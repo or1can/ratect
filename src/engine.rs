@@ -80,7 +80,7 @@ impl TaskEngine {
             .get(&task.run.container)
             .with_context(|| format!("Container '{}' not found", task.run.container))?;
 
-        println!("Running task '{}'...", task_name);
+        tracing::info!("Running task '{}'", task_name);
 
         if let Some(image) = &container_config.image {
             let needs_pull = {
@@ -101,7 +101,10 @@ impl TaskEngine {
                 )
                 .await?;
         } else if let Some(build_dir) = &container_config.build_directory {
-            println!("Building from directory {} not implemented yet", build_dir);
+            tracing::warn!(
+                "Building from directory '{}' is not implemented yet",
+                build_dir
+            );
         }
 
         Ok(())

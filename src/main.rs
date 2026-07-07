@@ -8,6 +8,7 @@ use crate::engine::TaskEngine;
 use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -28,8 +29,18 @@ struct Args {
     additional_args: Vec<String>,
 }
 
+fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    init_tracing();
+
     let args = Args::parse();
 
     let config = if args.config_file.exists() {
@@ -47,7 +58,7 @@ async fn main() -> Result<()> {
                 println!("- {}", task);
             }
         } else {
-            println!("Configuration file {:?} not found.", args.config_file);
+            tracing::error!("Configuration file {:?} not found.", args.config_file);
         }
         return Ok(());
     }
@@ -59,11 +70,11 @@ async fn main() -> Result<()> {
                 let engine = TaskEngine::new(config, docker);
                 engine.run_task(&task_name).await?;
             } else {
-                println!("Configuration file {:?} not found.", args.config_file);
+                tracing::error!("Configuration file {:?} not found.", args.config_file);
             }
         }
         None => {
-            println!("No task name provided. Use --help for usage.");
+            tracing::warn!("No task name provided. Use --help for usage.");
         }
     }
 

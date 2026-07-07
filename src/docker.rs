@@ -75,8 +75,10 @@ impl DockerClient {
         };
 
         let container = self.docker.create_container(None, config).await?;
+        tracing::debug!(container_id = %container.id, image, "created container");
 
         self.docker.start_container(&container.id, None).await?;
+        tracing::debug!(container_id = %container.id, "started container");
 
         let mut logs = self.docker.logs(
             &container.id,
@@ -96,6 +98,7 @@ impl DockerClient {
         }
 
         self.docker.remove_container(&container.id, None).await?;
+        tracing::debug!(container_id = %container.id, "removed container");
 
         Ok(())
     }
