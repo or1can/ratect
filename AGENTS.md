@@ -31,6 +31,7 @@ The project is modularized into several key components:
 - **Formatting/Linting**: `cargo fmt --check` and `cargo clippy --all-targets --all-features -- -D warnings` must pass; both are enforced in CI (`.github/workflows/ci.yml`).
 - **Dependency Audit**: `cargo audit` runs in CI against `Cargo.lock`, which is committed to the repo (binary crate convention, not gitignored).
 - **Tests**: `cargo test` runs in CI, covering config parsing/path resolution (`src/config.rs`), task engine logic including dependency-cycle detection and prerequisite dedup (`src/engine.rs`, via a fake `ContainerRuntime`), and CLI argument/behavior (`src/main.rs`, `tests/cli.rs`). `tests/cli.rs` also has an end-to-end test (`#[ignore]`d by default) that runs the sample `batect.yml` against a real Docker daemon — run it explicitly with `cargo test -- --ignored`; it also runs as its own `docker-integration` CI job.
+- **Coverage**: `cargo llvm-cov --show-missing-lines --summary-only` (requires `rustup component add llvm-tools-preview` and `cargo install cargo-llvm-cov`) reports exact uncovered lines per file — use it to find gaps, not to chase a percentage. `cargo llvm-cov --html` opens a browsable report at `target/llvm-cov/html`. CI runs this and uploads the HTML report as a `coverage-report` artifact (non-gating).
 
 ## Current Status & Roadmap
 
