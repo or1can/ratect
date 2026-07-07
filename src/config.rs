@@ -1,8 +1,8 @@
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
-use anyhow::{Context, Result};
 use std::fs::File;
+use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -33,8 +33,8 @@ pub struct TaskRun {
 
 impl Config {
     pub fn load_from_file(path: &Path) -> Result<Self> {
-        let file = File::open(path)
-            .with_context(|| format!("Failed to open config file {:?}", path))?;
+        let file =
+            File::open(path).with_context(|| format!("Failed to open config file {:?}", path))?;
         let mut config: Config = noyalib::from_reader(file)
             .with_context(|| format!("Failed to parse config file {:?}", path))?;
 

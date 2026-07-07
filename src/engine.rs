@@ -1,6 +1,6 @@
-use crate::config::{Config};
+use crate::config::Config;
 use crate::docker::DockerClient;
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use async_recursion::async_recursion;
 use std::collections::HashSet;
 use std::sync::Mutex;
@@ -36,7 +36,10 @@ impl TaskEngine {
         {
             let mut in_progress = self.in_progress_tasks.lock().unwrap();
             if in_progress.contains(task_name) {
-                return Err(anyhow::anyhow!("Dependency cycle detected involving task '{}'", task_name));
+                return Err(anyhow::anyhow!(
+                    "Dependency cycle detected involving task '{}'",
+                    task_name
+                ));
             }
             in_progress.insert(task_name.to_string());
         }
@@ -57,7 +60,10 @@ impl TaskEngine {
     }
 
     async fn run_task_internal(&self, task_name: &str) -> Result<()> {
-        let task = self.config.tasks.get(task_name)
+        let task = self
+            .config
+            .tasks
+            .get(task_name)
             .with_context(|| format!("Task '{}' not found", task_name))?;
 
         // Run prerequisites
@@ -68,7 +74,10 @@ impl TaskEngine {
         }
 
         // Run the task itself
-        let container_config = self.config.containers.get(&task.run.container)
+        let container_config = self
+            .config
+            .containers
+            .get(&task.run.container)
             .with_context(|| format!("Container '{}' not found", task.run.container))?;
 
         println!("Running task '{}'...", task_name);
@@ -84,7 +93,13 @@ impl TaskEngine {
                 let mut pulled = self.pulled_images.lock().unwrap();
                 pulled.insert(image.to_string());
             }
-            self.docker.run_container(image, task.run.command.as_deref(), container_config.volumes.as_ref()).await?;
+            self.docker
+                .run_container(
+                    image,
+                    task.run.command.as_deref(),
+                    container_config.volumes.as_ref(),
+                )
+                .await?;
         } else if let Some(build_dir) = &container_config.build_directory {
             println!("Building from directory {} not implemented yet", build_dir);
         }

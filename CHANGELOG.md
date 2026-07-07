@@ -21,9 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for volume mounting, including relative path resolution.
 - Command-line interface with task listing (`--list-tasks`) and execution.
 - Project documentation and Apache 2.0 license.
+- GitHub Actions CI workflow running `cargo fmt --check`, `cargo clippy`, `cargo build`/`cargo test`, and `cargo audit` on every push and pull request.
 
 ### Changed
 
 - Updated project version to `0.1.0-dev` to reflect pre-release status.
 - Migrated YAML parsing from `serde_yaml` to `noyalib` for improved safety and maintenance.
 - Upgraded core dependencies to their latest stable versions.
+- `Cargo.lock` is now committed to the repository (previously gitignored), following the convention for binary crates to ensure reproducible builds and accurate dependency audits.
+- Applied `cargo fmt` formatting across `src/`.

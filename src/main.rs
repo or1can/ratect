@@ -2,12 +2,12 @@ mod config;
 mod docker;
 mod engine;
 
-use clap::Parser;
-use anyhow::Result;
-use std::path::PathBuf;
 use crate::config::Config;
 use crate::docker::DockerClient;
 use crate::engine::TaskEngine;
+use anyhow::Result;
+use clap::Parser;
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

@@ -1,10 +1,10 @@
-use bollard::Docker;
-use bollard::query_parameters::CreateImageOptions;
+use anyhow::{Context, Result};
 use bollard::models::ContainerCreateBody as Config;
+use bollard::query_parameters::CreateImageOptions;
 use bollard::query_parameters::LogsOptions;
 use bollard::service::HostConfig;
+use bollard::Docker;
 use futures::StreamExt;
-use anyhow::{Result, Context};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
 
@@ -14,16 +14,18 @@ pub struct DockerClient {
 
 impl DockerClient {
     pub fn new() -> Result<Self> {
-        let docker = Docker::connect_with_local_defaults()
-            .context("Failed to connect to Docker")?;
+        let docker =
+            Docker::connect_with_local_defaults().context("Failed to connect to Docker")?;
         Ok(Self { docker })
     }
 
     pub async fn pull_image(&self, image: &str) -> Result<()> {
         let pb = ProgressBar::new_spinner();
-        pb.set_style(ProgressStyle::default_spinner()
-            .template("{spinner:.green} [{elapsed_precise}] {msg}")
-            .unwrap());
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} [{elapsed_precise}] {msg}")
+                .unwrap(),
+        );
         pb.set_message(format!("Pulling image {}...", image));
         pb.enable_steady_tick(Duration::from_millis(100));
 
@@ -52,7 +54,12 @@ impl DockerClient {
         Ok(())
     }
 
-    pub async fn run_container(&self, image: &str, command: Option<&str>, volumes: Option<&Vec<String>>) -> Result<()> {
+    pub async fn run_container(
+        &self,
+        image: &str,
+        command: Option<&str>,
+        volumes: Option<&Vec<String>>,
+    ) -> Result<()> {
         let host_config = HostConfig {
             binds: volumes.cloned(),
             ..Default::default()
@@ -68,7 +75,7 @@ impl DockerClient {
         };
 
         let container = self.docker.create_container(None, config).await?;
-        
+
         self.docker.start_container(&container.id, None).await?;
 
         let mut logs = self.docker.logs(
