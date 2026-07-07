@@ -12,8 +12,8 @@ The project is modularized into several key components:
 
 - **`src/main.rs`**: Handles CLI argument parsing (via `clap`) and orchestrates the high-level flow (loading config, initializing the Docker client, and starting the engine).
 - **`src/config.rs`**: Contains the data models for the configuration (`batect.yml`). It uses `noyalib` for YAML parsing and includes logic for resolving relative paths in volume mounts.
-- **`src/docker.rs`**: A wrapper around the `bollard` library. It manages interactions with the Docker daemon, including pulling images, creating containers, and streaming logs.
-- **`src/engine.rs`**: The core execution logic. It manages the task lifecycle, handles prerequisites, detects dependency cycles, and ensures that each task and image pull occurs only once per session.
+- **`src/docker.rs`**: A wrapper around the `bollard` library. It manages interactions with the Docker daemon, including pulling images, creating containers, and streaming logs. Exposes a `ContainerRuntime` trait (implemented by `DockerClient`) so the engine can be tested against a fake instead of a live daemon.
+- **`src/engine.rs`**: The core execution logic. It manages the task lifecycle, handles prerequisites, detects dependency cycles, and ensures that each task and image pull occurs only once per session. `TaskEngine` is generic over `ContainerRuntime`.
 
 ## Key Dependencies
 
@@ -24,12 +24,13 @@ The project is modularized into several key components:
 - **`indicatif`**: Used for displaying progress bars during image pulls.
 - **`anyhow`**: Simplified error handling with context.
 - **`tracing` / `tracing-subscriber`**: Structured, leveled logging. The subscriber is initialized in `main.rs`, filtered via `RUST_LOG` (defaults to `info`), and writes to stderr.
+- **`async-trait`**: Used for the `ContainerRuntime` trait in `src/docker.rs`, so it can have async methods and be implemented by both the real `DockerClient` and test fakes.
 
 ## Tooling & CI
 
 - **Formatting/Linting**: `cargo fmt --check` and `cargo clippy --all-targets --all-features -- -D warnings` must pass; both are enforced in CI (`.github/workflows/ci.yml`).
 - **Dependency Audit**: `cargo audit` runs in CI against `Cargo.lock`, which is committed to the repo (binary crate convention, not gitignored).
-- **Tests**: `cargo test` runs in CI. There is currently no test coverage — this is a known gap, not a passing baseline.
+- **Tests**: `cargo test` runs in CI, covering config parsing/path resolution (`src/config.rs`), task engine logic including dependency-cycle detection and prerequisite dedup (`src/engine.rs`, via a fake `ContainerRuntime`), and CLI argument/behavior (`src/main.rs`, `tests/cli.rs`). `tests/cli.rs` also has an end-to-end test (`#[ignore]`d by default) that runs the sample `batect.yml` against a real Docker daemon — run it explicitly with `cargo test -- --ignored`; it also runs as its own `docker-integration` CI job.
 
 ## Current Status & Roadmap
 

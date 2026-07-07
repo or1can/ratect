@@ -8,6 +8,20 @@ use futures::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
 
+/// Abstracts the container operations the task engine needs, so tests can
+/// inject a fake implementation instead of talking to a real Docker daemon.
+#[async_trait::async_trait]
+pub trait ContainerRuntime {
+    async fn pull_image(&self, image: &str) -> Result<()>;
+
+    async fn run_container(
+        &self,
+        image: &str,
+        command: Option<&str>,
+        volumes: Option<&Vec<String>>,
+    ) -> Result<()>;
+}
+
 pub struct DockerClient {
     docker: Docker,
 }
@@ -18,8 +32,11 @@ impl DockerClient {
             Docker::connect_with_local_defaults().context("Failed to connect to Docker")?;
         Ok(Self { docker })
     }
+}
 
-    pub async fn pull_image(&self, image: &str) -> Result<()> {
+#[async_trait::async_trait]
+impl ContainerRuntime for DockerClient {
+    async fn pull_image(&self, image: &str) -> Result<()> {
         let pb = ProgressBar::new_spinner();
         pb.set_style(
             ProgressStyle::default_spinner()
@@ -54,7 +71,7 @@ impl DockerClient {
         Ok(())
     }
 
-    pub async fn run_container(
+    async fn run_container(
         &self,
         image: &str,
         command: Option<&str>,

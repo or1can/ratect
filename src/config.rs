@@ -66,3 +66,153 @@ impl Config {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn parse(yaml: &str) -> Config {
+        noyalib::from_reader(Cursor::new(yaml.as_bytes())).expect("valid yaml")
+    }
+
+    #[test]
+    fn parses_containers_and_tasks() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - code:/code
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+    prerequisites:
+      - other
+"#,
+        );
+
+        assert_eq!(config.project_name, "demo");
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.image.as_deref(), Some("alpine:3.18"));
+        assert_eq!(
+            container.volumes.as_ref().unwrap(),
+            &vec!["code:/code".to_string()]
+        );
+
+        let task = config.tasks.get("test").unwrap();
+        assert_eq!(task.run.container, "build-env");
+        assert_eq!(task.run.command.as_deref(), Some("echo hi"));
+        assert_eq!(
+            task.prerequisites.as_ref().unwrap(),
+            &vec!["other".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_paths_makes_relative_volume_absolute() {
+        let mut config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - code:/code
+tasks: {}
+"#,
+        );
+
+        config.resolve_paths(Path::new("/base")).unwrap();
+
+        let volume = &config.containers["build-env"].volumes.as_ref().unwrap()[0];
+        assert_eq!(volume, "/base/code:/code");
+    }
+
+    #[test]
+    fn resolve_paths_leaves_absolute_volume_unchanged() {
+        let mut config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - /already/absolute:/code
+tasks: {}
+"#,
+        );
+
+        config.resolve_paths(Path::new("/base")).unwrap();
+
+        let volume = &config.containers["build-env"].volumes.as_ref().unwrap()[0];
+        assert_eq!(volume, "/already/absolute:/code");
+    }
+
+    #[test]
+    fn resolve_paths_leaves_malformed_volume_spec_unchanged() {
+        // Three colon-separated parts (e.g. a Windows drive-letter host path) don't
+        // match the `host:container` shape this resolver understands, so it's left as-is.
+        let mut config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - "C:/data:/code:ro"
+tasks: {}
+"#,
+        );
+
+        config.resolve_paths(Path::new("/base")).unwrap();
+
+        let volume = &config.containers["build-env"].volumes.as_ref().unwrap()[0];
+        assert_eq!(volume, "C:/data:/code:ro");
+    }
+
+    #[test]
+    fn load_from_file_parses_and_resolves_paths() {
+        let dir = std::env::temp_dir().join(format!(
+            "ratect-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config_path = dir.join("batect.yml");
+        std::fs::write(
+            &config_path,
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - code:/code
+tasks: {}
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load_from_file(&config_path).unwrap();
+
+        let volume = &config.containers["build-env"].volumes.as_ref().unwrap()[0];
+        assert_eq!(*volume, format!("{}:/code", dir.join("code").display()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_from_file_missing_file_errors() {
+        let result = Config::load_from_file(Path::new("/nonexistent/batect.yml"));
+        assert!(result.is_err());
+    }
+}

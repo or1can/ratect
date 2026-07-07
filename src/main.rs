@@ -80,3 +80,43 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_to_batect_yml_with_no_task() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert_eq!(args.config_file, PathBuf::from("batect.yml"));
+        assert!(!args.list_tasks);
+        assert_eq!(args.task_name, None);
+        assert!(args.additional_args.is_empty());
+    }
+
+    #[test]
+    fn parses_list_tasks_flag() {
+        let args = Args::try_parse_from(["ratect", "--list-tasks"]).unwrap();
+        assert!(args.list_tasks);
+
+        let args = Args::try_parse_from(["ratect", "-T"]).unwrap();
+        assert!(args.list_tasks);
+    }
+
+    #[test]
+    fn parses_custom_config_file() {
+        let args = Args::try_parse_from(["ratect", "-f", "custom.yml", "build"]).unwrap();
+        assert_eq!(args.config_file, PathBuf::from("custom.yml"));
+        assert_eq!(args.task_name.as_deref(), Some("build"));
+    }
+
+    #[test]
+    fn parses_task_name_and_trailing_args() {
+        let args = Args::try_parse_from(["ratect", "build", "--", "--flag", "value"]).unwrap();
+        assert_eq!(args.task_name.as_deref(), Some("build"));
+        assert_eq!(
+            args.additional_args,
+            vec!["--flag".to_string(), "value".to_string()]
+        );
+    }
+}
