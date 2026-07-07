@@ -1,0 +1,30 @@
+project_name: ratect-test
+containers:
+  build-env:
+    image: alpine:3.18.2
+    volumes:
+      - .:/code
+tasks:
+  shared-prereq:
+    run:
+      container: build-env
+      command: echo "I should only run once"
+  prereq-task:
+    run:
+      container: build-env
+      command: echo "I am a prerequisite"
+    prerequisites:
+      - shared-prereq
+  list-volume-task:
+    run:
+      container: build-env
+      command: ls /code
+    prerequisites:
+      - shared-prereq
+  test-task:
+    run:
+      container: build-env
+      command: echo "Hello from ratect!🐀"
+    prerequisites:
+      - prereq-task
+      - list-volume-task
