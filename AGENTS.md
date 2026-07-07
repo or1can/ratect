@@ -26,23 +26,7 @@ The project is modularized into several key components:
 
 ## Current Status & Roadmap
 
-Ratect is currently a **Work in Progress**.
-
-### Supported Features:
-- Parsing of core `batect.yml` structure (project name, containers, tasks).
-- Task execution with prerequisite support.
-- Image pulling with progress indicators.
-- Basic container execution with real-time log streaming.
-- Host-to-container volume mounting with relative path resolution.
-- Dependency cycle detection in tasks.
-
-### Planned / Missing Features:
-- Support for building images from `Dockerfile` (build directory).
-- Docker network management for inter-container communication.
-- Container dependency management (starting sidecar containers).
-- Parallel task/prerequisite execution.
-- Interactive terminal support (TTY/STDIN).
-- Comprehensive health check support.
+Ratect is currently a **Work in Progress**. For a detailed list of supported features and our future plans, please refer to the [ROADMAP.md](ROADMAP.md) file.
 
 ## Guidelines for AI Agents
 

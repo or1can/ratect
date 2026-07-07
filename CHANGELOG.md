@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ROADMAP.md` file outlining the path to Batect parity and future enhancements.
 - Guideline in `AGENTS.md` for maintaining the changelog.
 - `AGENTS.md` file providing context and instructions for AI agents working on the project.
 - Initial Rust implementation of Batect core functionality.
