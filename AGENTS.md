@@ -23,6 +23,13 @@ The project is modularized into several key components:
 - **`clap`**: Command-line argument parsing with derive support.
 - **`indicatif`**: Used for displaying progress bars during image pulls.
 - **`anyhow`**: Simplified error handling with context.
+- **`tracing` / `tracing-subscriber`**: Structured, leveled logging. The subscriber is initialized in `main.rs`, filtered via `RUST_LOG` (defaults to `info`), and writes to stderr.
+
+## Tooling & CI
+
+- **Formatting/Linting**: `cargo fmt --check` and `cargo clippy --all-targets --all-features -- -D warnings` must pass; both are enforced in CI (`.github/workflows/ci.yml`).
+- **Dependency Audit**: `cargo audit` runs in CI against `Cargo.lock`, which is committed to the repo (binary crate convention, not gitignored).
+- **Tests**: `cargo test` runs in CI. There is currently no test coverage — this is a known gap, not a passing baseline.
 
 ## Current Status & Roadmap
 
@@ -40,3 +47,5 @@ Ratect is currently a **Work in Progress**. For a detailed list of supported fea
     -   Executing `cargo run -- --list-tasks` to check config parsing.
     -   Running a sample task (e.g., `cargo run -- test-task`) to verify the execution engine and Docker integration.
 7.  **Changelog Maintenance**: After completing a task that changes the project's features, dependencies, or structure, ensure that `CHANGELOG.md` is updated in the "Unreleased" section, following the "Keep a Changelog" standard.
+8.  **Logging vs. Output**: Use `tracing::{info,warn,error,debug}` for diagnostics and progress (task lifecycle, Docker API breadcrumbs, error conditions) — these go to stderr and respect `RUST_LOG`. Reserve `println!`/`print!` for actual command output that the user is asking for (task listing, container log streaming) — this stays on stdout.
+9.  **Commit Messages**: Use the Conventional Commits format (`type: summary`, e.g. `feat:`, `fix:`, `chore:`). Keep the summary concise; add a body only when it clarifies non-obvious motivation, and focus the body on *why* the change was made rather than restating the diff.
