@@ -44,7 +44,15 @@ async fn main() -> ExitCode {
             // Use `{:?}` (not `{}`) so the full anyhow context chain is logged,
             // matching what the default Termination handler would have printed.
             tracing::error!("{:?}", err);
-            ExitCode::FAILURE
+
+            // If the task's own command exited non-zero, propagate that exact
+            // code as ratect's own exit code (matching `docker run`'s
+            // convention) rather than a generic failure code, so scripts can
+            // inspect what actually happened.
+            match err.downcast_ref::<ratect_core::docker::ContainerExitedNonZero>() {
+                Some(failure) => ExitCode::from(failure.exit_code as u8),
+                None => ExitCode::FAILURE,
+            }
         }
     }
 }

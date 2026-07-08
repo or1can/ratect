@@ -240,6 +240,7 @@ mod tests {
     #[derive(Default, Clone)]
     struct FakeContainerRuntime {
         events: Arc<Mutex<Vec<String>>>,
+        fail_run: Arc<Mutex<bool>>,
     }
 
     impl FakeContainerRuntime {
@@ -249,6 +250,13 @@ mod tests {
 
         fn push(&self, event: String) {
             self.events.lock().unwrap().push(event);
+        }
+
+        /// Makes `run_container` simulate the task's own command exiting
+        /// non-zero, the same way the real `DockerClient` does.
+        fn failing_run(self) -> Self {
+            *self.fail_run.lock().unwrap() = true;
+            self
         }
     }
 
@@ -298,6 +306,9 @@ mod tests {
                 command.unwrap_or_default(),
                 network.unwrap_or("none")
             ));
+            if *self.fail_run.lock().unwrap() {
+                return Err(crate::docker::ContainerExitedNonZero { exit_code: 1 }.into());
+            }
             Ok(())
         }
     }
@@ -543,6 +554,41 @@ mod tests {
         assert!(
             network_remove_index > run_index,
             "network removal happens after the run: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn task_fails_when_container_exits_nonzero_but_dependencies_are_still_cleaned_up() {
+        let mut containers = HashMap::new();
+        containers.insert("database".to_string(), container("postgres:16", None));
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "exit 1"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+        };
+
+        let docker = FakeContainerRuntime::default().failing_run();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        let err = engine.run_task("start").await.unwrap_err();
+        assert!(err.to_string().contains("exited with code"));
+
+        // A failing main container must not stop cleanup from happening —
+        // the sidecar and network are still torn down.
+        let events = docker.events();
+        assert!(
+            events.iter().any(|e| e.starts_with("sidecar-stop:")),
+            "dependency should still be cleaned up after a failed run: {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| e.starts_with("network-remove:")),
+            "network should still be removed after a failed run: {events:?}"
         );
     }
 

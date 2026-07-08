@@ -4,11 +4,31 @@ use bollard::models::{
 };
 use bollard::query_parameters::CreateImageOptions;
 use bollard::query_parameters::LogsOptions;
+use bollard::query_parameters::WaitContainerOptions;
 use bollard::service::HostConfig;
 use bollard::Docker;
 use futures::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
+use std::fmt;
 use std::time::Duration;
+
+/// The task's own container ran to completion, but its command exited with a
+/// non-zero status. Distinct from other errors (Docker API failures, missing
+/// images, etc.) so callers can distinguish "the task failed" from "ratect
+/// itself failed to run the task", and so `main` can propagate the exact exit
+/// code as ratect's own.
+#[derive(Debug)]
+pub struct ContainerExitedNonZero {
+    pub exit_code: i64,
+}
+
+impl fmt::Display for ContainerExitedNonZero {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "container command exited with code {}", self.exit_code)
+    }
+}
+
+impl std::error::Error for ContainerExitedNonZero {}
 
 /// Abstracts the container operations the task engine needs, so tests can
 /// inject a fake implementation instead of talking to a real Docker daemon.
@@ -76,6 +96,28 @@ impl DockerClient {
             .with_context(|| format!("Failed to connect '{}' to network '{}'", alias, network))?;
         tracing::debug!(container_id, network, alias, "joined network");
         Ok(())
+    }
+
+    /// Must only be called once the container has already stopped (e.g. after
+    /// its log stream, followed with `follow: true`, has ended) — at that
+    /// point Docker still has the exit status available, so this resolves
+    /// immediately rather than actually waiting.
+    async fn exit_code(&self, container_id: &str) -> Result<i64> {
+        let mut wait_stream = self
+            .docker
+            .wait_container(container_id, None::<WaitContainerOptions>);
+
+        match wait_stream.next().await {
+            Some(Ok(response)) => Ok(response.status_code),
+            Some(Err(bollard::errors::Error::DockerContainerWaitError { code, .. })) => Ok(code),
+            Some(Err(e)) => {
+                Err(e).with_context(|| format!("Failed to wait for container '{}'", container_id))
+            }
+            None => Err(anyhow::anyhow!(
+                "Docker did not report an exit status for container '{}'",
+                container_id
+            )),
+        }
     }
 }
 
@@ -235,8 +277,14 @@ impl ContainerRuntime for DockerClient {
             }
         }
 
+        let exit_code = self.exit_code(&container.id).await?;
+
         self.docker.remove_container(&container.id, None).await?;
-        tracing::debug!(container_id = %container.id, "removed container");
+        tracing::debug!(container_id = %container.id, exit_code, "removed container");
+
+        if exit_code != 0 {
+            return Err(ContainerExitedNonZero { exit_code }.into());
+        }
 
         Ok(())
     }

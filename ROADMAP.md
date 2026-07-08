@@ -62,12 +62,13 @@ interact with directly.
 ### `ratect-compat`
 
 - **0.1.0** — not a features milestone, an *honesty* milestone: the engine (prerequisites,
-  cycle detection, dedup, sidecars) is already solid, but four known gaps in
+  cycle detection, dedup, sidecars) is already solid, but a few known gaps in
   [Differences from Batect](docs/differences-from-batect.md) currently make the tool's
   output untrustworthy rather than just incomplete, and should be fixed before anything
   is tagged:
-  - Container exit codes aren't checked — a task whose command fails is still reported
-    as successful.
+  - ~~Container exit codes aren't checked~~ — fixed: a task whose command exits
+    non-zero now fails `ratect` itself with that exact exit code, and stops the rest
+    of a prerequisite chain, matching Batect.
   - A missing config file exits `0` instead of failing.
   - `-- ADDITIONAL_ARGS` is parsed but silently dropped — wire it up or remove the flag.
   - Unsupported config keys are silently ignored rather than rejected.

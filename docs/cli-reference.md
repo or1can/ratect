@@ -52,13 +52,14 @@ actual behavior — it doesn't yet distinguish "nothing to do" from "success":
   formatted stderr channel as everything else — see
   [how it works](how-it-works.md#5-logging-vs-output)), rather than a raw, differently
   formatted panic-style message.
-- **A failing command *inside* the container does not currently fail the `ratect`
-  process.** Ratect doesn't inspect the container's exit code — as long as the Docker
-  API calls themselves succeed (create/start/stream logs/remove), `run_container`
-  returns success regardless of what the command inside the container actually did.
-  This means, for example, a task whose command is `exit 1` will still report success
-  and continue to any tasks that depend on it. This is a real gap relative to Batect,
-  not intentional behavior.
+- **A failing command *inside* the container fails the `ratect` process too, with the
+  same exit code.** Ratect waits for the container to exit and inspects its status —
+  a task whose command is `exit 42` makes `ratect` itself exit `42`, matching
+  `docker run`'s convention rather than collapsing every failure to a generic `1`. A
+  task that runs as a [prerequisite](config-reference.md#task) and fails this way
+  stops the rest of the chain immediately — no other prerequisites, and not the task
+  that depended on it, will run — matching
+  [Batect's documented behavior](https://github.com/batect/batect.dev/blob/main/docs/reference/config/tasks.md#prerequisites).
 
 ## Environment variables
 

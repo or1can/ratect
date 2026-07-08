@@ -13,6 +13,10 @@ fn sidecar_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sidecar.yml")
 }
 
+fn exit_code_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/exit-code.yml")
+}
+
 #[test]
 fn list_tasks_lists_sample_tasks() {
     let output = ratect_command()
@@ -145,6 +149,73 @@ fn sidecars_are_reachable_by_name_via_docker() {
         3,
         "expected a successful ping of all three dependency containers (two \
          siblings plus one nested) by name:\n{}",
+        stdout
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn successful_container_command_exits_zero() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(exit_code_config_path())
+        .arg("succeeds")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves the exact container exit code becomes ratect's own process exit
+/// code, not just "some" non-zero code.
+#[test]
+#[ignore]
+fn failing_container_command_propagates_exact_exit_code() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(exit_code_config_path())
+        .arg("fails")
+        .output()
+        .expect("failed to run ratect");
+
+    assert_eq!(
+        output.status.code(),
+        Some(42),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Matches Batect's documented behavior: "If a prerequisite task finishes
+/// with a non-zero exit code, then neither this task nor any other
+/// prerequisites will be run."
+#[test]
+#[ignore]
+fn failing_prerequisite_stops_the_chain() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(exit_code_config_path())
+        .arg("stops-prerequisite-chain")
+        .output()
+        .expect("failed to run ratect");
+
+    assert_eq!(output.status.code(), Some(42));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("should never print this"),
+        "the task depending on the failed prerequisite must not have run:\n{}",
         stdout
     );
 }

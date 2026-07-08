@@ -151,15 +151,8 @@ tables above:
 ## Known correctness gaps (not Batect-parity issues — just bugs)
 
 These aren't "missing Batect features," they're places where Ratect's current behavior
-is surprising on its own terms — and, per Batect's own
-[`prerequisites` documentation](https://github.com/batect/batect.dev/blob/main/docs/reference/config/tasks.md#prerequisites),
-genuinely regress compared to Batect's behavior:
+is surprising on its own terms, regardless of what Batect does:
 
-- **Container exit codes aren't checked.** A task whose command fails inside the
-  container (e.g. `exit 1`) is currently still reported as successful, and any tasks
-  that depend on it still run. Batect, by contrast, explicitly stops the entire
-  prerequisite chain when a task exits non-zero. See the
-  [CLI reference](cli-reference.md#exit-codes-and-error-reporting).
 - **Missing config file doesn't fail the process.** Running with `--list-tasks` or a
   task name against a nonexistent config file logs an error but exits `0`.
 - **A container with neither `image` nor `build_directory`** silently does nothing
