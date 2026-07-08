@@ -4,7 +4,7 @@ This document outlines the planned journey for Ratect, from achieving parity wit
 
 ## Batect Parity
 
-The primary goal is to support the core features of Batect to ensure a seamless transition for existing users.
+The primary goal is to support the core features of Batect to ensure a seamless transition for existing users. This work targets the [`ratect-compat` binary](#two-binaries-ratect-and-ratect-compat) specifically — the `ratect` binary is not expected to maintain 1:1 Batect parity.
 
 - **Image Building**: Support for building Docker images from a `Dockerfile` using the `build_directory` configuration.
 - **Sidecar Containers**: Ability to start and manage dependency containers (sidecars) for tasks.
@@ -18,19 +18,42 @@ The primary goal is to support the core features of Batect to ensure a seamless 
 - **User Mapping**: Handling of file permissions and user mapping between host and container.
 - **Proxy Support**: Automatic detection and injection of proxy settings into containers.
 
-## CLI Evolution
+## Two Binaries: `ratect` and `ratect-compat`
 
-To provide both familiarity for existing users and a modern experience for new ones, the CLI will evolve in two phases:
+Rather than one binary evolving through phases and eventually deprecating Batect
+compatibility, the plan is a Cargo workspace with a shared core library
+(config parsing, task engine, `ContainerRuntime`/Docker integration) and two thin
+binary crates built on top of it:
 
-- **Batect-Compatible CLI (Phase 1)**: Initial focus on providing 1:1 parity with Batect's flag-based interface (e.g., `ratect --list-tasks`, `ratect <task>`). This ensures that existing Batect users can migrate with zero friction.
-- **Rust-native CLI (Phase 2)**: Introduction of a modern, subcommand-centric interface (e.g., `ratect tasks list`, `ratect run <task>`) that follows modern Rust CLI conventions. This will include better environment variable integration, improved shell completions, and a more intuitive structure. Once the Rust-native interface is stable, the Batect-compatible interface will be deprecated.
+- **`ratect-compat`**: A strict, literal, flag-for-flag and field-for-field match for
+  Batect's CLI and `batect.yml` format. This is where all of the [Batect Parity](#batect-parity)
+  work lands, scoped precisely by the itemized tables in
+  [Differences from Batect](docs/differences-from-batect.md). Its only job is being a
+  boring, reliable drop-in replacement for the (now-unmaintained) `batect` binary — it
+  is not the place for new ideas.
+
+  Ratect deliberately does **not** ship a binary literally named `batect` (that would be
+  confusing, and edges toward a trademark/naming concern). Anyone who wants their
+  existing `./batect` wrapper script or `PATH` entry to keep working symlinks or renames
+  `ratect-compat` to `batect` themselves.
+
+- **`ratect`**: The forward-looking CLI, free to diverge from Batect's interface —
+  subcommands (`ratect tasks list`, `ratect run <task>`), better shell completions, and
+  other modern-Rust-CLI conventions — without being constrained by parity concerns. This
+  is also the binary that would adopt any future alternative configuration format (see
+  [Future Vision](#future-vision)); `ratect-compat` stays YAML-only, permanently, since
+  that's what Batect compatibility requires.
+
+Because both binaries share the same core, an eventual migration/upgrade path from a
+`ratect-compat`-managed project (Batect-format config) to a `ratect`-managed one is a
+roadmap goal in its own right, not just a side effect of the split.
 
 ## Rust Enhancements
 
 Leveraging Rust's strengths to provide a superior experience compared to the original JVM-based implementation.
 
 - **Parallel Task Execution**: Utilizing `tokio` to execute independent tasks and prerequisites in parallel, significantly reducing execution time.
-- **Static Binaries**: Distribution as a single, zero-dependency static binary for easy installation and portability.
+- **Static Binaries**: Distribution as zero-dependency static binaries (`ratect` and `ratect-compat`) for easy installation and portability.
 - **First-class Cross-platform Support**: Providing a high-performance, native experience across macOS, Linux, and Windows without the overhead or startup latency of a JVM.
 - **Precise Error Reporting**: Utilizing Rust's type system and error handling to provide clear, actionable feedback on configuration errors and execution failures.
 
@@ -47,6 +70,7 @@ Improving the developer experience through better tools and feedback.
 
 Exploring innovative features that go beyond the original Batect, as well as planned improvements from the Batect roadmap.
 
+- **Alternative Configuration Format (TOML)**: **Undecided, exploratory.** TOML is a more typical configuration format for Rust projects than YAML. If pursued, this would apply only to the [`ratect` binary](#two-binaries-ratect-and-ratect-compat) — `ratect-compat` stays YAML-only for Batect compatibility — and would need a migration path for projects moving from `ratect-compat`'s YAML config.
 - **Wildcard Includes**: Support for including multiple files using glob patterns (e.g., `include: containers/*.yaml`).
 - **Configuration Merging/Replacement**: Ability to merge or override containers and tasks when including files.
 - **Init Containers**: Support for containers that must start, run, and complete before other containers can start (e.g., for database initialization).
