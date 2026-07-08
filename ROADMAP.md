@@ -47,6 +47,61 @@ Because both binaries share the same core, an eventual migration/upgrade path fr
 `ratect-compat`-managed project (Batect-format config) to a `ratect`-managed one is a
 roadmap goal in its own right, not just a side effect of the split.
 
+## Versioning & Releases
+
+`ratect-compat` and `ratect` are versioned **independently** — they're on different
+maturity clocks, and forcing one number to serve both meanings breaks the moment they
+diverge (which they will, since `ratect-compat` has a head start). What *is* shared is
+the release **process**: a fix in the shared core crate gets released for both binaries
+at the same time (one PR/tag/CI run), each bumping its own patch version independently
+— not the same version number, just released together, so nobody is left running a
+stale, unpatched core. The core crate itself isn't published or meaningfully versioned
+on its own; it's an internal implementation detail, not something either binary's users
+interact with directly.
+
+### `ratect-compat`
+
+- **0.1.0** — not a features milestone, an *honesty* milestone: the engine (prerequisites,
+  cycle detection, dedup, sidecars) is already solid, but four known gaps in
+  [Differences from Batect](docs/differences-from-batect.md) currently make the tool's
+  output untrustworthy rather than just incomplete, and should be fixed before anything
+  is tagged:
+  - Container exit codes aren't checked — a task whose command fails is still reported
+    as successful.
+  - A missing config file exits `0` instead of failing.
+  - `-- ADDITIONAL_ARGS` is parsed but silently dropped — wire it up or remove the flag.
+  - Unsupported config keys are silently ignored rather than rejected.
+- **0.2.0** — **Environment Variables** (the `environment` field on containers/tasks)
+  together with **Batect Expressions**/config variables (`$VAR`, `${VAR:-default}`,
+  config variables via `<name`). Bundled deliberately, not a grab-bag: interpolation is
+  the one shared mechanism both environment variables and config variables need to be
+  useful, and later fields like `build_args` (0.3.0) depend on it too.
+- **0.3.0** — **Image Building** (`build_directory` currently just warns and no-ops),
+  including `build_args` interpolation from 0.2.0.
+- **0.4.0** — **Interactive Mode** (TTY/STDIN attachment for tasks that need user input).
+- **0.5.0** — **User Mapping** (`run_as_current_user`).
+- **0.6.0** — **Full Docker Networking** and **Proxy Support** together — proxy
+  injection is fundamentally "set environment variables automatically," so it benefits
+  from 0.2.0's environment variable support already existing.
+- **Beyond 0.6.0** — not yet planned release-by-release, but not optional for 1.0.0
+  either: **Includes** (splitting config across files/bundles), and the long tail of
+  smaller [Full Configuration](docs/differences-from-batect.md#container-fields) /
+  [Full CLI](docs/differences-from-batect.md#cli-flags) parity items (`health_check`,
+  `setup_commands`, `ports`, `labels`, `--skip-prerequisites`, `--override-image`, etc.)
+  that 0.2.0–0.6.0 don't touch.
+- **1.0.0** — the [Batect Parity](#batect-parity) section above substantially checked
+  off (all of the above, not just the six headline items through 0.6.0), and verified
+  against a handful of real Batect projects, not just the itemized field/flag tables
+  passing in isolation. Not tagged early for appearances — earned once `ratect-compat`
+  can honestly replace `batect` on real projects.
+
+### `ratect`
+
+Hasn't started yet — see [Two Binaries](#two-binaries-ratect-and-ratect-compat). Its
+**1.0.0** means something different from `ratect-compat`'s: interface stability (the
+subcommand structure and config format won't break), not feature-completeness against
+Batect.
+
 ## Rust Enhancements
 
 Leveraging Rust's strengths to provide a superior experience compared to the original JVM-based implementation.
