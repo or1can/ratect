@@ -51,7 +51,21 @@ fn missing_config_file_reports_error() {
         .output()
         .expect("failed to run ratect");
 
-    assert!(output.status.success());
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not found"), "stderr:\n{}", stderr);
+}
+
+#[test]
+fn missing_config_file_reports_error_when_running_a_task() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg("/nonexistent/batect.yml")
+        .arg("some-task")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("not found"), "stderr:\n{}", stderr);
 }

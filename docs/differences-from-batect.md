@@ -153,8 +153,6 @@ tables above:
 These aren't "missing Batect features," they're places where Ratect's current behavior
 is surprising on its own terms, regardless of what Batect does:
 
-- **Missing config file doesn't fail the process.** Running with `--list-tasks` or a
-  task name against a nonexistent config file logs an error but exits `0`.
 - **A container with neither `image` nor `build_directory`** silently does nothing
   instead of raising a configuration error.
 - **Unsupported config keys are silently ignored** rather than rejected — see the note

@@ -42,14 +42,13 @@ ratect -f ./ci/batect.yml build
 Ratect uses a plain `0` (success) / non-zero (failure) convention, but note the current
 actual behavior — it doesn't yet distinguish "nothing to do" from "success":
 
-- A missing/invalid `task_name` combined with a missing config file, or running with no
-  task name at all, currently **exits `0`** — Ratect logs an error or warning (visible
-  on stderr, or with `--list-tasks`) but doesn't fail the process. This is a rough edge,
-  not intentional design; don't rely on it in scripts.
-- A malformed config file (fails to parse), a task/container referenced by name that
-  doesn't exist, or a dependency cycle all cause a non-zero (`1`) exit. The error is
-  logged via `tracing::error!` (so it goes through the same `RUST_LOG`-filterable,
-  formatted stderr channel as everything else — see
+- Running with no task name at all (and not `--list-tasks`) currently **exits `0`** —
+  Ratect logs a warning but doesn't fail the process. This is a rough edge, not
+  intentional design; don't rely on it in scripts.
+- A missing or malformed config file (fails to parse), a task/container referenced by
+  name that doesn't exist, or a dependency cycle all cause a non-zero (`1`) exit. The
+  error is logged via `tracing::error!` (so it goes through the same
+  `RUST_LOG`-filterable, formatted stderr channel as everything else — see
   [how it works](how-it-works.md#5-logging-vs-output)), rather than a raw, differently
   formatted panic-style message.
 - **A failing command *inside* the container fails the `ratect` process too, with the

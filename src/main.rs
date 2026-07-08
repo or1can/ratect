@@ -60,35 +60,26 @@ async fn main() -> ExitCode {
 async fn run() -> Result<()> {
     let args = Args::parse();
 
-    let config = if args.config_file.exists() {
-        Some(Config::load_from_file(&args.config_file)?)
-    } else {
-        None
-    };
+    if !args.config_file.exists() {
+        anyhow::bail!("Configuration file {:?} not found.", args.config_file);
+    }
+    let config = Config::load_from_file(&args.config_file)?;
 
     if args.list_tasks {
-        if let Some(config) = config {
-            println!("Tasks in {}:", config.project_name);
-            let mut tasks: Vec<_> = config.tasks.keys().collect();
-            tasks.sort();
-            for task in tasks {
-                println!("- {}", task);
-            }
-        } else {
-            tracing::error!("Configuration file {:?} not found.", args.config_file);
+        println!("Tasks in {}:", config.project_name);
+        let mut tasks: Vec<_> = config.tasks.keys().collect();
+        tasks.sort();
+        for task in tasks {
+            println!("- {}", task);
         }
         return Ok(());
     }
 
     match args.task_name {
         Some(task_name) => {
-            if let Some(config) = config {
-                let docker = DockerClient::new()?;
-                let engine = TaskEngine::new(config, docker);
-                engine.run_task(&task_name).await?;
-            } else {
-                tracing::error!("Configuration file {:?} not found.", args.config_file);
-            }
+            let docker = DockerClient::new()?;
+            let engine = TaskEngine::new(config, docker);
+            engine.run_task(&task_name).await?;
         }
         None => {
             tracing::warn!("No task name provided. Use --help for usage.");

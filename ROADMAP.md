@@ -69,7 +69,8 @@ interact with directly.
   - ~~Container exit codes aren't checked~~ — fixed: a task whose command exits
     non-zero now fails `ratect` itself with that exact exit code, and stops the rest
     of a prerequisite chain, matching Batect.
-  - A missing config file exits `0` instead of failing.
+  - ~~A missing config file exits `0` instead of failing~~ — fixed: it now fails fast
+    with a non-zero exit, for both `--list-tasks` and running a task.
   - `-- ADDITIONAL_ARGS` is parsed but silently dropped — wire it up or remove the flag.
   - Unsupported config keys are silently ignored rather than rejected.
 - **0.2.0** — **Environment Variables** (the `environment` field on containers/tasks)
