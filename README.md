@@ -70,6 +70,7 @@ assume you've read Batect's docs.
 - [Installation](docs/installation.md)
 - [Getting Started](docs/getting-started.md)
 - [How It Works](docs/how-it-works.md)
+- [Task Lifecycle](docs/task-lifecycle.md)
 - [CLI Reference](docs/cli-reference.md)
 - [Configuration Reference](docs/config-reference.md)
 - [Differences from Batect](docs/differences-from-batect.md)

@@ -58,7 +58,7 @@ for config variables) usable *within* several fields: `environment`, `build_args
 |---|---|---|
 | `image` | Supported | |
 | `volumes` | Partially supported | Only the `local:container[:options]` string form — see [config reference](config-reference.md#volume-path-resolution). The expanded map form, [caches](https://github.com/batect/batect.dev/blob/main/docs/reference/config/containers.md#volumes), and tmpfs mounts aren't supported. |
-| `dependencies` | Parsed, not implemented | No sidecar containers are started. Roadmap: [Sidecar Containers](../ROADMAP.md#batect-parity). |
+| `dependencies` | Supported (simplified) | Starts recursively (nested dependencies too), on a network scoped to one task execution — see [the task lifecycle](task-lifecycle.md). No health-check waiting (`health_check` isn't parsed — see below) and no `setup_commands` support, so a dependency is "ready" as soon as it's started, unlike Batect's real readiness check. |
 | `build_directory` | Parsed, not implemented | No image building. Roadmap: [Image Building](../ROADMAP.md#batect-parity). |
 | `additional_hostnames` | Not supported | |
 | `additional_hosts` | Not supported | |
@@ -73,14 +73,14 @@ for config variables) usable *within* several fields: `environment`, `build_args
 | `enable_init_process` | Not supported | |
 | `entrypoint` | Not supported | |
 | `environment` | Not supported | No environment variables can be set on containers or tasks. |
-| `health_check` | Not supported | |
+| `health_check` | Not supported | This is why `dependencies` (above) treats "started" as "ready" instead of waiting for real health. |
 | `image_pull_policy` | Not supported | Ratect always pulls an image at most once per run, with no `Always`-equivalent. |
 | `labels` | Not supported | |
 | `log_driver` / `log_options` | Not supported | |
 | `ports` | Not supported | No port publishing. |
 | `privileged` | Not supported | |
 | `run_as_current_user` | Not supported | In Batect, this runs the container as the host user's UID/GID (instead of root) so files written to mounted volumes aren't root-owned. Ratect always runs as whatever user the image defaults to — on Linux, that means volume-mounted files written by a task will typically come back owned by `root`. Roadmap: [User Mapping](../ROADMAP.md#batect-parity). |
-| `setup_commands` | Not supported | |
+| `setup_commands` | Not supported | See `health_check` above — this is the other half of Batect's real dependency-readiness check that Ratect doesn't implement. |
 | `shm_size` | Not supported | |
 | `working_directory` | Not supported | |
 
@@ -123,7 +123,7 @@ Batect's full flag list, from its [CLI reference](https://github.com/batect/bate
 | `--no-color` | Not supported | Ratect currently has no colored output to disable. |
 | `--no-cleanup`, `--no-cleanup-after-failure`, `--no-cleanup-after-success` | Not supported | Ratect always attempts to remove containers after running; there's no way to leave them for debugging. |
 | `--disable-ports` | N/A | Moot — no port publishing exists to disable. |
-| `--use-network` | N/A | Moot — no Docker networking exists yet. Roadmap: [Docker Networking](../ROADMAP.md#batect-parity). |
+| `--use-network` | Not supported | A minimal per-task network now exists (see `dependencies`) but there's no way to point it at an existing network instead. Roadmap: [Docker Networking](../ROADMAP.md#batect-parity). |
 | `--enable-buildkit` | N/A | Moot — no image building exists yet. |
 | `--tag-image` | N/A | Moot — no image building exists yet. |
 | `--config-vars-file`, `--config-var` | Not supported | No config variables feature exists. |
@@ -139,8 +139,11 @@ Batect's full flag list, from its [CLI reference](https://github.com/batect/bate
 Batect behavior not implemented in task execution, beyond what's covered by the field
 tables above:
 
-- **Docker networking**: no automatic per-task network, so multi-container tasks can't
-  reach each other by container name yet.
+- **Docker networking**: a minimal per-task network now exists (see
+  [`dependencies`](#container-fields) and [the task lifecycle](task-lifecycle.md)), but
+  only for containers involved in a dependency relationship — it's not Batect's fully
+  configurable networking (custom drivers, `--use-network` to reuse an existing
+  network, etc.).
 - **Interactive mode**: no TTY/STDIN attachment for tasks that need user input.
 - **Parallel execution**: prerequisites run sequentially, not in parallel — Batect runs
   independent setup/cleanup steps concurrently.

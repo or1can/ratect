@@ -7,8 +7,7 @@ This document outlines the planned journey for Ratect, from achieving parity wit
 The primary goal is to support the core features of Batect to ensure a seamless transition for existing users. This work targets the [`ratect-compat` binary](#two-binaries-ratect-and-ratect-compat) specifically — the `ratect` binary is not expected to maintain 1:1 Batect parity.
 
 - **Image Building**: Support for building Docker images from a `Dockerfile` using the `build_directory` configuration.
-- **Sidecar Containers**: Ability to start and manage dependency containers (sidecars) for tasks.
-- **Docker Networking**: Automatic management of Docker networks for inter-container communication.
+- **Full Docker Networking**: A minimal per-task network for dependency/sidecar containers is implemented (see [the task lifecycle](docs/task-lifecycle.md)); full Batect-equivalent networking (custom drivers, reusing an existing network via `--use-network`, disabling port bindings, etc.) is not.
 - **Interactive Mode**: Support for interactive terminal sessions (TTY and STDIN) for tasks that require user input.
 - **Environment Variable Interpolation**: Support for using environment variables in `batect.yml`.
 - **Batect Expressions**: Support for dynamic expressions within the configuration for flexible setup.

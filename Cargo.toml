@@ -16,3 +16,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-recursion = "1.1"
 async-trait = "0.1"
+uuid = { version = "1", features = ["v4"] }

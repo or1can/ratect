@@ -32,9 +32,16 @@ cases.
    instead of recursing forever.
 3. **Run prerequisites**: each entry in the task's `prerequisites` list is run (via the
    same `run_task` function) before the task's own container step.
-4. **Run the container step**:
+4. **Resolve dependencies**: if the task's container declares `dependencies`, a
+   Docker network is created and those containers are started (recursively, for
+   nested dependencies) before the task's own container, so it can reach them by
+   name. This is scoped to just this one task execution and torn down afterward —
+   see [the task lifecycle](task-lifecycle.md) for the full step-by-step detail and
+   diagrams.
+5. **Run the container step**:
    - If the container has an `image`, pull it (unless it's already been pulled once
-     this run) and run the container with the task's `command`.
+     this run) and run the container with the task's `command`, joined to the
+     dependency network if one was created in step 4.
    - If the container only has a `build_directory`, Ratect currently just logs a
      warning and does nothing further — image building isn't implemented yet (see
      [differences from Batect](differences-from-batect.md)).
@@ -43,7 +50,9 @@ cases.
 
 The "run once" and "pull once" guarantees are tracked with in-memory sets
 (`executed_tasks`, `pulled_images`, `in_progress_tasks`) scoped to a single `ratect`
-invocation — nothing persists between runs.
+invocation — nothing persists between runs. Dependency/network state, by contrast, is
+scoped to a single *task* execution, not the whole invocation — see
+[the task lifecycle](task-lifecycle.md).
 
 Task execution is currently **sequential**: prerequisites run one after another, not in
 parallel, even when they're independent of each other. Parallel execution is on the
@@ -64,8 +73,15 @@ client, and implements `ContainerRuntime`:
 - **`pull_image`**: streams `docker create-image` progress and displays it via a
   spinner (using [`indicatif`](https://docs.rs/indicatif)).
 - **`run_container`**: creates a container (attaching stdout/stderr and any resolved
-  volume binds), starts it, streams its logs live to Ratect's own stdout, then removes
-  the container once it exits.
+  volume binds), joins it to a dependency network if one was passed, starts it,
+  streams its logs live to Ratect's own stdout, then removes the container once it
+  exits.
+- **`create_network` / `remove_network`**: thin wrappers over Docker's network API,
+  used for the per-task dependency network (see [task lifecycle](task-lifecycle.md)).
+- **`start_background_container` / `stop_and_remove_container`**: create+start (or
+  stop+remove) a container without streaming its logs or waiting for it to exit —
+  used for dependency/sidecar containers, which run alongside the task rather than
+  being the thing the task is waiting on.
 
 Container creation/start/removal events are logged at `debug` level via `tracing` (see
 below) — not shown by default, but useful with `RUST_LOG=debug`.

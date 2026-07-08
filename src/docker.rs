@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
-use bollard::models::ContainerCreateBody as Config;
+use bollard::models::{
+    ContainerCreateBody as Config, EndpointSettings, NetworkConnectRequest, NetworkCreateRequest,
+};
 use bollard::query_parameters::CreateImageOptions;
 use bollard::query_parameters::LogsOptions;
 use bollard::service::HostConfig;
@@ -14,11 +16,36 @@ use std::time::Duration;
 pub trait ContainerRuntime {
     async fn pull_image(&self, image: &str) -> Result<()>;
 
+    async fn create_network(&self, name: &str) -> Result<()>;
+
+    async fn remove_network(&self, name: &str) -> Result<()>;
+
+    /// Starts a container in the background (does not wait for it to exit),
+    /// joined to `network` with a network alias of `alias` so other
+    /// containers on the same network can reach it by that name. Returns the
+    /// container id, used later to stop/remove it. Used for sidecar/dependency
+    /// containers.
+    async fn start_background_container(
+        &self,
+        alias: &str,
+        image: &str,
+        volumes: Option<&Vec<String>>,
+        network: &str,
+    ) -> Result<String>;
+
+    /// Stops and removes a container started with [`start_background_container`](Self::start_background_container).
+    async fn stop_and_remove_container(&self, container_id: &str) -> Result<()>;
+
+    /// Runs a container to completion, streaming its logs to stdout, then
+    /// removes it. `name` is this container's own network alias (used when
+    /// `network` is set); used for a task's own container.
     async fn run_container(
         &self,
+        name: &str,
         image: &str,
         command: Option<&str>,
         volumes: Option<&Vec<String>>,
+        network: Option<&str>,
     ) -> Result<()>;
 }
 
@@ -31,6 +58,24 @@ impl DockerClient {
         let docker =
             Docker::connect_with_local_defaults().context("Failed to connect to Docker")?;
         Ok(Self { docker })
+    }
+
+    async fn join_network(&self, container_id: &str, network: &str, alias: &str) -> Result<()> {
+        self.docker
+            .connect_network(
+                network,
+                NetworkConnectRequest {
+                    container: container_id.to_string(),
+                    endpoint_config: Some(EndpointSettings {
+                        aliases: Some(vec![alias.to_string()]),
+                        ..Default::default()
+                    }),
+                },
+            )
+            .await
+            .with_context(|| format!("Failed to connect '{}' to network '{}'", alias, network))?;
+        tracing::debug!(container_id, network, alias, "joined network");
+        Ok(())
     }
 }
 
@@ -71,11 +116,83 @@ impl ContainerRuntime for DockerClient {
         Ok(())
     }
 
+    async fn create_network(&self, name: &str) -> Result<()> {
+        self.docker
+            .create_network(NetworkCreateRequest {
+                name: name.to_string(),
+                ..Default::default()
+            })
+            .await
+            .with_context(|| format!("Failed to create network '{}'", name))?;
+        tracing::debug!(network = name, "created network");
+        Ok(())
+    }
+
+    async fn remove_network(&self, name: &str) -> Result<()> {
+        self.docker
+            .remove_network(name)
+            .await
+            .with_context(|| format!("Failed to remove network '{}'", name))?;
+        tracing::debug!(network = name, "removed network");
+        Ok(())
+    }
+
+    async fn start_background_container(
+        &self,
+        alias: &str,
+        image: &str,
+        volumes: Option<&Vec<String>>,
+        network: &str,
+    ) -> Result<String> {
+        let host_config = HostConfig {
+            binds: volumes.cloned(),
+            ..Default::default()
+        };
+
+        let config = Config {
+            image: Some(image.to_string()),
+            host_config: Some(host_config),
+            ..Default::default()
+        };
+
+        let container = self
+            .docker
+            .create_container(None, config)
+            .await
+            .with_context(|| format!("Failed to create sidecar container '{}'", alias))?;
+        tracing::debug!(container_id = %container.id, alias, image, "created sidecar container");
+
+        self.join_network(&container.id, network, alias).await?;
+
+        self.docker
+            .start_container(&container.id, None)
+            .await
+            .with_context(|| format!("Failed to start sidecar container '{}'", alias))?;
+        tracing::debug!(container_id = %container.id, alias, "started sidecar container");
+
+        Ok(container.id)
+    }
+
+    async fn stop_and_remove_container(&self, container_id: &str) -> Result<()> {
+        self.docker
+            .stop_container(container_id, None)
+            .await
+            .with_context(|| format!("Failed to stop container '{}'", container_id))?;
+        self.docker
+            .remove_container(container_id, None)
+            .await
+            .with_context(|| format!("Failed to remove container '{}'", container_id))?;
+        tracing::debug!(container_id, "stopped and removed container");
+        Ok(())
+    }
+
     async fn run_container(
         &self,
+        name: &str,
         image: &str,
         command: Option<&str>,
         volumes: Option<&Vec<String>>,
+        network: Option<&str>,
     ) -> Result<()> {
         let host_config = HostConfig {
             binds: volumes.cloned(),
@@ -93,6 +210,10 @@ impl ContainerRuntime for DockerClient {
 
         let container = self.docker.create_container(None, config).await?;
         tracing::debug!(container_id = %container.id, image, "created container");
+
+        if let Some(network) = network {
+            self.join_network(&container.id, network, name).await?;
+        }
 
         self.docker.start_container(&container.id, None).await?;
         tracing::debug!(container_id = %container.id, "started container");

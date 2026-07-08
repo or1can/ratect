@@ -1,0 +1,27 @@
+# Exercises dependency (sidecar) container resolution end to end: multiple
+# sibling dependencies (database, cache) plus a nested one (metrics, only
+# reachable via database) all sharing one task-scoped network with `app`.
+#
+# redis is used purely because its default command (`redis-server`) stays
+# running with no configuration — Container has no `command` field, so a
+# dependency always runs its image's default command.
+project_name: ratect-sidecar-test
+containers:
+  metrics:
+    image: redis:7-alpine
+  database:
+    image: redis:7-alpine
+    dependencies:
+      - metrics
+  cache:
+    image: redis:7-alpine
+  app:
+    image: alpine:3.18.2
+    dependencies:
+      - database
+      - cache
+tasks:
+  ping-sidecars:
+    run:
+      container: app
+      command: ping -c 1 database && ping -c 1 cache && ping -c 1 metrics
