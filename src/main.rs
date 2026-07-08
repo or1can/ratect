@@ -8,6 +8,7 @@ use crate::engine::TaskEngine;
 use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
+use std::process::ExitCode;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
@@ -38,9 +39,21 @@ fn init_tracing() {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
     init_tracing();
 
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            // Use `{:?}` (not `{}`) so the full anyhow context chain is logged,
+            // matching what the default Termination handler would have printed.
+            tracing::error!("{:?}", err);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> Result<()> {
     let args = Args::parse();
 
     let config = if args.config_file.exists() {

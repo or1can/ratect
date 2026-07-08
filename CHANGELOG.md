@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `ROADMAP.md` incorrectly listed `--project-name` as an example Batect CLI flag; it's actually a `batect.yml` config field, not a CLI option. Corrected and cross-linked to the itemized flag table in `docs/differences-from-batect.md`.
+- Fatal errors (malformed config, missing task/container, dependency cycle) previously bypassed `tracing` entirely, propagating to `main`'s default `Result` handler and printing via `anyhow`'s raw `Debug` formatting — inconsistent with every other diagnostic message, and unaffected by `RUST_LOG`. `main` now returns `ExitCode` and routes the final error through `tracing::error!` like everything else.
 
 ### Changed
 

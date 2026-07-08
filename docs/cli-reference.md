@@ -47,8 +47,11 @@ actual behavior — it doesn't yet distinguish "nothing to do" from "success":
   on stderr, or with `--list-tasks`) but doesn't fail the process. This is a rough edge,
   not intentional design; don't rely on it in scripts.
 - A malformed config file (fails to parse), a task/container referenced by name that
-  doesn't exist, or a dependency cycle all cause a non-zero exit, with the error
-  printed to stderr.
+  doesn't exist, or a dependency cycle all cause a non-zero (`1`) exit. The error is
+  logged via `tracing::error!` (so it goes through the same `RUST_LOG`-filterable,
+  formatted stderr channel as everything else — see
+  [how it works](how-it-works.md#5-logging-vs-output)), rather than a raw, differently
+  formatted panic-style message.
 - **A failing command *inside* the container does not currently fail the `ratect`
   process.** Ratect doesn't inspect the container's exit code — as long as the Docker
   API calls themselves succeed (create/start/stream logs/remove), `run_container`

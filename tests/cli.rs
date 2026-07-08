@@ -65,6 +65,24 @@ fn no_task_name_warns() {
     );
 }
 
+#[test]
+fn unknown_task_fails_with_nonzero_exit_and_logged_error() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(sample_config_path())
+        .arg("does-not-exist-task")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Task 'does-not-exist-task' not found"),
+        "stderr:\n{}",
+        stderr
+    );
+}
+
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
 /// Run explicitly with `cargo test -- --ignored`.
 #[test]
