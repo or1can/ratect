@@ -13,8 +13,8 @@ The primary goal is to support the core features of Batect to ensure a seamless 
 - **Environment Variable Interpolation**: Support for using environment variables in `batect.yml`.
 - **Batect Expressions**: Support for dynamic expressions within the configuration for flexible setup.
 - **Includes**: Support for splitting configuration across multiple files using the `include` directive.
-- **Full Configuration Parity**: Support for all available Batect configuration options and standard YAML structures.
-- **Full CLI Options Parity**: Support for all standard Batect CLI flags and options (e.g., `--config-file`, `--project-name`, cleanup control flags, etc.).
+- **Full Configuration Parity**: Support for all available Batect configuration options and standard YAML structures. See [Differences from Batect](docs/differences-from-batect.md#configuration-format) for the itemized current status of every field.
+- **Full CLI Options Parity**: Support for all standard Batect CLI flags and options (e.g., `--config-file`, `--override-image`, cleanup control flags, etc.). See [Differences from Batect](docs/differences-from-batect.md#cli-flags) for the itemized current status of every flag.
 - **User Mapping**: Handling of file permissions and user mapping between host and container.
 - **Proxy Support**: Automatic detection and injection of proxy settings into containers.
 

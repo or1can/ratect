@@ -36,7 +36,7 @@ containers:
 | `image` | string | one of `image`/`build_directory` | A Docker image reference to pull and run (e.g. `alpine:3.18`). |
 | `build_directory` | string | one of `image`/`build_directory` | **Parsed but not yet implemented.** Intended to build an image from a `Dockerfile` in this directory (see [Image Building](../ROADMAP.md#batect-parity) on the roadmap). Running a task against a container that only has `build_directory` set currently just logs a warning and does nothing. |
 | `volumes` | list of strings | no | Bind mounts in `host_path:container_path` form. See [Volume path resolution](#volume-path-resolution) below. |
-| `dependencies` | list of strings | no | **Parsed but not yet used by the engine.** Intended for sidecar/dependency containers that should be started alongside this one (see [Sidecar Containers](../ROADMAP.md#batect-parity) on the roadmap). Currently has no effect. |
+| `dependencies` | list of strings | no | **Parsed but not yet used by the engine.** In Batect, this starts other containers and waits for them to become healthy before this one starts (sidecar containers, e.g. a database). Ratect parses the field but doesn't start or wait for anything — see [Differences from Batect](differences-from-batect.md#container-fields). |
 
 > **Note:** if a container has *neither* `image` nor `build_directory` set, running a
 > task against it currently does nothing and reports success — no error is raised.
