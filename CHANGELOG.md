@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/cli.rs` integration tests covering `--list-tasks`, missing-config and no-task-name behavior, plus a Docker-backed end-to-end test (`#[ignore]`d by default, runnable via `cargo test -- --ignored`) that exercises the full sample `batect.yml` against a real daemon; wired into CI as its own `docker-integration` job.
 - `ContainerRuntime` trait in `src/docker.rs` (via `async-trait`), implemented by `DockerClient`, so `TaskEngine` can be tested against a fake instead of a live Docker daemon.
 - Coverage tooling via `cargo-llvm-cov`; CI generates an HTML report and uploads it as a `coverage-report` artifact for spotting untested code, without gating on a percentage.
+- `docs/` directory with self-contained user documentation: installation, getting started, how it works (architecture), CLI reference, configuration reference, and a differences-from-Batect page — linked from `README.md`. Documents current gaps found in the process: `-- ADDITIONAL_ARGS` are parsed but not forwarded to the running command, `build_directory`/container `dependencies` are parsed but unimplemented, a container with neither `image` nor `build_directory` is a silent no-op, a missing config file doesn't fail the process, and container exit codes aren't currently checked.
 
 ### Changed
 

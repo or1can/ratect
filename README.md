@@ -62,6 +62,19 @@ tasks:
       command: ls /code
 ```
 
+## Documentation
+
+Ratect is not a Batect wrapper — its documentation is self-contained and doesn't
+assume you've read Batect's docs.
+
+- [Installation](docs/installation.md)
+- [Getting Started](docs/getting-started.md)
+- [How It Works](docs/how-it-works.md)
+- [CLI Reference](docs/cli-reference.md)
+- [Configuration Reference](docs/config-reference.md)
+- [Differences from Batect](docs/differences-from-batect.md)
+- [Roadmap](ROADMAP.md)
+
 ## License
 
 Ratect is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
