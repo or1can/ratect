@@ -1,3 +1,6 @@
+[workspace]
+members = ["ratect-core"]
+
 [package]
 name = "ratect"
 version = "0.1.0-dev"
@@ -5,15 +8,8 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
-serde = { version = "1.0", features = ["derive"] }
-noyalib = { version = "0.0.13", features = ["compat-serde-yaml"] }
 tokio = { version = "1.52", features = ["full"] }
-bollard = "0.21"
 anyhow = "1.0"
-futures = "0.3"
-indicatif = "0.18"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-async-recursion = "1.1"
-async-trait = "0.1"
-uuid = { version = "1", features = ["v4"] }
+ratect-core = { path = "ratect-core" }

@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Converted the project into a Cargo workspace: extracted `config.rs`/`docker.rs`/`engine.rs` (and their tests) into a new `ratect-core` library crate, leaving the `ratect` binary crate as thin CLI glue (`src/main.rs` only) over `ratect-core`'s public API. Pure refactor, no behavior change — sets up the [two-binary plan](ROADMAP.md#two-binaries-ratect-and-ratect-compat) (a future `ratect-compat` and `ratect` sharing this same core) without committing to the rename or building the second binary yet. CI now runs `--workspace` variants of build/test/clippy/coverage.
 - Restructured `ROADMAP.md`'s CLI plan from a two-phase single-binary evolution (with eventual deprecation of Batect-compatible flags) into two permanent binaries sharing one core: `ratect-compat` (strict Batect CLI/YAML parity, the target for all "Batect Parity" roadmap items) and `ratect` (a free-to-diverge modern CLI, not required to maintain Batect parity). Ratect will not ship a binary literally named `batect`, to avoid confusion/trademark concerns; a drop-in `./batect` replacement is achieved by the user symlinking or renaming `ratect-compat` themselves. Also added an undecided/exploratory TOML-as-alternative-config-format item to "Future Vision", scoped to the `ratect` binary only.
 - Updated project version to `0.1.0-dev` to reflect pre-release status.
 - Migrated YAML parsing from `serde_yaml` to `noyalib` for improved safety and maintenance.

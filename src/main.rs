@@ -1,12 +1,8 @@
-mod config;
-mod docker;
-mod engine;
-
-use crate::config::Config;
-use crate::docker::DockerClient;
-use crate::engine::TaskEngine;
 use anyhow::Result;
 use clap::Parser;
+use ratect_core::config::Config;
+use ratect_core::docker::DockerClient;
+use ratect_core::engine::TaskEngine;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use tracing_subscriber::EnvFilter;

@@ -9,7 +9,7 @@ for a map of the source layout.
 `src/main.rs` parses arguments with [`clap`](https://docs.rs/clap). See the
 [CLI reference](cli-reference.md) for the full flag list.
 
-## 2. Config loading (`src/config.rs`)
+## 2. Config loading (`ratect-core/src/config.rs`)
 
 1. The YAML file (`batect.yml` by default) is parsed into `Config` /`Container` /
    `Task` / `TaskRun` structs using [`noyalib`](https://docs.rs/noyalib).
@@ -21,7 +21,7 @@ for a map of the source layout.
 See the [configuration reference](config-reference.md) for the exact rules and edge
 cases.
 
-## 3. Task engine (`src/engine.rs`)
+## 3. Task engine (`ratect-core/src/engine.rs`)
 
 `TaskEngine::run_task(name)` is a recursive async function:
 
@@ -61,11 +61,11 @@ parallel, even when they're independent of each other. Parallel execution is on 
 ### Testability
 
 The engine talks to Docker through a `ContainerRuntime` trait (defined in
-`src/docker.rs`) rather than depending on the concrete Docker client directly. This is
-what lets the engine's prerequisite/cycle/dedup logic be unit-tested with a fake
-implementation instead of a real Docker daemon.
+`ratect-core/src/docker.rs`) rather than depending on the concrete Docker client
+directly. This is what lets the engine's prerequisite/cycle/dedup logic be
+unit-tested with a fake implementation instead of a real Docker daemon.
 
-## 4. Docker integration (`src/docker.rs`)
+## 4. Docker integration (`ratect-core/src/docker.rs`)
 
 `DockerClient` wraps [`bollard`](https://docs.rs/bollard), Ratect's async Docker API
 client, and implements `ContainerRuntime`:

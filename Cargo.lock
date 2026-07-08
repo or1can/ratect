@@ -827,17 +827,27 @@ name = "ratect"
 version = "0.1.0-dev"
 dependencies = [
  "anyhow",
+ "clap",
+ "ratect-core",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "ratect-core"
+version = "0.1.0-dev"
+dependencies = [
+ "anyhow",
  "async-recursion",
  "async-trait",
  "bollard",
- "clap",
  "futures",
  "indicatif",
  "noyalib",
  "serde",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "uuid",
 ]
 

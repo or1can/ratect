@@ -1,7 +1,7 @@
 # Configuration Reference
 
 Ratect reads a YAML file (`batect.yml` by default) describing containers and tasks.
-This documents the schema Ratect actually parses today (`src/config.rs`) — it is a
+This documents the schema Ratect actually parses today (`ratect-core/src/config.rs`) — it is a
 **subset** of Batect's configuration format. See
 [differences from Batect](differences-from-batect.md) for what's not yet supported.
 
