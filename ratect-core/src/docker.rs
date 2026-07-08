@@ -30,6 +30,37 @@ impl fmt::Display for ContainerExitedNonZero {
 
 impl std::error::Error for ContainerExitedNonZero {}
 
+/// Builds the Docker `cmd` array for a task's container, folding in any
+/// `-- ADDITIONAL_ARGS` from the CLI.
+///
+/// When `command` is set, `sh -c '<command>' sh arg1 arg2 ...` is used
+/// instead of string concatenation, so the args become the shell's
+/// positional parameters (`$1`, `$2`, `$@`) inside `command` rather than
+/// being re-parsed as shell syntax — safe regardless of what characters
+/// they contain. The `sh` immediately after the command string fills the
+/// `$0` slot; it's conventional and not otherwise meaningful.
+///
+/// When `command` is unset, non-empty `additional_args` are passed directly
+/// as argv, letting the image's own entrypoint receive them (matching plain
+/// `docker run <image> <args>`).
+fn build_cmd(command: Option<&str>, additional_args: &[String]) -> Option<Vec<String>> {
+    match (command, additional_args.is_empty()) {
+        (Some(c), true) => Some(vec!["sh".to_string(), "-c".to_string(), c.to_string()]),
+        (Some(c), false) => {
+            let mut cmd = vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                c.to_string(),
+                "sh".to_string(),
+            ];
+            cmd.extend(additional_args.iter().cloned());
+            Some(cmd)
+        }
+        (None, true) => None,
+        (None, false) => Some(additional_args.to_vec()),
+    }
+}
+
 /// Abstracts the container operations the task engine needs, so tests can
 /// inject a fake implementation instead of talking to a real Docker daemon.
 #[async_trait::async_trait]
@@ -59,11 +90,19 @@ pub trait ContainerRuntime {
     /// Runs a container to completion, streaming its logs to stdout, then
     /// removes it. `name` is this container's own network alias (used when
     /// `network` is set); used for a task's own container.
+    ///
+    /// `additional_args` become positional parameters (`$1`, `$2`, ... `$@`)
+    /// within `command` (which always runs via `sh -c`) rather than being
+    /// concatenated into the command string — so they're never re-parsed as
+    /// shell syntax, regardless of what characters they contain. If `command`
+    /// is `None`, `additional_args` (when non-empty) are passed directly as
+    /// the container's argv, letting the image's own entrypoint receive them.
     async fn run_container(
         &self,
         name: &str,
         image: &str,
         command: Option<&str>,
+        additional_args: &[String],
         volumes: Option<&Vec<String>>,
         network: Option<&str>,
     ) -> Result<()>;
@@ -233,6 +272,7 @@ impl ContainerRuntime for DockerClient {
         name: &str,
         image: &str,
         command: Option<&str>,
+        additional_args: &[String],
         volumes: Option<&Vec<String>>,
         network: Option<&str>,
     ) -> Result<()> {
@@ -243,7 +283,7 @@ impl ContainerRuntime for DockerClient {
 
         let config = Config {
             image: Some(image.to_string()),
-            cmd: command.map(|c| vec!["sh".to_string(), "-c".to_string(), c.to_string()]),
+            cmd: build_cmd(command, additional_args),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             host_config: Some(host_config),

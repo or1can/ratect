@@ -22,7 +22,7 @@ missing.
 | Argument | Description |
 |---|---|
 | `TASK_NAME` | The name of the task to run, as defined under `tasks:` in the config file. Optional — if omitted (and `--list-tasks` isn't given), Ratect logs a warning and exits without doing anything. |
-| `-- ADDITIONAL_ARGS...` | Anything after a literal `--` is parsed by the CLI, but **is not currently forwarded to the running task's command**. This is a known gap, not a supported pass-through mechanism yet — see [differences from Batect](differences-from-batect.md). |
+| `-- ADDITIONAL_ARGS...` | Anything after a literal `--` is forwarded to the task's command as positional shell parameters (`$1`, `$2`, `$@`) — see below. Only applies to the task named on the command line, never to its prerequisites. |
 
 ## Examples
 
@@ -35,7 +35,33 @@ ratect test
 
 # Use a config file in a different location
 ratect -f ./ci/batect.yml build
+
+# Pass extra arguments through to the task's command
+ratect test -- --verbose some/specific/file.rs
 ```
+
+### Using ADDITIONAL_ARGS in a task command
+
+`run.command` always executes via `sh -c '<command>'`, so anything after `--` becomes
+that shell's positional parameters — reference them the same way you would in any
+shell script:
+
+```yaml
+tasks:
+  test:
+    run:
+      container: build-env
+      command: cargo test -- "$@"
+```
+
+Running `ratect test -- --nocapture` here runs `cargo test -- --nocapture` inside the
+container. Args are passed as literal argv entries (not concatenated into the command
+string and re-parsed), so they're safe even if they contain shell metacharacters like
+`;`, `&&`, or backticks — `$@` sees them as opaque values, not as syntax to interpret.
+
+If the task's container has no `command` at all, `ADDITIONAL_ARGS` (when given) are
+passed directly as the container's entrypoint arguments instead, matching plain
+`docker run <image> <args>`.
 
 ## Exit codes and error reporting
 

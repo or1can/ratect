@@ -71,7 +71,9 @@ interact with directly.
     of a prerequisite chain, matching Batect.
   - ~~A missing config file exits `0` instead of failing~~ — fixed: it now fails fast
     with a non-zero exit, for both `--list-tasks` and running a task.
-  - `-- ADDITIONAL_ARGS` is parsed but silently dropped — wire it up or remove the flag.
+  - ~~`-- ADDITIONAL_ARGS` is parsed but silently dropped~~ — fixed: forwarded as
+    `sh -c`'s positional parameters (`$1`, `$2`, `$@`), scoped to only the
+    explicitly-requested task, never its prerequisites.
   - Unsupported config keys are silently ignored rather than rejected.
 - **0.2.0** — **Environment Variables** (the `environment` field on containers/tasks)
   together with **Batect Expressions**/config variables (`$VAR`, `${VAR:-default}`,

@@ -25,8 +25,12 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         }
     }
 
+    /// `additional_args` are only ever forwarded to the container run for
+    /// exactly the task named here — not to any of its prerequisites, which
+    /// always run with no additional args, matching Batect's behavior of
+    /// scoping `-- ARGS` to the task named on the command line.
     #[async_recursion]
-    pub async fn run_task(&self, task_name: &str) -> Result<()> {
+    pub async fn run_task(&self, task_name: &str, additional_args: &[String]) -> Result<()> {
         {
             let executed = self.executed_tasks.lock().unwrap();
             if executed.contains(task_name) {
@@ -45,7 +49,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             in_progress.insert(task_name.to_string());
         }
 
-        let result = self.run_task_internal(task_name).await;
+        let result = self.run_task_internal(task_name, additional_args).await;
 
         {
             let mut in_progress = self.in_progress_tasks.lock().unwrap();
@@ -60,17 +64,18 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         result
     }
 
-    async fn run_task_internal(&self, task_name: &str) -> Result<()> {
+    async fn run_task_internal(&self, task_name: &str, additional_args: &[String]) -> Result<()> {
         let task = self
             .config
             .tasks
             .get(task_name)
             .with_context(|| format!("Task '{}' not found", task_name))?;
 
-        // Run prerequisites
+        // Run prerequisites (never with additional args - those are scoped to
+        // only the originally-requested task).
         if let Some(prerequisites) = &task.prerequisites {
             for prerequisite in prerequisites {
-                self.run_task(prerequisite).await?;
+                self.run_task(prerequisite, &[]).await?;
             }
         }
 
@@ -126,6 +131,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         &task.run.container,
                         image,
                         task.run.command.as_deref(),
+                        additional_args,
                         container_config.volumes.as_ref(),
                         network_name.as_deref(),
                     )
@@ -298,12 +304,14 @@ mod tests {
             name: &str,
             _image: &str,
             command: Option<&str>,
+            additional_args: &[String],
             _volumes: Option<&Vec<String>>,
             network: Option<&str>,
         ) -> Result<()> {
             self.push(format!(
-                "run:{name}:{}:{}",
+                "run:{name}:{}:args=[{}]:{}",
                 command.unwrap_or_default(),
+                additional_args.join(","),
                 network.unwrap_or("none")
             ));
             if *self.fail_run.lock().unwrap() {
@@ -436,7 +444,7 @@ mod tests {
         let docker = FakeContainerRuntime::default();
         let engine = TaskEngine::new(config_with_shared_prerequisite(), docker.clone());
 
-        engine.run_task("test-task").await.unwrap();
+        engine.run_task("test-task", &[]).await.unwrap();
 
         let events = docker.events();
 
@@ -455,10 +463,41 @@ mod tests {
             .cloned()
             .collect();
         assert_eq!(runs.len(), 4);
-        assert_eq!(runs[0], "run:build-env:shared-prereq:none");
-        assert_eq!(runs[3], "run:build-env:test-task:none");
-        assert!(runs[1..3].contains(&"run:build-env:prereq-task:none".to_string()));
-        assert!(runs[1..3].contains(&"run:build-env:list-volume-task:none".to_string()));
+        assert_eq!(runs[0], "run:build-env:shared-prereq:args=[]:none");
+        assert_eq!(runs[3], "run:build-env:test-task:args=[]:none");
+        assert!(runs[1..3].contains(&"run:build-env:prereq-task:args=[]:none".to_string()));
+        assert!(runs[1..3].contains(&"run:build-env:list-volume-task:args=[]:none".to_string()));
+    }
+
+    #[tokio::test]
+    async fn additional_args_reach_only_the_requested_task_not_its_prerequisites() {
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config_with_shared_prerequisite(), docker.clone());
+
+        let extra_args = vec!["--verbose".to_string(), "arg with spaces".to_string()];
+        engine.run_task("test-task", &extra_args).await.unwrap();
+
+        let events = docker.events();
+        let runs: Vec<_> = events
+            .iter()
+            .filter(|e| e.starts_with("run:"))
+            .cloned()
+            .collect();
+        assert_eq!(runs.len(), 4);
+
+        // Only "test-task" (the one explicitly requested) gets the args;
+        // its prerequisites ("shared-prereq", "prereq-task",
+        // "list-volume-task") all still run with none.
+        assert_eq!(
+            runs[3],
+            "run:build-env:test-task:args=[--verbose,arg with spaces]:none"
+        );
+        for run in &runs[0..3] {
+            assert!(
+                run.contains("args=[]"),
+                "prerequisite should not receive additional args: {run}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -493,7 +532,7 @@ mod tests {
         let docker = FakeContainerRuntime::default();
         let engine = TaskEngine::new(config, docker.clone());
 
-        engine.run_task("build").await.unwrap();
+        engine.run_task("build", &[]).await.unwrap();
 
         assert!(docker.events().is_empty());
     }
@@ -517,7 +556,7 @@ mod tests {
         let docker = FakeContainerRuntime::default();
         let engine = TaskEngine::new(config, docker.clone());
 
-        engine.run_task("start").await.unwrap();
+        engine.run_task("start", &[]).await.unwrap();
 
         let events = docker.events();
         let network = events
@@ -532,7 +571,7 @@ mod tests {
             .expect("dependency should have started");
         let run_index = events
             .iter()
-            .position(|e| *e == format!("run:app:echo hi:{network}"))
+            .position(|e| *e == format!("run:app:echo hi:args=[]:{network}"))
             .expect("main container should have run, joined to the dependency's network");
         assert!(
             sidecar_index < run_index,
@@ -576,7 +615,7 @@ mod tests {
         let docker = FakeContainerRuntime::default().failing_run();
         let engine = TaskEngine::new(config, docker.clone());
 
-        let err = engine.run_task("start").await.unwrap_err();
+        let err = engine.run_task("start", &[]).await.unwrap_err();
         assert!(err.to_string().contains("exited with code"));
 
         // A failing main container must not stop cleanup from happening —
@@ -615,7 +654,7 @@ mod tests {
         let docker = FakeContainerRuntime::default();
         let engine = TaskEngine::new(config, docker.clone());
 
-        engine.run_task("start").await.unwrap();
+        engine.run_task("start", &[]).await.unwrap();
 
         let events = docker.events();
         let network = events
@@ -634,7 +673,7 @@ mod tests {
             .expect("direct dependency should have started");
         let run_index = events
             .iter()
-            .position(|e| *e == format!("run:app:echo hi:{network}"))
+            .position(|e| *e == format!("run:app:echo hi:args=[]:{network}"))
             .expect("main container should have run");
 
         assert!(
@@ -674,7 +713,7 @@ mod tests {
         let docker = FakeContainerRuntime::default();
         let engine = TaskEngine::new(config, docker.clone());
 
-        engine.run_task("start").await.unwrap();
+        engine.run_task("start", &[]).await.unwrap();
 
         let events = docker.events();
 
@@ -730,7 +769,7 @@ mod tests {
         let docker = FakeContainerRuntime::default();
         let engine = TaskEngine::new(config, docker.clone());
 
-        engine.run_task("start").await.unwrap();
+        engine.run_task("start", &[]).await.unwrap();
 
         let events = docker.events();
         let network = events
@@ -747,7 +786,7 @@ mod tests {
         };
         let run_index = events
             .iter()
-            .position(|e| *e == format!("run:app:echo hi:{network}"))
+            .position(|e| *e == format!("run:app:echo hi:args=[]:{network}"))
             .expect("main container should have run");
 
         let (d_index, c_index, b_index) = (index_of("d"), index_of("c"), index_of("b"));
@@ -786,7 +825,7 @@ mod tests {
         let docker = FakeContainerRuntime::default();
         let engine = TaskEngine::new(config, docker.clone());
 
-        engine.run_task("test").await.unwrap();
+        engine.run_task("test", &[]).await.unwrap();
 
         let events = docker.events();
 
@@ -837,7 +876,7 @@ mod tests {
         let docker = FakeContainerRuntime::default();
         let engine = TaskEngine::new(config, docker);
 
-        let err = engine.run_task("start").await.unwrap_err();
+        let err = engine.run_task("start", &[]).await.unwrap_err();
         assert!(err
             .to_string()
             .contains("Container 'database' has no image"));
@@ -869,7 +908,7 @@ mod tests {
         let docker = FakeContainerRuntime::default();
         let engine = TaskEngine::new(config, docker);
 
-        let err = engine.run_task("start").await.unwrap_err();
+        let err = engine.run_task("start", &[]).await.unwrap_err();
         assert!(err
             .to_string()
             .contains("Circular container dependency detected"));
@@ -883,7 +922,7 @@ mod tests {
         let docker = DockerClient::new().expect("constructing a Docker client is infallible here");
         let engine = TaskEngine::new(config_with_cycle(), docker);
 
-        let err = engine.run_task("a").await.unwrap_err();
+        let err = engine.run_task("a", &[]).await.unwrap_err();
         assert!(err.to_string().contains("Dependency cycle detected"));
     }
 
@@ -892,7 +931,7 @@ mod tests {
         let docker = DockerClient::new().expect("constructing a Docker client is infallible here");
         let engine = TaskEngine::new(empty_config(), docker);
 
-        let err = engine.run_task("does-not-exist").await.unwrap_err();
+        let err = engine.run_task("does-not-exist", &[]).await.unwrap_err();
         assert!(err.to_string().contains("Task 'does-not-exist' not found"));
     }
 }

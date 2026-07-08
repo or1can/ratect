@@ -79,7 +79,7 @@ tasks:
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `container` | string | yes | Name of a container defined under `containers`. |
-| `command` | string | no | Shell command to run inside the container (executed as `sh -c "<command>"`). If omitted, the container's own default `CMD`/`ENTRYPOINT` runs instead. |
+| `command` | string | no | Shell command to run inside the container (executed as `sh -c "<command>"`). If omitted, the container's own default `CMD`/`ENTRYPOINT` runs instead. Any `-- ADDITIONAL_ARGS` from the CLI become this shell's positional parameters (`$1`, `$2`, `$@`) — see [CLI reference](cli-reference.md#using-additional_args-in-a-task-command). |
 
 ## Full example
 

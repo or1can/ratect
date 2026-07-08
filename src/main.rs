@@ -79,7 +79,7 @@ async fn run() -> Result<()> {
         Some(task_name) => {
             let docker = DockerClient::new()?;
             let engine = TaskEngine::new(config, docker);
-            engine.run_task(&task_name).await?;
+            engine.run_task(&task_name, &args.additional_args).await?;
         }
         None => {
             tracing::warn!("No task name provided. Use --help for usage.");

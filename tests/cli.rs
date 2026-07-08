@@ -17,6 +17,10 @@ fn exit_code_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/exit-code.yml")
 }
 
+fn additional_args_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/additional-args.yml")
+}
+
 #[test]
 fn list_tasks_lists_sample_tasks() {
     let output = ratect_command()
@@ -232,4 +236,34 @@ fn failing_prerequisite_stops_the_chain() {
         "the task depending on the failed prerequisite must not have run:\n{}",
         stdout
     );
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// The second arg deliberately contains a space and no shell metacharacters
+/// are involved — proves args arrive as literal positional parameters (via
+/// `sh -c`'s `$0 $1 $2...` mechanism) rather than being concatenated into the
+/// command string and re-parsed as shell syntax.
+#[test]
+#[ignore]
+fn additional_args_are_forwarded_to_the_task_command() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(additional_args_config_path())
+        .arg("echo-args")
+        .arg("--")
+        .arg("foo")
+        .arg("bar baz")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "args: foo bar baz");
 }

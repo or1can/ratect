@@ -1,0 +1,11 @@
+# Exercises `-- ADDITIONAL_ARGS` forwarding: `echo-args`'s command uses `$@`
+# to reference whatever args were passed after `--` on the command line.
+project_name: ratect-additional-args-test
+containers:
+  build-env:
+    image: alpine:3.18.2
+tasks:
+  echo-args:
+    run:
+      container: build-env
+      command: echo "args:" "$@"
