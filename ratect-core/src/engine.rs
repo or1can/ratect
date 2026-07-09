@@ -109,27 +109,24 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         // A task-scoped network + its dependency containers: created fresh for
         // this one task execution and torn down before this function returns,
         // regardless of outcome. Not shared across tasks — see docs/task-lifecycle.md.
-        let has_dependencies = container_config
-            .dependencies
-            .as_ref()
-            .is_some_and(|deps| !deps.is_empty());
-
-        let network_name = if has_dependencies {
-            let name = format!("ratect-{}", Uuid::new_v4());
-            self.docker.create_network(&name).await?;
-            Some(name)
-        } else {
-            None
-        };
+        // Always created, even with no dependencies, so the task's own
+        // container is never left on Docker's shared default bridge network.
+        let network_name = format!("ratect-{}", Uuid::new_v4());
+        self.docker.create_network(&network_name).await?;
 
         let mut running_sidecars: HashMap<String, String> = HashMap::new();
         let mut resolving: HashSet<String> = HashSet::new();
 
         let result: Result<()> = async {
-            if let (Some(network), Some(deps)) = (&network_name, &container_config.dependencies) {
+            if let Some(deps) = &container_config.dependencies {
                 for dep_name in deps {
-                    self.start_dependency(dep_name, network, &mut running_sidecars, &mut resolving)
-                        .await?;
+                    self.start_dependency(
+                        dep_name,
+                        &network_name,
+                        &mut running_sidecars,
+                        &mut resolving,
+                    )
+                    .await?;
                 }
             }
 
@@ -156,7 +153,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         additional_args,
                         container_config.volumes.as_ref(),
                         environment.as_ref(),
-                        network_name.as_deref(),
+                        &network_name,
                     )
                     .await?;
             } else if let Some(build_dir) = &container_config.build_directory {
@@ -184,10 +181,8 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 );
             }
         }
-        if let Some(network) = &network_name {
-            if let Err(e) = self.docker.remove_network(network).await {
-                tracing::warn!(network = network.as_str(), error = ?e, "Failed to remove network");
-            }
+        if let Err(e) = self.docker.remove_network(&network_name).await {
+            tracing::warn!(network = network_name.as_str(), error = ?e, "Failed to remove network");
         }
 
         result
@@ -364,7 +359,7 @@ mod tests {
             additional_args: &[String],
             _volumes: Option<&Vec<String>>,
             environment: Option<&HashMap<String, String>>,
-            network: Option<&str>,
+            network: &str,
         ) -> Result<()> {
             self.environments
                 .lock()
@@ -374,7 +369,7 @@ mod tests {
                 "run:{name}:{}:args=[{}]:{}",
                 command.unwrap_or_default(),
                 additional_args.join(","),
-                network.unwrap_or("none")
+                network
             ));
             if *self.fail_run.lock().unwrap() {
                 return Err(crate::docker::ContainerExitedNonZero { exit_code: 1 }.into());
@@ -525,20 +520,41 @@ mod tests {
         let pulls: Vec<_> = events.iter().filter(|e| e.starts_with("pull:")).collect();
         assert_eq!(pulls, vec!["pull:alpine:3.18"]);
 
+        // Every task gets its own isolated network, even though none of
+        // these declare `dependencies`.
+        let networks_created: Vec<_> = events
+            .iter()
+            .filter_map(|e| e.strip_prefix("network-create:"))
+            .collect();
+        assert_eq!(
+            networks_created.len(),
+            4,
+            "each of the 4 tasks should get its own network: {events:?}"
+        );
+
         // "shared-prereq" is a prerequisite of both "prereq-task" and
         // "list-volume-task", but must only run once, before either of them,
-        // and "test-task" must run last. None of these tasks declare
-        // dependencies, so no network is involved ("none").
+        // and "test-task" must run last.
         let runs: Vec<_> = events
             .iter()
             .filter(|e| e.starts_with("run:"))
             .cloned()
             .collect();
         assert_eq!(runs.len(), 4);
-        assert_eq!(runs[0], "run:build-env:shared-prereq:args=[]:none");
-        assert_eq!(runs[3], "run:build-env:test-task:args=[]:none");
-        assert!(runs[1..3].contains(&"run:build-env:prereq-task:args=[]:none".to_string()));
-        assert!(runs[1..3].contains(&"run:build-env:list-volume-task:args=[]:none".to_string()));
+        for (run, network) in runs.iter().zip(networks_created.iter()) {
+            assert!(
+                run.ends_with(&format!(":{network}")),
+                "run event should be on its own task's network: {run}"
+            );
+        }
+        assert!(runs[0].starts_with("run:build-env:shared-prereq:args=[]:"));
+        assert!(runs[3].starts_with("run:build-env:test-task:args=[]:"));
+        assert!(runs[1..3]
+            .iter()
+            .any(|r| r.starts_with("run:build-env:prereq-task:args=[]:")));
+        assert!(runs[1..3]
+            .iter()
+            .any(|r| r.starts_with("run:build-env:list-volume-task:args=[]:")));
     }
 
     #[tokio::test]
@@ -560,10 +576,7 @@ mod tests {
         // Only "test-task" (the one explicitly requested) gets the args;
         // its prerequisites ("shared-prereq", "prereq-task",
         // "list-volume-task") all still run with none.
-        assert_eq!(
-            runs[3],
-            "run:build-env:test-task:args=[--verbose,arg with spaces]:none"
-        );
+        assert!(runs[3].starts_with("run:build-env:test-task:args=[--verbose,arg with spaces]:"));
         for run in &runs[0..3] {
             assert!(
                 run.contains("args=[]"),
@@ -609,7 +622,12 @@ mod tests {
 
         engine.run_task("build", &[]).await.unwrap();
 
-        assert!(docker.events().is_empty());
+        let events = docker.events();
+        assert!(
+            events.iter().all(|e| e.starts_with("network-")),
+            "no pull/run/sidecar events expected, just this task's own \
+             network being created and torn down: {events:?}"
+        );
     }
 
     #[tokio::test]
@@ -641,7 +659,55 @@ mod tests {
         assert!(err
             .to_string()
             .contains("Container 'build-env' has neither 'image' nor 'build_directory' set"));
-        assert!(docker.events().is_empty());
+        let events = docker.events();
+        assert!(
+            events.iter().all(|e| e.starts_with("network-")),
+            "no pull/run/sidecar events expected, just this task's own \
+             network being created and torn down: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dependency_less_task_still_gets_its_own_network() {
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("build".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("build", &[]).await.unwrap();
+
+        let events = docker.events();
+        let created: Vec<_> = events
+            .iter()
+            .filter(|e| e.starts_with("network-create:"))
+            .collect();
+        let removed: Vec<_> = events
+            .iter()
+            .filter(|e| e.starts_with("network-remove:"))
+            .collect();
+        assert_eq!(
+            created.len(),
+            1,
+            "a task with no dependencies must still get its own isolated \
+             network, not run on Docker's default bridge network: {events:?}"
+        );
+        assert_eq!(
+            removed.len(),
+            1,
+            "the network must be torn down: {events:?}"
+        );
+
+        let network = created[0].strip_prefix("network-create:").unwrap();
+        assert!(events.contains(&format!("run:build-env:echo hi:args=[]:{network}")));
     }
 
     #[tokio::test]

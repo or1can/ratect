@@ -33,11 +33,14 @@ after it, then runs `test`.
 
 ## Per-task steps
 
-If a task's container declares `dependencies`, Ratect creates a Docker network and
-starts those dependency containers *before* the task's own container, so the task's
-container can reach them by name. All of this — network, dependencies, and the task's
-own container — is scoped to **this one task execution** and torn down before moving
-on, regardless of whether the task succeeded:
+Every task execution gets its own Docker network, whether or not its container
+declares `dependencies` — so a task's container is never left running on Docker's
+shared default bridge network, reachable by or able to reach anything else on the
+host. If the container *does* declare `dependencies`, those are started on that
+network *before* the task's own container, so the task's container can reach them by
+name. All of this — network, dependencies, and the task's own container — is scoped
+to **this one task execution** and torn down before moving on, regardless of whether
+the task succeeded:
 
 ```mermaid
 sequenceDiagram
@@ -46,7 +49,6 @@ sequenceDiagram
     participant Dep as Dependency container(s)
     participant Main as Task's own container
 
-    Note over Engine: only if the task's container has `dependencies`
     Engine->>Docker: create_network()
 
     loop for each dependency, nested ones first
@@ -65,9 +67,9 @@ sequenceDiagram
     Engine->>Docker: remove_network()
 ```
 
-If the container has no `dependencies`, the network/dependency steps are skipped
-entirely and the task's own container runs standalone, exactly as before this feature
-existed.
+If the container has no `dependencies`, the dependency steps (the `loop` above) are
+skipped — but the network is still created and the task's own container still joins
+it, isolating it just the same as a task with dependencies.
 
 ## Dependency resolution
 

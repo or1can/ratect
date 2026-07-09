@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A task whose container has no `dependencies` was left running on Docker's shared default bridge network instead of an isolated one, since `TaskEngine::run_task_internal` (`ratect-core/src/engine.rs`) only created a per-task network when `dependencies` was non-empty — meaning such a task's container was reachable from, and could reach, anything else on that bridge (other unrelated containers on the host, other concurrent `ratect` runs' non-dependency containers), contrary to the isolation `docs/task-lifecycle.md` otherwise describes and to Batect's own behavior of always scoping a network per task. Every task execution now creates (and tears down) its own network unconditionally; dependency containers still only start if `dependencies` is set. `ContainerRuntime::run_container`'s `network` parameter changed from `Option<&str>` to `&str`, since a network is now always present by the time it's called.
+
 ## [0.2.0] - 2026-07-09
 
 ### Added

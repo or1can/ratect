@@ -114,7 +114,9 @@ pub trait ContainerRuntime {
     /// is `None`, `additional_args` (when non-empty) are passed directly as
     /// the container's argv, letting the image's own entrypoint receive them.
     /// `environment` is the container's own `environment` merged with the
-    /// task's `run.environment` (which wins on key collision).
+    /// task's `run.environment` (which wins on key collision). `network` is
+    /// this task execution's own isolated network — every task gets one,
+    /// regardless of whether it has dependencies.
     #[allow(clippy::too_many_arguments)]
     async fn run_container(
         &self,
@@ -124,7 +126,7 @@ pub trait ContainerRuntime {
         additional_args: &[String],
         volumes: Option<&Vec<String>>,
         environment: Option<&HashMap<String, String>>,
-        network: Option<&str>,
+        network: &str,
     ) -> Result<()>;
 }
 
@@ -297,7 +299,7 @@ impl ContainerRuntime for DockerClient {
         additional_args: &[String],
         volumes: Option<&Vec<String>>,
         environment: Option<&HashMap<String, String>>,
-        network: Option<&str>,
+        network: &str,
     ) -> Result<()> {
         let host_config = HostConfig {
             binds: volumes.cloned(),
@@ -317,9 +319,7 @@ impl ContainerRuntime for DockerClient {
         let container = self.docker.create_container(None, config).await?;
         tracing::debug!(container_id = %container.id, image, "created container");
 
-        if let Some(network) = network {
-            self.join_network(&container.id, network, name).await?;
-        }
+        self.join_network(&container.id, network, name).await?;
 
         self.docker.start_container(&container.id, None).await?;
         tracing::debug!(container_id = %container.id, "started container");
