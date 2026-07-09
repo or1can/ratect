@@ -9,6 +9,7 @@ use bollard::service::HostConfig;
 use bollard::Docker;
 use futures::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
+use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
 
@@ -61,6 +62,19 @@ fn build_cmd(command: Option<&str>, additional_args: &[String]) -> Option<Vec<St
     }
 }
 
+/// Builds Docker's `KEY=VALUE` environment variable list from a config
+/// `environment` map. Sorted by key so callers (e.g. tests) see a
+/// deterministic order despite `HashMap`'s unspecified iteration order.
+fn build_env(environment: Option<&HashMap<String, String>>) -> Option<Vec<String>> {
+    let environment = environment?;
+    let mut pairs: Vec<String> = environment
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect();
+    pairs.sort();
+    Some(pairs)
+}
+
 /// Abstracts the container operations the task engine needs, so tests can
 /// inject a fake implementation instead of talking to a real Docker daemon.
 #[async_trait::async_trait]
@@ -75,12 +89,14 @@ pub trait ContainerRuntime {
     /// joined to `network` with a network alias of `alias` so other
     /// containers on the same network can reach it by that name. Returns the
     /// container id, used later to stop/remove it. Used for sidecar/dependency
-    /// containers.
+    /// containers. `environment` is that container's own `environment` field
+    /// (a dependency has no task `run`, so nothing to layer on top of it).
     async fn start_background_container(
         &self,
         alias: &str,
         image: &str,
         volumes: Option<&Vec<String>>,
+        environment: Option<&HashMap<String, String>>,
         network: &str,
     ) -> Result<String>;
 
@@ -97,6 +113,9 @@ pub trait ContainerRuntime {
     /// shell syntax, regardless of what characters they contain. If `command`
     /// is `None`, `additional_args` (when non-empty) are passed directly as
     /// the container's argv, letting the image's own entrypoint receive them.
+    /// `environment` is the container's own `environment` merged with the
+    /// task's `run.environment` (which wins on key collision).
+    #[allow(clippy::too_many_arguments)]
     async fn run_container(
         &self,
         name: &str,
@@ -104,6 +123,7 @@ pub trait ContainerRuntime {
         command: Option<&str>,
         additional_args: &[String],
         volumes: Option<&Vec<String>>,
+        environment: Option<&HashMap<String, String>>,
         network: Option<&str>,
     ) -> Result<()>;
 }
@@ -223,6 +243,7 @@ impl ContainerRuntime for DockerClient {
         alias: &str,
         image: &str,
         volumes: Option<&Vec<String>>,
+        environment: Option<&HashMap<String, String>>,
         network: &str,
     ) -> Result<String> {
         let host_config = HostConfig {
@@ -232,6 +253,7 @@ impl ContainerRuntime for DockerClient {
 
         let config = Config {
             image: Some(image.to_string()),
+            env: build_env(environment),
             host_config: Some(host_config),
             ..Default::default()
         };
@@ -274,6 +296,7 @@ impl ContainerRuntime for DockerClient {
         command: Option<&str>,
         additional_args: &[String],
         volumes: Option<&Vec<String>>,
+        environment: Option<&HashMap<String, String>>,
         network: Option<&str>,
     ) -> Result<()> {
         let host_config = HostConfig {
@@ -284,6 +307,7 @@ impl ContainerRuntime for DockerClient {
         let config = Config {
             image: Some(image.to_string()),
             cmd: build_cmd(command, additional_args),
+            env: build_env(environment),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             host_config: Some(host_config),

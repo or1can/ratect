@@ -6,6 +6,24 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use uuid::Uuid;
 
+/// Merges a container's `environment` with a task's `run.environment`
+/// (which wins on key collision), matching Batect: the container's is the
+/// baseline, the run's is a per-task override on top of it. `None` only
+/// when neither is set.
+fn merged_environment(
+    container_env: Option<&HashMap<String, String>>,
+    run_env: Option<&HashMap<String, String>>,
+) -> Option<HashMap<String, String>> {
+    if container_env.is_none() && run_env.is_none() {
+        return None;
+    }
+    let mut merged = container_env.cloned().unwrap_or_default();
+    if let Some(run_env) = run_env {
+        merged.extend(run_env.clone());
+    }
+    Some(merged)
+}
+
 pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     config: Config,
     docker: D,
@@ -126,6 +144,10 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     let mut pulled = self.pulled_images.lock().unwrap();
                     pulled.insert(image.to_string());
                 }
+                let environment = merged_environment(
+                    container_config.environment.as_ref(),
+                    task.run.environment.as_ref(),
+                );
                 self.docker
                     .run_container(
                         &task.run.container,
@@ -133,6 +155,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         task.run.command.as_deref(),
                         additional_args,
                         container_config.volumes.as_ref(),
+                        environment.as_ref(),
                         network_name.as_deref(),
                     )
                     .await?;
@@ -226,7 +249,13 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
 
         let container_id = self
             .docker
-            .start_background_container(name, image, dependency_config.volumes.as_ref(), network)
+            .start_background_container(
+                name,
+                image,
+                dependency_config.volumes.as_ref(),
+                dependency_config.environment.as_ref(),
+                network,
+            )
             .await?;
 
         resolving.remove(name);
@@ -248,10 +277,16 @@ mod tests {
     /// Docker, so tests can assert on dedup, cleanup, and ordering behavior
     /// (including across pull/network/sidecar/run calls) quickly and
     /// deterministically.
+    type CapturedEnvironments = Arc<Mutex<HashMap<String, Option<HashMap<String, String>>>>>;
+
     #[derive(Default, Clone)]
     struct FakeContainerRuntime {
         events: Arc<Mutex<Vec<String>>>,
         fail_run: Arc<Mutex<bool>>,
+        // Captured separately from `events` (rather than folded into its
+        // strings) so the many existing exact-string event assertions don't
+        // have to change shape just because environment support was added.
+        environments: CapturedEnvironments,
     }
 
     impl FakeContainerRuntime {
@@ -268,6 +303,18 @@ mod tests {
         fn failing_run(self) -> Self {
             *self.fail_run.lock().unwrap() = true;
             self
+        }
+
+        /// The `environment` a prior `run_container`/`start_background_container`
+        /// call for `name` was given (flattened: `None` covers both "never
+        /// called" and "called with no environment").
+        fn environment_for(&self, name: &str) -> Option<HashMap<String, String>> {
+            self.environments
+                .lock()
+                .unwrap()
+                .get(name)
+                .cloned()
+                .flatten()
         }
     }
 
@@ -293,8 +340,13 @@ mod tests {
             alias: &str,
             _image: &str,
             _volumes: Option<&Vec<String>>,
+            environment: Option<&HashMap<String, String>>,
             network: &str,
         ) -> Result<String> {
+            self.environments
+                .lock()
+                .unwrap()
+                .insert(alias.to_string(), environment.cloned());
             self.push(format!("sidecar-start:{alias}:{network}"));
             Ok(format!("sidecar-id-{alias}"))
         }
@@ -311,8 +363,13 @@ mod tests {
             command: Option<&str>,
             additional_args: &[String],
             _volumes: Option<&Vec<String>>,
+            environment: Option<&HashMap<String, String>>,
             network: Option<&str>,
         ) -> Result<()> {
+            self.environments
+                .lock()
+                .unwrap()
+                .insert(name.to_string(), environment.cloned());
             self.push(format!(
                 "run:{name}:{}:args=[{}]:{}",
                 command.unwrap_or_default(),
@@ -993,5 +1050,111 @@ mod tests {
 
         let err = engine.run_task("does-not-exist", &[]).await.unwrap_err();
         assert!(err.to_string().contains("Task 'does-not-exist' not found"));
+    }
+
+    #[tokio::test]
+    async fn task_run_environment_reaches_the_container() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.environment = Some(HashMap::from([(
+            "CONTAINER_VAR".to_string(),
+            "container-value".to_string(),
+        )]));
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+
+        let mut task_config = task("build-env", "echo hi");
+        task_config.run.environment = Some(HashMap::from([(
+            "RUN_VAR".to_string(),
+            "run-value".to_string(),
+        )]));
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task_config);
+
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        let environment = docker.environment_for("build-env").unwrap();
+        assert_eq!(
+            environment.get("CONTAINER_VAR"),
+            Some(&"container-value".to_string())
+        );
+        assert_eq!(environment.get("RUN_VAR"), Some(&"run-value".to_string()));
+    }
+
+    #[tokio::test]
+    async fn task_run_environment_overrides_container_environment_on_key_collision() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.environment = Some(HashMap::from([(
+            "SHARED".to_string(),
+            "from-container".to_string(),
+        )]));
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+
+        let mut task_config = task("build-env", "echo hi");
+        task_config.run.environment = Some(HashMap::from([(
+            "SHARED".to_string(),
+            "from-run".to_string(),
+        )]));
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task_config);
+
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        let environment = docker.environment_for("build-env").unwrap();
+        assert_eq!(environment.get("SHARED"), Some(&"from-run".to_string()));
+    }
+
+    #[tokio::test]
+    async fn dependency_container_environment_reaches_the_sidecar() {
+        let mut database = container("postgres:16", None);
+        database.environment = Some(HashMap::from([(
+            "POSTGRES_PASSWORD".to_string(),
+            "secret".to_string(),
+        )]));
+        let mut containers = HashMap::new();
+        containers.insert("database".to_string(), database);
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        let environment = docker.environment_for("database").unwrap();
+        assert_eq!(
+            environment.get("POSTGRES_PASSWORD"),
+            Some(&"secret".to_string())
+        );
     }
 }
