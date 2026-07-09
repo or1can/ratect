@@ -61,9 +61,12 @@ interact with directly.
 Mechanically, each `Cargo.toml` (`ratect`'s and `ratect-core`'s) sits at `X.Y.Z-dev`
 between releases. Cutting a release is one isolated `chore:` commit that bumps both to
 the plain `X.Y.Z` being released and moves `CHANGELOG.md`'s accumulated `Unreleased`
-entries under a new dated `## [X.Y.Z]` header. The next commit — starting the following
-version's development, also isolated, also `chore:` — bumps both back to the next
-`X.Y.Z-dev`. Neither bump is ever folded into a feature commit.
+entries under a new dated `## [X.Y.Z]` header. That commit is tagged `vX.Y.Z` and
+published as a GitHub Release (`prerelease: true` until a binary's own 1.0.0 — see
+below — with that `CHANGELOG.md` section as its body). The next commit — starting the
+following version's development, also isolated, also `chore:` — bumps both
+`Cargo.toml`s back to the next `X.Y.Z-dev`.
+Neither bump is ever folded into a feature commit.
 
 ### `ratect-compat`
 
