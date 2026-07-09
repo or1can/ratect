@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-09
+
 ### Added
 
 - `environment` field on both containers and task `run`s (`ratect-core/src/config.rs`), merged when a task's own container runs (the container's values apply first, `run.environment` overrides them on a key collision) and passed through to Docker as real container environment variables. A dependency/sidecar container only ever gets its own container-level `environment`, since it has no task `run` of its own. `ContainerRuntime::run_container`/`start_background_container` gained an `environment` parameter, mapped to bollard's `ContainerCreateBody.env` via a new `build_env` helper in `ratect-core/src/docker.rs`.
