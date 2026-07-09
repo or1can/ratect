@@ -1,0 +1,21 @@
+# Exercises environment/expression interpolation end-to-end: a container-level
+# `${HOST_VAR:-fallback}` expression (HOST_VAR is intentionally never set, so
+# the fallback is what's exercised) and a task `run.environment` entry
+# referencing a declared config variable, both landing in the real
+# container's environment.
+project_name: ratect-environment-test
+config_variables:
+  env_name:
+    default: from-default
+containers:
+  build-env:
+    image: alpine:3.18.2
+    environment:
+      GREETING: "hello-${HOST_VAR:-fallback}"
+tasks:
+  print-env:
+    run:
+      container: build-env
+      command: echo "GREETING=$GREETING" "ENV_NAME=$ENV_NAME"
+      environment:
+        ENV_NAME: <env_name

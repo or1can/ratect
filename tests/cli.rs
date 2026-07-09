@@ -29,6 +29,14 @@ fn no_image_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/no-image.yml")
 }
 
+fn environment_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/environment.yml")
+}
+
+fn config_vars_file_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/config-vars.yml")
+}
+
 #[test]
 fn list_tasks_lists_sample_tasks() {
     let output = ratect_command()
@@ -309,4 +317,70 @@ fn additional_args_are_forwarded_to_the_task_command() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(stdout.trim(), "args: foo bar baz");
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves environment values actually reach the real container (not just
+/// that the right bollard calls were made): a container-level
+/// `${HOST_VAR:-fallback}` expression (its default, since `HOST_VAR` is
+/// never set) and a task `run.environment` entry referencing a config
+/// variable. Passes both `--config-vars-file` (`env_name: from-file`) and
+/// `--config-var env_name=from-cli` together to prove the real precedence
+/// too, not just the isolated merge logic a unit test would cover.
+#[test]
+#[ignore]
+fn environment_and_config_variables_reach_the_real_container() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(environment_config_path())
+        .arg("--config-vars-file")
+        .arg(config_vars_file_path())
+        .arg("--config-var")
+        .arg("env_name=from-cli")
+        .arg("print-env")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "GREETING=hello-fallback ENV_NAME=from-cli",
+        "--config-var should take precedence over --config-vars-file"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Same fixture as above, but with only `--config-vars-file` (no
+/// `--config-var`), proving a config variable's value can come from the file
+/// alone, not just as an override on top of a CLI-supplied one.
+#[test]
+#[ignore]
+fn config_vars_file_alone_provides_a_declared_variables_value() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(environment_config_path())
+        .arg("--config-vars-file")
+        .arg(config_vars_file_path())
+        .arg("print-env")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "GREETING=hello-fallback ENV_NAME=from-file");
 }
