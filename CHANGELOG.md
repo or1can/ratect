@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `environment` field on both containers and task `run`s (`ratect-core/src/config.rs`), merged when a task's own container runs (the container's values apply first, `run.environment` overrides them on a key collision) and passed through to Docker as real container environment variables. A dependency/sidecar container only ever gets its own container-level `environment`, since it has no task `run` of its own. `ContainerRuntime::run_container`/`start_background_container` gained an `environment` parameter, mapped to bollard's `ContainerCreateBody.env` via a new `build_env` helper in `ratect-core/src/docker.rs`.
+- Batect expression syntax (`$VAR`, `${VAR}`, `${VAR:-default}` for host environment variables; `<name`, `<{name}` for config variables), resolved within `environment` values only — new `ratect-core/src/expressions.rs` module, with host-env and config-variable lookups injected as parameters rather than reading the real process environment, so resolution is deterministic and testable. An unset host variable with no `:-default` fallback, an undeclared config variable, or a declared config variable with no value from any source, are all hard errors naming the variable.
+- `config_variables` top-level field (`ratect-core/src/config.rs`), declaring which names are resolvable via `<name`/`<{name}` and their optional `default:`. New `Config::resolve_environment` merges CLI-supplied overrides over each declared variable's `default` and runs every `environment` value through the expressions module, called once from `main.rs` after `Config::load_from_file`.
+- `--config-var NAME=VALUE` (repeatable) and `--config-vars-file PATH` CLI flags to supply config variable values, highest-precedence first: `--config-var` over `--config-vars-file` over a variable's own `default`. New `Config::load_config_vars_file` (a flat YAML map, parsed via the existing `noyalib` dependency) lives in `ratect-core`, not `main.rs`, keeping the CLI crate a thin parsing/orchestration layer per its documented architecture split.
+- New `docs/config-reference.md#expressions`/`#configvariable` sections and `docs/cli-reference.md` entries for the above; `docs/differences-from-batect.md` and `ROADMAP.md` updated to reflect `environment`/`config_variables`/the two CLI flags as supported, scoped specifically to `environment` (volume paths, `build_directory`, `build_args`, etc. remain literal-only).
+- New unit tests across `ratect-core/src/config.rs` (parsing, `resolve_environment` merge/precedence/error cases, `load_config_vars_file`), `ratect-core/src/expressions.rs` (token parsing, defaults, literal passthrough, error messages), `ratect-core/src/engine.rs` (environment reaching a task's own container vs. a dependency container, run-level override), and `src/main.rs` (the two new CLI flags). New Docker-backed end-to-end tests (`tests/fixtures/environment.yml`, `tests/fixtures/config-vars.yml`) prove both flags' values, and their precedence, reach a real container's real environment — not just that the right calls were made.
+
+### Changed
+
+- Both workspace crates (`ratect`, `ratect-core`) now sit at `0.2.0-dev`, the first commit of the 0.2.0 development cycle now that 0.1.0 is tagged. The `X.Y.Z-dev` ↔ `X.Y.Z` version bump convention itself is now documented in `ROADMAP.md`'s Versioning & Releases section and `AGENTS.md`, rather than only existing as an inferable pattern in the 0.1.0 release commit.
+
 ## [0.1.0] - 2026-07-09
 
 ### Added

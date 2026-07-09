@@ -15,11 +15,11 @@ direction, this page describes exact current status per field/flag, verified aga
 Batect's own reference documentation.
 
 > **A note on unsupported fields**: Ratect's YAML parsing rejects unknown keys — if you
-> write a Batect config field that Ratect doesn't understand (e.g. `environment` on a
-> container), config loading fails with an error naming the field, rather than silently
-> ignoring it. This means a config using any not-yet-supported Batect field won't load
-> at all until that field is supported, even for fields marked "Not supported" in the
-> tables below — there's no partial/best-effort mode.
+> write a Batect config field that Ratect doesn't understand (e.g. `working_directory`
+> on a container), config loading fails with an error naming the field, rather than
+> silently ignoring it. This means a config using any not-yet-supported Batect field
+> won't load at all until that field is supported, even for fields marked "Not
+> supported" in the tables below — there's no partial/best-effort mode.
 
 ## Configuration format
 
@@ -30,7 +30,7 @@ Batect's own reference documentation.
 | `project_name` | Supported | |
 | `containers` | Supported | See [Container fields](#container-fields) below. |
 | `tasks` | Supported | See [Task fields](#task-fields) below. |
-| `config_variables` | Not supported | No variable substitution mechanism at all. |
+| `config_variables` | Supported | Only `default:` — no `description` field (rejected, per the note above; Ratect has no help/usage output to show one in anyway). See [config reference](config-reference.md#configvariable) and [Expressions](#expressions) below. |
 | `include` | Not supported | No multi-file configuration — neither form: local **file includes** (splitting one project's config across files) nor Git **includes/bundles** (importing shared tasks/containers from a separate Git repository, e.g. a team-wide `bundle.yml`). |
 | `forbid_telemetry` | N/A | Ratect doesn't collect telemetry, so there's nothing to forbid. |
 
@@ -42,17 +42,24 @@ Not a single field — Batect supports an
 for config variables) usable *within* several fields: `environment`, `build_args`,
 `build_directory`, `build_secrets.path`, `build_ssh.paths`, and volume local paths.
 
-**Ratect implements none of this.** Every YAML string value is used exactly as written
-— there is no host-side substitution step at all. Two things follow from that:
+**Ratect implements this within `environment` only** (on both containers and
+`run` — see [config reference](config-reference.md#expressions) for the full syntax,
+precedence, and error rules). Every other field's YAML string value is still used
+exactly as written, with no host-side substitution step:
 
-- A volume path like `<{batect.project_directory}/scripts` would be treated as a
-  literal, nonexistent host path, not resolved to anything.
-- `run.command` is the one field where you *will* see `$VAR`-style expansion happen —
-  but that's ordinary POSIX shell variable expansion done by `sh -c` **inside the
-  container**, using the container's own environment. It is unrelated to Batect's
-  expression syntax, which substitutes values from the **host** before the container
-  even starts, and Ratect has no equivalent — see `environment`'s "Not supported" entry
-  below.
+- A volume path like `<{batect.project_directory}/scripts` is treated as a literal,
+  nonexistent host path, not resolved to anything.
+- `build_args`, `build_directory`, `build_secrets.path`, and `build_ssh.paths` are
+  moot anyway until image building itself exists — see `build_directory`'s "Parsed,
+  not implemented" entry below.
+- `run.command` is a field where you *will* see `$VAR`-style expansion happen — but
+  that's ordinary POSIX shell variable expansion done by `sh -c` **inside the
+  container**, using the container's own environment (including anything set via
+  `environment`). It's unrelated to Batect's expression syntax, which substitutes
+  values from the **host** before the container even starts.
+- Batect's implicit built-in variables (e.g. `batect.project_directory`) don't exist —
+  only variables you explicitly declare under `config_variables` are resolvable via
+  `<name`/`<{name}`.
 
 ### Container fields
 
@@ -74,7 +81,7 @@ for config variables) usable *within* several fields: `environment`, `build_args
 | `dockerfile` | Not supported | (moot until image building exists) |
 | `enable_init_process` | Not supported | |
 | `entrypoint` | Not supported | |
-| `environment` | Not supported | No environment variables can be set on containers or tasks. |
+| `environment` | Supported | Values support [expressions](#expressions) (host env vars and config variables). Combines with the equivalent task-level `run.environment` — see [Task run fields](#run-fields) and [config reference](config-reference.md#taskrun). |
 | `health_check` | Not supported | This is why `dependencies` (above) treats "started" as "ready" instead of waiting for real health. |
 | `image_pull_policy` | Not supported | Ratect always pulls an image at most once per run, with no `Always`-equivalent. |
 | `labels` | Not supported | |
@@ -104,7 +111,7 @@ for config variables) usable *within* several fields: `environment`, `build_args
 | `container` | Supported | |
 | `command` | Supported | |
 | `entrypoint` | Not supported | |
-| `environment` | Not supported | |
+| `environment` | Supported | Values support [expressions](#expressions). Overrides the container's own `environment` on a key collision — see [config reference](config-reference.md#taskrun). |
 | `ports` | Not supported | |
 | `working_directory` | Not supported | |
 
@@ -128,7 +135,7 @@ Batect's full flag list, from its [CLI reference](https://github.com/batect/bate
 | `--use-network` | Not supported | A minimal per-task network now exists (see `dependencies`) but there's no way to point it at an existing network instead. Roadmap: [Docker Networking](../ROADMAP.md#batect-parity). |
 | `--enable-buildkit` | N/A | Moot — no image building exists yet. |
 | `--tag-image` | N/A | Moot — no image building exists yet. |
-| `--config-vars-file`, `--config-var` | Not supported | No config variables feature exists. |
+| `--config-vars-file`, `--config-var` | Supported | See [CLI reference](cli-reference.md) and [Expressions](#expressions). |
 | `--docker-host`, `--docker-context`, `--docker-config`, `--docker-cert-path`, `--docker-tls*` | Not supported | Ratect connects using Docker's local defaults only, with no CLI overrides. |
 | `--cache-type`, `--clean`, `--clean-cache` | N/A | Moot — no cache concept exists (Batect's caches are for build performance, not implemented here). |
 | `--max-parallelism` | N/A | Moot — Ratect doesn't run anything in parallel yet. Roadmap: [Parallel Task Execution](../ROADMAP.md#rust-enhancements). |
