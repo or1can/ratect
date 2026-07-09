@@ -59,6 +59,13 @@ stale, unpatched core. The core crate itself isn't published or meaningfully ver
 on its own; it's an internal implementation detail, not something either binary's users
 interact with directly.
 
+Mechanically, each `Cargo.toml` (`ratect`'s and `ratect-core`'s) sits at `X.Y.Z-dev`
+between releases. Cutting a release is one isolated `chore:` commit that bumps both to
+the plain `X.Y.Z` being released and moves `CHANGELOG.md`'s accumulated `Unreleased`
+entries under a new dated `## [X.Y.Z]` header. The next commit — starting the following
+version's development, also isolated, also `chore:` — bumps both back to the next
+`X.Y.Z-dev`. Neither bump is ever folded into a feature commit.
+
 ### `ratect-compat`
 
 - **0.1.0** — not a features milestone, an *honesty* milestone: the engine (prerequisites,
