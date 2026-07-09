@@ -1,5 +1,8 @@
 # Ratect
 
+[![CI](https://github.com/or1can/ratect/actions/workflows/ci.yml/badge.svg)](https://github.com/or1can/ratect/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
 Ratect is a Rust implementation of [Batect](https://github.com/batect/batect).
 
 It aims to be a fast, lightweight, and robust CLI application for defining and running development tasks in Docker containers.
