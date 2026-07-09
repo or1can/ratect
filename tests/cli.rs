@@ -37,6 +37,14 @@ fn config_vars_file_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/config-vars.yml")
 }
 
+fn project_directory_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-directory.yml")
+}
+
+fn project_directory_declared_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-directory-declared.yml")
+}
+
 #[test]
 fn list_tasks_lists_sample_tasks() {
     let output = ratect_command()
@@ -102,6 +110,42 @@ fn unsupported_config_key_reports_error() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("unknown field") && stderr.contains("working_directory"),
+        "stderr:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn declaring_batect_project_directory_in_config_variables_reports_error() {
+    let output = ratect_command()
+        .args(["--list-tasks", "-f"])
+        .arg(project_directory_declared_config_path())
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("batect.project_directory") && stderr.contains("built-in"),
+        "stderr:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn overriding_batect_project_directory_via_cli_reports_error() {
+    let output = ratect_command()
+        .args(["--list-tasks", "-f"])
+        .arg(sample_config_path())
+        .arg("--config-var")
+        .arg("batect.project_directory=/hijacked")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("batect.project_directory"),
         "stderr:\n{}",
         stderr
     );
@@ -383,4 +427,42 @@ fn config_vars_file_alone_provides_a_declared_variables_value() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(stdout.trim(), "GREETING=hello-fallback ENV_NAME=from-file");
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves `batect.project_directory` resolves to the real, absolute
+/// directory containing the config file - in both a bare-form `environment`
+/// reference and a braced-form volume host path - without being declared
+/// under `config_variables`.
+#[test]
+#[ignore]
+fn batect_project_directory_resolves_to_the_configs_own_directory() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(project_directory_config_path())
+        .arg("print-project-dir")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let expected_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    assert!(
+        stdout.contains(&format!("PROJECT_DIR={}", expected_dir.display())),
+        "stdout:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("project-directory.yml"),
+        "expected the volume mount (at /mnt) to list this fixture's own \
+         directory contents, proving it mounted the right path:\n{}",
+        stdout
+    );
 }

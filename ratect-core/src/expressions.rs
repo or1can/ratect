@@ -42,12 +42,16 @@ fn is_ident_start(c: char) -> bool {
     c.is_ascii_alphabetic() || c == '_'
 }
 
-fn is_ident_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_'
+/// Config variable names (`<name`, sigil `<`) may contain `.` — needed for
+/// Batect's one built-in, `batect.project_directory`. Host environment
+/// variable names (`$VAR`, sigil `$`) never do, so `.` isn't allowed there.
+fn is_ident_char(c: char, sigil: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || (sigil == '<' && c == '.')
 }
 
-fn is_valid_ident(name: &str) -> bool {
-    matches!(name.chars().next(), Some(c) if is_ident_start(c)) && name.chars().all(is_ident_char)
+fn is_valid_ident(name: &str, sigil: char) -> bool {
+    matches!(name.chars().next(), Some(c) if is_ident_start(c))
+        && name.chars().all(|c| is_ident_char(c, sigil))
 }
 
 /// Tries to parse one expression token starting at `chars[0]` (which is `$`
@@ -81,7 +85,7 @@ fn parse_token(
             (inner, None)
         };
 
-        if !is_valid_ident(&name) {
+        if !is_valid_ident(&name, sigil) {
             return Ok(None);
         }
 
@@ -92,7 +96,7 @@ fn parse_token(
             return Ok(None);
         }
         let mut end = 1;
-        while end < chars.len() && is_ident_char(chars[end]) {
+        while end < chars.len() && is_ident_char(chars[end], sigil) {
             end += 1;
         }
         let name: String = chars[1..end].iter().collect();
@@ -252,5 +256,44 @@ mod tests {
         // `<env_name` expands (consuming just the identifier), leaving the
         // trailing '>' from the input as literal text.
         assert_eq!(result, "api-staging>-eu");
+    }
+
+    #[test]
+    fn expands_bare_config_var_with_dotted_name() {
+        let mut config_vars = HashMap::new();
+        config_vars.insert(
+            "batect.project_directory".to_string(),
+            Some("/abs/project".to_string()),
+        );
+        let result = interpolate("<batect.project_directory", host_env(&[]), &config_vars).unwrap();
+        assert_eq!(result, "/abs/project");
+    }
+
+    #[test]
+    fn expands_braced_config_var_with_dotted_name() {
+        let mut config_vars = HashMap::new();
+        config_vars.insert(
+            "batect.project_directory".to_string(),
+            Some("/abs/project".to_string()),
+        );
+        let result = interpolate(
+            "<{batect.project_directory}/scripts",
+            host_env(&[]),
+            &config_vars,
+        )
+        .unwrap();
+        assert_eq!(result, "/abs/project/scripts");
+    }
+
+    #[test]
+    fn dot_is_not_a_valid_host_var_identifier_character() {
+        // Unlike config variables, host env var names never contain '.', so
+        // `$batect.project_directory` should expand just `$batect` (which
+        // errors here, since it's unset) rather than treating the dot as
+        // part of the identifier.
+        let err =
+            interpolate("$batect.project_directory", host_env(&[]), &HashMap::new()).unwrap_err();
+        assert!(err.to_string().contains("batect"));
+        assert!(!err.to_string().contains("batect.project_directory"));
     }
 }

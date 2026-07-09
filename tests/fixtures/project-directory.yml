@@ -1,0 +1,17 @@
+# Exercises Batect's one built-in config variable, batect.project_directory
+# (the absolute path of the directory containing this file) - used both in
+# `environment` (bare form) and a volume host path (braced form), without
+# being declared under config_variables.
+project_name: ratect-project-directory-test
+containers:
+  build-env:
+    image: alpine:3.18.2
+    environment:
+      PROJECT_DIR: <batect.project_directory
+    volumes:
+      - <{batect.project_directory}:/mnt
+tasks:
+  print-project-dir:
+    run:
+      container: build-env
+      command: echo "PROJECT_DIR=$PROJECT_DIR" && ls /mnt

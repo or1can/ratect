@@ -57,11 +57,14 @@ substitution step:
   container**, using the container's own environment (including anything set via
   `environment`). It's unrelated to Batect's expression syntax, which substitutes
   values from the **host** before the container even starts.
-- Batect's implicit built-in variables (e.g. `batect.project_directory`) don't exist —
-  only variables you explicitly declare under `config_variables` are resolvable via
-  `<name`/`<{name}`. So a Batect volume path like `<{batect.project_directory}/scripts`
-  specifically won't resolve (`batect.project_directory` isn't a name you can declare),
-  but `<{my_declared_var}/scripts` will.
+- Batect has exactly one implicit built-in variable, `batect.project_directory`
+  (the absolute path of the directory containing the config file), and Ratect
+  supports it too — resolvable via `<batect.project_directory`/
+  `<{batect.project_directory}` without being declared under `config_variables` (in
+  fact, declaring or `--config-var`/`--config-vars-file`-overriding that exact name is
+  a hard error, since it isn't meant to be overridable) — see
+  [config reference](config-reference.md#built-in-config-variable-batectproject_directory).
+  No other implicit/built-in variables exist beyond this one.
 
 ### Container fields
 

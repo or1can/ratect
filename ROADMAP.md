@@ -9,7 +9,7 @@ The primary goal is to support the core features of Batect to ensure a seamless 
 - **Image Building**: Support for building Docker images from a `Dockerfile` using the `build_directory` configuration.
 - **Full Docker Networking**: A minimal per-task network for dependency/sidecar containers is implemented (see [the task lifecycle](docs/task-lifecycle.md)); full Batect-equivalent networking (custom drivers, reusing an existing network via `--use-network`, disabling port bindings, etc.) is not.
 - **Interactive Mode**: Support for interactive terminal sessions (TTY and STDIN) for tasks that require user input.
-- **Full Environment Variable Interpolation & Batect Expressions**: `environment` on containers/tasks, `config_variables`, and `$VAR`/`${VAR}`/`${VAR:-default}`/`<name`/`<{name}` expressions are implemented for `environment` values and volume host paths (0.2.0) — every already-supported field that could meaningfully take one; expression support within `build_directory`, `build_args`, etc. is moot until image building itself exists — see [Expressions](docs/differences-from-batect.md#expressions).
+- **Full Environment Variable Interpolation & Batect Expressions**: `environment` on containers/tasks, `config_variables` (including Batect's one built-in, `batect.project_directory`), and `$VAR`/`${VAR}`/`${VAR:-default}`/`<name`/`<{name}` expressions are implemented for `environment` values and volume host paths (0.2.0) — every already-supported field that could meaningfully take one; expression support within `build_directory`, `build_args`, etc. is moot until image building itself exists — see [Expressions](docs/differences-from-batect.md#expressions).
 - **Includes**: Support for splitting configuration across multiple files using the `include` directive.
 - **Full Configuration Parity**: Support for all available Batect configuration options and standard YAML structures. See [Differences from Batect](docs/differences-from-batect.md#configuration-format) for the itemized current status of every field.
 - **Full CLI Options Parity**: Support for all standard Batect CLI flags and options (e.g., `--config-file`, `--override-image`, cleanup control flags, etc.). See [Differences from Batect](docs/differences-from-batect.md#cli-flags) for the itemized current status of every flag.
@@ -90,8 +90,8 @@ version's development, also isolated, also `chore:` — bumps both back to the n
   `run`s (merged, with `run.environment` winning on a key collision), a
   `config_variables` top-level field (`default:` only), `$VAR`/`${VAR}`/`${VAR:-default}`
   and `<name`/`<{name}` expressions resolved within `environment` values and volume
-  host paths, and `--config-var`/`--config-vars-file` CLI flags to supply config
-  variable values. See
+  host paths, `--config-var`/`--config-vars-file` CLI flags to supply config variable
+  values, and Batect's one built-in config variable, `batect.project_directory`. See
   [config reference](docs/config-reference.md#expressions). Bundled deliberately, not a
   grab-bag: interpolation is the one shared mechanism both environment variables and
   config variables need to be useful, and later fields like `build_args` (0.3.0) depend

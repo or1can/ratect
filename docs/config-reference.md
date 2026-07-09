@@ -132,6 +132,15 @@ Config variable values themselves come from, highest precedence first: `--config
 NAME=VALUE` (repeatable), `--config-vars-file` (a flat YAML map), then the variable's
 own `default` — see [CLI reference](cli-reference.md).
 
+### Built-in config variable: `batect.project_directory`
+
+`<batect.project_directory`/`<{batect.project_directory}` always resolves to the
+absolute path of the directory containing the config file — Batect's one built-in
+config variable, so Ratect supports it without requiring (or allowing) it to be
+declared under `config_variables`. Declaring a `config_variables` entry named
+`batect.project_directory`, or supplying one via `--config-var`/`--config-vars-file`,
+is a hard error — it isn't overridable.
+
 ## Full example
 
 This mirrors the sample config used in the test suite (`batect.yml` in the repo root):

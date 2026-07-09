@@ -4,6 +4,12 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
 
+/// Batect's one built-in config variable, resolvable via `<batect.project_directory`/
+/// `<{batect.project_directory}` without being declared in `config_variables` — always
+/// the absolute path of the directory containing the config file. See
+/// [`Config::resolve_expressions_with`].
+const PROJECT_DIRECTORY_VAR: &str = "batect.project_directory";
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -100,6 +106,17 @@ impl Config {
         config_var_overrides: &HashMap<String, String>,
         host_env: impl Fn(&str) -> Option<String>,
     ) -> Result<()> {
+        if self
+            .config_variables
+            .as_ref()
+            .is_some_and(|vars| vars.contains_key(PROJECT_DIRECTORY_VAR))
+        {
+            anyhow::bail!(
+                "'{PROJECT_DIRECTORY_VAR}' is a built-in config variable and can't be declared \
+                 in 'config_variables'"
+            );
+        }
+
         for key in config_var_overrides.keys() {
             let declared = self
                 .config_variables
@@ -124,6 +141,17 @@ impl Config {
                 config_vars.insert(name.clone(), value);
             }
         }
+
+        // Batect's one built-in config variable: the absolute path of the
+        // directory containing the config file. Not user-declarable (see
+        // the check above) or overridable via --config-var — the guard
+        // above already stops that, since only *declared* names can be
+        // overridden.
+        let project_directory = std::env::current_dir()?
+            .join(base_path)
+            .display()
+            .to_string();
+        config_vars.insert(PROJECT_DIRECTORY_VAR.to_string(), Some(project_directory));
 
         for container in self.containers.values_mut() {
             if let Some(environment) = &mut container.environment {
@@ -694,5 +722,89 @@ config_variables:
             config.containers["build-env"].environment.as_ref().unwrap()["FOO"],
             "literal-value"
         );
+    }
+
+    #[test]
+    fn resolve_expressions_resolves_built_in_project_directory_var_in_environment() {
+        let mut environment = HashMap::new();
+        environment.insert("FOO".to_string(), "<batect.project_directory".to_string());
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_environment(environment),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        config
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), |_| None)
+            .unwrap();
+
+        assert_eq!(
+            config.containers["build-env"].environment.as_ref().unwrap()["FOO"],
+            "/base"
+        );
+    }
+
+    #[test]
+    fn resolve_expressions_resolves_built_in_project_directory_var_in_volumes() {
+        let mut container = container_with_environment(HashMap::new());
+        container.volumes = Some(vec![
+            "<{batect.project_directory}/scripts:/scripts".to_string()
+        ]);
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([("build-env".to_string(), container)]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        config
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), |_| None)
+            .unwrap();
+
+        assert_eq!(
+            config.containers["build-env"].volumes.as_ref().unwrap()[0],
+            "/base/scripts:/scripts"
+        );
+    }
+
+    #[test]
+    fn resolve_expressions_errors_if_project_directory_is_declared_in_config_variables() {
+        let mut config_variables = HashMap::new();
+        config_variables.insert(
+            "batect.project_directory".to_string(),
+            ConfigVariable {
+                default: Some("/somewhere".to_string()),
+            },
+        );
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::new(),
+            tasks: HashMap::new(),
+            config_variables: Some(config_variables),
+        };
+
+        let result = config.resolve_expressions_with(Path::new("/base"), &HashMap::new(), |_| None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_expressions_errors_if_project_directory_is_given_as_a_cli_override() {
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::new(),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        let overrides = HashMap::from([(
+            "batect.project_directory".to_string(),
+            "/hijacked".to_string(),
+        )]);
+        let result = config.resolve_expressions_with(Path::new("/base"), &overrides, |_| None);
+        assert!(result.is_err());
     }
 }

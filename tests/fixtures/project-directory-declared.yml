@@ -1,0 +1,15 @@
+# batect.project_directory is a reserved, built-in name - declaring it under
+# config_variables should be rejected rather than silently shadowing the
+# built-in.
+project_name: ratect-project-directory-declared-test
+config_variables:
+  batect.project_directory:
+    default: /somewhere
+containers:
+  build-env:
+    image: alpine:3.18.2
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
