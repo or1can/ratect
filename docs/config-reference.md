@@ -38,7 +38,7 @@ containers:
 |---|---|---|---|
 | `image` | string | one of `image`/`build_directory` | A Docker image reference to pull and run (e.g. `alpine:3.18`). |
 | `build_directory` | string | one of `image`/`build_directory` | **Parsed but not yet implemented.** Intended to build an image from a `Dockerfile` in this directory (see [Image Building](../ROADMAP.md#batect-parity) on the roadmap). Running a task against a container that only has `build_directory` set currently just logs a warning and does nothing. |
-| `volumes` | list of strings | no | Bind mounts in `host_path:container_path` form. See [Volume path resolution](#volume-path-resolution) below. |
+| `volumes` | list of strings | no | Bind mounts in `host_path:container_path` form. `host_path` supports [expressions](#expressions). See [Volume path resolution](#volume-path-resolution) below. |
 | `dependencies` | list of strings | no | Names of other containers to start (recursively, if they themselves have dependencies) before this one, reachable by name over a Docker network created for the duration of the task. No health-check waiting — a dependency is considered ready as soon as it's started. See [the task lifecycle](task-lifecycle.md) for the full model, and [Differences from Batect](differences-from-batect.md#container-fields) for what's simplified relative to Batect. |
 | `environment` | map of string → string | no | Environment variables to set in the container, e.g. `FOO: bar`. Values support [expressions](#expressions) (`$VAR`, `${VAR:-default}`, `<name`). A dependency container only ever gets its own `environment` — see [TaskRun](#taskrun) for how a task's own container's `environment` combines with `run.environment`. |
 
@@ -52,14 +52,19 @@ containers:
 Each entry in `volumes` is split on `:`. Only entries with **exactly two** colon-separated
 parts (`host_path:container_path`) are resolved:
 
-- If `host_path` is relative, it's resolved to an absolute path **relative to the
-  directory containing the config file** (not the current working directory), at load
-  time — once, before any task runs.
-- If `host_path` is already absolute, it's left unchanged.
+- `host_path` is interpolated first (see [Expressions](#expressions)) — so a config
+  variable that itself resolves to an absolute path is used as-is, not treated as a
+  literal relative fragment.
+- *After* interpolation, if the result is relative, it's resolved to an absolute path
+  **relative to the directory containing the config file** (not the current working
+  directory). If it's already absolute (whether literally written that way, or because
+  that's what an expression resolved to), it's left unchanged.
+- This all happens once, after CLI-supplied config variable overrides
+  (`--config-var`/`--config-vars-file`) are known — not at config-parse time.
 - Entries that don't split into exactly two parts — e.g. a three-part spec like
   `host:container:ro` (Docker's read-only mount flag), or a Windows drive-letter path
-  like `C:/data:/code` — are **left completely unresolved**, including the host path.
-  Use an absolute host path if you need one of these forms today.
+  like `C:/data:/code` — are **left completely unresolved**, including no interpolation
+  and no path resolution. Use an absolute host path if you need one of these forms today.
 
 ## Task
 
@@ -100,13 +105,15 @@ config_variables:
 
 ## Expressions
 
-`environment` values (on both [Container](#container) and [TaskRun](#taskrun)) support
-two kinds of expression, resolved once when the config is loaded — everywhere else in
-the config (volume paths, `build_directory`, etc.), a string is used exactly as
-written, with no substitution. Literal text around an expression is left untouched
-(`"prefix-$VAR-suffix"` interpolates just `$VAR`), and a `$`/`<` not followed by a
-valid identifier (or an unterminated `${`/`<{`) is treated as a literal character
-rather than an error.
+`environment` values (on both [Container](#container) and [TaskRun](#taskrun)) and a
+volume's `host_path` (see [Volume path resolution](#volume-path-resolution)) support
+two kinds of expression, resolved once — after CLI-supplied config variable overrides
+(`--config-var`/`--config-vars-file`) are known, so before any task runs but not at
+config-parse time itself. Everywhere else in the config (`build_directory`, etc.), a
+string is used exactly as written, with no substitution. Literal text around an
+expression is left untouched (`"prefix-$VAR-suffix"` interpolates just `$VAR`), and a
+`$`/`<` not followed by a valid identifier (or an unterminated `${`/`<{`) is treated as
+a literal character rather than an error.
 
 | Form | Resolves against | Example |
 |---|---|---|

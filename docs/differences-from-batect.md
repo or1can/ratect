@@ -42,13 +42,13 @@ Not a single field — Batect supports an
 for config variables) usable *within* several fields: `environment`, `build_args`,
 `build_directory`, `build_secrets.path`, `build_ssh.paths`, and volume local paths.
 
-**Ratect implements this within `environment` only** (on both containers and
-`run` — see [config reference](config-reference.md#expressions) for the full syntax,
-precedence, and error rules). Every other field's YAML string value is still used
-exactly as written, with no host-side substitution step:
+**Ratect implements this within `environment` and volume local paths** (see
+[config reference](config-reference.md#expressions) for the full syntax, precedence,
+and error rules, and [Volume path resolution](config-reference.md#volume-path-resolution)
+for how an interpolated host path is then resolved relative to the config file). Every
+other field's YAML string value is still used exactly as written, with no host-side
+substitution step:
 
-- A volume path like `<{batect.project_directory}/scripts` is treated as a literal,
-  nonexistent host path, not resolved to anything.
 - `build_args`, `build_directory`, `build_secrets.path`, and `build_ssh.paths` are
   moot anyway until image building itself exists — see `build_directory`'s "Parsed,
   not implemented" entry below.
@@ -59,14 +59,16 @@ exactly as written, with no host-side substitution step:
   values from the **host** before the container even starts.
 - Batect's implicit built-in variables (e.g. `batect.project_directory`) don't exist —
   only variables you explicitly declare under `config_variables` are resolvable via
-  `<name`/`<{name}`.
+  `<name`/`<{name}`. So a Batect volume path like `<{batect.project_directory}/scripts`
+  specifically won't resolve (`batect.project_directory` isn't a name you can declare),
+  but `<{my_declared_var}/scripts` will.
 
 ### Container fields
 
 | Field | Status | Notes |
 |---|---|---|
 | `image` | Supported | |
-| `volumes` | Partially supported | Only the `local:container[:options]` string form — see [config reference](config-reference.md#volume-path-resolution). The expanded map form, [caches](https://github.com/batect/batect.dev/blob/main/docs/reference/config/containers.md#volumes), and tmpfs mounts aren't supported. |
+| `volumes` | Partially supported | Only the `local:container[:options]` string form — see [config reference](config-reference.md#volume-path-resolution). The local path supports [expressions](#expressions). The expanded map form, [caches](https://github.com/batect/batect.dev/blob/main/docs/reference/config/containers.md#volumes), and tmpfs mounts aren't supported. |
 | `dependencies` | Supported (simplified) | Starts recursively (nested dependencies too), on a network scoped to one task execution — see [the task lifecycle](task-lifecycle.md). No health-check waiting (`health_check` isn't parsed — see below) and no `setup_commands` support, so a dependency is "ready" as soon as it's started, unlike Batect's real readiness check. |
 | `build_directory` | Parsed, not implemented | No image building. Roadmap: [Image Building](../ROADMAP.md#batect-parity). |
 | `additional_hostnames` | Not supported | |

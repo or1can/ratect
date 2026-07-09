@@ -4,7 +4,7 @@ use ratect_core::config::Config;
 use ratect_core::docker::DockerClient;
 use ratect_core::engine::TaskEngine;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use tracing_subscriber::EnvFilter;
 
@@ -89,7 +89,8 @@ async fn run() -> Result<()> {
         None => HashMap::new(),
     };
     config_var_overrides.extend(args.config_var.iter().cloned());
-    config.resolve_environment(&config_var_overrides)?;
+    let base_path = args.config_file.parent().unwrap_or(Path::new("."));
+    config.resolve_expressions(base_path, &config_var_overrides)?;
 
     if args.list_tasks {
         println!("Tasks in {}:", config.project_name);

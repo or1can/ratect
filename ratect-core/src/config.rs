@@ -45,16 +45,16 @@ pub struct ConfigVariable {
 }
 
 impl Config {
+    /// Parses the config file only — no path resolution or expression
+    /// interpolation. Those need `config_var_overrides` from the CLI
+    /// (`--config-var`/`--config-vars-file`), which aren't known yet at this
+    /// point, so callers must follow up with
+    /// [`resolve_expressions`](Self::resolve_expressions).
     pub fn load_from_file(path: &Path) -> Result<Self> {
         let file =
             File::open(path).with_context(|| format!("Failed to open config file {:?}", path))?;
-        let mut config: Config = noyalib::from_reader(file)
-            .with_context(|| format!("Failed to parse config file {:?}", path))?;
-
-        let base_path = path.parent().unwrap_or(Path::new("."));
-        config.resolve_paths(base_path)?;
-
-        Ok(config)
+        noyalib::from_reader(file)
+            .with_context(|| format!("Failed to parse config file {:?}", path))
     }
 
     /// Loads a `--config-vars-file`: a flat YAML map of config variable
@@ -66,23 +66,37 @@ impl Config {
             .with_context(|| format!("Failed to parse config vars file {:?}", path))
     }
 
-    /// Resolves every `environment` value (on containers and task `run`s)
-    /// through Batect's expression syntax — `$VAR`/`${VAR}`/`${VAR:-default}`
+    /// Resolves every expression-bearing value in the config — `environment`
+    /// entries (on containers and task `run`s) and volume host paths —
+    /// through Batect's expression syntax: `$VAR`/`${VAR}`/`${VAR:-default}`
     /// against the real host environment, and `<name`/`<{name}` against
     /// `config_variables`, merged with `config_var_overrides` (highest
     /// precedence — from `--config-var`/`--config-vars-file`).
-    pub fn resolve_environment(
+    ///
+    /// Also turns relative volume host paths into absolute ones (relative to
+    /// `base_path`, the config file's directory) — done here, *after*
+    /// interpolation, rather than automatically in `load_from_file`. An
+    /// expression can itself resolve to an absolute path (e.g. a
+    /// `<project_root` config variable), and that must not be prefixed with
+    /// `base_path` as if it were still a literal relative fragment — so
+    /// path resolution has to run after interpolation, which in turn has to
+    /// wait for CLI-supplied config variable overrides to be known.
+    pub fn resolve_expressions(
         &mut self,
+        base_path: &Path,
         config_var_overrides: &HashMap<String, String>,
     ) -> Result<()> {
-        self.resolve_environment_with(config_var_overrides, |name| std::env::var(name).ok())
+        self.resolve_expressions_with(base_path, config_var_overrides, |name| {
+            std::env::var(name).ok()
+        })
     }
 
-    /// The actual implementation behind [`resolve_environment`](Self::resolve_environment),
+    /// The actual implementation behind [`resolve_expressions`](Self::resolve_expressions),
     /// parameterized over the host environment lookup so tests don't have to
     /// touch the real process environment.
-    fn resolve_environment_with(
+    fn resolve_expressions_with(
         &mut self,
+        base_path: &Path,
         config_var_overrides: &HashMap<String, String>,
         host_env: impl Fn(&str) -> Option<String>,
     ) -> Result<()> {
@@ -117,6 +131,11 @@ impl Config {
                     *value = crate::expressions::interpolate(value, &host_env, &config_vars)?;
                 }
             }
+            if let Some(volumes) = &mut container.volumes {
+                for volume in volumes {
+                    *volume = resolve_volume(volume, base_path, &host_env, &config_vars)?;
+                }
+            }
         }
 
         for task in self.tasks.values_mut() {
@@ -129,28 +148,41 @@ impl Config {
 
         Ok(())
     }
+}
 
-    fn resolve_paths(&mut self, base_path: &Path) -> Result<()> {
-        for container in self.containers.values_mut() {
-            if let Some(volumes) = &mut container.volumes {
-                for volume in volumes {
-                    let parts: Vec<&str> = volume.split(':').collect();
-                    if parts.len() == 2 {
-                        let host_path = Path::new(parts[0]);
-                        if host_path.is_relative() {
-                            let absolute_host_path = base_path.join(host_path);
-                            // We use absolute() if available, but for compatibility let's just use join and canonicalize if it exists
-                            // Or better, just join and use display() if we want to avoid requiring the path to exist.
-                            // Docker usually requires absolute paths.
-                            let resolved = std::env::current_dir()?.join(absolute_host_path);
-                            *volume = format!("{}:{}", resolved.display(), parts[1]);
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
+/// Interpolates expressions within a volume spec's host-path segment, then
+/// resolves the result to an absolute path (relative to `base_path`) if
+/// it's relative. Volume specs that don't split into exactly two
+/// `:`-separated parts (e.g. a three-part `host:container:ro` spec, or a
+/// Windows drive-letter path) are left completely untouched, including no
+/// interpolation — ambiguous to parse, so left for the user to write
+/// literally, matching this resolver's pre-existing behavior for that case.
+fn resolve_volume(
+    volume: &str,
+    base_path: &Path,
+    host_env: &impl Fn(&str) -> Option<String>,
+    config_vars: &HashMap<String, Option<String>>,
+) -> Result<String> {
+    let parts: Vec<&str> = volume.split(':').collect();
+    if parts.len() != 2 {
+        return Ok(volume.to_string());
     }
+
+    let host_path = crate::expressions::interpolate(parts[0], host_env, config_vars)?;
+    let resolved_host_path = if Path::new(&host_path).is_relative() {
+        let absolute_host_path = base_path.join(&host_path);
+        // We use absolute() if available, but for compatibility let's just use join and canonicalize if it exists
+        // Or better, just join and use display() if we want to avoid requiring the path to exist.
+        // Docker usually requires absolute paths.
+        std::env::current_dir()?
+            .join(absolute_host_path)
+            .display()
+            .to_string()
+    } else {
+        host_path
+    };
+
+    Ok(format!("{}:{}", resolved_host_path, parts[1]))
 }
 
 #[cfg(test)]
@@ -200,87 +232,108 @@ tasks:
         );
     }
 
-    #[test]
-    fn resolve_paths_makes_relative_volume_absolute() {
-        let mut config = parse(
-            r#"
-project_name: demo
-containers:
-  build-env:
-    image: alpine:3.18
-    volumes:
-      - code:/code
-tasks: {}
-"#,
-        );
-
-        config.resolve_paths(Path::new("/base")).unwrap();
-
-        let volume = &config.containers["build-env"].volumes.as_ref().unwrap()[0];
-        assert_eq!(volume, "/base/code:/code");
+    fn no_host_env(_: &str) -> Option<String> {
+        None
     }
 
     #[test]
-    fn resolve_paths_leaves_absolute_volume_unchanged() {
-        let mut config = parse(
-            r#"
-project_name: demo
-containers:
-  build-env:
-    image: alpine:3.18
-    volumes:
-      - /already/absolute:/code
-tasks: {}
-"#,
-        );
-
-        config.resolve_paths(Path::new("/base")).unwrap();
-
-        let volume = &config.containers["build-env"].volumes.as_ref().unwrap()[0];
-        assert_eq!(volume, "/already/absolute:/code");
+    fn resolve_volume_makes_relative_host_path_absolute() {
+        let resolved = resolve_volume(
+            "code:/code",
+            Path::new("/base"),
+            &no_host_env,
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(resolved, "/base/code:/code");
     }
 
     #[test]
-    fn resolve_paths_leaves_malformed_volume_spec_unchanged() {
+    fn resolve_volume_leaves_absolute_host_path_unchanged() {
+        let resolved = resolve_volume(
+            "/already/absolute:/code",
+            Path::new("/base"),
+            &no_host_env,
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(resolved, "/already/absolute:/code");
+    }
+
+    #[test]
+    fn resolve_volume_leaves_malformed_volume_spec_unchanged() {
         // Three colon-separated parts (e.g. a Windows drive-letter host path) don't
-        // match the `host:container` shape this resolver understands, so it's left as-is.
-        let mut config = parse(
-            r#"
-project_name: demo
-containers:
-  build-env:
-    image: alpine:3.18
-    volumes:
-      - "C:/data:/code:ro"
-tasks: {}
-"#,
-        );
+        // match the `host:container` shape this resolver understands, so it's left as-is
+        // — no interpolation either, matching that "left completely unresolved" behavior.
+        let resolved = resolve_volume(
+            "C:/data:/code:ro",
+            Path::new("/base"),
+            &no_host_env,
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(resolved, "C:/data:/code:ro");
+    }
 
-        config.resolve_paths(Path::new("/base")).unwrap();
+    #[test]
+    fn resolve_volume_interpolates_relative_host_path_expression() {
+        let config_vars = HashMap::from([("subdir".to_string(), Some("code".to_string()))]);
+        let resolved = resolve_volume(
+            "<subdir:/code",
+            Path::new("/base"),
+            &no_host_env,
+            &config_vars,
+        )
+        .unwrap();
+        assert_eq!(resolved, "/base/code:/code");
+    }
 
-        let volume = &config.containers["build-env"].volumes.as_ref().unwrap()[0];
-        assert_eq!(volume, "C:/data:/code:ro");
+    #[test]
+    fn resolve_volume_interpolates_absolute_host_path_expression_without_prefixing_base_path() {
+        // `<project_root` resolving to an absolute path must be used as-is,
+        // not treated as a literal relative fragment of `base_path` the way
+        // it would be if resolution happened before interpolation.
+        let config_vars =
+            HashMap::from([("project_root".to_string(), Some("/abs/root".to_string()))]);
+        let resolved = resolve_volume(
+            "<project_root:/code",
+            Path::new("/base"),
+            &no_host_env,
+            &config_vars,
+        )
+        .unwrap();
+        assert_eq!(resolved, "/abs/root:/code");
     }
 
     /// A fresh, unique scratch directory for tests that need to write real
     /// files to disk (e.g. to exercise `load_from_file`'s own file I/O,
     /// not just YAML parsing). Caller is responsible for cleanup via
     /// `std::fs::remove_dir_all`.
+    ///
+    /// Includes a monotonic counter alongside the PID/timestamp: tests run
+    /// in parallel by default, and two calls landing in the same clock tick
+    /// (observed in practice — coarser than nanosecond resolution on some
+    /// platforms) would otherwise collide on the same directory and produce
+    /// flaky failures.
     fn unique_temp_dir() -> std::path::PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         let dir = std::env::temp_dir().join(format!(
-            "ratect-test-{}-{}",
+            "ratect-test-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            count
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
 
     #[test]
-    fn load_from_file_parses_and_resolves_paths() {
+    fn load_from_file_then_resolve_expressions_resolves_paths() {
         let dir = unique_temp_dir();
         let config_path = dir.join("batect.yml");
         std::fs::write(
@@ -297,7 +350,8 @@ tasks: {}
         )
         .unwrap();
 
-        let config = Config::load_from_file(&config_path).unwrap();
+        let mut config = Config::load_from_file(&config_path).unwrap();
+        config.resolve_expressions(&dir, &HashMap::new()).unwrap();
 
         let volume = &config.containers["build-env"].volumes.as_ref().unwrap()[0];
         assert_eq!(*volume, format!("{}:/code", dir.join("code").display()));
@@ -436,7 +490,7 @@ config_variables:
     }
 
     #[test]
-    fn resolve_environment_expands_host_var() {
+    fn resolve_expressions_expands_host_var() {
         let mut environment = HashMap::new();
         environment.insert("FOO".to_string(), "$HOST_VAR".to_string());
         let mut config = Config {
@@ -450,7 +504,7 @@ config_variables:
         };
 
         config
-            .resolve_environment_with(&HashMap::new(), |name| {
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), |name| {
                 (name == "HOST_VAR").then(|| "host-value".to_string())
             })
             .unwrap();
@@ -462,7 +516,7 @@ config_variables:
     }
 
     #[test]
-    fn resolve_environment_uses_default_when_host_var_unset() {
+    fn resolve_expressions_uses_default_when_host_var_unset() {
         let mut environment = HashMap::new();
         environment.insert("FOO".to_string(), "${HOST_VAR:-fallback}".to_string());
         let mut config = Config {
@@ -476,7 +530,7 @@ config_variables:
         };
 
         config
-            .resolve_environment_with(&HashMap::new(), |_| None)
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), |_| None)
             .unwrap();
 
         assert_eq!(
@@ -486,7 +540,7 @@ config_variables:
     }
 
     #[test]
-    fn resolve_environment_errors_when_host_var_unset_without_default() {
+    fn resolve_expressions_errors_when_host_var_unset_without_default() {
         let mut environment = HashMap::new();
         environment.insert("FOO".to_string(), "$HOST_VAR".to_string());
         let mut config = Config {
@@ -499,12 +553,12 @@ config_variables:
             config_variables: None,
         };
 
-        let result = config.resolve_environment_with(&HashMap::new(), |_| None);
+        let result = config.resolve_expressions_with(Path::new("/base"), &HashMap::new(), |_| None);
         assert!(result.is_err());
     }
 
     #[test]
-    fn resolve_environment_prefers_cli_override_over_default() {
+    fn resolve_expressions_prefers_cli_override_over_default() {
         let mut environment = HashMap::new();
         environment.insert("FOO".to_string(), "<env_name".to_string());
         let mut config_variables = HashMap::new();
@@ -526,7 +580,7 @@ config_variables:
 
         let overrides = HashMap::from([("env_name".to_string(), "prod".to_string())]);
         config
-            .resolve_environment_with(&overrides, |_| None)
+            .resolve_expressions_with(Path::new("/base"), &overrides, |_| None)
             .unwrap();
 
         assert_eq!(
@@ -536,7 +590,7 @@ config_variables:
     }
 
     #[test]
-    fn resolve_environment_falls_back_to_config_variable_default() {
+    fn resolve_expressions_falls_back_to_config_variable_default() {
         let mut environment = HashMap::new();
         environment.insert("FOO".to_string(), "<env_name".to_string());
         let mut config_variables = HashMap::new();
@@ -557,7 +611,7 @@ config_variables:
         };
 
         config
-            .resolve_environment_with(&HashMap::new(), |_| None)
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), |_| None)
             .unwrap();
 
         assert_eq!(
@@ -567,7 +621,7 @@ config_variables:
     }
 
     #[test]
-    fn resolve_environment_errors_on_undeclared_config_variable_reference() {
+    fn resolve_expressions_errors_on_undeclared_config_variable_reference() {
         let mut environment = HashMap::new();
         environment.insert("FOO".to_string(), "<missing".to_string());
         let mut config = Config {
@@ -580,12 +634,12 @@ config_variables:
             config_variables: None,
         };
 
-        let result = config.resolve_environment_with(&HashMap::new(), |_| None);
+        let result = config.resolve_expressions_with(Path::new("/base"), &HashMap::new(), |_| None);
         assert!(result.is_err());
     }
 
     #[test]
-    fn resolve_environment_errors_on_declared_config_variable_with_no_value() {
+    fn resolve_expressions_errors_on_declared_config_variable_with_no_value() {
         let mut environment = HashMap::new();
         environment.insert("FOO".to_string(), "<env_name".to_string());
         let mut config_variables = HashMap::new();
@@ -600,12 +654,12 @@ config_variables:
             config_variables: Some(config_variables),
         };
 
-        let result = config.resolve_environment_with(&HashMap::new(), |_| None);
+        let result = config.resolve_expressions_with(Path::new("/base"), &HashMap::new(), |_| None);
         assert!(result.is_err());
     }
 
     #[test]
-    fn resolve_environment_errors_on_unknown_cli_override() {
+    fn resolve_expressions_errors_on_unknown_cli_override() {
         let mut config = Config {
             project_name: "demo".to_string(),
             containers: HashMap::new(),
@@ -614,12 +668,12 @@ config_variables:
         };
 
         let overrides = HashMap::from([("unknown".to_string(), "value".to_string())]);
-        let result = config.resolve_environment_with(&overrides, |_| None);
+        let result = config.resolve_expressions_with(Path::new("/base"), &overrides, |_| None);
         assert!(result.is_err());
     }
 
     #[test]
-    fn resolve_environment_leaves_literal_values_unchanged() {
+    fn resolve_expressions_leaves_literal_values_unchanged() {
         let mut environment = HashMap::new();
         environment.insert("FOO".to_string(), "literal-value".to_string());
         let mut config = Config {
@@ -633,7 +687,7 @@ config_variables:
         };
 
         config
-            .resolve_environment_with(&HashMap::new(), |_| None)
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), |_| None)
             .unwrap();
 
         assert_eq!(
