@@ -332,6 +332,7 @@ mod tests {
             build_directory: None,
             volumes: None,
             dependencies,
+            environment: None,
         }
     }
 
@@ -340,6 +341,7 @@ mod tests {
             run: TaskRun {
                 container: container.to_string(),
                 command: Some(command.to_string()),
+                environment: None,
             },
             prerequisites: None,
         }
@@ -354,6 +356,7 @@ mod tests {
                 build_directory: None,
                 volumes: None,
                 dependencies: None,
+                environment: None,
             },
         );
 
@@ -364,6 +367,7 @@ mod tests {
                 run: TaskRun {
                     container: "build-env".to_string(),
                     command: None,
+                    environment: None,
                 },
                 prerequisites: Some(vec!["b".to_string()]),
             },
@@ -374,6 +378,7 @@ mod tests {
                 run: TaskRun {
                     container: "build-env".to_string(),
                     command: None,
+                    environment: None,
                 },
                 prerequisites: Some(vec!["a".to_string()]),
             },
@@ -383,6 +388,7 @@ mod tests {
             project_name: "demo".to_string(),
             containers,
             tasks,
+            config_variables: None,
         }
     }
 
@@ -391,6 +397,7 @@ mod tests {
             project_name: "demo".to_string(),
             containers: HashMap::new(),
             tasks: HashMap::new(),
+            config_variables: None,
         }
     }
 
@@ -405,6 +412,7 @@ mod tests {
                 build_directory: None,
                 volumes: None,
                 dependencies: None,
+                environment: None,
             },
         );
 
@@ -412,6 +420,7 @@ mod tests {
             run: TaskRun {
                 container: "build-env".to_string(),
                 command: Some(command.to_string()),
+                environment: None,
             },
             prerequisites,
         };
@@ -441,6 +450,7 @@ mod tests {
             project_name: "demo".to_string(),
             containers,
             tasks,
+            config_variables: None,
         }
     }
 
@@ -515,6 +525,7 @@ mod tests {
                 build_directory: Some("./docker".to_string()),
                 volumes: None,
                 dependencies: None,
+                environment: None,
             },
         );
         let mut tasks = HashMap::new();
@@ -524,6 +535,7 @@ mod tests {
                 run: TaskRun {
                     container: "build-env".to_string(),
                     command: None,
+                    environment: None,
                 },
                 prerequisites: None,
             },
@@ -532,6 +544,7 @@ mod tests {
             project_name: "demo".to_string(),
             containers,
             tasks,
+            config_variables: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -552,6 +565,7 @@ mod tests {
                 build_directory: None,
                 volumes: None,
                 dependencies: None,
+                environment: None,
             },
         );
         let mut tasks = HashMap::new();
@@ -560,6 +574,7 @@ mod tests {
             project_name: "demo".to_string(),
             containers,
             tasks,
+            config_variables: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -586,6 +601,7 @@ mod tests {
             project_name: "demo".to_string(),
             containers,
             tasks,
+            config_variables: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -645,6 +661,7 @@ mod tests {
             project_name: "demo".to_string(),
             containers,
             tasks,
+            config_variables: None,
         };
 
         let docker = FakeContainerRuntime::default().failing_run();
@@ -684,6 +701,7 @@ mod tests {
             project_name: "demo".to_string(),
             containers,
             tasks,
+            config_variables: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -743,6 +761,7 @@ mod tests {
             project_name: "demo".to_string(),
             containers,
             tasks,
+            config_variables: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -799,6 +818,7 @@ mod tests {
             project_name: "demo".to_string(),
             containers,
             tasks,
+            config_variables: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -847,6 +867,7 @@ mod tests {
                 run: TaskRun {
                     container: "app".to_string(),
                     command: Some("test".to_string()),
+                    environment: None,
                 },
                 prerequisites: Some(vec!["migrate".to_string()]),
             },
@@ -855,6 +876,7 @@ mod tests {
             project_name: "demo".to_string(),
             containers,
             tasks,
+            config_variables: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -894,6 +916,7 @@ mod tests {
                 build_directory: None,
                 volumes: None,
                 dependencies: None,
+                environment: None,
             },
         );
         containers.insert(
@@ -906,6 +929,7 @@ mod tests {
             project_name: "demo".to_string(),
             containers,
             tasks,
+            config_variables: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -938,6 +962,7 @@ mod tests {
             project_name: "demo".to_string(),
             containers,
             tasks,
+            config_variables: None,
         };
 
         let docker = FakeContainerRuntime::default();

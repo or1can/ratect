@@ -93,7 +93,7 @@ fn unsupported_config_key_reports_error() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("unknown field") && stderr.contains("environment"),
+        stderr.contains("unknown field") && stderr.contains("working_directory"),
         "stderr:\n{}",
         stderr
     );

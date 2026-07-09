@@ -10,6 +10,7 @@ pub struct Config {
     pub project_name: String,
     pub containers: HashMap<String, Container>,
     pub tasks: HashMap<String, Task>,
+    pub config_variables: Option<HashMap<String, ConfigVariable>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -19,6 +20,7 @@ pub struct Container {
     pub build_directory: Option<String>,
     pub volumes: Option<Vec<String>>,
     pub dependencies: Option<Vec<String>>,
+    pub environment: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,6 +35,13 @@ pub struct Task {
 pub struct TaskRun {
     pub container: String,
     pub command: Option<String>,
+    pub environment: Option<HashMap<String, String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigVariable {
+    pub default: Option<String>,
 }
 
 impl Config {
@@ -46,6 +55,70 @@ impl Config {
         config.resolve_paths(base_path)?;
 
         Ok(config)
+    }
+
+    /// Resolves every `environment` value (on containers and task `run`s)
+    /// through Batect's expression syntax — `$VAR`/`${VAR}`/`${VAR:-default}`
+    /// against the real host environment, and `<name`/`<{name}` against
+    /// `config_variables`, merged with `config_var_overrides` (highest
+    /// precedence — from `--config-var`/`--config-vars-file`).
+    pub fn resolve_environment(
+        &mut self,
+        config_var_overrides: &HashMap<String, String>,
+    ) -> Result<()> {
+        self.resolve_environment_with(config_var_overrides, |name| std::env::var(name).ok())
+    }
+
+    /// The actual implementation behind [`resolve_environment`](Self::resolve_environment),
+    /// parameterized over the host environment lookup so tests don't have to
+    /// touch the real process environment.
+    fn resolve_environment_with(
+        &mut self,
+        config_var_overrides: &HashMap<String, String>,
+        host_env: impl Fn(&str) -> Option<String>,
+    ) -> Result<()> {
+        for key in config_var_overrides.keys() {
+            let declared = self
+                .config_variables
+                .as_ref()
+                .is_some_and(|vars| vars.contains_key(key));
+            if !declared {
+                anyhow::bail!(
+                    "Config variable '{}' was given a value via --config-var/--config-vars-file, \
+                     but isn't declared in 'config_variables'",
+                    key
+                );
+            }
+        }
+
+        let mut config_vars: HashMap<String, Option<String>> = HashMap::new();
+        if let Some(declared) = &self.config_variables {
+            for (name, var) in declared {
+                let value = config_var_overrides
+                    .get(name)
+                    .cloned()
+                    .or_else(|| var.default.clone());
+                config_vars.insert(name.clone(), value);
+            }
+        }
+
+        for container in self.containers.values_mut() {
+            if let Some(environment) = &mut container.environment {
+                for value in environment.values_mut() {
+                    *value = crate::expressions::interpolate(value, &host_env, &config_vars)?;
+                }
+            }
+        }
+
+        for task in self.tasks.values_mut() {
+            if let Some(environment) = &mut task.run.environment {
+                for value in environment.values_mut() {
+                    *value = crate::expressions::interpolate(value, &host_env, &config_vars)?;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn resolve_paths(&mut self, base_path: &Path) -> Result<()> {
@@ -239,8 +312,7 @@ project_name: demo
 containers:
   build-env:
     image: alpine:3.18
-    environment:
-      FOO: bar
+    working_directory: /code
 tasks: {}
 "#,
         )
@@ -250,5 +322,274 @@ tasks: {}
         assert!(result.is_err());
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn parses_container_and_task_run_environment() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    environment:
+      CONTAINER_VAR: container-value
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+      environment:
+        RUN_VAR: run-value
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(
+            container.environment.as_ref().unwrap().get("CONTAINER_VAR"),
+            Some(&"container-value".to_string())
+        );
+
+        let task = config.tasks.get("test").unwrap();
+        assert_eq!(
+            task.run.environment.as_ref().unwrap().get("RUN_VAR"),
+            Some(&"run-value".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_config_variables() {
+        let config = parse(
+            r#"
+project_name: demo
+containers: {}
+tasks: {}
+config_variables:
+  env_name:
+    default: dev
+  no_default: {}
+"#,
+        );
+
+        let vars = config.config_variables.unwrap();
+        assert_eq!(vars["env_name"].default.as_deref(), Some("dev"));
+        assert_eq!(vars["no_default"].default, None);
+    }
+
+    fn container_with_environment(environment: HashMap<String, String>) -> Container {
+        Container {
+            image: Some("alpine:3.18".to_string()),
+            build_directory: None,
+            volumes: None,
+            dependencies: None,
+            environment: Some(environment),
+        }
+    }
+
+    #[test]
+    fn resolve_environment_expands_host_var() {
+        let mut environment = HashMap::new();
+        environment.insert("FOO".to_string(), "$HOST_VAR".to_string());
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_environment(environment),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        config
+            .resolve_environment_with(&HashMap::new(), |name| {
+                (name == "HOST_VAR").then(|| "host-value".to_string())
+            })
+            .unwrap();
+
+        assert_eq!(
+            config.containers["build-env"].environment.as_ref().unwrap()["FOO"],
+            "host-value"
+        );
+    }
+
+    #[test]
+    fn resolve_environment_uses_default_when_host_var_unset() {
+        let mut environment = HashMap::new();
+        environment.insert("FOO".to_string(), "${HOST_VAR:-fallback}".to_string());
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_environment(environment),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        config
+            .resolve_environment_with(&HashMap::new(), |_| None)
+            .unwrap();
+
+        assert_eq!(
+            config.containers["build-env"].environment.as_ref().unwrap()["FOO"],
+            "fallback"
+        );
+    }
+
+    #[test]
+    fn resolve_environment_errors_when_host_var_unset_without_default() {
+        let mut environment = HashMap::new();
+        environment.insert("FOO".to_string(), "$HOST_VAR".to_string());
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_environment(environment),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        let result = config.resolve_environment_with(&HashMap::new(), |_| None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_environment_prefers_cli_override_over_default() {
+        let mut environment = HashMap::new();
+        environment.insert("FOO".to_string(), "<env_name".to_string());
+        let mut config_variables = HashMap::new();
+        config_variables.insert(
+            "env_name".to_string(),
+            ConfigVariable {
+                default: Some("dev".to_string()),
+            },
+        );
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_environment(environment),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: Some(config_variables),
+        };
+
+        let overrides = HashMap::from([("env_name".to_string(), "prod".to_string())]);
+        config
+            .resolve_environment_with(&overrides, |_| None)
+            .unwrap();
+
+        assert_eq!(
+            config.containers["build-env"].environment.as_ref().unwrap()["FOO"],
+            "prod"
+        );
+    }
+
+    #[test]
+    fn resolve_environment_falls_back_to_config_variable_default() {
+        let mut environment = HashMap::new();
+        environment.insert("FOO".to_string(), "<env_name".to_string());
+        let mut config_variables = HashMap::new();
+        config_variables.insert(
+            "env_name".to_string(),
+            ConfigVariable {
+                default: Some("dev".to_string()),
+            },
+        );
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_environment(environment),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: Some(config_variables),
+        };
+
+        config
+            .resolve_environment_with(&HashMap::new(), |_| None)
+            .unwrap();
+
+        assert_eq!(
+            config.containers["build-env"].environment.as_ref().unwrap()["FOO"],
+            "dev"
+        );
+    }
+
+    #[test]
+    fn resolve_environment_errors_on_undeclared_config_variable_reference() {
+        let mut environment = HashMap::new();
+        environment.insert("FOO".to_string(), "<missing".to_string());
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_environment(environment),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        let result = config.resolve_environment_with(&HashMap::new(), |_| None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_environment_errors_on_declared_config_variable_with_no_value() {
+        let mut environment = HashMap::new();
+        environment.insert("FOO".to_string(), "<env_name".to_string());
+        let mut config_variables = HashMap::new();
+        config_variables.insert("env_name".to_string(), ConfigVariable { default: None });
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_environment(environment),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: Some(config_variables),
+        };
+
+        let result = config.resolve_environment_with(&HashMap::new(), |_| None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_environment_errors_on_unknown_cli_override() {
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::new(),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        let overrides = HashMap::from([("unknown".to_string(), "value".to_string())]);
+        let result = config.resolve_environment_with(&overrides, |_| None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_environment_leaves_literal_values_unchanged() {
+        let mut environment = HashMap::new();
+        environment.insert("FOO".to_string(), "literal-value".to_string());
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_environment(environment),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        config
+            .resolve_environment_with(&HashMap::new(), |_| None)
+            .unwrap();
+
+        assert_eq!(
+            config.containers["build-env"].environment.as_ref().unwrap()["FOO"],
+            "literal-value"
+        );
     }
 }
