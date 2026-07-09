@@ -20,8 +20,17 @@ Ratect is a **Cargo workspace** with two crates today, and a third planned (see 
 - **`ratect-core`** (library crate, `ratect-core/src/`): all the reusable logic, with
   no CLI-specific code. This is what any future second binary would also depend on.
   - **`ratect-core/src/config.rs`**: Data models for the configuration (`batect.yml`).
-    Uses `noyalib` for YAML parsing and includes logic for resolving relative paths in
-    volume mounts.
+    Uses `noyalib` for YAML parsing. `Config::load_from_file` only parses; a separate
+    `Config::resolve_expressions` call (needs CLI-supplied `--config-var`/
+    `--config-vars-file` overrides, so it can't happen inside `load_from_file`)
+    interpolates `environment` values and volume host paths via `expressions.rs`, then
+    resolves relative volume host paths to absolute ones.
+  - **`ratect-core/src/expressions.rs`**: Batect's expression syntax (`$VAR`, `${VAR}`,
+    `${VAR:-default}` for host environment variables; `<name`, `<{name}` for config
+    variables, including the built-in `batect.project_directory`). A single
+    `interpolate` function, with the host environment and resolved config variable
+    values injected as parameters rather than read from the real process environment,
+    so resolution is deterministic and unit-testable.
   - **`ratect-core/src/docker.rs`**: A wrapper around the `bollard` library. It manages
     interactions with the Docker daemon: pulling images, creating/starting/streaming/
     removing the task's own container, and creating/removing a per-task network plus
@@ -58,7 +67,7 @@ Dependencies are split across the two `Cargo.toml`s along CLI-vs-core lines: `cl
 
 - **Formatting/Linting**: `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` must pass; both are enforced in CI (`.github/workflows/ci.yml`).
 - **Dependency Audit**: `cargo audit` runs in CI against `Cargo.lock`, which is committed to the repo (binary crate convention, not gitignored). One shared lockfile covers both crates.
-- **Tests**: `cargo test --workspace` runs in CI, covering config parsing/path resolution (`ratect-core/src/config.rs`), task engine logic including dependency-cycle detection, prerequisite dedup, and sidecar/dependency-container resolution (nesting, within-task dedup, cross-task isolation, circular-dependency detection — `ratect-core/src/engine.rs`, via a fake `ContainerRuntime`), and CLI argument/behavior (`src/main.rs`, `tests/cli.rs`). `tests/cli.rs` also has end-to-end tests (`#[ignore]`d by default) that run against a real Docker daemon — the sample `batect.yml` and `tests/fixtures/sidecar.yml` (which proves real cross-container DNS resolution, not just that the right calls were made) — run them explicitly with `cargo test --workspace --test cli -- --ignored`; they also run as their own `docker-integration` CI job.
+- **Tests**: `cargo test --workspace` runs in CI, covering config parsing/resolution (`ratect-core/src/config.rs`, including `resolve_expressions`'s merge/precedence/error cases), expression interpolation (`ratect-core/src/expressions.rs`), task engine logic including dependency-cycle detection, prerequisite dedup, sidecar/dependency-container resolution (nesting, within-task dedup, cross-task isolation, circular-dependency detection), and environment variable merging (container vs. task `run`, dependency containers — `ratect-core/src/engine.rs`, via a fake `ContainerRuntime`), and CLI argument/behavior (`src/main.rs`, `tests/cli.rs`). `tests/cli.rs` also has end-to-end tests (`#[ignore]`d by default) that run against a real Docker daemon — the sample `batect.yml`, `tests/fixtures/sidecar.yml` (proves real cross-container DNS resolution), and `tests/fixtures/environment.yml`/`config-vars.yml`/`project-directory.yml` (prove `environment`/config variable/`batect.project_directory` values reach a real container) — not just that the right calls were made — run them explicitly with `cargo test --workspace --test cli -- --ignored`; they also run as their own `docker-integration` CI job.
 - **Coverage**: `cargo llvm-cov --workspace --show-missing-lines --summary-only` (requires `rustup component add llvm-tools-preview` and `cargo install cargo-llvm-cov`) reports exact uncovered lines per file — use it to find gaps, not to chase a percentage. `cargo llvm-cov --workspace --html` opens a browsable report at `target/llvm-cov/html`. CI runs this and uploads the HTML report as a `coverage-report` artifact (non-gating).
 
 ## Current Status & Roadmap

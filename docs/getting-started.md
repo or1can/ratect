@@ -78,7 +78,44 @@ invocation:
 
 See [how it works](how-it-works.md) for the details.
 
-## 5. Reading the output
+## 5. Environment variables and expressions
+
+Containers and individual task runs can set environment variables, and their values
+can pull in a host environment variable or a declared config variable instead of being
+written as a literal:
+
+```yaml
+config_variables:
+  environment_name:
+    default: dev
+containers:
+  build-env:
+    image: alpine:3.18
+    environment:
+      GREETING: "hello-${WHO:-world}"
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo "$GREETING in $ENVIRONMENT_NAME"
+      environment:
+        ENVIRONMENT_NAME: <environment_name
+```
+
+Running `ratect test` (with `WHO` unset in your shell) prints `hello-world in dev`.
+Override the config variable from the command line instead of relying on its
+`default`:
+
+```bash
+ratect --config-var environment_name=staging test
+```
+
+See the [configuration reference](config-reference.md#expressions) for the full
+expression syntax (including `batect.project_directory`, always available without
+being declared) and the [CLI reference](cli-reference.md) for `--config-var`/
+`--config-vars-file`.
+
+## 6. Reading the output
 
 Ratect separates two kinds of output:
 

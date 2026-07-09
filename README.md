@@ -22,6 +22,11 @@ Ratect is currently in early development. It supports a subset of Batect's featu
   - Image pulling with progress bars.
   - Volume mounting.
   - Log streaming from containers.
+  - Sidecar/dependency containers, started on a per-task Docker network.
+  - Environment variables, on both containers and individual task runs.
+- **Expressions**: `$VAR`/`${VAR:-default}` (host environment) and `<name`/`<{name}`
+  (config variables, including Batect's built-in `batect.project_directory`) within
+  `environment` values and volume host paths.
 - **CLI**: Robust command-line interface built with [clap](https://github.com/clap-rs/clap).
 
 ## Getting Started

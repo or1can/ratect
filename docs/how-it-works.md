@@ -7,19 +7,32 @@ for a map of the source layout.
 ## 1. CLI parsing
 
 `src/main.rs` parses arguments with [`clap`](https://docs.rs/clap). See the
-[CLI reference](cli-reference.md) for the full flag list.
+[CLI reference](cli-reference.md) for the full flag list. This has to happen before
+config resolution (step 2 below) can finish, since `--config-var`/`--config-vars-file`
+feed into it.
 
-## 2. Config loading (`ratect-core/src/config.rs`)
+## 2. Config loading and resolution (`ratect-core/src/config.rs`)
 
-1. The YAML file (`batect.yml` by default) is parsed into `Config` /`Container` /
-   `Task` / `TaskRun` structs using [`noyalib`](https://docs.rs/noyalib).
-2. **Volume path resolution**: for every container's `volumes` entries, if the host
-   side of a `host:container` pair is a relative path, it's resolved to an absolute
-   path *relative to the directory containing the config file* — not the current
-   working directory. This happens once, right after parsing.
+This is two separate steps, not one, because the second depends on CLI flags that
+aren't known at the first:
 
-See the [configuration reference](config-reference.md) for the exact rules and edge
-cases.
+1. **`Config::load_from_file`**: the YAML file (`batect.yml` by default) is parsed into
+   `Config`/`Container`/`Task`/`TaskRun`/`ConfigVariable` structs using
+   [`noyalib`](https://docs.rs/noyalib). Nothing else — no path resolution, no
+   expression interpolation.
+2. **`Config::resolve_expressions`**: called once from `main.rs`, after `--config-var`/
+   `--config-vars-file` have been parsed and merged into an overrides map. In one pass:
+   - Resolves [expressions](config-reference.md#expressions) (`$VAR`, `${VAR:-default}`,
+     `<name`, `<{name}`, plus the built-in `batect.project_directory`) within every
+     `environment` value (container and task `run`) and every volume's host path.
+   - **Volume path resolution**: *after* interpolating a volume's host path, if the
+     result is relative, it's resolved to an absolute path relative to the directory
+     containing the config file (not the current working directory) — done in this
+     order (interpolate, then resolve) because an expression can itself resolve to an
+     absolute path, which mustn't be treated as a relative fragment.
+
+   See the [configuration reference](config-reference.md#expressions) for the full
+   expression syntax, precedence, and error rules.
 
 ## 3. Task engine (`ratect-core/src/engine.rs`)
 
@@ -41,7 +54,8 @@ cases.
 5. **Run the container step**:
    - If the container has an `image`, pull it (unless it's already been pulled once
      this run) and run the container with the task's `command`, joined to the
-     dependency network if one was created in step 4.
+     dependency network if one was created in step 4, with its `environment` merged
+     with the task's own `run.environment` (which wins on a key collision).
    - If the container only has a `build_directory`, Ratect currently just logs a
      warning and does nothing further — image building isn't implemented yet (see
      [differences from Batect](differences-from-batect.md)).
@@ -72,10 +86,10 @@ client, and implements `ContainerRuntime`:
 
 - **`pull_image`**: streams `docker create-image` progress and displays it via a
   spinner (using [`indicatif`](https://docs.rs/indicatif)).
-- **`run_container`**: creates a container (attaching stdout/stderr and any resolved
-  volume binds), joins it to a dependency network if one was passed, starts it,
-  streams its logs live to Ratect's own stdout, then removes the container once it
-  exits.
+- **`run_container`**: creates a container (attaching stdout/stderr, any resolved
+  volume binds, and any resolved `environment` variables), joins it to a dependency
+  network if one was passed, starts it, streams its logs live to Ratect's own stdout,
+  then removes the container once it exits.
 - **`create_network` / `remove_network`**: thin wrappers over Docker's network API,
   used for the per-task dependency network (see [task lifecycle](task-lifecycle.md)).
 - **`start_background_container` / `stop_and_remove_container`**: create+start (or
