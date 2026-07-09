@@ -150,14 +150,6 @@ tables above:
 - **Parallel execution**: prerequisites run sequentially, not in parallel — Batect runs
   independent setup/cleanup steps concurrently.
 
-## Known correctness gaps (not Batect-parity issues — just bugs)
-
-These aren't "missing Batect features," they're places where Ratect's current behavior
-is surprising on its own terms, regardless of what Batect does:
-
-- **A container with neither `image` nor `build_directory`** silently does nothing
-  instead of raising a configuration error.
-
 ## What Ratect *does* support today
 
 For the positive list — what's actually implemented and working — see:

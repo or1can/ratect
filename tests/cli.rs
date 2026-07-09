@@ -25,6 +25,10 @@ fn unsupported_key_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/unsupported-key.yml")
 }
 
+fn no_image_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/no-image.yml")
+}
+
 #[test]
 fn list_tasks_lists_sample_tasks() {
     let output = ratect_command()
@@ -90,6 +94,24 @@ fn unsupported_config_key_reports_error() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("unknown field") && stderr.contains("environment"),
+        "stderr:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn container_without_image_or_build_directory_reports_error() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(no_image_config_path())
+        .arg("test-task")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Container 'build-env' has neither 'image' nor 'build_directory' set"),
         "stderr:\n{}",
         stderr
     );

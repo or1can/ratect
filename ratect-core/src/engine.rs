@@ -141,6 +141,11 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     "Building from directory '{}' is not implemented yet",
                     build_dir
                 );
+            } else {
+                return Err(anyhow::anyhow!(
+                    "Container '{}' has neither 'image' nor 'build_directory' set",
+                    task.run.container
+                ));
             }
 
             Ok(())
@@ -534,6 +539,36 @@ mod tests {
 
         engine.run_task("build", &[]).await.unwrap();
 
+        assert!(docker.events().is_empty());
+    }
+
+    #[tokio::test]
+    async fn container_without_image_or_build_directory_errors() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "build-env".to_string(),
+            Container {
+                image: None,
+                build_directory: None,
+                volumes: None,
+                dependencies: None,
+            },
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("build".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        let err = engine.run_task("build", &[]).await.unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Container 'build-env' has neither 'image' nor 'build_directory' set"));
         assert!(docker.events().is_empty());
     }
 

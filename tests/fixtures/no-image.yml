@@ -1,0 +1,10 @@
+# Exercises rejection of a container with neither `image` nor
+# `build_directory` set: previously this silently did nothing and exited 0.
+project_name: ratect-no-image-test
+containers:
+  build-env: {}
+tasks:
+  test-task:
+    run:
+      container: build-env
+      command: echo hi
