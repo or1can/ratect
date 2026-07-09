@@ -74,7 +74,10 @@ interact with directly.
   - ~~`-- ADDITIONAL_ARGS` is parsed but silently dropped~~ — fixed: forwarded as
     `sh -c`'s positional parameters (`$1`, `$2`, `$@`), scoped to only the
     explicitly-requested task, never its prerequisites.
-  - Unsupported config keys are silently ignored rather than rejected.
+  - ~~Unsupported config keys are silently ignored rather than rejected~~ — fixed:
+    every config struct now denies unknown fields, so a config using a field Ratect
+    doesn't yet support fails to load with an error naming the field, instead of
+    silently loading with that field ignored.
 - **0.2.0** — **Environment Variables** (the `environment` field on containers/tasks)
   together with **Batect Expressions**/config variables (`$VAR`, `${VAR:-default}`,
   config variables via `<name`). Bundled deliberately, not a grab-bag: interpolation is

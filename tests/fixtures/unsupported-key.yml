@@ -1,0 +1,14 @@
+# Exercises rejection of unsupported config keys: `environment` is a real
+# Batect container field, but not one Ratect implements, so it must fail
+# config loading rather than silently being ignored.
+project_name: ratect-unsupported-key-test
+containers:
+  build-env:
+    image: alpine:3.18.2
+    environment:
+      FOO: bar
+tasks:
+  test-task:
+    run:
+      container: build-env
+      command: echo hi

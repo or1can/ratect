@@ -14,10 +14,12 @@ The tables below are the itemized detail behind the "Full Configuration Parity" 
 direction, this page describes exact current status per field/flag, verified against
 Batect's own reference documentation.
 
-> **A note on unsupported fields**: Ratect's YAML parsing does not reject unknown keys.
-> If you write a Batect config field that Ratect doesn't understand (e.g. `environment`
-> on a container), it's silently ignored rather than raising an error — the config still
-> loads. Don't assume a field works just because Ratect didn't complain about it.
+> **A note on unsupported fields**: Ratect's YAML parsing rejects unknown keys — if you
+> write a Batect config field that Ratect doesn't understand (e.g. `environment` on a
+> container), config loading fails with an error naming the field, rather than silently
+> ignoring it. This means a config using any not-yet-supported Batect field won't load
+> at all until that field is supported, even for fields marked "Not supported" in the
+> tables below — there's no partial/best-effort mode.
 
 ## Configuration format
 
@@ -91,8 +93,8 @@ for config variables) usable *within* several fields: `environment`, `build_args
 | `run` | Supported, but **required** | Batect allows a task with only `prerequisites` and no `run`; Ratect requires `run` on every task. |
 | `prerequisites` | Supported | No wildcard (`*`) matching — each name must be listed explicitly. |
 | `dependencies` (task-level sidecars) | Not supported | Distinct from the container-level `dependencies` field above; not parsed at all. |
-| `description` | Not supported | Silently ignored; `--list-tasks` output has no description column. |
-| `group` | Not supported | Silently ignored; `--list-tasks` output isn't grouped. |
+| `description` | Not supported | Rejected — see the note at the top of this page; `--list-tasks` output has no description column. |
+| `group` | Not supported | Rejected — see the note at the top of this page; `--list-tasks` output isn't grouped. |
 | `customise` | Not supported | |
 
 ### `run` fields
@@ -155,8 +157,6 @@ is surprising on its own terms, regardless of what Batect does:
 
 - **A container with neither `image` nor `build_directory`** silently does nothing
   instead of raising a configuration error.
-- **Unsupported config keys are silently ignored** rather than rejected — see the note
-  at the top of this page.
 
 ## What Ratect *does* support today
 

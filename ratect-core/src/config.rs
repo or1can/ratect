@@ -5,6 +5,7 @@ use std::fs::File;
 use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub project_name: String,
     pub containers: HashMap<String, Container>,
@@ -12,6 +13,7 @@ pub struct Config {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Container {
     pub image: Option<String>,
     pub build_directory: Option<String>,
@@ -20,12 +22,14 @@ pub struct Container {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Task {
     pub run: TaskRun,
     pub prerequisites: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskRun {
     pub container: String,
     pub command: Option<String>,
@@ -214,5 +218,37 @@ tasks: {}
     fn load_from_file_missing_file_errors() {
         let result = Config::load_from_file(Path::new("/nonexistent/batect.yml"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_from_file_unsupported_key_errors() {
+        let dir = std::env::temp_dir().join(format!(
+            "ratect-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config_path = dir.join("batect.yml");
+        std::fs::write(
+            &config_path,
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    environment:
+      FOO: bar
+tasks: {}
+"#,
+        )
+        .unwrap();
+
+        let result = Config::load_from_file(&config_path);
+        assert!(result.is_err());
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

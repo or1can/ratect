@@ -21,6 +21,10 @@ fn additional_args_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/additional-args.yml")
 }
 
+fn unsupported_key_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/unsupported-key.yml")
+}
+
 #[test]
 fn list_tasks_lists_sample_tasks() {
     let output = ratect_command()
@@ -72,6 +76,23 @@ fn missing_config_file_reports_error_when_running_a_task() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("not found"), "stderr:\n{}", stderr);
+}
+
+#[test]
+fn unsupported_config_key_reports_error() {
+    let output = ratect_command()
+        .args(["--list-tasks", "-f"])
+        .arg(unsupported_key_config_path())
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown field") && stderr.contains("environment"),
+        "stderr:\n{}",
+        stderr
+    );
 }
 
 #[test]
