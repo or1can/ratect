@@ -3,6 +3,7 @@ use clap::Parser;
 use ratect_core::config::Config;
 use ratect_core::docker::DockerClient;
 use ratect_core::engine::TaskEngine;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use tracing_subscriber::EnvFilter;
@@ -18,12 +19,30 @@ struct Args {
     #[arg(short = 'T', long)]
     list_tasks: bool,
 
+    /// Set a config variable's value, as NAME=VALUE (repeatable). Takes
+    /// precedence over --config-vars-file and the variable's `default` in
+    /// `config_variables`.
+    #[arg(long = "config-var", value_parser = parse_config_var)]
+    config_var: Vec<(String, String)>,
+
+    /// Path to a YAML file of config variable NAME: VALUE pairs
+    #[arg(long = "config-vars-file")]
+    config_vars_file: Option<PathBuf>,
+
     /// Name of the task to run
     task_name: Option<String>,
 
     /// Additional arguments to pass to the task command
     #[arg(last = true)]
     additional_args: Vec<String>,
+}
+
+/// Parses a `--config-var` value of the form `NAME=VALUE`.
+fn parse_config_var(s: &str) -> std::result::Result<(String, String), String> {
+    match s.split_once('=') {
+        Some((name, value)) => Ok((name.to_string(), value.to_string())),
+        None => Err(format!("expected NAME=VALUE, got '{s}'")),
+    }
 }
 
 fn init_tracing() {
@@ -63,7 +82,14 @@ async fn run() -> Result<()> {
     if !args.config_file.exists() {
         anyhow::bail!("Configuration file {:?} not found.", args.config_file);
     }
-    let config = Config::load_from_file(&args.config_file)?;
+    let mut config = Config::load_from_file(&args.config_file)?;
+
+    let mut config_var_overrides: HashMap<String, String> = match &args.config_vars_file {
+        Some(path) => Config::load_config_vars_file(path)?,
+        None => HashMap::new(),
+    };
+    config_var_overrides.extend(args.config_var.iter().cloned());
+    config.resolve_environment(&config_var_overrides)?;
 
     if args.list_tasks {
         println!("Tasks in {}:", config.project_name);
@@ -126,5 +152,45 @@ mod tests {
             args.additional_args,
             vec!["--flag".to_string(), "value".to_string()]
         );
+    }
+
+    #[test]
+    fn parses_repeated_config_var_flags() {
+        let args = Args::try_parse_from([
+            "ratect",
+            "--config-var",
+            "ENV=prod",
+            "--config-var",
+            "REGION=eu",
+            "build",
+        ])
+        .unwrap();
+        assert_eq!(
+            args.config_var,
+            vec![
+                ("ENV".to_string(), "prod".to_string()),
+                ("REGION".to_string(), "eu".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_config_var_without_equals_sign() {
+        let result = Args::try_parse_from(["ratect", "--config-var", "NOEQUALS", "build"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parses_config_vars_file() {
+        let args =
+            Args::try_parse_from(["ratect", "--config-vars-file", "vars.yml", "build"]).unwrap();
+        assert_eq!(args.config_vars_file, Some(PathBuf::from("vars.yml")));
+    }
+
+    #[test]
+    fn defaults_config_var_flags_to_empty() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert!(args.config_var.is_empty());
+        assert_eq!(args.config_vars_file, None);
     }
 }

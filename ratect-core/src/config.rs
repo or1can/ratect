@@ -57,6 +57,15 @@ impl Config {
         Ok(config)
     }
 
+    /// Loads a `--config-vars-file`: a flat YAML map of config variable
+    /// names to values, in the same format/parser as `batect.yml` itself.
+    pub fn load_config_vars_file(path: &Path) -> Result<HashMap<String, String>> {
+        let file = File::open(path)
+            .with_context(|| format!("Failed to open config vars file {:?}", path))?;
+        noyalib::from_reader(file)
+            .with_context(|| format!("Failed to parse config vars file {:?}", path))
+    }
+
     /// Resolves every `environment` value (on containers and task `run`s)
     /// through Batect's expression syntax — `$VAR`/`${VAR}`/`${VAR:-default}`
     /// against the real host environment, and `<name`/`<{name}` against
@@ -253,8 +262,11 @@ tasks: {}
         assert_eq!(volume, "C:/data:/code:ro");
     }
 
-    #[test]
-    fn load_from_file_parses_and_resolves_paths() {
+    /// A fresh, unique scratch directory for tests that need to write real
+    /// files to disk (e.g. to exercise `load_from_file`'s own file I/O,
+    /// not just YAML parsing). Caller is responsible for cleanup via
+    /// `std::fs::remove_dir_all`.
+    fn unique_temp_dir() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "ratect-test-{}-{}",
             std::process::id(),
@@ -264,6 +276,12 @@ tasks: {}
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn load_from_file_parses_and_resolves_paths() {
+        let dir = unique_temp_dir();
         let config_path = dir.join("batect.yml");
         std::fs::write(
             &config_path,
@@ -295,15 +313,7 @@ tasks: {}
 
     #[test]
     fn load_from_file_unsupported_key_errors() {
-        let dir = std::env::temp_dir().join(format!(
-            "ratect-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = unique_temp_dir();
         let config_path = dir.join("batect.yml");
         std::fs::write(
             &config_path,
@@ -319,6 +329,45 @@ tasks: {}
         .unwrap();
 
         let result = Config::load_from_file(&config_path);
+        assert!(result.is_err());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_config_vars_file_parses_a_flat_map() {
+        let dir = unique_temp_dir();
+        let vars_path = dir.join("vars.yml");
+        std::fs::write(
+            &vars_path,
+            r#"
+env_name: staging
+region: eu
+"#,
+        )
+        .unwrap();
+
+        let vars = Config::load_config_vars_file(&vars_path).unwrap();
+        assert_eq!(vars.get("env_name"), Some(&"staging".to_string()));
+        assert_eq!(vars.get("region"), Some(&"eu".to_string()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_config_vars_file_missing_file_errors() {
+        let result = Config::load_config_vars_file(Path::new("/nonexistent/vars.yml"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_config_vars_file_malformed_yaml_errors() {
+        let dir = unique_temp_dir();
+        let vars_path = dir.join("vars.yml");
+        // A YAML sequence, not the flat name/value map load_config_vars_file expects.
+        std::fs::write(&vars_path, "- not\n- a map\n").unwrap();
+
+        let result = Config::load_config_vars_file(&vars_path);
         assert!(result.is_err());
 
         std::fs::remove_dir_all(&dir).unwrap();
