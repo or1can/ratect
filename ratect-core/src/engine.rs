@@ -30,12 +30,13 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     docker: D,
     executed_tasks: Mutex<HashSet<String>>,
     pulled_images: Mutex<HashSet<String>>,
-    /// Container name -> tag of the image built for it, so a container with
+    /// Container name -> ID of the image built for it, so a container with
     /// `build_directory` is only ever built once per invocation even if
     /// referenced by multiple tasks or as both a dependency and a task's
     /// own container. Keyed by container name (not build directory) since
     /// a given name always has the same `build_directory`/`build_args`
-    /// within one `Config`.
+    /// within one `Config`. Stores the image ID (not the human-readable tag)
+    /// — see `resolve_image` for why.
     built_images: Mutex<HashMap<String, String>>,
     in_progress_tasks: Mutex<HashSet<String>>,
 }
@@ -59,13 +60,19 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     /// nothing else, which is also why dependency containers now support
     /// `build_directory` (they didn't before this was unified).
     ///
-    /// Each build gets a fresh `Uuid::new_v4()`-based tag rather than one
-    /// derived from `container_name`: two *overlapping* `ratect` invocations
-    /// (e.g. two different projects, or two checkouts of the same one) could
-    /// otherwise race to build and tag the same name, and since a Docker
-    /// tag is a mutable pointer, one process could end up running the
-    /// other's image. A random tag per build makes that structurally
-    /// impossible — nothing else can ever produce the same tag.
+    /// Built images are tagged `<project_name>-<container_name>` — the same
+    /// convention Batect uses — so `docker images` shows something a user can
+    /// actually identify, rather than an opaque generated name. That tag is
+    /// human-facing only, though: what this returns (and what `run_container`/
+    /// `start_background_container` are actually given) is the image *ID*
+    /// `ContainerRuntime::build_image` reports back from the build, not the
+    /// tag string. This matters because the tag isn't unique — two
+    /// *overlapping* `ratect` invocations (e.g. two checkouts of the same
+    /// project, or two projects that happen to share a name) could race to
+    /// retag the same name, and a Docker tag is a mutable pointer. Resolving
+    /// by ID sidesteps that race entirely: whichever image this process just
+    /// built is the one it runs, regardless of what the tag currently points
+    /// to by the time the container actually starts.
     async fn resolve_image(
         &self,
         container_name: &str,
@@ -85,16 +92,17 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
 
             Ok(image.clone())
         } else if let Some(build_directory) = &container_config.build_directory {
-            let existing_tag = {
+            let existing_image_id = {
                 let built = self.built_images.lock().unwrap();
                 built.get(container_name).cloned()
             };
-            if let Some(tag) = existing_tag {
-                return Ok(tag);
+            if let Some(image_id) = existing_image_id {
+                return Ok(image_id);
             }
 
-            let tag = format!("ratect-build-{}", Uuid::new_v4());
-            self.docker
+            let tag = format!("{}-{}", self.config.project_name, container_name);
+            let image_id = self
+                .docker
                 .build_image(
                     Path::new(build_directory),
                     container_config.build_args.as_ref(),
@@ -103,9 +111,9 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 .await?;
 
             let mut built = self.built_images.lock().unwrap();
-            built.insert(container_name.to_string(), tag.clone());
+            built.insert(container_name.to_string(), image_id.clone());
 
-            Ok(tag)
+            Ok(image_id)
         } else {
             Err(anyhow::anyhow!(
                 "Container '{}' has neither 'image' nor 'build_directory' set",
@@ -382,13 +390,16 @@ mod tests {
             build_directory: &Path,
             build_args: Option<&HashMap<String, String>>,
             tag: &str,
-        ) -> Result<()> {
+        ) -> Result<String> {
             self.build_args
                 .lock()
                 .unwrap()
                 .insert(tag.to_string(), build_args.cloned());
             self.push(format!("build:{tag}:{}", build_directory.display()));
-            Ok(())
+            // Real Docker returns an image ID distinct from the tag; the fake
+            // has no such concept, so it just echoes the tag back — tests
+            // that assert `image_for(name) == tag` still hold either way.
+            Ok(tag.to_string())
         }
 
         async fn create_network(&self, name: &str) -> Result<()> {
@@ -722,6 +733,37 @@ mod tests {
             docker.image_for("build-env").as_deref(),
             Some(tag),
             "the run should use the image that was just built, not a pulled/literal one"
+        );
+    }
+
+    #[tokio::test]
+    async fn built_image_is_tagged_with_project_and_container_name() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "build-env".to_string(),
+            container_with_build_directory("./docker", None),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("build".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("build", &[]).await.unwrap();
+
+        let events = docker.events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with("build:demo-build-env:")),
+            "built image should be tagged '<project_name>-<container_name>', matching \
+             Batect's convention, so it's identifiable in `docker images`: {events:?}"
         );
     }
 

@@ -108,15 +108,21 @@ Neither bump is ever folded into a feature commit.
   [config reference](docs/config-reference.md#dockerignore-semantics)), and dependency
   containers gained `build_directory` support too (previously image-only). Known gaps,
   candidates for later work rather than blocking this release:
-  - No cross-invocation build caching — each `ratect` run rebuilds fresh, tagged with a
-    fresh random name every time (deliberately, to avoid a same-name-tag collision
-    hazard across overlapping invocations — see the `resolve_image` design comment in
-    `ratect-core/src/engine.rs`). A future cache-aware tagging scheme would need to
-    solve that collision-avoidance problem *and* staleness detection together, which is
-    why it's noted as one combined item rather than "just add caching."
-  - Built images aren't cleaned up automatically — they accumulate under their unique
-    tags until manually pruned (`docker image prune`), same as a plain `docker build -t
-    ... .` would leave behind.
+  - No cross-invocation build caching — each `ratect` run rebuilds fresh, tagged
+    `<project_name>-<container_name>` (matching Batect's own convention, so the image
+    is identifiable in `docker images`), but that tag is reused/overwritten on every
+    run rather than cached against. Running containers doesn't depend on the tag
+    staying put, though — `resolve_image` uses the image *ID* Docker reports back from
+    the build, not the tag, specifically so two overlapping `ratect` invocations
+    retagging the same name can't race each other into running the wrong image (see
+    the `resolve_image` design comment in `ratect-core/src/engine.rs`). A future
+    cache-aware scheme would need to reuse a previous build's output safely (staleness
+    detection), which is separate from the naming/identification problem solved here.
+  - Built images aren't cleaned up automatically — since each run retags
+    `<project_name>-<container_name>` to point at its fresh build, the image it
+    replaces becomes a dangling (`<none>`) image rather than disappearing, and
+    accumulates until manually pruned (`docker image prune`), same as repeatedly
+    running a plain `docker build -t ... .` would leave behind.
   - **Build output isn't captured or persisted anywhere** (`DockerClient::build_image`,
     `ratect-core/src/docker.rs`) — each streamed build log line only updates an
     ephemeral `indicatif` spinner message (same pattern `pull_image` already used),

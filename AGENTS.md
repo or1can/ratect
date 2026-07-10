@@ -75,7 +75,7 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
 - **`anyhow`**: Simplified error handling with context.
 - **`tracing` / `tracing-subscriber`**: Structured, leveled logging. The subscriber is initialized in `main.rs`, filtered via `RUST_LOG` (defaults to `info`), and writes to stderr.
 - **`async-trait`**: Used for the `ContainerRuntime` trait in `ratect-core/src/docker.rs`, so it can have async methods and be implemented by both the real `DockerClient` and test fakes.
-- **`uuid`**: Generates collision-resistant per-task Docker network names (`ratect-<uuid>`) and per-build image tags (`ratect-build-<uuid>`) in `ratect-core/src/engine.rs`. Deliberately not `std::process::id()` — that's frequently `1` when `ratect` itself runs inside a container (e.g. CI), which would collide across concurrent runs; a random tag per build also avoids a same-name-tag collision hazard across overlapping `ratect` invocations.
+- **`uuid`**: Generates collision-resistant per-task Docker network names (`ratect-<uuid>`) in `ratect-core/src/engine.rs`. Deliberately not `std::process::id()` — that's frequently `1` when `ratect` itself runs inside a container (e.g. CI), which would collide across concurrent runs. Built images are tagged `<project_name>-<container_name>` instead (human-readable, matching Batect's convention) — `resolve_image` avoids the same collision hazard for these not via a random name but by running the image *ID* Docker's build reports back, not the (non-unique) tag.
 - **`tar`**: Builds the in-memory build-context tarball `docker.rs`'s `build_context_tar` hands to `bollard`'s `build_image`.
 - **`dockerignore`** (local workspace crate, not external): `.dockerignore` pattern matching — see the Architecture section above.
 

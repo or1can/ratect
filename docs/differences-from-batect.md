@@ -139,7 +139,7 @@ Batect's full flag list, from its [CLI reference](https://github.com/batect/bate
 | `--disable-ports` | N/A | Moot — no port publishing exists to disable. |
 | `--use-network` | Not supported | A minimal per-task network now exists (see `dependencies`) but there's no way to point it at an existing network instead. Roadmap: [Docker Networking](../ROADMAP.md#batect-parity). |
 | `--enable-buildkit` | Not supported | Images are built via Docker's classic (non-BuildKit) build API — no way to opt into BuildKit. |
-| `--tag-image` | Not supported | Built images are tagged internally with a random, unique-per-build name — no way to additionally tag one with a custom name. |
+| `--tag-image` | Not supported | Built images are tagged `<project_name>-<container_name>` (like Batect's own default) — no way to additionally tag one with a custom name. |
 | `--config-vars-file`, `--config-var` | Supported | See [CLI reference](cli-reference.md) and [Expressions](#expressions). |
 | `--docker-host`, `--docker-context`, `--docker-config`, `--docker-cert-path`, `--docker-tls*` | Not supported | Ratect connects using Docker's local defaults only, with no CLI overrides. |
 | `--cache-type`, `--clean`, `--clean-cache` | N/A | Moot — no cache concept exists (Batect's caches are for build performance, not implemented here). |

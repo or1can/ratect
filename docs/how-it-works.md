@@ -66,8 +66,9 @@ aren't known at the first:
 The "run once", "pull once", and "build once" guarantees are tracked with in-memory
 maps/sets (`executed_tasks`, `pulled_images`, `built_images`, `in_progress_tasks`)
 scoped to a single `ratect` invocation — nothing persists between runs (a
-`build_directory` container is rebuilt fresh every invocation, tagged with a fresh
-random name each time — see [config reference](config-reference.md#image-building)).
+`build_directory` container is rebuilt fresh every invocation, retagging
+`<project_name>-<container_name>` each time — see
+[config reference](config-reference.md#image-building)).
 Dependency/network state, by contrast, is scoped to a single *task* execution, not the
 whole invocation — see [the task lifecycle](task-lifecycle.md).
 

@@ -63,9 +63,16 @@ task's own container, as a dependency, or by more than one task) — but never r
   directory tree becomes the build context, unchanged from before this existed.
 - `build_target`, `build_secrets`, and `build_ssh` aren't supported yet — see
   [Differences from Batect](differences-from-batect.md).
-- Built images aren't cleaned up automatically (same as a plain `docker build -t ... .`
-  would leave behind) — they accumulate under unique tags over repeated runs until
-  manually pruned (`docker image prune`).
+- The built image is tagged `<project_name>-<container_name>` (matching Batect's own
+  default), so it's identifiable in `docker images` rather than showing up as an
+  opaque generated name. That tag is reused/overwritten on every run, though — it's
+  for identification only, not caching or correctness (Ratect always runs the image
+  it just built, regardless of what the tag currently points to by the time the
+  container starts).
+- Built images aren't cleaned up automatically — since the tag is reused, the image a
+  build replaces becomes a dangling (`<none>`) image rather than disappearing, and
+  accumulates until manually pruned (`docker image prune`), same as repeatedly running
+  a plain `docker build -t ... .` would leave behind.
 
 #### `.dockerignore` semantics
 

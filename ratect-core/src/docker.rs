@@ -171,12 +171,18 @@ pub trait ContainerRuntime {
     /// absolute path), tagging it as `tag`. The Dockerfile is always named
     /// `Dockerfile`, at `build_directory`'s own root. `build_args` are
     /// passed through as Docker's own `--build-arg` mechanism.
+    ///
+    /// Returns the built image's ID (e.g. `sha256:...`), not `tag` — `tag` is
+    /// applied so the image is identifiable in `docker images`, but isn't
+    /// guaranteed unique (see `TaskEngine::resolve_image`), so callers must
+    /// use the returned ID, not `tag`, to reliably reference the image this
+    /// call just built.
     async fn build_image(
         &self,
         build_directory: &Path,
         build_args: Option<&HashMap<String, String>>,
         tag: &str,
-    ) -> Result<()>;
+    ) -> Result<String>;
 
     async fn create_network(&self, name: &str) -> Result<()>;
 
@@ -321,7 +327,7 @@ impl ContainerRuntime for DockerClient {
         build_directory: &Path,
         build_args: Option<&HashMap<String, String>>,
         tag: &str,
-    ) -> Result<()> {
+    ) -> Result<String> {
         let pb = ProgressBar::new_spinner();
         pb.set_style(
             ProgressStyle::default_spinner()
@@ -349,6 +355,7 @@ impl ContainerRuntime for DockerClient {
             self.docker
                 .build_image(options, None, Some(bollard::body_full(tar_bytes.into())));
 
+        let mut image_id = None;
         while let Some(result) = stream.next().await {
             match result {
                 Ok(info) => {
@@ -366,6 +373,9 @@ impl ContainerRuntime for DockerClient {
                             pb.set_message(format!("{}: {}", tag, trimmed));
                         }
                     }
+                    if let Some(id) = info.aux.and_then(|aux| aux.id) {
+                        image_id = Some(id);
+                    }
                 }
                 Err(e) => {
                     pb.finish_with_message(format!("Failed to build image {}", tag));
@@ -374,8 +384,12 @@ impl ContainerRuntime for DockerClient {
             }
         }
 
+        let image_id = image_id.ok_or_else(|| {
+            anyhow::anyhow!("Docker did not report an image ID after building '{}'", tag)
+        })?;
+
         pb.finish_with_message(format!("Image {} built successfully", tag));
-        Ok(())
+        Ok(image_id)
     }
 
     async fn create_network(&self, name: &str) -> Result<()> {
