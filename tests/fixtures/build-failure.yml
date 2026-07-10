@@ -1,0 +1,13 @@
+# Exercises a failing `docker build`: the Dockerfile's `RUN` step always
+# fails after printing a distinctive line, proving the full build transcript
+# (not just Docker's one-line failure summary) reaches `ratect`'s own error
+# output — see `build_output_suffix` in `ratect-core/src/docker.rs`.
+project_name: ratect-build-failure-test
+containers:
+  build-env:
+    build_directory: ./build-failure
+tasks:
+  build:
+    run:
+      container: build-env
+      command: echo unreachable

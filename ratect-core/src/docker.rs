@@ -128,6 +128,20 @@ fn build_context_tar(build_directory: &Path) -> Result<Vec<u8>> {
         .context("Failed to finalize build context archive")
 }
 
+/// Formats `output` (the build log accumulated so far) as a "Build output:"
+/// section to append to a build failure message, or an empty string if
+/// nothing was captured yet (e.g. the build failed before Docker streamed
+/// anything). Kept separate from `build_image` so it's unit-testable without
+/// a Docker daemon.
+fn build_output_suffix(output: &str) -> String {
+    let trimmed = output.trim_end();
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nBuild output:\n{trimmed}")
+    }
+}
+
 /// Recursively collects every regular file under `dir` as `(absolute_path,
 /// path_relative_to_root)` pairs, the latter always `/`-joined regardless
 /// of platform, matching the path style `.dockerignore` patterns use.
@@ -356,20 +370,31 @@ impl ContainerRuntime for DockerClient {
                 .build_image(options, None, Some(bollard::body_full(tar_bytes.into())));
 
         let mut image_id = None;
+        // The full build transcript, so a failure's error carries everything
+        // that led up to it (not just Docker's own one-line summary) — the
+        // only other place this streamed output goes is the ephemeral
+        // spinner message below, which is gone the instant the next line
+        // arrives and never rendered at all on a non-TTY (CI, redirected
+        // output).
+        let mut output = String::new();
         while let Some(result) = stream.next().await {
             match result {
                 Ok(info) => {
                     if let Some(message) = info.error_detail.and_then(|detail| detail.message) {
                         pb.finish_with_message(format!("Failed to build image {}", tag));
                         return Err(anyhow::anyhow!(
-                            "Failed to build image '{}': {}",
+                            "Failed to build image '{}': {}{}",
                             tag,
-                            message
+                            message,
+                            build_output_suffix(&output)
                         ));
                     }
                     if let Some(stream_line) = info.stream {
                         let trimmed = stream_line.trim();
                         if !trimmed.is_empty() {
+                            tracing::debug!(image = tag, "{trimmed}");
+                            output.push_str(trimmed);
+                            output.push('\n');
                             pb.set_message(format!("{}: {}", tag, trimmed));
                         }
                     }
@@ -379,7 +404,11 @@ impl ContainerRuntime for DockerClient {
                 }
                 Err(e) => {
                     pb.finish_with_message(format!("Failed to build image {}", tag));
-                    return Err(e).context(format!("Failed to build image {}", tag));
+                    return Err(e).context(format!(
+                        "Failed to build image '{}'{}",
+                        tag,
+                        build_output_suffix(&output)
+                    ));
                 }
             }
         }
@@ -651,5 +680,19 @@ mod tests {
         assert!(entries.contains(&"packages/foo/build/output.txt".to_string()));
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn build_output_suffix_is_empty_when_nothing_was_captured() {
+        assert_eq!(build_output_suffix(""), "");
+    }
+
+    #[test]
+    fn build_output_suffix_includes_the_trimmed_transcript() {
+        let output = "Step 1/3 : FROM alpine\nStep 2/3 : RUN false\n";
+        assert_eq!(
+            build_output_suffix(output),
+            "\n\nBuild output:\nStep 1/3 : FROM alpine\nStep 2/3 : RUN false"
+        );
     }
 }

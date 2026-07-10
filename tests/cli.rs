@@ -49,6 +49,10 @@ fn build_with_dockerignore_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-with-dockerignore.yml")
 }
 
+fn build_failure_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-failure.yml")
+}
+
 fn project_directory_declared_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-directory-declared.yml")
 }
@@ -528,5 +532,37 @@ fn dockerignore_semantics_hold_against_a_real_docker_build() {
         output.status.success(),
         "stderr:\n{}",
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves a real failing `docker build`'s full transcript (not just
+/// Docker's one-line failure summary) reaches `ratect`'s own error output —
+/// `build_output_suffix`'s unit tests already cover the string formatting in
+/// isolation, but only a real Docker daemon actually exercises the
+/// streaming/`error_detail` wiring in `DockerClient::build_image` that feeds
+/// it.
+#[test]
+#[ignore]
+fn failing_build_output_reaches_the_error() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(build_failure_config_path())
+        .arg("build")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        !output.status.success(),
+        "the build should have failed: stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("this line should reach the user"),
+        "the Dockerfile's RUN output should be in the error: {stderr}"
     );
 }

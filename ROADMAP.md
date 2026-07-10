@@ -123,16 +123,14 @@ Neither bump is ever folded into a feature commit.
     replaces becomes a dangling (`<none>`) image rather than disappearing, and
     accumulates until manually pruned (`docker image prune`), same as repeatedly
     running a plain `docker build -t ... .` would leave behind.
-  - **Build output isn't captured or persisted anywhere** (`DockerClient::build_image`,
-    `ratect-core/src/docker.rs`) — each streamed build log line only updates an
-    ephemeral `indicatif` spinner message (same pattern `pull_image` already used),
-    with nothing written via `println!`/`tracing::`. On a non-TTY (CI, redirected
-    output) the spinner may not render at all. On failure, only Docker's one-line
-    `error_detail.message` surfaces via the returned error — not the build transcript
-    leading up to it. A `RUN` step failing with useful output in its own logs is
-    exactly the case where this matters most, so this is a real usability gap, not
-    just cosmetic — a build a user can't debug isn't very useful. Worth prioritizing
-    over the other gaps here.
+  - ~~Build output isn't captured or persisted anywhere~~ — fixed: every streamed
+    build log line is now logged at `debug` level (`RUST_LOG=debug` for a live
+    transcript), and — more importantly — a build failure's error now includes the
+    *entire* accumulated transcript, not just Docker's one-line `error_detail.message`,
+    via a new `build_output_suffix` helper (`ratect-core/src/docker.rs`). Deliberately
+    not a `--output` mode (Ratect has none yet — see below) — piggybacking on the
+    existing `tracing`-based logging/error-reporting Ratect already has was the honest
+    "for now" answer, not a new UI concept.
   - The `dockerignore` crate has zero dependency on any ratect-specific type and was
     deliberately kept as its own workspace crate (not a `ratect-core` module)
     specifically so it *could* be extracted and published as a standalone crate later —

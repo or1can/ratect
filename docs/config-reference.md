@@ -73,6 +73,12 @@ task's own container, as a dependency, or by more than one task) — but never r
   build replaces becomes a dangling (`<none>`) image rather than disappearing, and
   accumulates until manually pruned (`docker image prune`), same as repeatedly running
   a plain `docker build -t ... .` would leave behind.
+- Ratect has no `--output` mode yet, so build progress is logged rather than
+  streamed to the console: each build log line is emitted at `debug` level (set
+  `RUST_LOG=debug` for a live transcript), and if the build fails, the *entire*
+  transcript is included in the error Ratect reports — not just Docker's one-line
+  failure summary — so a failing `RUN` step's own output is always visible without
+  needing `RUST_LOG` set.
 
 #### `.dockerignore` semantics
 
