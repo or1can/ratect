@@ -45,6 +45,21 @@ fn parse_config_var(s: &str) -> std::result::Result<(String, String), String> {
     }
 }
 
+/// The directory `config_file`'s relative expressions/paths (`build_directory`,
+/// volume host paths, `batect.project_directory`) are resolved against.
+///
+/// `Path::parent()` returns `Some("")` for a bare filename with no directory
+/// prefix (e.g. the default `batect.yml`) rather than `None` — that's not a
+/// "no parent" case in the `unwrap_or` sense, so the common bare `-f
+/// batect.yml` invocation resolves to `""`, not `"."`. Both are handled the
+/// same way downstream (`Config::resolve_expressions` joins onto the current
+/// directory and lexically cleans the result), but it's worth being explicit
+/// here since it's easy to assume `parent()` returning `None` is the only
+/// case that needs a fallback.
+fn base_path_for(config_file: &Path) -> &Path {
+    config_file.parent().unwrap_or(Path::new("."))
+}
+
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
@@ -89,7 +104,7 @@ async fn run() -> Result<()> {
         None => HashMap::new(),
     };
     config_var_overrides.extend(args.config_var.iter().cloned());
-    let base_path = args.config_file.parent().unwrap_or(Path::new("."));
+    let base_path = base_path_for(&args.config_file);
     config.resolve_expressions(base_path, &config_var_overrides)?;
 
     if args.list_tasks {
@@ -143,6 +158,36 @@ mod tests {
         let args = Args::try_parse_from(["ratect", "-f", "custom.yml", "build"]).unwrap();
         assert_eq!(args.config_file, PathBuf::from("custom.yml"));
         assert_eq!(args.task_name.as_deref(), Some("build"));
+    }
+
+    #[test]
+    fn base_path_for_a_bare_config_file_name_is_empty_not_dot() {
+        // The default `-f batect.yml` case: `Path::parent()` on a bare
+        // filename returns `Some("")`, not `None`, so the `.` fallback in
+        // `base_path_for` never actually applies here — worth locking in
+        // explicitly since it's easy to assume otherwise.
+        assert_eq!(base_path_for(Path::new("batect.yml")), Path::new(""));
+    }
+
+    #[test]
+    fn base_path_for_a_dot_relative_config_file_is_dot() {
+        assert_eq!(base_path_for(Path::new("./batect.yml")), Path::new("."));
+    }
+
+    #[test]
+    fn base_path_for_a_config_file_in_a_subdirectory_is_that_subdirectory() {
+        assert_eq!(
+            base_path_for(Path::new("project/batect.yml")),
+            Path::new("project")
+        );
+    }
+
+    #[test]
+    fn base_path_for_an_absolute_config_file_is_its_directory() {
+        assert_eq!(
+            base_path_for(Path::new("/abs/project/batect.yml")),
+            Path::new("/abs/project")
+        );
     }
 
     #[test]

@@ -78,12 +78,13 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
 - **`uuid`**: Generates collision-resistant per-task Docker network names (`ratect-<uuid>`) in `ratect-core/src/engine.rs`. Deliberately not `std::process::id()` — that's frequently `1` when `ratect` itself runs inside a container (e.g. CI), which would collide across concurrent runs. Built images are tagged `<project_name>-<container_name>` instead (human-readable, matching Batect's convention) — `resolve_image` avoids the same collision hazard for these not via a random name but by running the image *ID* Docker's build reports back, not the (non-unique) tag.
 - **`tar`**: Builds the in-memory build-context tarball `docker.rs`'s `build_context_tar` hands to `bollard`'s `build_image`.
 - **`dockerignore`** (local workspace crate, not external): `.dockerignore` pattern matching — see the Architecture section above.
+- **`path-clean`**: Lexically normalizes (`.`/`..`/trailing-slash) resolved paths in `ratect-core/src/config.rs` (`resolve_path`, and the built-in `batect.project_directory` config variable) — `PathBuf::join` alone doesn't do this, so without it a `base_path` like `""` or `"."` (both common — see `main.rs`'s `-f` handling) would leave a stray `.` or trailing slash in every path/expression derived from it. Already a `dockerignore` dependency; reused here rather than hand-rolling the same normalization twice.
 
 Dependencies are split across the three `Cargo.toml`s along CLI-vs-core lines: `clap`
 and `tracing-subscriber` are `ratect`-only; `serde`, `noyalib`, `bollard`, `futures`,
-`indicatif`, `async-recursion`, `async-trait`, `uuid`, `tar`, and the local
-`dockerignore` crate are `ratect-core`-only (`dockerignore` itself depends only on
-`regex` and `path-clean`); `anyhow`, `tracing`, and `tokio` are needed by both. `tokio`
+`indicatif`, `async-recursion`, `async-trait`, `uuid`, `tar`, `path-clean`, and the local
+`dockerignore` crate are `ratect-core`-only (`dockerignore` itself depends on `regex`
+and `path-clean` too); `anyhow`, `tracing`, and `tokio` are needed by both. `tokio`
 is a normal dependency in both crates now — `ratect-core`'s non-test code needs it too,
 for `build_context_tar`'s `tokio::task::spawn_blocking` (it used to be a `ratect-core`
 dev-dependency only, for `#[tokio::test]` in its unit tests).

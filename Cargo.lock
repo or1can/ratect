@@ -876,6 +876,7 @@ dependencies = [
  "futures",
  "indicatif",
  "noyalib",
+ "path-clean",
  "serde",
  "tar",
  "tokio",

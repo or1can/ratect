@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
@@ -147,9 +148,13 @@ impl Config {
         // directory containing the config file. Not user-declarable (see
         // the check above) or overridable via --config-var — the guard
         // above already stops that, since only *declared* names can be
-        // overridden.
+        // overridden. `.clean()`d for the same reason as `resolve_path`
+        // below — `base_path` is frequently "" or "." (e.g. from `-f
+        // batect.yml` or `-f ./batect.yml`), which without cleaning would
+        // leave a trailing slash or `/.` in every value derived from this.
         let project_directory = std::env::current_dir()?
             .join(base_path)
+            .clean()
             .display()
             .to_string();
         config_vars.insert(PROJECT_DIRECTORY_VAR.to_string(), Some(project_directory));
@@ -217,6 +222,14 @@ fn resolve_volume(
 /// a `<project_root` config variable), which mustn't be prefixed with
 /// `base_path` as if it were still a literal relative fragment. Shared by
 /// volume host paths (the host-path segment) and `build_directory`.
+///
+/// `base_path` itself may be relative (e.g. derived from a `-f ./batect.yml`
+/// config path), so this always joins onto the current directory too, then
+/// lexically `.clean()`s the result — otherwise a `.` component anywhere
+/// along the way (from either `base_path` or `path`) would survive verbatim
+/// into the returned string, e.g. `/project/./docker` instead of
+/// `/project/docker`. Purely cosmetic (the path still resolves correctly on
+/// disk either way), but worth avoiding since it's user-visible in errors.
 fn resolve_path(
     path: &str,
     base_path: &Path,
@@ -226,11 +239,9 @@ fn resolve_path(
     let interpolated = crate::expressions::interpolate(path, host_env, config_vars)?;
     if Path::new(&interpolated).is_relative() {
         let absolute_path = base_path.join(&interpolated);
-        // We use absolute() if available, but for compatibility let's just use join and canonicalize if it exists
-        // Or better, just join and use display() if we want to avoid requiring the path to exist.
-        // Docker usually requires absolute paths.
         Ok(std::env::current_dir()?
             .join(absolute_path)
+            .clean()
             .display()
             .to_string())
     } else {
@@ -382,6 +393,21 @@ tasks: {}
         let resolved =
             resolve_path("docker", Path::new("/base"), &no_host_env, &HashMap::new()).unwrap();
         assert_eq!(resolved, "/base/docker");
+    }
+
+    #[test]
+    fn resolve_path_cleans_dot_components_from_the_joined_path() {
+        let resolved = resolve_path(
+            "./docker",
+            Path::new("/base"),
+            &no_host_env,
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            resolved, "/base/docker",
+            "a leading './' shouldn't survive into the resolved path"
+        );
     }
 
     #[test]
@@ -908,6 +934,35 @@ config_variables:
         assert_eq!(
             config.containers["build-env"].volumes.as_ref().unwrap()[0],
             "/base/scripts:/scripts"
+        );
+    }
+
+    #[test]
+    fn resolve_expressions_cleans_project_directory_var_when_base_path_is_empty() {
+        // An empty `base_path` is what `main.rs` passes for a bare `-f
+        // batect.yml` (no directory prefix) — `Path::parent()` on that
+        // returns `Some("")`, not `None`. Without cleaning, joining an empty
+        // path leaves a trailing slash on every value derived from it.
+        let mut environment = HashMap::new();
+        environment.insert("FOO".to_string(), "<batect.project_directory".to_string());
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_environment(environment),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        config
+            .resolve_expressions_with(Path::new(""), &HashMap::new(), |_| None)
+            .unwrap();
+
+        let resolved = &config.containers["build-env"].environment.as_ref().unwrap()["FOO"];
+        assert!(
+            !resolved.ends_with('/'),
+            "batect.project_directory shouldn't have a trailing slash: {resolved}"
         );
     }
 
