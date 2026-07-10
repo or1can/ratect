@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-10
+
 ### Added
 
 - Image building: a container with `build_directory` set now actually builds an image from a `Dockerfile` (always that name, at `build_directory`'s own root) via `bollard`'s classic (non-BuildKit) build API, instead of logging a warning and no-op'ing. New `ContainerRuntime::build_image` and free function `build_context_tar` (`ratect-core/src/docker.rs`) build an in-memory tar of the build directory, respecting a `.dockerignore` if present. Dependency containers now support `build_directory` too (previously only a task's own container could use it) — `TaskEngine::run_task_internal` and `start_dependency` (`ratect-core/src/engine.rs`) both now go through a single shared `TaskEngine::resolve_image`, which pulls or builds as needed and dedupes both (a container is only ever pulled/built once per `ratect` invocation, keyed by image name or container name respectively, via new `built_images: Mutex<HashMap<String, String>>`). Built images are tagged `<project_name>-<container_name>`, matching Batect's own convention, so they're identifiable in `docker images` instead of showing up as an opaque generated name. That tag isn't unique, though (retagged on every run) — `ContainerRuntime::build_image` now returns the image *ID* Docker's build reports back, and `resolve_image` runs/caches that ID rather than the tag, so two overlapping `ratect` invocations retagging the same name can't race each other into running the wrong image.
