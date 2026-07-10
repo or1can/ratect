@@ -579,6 +579,51 @@ mod tests {
         dir
     }
 
+    #[test]
+    fn build_cmd_with_command_and_no_additional_args_runs_it_via_sh_c() {
+        let cmd = build_cmd(Some("echo hi"), &[]);
+        assert_eq!(
+            cmd,
+            Some(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "echo hi".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn build_cmd_with_command_and_additional_args_passes_them_as_positional_parameters() {
+        let additional_args = vec!["arg1".to_string(), "arg2".to_string()];
+        let cmd = build_cmd(Some("echo $1 $2"), &additional_args);
+        assert_eq!(
+            cmd,
+            Some(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "echo $1 $2".to_string(),
+                "sh".to_string(),
+                "arg1".to_string(),
+                "arg2".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn build_cmd_with_no_command_and_no_additional_args_lets_the_image_use_its_own_entrypoint() {
+        // `None` (not an empty `Vec`) — bollard/Docker treats an unset `cmd`
+        // as "use the image's own default CMD/entrypoint", which an empty
+        // array wouldn't.
+        assert_eq!(build_cmd(None, &[]), None);
+    }
+
+    #[test]
+    fn build_cmd_with_no_command_and_additional_args_passes_them_directly_as_argv() {
+        let additional_args = vec!["migrate".to_string(), "--up".to_string()];
+        let cmd = build_cmd(None, &additional_args);
+        assert_eq!(cmd, Some(vec!["migrate".to_string(), "--up".to_string()]));
+    }
+
     /// The `/`-joined relative paths of every entry in a tar built by
     /// `build_context_tar`, for assertions.
     fn tar_entry_paths(tar_bytes: &[u8]) -> Vec<String> {
