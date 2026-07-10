@@ -1,0 +1,3 @@
+FROM alpine:3.18.2
+ARG MESSAGE=default
+ENV MESSAGE=$MESSAGE

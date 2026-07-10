@@ -101,8 +101,8 @@ actual behavior — it doesn't yet distinguish "nothing to do" from "success":
 | `RUST_LOG` | Controls log verbosity on stderr (`error`, `warn`, `info` [default], `debug`, `trace`). See [how it works](how-it-works.md#5-logging-vs-output). |
 
 Ratect supports interpolating host environment variables and config variables into
-`environment` values and volume host paths in `batect.yml` (`$VAR`, `${VAR:-default}`,
-`<name` — see [config reference](config-reference.md#expressions)), but nowhere else
-in the config yet (`build_directory`, `build_args`, etc. are still used literally,
-moot until image building exists) — see
+`environment` values, volume host paths, `build_directory`, and `build_args` in
+`batect.yml` (`$VAR`, `${VAR:-default}`, `<name` — see
+[config reference](config-reference.md#expressions)), but not yet within fields that
+don't exist yet (`build_secrets.path`, `build_ssh.paths`) — see
 [differences from Batect](differences-from-batect.md).

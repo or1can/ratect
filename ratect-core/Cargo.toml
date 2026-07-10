@@ -14,6 +14,6 @@ tracing = "0.1"
 async-recursion = "1.1"
 async-trait = "0.1"
 uuid = { version = "1", features = ["v4"] }
-
-[dev-dependencies]
+tar = "0.4"
+dockerignore = { path = "../dockerignore" }
 tokio = { version = "1.52", features = ["full"] }

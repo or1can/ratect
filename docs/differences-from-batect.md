@@ -42,16 +42,16 @@ Not a single field — Batect supports an
 for config variables) usable *within* several fields: `environment`, `build_args`,
 `build_directory`, `build_secrets.path`, `build_ssh.paths`, and volume local paths.
 
-**Ratect implements this within `environment` and volume local paths** (see
-[config reference](config-reference.md#expressions) for the full syntax, precedence,
-and error rules, and [Volume path resolution](config-reference.md#volume-path-resolution)
-for how an interpolated host path is then resolved relative to the config file). Every
-other field's YAML string value is still used exactly as written, with no host-side
-substitution step:
+**Ratect implements this within `environment`, volume local paths, `build_directory`,
+and `build_args`** (see [config reference](config-reference.md#expressions) for the
+full syntax, precedence, and error rules, and
+[Volume path resolution](config-reference.md#volume-path-resolution) for how an
+interpolated host path — or `build_directory` — is then resolved relative to the config
+file). Every other field's YAML string value is still used exactly as written, with no
+host-side substitution step:
 
-- `build_args`, `build_directory`, `build_secrets.path`, and `build_ssh.paths` are
-  moot anyway until image building itself exists — see `build_directory`'s "Parsed,
-  not implemented" entry below.
+- `build_secrets.path` and `build_ssh.paths` are moot until those fields themselves
+  exist — see their "Not supported" entries below.
 - `run.command` is a field where you *will* see `$VAR`-style expansion happen — but
   that's ordinary POSIX shell variable expansion done by `sh -c` **inside the
   container**, using the container's own environment (including anything set via
@@ -72,18 +72,18 @@ substitution step:
 |---|---|---|
 | `image` | Supported | |
 | `volumes` | Partially supported | Only the `local:container[:options]` string form — see [config reference](config-reference.md#volume-path-resolution). The local path supports [expressions](#expressions). The expanded map form, [caches](https://github.com/batect/batect.dev/blob/main/docs/reference/config/containers.md#volumes), and tmpfs mounts aren't supported. |
-| `dependencies` | Supported (simplified) | Starts recursively (nested dependencies too), on a network scoped to one task execution — see [the task lifecycle](task-lifecycle.md). No health-check waiting (`health_check` isn't parsed — see below) and no `setup_commands` support, so a dependency is "ready" as soon as it's started, unlike Batect's real readiness check. |
-| `build_directory` | Parsed, not implemented | No image building. Roadmap: [Image Building](../ROADMAP.md#batect-parity). |
+| `dependencies` | Supported (simplified) | Starts recursively (nested dependencies too), on a network scoped to one task execution — see [the task lifecycle](task-lifecycle.md). No health-check waiting (`health_check` isn't parsed — see below) and no `setup_commands` support, so a dependency is "ready" as soon as it's started, unlike Batect's real readiness check. Works for dependency containers too, not just a task's own — see `build_directory` below. |
+| `build_directory` | Supported (simplified) | Builds an image from a `Dockerfile` (always that exact name, at `build_directory`'s own root — no custom naming yet) — see [config reference](config-reference.md#image-building). A `.dockerignore` at the root is respected, with real Docker's actual matching rules (not `.gitignore`'s — see [`.dockerignore` semantics](config-reference.md#dockerignore-semantics)). No cross-invocation build caching or automatic image cleanup yet. |
 | `additional_hostnames` | Not supported | |
 | `additional_hosts` | Not supported | |
-| `build_args` | Not supported | (moot until image building exists) |
-| `build_target` | Not supported | (moot until image building exists) |
-| `build_secrets` | Not supported | (moot until image building exists) |
-| `build_ssh` | Not supported | (moot until image building exists) |
+| `build_args` | Supported | Values support [expressions](#expressions). |
+| `build_target` | Not supported | |
+| `build_secrets` | Not supported | |
+| `build_ssh` | Not supported | |
 | `capabilities_to_add` / `capabilities_to_drop` | Not supported | |
 | `command` | Supported | Only at the container level via the equivalent task-level `run.command` — see [Task fields](#task-fields). |
 | `devices` | Not supported | |
-| `dockerfile` | Not supported | (moot until image building exists) |
+| `dockerfile` | Not supported | The Dockerfile is always named `Dockerfile`, at `build_directory`'s own root — no way yet to point at a differently-named or differently-located one. |
 | `enable_init_process` | Not supported | |
 | `entrypoint` | Not supported | |
 | `environment` | Supported | Values support [expressions](#expressions) (host env vars and config variables). Combines with the equivalent task-level `run.environment` — see [Task run fields](#run-fields) and [config reference](config-reference.md#taskrun). |
@@ -138,8 +138,8 @@ Batect's full flag list, from its [CLI reference](https://github.com/batect/bate
 | `--no-cleanup`, `--no-cleanup-after-failure`, `--no-cleanup-after-success` | Not supported | Ratect always attempts to remove containers after running; there's no way to leave them for debugging. |
 | `--disable-ports` | N/A | Moot — no port publishing exists to disable. |
 | `--use-network` | Not supported | A minimal per-task network now exists (see `dependencies`) but there's no way to point it at an existing network instead. Roadmap: [Docker Networking](../ROADMAP.md#batect-parity). |
-| `--enable-buildkit` | N/A | Moot — no image building exists yet. |
-| `--tag-image` | N/A | Moot — no image building exists yet. |
+| `--enable-buildkit` | Not supported | Images are built via Docker's classic (non-BuildKit) build API — no way to opt into BuildKit. |
+| `--tag-image` | Not supported | Built images are tagged internally with a random, unique-per-build name — no way to additionally tag one with a custom name. |
 | `--config-vars-file`, `--config-var` | Supported | See [CLI reference](cli-reference.md) and [Expressions](#expressions). |
 | `--docker-host`, `--docker-context`, `--docker-config`, `--docker-cert-path`, `--docker-tls*` | Not supported | Ratect connects using Docker's local defaults only, with no CLI overrides. |
 | `--cache-type`, `--clean`, `--clean-cache` | N/A | Moot — no cache concept exists (Batect's caches are for build performance, not implemented here). |
@@ -153,11 +153,10 @@ Batect's full flag list, from its [CLI reference](https://github.com/batect/bate
 Batect behavior not implemented in task execution, beyond what's covered by the field
 tables above:
 
-- **Docker networking**: a minimal per-task network now exists (see
+- **Docker networking**: every task execution gets its own isolated network (see
   [`dependencies`](#container-fields) and [the task lifecycle](task-lifecycle.md)), but
-  only for containers involved in a dependency relationship — it's not Batect's fully
-  configurable networking (custom drivers, `--use-network` to reuse an existing
-  network, etc.).
+  it's not Batect's fully configurable networking (custom drivers, `--use-network` to
+  reuse an existing network, etc.).
 - **Interactive mode**: no TTY/STDIN attachment for tasks that need user input.
 - **Parallel execution**: prerequisites run sequentially, not in parallel — Batect runs
   independent setup/cleanup steps concurrently.

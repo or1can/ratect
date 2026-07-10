@@ -1,0 +1,9 @@
+[package]
+name = "dockerignore"
+version = "0.3.0-dev"
+edition = "2021"
+description = "A faithful port of Docker's own .dockerignore pattern matching (github.com/moby/patternmatcher)"
+
+[dependencies]
+regex = "1"
+path-clean = "1"

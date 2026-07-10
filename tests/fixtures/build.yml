@@ -1,0 +1,18 @@
+# Exercises image building end-to-end: `build_directory` (resolved relative
+# to this file's own directory) builds a real image from
+# `tests/fixtures/build/Dockerfile`, and `build_args` reaches that build —
+# the Dockerfile promotes the MESSAGE build arg to a runtime environment
+# variable, which the task then echoes, proving both `build_directory` and
+# `build_args` reached a real `docker build`, not just that the right calls
+# were made.
+project_name: ratect-build-test
+containers:
+  build-env:
+    build_directory: ./build
+    build_args:
+      MESSAGE: hello-from-build-arg
+tasks:
+  print-message:
+    run:
+      container: build-env
+      command: echo "$MESSAGE"

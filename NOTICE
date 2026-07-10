@@ -1,0 +1,26 @@
+Ratect
+Copyright the Ratect contributors.
+
+This product includes software developed at Docker, Inc. (https://www.docker.com).
+
+The `dockerignore` crate (`dockerignore/src/pattern.rs`, `dockerignore/src/lib.rs`) is a
+Rust port of `.dockerignore` pattern matching from `github.com/moby/patternmatcher`
+(`patternmatcher.go` and `ignorefile/ignorefile.go`), including that project's own test
+suite, carried over as this crate's tests. That project is licensed under the Apache
+License, Version 2.0, and its own NOTICE file reads:
+
+    Docker
+    Copyright 2012-2017 Docker, Inc.
+
+    This product includes software developed at Docker, Inc. (https://www.docker.com).
+
+    The following is courtesy of our legal counsel:
+
+    Use and transfer of Docker may be subject to certain restrictions by the
+    United States and other governments.
+    It is your responsibility to ensure that your use and/or transfer does not
+    violate applicable laws.
+
+    For more information, please see https://www.bis.doc.gov
+
+    See also https://www.apache.org/dev/crypto.html and/or seek legal counsel.

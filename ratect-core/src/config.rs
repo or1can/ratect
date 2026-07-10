@@ -24,6 +24,7 @@ pub struct Config {
 pub struct Container {
     pub image: Option<String>,
     pub build_directory: Option<String>,
+    pub build_args: Option<HashMap<String, String>>,
     pub volumes: Option<Vec<String>>,
     pub dependencies: Option<Vec<String>>,
     pub environment: Option<HashMap<String, String>>,
@@ -164,6 +165,15 @@ impl Config {
                     *volume = resolve_volume(volume, base_path, &host_env, &config_vars)?;
                 }
             }
+            if let Some(build_directory) = &mut container.build_directory {
+                *build_directory =
+                    resolve_path(build_directory, base_path, &host_env, &config_vars)?;
+            }
+            if let Some(build_args) = &mut container.build_args {
+                for value in build_args.values_mut() {
+                    *value = crate::expressions::interpolate(value, &host_env, &config_vars)?;
+                }
+            }
         }
 
         for task in self.tasks.values_mut() {
@@ -196,21 +206,36 @@ fn resolve_volume(
         return Ok(volume.to_string());
     }
 
-    let host_path = crate::expressions::interpolate(parts[0], host_env, config_vars)?;
-    let resolved_host_path = if Path::new(&host_path).is_relative() {
-        let absolute_host_path = base_path.join(&host_path);
+    let resolved_host_path = resolve_path(parts[0], base_path, host_env, config_vars)?;
+
+    Ok(format!("{}:{}", resolved_host_path, parts[1]))
+}
+
+/// Interpolates expressions within `path`, then resolves the result to an
+/// absolute path (relative to `base_path`) if it's relative — done in this
+/// order because an expression can itself resolve to an absolute path (e.g.
+/// a `<project_root` config variable), which mustn't be prefixed with
+/// `base_path` as if it were still a literal relative fragment. Shared by
+/// volume host paths (the host-path segment) and `build_directory`.
+fn resolve_path(
+    path: &str,
+    base_path: &Path,
+    host_env: &impl Fn(&str) -> Option<String>,
+    config_vars: &HashMap<String, Option<String>>,
+) -> Result<String> {
+    let interpolated = crate::expressions::interpolate(path, host_env, config_vars)?;
+    if Path::new(&interpolated).is_relative() {
+        let absolute_path = base_path.join(&interpolated);
         // We use absolute() if available, but for compatibility let's just use join and canonicalize if it exists
         // Or better, just join and use display() if we want to avoid requiring the path to exist.
         // Docker usually requires absolute paths.
-        std::env::current_dir()?
-            .join(absolute_host_path)
+        Ok(std::env::current_dir()?
+            .join(absolute_path)
             .display()
-            .to_string()
+            .to_string())
     } else {
-        host_path
-    };
-
-    Ok(format!("{}:{}", resolved_host_path, parts[1]))
+        Ok(interpolated)
+    }
 }
 
 #[cfg(test)]
@@ -258,6 +283,25 @@ tasks:
             task.prerequisites.as_ref().unwrap(),
             &vec!["other".to_string()]
         );
+    }
+
+    #[test]
+    fn parses_build_directory_and_build_args() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    build_directory: ./docker
+    build_args:
+      VERSION: "1.2.3"
+tasks: {}
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.build_directory.as_deref(), Some("./docker"));
+        assert_eq!(container.build_args.as_ref().unwrap()["VERSION"], "1.2.3");
     }
 
     fn no_host_env(_: &str) -> Option<String> {
@@ -331,6 +375,101 @@ tasks:
         )
         .unwrap();
         assert_eq!(resolved, "/abs/root:/code");
+    }
+
+    #[test]
+    fn resolve_path_makes_relative_path_absolute() {
+        let resolved =
+            resolve_path("docker", Path::new("/base"), &no_host_env, &HashMap::new()).unwrap();
+        assert_eq!(resolved, "/base/docker");
+    }
+
+    #[test]
+    fn resolve_path_leaves_absolute_path_unchanged() {
+        let resolved = resolve_path(
+            "/already/absolute",
+            Path::new("/base"),
+            &no_host_env,
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(resolved, "/already/absolute");
+    }
+
+    #[test]
+    fn resolve_path_interpolates_expression_before_resolving() {
+        let config_vars =
+            HashMap::from([("project_root".to_string(), Some("/abs/root".to_string()))]);
+        let resolved = resolve_path(
+            "<project_root",
+            Path::new("/base"),
+            &no_host_env,
+            &config_vars,
+        )
+        .unwrap();
+        assert_eq!(resolved, "/abs/root");
+    }
+
+    fn container_with_build(
+        build_directory: &str,
+        build_args: HashMap<String, String>,
+    ) -> Container {
+        Container {
+            image: None,
+            build_directory: Some(build_directory.to_string()),
+            build_args: Some(build_args),
+            volumes: None,
+            dependencies: None,
+            environment: None,
+        }
+    }
+
+    #[test]
+    fn resolve_expressions_resolves_build_directory_relative_path() {
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_build("docker", HashMap::new()),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        config
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), no_host_env)
+            .unwrap();
+
+        assert_eq!(
+            config.containers["build-env"].build_directory.as_deref(),
+            Some("/base/docker")
+        );
+    }
+
+    #[test]
+    fn resolve_expressions_interpolates_build_args() {
+        let mut build_args = HashMap::new();
+        build_args.insert("MESSAGE".to_string(), "$HOST_VAR".to_string());
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_build("./docker", build_args),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        config
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), |name| {
+                (name == "HOST_VAR").then(|| "host-value".to_string())
+            })
+            .unwrap();
+
+        assert_eq!(
+            config.containers["build-env"].build_args.as_ref().unwrap()["MESSAGE"],
+            "host-value"
+        );
     }
 
     /// A fresh, unique scratch directory for tests that need to write real
@@ -509,6 +648,7 @@ config_variables:
 
     fn container_with_environment(environment: HashMap<String, String>) -> Container {
         Container {
+            build_args: None,
             image: Some("alpine:3.18".to_string()),
             build_directory: None,
             volumes: None,

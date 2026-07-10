@@ -1,8 +1,9 @@
-use crate::config::Config;
+use crate::config::{Config, Container};
 use crate::docker::ContainerRuntime;
 use anyhow::{Context, Result};
 use async_recursion::async_recursion;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::Mutex;
 use uuid::Uuid;
 
@@ -29,6 +30,13 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     docker: D,
     executed_tasks: Mutex<HashSet<String>>,
     pulled_images: Mutex<HashSet<String>>,
+    /// Container name -> tag of the image built for it, so a container with
+    /// `build_directory` is only ever built once per invocation even if
+    /// referenced by multiple tasks or as both a dependency and a task's
+    /// own container. Keyed by container name (not build directory) since
+    /// a given name always has the same `build_directory`/`build_args`
+    /// within one `Config`.
+    built_images: Mutex<HashMap<String, String>>,
     in_progress_tasks: Mutex<HashSet<String>>,
 }
 
@@ -39,7 +47,70 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             docker,
             executed_tasks: Mutex::new(HashSet::new()),
             pulled_images: Mutex::new(HashSet::new()),
+            built_images: Mutex::new(HashMap::new()),
             in_progress_tasks: Mutex::new(HashSet::new()),
+        }
+    }
+
+    /// Resolves `container_config`'s `image` (pulling it, deduped by image
+    /// name) or `build_directory` (building it, deduped by `container_name`)
+    /// into the image reference to actually run. Shared by a task's own
+    /// container and its dependency containers — both need exactly this and
+    /// nothing else, which is also why dependency containers now support
+    /// `build_directory` (they didn't before this was unified).
+    ///
+    /// Each build gets a fresh `Uuid::new_v4()`-based tag rather than one
+    /// derived from `container_name`: two *overlapping* `ratect` invocations
+    /// (e.g. two different projects, or two checkouts of the same one) could
+    /// otherwise race to build and tag the same name, and since a Docker
+    /// tag is a mutable pointer, one process could end up running the
+    /// other's image. A random tag per build makes that structurally
+    /// impossible — nothing else can ever produce the same tag.
+    async fn resolve_image(
+        &self,
+        container_name: &str,
+        container_config: &Container,
+    ) -> Result<String> {
+        if let Some(image) = &container_config.image {
+            let needs_pull = {
+                let pulled = self.pulled_images.lock().unwrap();
+                !pulled.contains(image)
+            };
+
+            if needs_pull {
+                self.docker.pull_image(image).await?;
+                let mut pulled = self.pulled_images.lock().unwrap();
+                pulled.insert(image.to_string());
+            }
+
+            Ok(image.clone())
+        } else if let Some(build_directory) = &container_config.build_directory {
+            let existing_tag = {
+                let built = self.built_images.lock().unwrap();
+                built.get(container_name).cloned()
+            };
+            if let Some(tag) = existing_tag {
+                return Ok(tag);
+            }
+
+            let tag = format!("ratect-build-{}", Uuid::new_v4());
+            self.docker
+                .build_image(
+                    Path::new(build_directory),
+                    container_config.build_args.as_ref(),
+                    &tag,
+                )
+                .await?;
+
+            let mut built = self.built_images.lock().unwrap();
+            built.insert(container_name.to_string(), tag.clone());
+
+            Ok(tag)
+        } else {
+            Err(anyhow::anyhow!(
+                "Container '{}' has neither 'image' nor 'build_directory' set",
+                container_name
+            ))
         }
     }
 
@@ -130,43 +201,24 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 }
             }
 
-            if let Some(image) = &container_config.image {
-                let needs_pull = {
-                    let pulled = self.pulled_images.lock().unwrap();
-                    !pulled.contains(image)
-                };
-
-                if needs_pull {
-                    self.docker.pull_image(image).await?;
-                    let mut pulled = self.pulled_images.lock().unwrap();
-                    pulled.insert(image.to_string());
-                }
-                let environment = merged_environment(
-                    container_config.environment.as_ref(),
-                    task.run.environment.as_ref(),
-                );
-                self.docker
-                    .run_container(
-                        &task.run.container,
-                        image,
-                        task.run.command.as_deref(),
-                        additional_args,
-                        container_config.volumes.as_ref(),
-                        environment.as_ref(),
-                        &network_name,
-                    )
-                    .await?;
-            } else if let Some(build_dir) = &container_config.build_directory {
-                tracing::warn!(
-                    "Building from directory '{}' is not implemented yet",
-                    build_dir
-                );
-            } else {
-                return Err(anyhow::anyhow!(
-                    "Container '{}' has neither 'image' nor 'build_directory' set",
-                    task.run.container
-                ));
-            }
+            let image = self
+                .resolve_image(&task.run.container, container_config)
+                .await?;
+            let environment = merged_environment(
+                container_config.environment.as_ref(),
+                task.run.environment.as_ref(),
+            );
+            self.docker
+                .run_container(
+                    &task.run.container,
+                    &image,
+                    task.run.command.as_deref(),
+                    additional_args,
+                    container_config.volumes.as_ref(),
+                    environment.as_ref(),
+                    &network_name,
+                )
+                .await?;
 
             Ok(())
         }
@@ -224,29 +276,13 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             }
         }
 
-        let image = dependency_config.image.as_ref().with_context(|| {
-            format!(
-                "Container '{}' has no image and cannot be started as a dependency \
-                 (build_directory is not yet supported for dependency containers)",
-                name
-            )
-        })?;
-
-        let needs_pull = {
-            let pulled = self.pulled_images.lock().unwrap();
-            !pulled.contains(image)
-        };
-        if needs_pull {
-            self.docker.pull_image(image).await?;
-            let mut pulled = self.pulled_images.lock().unwrap();
-            pulled.insert(image.to_string());
-        }
+        let image = self.resolve_image(name, dependency_config).await?;
 
         let container_id = self
             .docker
             .start_background_container(
                 name,
-                image,
+                &image,
                 dependency_config.volumes.as_ref(),
                 dependency_config.environment.as_ref(),
                 network,
@@ -273,6 +309,8 @@ mod tests {
     /// (including across pull/network/sidecar/run calls) quickly and
     /// deterministically.
     type CapturedEnvironments = Arc<Mutex<HashMap<String, Option<HashMap<String, String>>>>>;
+    type CapturedBuildArgs = Arc<Mutex<HashMap<String, Option<HashMap<String, String>>>>>;
+    type CapturedImages = Arc<Mutex<HashMap<String, String>>>;
 
     #[derive(Default, Clone)]
     struct FakeContainerRuntime {
@@ -282,6 +320,13 @@ mod tests {
         // strings) so the many existing exact-string event assertions don't
         // have to change shape just because environment support was added.
         environments: CapturedEnvironments,
+        // Keyed by the tag `build_image` was called with.
+        build_args: CapturedBuildArgs,
+        // The `image` a `run_container`/`start_background_container` call
+        // for a given container name actually used — lets tests prove a
+        // built tag (not just a pulled image) reached the run, without
+        // changing the existing exact-string `events()` assertions.
+        images: CapturedImages,
     }
 
     impl FakeContainerRuntime {
@@ -311,12 +356,38 @@ mod tests {
                 .cloned()
                 .flatten()
         }
+
+        /// The `build_args` a prior `build_image` call for `tag` was given
+        /// (flattened, same convention as `environment_for`).
+        fn build_args_for(&self, tag: &str) -> Option<HashMap<String, String>> {
+            self.build_args.lock().unwrap().get(tag).cloned().flatten()
+        }
+
+        /// The `image` a prior `run_container`/`start_background_container`
+        /// call for `name` was given.
+        fn image_for(&self, name: &str) -> Option<String> {
+            self.images.lock().unwrap().get(name).cloned()
+        }
     }
 
     #[async_trait::async_trait]
     impl ContainerRuntime for FakeContainerRuntime {
         async fn pull_image(&self, image: &str) -> Result<()> {
             self.push(format!("pull:{image}"));
+            Ok(())
+        }
+
+        async fn build_image(
+            &self,
+            build_directory: &Path,
+            build_args: Option<&HashMap<String, String>>,
+            tag: &str,
+        ) -> Result<()> {
+            self.build_args
+                .lock()
+                .unwrap()
+                .insert(tag.to_string(), build_args.cloned());
+            self.push(format!("build:{tag}:{}", build_directory.display()));
             Ok(())
         }
 
@@ -333,7 +404,7 @@ mod tests {
         async fn start_background_container(
             &self,
             alias: &str,
-            _image: &str,
+            image: &str,
             _volumes: Option<&Vec<String>>,
             environment: Option<&HashMap<String, String>>,
             network: &str,
@@ -342,6 +413,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(alias.to_string(), environment.cloned());
+            self.images
+                .lock()
+                .unwrap()
+                .insert(alias.to_string(), image.to_string());
             self.push(format!("sidecar-start:{alias}:{network}"));
             Ok(format!("sidecar-id-{alias}"))
         }
@@ -354,7 +429,7 @@ mod tests {
         async fn run_container(
             &self,
             name: &str,
-            _image: &str,
+            image: &str,
             command: Option<&str>,
             additional_args: &[String],
             _volumes: Option<&Vec<String>>,
@@ -365,6 +440,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(name.to_string(), environment.cloned());
+            self.images
+                .lock()
+                .unwrap()
+                .insert(name.to_string(), image.to_string());
             self.push(format!(
                 "run:{name}:{}:args=[{}]:{}",
                 command.unwrap_or_default(),
@@ -380,6 +459,7 @@ mod tests {
 
     fn container(image: &str, dependencies: Option<Vec<String>>) -> Container {
         Container {
+            build_args: None,
             image: Some(image.to_string()),
             build_directory: None,
             volumes: None,
@@ -404,6 +484,7 @@ mod tests {
         containers.insert(
             "build-env".to_string(),
             Container {
+                build_args: None,
                 image: Some("alpine:3.18".to_string()),
                 build_directory: None,
                 volumes: None,
@@ -460,6 +541,7 @@ mod tests {
         containers.insert(
             "build-env".to_string(),
             Container {
+                build_args: None,
                 image: Some("alpine:3.18".to_string()),
                 build_directory: None,
                 volumes: None,
@@ -585,31 +667,29 @@ mod tests {
         }
     }
 
+    fn container_with_build_directory(
+        build_directory: &str,
+        build_args: Option<HashMap<String, String>>,
+    ) -> Container {
+        Container {
+            image: None,
+            build_directory: Some(build_directory.to_string()),
+            build_args,
+            volumes: None,
+            dependencies: None,
+            environment: None,
+        }
+    }
+
     #[tokio::test]
-    async fn build_directory_container_warns_and_skips_run() {
+    async fn build_directory_container_builds_then_runs_the_built_image() {
         let mut containers = HashMap::new();
         containers.insert(
             "build-env".to_string(),
-            Container {
-                image: None,
-                build_directory: Some("./docker".to_string()),
-                volumes: None,
-                dependencies: None,
-                environment: None,
-            },
+            container_with_build_directory("./docker", None),
         );
         let mut tasks = HashMap::new();
-        tasks.insert(
-            "build".to_string(),
-            Task {
-                run: TaskRun {
-                    container: "build-env".to_string(),
-                    command: None,
-                    environment: None,
-                },
-                prerequisites: None,
-            },
-        );
+        tasks.insert("build".to_string(), task("build-env", "echo hi"));
         let config = Config {
             project_name: "demo".to_string(),
             containers,
@@ -623,10 +703,153 @@ mod tests {
         engine.run_task("build", &[]).await.unwrap();
 
         let events = docker.events();
+        let build_event = events
+            .iter()
+            .find(|e| e.starts_with("build:"))
+            .expect("image should have been built");
         assert!(
-            events.iter().all(|e| e.starts_with("network-")),
-            "no pull/run/sidecar events expected, just this task's own \
-             network being created and torn down: {events:?}"
+            build_event.ends_with(":./docker"),
+            "build should use the container's build_directory: {build_event}"
+        );
+
+        let tag = build_event
+            .strip_prefix("build:")
+            .unwrap()
+            .split(':')
+            .next()
+            .unwrap();
+        assert_eq!(
+            docker.image_for("build-env").as_deref(),
+            Some(tag),
+            "the run should use the image that was just built, not a pulled/literal one"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_directory_is_only_built_once_when_reused_across_tasks() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "build-env".to_string(),
+            container_with_build_directory("./docker", None),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("first".to_string(), task("build-env", "echo one"));
+        tasks.insert(
+            "second".to_string(),
+            Task {
+                run: TaskRun {
+                    container: "build-env".to_string(),
+                    command: Some("echo two".to_string()),
+                    environment: None,
+                },
+                prerequisites: Some(vec!["first".to_string()]),
+            },
+        );
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("second", &[]).await.unwrap();
+
+        let events = docker.events();
+        let build_events: Vec<_> = events.iter().filter(|e| e.starts_with("build:")).collect();
+        assert_eq!(
+            build_events.len(),
+            1,
+            "the container should only be built once even though two tasks use it: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_args_reach_the_build() {
+        let mut build_args = HashMap::new();
+        build_args.insert("VERSION".to_string(), "1.2.3".to_string());
+        let mut containers = HashMap::new();
+        containers.insert(
+            "build-env".to_string(),
+            container_with_build_directory("./docker", Some(build_args)),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("build".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("build", &[]).await.unwrap();
+
+        let events = docker.events();
+        let tag = events
+            .iter()
+            .find_map(|e| e.strip_prefix("build:"))
+            .and_then(|rest| rest.split(':').next())
+            .expect("image should have been built");
+
+        assert_eq!(docker.build_args_for(tag).unwrap()["VERSION"], "1.2.3");
+    }
+
+    #[tokio::test]
+    async fn dependency_container_with_build_directory_is_built_and_started() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "database".to_string(),
+            container_with_build_directory("./db", None),
+        );
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        let events = docker.events();
+        let build_event = events
+            .iter()
+            .find(|e| e.starts_with("build:") && e.ends_with(":./db"))
+            .expect("dependency container should have been built");
+        let tag = build_event
+            .strip_prefix("build:")
+            .unwrap()
+            .split(':')
+            .next()
+            .unwrap();
+
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with("sidecar-start:database:")),
+            "dependency should have started: {events:?}"
+        );
+        assert_eq!(
+            docker.image_for("database").as_deref(),
+            Some(tag),
+            "the dependency's sidecar should use the image that was just built"
+        );
+        assert!(
+            !events.contains(&format!("pull:{tag}")),
+            "a built image should never be pulled: {events:?}"
         );
     }
 
@@ -636,6 +859,7 @@ mod tests {
         containers.insert(
             "build-env".to_string(),
             Container {
+                build_args: None,
                 image: None,
                 build_directory: None,
                 volumes: None,
@@ -1030,11 +1254,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dependency_without_image_errors() {
+    async fn dependency_without_image_or_build_directory_errors() {
         let mut containers = HashMap::new();
         containers.insert(
             "database".to_string(),
             Container {
+                build_args: None,
                 image: None,
                 build_directory: None,
                 volumes: None,
@@ -1061,7 +1286,7 @@ mod tests {
         let err = engine.run_task("start", &[]).await.unwrap_err();
         assert!(err
             .to_string()
-            .contains("Container 'database' has no image"));
+            .contains("Container 'database' has neither 'image' nor 'build_directory' set"));
     }
 
     #[tokio::test]

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use bollard::models::{
     ContainerCreateBody as Config, EndpointSettings, NetworkConnectRequest, NetworkCreateRequest,
 };
+use bollard::query_parameters::BuildImageOptionsBuilder;
 use bollard::query_parameters::CreateImageOptions;
 use bollard::query_parameters::LogsOptions;
 use bollard::query_parameters::WaitContainerOptions;
@@ -11,6 +12,8 @@ use futures::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashMap;
 use std::fmt;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// The task's own container ran to completion, but its command exited with a
@@ -75,11 +78,105 @@ fn build_env(environment: Option<&HashMap<String, String>>) -> Option<Vec<String
     Some(pairs)
 }
 
+/// Builds an in-memory tar of `build_directory`'s contents to use as a
+/// Docker build context — pure filesystem-in, bytes-out, no Docker
+/// involved, so it's unit-testable without a daemon.
+///
+/// Reads a `.dockerignore` at `build_directory`'s own root, if present (a
+/// missing one is equivalent to an empty pattern list — every file is
+/// included, unchanged from before `.dockerignore` support existed), and
+/// excludes anything it matches via [`dockerignore::PatternMatcher`] — see
+/// that crate's docs for why this isn't the same as `.gitignore`'s
+/// matching rules. `Dockerfile` and `.dockerignore` themselves are always
+/// included regardless of exclusion patterns, mirroring Docker's own
+/// special-casing (otherwise a broad `*` pattern would exclude the file the
+/// build needs).
+///
+/// Known simplifications: symlinks are silently skipped (rare in build
+/// contexts; proper support needs tar symlink entries, not just file
+/// copies), and empty directories aren't preserved as their own tar
+/// entries (only added implicitly as the parent of a file within them).
+fn build_context_tar(build_directory: &Path) -> Result<Vec<u8>> {
+    let dockerignore_path = build_directory.join(".dockerignore");
+    let patterns = if dockerignore_path.is_file() {
+        let file = fs::File::open(&dockerignore_path)
+            .with_context(|| format!("Failed to open {:?}", dockerignore_path))?;
+        dockerignore::read_ignore_file(file)
+            .with_context(|| format!("Failed to read {:?}", dockerignore_path))?
+    } else {
+        Vec::new()
+    };
+    let matcher = dockerignore::PatternMatcher::new(&patterns)
+        .with_context(|| format!("Invalid pattern in {:?}", dockerignore_path))?;
+
+    let mut entries = Vec::new();
+    collect_build_context_entries(build_directory, build_directory, &mut entries)?;
+
+    let mut builder = tar::Builder::new(Vec::new());
+    for (absolute_path, relative_path) in entries {
+        let force_include = relative_path == "Dockerfile" || relative_path == ".dockerignore";
+        if !force_include && matcher.matches_or_parent_matches(&relative_path) {
+            continue;
+        }
+        builder
+            .append_path_with_name(&absolute_path, &relative_path)
+            .with_context(|| format!("Failed to add {:?} to build context", absolute_path))?;
+    }
+
+    builder
+        .into_inner()
+        .context("Failed to finalize build context archive")
+}
+
+/// Recursively collects every regular file under `dir` as `(absolute_path,
+/// path_relative_to_root)` pairs, the latter always `/`-joined regardless
+/// of platform, matching the path style `.dockerignore` patterns use.
+fn collect_build_context_entries(
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<(PathBuf, String)>,
+) -> Result<()> {
+    let read_dir =
+        fs::read_dir(dir).with_context(|| format!("Failed to read directory {:?}", dir))?;
+    for entry in read_dir {
+        let entry = entry.with_context(|| format!("Failed to read entry in {:?}", dir))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("Failed to determine file type of {:?}", path))?;
+
+        if file_type.is_dir() {
+            collect_build_context_entries(root, &path, out)?;
+        } else if file_type.is_file() {
+            let relative = path
+                .strip_prefix(root)
+                .expect("walked path is always under root")
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            out.push((path, relative));
+        }
+    }
+    Ok(())
+}
+
 /// Abstracts the container operations the task engine needs, so tests can
 /// inject a fake implementation instead of talking to a real Docker daemon.
 #[async_trait::async_trait]
 pub trait ContainerRuntime {
     async fn pull_image(&self, image: &str) -> Result<()>;
+
+    /// Builds an image from `build_directory` (already resolved to an
+    /// absolute path), tagging it as `tag`. The Dockerfile is always named
+    /// `Dockerfile`, at `build_directory`'s own root. `build_args` are
+    /// passed through as Docker's own `--build-arg` mechanism.
+    async fn build_image(
+        &self,
+        build_directory: &Path,
+        build_args: Option<&HashMap<String, String>>,
+        tag: &str,
+    ) -> Result<()>;
 
     async fn create_network(&self, name: &str) -> Result<()>;
 
@@ -219,6 +316,68 @@ impl ContainerRuntime for DockerClient {
         Ok(())
     }
 
+    async fn build_image(
+        &self,
+        build_directory: &Path,
+        build_args: Option<&HashMap<String, String>>,
+        tag: &str,
+    ) -> Result<()> {
+        let pb = ProgressBar::new_spinner();
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} [{elapsed_precise}] {msg}")
+                .unwrap(),
+        );
+        pb.set_message(format!("Building image {}...", tag));
+        pb.enable_steady_tick(Duration::from_millis(100));
+
+        let build_directory = build_directory.to_path_buf();
+        let tar_bytes = tokio::task::spawn_blocking(move || build_context_tar(&build_directory))
+            .await
+            .context("Failed to build the Docker build context")??;
+
+        let mut options_builder = BuildImageOptionsBuilder::default()
+            .dockerfile("Dockerfile")
+            .t(tag)
+            .rm(true);
+        if let Some(build_args) = build_args {
+            options_builder = options_builder.buildargs(build_args);
+        }
+        let options = options_builder.build();
+
+        let mut stream =
+            self.docker
+                .build_image(options, None, Some(bollard::body_full(tar_bytes.into())));
+
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(info) => {
+                    if let Some(message) = info.error_detail.and_then(|detail| detail.message) {
+                        pb.finish_with_message(format!("Failed to build image {}", tag));
+                        return Err(anyhow::anyhow!(
+                            "Failed to build image '{}': {}",
+                            tag,
+                            message
+                        ));
+                    }
+                    if let Some(stream_line) = info.stream {
+                        let trimmed = stream_line.trim();
+                        if !trimmed.is_empty() {
+                            pb.set_message(format!("{}: {}", tag, trimmed));
+                        }
+                    }
+                }
+                Err(e) => {
+                    pb.finish_with_message(format!("Failed to build image {}", tag));
+                    return Err(e).context(format!("Failed to build image {}", tag));
+                }
+            }
+        }
+
+        pb.finish_with_message(format!("Image {} built successfully", tag));
+        Ok(())
+    }
+
     async fn create_network(&self, name: &str) -> Result<()> {
         self.docker
             .create_network(NetworkCreateRequest {
@@ -351,5 +510,132 @@ impl ContainerRuntime for DockerClient {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh, unique scratch directory — same pattern as
+    /// `config.rs`'s `unique_temp_dir`. Caller cleans up.
+    fn unique_temp_dir() -> PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        let dir = std::env::temp_dir().join(format!(
+            "ratect-docker-test-{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            count
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The `/`-joined relative paths of every entry in a tar built by
+    /// `build_context_tar`, for assertions.
+    fn tar_entry_paths(tar_bytes: &[u8]) -> Vec<String> {
+        let mut archive = tar::Archive::new(tar_bytes);
+        archive
+            .entries()
+            .unwrap()
+            .map(|entry| {
+                entry
+                    .unwrap()
+                    .path()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn build_context_tar_includes_everything_when_no_dockerignore() {
+        let dir = unique_temp_dir();
+        fs::write(dir.join("Dockerfile"), "FROM alpine").unwrap();
+        fs::write(dir.join("app.txt"), "hello").unwrap();
+        fs::create_dir_all(dir.join("subdir")).unwrap();
+        fs::write(dir.join("subdir/nested.txt"), "nested").unwrap();
+
+        let tar_bytes = build_context_tar(&dir).unwrap();
+        let mut entries = tar_entry_paths(&tar_bytes);
+        entries.sort();
+
+        assert_eq!(
+            entries,
+            vec![
+                "Dockerfile".to_string(),
+                "app.txt".to_string(),
+                "subdir/nested.txt".to_string(),
+            ]
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn build_context_tar_excludes_dockerignore_matches() {
+        let dir = unique_temp_dir();
+        fs::write(dir.join("Dockerfile"), "FROM alpine").unwrap();
+        fs::write(dir.join(".dockerignore"), "secret.txt\n").unwrap();
+        fs::write(dir.join("secret.txt"), "shh").unwrap();
+        fs::write(dir.join("app.txt"), "hello").unwrap();
+
+        let tar_bytes = build_context_tar(&dir).unwrap();
+        let entries = tar_entry_paths(&tar_bytes);
+
+        assert!(!entries.contains(&"secret.txt".to_string()));
+        assert!(entries.contains(&"app.txt".to_string()));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn build_context_tar_always_includes_dockerfile_and_dockerignore_under_broad_exclusion() {
+        let dir = unique_temp_dir();
+        fs::write(dir.join("Dockerfile"), "FROM alpine").unwrap();
+        fs::write(dir.join(".dockerignore"), "*\n").unwrap();
+        fs::write(dir.join("app.txt"), "hello").unwrap();
+
+        let tar_bytes = build_context_tar(&dir).unwrap();
+        let entries = tar_entry_paths(&tar_bytes);
+
+        assert!(entries.contains(&"Dockerfile".to_string()));
+        assert!(entries.contains(&".dockerignore".to_string()));
+        assert!(!entries.contains(&"app.txt".to_string()));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Proves the root-only-for-bare-patterns behavior (see the
+    /// `dockerignore` crate) holds end-to-end through the tar: a bare
+    /// pattern only excludes a root-level match, not a nested one with the
+    /// same name.
+    #[test]
+    fn build_context_tar_bare_pattern_only_excludes_at_the_root() {
+        let dir = unique_temp_dir();
+        fs::write(dir.join("Dockerfile"), "FROM alpine").unwrap();
+        fs::write(dir.join(".dockerignore"), "build\n").unwrap();
+        fs::create_dir_all(dir.join("build")).unwrap();
+        fs::write(dir.join("build/output.txt"), "root build output").unwrap();
+        fs::create_dir_all(dir.join("packages/foo/build")).unwrap();
+        fs::write(
+            dir.join("packages/foo/build/output.txt"),
+            "nested build output",
+        )
+        .unwrap();
+
+        let tar_bytes = build_context_tar(&dir).unwrap();
+        let entries = tar_entry_paths(&tar_bytes);
+
+        assert!(!entries.contains(&"build/output.txt".to_string()));
+        assert!(entries.contains(&"packages/foo/build/output.txt".to_string()));
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

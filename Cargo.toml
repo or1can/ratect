@@ -1,5 +1,5 @@
 [workspace]
-members = ["ratect-core"]
+members = ["ratect-core", "dockerignore"]
 
 [package]
 name = "ratect"

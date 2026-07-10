@@ -24,9 +24,12 @@ Ratect is currently in early development. It supports a subset of Batect's featu
   - Log streaming from containers.
   - Sidecar/dependency containers, started on a per-task Docker network.
   - Environment variables, on both containers and individual task runs.
+  - Image building from a `Dockerfile` via `build_directory`, with `build_args` and
+    real `.dockerignore` semantics (not `.gitignore`-compatible — see
+    [config reference](docs/config-reference.md#dockerignore-semantics)).
 - **Expressions**: `$VAR`/`${VAR:-default}` (host environment) and `<name`/`<{name}`
   (config variables, including Batect's built-in `batect.project_directory`) within
-  `environment` values and volume host paths.
+  `environment` values, volume host paths, `build_directory`, and `build_args`.
 - **CLI**: Robust command-line interface built with [clap](https://github.com/clap-rs/clap).
 
 ## Getting Started

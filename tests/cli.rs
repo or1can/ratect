@@ -41,6 +41,14 @@ fn project_directory_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-directory.yml")
 }
 
+fn build_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build.yml")
+}
+
+fn build_with_dockerignore_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-with-dockerignore.yml")
+}
+
 fn project_directory_declared_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-directory-declared.yml")
 }
@@ -464,5 +472,61 @@ fn batect_project_directory_resolves_to_the_configs_own_directory() {
         "expected the volume mount (at /mnt) to list this fixture's own \
          directory contents, proving it mounted the right path:\n{}",
         stdout
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2` and build `tests/fixtures/build/Dockerfile`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves `build_directory` and `build_args` both reach a real `docker
+/// build`, not just that the right calls were made: the Dockerfile
+/// promotes the `MESSAGE` build arg to a runtime environment variable,
+/// which the task then echoes.
+#[test]
+#[ignore]
+fn build_directory_and_build_args_reach_a_real_docker_build() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(build_config_path())
+        .arg("print-message")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "hello-from-build-arg");
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2` and build `tests/fixtures/build-with-dockerignore/Dockerfile`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves `.dockerignore` semantics hold against a real `docker build`, not
+/// just that `build_context_tar` constructs the right tar bytes (already
+/// covered by `ratect-core/src/docker.rs`'s unit tests) — a bug in how the
+/// tar is actually sent to Docker (path encoding, `bollard::body_full`
+/// wiring, etc.) wouldn't be caught by an in-memory-only test. The
+/// Dockerfile's own `RUN test` assertions fail the build if the context
+/// doesn't match what's expected, so a successful build is the proof.
+#[test]
+#[ignore]
+fn dockerignore_semantics_hold_against_a_real_docker_build() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(build_with_dockerignore_config_path())
+        .arg("check")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }

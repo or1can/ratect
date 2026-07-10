@@ -53,22 +53,23 @@ aren't known at the first:
    reach them by name. This is scoped to just this one task execution and torn down
    afterward — see [the task lifecycle](task-lifecycle.md) for the full step-by-step
    detail and diagrams.
-5. **Run the container step**:
-   - If the container has an `image`, pull it (unless it's already been pulled once
-     this run) and run the container with the task's `command`, joined to the task's
-     own network, with its `environment` merged with the task's own `run.environment`
-     (which wins on a key collision).
-   - If the container only has a `build_directory`, Ratect currently just logs a
-     warning and does nothing further — image building isn't implemented yet (see
-     [differences from Batect](differences-from-batect.md)).
-   - If neither `image` nor `build_directory` is set, nothing happens and no error is
-     raised.
+5. **Resolve and run the image**: `TaskEngine::resolve_image` turns the container's
+   `image` or `build_directory` into the image reference to actually run — pulling
+   (unless already pulled once this run) if `image` is set, or building (unless already
+   built once this run — see below) if `build_directory` is set, or erroring if neither
+   is. The same method is used for a task's own container and for dependency
+   containers (in step 4), so both support either form identically. Then the container
+   runs with the task's `command`, joined to the task's own network, with its
+   `environment` merged with the task's own `run.environment` (which wins on a key
+   collision).
 
-The "run once" and "pull once" guarantees are tracked with in-memory sets
-(`executed_tasks`, `pulled_images`, `in_progress_tasks`) scoped to a single `ratect`
-invocation — nothing persists between runs. Dependency/network state, by contrast, is
-scoped to a single *task* execution, not the whole invocation — see
-[the task lifecycle](task-lifecycle.md).
+The "run once", "pull once", and "build once" guarantees are tracked with in-memory
+maps/sets (`executed_tasks`, `pulled_images`, `built_images`, `in_progress_tasks`)
+scoped to a single `ratect` invocation — nothing persists between runs (a
+`build_directory` container is rebuilt fresh every invocation, tagged with a fresh
+random name each time — see [config reference](config-reference.md#image-building)).
+Dependency/network state, by contrast, is scoped to a single *task* execution, not the
+whole invocation — see [the task lifecycle](task-lifecycle.md).
 
 Task execution is currently **sequential**: prerequisites run one after another, not in
 parallel, even when they're independent of each other. Parallel execution is on the
@@ -88,6 +89,11 @@ client, and implements `ContainerRuntime`:
 
 - **`pull_image`**: streams `docker create-image` progress and displays it via a
   spinner (using [`indicatif`](https://docs.rs/indicatif)).
+- **`build_image`**: builds an in-memory tar of the build directory (via the
+  `build_context_tar` free function, `.dockerignore`-aware — see the
+  [`dockerignore`](../dockerignore) crate — and unit-testable on its own, with no
+  Docker involved), then streams `docker build` progress the same way `pull_image`
+  does.
 - **`run_container`**: creates a container (attaching stdout/stderr, any resolved
   volume binds, and any resolved `environment` variables), joins it to the task's own
   network, starts it, streams its logs live to Ratect's own stdout, then removes the

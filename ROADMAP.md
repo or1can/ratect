@@ -6,10 +6,10 @@ This document outlines the planned journey for Ratect, from achieving parity wit
 
 The primary goal is to support the core features of Batect to ensure a seamless transition for existing users. This work targets the [`ratect-compat` binary](#two-binaries-ratect-and-ratect-compat) specifically — the `ratect` binary is not expected to maintain 1:1 Batect parity.
 
-- **Image Building**: Support for building Docker images from a `Dockerfile` using the `build_directory` configuration.
-- **Full Docker Networking**: A minimal per-task network for dependency/sidecar containers is implemented (see [the task lifecycle](docs/task-lifecycle.md)); full Batect-equivalent networking (custom drivers, reusing an existing network via `--use-network`, disabling port bindings, etc.) is not.
+- **Image Building**: Building a Docker image from a `Dockerfile` via `build_directory` (always named `Dockerfile`, at `build_directory`'s own root) is implemented, including `build_args` and `.dockerignore` support (0.3.0) — see [config reference](docs/config-reference.md#image-building). Custom Dockerfile naming/location (`dockerfile`), `build_target`, `build_secrets`, `build_ssh`, cross-invocation build caching, and automatic image cleanup are not — see [Differences from Batect](docs/differences-from-batect.md#container-fields).
+- **Full Docker Networking**: Every task execution gets its own isolated network (see [the task lifecycle](docs/task-lifecycle.md)); full Batect-equivalent networking (custom drivers, reusing an existing network via `--use-network`, disabling port bindings, etc.) is not.
 - **Interactive Mode**: Support for interactive terminal sessions (TTY and STDIN) for tasks that require user input.
-- **Full Environment Variable Interpolation & Batect Expressions**: `environment` on containers/tasks, `config_variables` (including Batect's one built-in, `batect.project_directory`), and `$VAR`/`${VAR}`/`${VAR:-default}`/`<name`/`<{name}` expressions are implemented for `environment` values and volume host paths (0.2.0) — every already-supported field that could meaningfully take one; expression support within `build_directory`, `build_args`, etc. is moot until image building itself exists — see [Expressions](docs/differences-from-batect.md#expressions).
+- **Full Environment Variable Interpolation & Batect Expressions**: `environment` on containers/tasks, `config_variables` (including Batect's one built-in, `batect.project_directory`), and `$VAR`/`${VAR}`/`${VAR:-default}`/`<name`/`<{name}` expressions are implemented for `environment` values, volume host paths, `build_directory`, and `build_args` — every already-supported field that could meaningfully take one; `build_secrets.path`/`build_ssh.paths` remain moot until those fields themselves exist — see [Expressions](docs/differences-from-batect.md#expressions).
 - **Includes**: Support for splitting configuration across multiple files using the `include` directive.
 - **Full Configuration Parity**: Support for all available Batect configuration options and standard YAML structures. See [Differences from Batect](docs/differences-from-batect.md#configuration-format) for the itemized current status of every field.
 - **Full CLI Options Parity**: Support for all standard Batect CLI flags and options (e.g., `--config-file`, `--override-image`, cleanup control flags, etc.). See [Differences from Batect](docs/differences-from-batect.md#cli-flags) for the itemized current status of every flag.
@@ -99,8 +99,40 @@ Neither bump is ever folded into a feature commit.
   grab-bag: interpolation is the one shared mechanism both environment variables and
   config variables need to be useful, and later fields like `build_args` (0.3.0) depend
   on it too.
-- **0.3.0** — **Image Building** (`build_directory` currently just warns and no-ops),
-  including `build_args` interpolation from 0.2.0.
+- **0.3.0** — ~~**Image Building** (`build_directory` currently just warns and no-ops),
+  including `build_args` interpolation from 0.2.0~~ — done: `build_directory` builds a
+  real image (Dockerfile always named `Dockerfile`, at its own root), `build_args`
+  interpolated and passed through as `docker build`'s own `--build-arg` mechanism,
+  `.dockerignore` support (a from-scratch port of Docker's actual matching rules — not
+  `.gitignore`-compatible — new `dockerignore/` workspace crate, see
+  [config reference](docs/config-reference.md#dockerignore-semantics)), and dependency
+  containers gained `build_directory` support too (previously image-only). Known gaps,
+  candidates for later work rather than blocking this release:
+  - No cross-invocation build caching — each `ratect` run rebuilds fresh, tagged with a
+    fresh random name every time (deliberately, to avoid a same-name-tag collision
+    hazard across overlapping invocations — see the `resolve_image` design comment in
+    `ratect-core/src/engine.rs`). A future cache-aware tagging scheme would need to
+    solve that collision-avoidance problem *and* staleness detection together, which is
+    why it's noted as one combined item rather than "just add caching."
+  - Built images aren't cleaned up automatically — they accumulate under their unique
+    tags until manually pruned (`docker image prune`), same as a plain `docker build -t
+    ... .` would leave behind.
+  - **Build output isn't captured or persisted anywhere** (`DockerClient::build_image`,
+    `ratect-core/src/docker.rs`) — each streamed build log line only updates an
+    ephemeral `indicatif` spinner message (same pattern `pull_image` already used),
+    with nothing written via `println!`/`tracing::`. On a non-TTY (CI, redirected
+    output) the spinner may not render at all. On failure, only Docker's one-line
+    `error_detail.message` surfaces via the returned error — not the build transcript
+    leading up to it. A `RUN` step failing with useful output in its own logs is
+    exactly the case where this matters most, so this is a real usability gap, not
+    just cosmetic — a build a user can't debug isn't very useful. Worth prioritizing
+    over the other gaps here.
+  - The `dockerignore` crate has zero dependency on any ratect-specific type and was
+    deliberately kept as its own workspace crate (not a `ratect-core` module)
+    specifically so it *could* be extracted and published as a standalone crate later —
+    no existing one implements Docker's actual `.dockerignore` semantics faithfully.
+    Not committed to yet (no public API stability promise, no external docs, not on
+    crates.io) — a candidate for later, not a plan.
 - **0.4.0** — **Interactive Mode** (TTY/STDIN attachment for tasks that need user input).
 - **0.5.0** — **User Mapping** (`run_as_current_user`).
 - **0.6.0** — **Full Docker Networking** and **Proxy Support** together — proxy
