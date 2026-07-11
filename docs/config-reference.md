@@ -149,6 +149,34 @@ tasks:
 | `command` | string | no | Shell command to run inside the container (executed as `sh -c "<command>"`). If omitted, the container's own default `CMD`/`ENTRYPOINT` runs instead. Any `-- ADDITIONAL_ARGS` from the CLI become this shell's positional parameters (`$1`, `$2`, `$@`) — see [CLI reference](cli-reference.md#using-additional_args-in-a-task-command). |
 | `environment` | map of string → string | no | Environment variables to set for this task's run specifically. Merged with the container's own `environment` (see [Container](#container)): the container's values apply first, and `run.environment` overrides them on a key collision. Values support the same [expressions](#expressions) as `environment` does. |
 
+## Interactive mode
+
+There's no config field for this — it's automatic, matching Batect's own behavior:
+running a task whose command drops you into a shell or otherwise needs your input
+(`command: sh`, for example) just works, with no `interactive: true` to remember to
+set anywhere.
+
+A container gets a real Docker TTY and its stdin forwarded when *all* of the following
+hold:
+
+- It's the invoked task's own container — never a prerequisite's, a dependency's, or
+  a sidecar's. Only the task actually named on the command line is ever eligible;
+  running it via a prerequisite chain doesn't count, since stdin can only usefully
+  attach to one container at a time.
+- Ratect's own stdin *and* stdout are both genuinely connected to a real terminal.
+  Piped output, a redirected non-terminal, or running in CI all fall back to the
+  normal (non-interactive) streamed output, exactly as if the task didn't need a TTY
+  at all — nothing extra to configure for that case either.
+
+A few things to know about what this doesn't do yet:
+
+- The container's TTY size is synced to the local terminal's size once, at the start
+  of the session — it isn't tracked live if the local terminal is resized mid-session.
+- Stdin forwarding and TTY allocation aren't decoupled the way Batect's are (Batect can
+  forward stdin into a task even without allocating a TTY, e.g. when piping input into
+  a non-interactive run). Ratect gates both together — no support yet for piping input
+  into a task that isn't otherwise running interactively.
+
 ## ConfigVariable
 
 ```yaml

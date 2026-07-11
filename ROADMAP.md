@@ -8,7 +8,7 @@ The primary goal is to support the core features of Batect to ensure a seamless 
 
 - **Image Building**: Building a Docker image from a `Dockerfile` via `build_directory` (always named `Dockerfile`, at `build_directory`'s own root) is implemented, including `build_args` and `.dockerignore` support (0.3.0) — see [config reference](docs/config-reference.md#image-building). Custom Dockerfile naming/location (`dockerfile`), `build_target`, `build_secrets`, `build_ssh`, cross-invocation build caching, and automatic image cleanup are not — see [Differences from Batect](docs/differences-from-batect.md#container-fields).
 - **Full Docker Networking**: Every task execution gets its own isolated network (see [the task lifecycle](docs/task-lifecycle.md)); full Batect-equivalent networking (custom drivers, reusing an existing network via `--use-network`, disabling port bindings, etc.) is not.
-- **Interactive Mode**: Support for interactive terminal sessions (TTY and STDIN) for tasks that require user input.
+- **Interactive Mode**: A task's own container gets a real Docker TTY and its stdin forwarded, automatically, when both Ratect's own stdin and stdout are real terminals (0.4.0) — see [Interactive mode](docs/config-reference.md#interactive-mode). Live terminal-resize forwarding and Batect's decoupled stdin-without-TTY support are not — see [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
 - **Full Environment Variable Interpolation & Batect Expressions**: `environment` on containers/tasks, `config_variables` (including Batect's one built-in, `batect.project_directory`), and `$VAR`/`${VAR}`/`${VAR:-default}`/`<name`/`<{name}` expressions are implemented for `environment` values, volume host paths, `build_directory`, and `build_args` — every already-supported field that could meaningfully take one; `build_secrets.path`/`build_ssh.paths` remain moot until those fields themselves exist — see [Expressions](docs/differences-from-batect.md#expressions).
 - **Includes**: Support for splitting configuration across multiple files using the `include` directive.
 - **Full Configuration Parity**: Support for all available Batect configuration options and standard YAML structures. See [Differences from Batect](docs/differences-from-batect.md#configuration-format) for the itemized current status of every field.
@@ -137,7 +137,21 @@ Neither bump is ever folded into a feature commit.
     no existing one implements Docker's actual `.dockerignore` semantics faithfully.
     Not committed to yet (no public API stability promise, no external docs, not on
     crates.io) — a candidate for later, not a plan.
-- **0.4.0** — **Interactive Mode** (TTY/STDIN attachment for tasks that need user input).
+- **0.4.0** — ~~**Interactive Mode** (TTY/STDIN attachment for tasks that need user
+  input)~~ — done: a task's own container gets a real Docker TTY and its stdin
+  forwarded whenever the invoked task's own container is running and Ratect's own
+  stdin/stdout are both real terminals — fully automatic, matching Batect, no config
+  field or CLI flag. Never applies to a prerequisite's, dependency's, or sidecar's
+  container. Known gaps, candidates for later work rather than blocking this release:
+  - No live terminal-resize forwarding — the container's TTY size is synced to the
+    local terminal's once, at attach time, not tracked for the rest of the session.
+  - Stdin forwarding isn't decoupled from TTY allocation the way Batect's is (Batect
+    can pipe input into a task without allocating a TTY). Ratect gates both together —
+    no support yet for piping input into a task that isn't otherwise interactive.
+  - Windows terminal handling (raw mode, resize) is implemented via `crossterm`
+    (cross-platform) but hasn't been verified there — Ratect's own testing has been
+    Unix-only so far, consistent with [First-class Cross-platform
+    Support](#rust-enhancements) not having started yet.
 - **0.5.0** — **User Mapping** (`run_as_current_user`).
 - **0.6.0** — **Full Docker Networking** and **Proxy Support** together — proxy
   injection is fundamentally "set environment variables automatically," so it benefits

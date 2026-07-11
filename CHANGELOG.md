@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Interactive mode**: a task's own container now gets a real Docker TTY and its
+  stdin forwarded when it's actually being run interactively (e.g. `command: sh` drops
+  you into a working shell), instead of always running non-interactively with no
+  stdin.
+  - Fully automatic, matching Batect: no new config field, no new CLI flag. Applies
+    whenever the invoked task's own container is running and Ratect's own stdin *and*
+    stdout are both real terminals — falls back to today's `docker logs --follow`
+    streaming otherwise (piped output, CI, redirected non-terminals). Never applies to
+    a prerequisite's container, a dependency's, or a sidecar's — even though
+    prerequisites are themselves full recursive task runs here, only the task actually
+    named on the command line is eligible, via a new `top_level: bool` threaded
+    through `TaskEngine::run_task`/the new private `run_task_scoped`
+    (`ratect-core/src/engine.rs`).
+  - `ContainerRuntime::run_container` (`ratect-core/src/docker.rs`) gained an
+    `interactive: bool` parameter (eligibility, decided by the engine) and a new
+    `should_use_tty` helper (its own unit tests) that further gates it on real
+    `IsTerminal` checks. When true: the container is created with
+    `tty`/`open_stdin`/`attach_stdin`/`stdin_once` set, attached to via `bollard`'s
+    `attach_container` (before starting it, so no early output is lost) instead of
+    `docker logs`, the local terminal is put into raw mode for the session (restored
+    via a `Drop` guard, even on an error return), and stdin/stdout are pumped
+    concurrently between the local terminal and the container until the session ends.
+    The container's TTY size is synced to the local terminal's once, at attach time —
+    not tracked live if the terminal is resized mid-session (known gap).
+  - New `crossterm` dependency (`ratect-core`) for raw-mode enable/disable and
+    terminal size; `std::io::IsTerminal` (stable stdlib) covers the "is this actually
+    a terminal" checks, no crate needed for that part.
+  - **Fixed a real hang found along the way**: `main` previously returned `ExitCode`
+    from `#[tokio::main]`, which drops (and blocking-shuts-down) the Tokio runtime
+    before the process actually exits — including waiting for the interactive
+    session's abandoned `tokio::io::stdin()`-backed blocking read task, which never
+    completes on its own (a real terminal's stdin has no natural EOF). Every
+    interactive session would have hung the whole process afterward. `main` now calls
+    `std::process::exit` explicitly once its own cleanup (raw-mode restoration,
+    container/network teardown) has already run via ordinary `Drop`/`?`-propagation,
+    bypassing that wait entirely.
+  - New `portable-pty` dev-dependency and `#[ignore]`d `tests/cli.rs` test
+    (`interactive_session_forwards_stdin_and_stdout`, `tests/fixtures/interactive.yml`)
+    spawning `ratect` attached to a real (emulated) pseudo-terminal, scripting input,
+    and asserting it round-trips through stdin → container → stdout and the process
+    exits cleanly — proves the actual attach/raw-mode/pump path end-to-end (this is
+    what caught the hang above), not just that the eligibility policy computes the
+    right bool. Works in headless CI; no real terminal required.
+
 ## [0.3.0] - 2026-07-10
 
 ### Added

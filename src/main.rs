@@ -5,7 +5,6 @@ use ratect_core::docker::DockerClient;
 use ratect_core::engine::TaskEngine;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
@@ -69,11 +68,11 @@ fn init_tracing() {
 }
 
 #[tokio::main]
-async fn main() -> ExitCode {
+async fn main() {
     init_tracing();
 
-    match run().await {
-        Ok(()) => ExitCode::SUCCESS,
+    let exit_code = match run().await {
+        Ok(()) => 0,
         Err(err) => {
             // Use `{:?}` (not `{}`) so the full anyhow context chain is logged,
             // matching what the default Termination handler would have printed.
@@ -84,11 +83,27 @@ async fn main() -> ExitCode {
             // convention) rather than a generic failure code, so scripts can
             // inspect what actually happened.
             match err.downcast_ref::<ratect_core::docker::ContainerExitedNonZero>() {
-                Some(failure) => ExitCode::from(failure.exit_code as u8),
-                None => ExitCode::FAILURE,
+                Some(failure) => failure.exit_code as u8,
+                None => 1,
             }
         }
-    }
+    };
+
+    // `std::process::exit` (not returning `ExitCode` from `main`) is
+    // deliberate: an interactive run leaves a `tokio::io::stdin()`-backed
+    // blocking read task abandoned once its session ends (the stdin pump in
+    // `DockerClient::run_container_interactively` is `.abort()`ed, but that
+    // only stops polling it — the underlying OS thread stays blocked in a
+    // real `read()` syscall until stdin next produces data or EOF, which a
+    // real terminal's stdin never does on its own). Returning `ExitCode`
+    // normally would drop the `tokio::main`-managed runtime first, which
+    // waits for exactly that lingering task — hanging the whole process
+    // indefinitely after every interactive session. `process::exit` skips
+    // that wait entirely; everything that needed to run on a clean exit
+    // (the raw-mode guard restoring the terminal, container/network cleanup)
+    // has already completed via ordinary `Drop`/`?`-propagation well before
+    // `run().await` returns here.
+    std::process::exit(exit_code.into());
 }
 
 async fn run() -> Result<()> {

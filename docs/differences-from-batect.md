@@ -157,7 +157,13 @@ tables above:
   [`dependencies`](#container-fields) and [the task lifecycle](task-lifecycle.md)), but
   it's not Batect's fully configurable networking (custom drivers, `--use-network` to
   reuse an existing network, etc.).
-- **Interactive mode**: no TTY/STDIN attachment for tasks that need user input.
+- **Interactive mode**: supported for the invoked task's own container (never a
+  prerequisite's, a dependency's, or a sidecar's) when both Ratect's own stdin and
+  stdout are real terminals — see [Interactive mode](config-reference.md#interactive-mode).
+  Two things simplified relative to Batect: no live terminal-resize forwarding (synced
+  once, at attach time, not tracked for the rest of the session), and stdin forwarding
+  isn't decoupled from TTY allocation the way Batect's is (Batect can pipe input into a
+  task without allocating a TTY; Ratect gates both together).
 - **Parallel execution**: prerequisites run sequentially, not in parallel — Batect runs
   independent setup/cleanup steps concurrently.
 

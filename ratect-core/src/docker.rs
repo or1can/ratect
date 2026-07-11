@@ -1,10 +1,13 @@
 use anyhow::{Context, Result};
+use bollard::container::AttachContainerResults;
 use bollard::models::{
     ContainerCreateBody as Config, EndpointSettings, NetworkConnectRequest, NetworkCreateRequest,
 };
+use bollard::query_parameters::AttachContainerOptionsBuilder;
 use bollard::query_parameters::BuildImageOptionsBuilder;
 use bollard::query_parameters::CreateImageOptions;
 use bollard::query_parameters::LogsOptions;
+use bollard::query_parameters::ResizeContainerTTYOptionsBuilder;
 use bollard::query_parameters::WaitContainerOptions;
 use bollard::service::HostConfig;
 use bollard::Docker;
@@ -13,8 +16,10 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 
 /// The task's own container ran to completion, but its command exited with a
 /// non-zero status. Distinct from other errors (Docker API failures, missing
@@ -142,6 +147,40 @@ fn build_output_suffix(output: &str) -> String {
     }
 }
 
+/// Whether a container run should actually get a real Docker TTY and its
+/// stdin forwarded. `interactive` is eligibility — this is the top-level
+/// requested task's own container, see `TaskEngine::run_task_internal` — not
+/// a guarantee: it's further gated on the local process's own stdin *and*
+/// stdout genuinely being connected to a terminal. Deliberately not decoupled
+/// (unlike Batect, which always forwards stdin to the task container
+/// regardless of whether a TTY is allocated) — piping input into a
+/// non-interactive run isn't supported yet.
+fn should_use_tty(interactive: bool, stdin_is_tty: bool, stdout_is_tty: bool) -> bool {
+    interactive && stdin_is_tty && stdout_is_tty
+}
+
+/// Puts the local terminal into raw mode for the duration of an interactive
+/// container session — no local line buffering/echo, so every keystroke
+/// passes straight through to the container's own TTY instead of being
+/// handled locally first. Restores the terminal on `Drop`, so it's never
+/// left in raw mode even if the session ends via an error return.
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn enable() -> Result<Self> {
+        crossterm::terminal::enable_raw_mode().context("Failed to enable raw terminal mode")?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        if let Err(e) = crossterm::terminal::disable_raw_mode() {
+            tracing::warn!(error = ?e, "Failed to restore terminal mode");
+        }
+    }
+}
+
 /// Recursively collects every regular file under `dir` as `(absolute_path,
 /// path_relative_to_root)` pairs, the latter always `/`-joined regardless
 /// of platform, matching the path style `.dockerignore` patterns use.
@@ -234,6 +273,15 @@ pub trait ContainerRuntime {
     /// task's `run.environment` (which wins on key collision). `network` is
     /// this task execution's own isolated network — every task gets one,
     /// regardless of whether it has dependencies.
+    ///
+    /// `interactive` is *eligibility*, not a guarantee — only ever `true` for
+    /// the top-level requested task's own container (never a prerequisite's,
+    /// a dependency's, or a sidecar's — see `TaskEngine::run_task_internal`).
+    /// Whether a real Docker TTY actually gets allocated additionally
+    /// depends on the local process's own stdin/stdout genuinely being
+    /// terminals; when they're not (piped output, CI, a redirected
+    /// non-terminal), this container runs exactly as if `interactive` were
+    /// `false`.
     #[allow(clippy::too_many_arguments)]
     async fn run_container(
         &self,
@@ -244,6 +292,7 @@ pub trait ContainerRuntime {
         volumes: Option<&Vec<String>>,
         environment: Option<&HashMap<String, String>>,
         network: &str,
+        interactive: bool,
     ) -> Result<()>;
 }
 
@@ -296,6 +345,83 @@ impl DockerClient {
                 container_id
             )),
         }
+    }
+
+    /// Attaches to `container_id`'s TTY, forwards the local terminal's
+    /// stdin/stdout to it for the duration of the session, and returns its
+    /// exit code once the session ends. Only called once `should_use_tty`
+    /// has already confirmed both the local terminal and the container's own
+    /// config (`tty`/`open_stdin`/etc., set by the caller before creating the
+    /// container) are set up for it.
+    ///
+    /// Attaches *before* starting the container — same ordering Docker's own
+    /// attach-then-start pattern uses, so no early output is missed — and
+    /// puts the local terminal into raw mode for the duration, restored via
+    /// `RawModeGuard`'s `Drop` even if this returns early on error.
+    async fn run_container_interactively(&self, container_id: &str) -> Result<i64> {
+        let attach_options = AttachContainerOptionsBuilder::default()
+            .stdin(true)
+            .stdout(true)
+            .stderr(true)
+            .stream(true)
+            .build();
+        let AttachContainerResults {
+            output: mut attach_output,
+            input: mut attach_input,
+        } = self
+            .docker
+            .attach_container(container_id, Some(attach_options))
+            .await
+            .context("Failed to attach to container")?;
+
+        let _raw_mode = RawModeGuard::enable()?;
+
+        self.docker
+            .start_container(container_id, None)
+            .await
+            .context("Failed to start container")?;
+        tracing::debug!(container_id, "started container interactively");
+
+        // Best-effort: syncs the container's TTY to the local terminal's
+        // size once, at attach time. Not tracked live if the local terminal
+        // is resized mid-session — see the 0.4.0 plan's known gaps.
+        if let Ok((cols, rows)) = crossterm::terminal::size() {
+            let resize_options = ResizeContainerTTYOptionsBuilder::default()
+                .w(cols as i32)
+                .h(rows as i32)
+                .build();
+            if let Err(e) = self
+                .docker
+                .resize_container_tty(container_id, resize_options)
+                .await
+            {
+                tracing::warn!(container_id, error = ?e, "Failed to resize container TTY");
+            }
+        }
+
+        // Local stdin has no natural end of its own here — the attach
+        // output stream ending (the container exiting) is what ends the
+        // session, so this pump is aborted once that happens rather than
+        // awaited to completion.
+        let stdin_pump = tokio::spawn(async move {
+            let mut stdin = tokio::io::stdin();
+            let _ = tokio::io::copy(&mut stdin, &mut attach_input).await;
+        });
+
+        let mut stdout = tokio::io::stdout();
+        let output_result: Result<()> = async {
+            while let Some(chunk) = attach_output.next().await {
+                let log_output = chunk.context("Failed to read container output")?;
+                stdout.write_all(log_output.as_ref()).await?;
+                stdout.flush().await?;
+            }
+            Ok(())
+        }
+        .await;
+        stdin_pump.abort();
+        output_result?;
+
+        self.exit_code(container_id).await
     }
 }
 
@@ -502,7 +628,14 @@ impl ContainerRuntime for DockerClient {
         volumes: Option<&Vec<String>>,
         environment: Option<&HashMap<String, String>>,
         network: &str,
+        interactive: bool,
     ) -> Result<()> {
+        let use_tty = should_use_tty(
+            interactive,
+            std::io::stdin().is_terminal(),
+            std::io::stdout().is_terminal(),
+        );
+
         let host_config = HostConfig {
             binds: volumes.cloned(),
             ..Default::default()
@@ -514,6 +647,10 @@ impl ContainerRuntime for DockerClient {
             env: build_env(environment),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
+            tty: use_tty.then_some(true),
+            open_stdin: use_tty.then_some(true),
+            attach_stdin: use_tty.then_some(true),
+            stdin_once: use_tty.then_some(true),
             host_config: Some(host_config),
             ..Default::default()
         };
@@ -523,27 +660,31 @@ impl ContainerRuntime for DockerClient {
 
         self.join_network(&container.id, network, name).await?;
 
-        self.docker.start_container(&container.id, None).await?;
-        tracing::debug!(container_id = %container.id, "started container");
+        let exit_code = if use_tty {
+            self.run_container_interactively(&container.id).await?
+        } else {
+            self.docker.start_container(&container.id, None).await?;
+            tracing::debug!(container_id = %container.id, "started container");
 
-        let mut logs = self.docker.logs(
-            &container.id,
-            Some(LogsOptions {
-                stdout: true,
-                stderr: true,
-                follow: true,
-                ..Default::default()
-            }),
-        );
+            let mut logs = self.docker.logs(
+                &container.id,
+                Some(LogsOptions {
+                    stdout: true,
+                    stderr: true,
+                    follow: true,
+                    ..Default::default()
+                }),
+            );
 
-        while let Some(log) = logs.next().await {
-            match log {
-                Ok(output) => print!("{}", output),
-                Err(e) => return Err(e).context("Failed to get container logs"),
+            while let Some(log) = logs.next().await {
+                match log {
+                    Ok(output) => print!("{}", output),
+                    Err(e) => return Err(e).context("Failed to get container logs"),
+                }
             }
-        }
 
-        let exit_code = self.exit_code(&container.id).await?;
+            self.exit_code(&container.id).await?
+        };
 
         self.docker.remove_container(&container.id, None).await?;
         tracing::debug!(container_id = %container.id, exit_code, "removed container");
@@ -739,5 +880,25 @@ mod tests {
             build_output_suffix(output),
             "\n\nBuild output:\nStep 1/3 : FROM alpine\nStep 2/3 : RUN false"
         );
+    }
+
+    #[test]
+    fn should_use_tty_requires_both_stdin_and_stdout_to_be_real_terminals() {
+        assert!(should_use_tty(true, true, true));
+    }
+
+    #[test]
+    fn should_use_tty_is_false_when_not_interactive_eligible() {
+        assert!(!should_use_tty(false, true, true));
+    }
+
+    #[test]
+    fn should_use_tty_is_false_when_stdin_is_not_a_terminal() {
+        assert!(!should_use_tty(true, false, true));
+    }
+
+    #[test]
+    fn should_use_tty_is_false_when_stdout_is_not_a_terminal() {
+        assert!(!should_use_tty(true, true, false));
     }
 }

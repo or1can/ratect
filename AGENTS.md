@@ -45,7 +45,15 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     arrive and, on failure, the full accumulated transcript (not just Docker's one-line
     `error_detail.message`) is folded into the returned error via `build_output_suffix`
     — Ratect has no `--output` mode to stream them to otherwise, so logging/error
-    context is the stand-in.
+    context is the stand-in. `run_container` takes one of two paths depending on
+    `should_use_tty` (an `interactive` eligibility bool the engine decided, ANDed
+    against real `IsTerminal` checks on Ratect's own stdin/stdout): the default path is
+    unchanged (`docker logs --follow`); the interactive path (`run_container_interactively`)
+    attaches to the container (`bollard`'s `attach_container`, before starting it),
+    puts the local terminal into raw mode via a `RawModeGuard` (restored on `Drop`,
+    even on an error return), and pumps stdin/stdout between the local terminal and the
+    container concurrently until the session ends — see
+    [Interactive mode](docs/config-reference.md#interactive-mode).
   - **`ratect-core/src/engine.rs`**: The core execution logic. It manages the task
     lifecycle, handles prerequisites, detects dependency cycles, resolves and starts a
     task's dependency/sidecar containers (recursively, deduped and cleaned up within
@@ -55,7 +63,11 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     `image`/`build_directory` into the image reference to actually run (pulling or
     building as needed, deduped via `pulled_images`/`built_images`), shared by both a
     task's own container and its dependency containers. `TaskEngine` is generic over
-    `ContainerRuntime`.
+    `ContainerRuntime`. The public `run_task` is a thin wrapper fixing a private,
+    recursive `run_task_scoped`'s `top_level: bool` to `true`; prerequisites recurse
+    into it with `top_level: false` — this is what decides interactive-TTY eligibility
+    (only the task actually named on the command line, never a prerequisite's
+    container, is ever passed `interactive: true`).
 - **`dockerignore`** (library crate, `dockerignore/src/`): a from-scratch Rust port of
   Docker's own `.dockerignore` matching (`github.com/moby/patternmatcher`, which
   Docker's documentation cites as the reference implementation) — deliberately **not**
@@ -83,21 +95,24 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
 - **`tar`**: Builds the in-memory build-context tarball `docker.rs`'s `build_context_tar` hands to `bollard`'s `build_image`.
 - **`dockerignore`** (local workspace crate, not external): `.dockerignore` pattern matching — see the Architecture section above.
 - **`path-clean`**: Lexically normalizes (`.`/`..`/trailing-slash) resolved paths in `ratect-core/src/config.rs` (`resolve_path`, and the built-in `batect.project_directory` config variable) — `PathBuf::join` alone doesn't do this, so without it a `base_path` like `""` or `"."` (both common — see `main.rs`'s `-f` handling) would leave a stray `.` or trailing slash in every path/expression derived from it. Already a `dockerignore` dependency; reused here rather than hand-rolling the same normalization twice.
+- **`crossterm`**: Raw-mode terminal enable/disable and terminal size queries for interactive mode's attach path (`ratect-core/src/docker.rs`). Deliberately not used for its structured `event`/`EventStream` API — that's for TUI-style key/mouse/resize events and would consume/interpret stdin bytes instead of passing them through raw. `std::io::IsTerminal` (stable stdlib) covers the separate "is this actually a terminal" checks; no crate needed for that part.
+- **`portable-pty`** (dev-dependency, `tests/cli.rs` only): creates a real (emulated) pseudo-terminal pair in-process, so an integration test can spawn `ratect` attached to something that genuinely passes `IsTerminal` checks and actually drive an interactive session — no existing test infrastructure here could otherwise exercise that path at all. Works in headless CI; no real terminal required. A reusable pattern worth reaching for again for any other feature that's only meaningfully testable from a real terminal.
 
 Dependencies are split across the three `Cargo.toml`s along CLI-vs-core lines: `clap`
 and `tracing-subscriber` are `ratect`-only; `serde`, `noyalib`, `bollard`, `futures`,
-`indicatif`, `async-recursion`, `async-trait`, `uuid`, `tar`, `path-clean`, and the local
-`dockerignore` crate are `ratect-core`-only (`dockerignore` itself depends on `regex`
-and `path-clean` too); `anyhow`, `tracing`, and `tokio` are needed by both. `tokio`
-is a normal dependency in both crates now — `ratect-core`'s non-test code needs it too,
-for `build_context_tar`'s `tokio::task::spawn_blocking` (it used to be a `ratect-core`
-dev-dependency only, for `#[tokio::test]` in its unit tests).
+`indicatif`, `async-recursion`, `async-trait`, `uuid`, `tar`, `path-clean`, `crossterm`,
+and the local `dockerignore` crate are `ratect-core`-only (`dockerignore` itself
+depends on `regex` and `path-clean` too); `anyhow`, `tracing`, and `tokio` are needed
+by both. `tokio` is a normal dependency in both crates now — `ratect-core`'s non-test
+code needs it too, for `build_context_tar`'s `tokio::task::spawn_blocking` (it used to
+be a `ratect-core` dev-dependency only, for `#[tokio::test]` in its unit tests).
+`portable-pty` is `ratect`'s (root crate's) first `[dev-dependencies]` entry.
 
 ## Tooling & CI
 
 - **Formatting/Linting**: `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` must pass; both are enforced in CI (`.github/workflows/ci.yml`).
 - **Dependency Audit**: `cargo audit` runs in CI against `Cargo.lock`, which is committed to the repo (binary crate convention, not gitignored). One shared lockfile covers both crates.
-- **Tests**: `cargo test --workspace` runs in CI, covering pattern matching (`dockerignore/src/pattern.rs`, verified against upstream `moby/patternmatcher`'s own test table), config parsing/resolution (`ratect-core/src/config.rs`, including `resolve_expressions`'s merge/precedence/error cases and `build_directory`/`build_args`), expression interpolation (`ratect-core/src/expressions.rs`), build-context tar construction (`ratect-core/src/docker.rs`'s `build_context_tar` — `.dockerignore` inclusion/exclusion, including the root-only-for-bare-patterns behavior, and the always-included `Dockerfile`/`.dockerignore` special case), container `cmd` construction (`build_cmd` — command-with/without-additional-args, and the `command: None` entrypoint-passthrough case, which must stay `None` rather than an empty `Vec` so bollard/Docker falls back to the image's own default), task engine logic including dependency-cycle detection, prerequisite dedup, sidecar/dependency-container resolution (nesting, within-task dedup, cross-task isolation, circular-dependency detection), environment variable merging (container vs. task `run`, dependency containers), and image resolution (pull vs. build, build dedup, `build_args` reaching the build — `ratect-core/src/engine.rs`, via a fake `ContainerRuntime`), and CLI argument/behavior (`src/main.rs`, `tests/cli.rs`). `tests/cli.rs` also has end-to-end tests (`#[ignore]`d by default) that run against a real Docker daemon — the sample `batect.yml`, `tests/fixtures/sidecar.yml` (proves real cross-container DNS resolution), `tests/fixtures/environment.yml`/`config-vars.yml`/`project-directory.yml` (prove `environment`/config variable/`batect.project_directory` values reach a real container), `tests/fixtures/build.yml`/`build/Dockerfile` (proves `build_directory`/`build_args` reach a real `docker build`), `tests/fixtures/build-with-dockerignore.yml` (proves `.dockerignore` semantics hold against real Docker), and `tests/fixtures/build-failure.yml`/`build-failure/Dockerfile` (proves a real failing build's full transcript, not just Docker's one-line summary, reaches Ratect's own error output) — not just that the right calls were made — run them explicitly with `cargo test --workspace --test cli -- --ignored`; they also run as their own `docker-integration` CI job.
+- **Tests**: `cargo test --workspace` runs in CI, covering pattern matching (`dockerignore/src/pattern.rs`, verified against upstream `moby/patternmatcher`'s own test table), config parsing/resolution (`ratect-core/src/config.rs`, including `resolve_expressions`'s merge/precedence/error cases and `build_directory`/`build_args`), expression interpolation (`ratect-core/src/expressions.rs`), build-context tar construction (`ratect-core/src/docker.rs`'s `build_context_tar` — `.dockerignore` inclusion/exclusion, including the root-only-for-bare-patterns behavior, and the always-included `Dockerfile`/`.dockerignore` special case), container `cmd` construction (`build_cmd` — command-with/without-additional-args, and the `command: None` entrypoint-passthrough case, which must stay `None` rather than an empty `Vec` so bollard/Docker falls back to the image's own default), interactive-TTY eligibility (`should_use_tty`'s four combinations in `docker.rs`; `only_the_top_level_tasks_own_container_run_is_interactive_eligible`/`prerequisite_tasks_own_container_is_never_interactive` in `engine.rs`, via a fake `ContainerRuntime` that captures the `interactive` bool a `run_container` call was given), task engine logic including dependency-cycle detection, prerequisite dedup, sidecar/dependency-container resolution (nesting, within-task dedup, cross-task isolation, circular-dependency detection), environment variable merging (container vs. task `run`, dependency containers), and image resolution (pull vs. build, build dedup, `build_args` reaching the build — `ratect-core/src/engine.rs`, via a fake `ContainerRuntime`), and CLI argument/behavior (`src/main.rs`, `tests/cli.rs`). `tests/cli.rs` also has end-to-end tests (`#[ignore]`d by default) that run against a real Docker daemon — the sample `batect.yml`, `tests/fixtures/sidecar.yml` (proves real cross-container DNS resolution), `tests/fixtures/environment.yml`/`config-vars.yml`/`project-directory.yml` (prove `environment`/config variable/`batect.project_directory` values reach a real container), `tests/fixtures/build.yml`/`build/Dockerfile` (proves `build_directory`/`build_args` reach a real `docker build`), `tests/fixtures/build-with-dockerignore.yml` (proves `.dockerignore` semantics hold against real Docker), `tests/fixtures/build-failure.yml`/`build-failure/Dockerfile` (proves a real failing build's full transcript, not just Docker's one-line summary, reaches Ratect's own error output), and `tests/fixtures/interactive.yml` (`interactive_session_forwards_stdin_and_stdout` — spawns `ratect` attached to a `portable-pty`-emulated pseudo-terminal, scripts input, and asserts it round-trips through stdin → container → stdout and the process exits cleanly; this is the test that caught a real hang (`main` waiting forever on an abandoned `tokio::io::stdin()` read task after every interactive session — see the "Interactive mode" entry's own sub-bullet under `[Unreleased]` in `CHANGELOG.md`) before it shipped) — not just that the right calls were made — run them explicitly with `cargo test --workspace --test cli -- --ignored`; they also run as their own `docker-integration` CI job.
 - **Coverage**: `cargo llvm-cov --workspace --show-missing-lines --summary-only` (requires `rustup component add llvm-tools-preview` and `cargo install cargo-llvm-cov`) reports exact uncovered lines per file — use it to find gaps, not to chase a percentage. `cargo llvm-cov --workspace --html` opens a browsable report at `target/llvm-cov/html`. CI runs this and uploads the HTML report as a `coverage-report` artifact (non-gating).
 
 ## Current Status & Roadmap

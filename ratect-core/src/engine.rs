@@ -126,8 +126,30 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     /// exactly the task named here — not to any of its prerequisites, which
     /// always run with no additional args, matching Batect's behavior of
     /// scoping `-- ARGS` to the task named on the command line.
-    #[async_recursion]
+    ///
+    /// Thin wrapper over `run_task_scoped` fixing `top_level` to `true` — the
+    /// only externally-visible entry point (called once from `main.rs`), so
+    /// it's always the task actually named on the command line.
     pub async fn run_task(&self, task_name: &str, additional_args: &[String]) -> Result<()> {
+        self.run_task_scoped(task_name, additional_args, true).await
+    }
+
+    /// `top_level` is `true` only for the task actually named on the command
+    /// line, `false` for every prerequisite (however deeply nested) — used to
+    /// decide interactive-TTY eligibility for that task's own container (see
+    /// `run_task_internal`). A prerequisite chain isn't the thing being "run"
+    /// interactively, and stdin can only usefully attach to one container at
+    /// a time, so only the top-level task's own container is ever eligible —
+    /// same principle Batect applies (only ever its single "task container"),
+    /// even though Ratect's prerequisites are structurally different (full
+    /// recursive task runs, not steps within one task).
+    #[async_recursion]
+    async fn run_task_scoped(
+        &self,
+        task_name: &str,
+        additional_args: &[String],
+        top_level: bool,
+    ) -> Result<()> {
         {
             let executed = self.executed_tasks.lock().unwrap();
             if executed.contains(task_name) {
@@ -146,7 +168,9 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             in_progress.insert(task_name.to_string());
         }
 
-        let result = self.run_task_internal(task_name, additional_args).await;
+        let result = self
+            .run_task_internal(task_name, additional_args, top_level)
+            .await;
 
         {
             let mut in_progress = self.in_progress_tasks.lock().unwrap();
@@ -161,18 +185,24 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         result
     }
 
-    async fn run_task_internal(&self, task_name: &str, additional_args: &[String]) -> Result<()> {
+    async fn run_task_internal(
+        &self,
+        task_name: &str,
+        additional_args: &[String],
+        top_level: bool,
+    ) -> Result<()> {
         let task = self
             .config
             .tasks
             .get(task_name)
             .with_context(|| format!("Task '{}' not found", task_name))?;
 
-        // Run prerequisites (never with additional args - those are scoped to
-        // only the originally-requested task).
+        // Run prerequisites (never with additional args, and never eligible
+        // for interactive TTY attachment — both scoped to only the
+        // originally-requested task).
         if let Some(prerequisites) = &task.prerequisites {
             for prerequisite in prerequisites {
-                self.run_task(prerequisite, &[]).await?;
+                self.run_task_scoped(prerequisite, &[], false).await?;
             }
         }
 
@@ -216,6 +246,10 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 container_config.environment.as_ref(),
                 task.run.environment.as_ref(),
             );
+            // Eligibility only — `ContainerRuntime::run_container` further
+            // gates this on the local process's own stdin/stdout genuinely
+            // being terminals before actually attaching a TTY.
+            let interactive = top_level;
             self.docker
                 .run_container(
                     &task.run.container,
@@ -225,6 +259,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     container_config.volumes.as_ref(),
                     environment.as_ref(),
                     &network_name,
+                    interactive,
                 )
                 .await?;
 
@@ -319,6 +354,7 @@ mod tests {
     type CapturedEnvironments = Arc<Mutex<HashMap<String, Option<HashMap<String, String>>>>>;
     type CapturedBuildArgs = Arc<Mutex<HashMap<String, Option<HashMap<String, String>>>>>;
     type CapturedImages = Arc<Mutex<HashMap<String, String>>>;
+    type CapturedInteractive = Arc<Mutex<HashMap<String, bool>>>;
 
     #[derive(Default, Clone)]
     struct FakeContainerRuntime {
@@ -335,6 +371,11 @@ mod tests {
         // built tag (not just a pulled image) reached the run, without
         // changing the existing exact-string `events()` assertions.
         images: CapturedImages,
+        // The `interactive` a prior `run_container` call for a given
+        // container name was given — lets tests prove interactive
+        // eligibility is scoped to only the top-level requested task's own
+        // container (see `interactive_for`).
+        interactive: CapturedInteractive,
     }
 
     impl FakeContainerRuntime {
@@ -375,6 +416,12 @@ mod tests {
         /// call for `name` was given.
         fn image_for(&self, name: &str) -> Option<String> {
             self.images.lock().unwrap().get(name).cloned()
+        }
+
+        /// The `interactive` a prior `run_container` call for `name` was
+        /// given.
+        fn interactive_for(&self, name: &str) -> Option<bool> {
+            self.interactive.lock().unwrap().get(name).copied()
         }
     }
 
@@ -446,6 +493,7 @@ mod tests {
             _volumes: Option<&Vec<String>>,
             environment: Option<&HashMap<String, String>>,
             network: &str,
+            interactive: bool,
         ) -> Result<()> {
             self.environments
                 .lock()
@@ -455,6 +503,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(name.to_string(), image.to_string());
+            self.interactive
+                .lock()
+                .unwrap()
+                .insert(name.to_string(), interactive);
             self.push(format!(
                 "run:{name}:{}:args=[{}]:{}",
                 command.unwrap_or_default(),
@@ -676,6 +728,73 @@ mod tests {
                 "prerequisite should not receive additional args: {run}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn only_the_top_level_tasks_own_container_run_is_interactive_eligible() {
+        let mut containers = HashMap::new();
+        containers.insert("app".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("run".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.interactive_for("app"),
+            Some(true),
+            "the task actually named on the command line is interactive-eligible"
+        );
+    }
+
+    #[tokio::test]
+    async fn prerequisite_tasks_own_container_is_never_interactive() {
+        let mut containers = HashMap::new();
+        containers.insert("app".to_string(), container("alpine:3.18", None));
+        containers.insert("setup".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("setup".to_string(), task("setup", "echo setting up"));
+        tasks.insert(
+            "run".to_string(),
+            Task {
+                run: TaskRun {
+                    container: "app".to_string(),
+                    command: Some("echo hi".to_string()),
+                    environment: None,
+                },
+                prerequisites: Some(vec!["setup".to_string()]),
+            },
+        );
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.interactive_for("setup"),
+            Some(false),
+            "a prerequisite's own container should never be interactive-eligible"
+        );
+        assert_eq!(
+            docker.interactive_for("app"),
+            Some(true),
+            "the top-level requested task's own container should still be interactive-eligible"
+        );
     }
 
     fn container_with_build_directory(

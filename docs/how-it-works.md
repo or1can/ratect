@@ -44,7 +44,12 @@ aren't known at the first:
    an ancestor of itself in the current call stack), return an error immediately
    instead of recursing forever.
 3. **Run prerequisites**: each entry in the task's `prerequisites` list is run (via the
-   same `run_task` function) before the task's own container step.
+   same recursive function, `run_task_scoped`) before the task's own container step —
+   but with `top_level: false`, unlike the task actually named on the command line
+   (`top_level: true`). That flag is what decides interactive-TTY eligibility in step 5
+   below — a prerequisite chain isn't the thing being "run" interactively, so only the
+   originally-requested task's own container is ever eligible, however deeply nested
+   its prerequisites are.
 4. **Create the task's network**: every task execution gets its own Docker network,
    whether or not its container declares `dependencies` — a task's container is
    never left running on Docker's shared default bridge network. If the container
@@ -61,7 +66,9 @@ aren't known at the first:
    containers (in step 4), so both support either form identically. Then the container
    runs with the task's `command`, joined to the task's own network, with its
    `environment` merged with the task's own `run.environment` (which wins on a key
-   collision).
+   collision), and `interactive` set to `top_level` from step 3 — eligibility only;
+   see [Interactive mode](config-reference.md#interactive-mode) and the Docker
+   integration section below for what actually decides whether a TTY gets used.
 
 The "run once", "pull once", and "build once" guarantees are tracked with in-memory
 maps/sets (`executed_tasks`, `pulled_images`, `built_images`, `in_progress_tasks`)
@@ -97,8 +104,17 @@ client, and implements `ContainerRuntime`:
   does.
 - **`run_container`**: creates a container (attaching stdout/stderr, any resolved
   volume binds, and any resolved `environment` variables), joins it to the task's own
-  network, starts it, streams its logs live to Ratect's own stdout, then removes the
-  container once it exits.
+  network, starts it, streams its output, then removes the container once it exits.
+  Takes one of two paths depending on `should_use_tty` (ANDing the `interactive`
+  eligibility the engine passed in against whether Ratect's own stdin *and* stdout are
+  real terminals — see [Interactive mode](config-reference.md#interactive-mode)): the
+  default path creates the container without a TTY and streams `docker logs
+  --follow`; the interactive path additionally sets `tty`/`open_stdin`/`attach_stdin`
+  on the container, attaches to it (`docker.attach_container`, before starting it, so
+  no early output is missed) instead of using `logs`, puts the local terminal into raw
+  mode for the session's duration (restored via a guard's `Drop`, even on an error
+  return), and pumps stdin/stdout between the local terminal and the container
+  concurrently until the attach stream ends.
 - **`create_network` / `remove_network`**: thin wrappers over Docker's network API,
   used for the per-task network every task execution gets (see
   [task lifecycle](task-lifecycle.md)).

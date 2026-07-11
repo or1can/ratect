@@ -22,6 +22,8 @@ Ratect is currently in early development. It supports a subset of Batect's featu
   - Image pulling with progress bars.
   - Volume mounting.
   - Log streaming from containers.
+  - Interactive TTY/stdin attachment for a task's own container (e.g. dropping into a
+    shell) — automatic whenever run from a real terminal, no config needed.
   - Sidecar/dependency containers, started on a per-task Docker network.
   - Environment variables, on both containers and individual task runs.
   - Image building from a `Dockerfile` via `build_directory`, with `build_args` and

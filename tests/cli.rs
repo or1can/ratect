@@ -1,5 +1,9 @@
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 fn ratect_command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ratect"))
@@ -55,6 +59,10 @@ fn build_failure_config_path() -> PathBuf {
 
 fn project_directory_declared_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-directory-declared.yml")
+}
+
+fn interactive_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/interactive.yml")
 }
 
 #[test]
@@ -564,5 +572,111 @@ fn failing_build_output_reaches_the_error() {
     assert!(
         stderr.contains("this line should reach the user"),
         "the Dockerfile's RUN output should be in the error: {stderr}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`, and the ability to allocate a local pseudo-terminal —
+/// `portable-pty` emulates one in-process, so this works on regular
+/// Linux/macOS CI runners and locally, same as every other `--ignored` test
+/// here; no real terminal is required. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// Proves the actual interactive attach path end-to-end — `attach_container`,
+/// the raw-mode guard, and both I/O pumps together — not just that
+/// `should_use_tty`/the eligibility policy compute the right bool (already
+/// covered by unit tests, which can't exercise any of this without a real
+/// terminal). `ratect` is spawned with its stdin/stdout/stderr wired to a pty
+/// pair's slave side, so `IsTerminal` genuinely returns true and it takes the
+/// real interactive branch; a scripted `echo <marker>` is then written to the
+/// pty's master side, and the resulting output is checked for the marker
+/// having round-tripped through stdin -> container -> stdout.
+#[test]
+#[ignore]
+fn interactive_session_forwards_stdin_and_stdout() {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("failed to open pty");
+
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect"));
+    cmd.arg("-f");
+    cmd.arg(interactive_config_path());
+    cmd.arg("shell");
+
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
+        .expect("failed to spawn ratect in the pty");
+    // Drop our side of the slave now that the child has its own — otherwise
+    // the master's reader never sees EOF, since the pty only closes once
+    // every writer to it (including ours) is gone.
+    drop(pair.slave);
+
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .expect("failed to clone pty reader");
+    let mut writer = pair
+        .master
+        .take_writer()
+        .expect("failed to take pty writer");
+
+    // Reads in a background thread since `Read::read` blocks; the main
+    // thread polls the accumulated output with a bounded timeout instead of
+    // blocking indefinitely if something hangs.
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // Safe to write immediately, before the shell has necessarily started
+    // reading: the pty's own kernel-level buffer holds unread input until
+    // something reads it, so this doesn't race the container's startup.
+    let marker = "ratect-interactive-test-marker";
+    writeln!(writer, "echo {marker}").expect("failed to write to pty");
+    writeln!(writer, "exit").expect("failed to write to pty");
+
+    let mut output = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !String::from_utf8_lossy(&output).contains(marker) && Instant::now() < deadline {
+        if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(200)) {
+            output.extend_from_slice(&chunk);
+        }
+    }
+
+    let output_str = String::from_utf8_lossy(&output);
+    assert!(
+        output_str.contains(marker),
+        "expected the echoed marker to round-trip through stdin -> container -> stdout: {output_str:?}"
+    );
+
+    let (wait_tx, wait_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = wait_tx.send(child.wait());
+    });
+    let status = wait_rx
+        .recv_timeout(Duration::from_secs(15))
+        .expect("ratect did not exit after the interactive session ended")
+        .expect("failed to wait for ratect");
+
+    assert!(
+        status.success(),
+        "ratect should exit successfully once the shell session ends: {status:?}"
     );
 }
