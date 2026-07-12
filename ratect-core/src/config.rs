@@ -29,6 +29,19 @@ pub struct Container {
     pub volumes: Option<Vec<String>>,
     pub dependencies: Option<Vec<String>>,
     pub environment: Option<HashMap<String, String>>,
+    pub run_as_current_user: Option<RunAsCurrentUser>,
+}
+
+/// Runs this container as the host's own user/group instead of whatever the
+/// image defaults to (see [`Config::resolve_expressions_with`]'s validation
+/// and `TaskEngine::resolve_user_mapping`). `home_directory` is required
+/// when `enabled` is `true` (and rejected otherwise) — Ratect never guesses
+/// one, matching Batect.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunAsCurrentUser {
+    pub enabled: bool,
+    pub home_directory: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -159,7 +172,7 @@ impl Config {
             .to_string();
         config_vars.insert(PROJECT_DIRECTORY_VAR.to_string(), Some(project_directory));
 
-        for container in self.containers.values_mut() {
+        for (container_name, container) in self.containers.iter_mut() {
             if let Some(environment) = &mut container.environment {
                 for value in environment.values_mut() {
                     *value = crate::expressions::interpolate(value, &host_env, &config_vars)?;
@@ -177,6 +190,36 @@ impl Config {
             if let Some(build_args) = &mut container.build_args {
                 for value in build_args.values_mut() {
                     *value = crate::expressions::interpolate(value, &host_env, &config_vars)?;
+                }
+            }
+            if let Some(run_as_current_user) = &mut container.run_as_current_user {
+                if run_as_current_user.enabled {
+                    let home_directory =
+                        run_as_current_user.home_directory.as_mut().ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Container '{}' has 'run_as_current_user.enabled' set to true, \
+                                 but no 'home_directory' was provided",
+                                container_name
+                            )
+                        })?;
+                    // Not `resolve_path` — this is a path *inside the
+                    // container*, never resolved against `base_path`.
+                    *home_directory =
+                        crate::expressions::interpolate(home_directory, &host_env, &config_vars)?;
+                    if !home_directory.starts_with('/') {
+                        anyhow::bail!(
+                            "Container '{}' has an invalid 'run_as_current_user.home_directory': \
+                             '{}' is not an absolute path",
+                            container_name,
+                            home_directory
+                        );
+                    }
+                } else if run_as_current_user.home_directory.is_some() {
+                    anyhow::bail!(
+                        "Container '{}' has 'run_as_current_user.home_directory' set, but \
+                         'run_as_current_user.enabled' is not true",
+                        container_name
+                    );
                 }
             }
         }
@@ -447,6 +490,7 @@ tasks: {}
             volumes: None,
             dependencies: None,
             environment: None,
+            run_as_current_user: None,
         }
     }
 
@@ -496,6 +540,144 @@ tasks: {}
             config.containers["build-env"].build_args.as_ref().unwrap()["MESSAGE"],
             "host-value"
         );
+    }
+
+    fn container_with_run_as_current_user(
+        enabled: bool,
+        home_directory: Option<&str>,
+    ) -> Container {
+        Container {
+            image: Some("alpine:3.18".to_string()),
+            build_directory: None,
+            build_args: None,
+            volumes: None,
+            dependencies: None,
+            environment: None,
+            run_as_current_user: Some(RunAsCurrentUser {
+                enabled,
+                home_directory: home_directory.map(|s| s.to_string()),
+            }),
+        }
+    }
+
+    fn config_with_container(container: Container) -> Config {
+        Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([("build-env".to_string(), container)]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        }
+    }
+
+    #[test]
+    fn parses_run_as_current_user() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    run_as_current_user:
+      enabled: true
+      home_directory: /home/container-user
+tasks: {}
+"#,
+        );
+
+        let run_as_current_user = config.containers["build-env"]
+            .run_as_current_user
+            .as_ref()
+            .unwrap();
+        assert!(run_as_current_user.enabled);
+        assert_eq!(
+            run_as_current_user.home_directory.as_deref(),
+            Some("/home/container-user")
+        );
+    }
+
+    #[test]
+    fn resolve_expressions_errors_when_run_as_current_user_enabled_without_home_directory() {
+        let mut config = config_with_container(container_with_run_as_current_user(true, None));
+
+        let result =
+            config.resolve_expressions_with(Path::new("/base"), &HashMap::new(), no_host_env);
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("no 'home_directory' was provided"));
+    }
+
+    #[test]
+    fn resolve_expressions_errors_when_home_directory_given_without_run_as_current_user_enabled() {
+        let mut config = config_with_container(container_with_run_as_current_user(
+            false,
+            Some("/home/container-user"),
+        ));
+
+        let result =
+            config.resolve_expressions_with(Path::new("/base"), &HashMap::new(), no_host_env);
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("'run_as_current_user.enabled' is not true"));
+    }
+
+    #[test]
+    fn resolve_expressions_errors_when_run_as_current_user_home_directory_is_not_absolute() {
+        let mut config = config_with_container(container_with_run_as_current_user(
+            true,
+            Some("home/container-user"),
+        ));
+
+        let result =
+            config.resolve_expressions_with(Path::new("/base"), &HashMap::new(), no_host_env);
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("is not an absolute path"));
+    }
+
+    #[test]
+    fn resolve_expressions_interpolates_run_as_current_user_home_directory() {
+        let mut config = config_with_container(container_with_run_as_current_user(
+            true,
+            Some("/home/$HOST_VAR"),
+        ));
+
+        config
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), |name| {
+                (name == "HOST_VAR").then(|| "container-user".to_string())
+            })
+            .unwrap();
+
+        assert_eq!(
+            config.containers["build-env"]
+                .run_as_current_user
+                .as_ref()
+                .unwrap()
+                .home_directory
+                .as_deref(),
+            Some("/home/container-user")
+        );
+    }
+
+    #[test]
+    fn resolve_expressions_leaves_disabled_run_as_current_user_unaffected() {
+        let mut config = config_with_container(container_with_run_as_current_user(false, None));
+
+        config
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), no_host_env)
+            .unwrap();
+
+        let run_as_current_user = config.containers["build-env"]
+            .run_as_current_user
+            .as_ref()
+            .unwrap();
+        assert!(!run_as_current_user.enabled);
+        assert_eq!(run_as_current_user.home_directory, None);
     }
 
     /// A fresh, unique scratch directory for tests that need to write real
@@ -680,6 +862,7 @@ config_variables:
             volumes: None,
             dependencies: None,
             environment: Some(environment),
+            run_as_current_user: None,
         }
     }
 

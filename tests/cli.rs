@@ -680,3 +680,127 @@ fn interactive_session_forwards_stdin_and_stdout() {
         "ratect should exit successfully once the shell session ends: {status:?}"
     );
 }
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`, and runs against the real host user (this doesn't need a
+/// TTY, unlike the interactive test above — `run_as_current_user` and
+/// interactive mode are independent features). Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// Writes its own temporary config (rather than a static checked-in
+/// fixture) pointing a volume at a temp scratch host directory that doesn't
+/// exist yet, so this also exercises the host-directory-pre-creation half
+/// of the feature, not just the container-side uid/gid mapping. Proves the
+/// container actually runs as the host's real uid/gid (compared against
+/// this test process's own, via `id -u`/`id -g` — no need for a new test
+/// dependency), and that a file the container writes to the mounted volume
+/// comes back owned by the current host user on disk, not root — the actual
+/// practical point of the feature, not just that the right calls were made.
+#[test]
+#[ignore]
+fn run_as_current_user_maps_the_container_onto_the_host_user() {
+    let test_id = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let scratch_dir = std::env::temp_dir().join(format!("ratect-user-mapping-test-{test_id}"));
+    if scratch_dir.exists() {
+        std::fs::remove_dir_all(&scratch_dir).unwrap();
+    }
+    let config_path = std::env::temp_dir().join(format!("ratect-user-mapping-test-{test_id}.yml"));
+
+    let config = format!(
+        r#"
+project_name: ratect-user-mapping-test
+containers:
+  app:
+    image: alpine:3.18.2
+    volumes:
+      - {volume}:/output
+    run_as_current_user:
+      enabled: true
+      home_directory: /home/container-user
+tasks:
+  check:
+    run:
+      container: app
+      command: id -u && id -g && touch /output/marker
+"#,
+        volume = scratch_dir.display()
+    );
+    std::fs::write(&config_path, &config).expect("failed to write temp config");
+
+    let cleanup = || {
+        let _ = std::fs::remove_dir_all(&scratch_dir);
+        let _ = std::fs::remove_file(&config_path);
+    };
+
+    let output = ratect_command()
+        .arg("-f")
+        .arg(&config_path)
+        .arg("check")
+        .output()
+        .expect("failed to run ratect");
+
+    if !output.status.success() {
+        cleanup();
+        panic!(
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let host_uid = String::from_utf8(
+        Command::new("id")
+            .arg("-u")
+            .output()
+            .expect("failed to run id -u")
+            .stdout,
+    )
+    .unwrap();
+    let host_gid = String::from_utf8(
+        Command::new("id")
+            .arg("-g")
+            .output()
+            .expect("failed to run id -g")
+            .stdout,
+    )
+    .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.lines();
+    let container_uid = lines.next().unwrap_or_default();
+    let container_gid = lines.next().unwrap_or_default();
+
+    assert_eq!(
+        container_uid.trim(),
+        host_uid.trim(),
+        "the container should run as the host's own uid: stdout:\n{stdout}"
+    );
+    assert_eq!(
+        container_gid.trim(),
+        host_gid.trim(),
+        "the container should run as the host's own gid: stdout:\n{stdout}"
+    );
+
+    let marker = scratch_dir.join("marker");
+    assert!(
+        marker.exists(),
+        "the container should have written a marker file into the mounted volume"
+    );
+
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(&marker).expect("failed to stat marker file");
+    assert_eq!(
+        metadata.uid().to_string(),
+        host_uid.trim(),
+        "a file the container wrote to the mounted volume should be host-user-owned, not root"
+    );
+
+    cleanup();
+}

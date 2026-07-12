@@ -122,6 +122,37 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         }
     }
 
+    /// `None` unless `container_config.run_as_current_user` is enabled — in
+    /// which case, resolves the actual host user to map the container onto.
+    /// Applies per-container, matching Batect: a task's own container and
+    /// each of its dependencies set this independently, so this is called
+    /// from both `run_task_internal` and `start_dependency` rather than
+    /// once per task. No caching — there's only ever one real host user per
+    /// process, so recomputing it per call is cheap and simpler than adding
+    /// a memoization layer for no real benefit.
+    async fn resolve_user_mapping(
+        &self,
+        container_config: &Container,
+    ) -> Result<Option<crate::docker::UserMapping>> {
+        let Some(run_as_current_user) = &container_config.run_as_current_user else {
+            return Ok(None);
+        };
+        if !run_as_current_user.enabled {
+            return Ok(None);
+        }
+
+        let user = crate::user::current_user()?;
+        let home_directory = run_as_current_user
+            .home_directory
+            .clone()
+            .expect("validated non-None by Config::resolve_expressions when enabled is true");
+
+        Ok(Some(crate::docker::UserMapping {
+            user,
+            home_directory,
+        }))
+    }
+
     /// `additional_args` are only ever forwarded to the container run for
     /// exactly the task named here — not to any of its prerequisites, which
     /// always run with no additional args, matching Batect's behavior of
@@ -246,6 +277,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 container_config.environment.as_ref(),
                 task.run.environment.as_ref(),
             );
+            let user_mapping = self.resolve_user_mapping(container_config).await?;
             // Eligibility only — `ContainerRuntime::run_container` further
             // gates this on the local process's own stdin/stdout genuinely
             // being terminals before actually attaching a TTY.
@@ -260,6 +292,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     environment.as_ref(),
                     &network_name,
                     interactive,
+                    user_mapping.as_ref(),
                 )
                 .await?;
 
@@ -320,6 +353,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         }
 
         let image = self.resolve_image(name, dependency_config).await?;
+        let user_mapping = self.resolve_user_mapping(dependency_config).await?;
 
         let container_id = self
             .docker
@@ -329,6 +363,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 dependency_config.volumes.as_ref(),
                 dependency_config.environment.as_ref(),
                 network,
+                user_mapping.as_ref(),
             )
             .await?;
 
@@ -355,6 +390,8 @@ mod tests {
     type CapturedBuildArgs = Arc<Mutex<HashMap<String, Option<HashMap<String, String>>>>>;
     type CapturedImages = Arc<Mutex<HashMap<String, String>>>;
     type CapturedInteractive = Arc<Mutex<HashMap<String, bool>>>;
+    /// `(uid, gid, home_directory)`, keyed by container name.
+    type CapturedUserMapping = Arc<Mutex<HashMap<String, Option<(u32, u32, String)>>>>;
 
     #[derive(Default, Clone)]
     struct FakeContainerRuntime {
@@ -376,6 +413,9 @@ mod tests {
         // eligibility is scoped to only the top-level requested task's own
         // container (see `interactive_for`).
         interactive: CapturedInteractive,
+        // The `user_mapping` a prior `run_container`/`start_background_container`
+        // call for a given container name was given (see `user_mapping_for`).
+        user_mapping: CapturedUserMapping,
     }
 
     impl FakeContainerRuntime {
@@ -423,6 +463,18 @@ mod tests {
         fn interactive_for(&self, name: &str) -> Option<bool> {
             self.interactive.lock().unwrap().get(name).copied()
         }
+
+        /// The `(uid, gid, home_directory)` a prior `run_container`/
+        /// `start_background_container` call for `name` was given
+        /// (flattened, same convention as `environment_for`).
+        fn user_mapping_for(&self, name: &str) -> Option<(u32, u32, String)> {
+            self.user_mapping
+                .lock()
+                .unwrap()
+                .get(name)
+                .cloned()
+                .flatten()
+        }
     }
 
     #[async_trait::async_trait]
@@ -466,6 +518,7 @@ mod tests {
             _volumes: Option<&Vec<String>>,
             environment: Option<&HashMap<String, String>>,
             network: &str,
+            user_mapping: Option<&crate::docker::UserMapping>,
         ) -> Result<String> {
             self.environments
                 .lock()
@@ -475,6 +528,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(alias.to_string(), image.to_string());
+            self.user_mapping.lock().unwrap().insert(
+                alias.to_string(),
+                user_mapping.map(|m| (m.user.uid, m.user.gid, m.home_directory.clone())),
+            );
             self.push(format!("sidecar-start:{alias}:{network}"));
             Ok(format!("sidecar-id-{alias}"))
         }
@@ -494,6 +551,7 @@ mod tests {
             environment: Option<&HashMap<String, String>>,
             network: &str,
             interactive: bool,
+            user_mapping: Option<&crate::docker::UserMapping>,
         ) -> Result<()> {
             self.environments
                 .lock()
@@ -507,6 +565,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(name.to_string(), interactive);
+            self.user_mapping.lock().unwrap().insert(
+                name.to_string(),
+                user_mapping.map(|m| (m.user.uid, m.user.gid, m.home_directory.clone())),
+            );
             self.push(format!(
                 "run:{name}:{}:args=[{}]:{}",
                 command.unwrap_or_default(),
@@ -528,6 +590,7 @@ mod tests {
             volumes: None,
             dependencies,
             environment: None,
+            run_as_current_user: None,
         }
     }
 
@@ -553,6 +616,7 @@ mod tests {
                 volumes: None,
                 dependencies: None,
                 environment: None,
+                run_as_current_user: None,
             },
         );
 
@@ -610,6 +674,7 @@ mod tests {
                 volumes: None,
                 dependencies: None,
                 environment: None,
+                run_as_current_user: None,
             },
         );
 
@@ -797,6 +862,120 @@ mod tests {
         );
     }
 
+    fn container_with_run_as_current_user(
+        image: &str,
+        dependencies: Option<Vec<String>>,
+        home_directory: &str,
+    ) -> Container {
+        Container {
+            build_args: None,
+            image: Some(image.to_string()),
+            build_directory: None,
+            volumes: None,
+            dependencies,
+            environment: None,
+            run_as_current_user: Some(crate::config::RunAsCurrentUser {
+                enabled: true,
+                home_directory: Some(home_directory.to_string()),
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_as_current_user_reaches_the_container() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "app".to_string(),
+            container_with_run_as_current_user("alpine:3.18", None, "/home/container-user"),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("run".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        let expected_user = crate::user::current_user().unwrap();
+        assert_eq!(
+            docker.user_mapping_for("app"),
+            Some((
+                expected_user.uid,
+                expected_user.gid,
+                "/home/container-user".to_string()
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dependencys_run_as_current_user_is_independent_of_its_own_containers() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "database".to_string(),
+            container_with_run_as_current_user("alpine:3.18", None, "/home/container-user"),
+        );
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        let expected_user = crate::user::current_user().unwrap();
+        assert_eq!(
+            docker.user_mapping_for("database"),
+            Some((
+                expected_user.uid,
+                expected_user.gid,
+                "/home/container-user".to_string()
+            )),
+            "the dependency's own run_as_current_user should be applied"
+        );
+        assert_eq!(
+            docker.user_mapping_for("app"),
+            None,
+            "the task's own container has no run_as_current_user set, regardless of its dependency's"
+        );
+    }
+
+    #[tokio::test]
+    async fn container_without_run_as_current_user_reaches_the_container_with_no_mapping() {
+        let mut containers = HashMap::new();
+        containers.insert("app".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("run".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        assert_eq!(docker.user_mapping_for("app"), None);
+    }
+
     fn container_with_build_directory(
         build_directory: &str,
         build_args: Option<HashMap<String, String>>,
@@ -808,6 +987,7 @@ mod tests {
             volumes: None,
             dependencies: None,
             environment: None,
+            run_as_current_user: None,
         }
     }
 
@@ -1026,6 +1206,7 @@ mod tests {
                 volumes: None,
                 dependencies: None,
                 environment: None,
+                run_as_current_user: None,
             },
         );
         let mut tasks = HashMap::new();
@@ -1426,6 +1607,7 @@ mod tests {
                 volumes: None,
                 dependencies: None,
                 environment: None,
+                run_as_current_user: None,
             },
         );
         containers.insert(

@@ -8,6 +8,7 @@ use bollard::query_parameters::BuildImageOptionsBuilder;
 use bollard::query_parameters::CreateImageOptions;
 use bollard::query_parameters::LogsOptions;
 use bollard::query_parameters::ResizeContainerTTYOptionsBuilder;
+use bollard::query_parameters::UploadToContainerOptionsBuilder;
 use bollard::query_parameters::WaitContainerOptions;
 use bollard::service::HostConfig;
 use bollard::Docker;
@@ -214,6 +215,134 @@ fn collect_build_context_entries(
     Ok(())
 }
 
+/// The host user a container should run as, when its `run_as_current_user`
+/// config is enabled — see `TaskEngine::resolve_user_mapping`.
+pub struct UserMapping {
+    pub user: crate::user::CurrentUser,
+    pub home_directory: String,
+}
+
+/// Appends a plain file entry (`name`, `contents`, `mode`) to `builder`,
+/// owned by root (`0:0` — these files must be root-owned regardless of which
+/// uid/gid the container itself runs as, matching real `/etc/passwd`-style
+/// files on any system).
+fn append_tar_file(
+    builder: &mut tar::Builder<Vec<u8>>,
+    name: &str,
+    contents: &str,
+    mode: u32,
+) -> Result<()> {
+    let data = contents.as_bytes();
+    let mut header = tar::Header::new_gnu();
+    header.set_size(data.len() as u64);
+    header.set_mode(mode);
+    header.set_uid(0);
+    header.set_gid(0);
+    builder
+        .append_data(&mut header, name, data)
+        .with_context(|| format!("Failed to add {name} to user mapping archive"))
+}
+
+/// Builds an in-memory tar containing minimal `/etc/passwd`, `/etc/shadow`,
+/// and `/etc/group` entries for `mapping`'s user, extracted to `/etc` (see
+/// `ContainerRuntime::run_container`'s `user_mapping` handling) before the
+/// container starts. Necessary because a container running as an arbitrary
+/// host uid/gid has no corresponding entry in the image's own passwd/group —
+/// many programs misbehave or refuse to run at all without one. Pure (no
+/// Docker involved), so it's unit-testable directly. Ported from Batect's
+/// `RunAsCurrentUserConfigurationProvider.uploadFilesForConfiguration`.
+fn build_user_mapping_tar(mapping: &UserMapping) -> Result<Vec<u8>> {
+    let passwd = crate::user::generate_passwd_file(&mapping.user, &mapping.home_directory);
+    let shadow = crate::user::generate_shadow_file(&mapping.user);
+    let group = crate::user::generate_group_file(&mapping.user);
+
+    let mut builder = tar::Builder::new(Vec::new());
+    append_tar_file(&mut builder, "passwd", &passwd, 0o644)?;
+    append_tar_file(&mut builder, "shadow", &shadow, 0o640)?;
+    append_tar_file(&mut builder, "group", &group, 0o644)?;
+
+    builder
+        .into_inner()
+        .context("Failed to finalize user mapping archive")
+}
+
+/// Builds an in-memory tar containing a single directory entry for
+/// `mapping.home_directory`'s leaf name, owned by `mapping.user`'s uid/gid,
+/// mode `0755` — extracted to the home directory's *parent* (see
+/// `ContainerRuntime::run_container`'s `user_mapping` handling), matching
+/// Batect's `uploadHomeDirectoryForConfiguration`. Pure (no Docker
+/// involved), so it's unit-testable directly.
+fn build_home_directory_tar(mapping: &UserMapping) -> Result<Vec<u8>> {
+    let leaf_name = Path::new(&mapping.home_directory)
+        .file_name()
+        .with_context(|| {
+            format!(
+                "Invalid home directory '{}': no directory name",
+                mapping.home_directory
+            )
+        })?
+        .to_string_lossy()
+        .into_owned();
+
+    let mut header = tar::Header::new_gnu();
+    header.set_entry_type(tar::EntryType::Directory);
+    header.set_mode(0o755);
+    header.set_uid(mapping.user.uid as u64);
+    header.set_gid(mapping.user.gid as u64);
+    header.set_size(0);
+    header
+        .set_path(format!("{leaf_name}/"))
+        .with_context(|| format!("Invalid home directory '{}'", mapping.home_directory))?;
+    header.set_cksum();
+
+    let mut builder = tar::Builder::new(Vec::new());
+    builder
+        .append(&header, std::io::empty())
+        .context("Failed to add home directory to user mapping archive")?;
+
+    builder
+        .into_inner()
+        .context("Failed to finalize home directory archive")
+}
+
+/// The parent directory `build_home_directory_tar`'s entry should be
+/// extracted into — `/` if `home_directory` has no parent (e.g. `/home`).
+fn home_directory_parent(home_directory: &str) -> String {
+    Path::new(home_directory)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("/"))
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Creates any host-side bind-mount directories in `volumes` (already
+/// resolved `"host:container"` strings) that don't exist yet — as the
+/// current host user, before the container is created. Otherwise Docker's
+/// daemon (running as root) would auto-create them as `root:root` on first
+/// use, defeating the point of `run_as_current_user` for the common "mount
+/// my code directory, get build artifacts back with sane ownership" case.
+/// Pure filesystem logic, no Docker involved. Ported from Batect's
+/// `createMissingMountDirectories`.
+fn ensure_host_volume_directories_exist(volumes: Option<&Vec<String>>) -> Result<()> {
+    let Some(volumes) = volumes else {
+        return Ok(());
+    };
+
+    for volume in volumes {
+        let Some((host_path, _)) = volume.split_once(':') else {
+            continue;
+        };
+        let path = Path::new(host_path);
+        if !path.exists() {
+            fs::create_dir_all(path)
+                .with_context(|| format!("Failed to create host directory {:?}", path))?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Abstracts the container operations the task engine needs, so tests can
 /// inject a fake implementation instead of talking to a real Docker daemon.
 #[async_trait::async_trait]
@@ -247,6 +376,11 @@ pub trait ContainerRuntime {
     /// container id, used later to stop/remove it. Used for sidecar/dependency
     /// containers. `environment` is that container's own `environment` field
     /// (a dependency has no task `run`, so nothing to layer on top of it).
+    ///
+    /// `user_mapping` is `Some` when this container's own `run_as_current_user`
+    /// is enabled (independent of whether the task's own container has it
+    /// enabled — see `TaskEngine::resolve_user_mapping`) — see `run_container`'s
+    /// doc comment for what applying it actually does.
     async fn start_background_container(
         &self,
         alias: &str,
@@ -254,6 +388,7 @@ pub trait ContainerRuntime {
         volumes: Option<&Vec<String>>,
         environment: Option<&HashMap<String, String>>,
         network: &str,
+        user_mapping: Option<&UserMapping>,
     ) -> Result<String>;
 
     /// Stops and removes a container started with [`start_background_container`](Self::start_background_container).
@@ -282,6 +417,17 @@ pub trait ContainerRuntime {
     /// terminals; when they're not (piped output, CI, a redirected
     /// non-terminal), this container runs exactly as if `interactive` were
     /// `false`.
+    ///
+    /// `user_mapping` is `Some` when this container's `run_as_current_user`
+    /// is enabled. When present: any of `volumes`' host paths that don't
+    /// exist yet are created first (as the current host user, so Docker's
+    /// daemon doesn't auto-create them as `root:root`); the container's
+    /// `User` is set to the mapped `uid:gid`; and, after creation but before
+    /// starting, minimal `/etc/passwd`/`/etc/shadow`/`/etc/group` entries and
+    /// the declared home directory (owned by that `uid:gid`) are uploaded
+    /// into it — an arbitrary host uid/gid otherwise has no corresponding
+    /// entry in the image's own passwd/group, which many programs need to
+    /// function at all.
     #[allow(clippy::too_many_arguments)]
     async fn run_container(
         &self,
@@ -293,6 +439,7 @@ pub trait ContainerRuntime {
         environment: Option<&HashMap<String, String>>,
         network: &str,
         interactive: bool,
+        user_mapping: Option<&UserMapping>,
     ) -> Result<()>;
 }
 
@@ -322,6 +469,53 @@ impl DockerClient {
             .await
             .with_context(|| format!("Failed to connect '{}' to network '{}'", alias, network))?;
         tracing::debug!(container_id, network, alias, "joined network");
+        Ok(())
+    }
+
+    /// Uploads the synthetic `/etc/passwd`/`/etc/shadow`/`/etc/group` and the
+    /// home directory `mapping` needs into `container_id` — must be called
+    /// after the container is created but before it's started (Docker's own
+    /// "upload archive to container" API works on an already-created
+    /// container's filesystem; the container needs those files in place
+    /// before its own process starts reading them).
+    async fn apply_user_mapping(&self, container_id: &str, mapping: &UserMapping) -> Result<()> {
+        let passwd_tar = build_user_mapping_tar(mapping)?;
+        let passwd_options = UploadToContainerOptionsBuilder::default()
+            .path("/etc")
+            .build();
+        self.docker
+            .upload_to_container(
+                container_id,
+                Some(passwd_options),
+                bollard::body_full(passwd_tar.into()),
+            )
+            .await
+            .with_context(|| {
+                format!("Failed to upload user mapping files to container '{container_id}'")
+            })?;
+
+        let home_tar = build_home_directory_tar(mapping)?;
+        let home_parent = home_directory_parent(&mapping.home_directory);
+        let home_options = UploadToContainerOptionsBuilder::default()
+            .path(&home_parent)
+            .build();
+        self.docker
+            .upload_to_container(
+                container_id,
+                Some(home_options),
+                bollard::body_full(home_tar.into()),
+            )
+            .await
+            .with_context(|| {
+                format!("Failed to upload home directory to container '{container_id}'")
+            })?;
+
+        tracing::debug!(
+            container_id,
+            uid = mapping.user.uid,
+            gid = mapping.user.gid,
+            "applied user mapping"
+        );
         Ok(())
     }
 
@@ -575,7 +769,12 @@ impl ContainerRuntime for DockerClient {
         volumes: Option<&Vec<String>>,
         environment: Option<&HashMap<String, String>>,
         network: &str,
+        user_mapping: Option<&UserMapping>,
     ) -> Result<String> {
+        if user_mapping.is_some() {
+            ensure_host_volume_directories_exist(volumes)?;
+        }
+
         let host_config = HostConfig {
             binds: volumes.cloned(),
             ..Default::default()
@@ -584,6 +783,7 @@ impl ContainerRuntime for DockerClient {
         let config = Config {
             image: Some(image.to_string()),
             env: build_env(environment),
+            user: user_mapping.map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
             host_config: Some(host_config),
             ..Default::default()
         };
@@ -594,6 +794,10 @@ impl ContainerRuntime for DockerClient {
             .await
             .with_context(|| format!("Failed to create sidecar container '{}'", alias))?;
         tracing::debug!(container_id = %container.id, alias, image, "created sidecar container");
+
+        if let Some(mapping) = user_mapping {
+            self.apply_user_mapping(&container.id, mapping).await?;
+        }
 
         self.join_network(&container.id, network, alias).await?;
 
@@ -629,12 +833,17 @@ impl ContainerRuntime for DockerClient {
         environment: Option<&HashMap<String, String>>,
         network: &str,
         interactive: bool,
+        user_mapping: Option<&UserMapping>,
     ) -> Result<()> {
         let use_tty = should_use_tty(
             interactive,
             std::io::stdin().is_terminal(),
             std::io::stdout().is_terminal(),
         );
+
+        if user_mapping.is_some() {
+            ensure_host_volume_directories_exist(volumes)?;
+        }
 
         let host_config = HostConfig {
             binds: volumes.cloned(),
@@ -651,12 +860,17 @@ impl ContainerRuntime for DockerClient {
             open_stdin: use_tty.then_some(true),
             attach_stdin: use_tty.then_some(true),
             stdin_once: use_tty.then_some(true),
+            user: user_mapping.map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
             host_config: Some(host_config),
             ..Default::default()
         };
 
         let container = self.docker.create_container(None, config).await?;
         tracing::debug!(container_id = %container.id, image, "created container");
+
+        if let Some(mapping) = user_mapping {
+            self.apply_user_mapping(&container.id, mapping).await?;
+        }
 
         self.join_network(&container.id, network, name).await?;
 
@@ -900,5 +1114,122 @@ mod tests {
     #[test]
     fn should_use_tty_is_false_when_stdout_is_not_a_terminal() {
         assert!(!should_use_tty(true, true, false));
+    }
+
+    fn user_mapping_fixture() -> UserMapping {
+        UserMapping {
+            user: crate::user::CurrentUser {
+                uid: 1000,
+                gid: 1000,
+                username: "ratect".to_string(),
+                groupname: "ratect".to_string(),
+            },
+            home_directory: "/home/ratect".to_string(),
+        }
+    }
+
+    fn tar_entry_contents(tar_bytes: &[u8], path: &str) -> String {
+        let mut archive = tar::Archive::new(tar_bytes);
+        let mut entry = archive
+            .entries()
+            .unwrap()
+            .map(|e| e.unwrap())
+            .find(|e| e.path().unwrap().to_string_lossy() == path)
+            .unwrap_or_else(|| panic!("no {path:?} entry found"));
+        let mut contents = String::new();
+        std::io::Read::read_to_string(&mut entry, &mut contents).unwrap();
+        contents
+    }
+
+    #[test]
+    fn build_user_mapping_tar_includes_passwd_shadow_and_group() {
+        let mapping = user_mapping_fixture();
+        let tar_bytes = build_user_mapping_tar(&mapping).unwrap();
+        let entries = tar_entry_paths(&tar_bytes);
+
+        assert_eq!(entries, vec!["passwd", "shadow", "group"]);
+        assert_eq!(
+            tar_entry_contents(&tar_bytes, "passwd"),
+            crate::user::generate_passwd_file(&mapping.user, &mapping.home_directory)
+        );
+        assert_eq!(
+            tar_entry_contents(&tar_bytes, "shadow"),
+            crate::user::generate_shadow_file(&mapping.user)
+        );
+        assert_eq!(
+            tar_entry_contents(&tar_bytes, "group"),
+            crate::user::generate_group_file(&mapping.user)
+        );
+    }
+
+    #[test]
+    fn build_user_mapping_tar_entries_are_root_owned_with_correct_modes() {
+        let tar_bytes = build_user_mapping_tar(&user_mapping_fixture()).unwrap();
+        let mut archive = tar::Archive::new(tar_bytes.as_slice());
+        for entry in archive.entries().unwrap() {
+            let entry = entry.unwrap();
+            let header = entry.header();
+            assert_eq!(header.uid().unwrap(), 0);
+            assert_eq!(header.gid().unwrap(), 0);
+            let expected_mode = match entry.path().unwrap().to_string_lossy().as_ref() {
+                "shadow" => 0o640,
+                _ => 0o644,
+            };
+            assert_eq!(header.mode().unwrap(), expected_mode);
+        }
+    }
+
+    #[test]
+    fn build_home_directory_tar_creates_a_directory_entry_owned_by_the_mapped_user() {
+        let tar_bytes = build_home_directory_tar(&user_mapping_fixture()).unwrap();
+        let mut archive = tar::Archive::new(tar_bytes.as_slice());
+        let mut entries = archive.entries().unwrap().map(|e| e.unwrap());
+        let entry = entries.next().unwrap();
+
+        assert_eq!(entry.path().unwrap().to_string_lossy(), "ratect/");
+        assert_eq!(entry.header().entry_type(), tar::EntryType::Directory);
+        assert_eq!(entry.header().uid().unwrap(), 1000);
+        assert_eq!(entry.header().gid().unwrap(), 1000);
+        assert_eq!(entry.header().mode().unwrap(), 0o755);
+        assert!(entries.next().is_none());
+    }
+
+    #[test]
+    fn home_directory_parent_is_the_directory_above_the_leaf() {
+        assert_eq!(home_directory_parent("/home/ratect"), "/home");
+    }
+
+    #[test]
+    fn home_directory_parent_is_root_for_a_top_level_home_directory() {
+        assert_eq!(home_directory_parent("/ratect"), "/");
+    }
+
+    #[test]
+    fn ensure_host_volume_directories_exist_creates_a_missing_directory() {
+        let dir = unique_temp_dir();
+        let host_path = dir.join("missing");
+        let volumes = vec![format!("{}:/code", host_path.display())];
+
+        assert!(!host_path.exists());
+        ensure_host_volume_directories_exist(Some(&volumes)).unwrap();
+        assert!(host_path.is_dir());
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn ensure_host_volume_directories_exist_leaves_an_existing_directory_alone() {
+        let dir = unique_temp_dir();
+        let volumes = vec![format!("{}:/code", dir.display())];
+
+        ensure_host_volume_directories_exist(Some(&volumes)).unwrap();
+        assert!(dir.is_dir());
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn ensure_host_volume_directories_exist_does_nothing_when_there_are_no_volumes() {
+        ensure_host_volume_directories_exist(None).unwrap();
     }
 }

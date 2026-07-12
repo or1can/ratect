@@ -63,12 +63,18 @@ aren't known at the first:
    (unless already pulled once this run) if `image` is set, or building (unless already
    built once this run — see below) if `build_directory` is set, or erroring if neither
    is. The same method is used for a task's own container and for dependency
-   containers (in step 4), so both support either form identically. Then the container
-   runs with the task's `command`, joined to the task's own network, with its
-   `environment` merged with the task's own `run.environment` (which wins on a key
-   collision), and `interactive` set to `top_level` from step 3 — eligibility only;
-   see [Interactive mode](config-reference.md#interactive-mode) and the Docker
-   integration section below for what actually decides whether a TTY gets used.
+   containers (in step 4), so both support either form identically.
+   `TaskEngine::resolve_user_mapping` similarly turns a container's
+   `run_as_current_user` (if enabled) into a `UserMapping` — also called for both a
+   task's own container and each dependency independently (a dependency's own
+   `run_as_current_user` doesn't depend on the task's), unlike `interactive` below,
+   which only ever applies to the task's own container — see
+   [User mapping](config-reference.md#user-mapping). Then the container runs with the
+   task's `command`, joined to the task's own network, with its `environment` merged
+   with the task's own `run.environment` (which wins on a key collision), and
+   `interactive` set to `top_level` from step 3 — eligibility only; see
+   [Interactive mode](config-reference.md#interactive-mode) and the Docker integration
+   section below for what actually decides whether a TTY gets used.
 
 The "run once", "pull once", and "build once" guarantees are tracked with in-memory
 maps/sets (`executed_tasks`, `pulled_images`, `built_images`, `in_progress_tasks`)
@@ -114,14 +120,22 @@ client, and implements `ContainerRuntime`:
   no early output is missed) instead of using `logs`, puts the local terminal into raw
   mode for the session's duration (restored via a guard's `Drop`, even on an error
   return), and pumps stdin/stdout between the local terminal and the container
-  concurrently until the attach stream ends.
+  concurrently until the attach stream ends. When `user_mapping` is `Some` (see
+  [User mapping](config-reference.md#user-mapping)), missing host-side volume
+  directories are created first, the container's `User` is set to the mapped
+  `uid:gid`, and — after creation, before starting — synthetic
+  `/etc/passwd`/`/etc/shadow`/`/etc/group` entries and the declared home directory are
+  uploaded into it (`docker.upload_to_container`, via the `build_user_mapping_tar`/
+  `build_home_directory_tar` free functions, both unit-testable on their own).
 - **`create_network` / `remove_network`**: thin wrappers over Docker's network API,
   used for the per-task network every task execution gets (see
   [task lifecycle](task-lifecycle.md)).
 - **`start_background_container` / `stop_and_remove_container`**: create+start (or
   stop+remove) a container without streaming its logs or waiting for it to exit —
   used for dependency/sidecar containers, which run alongside the task rather than
-  being the thing the task is waiting on.
+  being the thing the task is waiting on. Applies `user_mapping` the same way
+  `run_container` does, if that dependency's own `run_as_current_user` is enabled —
+  independent of whether the task's own container has it enabled.
 
 Container creation/start/removal events are logged at `debug` level via `tracing` (see
 below) — not shown by default, but useful with `RUST_LOG=debug`.

@@ -13,7 +13,7 @@ The primary goal is to support the core features of Batect to ensure a seamless 
 - **Includes**: Support for splitting configuration across multiple files using the `include` directive.
 - **Full Configuration Parity**: Support for all available Batect configuration options and standard YAML structures. See [Differences from Batect](docs/differences-from-batect.md#configuration-format) for the itemized current status of every field.
 - **Full CLI Options Parity**: Support for all standard Batect CLI flags and options (e.g., `--config-file`, `--override-image`, cleanup control flags, etc.). See [Differences from Batect](docs/differences-from-batect.md#cli-flags) for the itemized current status of every flag.
-- **User Mapping**: Handling of file permissions and user mapping between host and container.
+- **User Mapping**: A container can run as the host's own user/group (`run_as_current_user`) instead of the image's default, so files it writes to a mounted volume aren't root-owned (0.5.0) — see [User mapping](docs/config-reference.md#user-mapping). No equivalent to Batect's "cache mounts", and host-side uid/gid lookup is Unix-only — see [Differences from Batect](docs/differences-from-batect.md#container-fields).
 - **Proxy Support**: Automatic detection and injection of proxy settings into containers.
 
 ## Two Binaries: `ratect` and `ratect-compat`
@@ -152,7 +152,22 @@ Neither bump is ever folded into a feature commit.
     (cross-platform) but hasn't been verified there — Ratect's own testing has been
     Unix-only so far, consistent with [First-class Cross-platform
     Support](#rust-enhancements) not having started yet.
-- **0.5.0** — **User Mapping** (`run_as_current_user`).
+- **0.5.0** — ~~**User Mapping** (`run_as_current_user`)~~ — done: a container runs
+  as the host's own user/group, matching Batect's already-shipped mechanism (not
+  just `--user`): host-side volume directories are pre-created (as the current
+  user, before the container exists, so Docker's daemon doesn't auto-create them as
+  `root:root`), the container's `User` is set to the mapped `uid:gid`, and — since
+  an arbitrary host uid/gid has no entry in the image's own passwd/group — minimal
+  synthetic `/etc/passwd`/`/etc/shadow`/`/etc/group` and the declared home
+  directory are uploaded into it before it starts. Applies per-container (a task's
+  own container and each dependency set it independently), matching Batect. Known
+  gaps, candidates for later work rather than blocking this release:
+  - No equivalent to Batect's "cache mounts" — Ratect has no such config concept at
+    all, so the corresponding provisioning step doesn't apply here.
+  - Host-side `uid`/`gid` lookup (`ratect-core/src/user.rs`, via the `nix` crate)
+    is Unix-only — errors clearly on other platforms rather than guessing, same
+    caveat as 0.4.0's `crossterm` usage. Windows containers were never in scope for
+    Ratect regardless.
 - **0.6.0** — **Full Docker Networking** and **Proxy Support** together — proxy
   injection is fundamentally "set environment variables automatically," so it benefits
   from 0.2.0's environment variable support already existing.

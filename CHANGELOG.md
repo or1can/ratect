@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **User mapping** (`run_as_current_user`): a container can now run as the host's own
+  user/group instead of the image's default (often root), so files a task writes to a
+  bind-mounted volume come back owned by you, not root.
+  - New `run_as_current_user: { enabled: bool, home_directory: string }` field on
+    `Container` (`ratect-core/src/config.rs`), mirroring Batect's own shape exactly.
+    `home_directory` is required whenever `enabled` is `true` (and rejected if given
+    without it) — Ratect never guesses one. Interpolated through the existing
+    expression machinery, but — unlike `build_directory` or volume host paths — *not*
+    resolved against `base_path`: it's a path inside the container, validated to start
+    with `/` instead.
+  - This isn't just `--user uid:gid`: an arbitrary host uid/gid has no entry in the
+    image's own `/etc/passwd`/`/etc/group`, which many programs need to function at
+    all (no `$HOME`, no username resolution). New `ratect-core/src/user.rs` looks up
+    the real host user (`nix`'s `Uid`/`Gid`/`User`/`Group`, new dependency, Unix-only)
+    and generates minimal synthetic `/etc/passwd`/`/etc/shadow`/`/etc/group` content —
+    ported from Batect's own `RunAsCurrentUserConfigurationProvider`, including its
+    `uid == 0`/`gid == 0` special-casing so running as the current user doesn't
+    produce a duplicate, conflicting `root` entry. New `docker.rs` functions
+    (`build_user_mapping_tar`, `build_home_directory_tar`, both pure and
+    unit-tested) build the tars uploaded into the container — via `bollard`'s
+    `upload_to_container` — after it's created but before it starts.
+  - Host-side bind-mount directories that don't exist yet are created *before* the
+    container is even created (`ensure_host_volume_directories_exist`), as the
+    current host user — otherwise Docker's daemon (running as root) would
+    auto-create them as `root:root` on first use, defeating the point for the common
+    "mount my code directory, get build artifacts back with sane ownership" case.
+  - `ContainerRuntime::run_container`/`start_background_container` both gained a
+    `user_mapping: Option<&UserMapping>` parameter; applies per-container (not
+    per-task) — a task's own container and each of its dependencies can set
+    `run_as_current_user` independently, matching Batect.
+    `TaskEngine::resolve_user_mapping` (`ratect-core/src/engine.rs`) is the shared
+    entry point, called from both `run_task_internal` and `start_dependency`.
+  - New `#[ignore]`d Docker-backed test
+    (`run_as_current_user_maps_the_container_onto_the_host_user`, `tests/cli.rs`) —
+    writes its own temporary config at test time (rather than a static fixture,
+    since it needs a *missing* host directory to exist beforehand to exercise
+    pre-creation) and proves the container actually runs as the host's real uid/gid
+    (compared against the test process's own `id -u`/`id -g`), and that a file it
+    writes to the mounted volume comes back host-user-owned on disk, not root — the
+    actual practical point of the feature, not just that the right calls were made.
+
 ## [0.4.0] - 2026-07-11
 
 ### Added

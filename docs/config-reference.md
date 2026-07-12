@@ -42,6 +42,7 @@ containers:
 | `volumes` | list of strings | no | Bind mounts in `host_path:container_path` form. `host_path` supports [expressions](#expressions). See [Volume path resolution](#volume-path-resolution) below. |
 | `dependencies` | list of strings | no | Names of other containers to start (recursively, if they themselves have dependencies) before this one, reachable by name over a Docker network created for the duration of the task. No health-check waiting — a dependency is considered ready as soon as it's started. See [the task lifecycle](task-lifecycle.md) for the full model, and [Differences from Batect](differences-from-batect.md#container-fields) for what's simplified relative to Batect. |
 | `environment` | map of string → string | no | Environment variables to set in the container, e.g. `FOO: bar`. Values support [expressions](#expressions) (`$VAR`, `${VAR:-default}`, `<name`). A dependency container only ever gets its own `environment` — see [TaskRun](#taskrun) for how a task's own container's `environment` combines with `run.environment`. |
+| `run_as_current_user` | object (`enabled`, `home_directory`) | no | Runs this container as the host's own user/group instead of the image's default (see [User mapping](#user-mapping) below). |
 
 > **Note:** if a container has *neither* `image` nor `build_directory` set, running a
 > task against it is an error naming the container. A dependency container without
@@ -123,6 +124,56 @@ identical rules):
   `host:container:ro` (Docker's read-only mount flag), or a Windows drive-letter path
   like `C:/data:/code` — are **left completely unresolved**, including no interpolation
   and no path resolution. Use an absolute host path if you need one of these forms today.
+
+### User mapping
+
+```yaml
+containers:
+  build-env:
+    image: alpine:3.18
+    run_as_current_user:
+      enabled: true
+      home_directory: /home/container-user
+```
+
+By default, a container runs as whatever user the image defaults to — often root — so
+files a task writes to a bind-mounted volume come back host-root-owned. Setting
+`run_as_current_user.enabled: true` runs the container as the *host's own* user and
+group instead.
+
+> **Note:** `enabled` and `home_directory` are only ever valid *together* — this
+> matches Batect's own behavior exactly, not a Ratect-specific restriction. Setting
+> `enabled: true` with no `home_directory` is an error (Ratect never guesses one,
+> since the container's own image has no home directory prepared for an arbitrary
+> host uid/gid). The reverse is *also* an error: `enabled: false` (or omitted) with
+> `home_directory` still set — e.g. simply flipping `enabled` back to `false` without
+> also deleting `home_directory` fails config loading. Remove `home_directory`
+> entirely to disable user mapping, not just `enabled`.
+
+A few things happen automatically to make this actually work, not just set `--user`:
+
+- Any `volumes` entries whose host path doesn't exist yet are created **before** the
+  container is even created, as the current host user. Otherwise Docker's daemon
+  (running as root) would auto-create them as `root:root` on first use, defeating the
+  point for the common "mount my code directory, get build artifacts back with sane
+  ownership" case.
+- The container's own image has no `/etc/passwd`/`/etc/group` entry for an arbitrary
+  host uid/gid — many programs misbehave or refuse to run at all without one (no
+  `$HOME`, no username resolution). Minimal synthetic `/etc/passwd`, `/etc/shadow`,
+  and `/etc/group` entries are uploaded into the container before it starts.
+- `home_directory` itself is created inside the container (owned by the mapped
+  uid/gid) before it starts — it's a path inside the container's own filesystem, not
+  host-mounted, so it doesn't persist across runs, matching Ratect's existing
+  ephemeral-container model.
+
+Applies per-container, independently — a task's own container and each of its
+dependencies can each set `run_as_current_user` on their own; it isn't inherited or
+shared task-wide.
+
+Not supported yet: an equivalent to Batect's "cache mounts" (Ratect has no such config
+concept at all — see [Differences from Batect](differences-from-batect.md)), and
+host-side uid/gid lookup is Unix-only (this errors clearly on other platforms rather
+than guessing).
 
 ## Task
 

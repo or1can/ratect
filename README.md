@@ -29,6 +29,9 @@ Ratect is currently in early development. It supports a subset of Batect's featu
   - Image building from a `Dockerfile` via `build_directory`, with `build_args` and
     real `.dockerignore` semantics (not `.gitignore`-compatible — see
     [config reference](docs/config-reference.md#dockerignore-semantics)).
+  - User mapping (`run_as_current_user`): runs a container as the host's own
+    user/group instead of root, so files it writes to a mounted volume come back
+    owned by you, not root.
 - **Expressions**: `$VAR`/`${VAR:-default}` (host environment) and `<name`/`<{name}`
   (config variables, including Batect's built-in `batect.project_directory`) within
   `environment` values, volume host paths, `build_directory`, and `build_args`.

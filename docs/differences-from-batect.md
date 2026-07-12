@@ -93,7 +93,7 @@ host-side substitution step:
 | `log_driver` / `log_options` | Not supported | |
 | `ports` | Not supported | No port publishing. |
 | `privileged` | Not supported | |
-| `run_as_current_user` | Not supported | In Batect, this runs the container as the host user's UID/GID (instead of root) so files written to mounted volumes aren't root-owned. Ratect always runs as whatever user the image defaults to — on Linux, that means volume-mounted files written by a task will typically come back owned by `root`. Roadmap: [User Mapping](../ROADMAP.md#batect-parity). |
+| `run_as_current_user` | Supported | Runs the container as the host user's UID/GID instead of root, so files written to mounted volumes aren't root-owned — see [User mapping](config-reference.md#user-mapping). No equivalent to Batect's "cache mounts" (Ratect has no such config concept), and host-side uid/gid lookup is Unix-only. |
 | `setup_commands` | Not supported | See `health_check` above — this is the other half of Batect's real dependency-readiness check that Ratect doesn't implement. |
 | `shm_size` | Not supported | |
 | `working_directory` | Not supported | |
