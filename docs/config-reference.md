@@ -45,7 +45,7 @@ containers:
 | `run_as_current_user` | object (`enabled`, `home_directory`) | no | Runs this container as the host's own user/group instead of the image's default (see [User mapping](#user-mapping) below). |
 | `additional_hostnames` | list of strings | no | Extra network aliases this container is reachable by, beyond its own name. No [expression](#expressions) support. |
 | `additional_hosts` | map of string → string | no | Extra `/etc/hosts` entries in this container, `hostname: ip`, Docker's own `--add-host` mechanism. No expression support. |
-| `ports` | list of strings | no | Publishes container ports to the host, `"local:container[/protocol]"` (protocol defaults to `tcp`), e.g. `"8080:80"`. Only single ports — no ranges, and no expression support. Suppressed entirely by `--disable-ports`, regardless of this field. See [CLI reference](cli-reference.md). |
+| `ports` | list of strings/objects | no | Publishes container ports to the host (see [Port mappings](#port-mappings) below). No expression support. Suppressed entirely by `--disable-ports`, regardless of this field. See [CLI reference](cli-reference.md). |
 
 > **Note:** if a container has *neither* `image` nor `build_directory` set, running a
 > task against it is an error naming the container. A dependency container without
@@ -184,6 +184,45 @@ concept at all — see [Differences from Batect](differences-from-batect.md)), a
 host-side uid/gid lookup is Unix-only (this errors clearly on other platforms rather
 than guessing).
 
+### Port mappings
+
+```yaml
+containers:
+  web:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+      - "9000-9002:9100-9102/udp"
+      - local: 8443
+        container: 443
+```
+
+`ports` publishes container ports to the host — Docker's own `-p`/`--publish`
+mechanism — and takes either form Batect itself supports, freely mixed within one
+list:
+
+- A string, `"local:container[/protocol]"` (`protocol` defaults to `tcp`), e.g.
+  `"8080:80"` or `"8080:80/udp"`.
+- A port *range* string, `"from-to:from-to[/protocol]"`, e.g. `"9000-9002:9100-9102"`
+  — each local port maps to the corresponding container port by position (`9000` →
+  `9100`, `9001` → `9101`, `9002` → `9102`); `local` and `container` must cover the
+  same number of ports.
+- The expanded object form, `{local, container, protocol}` — `local`/`container` each
+  accept a single port or a range (`8443` or `"8000-8002"`), `protocol` is optional
+  (defaults to `tcp`).
+
+Validated at config-load time (unlike `volumes`, which is never format-checked):
+a malformed entry, a non-positive port, or mismatched-size local/container ranges are
+all rejected before anything runs. No [expression](#expressions) support.
+
+`TaskRun.ports` (see [TaskRun](#taskrun)) adds *additional* port mappings for a
+specific task's run — combined with the container's own `ports` as a union, not an
+override; there's no concept of one replacing an entry from the other.
+
+`--disable-ports` suppresses publishing of every container's `ports` — from both
+`Container.ports` and any `TaskRun.ports` — regardless of what's configured. See
+[CLI reference](cli-reference.md).
+
 ## Task
 
 ```yaml
@@ -208,6 +247,7 @@ tasks:
 | `container` | string | yes | Name of a container defined under `containers`. |
 | `command` | string | no | Shell command to run inside the container (executed as `sh -c "<command>"`). If omitted, the container's own default `CMD`/`ENTRYPOINT` runs instead. Any `-- ADDITIONAL_ARGS` from the CLI become this shell's positional parameters (`$1`, `$2`, `$@`) — see [CLI reference](cli-reference.md#using-additional_args-in-a-task-command). |
 | `environment` | map of string → string | no | Environment variables to set for this task's run specifically. Merged with the container's own `environment` (see [Container](#container)): the container's values apply first, and `run.environment` overrides them on a key collision. Values support the same [expressions](#expressions) as `environment` does. |
+| `ports` | list of strings/objects | no | Additional port mappings for this task's run specifically — see [Port mappings](#port-mappings). *Added* to the container's own `ports`, not an override — there's no concept of one replacing an entry from the other. |
 
 ## Interactive mode
 

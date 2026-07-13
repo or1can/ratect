@@ -91,7 +91,7 @@ host-side substitution step:
 | `image_pull_policy` | Not supported | Ratect always pulls an image at most once per run, with no `Always`-equivalent. |
 | `labels` | Not supported | |
 | `log_driver` / `log_options` | Not supported | |
-| `ports` | Partially supported | Only the `local:container[/protocol]` single-port string form — see [config reference](config-reference.md#container). Port ranges and the expanded object form aren't supported, same simplification precedent as `volumes` above. |
+| `ports` | Supported | Both the `local:container[/protocol]` string form (including port ranges) and the expanded `{local, container, protocol}` object form — see [Port mappings](config-reference.md#port-mappings). Validated (matching ranges, positive ports) at config-load time. |
 | `privileged` | Not supported | |
 | `run_as_current_user` | Supported | Runs the container as the host user's UID/GID instead of root, so files written to mounted volumes aren't root-owned — see [User mapping](config-reference.md#user-mapping). No equivalent to Batect's "cache mounts" (Ratect has no such config concept), and host-side uid/gid lookup is Unix-only. |
 | `setup_commands` | Not supported | See `health_check` above — this is the other half of Batect's real dependency-readiness check that Ratect doesn't implement. |
@@ -117,7 +117,7 @@ host-side substitution step:
 | `command` | Supported | |
 | `entrypoint` | Not supported | |
 | `environment` | Supported | Values support [expressions](#expressions). Overrides the container's own `environment` on a key collision — see [config reference](config-reference.md#taskrun). |
-| `ports` | Not supported | |
+| `ports` | Supported | Additional port mappings for this task's run, added to the container's own `ports` as a union — see [config reference](config-reference.md#port-mappings). |
 | `working_directory` | Not supported | |
 
 ## CLI flags

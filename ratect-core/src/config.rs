@@ -38,15 +38,13 @@ pub struct Container {
     /// `--add-host` mechanism. Plain strings, no expression support — same
     /// reasoning as `additional_hostnames`.
     pub additional_hosts: Option<HashMap<String, String>>,
-    /// Publishes container ports to the host, `"local:container[/protocol]"`
-    /// (protocol defaults to `tcp`). Only the single-port string form is
-    /// supported — same simplification precedent as `volumes`, which also
-    /// only supports its plain string form, not Batect's expanded object
-    /// form; port ranges and the object form aren't supported here either.
-    /// Not format-checked at parse time (like `volumes`) — malformed entries
-    /// are only discovered when actually applied, in
-    /// `docker.rs::parse_port_mapping`.
-    pub ports: Option<Vec<String>>,
+    /// Publishes container ports to the host. Accepts both of Batect's
+    /// forms — a `"local:container[/protocol]"` string (with port ranges,
+    /// `"from-to:from-to[/protocol]"`) and the expanded object form
+    /// (`{local, container, protocol}`) — see [`PortMapping`]. Validated
+    /// (matching ranges, positive ports) at config-parse time, unlike
+    /// `volumes`, which is never format-checked.
+    pub ports: Option<Vec<PortMapping>>,
 }
 
 /// Runs this container as the host's own user/group instead of whatever the
@@ -59,6 +57,252 @@ pub struct Container {
 pub struct RunAsCurrentUser {
     pub enabled: bool,
     pub home_directory: Option<String>,
+}
+
+/// A single port or a range of consecutive ports (`from..=to`; `from == to`
+/// for a single port). Ported from Batect's own `PortRange`: `from` must be
+/// positive, and `from <= to`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PortRange {
+    pub from: u16,
+    pub to: u16,
+}
+
+impl PortRange {
+    /// Parses `"port"` or `"from-to"`. Ported from Batect's
+    /// `PortRange.parse`.
+    pub fn parse(value: &str) -> Result<Self> {
+        let invalid = || {
+            anyhow::anyhow!(
+                "Port range '{value}' is invalid. It must be in the form 'port' or 'from-to' \
+                 and each port must be a positive integer."
+            )
+        };
+        let (from_str, to_str) = value.split_once('-').unwrap_or((value, value));
+        let from: u16 = from_str.parse().map_err(|_| invalid())?;
+        let to: u16 = to_str.parse().map_err(|_| invalid())?;
+        if from == 0 {
+            anyhow::bail!("Port range '{value}' is invalid. Ports must be positive integers.");
+        }
+        if from > to {
+            anyhow::bail!(
+                "Port range '{value}' is invalid. Port range limits must be given in ascending \
+                 order."
+            );
+        }
+        Ok(Self { from, to })
+    }
+
+    /// How many ports this range covers — `1` for a single port.
+    pub fn size(&self) -> u32 {
+        (self.to as u32 - self.from as u32) + 1
+    }
+}
+
+impl std::fmt::Display for PortRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.from == self.to {
+            write!(f, "{}", self.from)
+        } else {
+            write!(f, "{}-{}", self.from, self.to)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PortRange {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct PortRangeVisitor;
+
+        impl serde::de::Visitor<'_> for PortRangeVisitor {
+            type Value = PortRange;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a port number or a port range in the form 'from-to'")
+            }
+
+            fn visit_str<E>(self, v: &str) -> std::result::Result<PortRange, E>
+            where
+                E: serde::de::Error,
+            {
+                PortRange::parse(v).map_err(serde::de::Error::custom)
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<PortRange, E>
+            where
+                E: serde::de::Error,
+            {
+                PortRange::parse(&v.to_string()).map_err(serde::de::Error::custom)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<PortRange, E>
+            where
+                E: serde::de::Error,
+            {
+                PortRange::parse(&v.to_string()).map_err(serde::de::Error::custom)
+            }
+        }
+
+        deserializer.deserialize_any(PortRangeVisitor)
+    }
+}
+
+impl Serialize for PortRange {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+/// A `ports` entry: publishes `local` (a container's `container` port, or
+/// range) to the host. Accepts either Batect form — a
+/// `"local:container[/protocol]"` string (`parse_string`) or an expanded
+/// object (`{local, container, protocol}`, via [`Deserialize`]) — and
+/// validates `local`/`container` cover the same number of ports at
+/// construction time either way, matching Batect's own
+/// `PortMappingConfigSerializer.validateDeserializedObject`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortMapping {
+    pub local: PortRange,
+    pub container: PortRange,
+    pub protocol: String,
+}
+
+impl PortMapping {
+    fn new(local: PortRange, container: PortRange, protocol: String) -> Result<Self> {
+        if local.size() != container.size() {
+            anyhow::bail!(
+                "Port mapping definition is invalid. The local port range has {} port(s) and \
+                 the container port range has {} port(s), but the ranges must be the same size.",
+                local.size(),
+                container.size()
+            );
+        }
+        Ok(Self {
+            local,
+            container,
+            protocol,
+        })
+    }
+
+    /// Parses `"local:container"`, `"local:container/protocol"`,
+    /// `"from-to:from-to"`, or `"from-to:from-to/protocol"` (protocol
+    /// defaults to `tcp`). Ported from Batect's
+    /// `PortMappingConfigSerializer.deserializeFromString`.
+    fn parse_string(value: &str) -> Result<Self> {
+        let invalid = || {
+            anyhow::anyhow!(
+                "Port mapping definition '{value}' is invalid. It must be in the form \
+                 'local:container', 'local:container/protocol', 'from-to:from-to' or \
+                 'from-to:from-to/protocol' and each port must be a positive integer."
+            )
+        };
+        if value.is_empty() {
+            anyhow::bail!("Port mapping definition cannot be empty.");
+        }
+        let (local, rest) = value.split_once(':').ok_or_else(invalid)?;
+        let (container, protocol) = match rest.split_once('/') {
+            Some((container, protocol)) => (container, protocol),
+            None => (rest, "tcp"),
+        };
+        if local.is_empty() || container.is_empty() || protocol.is_empty() {
+            return Err(invalid());
+        }
+
+        let local = PortRange::parse(local)?;
+        let container = PortRange::parse(container)?;
+        Self::new(local, container, protocol.to_string())
+    }
+
+    /// Expands this mapping into concrete `(local_port, container_port,
+    /// protocol)` triples — more than one when `local`/`container` are
+    /// ranges, zipped by position (e.g. `8000-8002:9000-9002` becomes
+    /// `8000->9000`, `8001->9001`, `8002->9002`). `local.size() ==
+    /// container.size()` is already guaranteed by construction (`new`),
+    /// never checked again here.
+    pub fn expand(&self) -> Vec<(u16, u16, String)> {
+        (0..self.local.size())
+            .map(|i| {
+                (
+                    self.local.from + i as u16,
+                    self.container.from + i as u16,
+                    self.protocol.clone(),
+                )
+            })
+            .collect()
+    }
+}
+
+impl<'de> Deserialize<'de> for PortMapping {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct PortMappingVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for PortMappingVisitor {
+            type Value = PortMapping;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(
+                    "a port mapping string ('local:container[/protocol]') or an object with \
+                     'local'/'container'/'protocol' fields",
+                )
+            }
+
+            fn visit_str<E>(self, v: &str) -> std::result::Result<PortMapping, E>
+            where
+                E: serde::de::Error,
+            {
+                PortMapping::parse_string(v).map_err(serde::de::Error::custom)
+            }
+
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<PortMapping, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut local: Option<PortRange> = None;
+                let mut container: Option<PortRange> = None;
+                let mut protocol: Option<String> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "local" => local = Some(map.next_value()?),
+                        "container" => container = Some(map.next_value()?),
+                        "protocol" => protocol = Some(map.next_value()?),
+                        other => {
+                            return Err(serde::de::Error::unknown_field(
+                                other,
+                                &["local", "container", "protocol"],
+                            ))
+                        }
+                    }
+                }
+                let local = local.ok_or_else(|| serde::de::Error::missing_field("local"))?;
+                let container =
+                    container.ok_or_else(|| serde::de::Error::missing_field("container"))?;
+                let protocol = protocol.unwrap_or_else(|| "tcp".to_string());
+                PortMapping::new(local, container, protocol).map_err(serde::de::Error::custom)
+            }
+        }
+
+        deserializer.deserialize_any(PortMappingVisitor)
+    }
+}
+
+impl Serialize for PortMapping {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&format!(
+            "{}:{}/{}",
+            self.local, self.container, self.protocol
+        ))
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -74,6 +318,12 @@ pub struct TaskRun {
     pub container: String,
     pub command: Option<String>,
     pub environment: Option<HashMap<String, String>>,
+    /// Additional port mappings for this task's run specifically —
+    /// *added* to the container's own `ports` (a union, not an override:
+    /// matching Batect, which combines these as a `Set`, so there's no
+    /// concept of one replacing an entry from the other by container
+    /// port). See [`Container::ports`].
+    pub ports: Option<Vec<PortMapping>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -695,8 +945,22 @@ tasks: {}
         );
     }
 
+    fn port_mapping(local: (u16, u16), container: (u16, u16), protocol: &str) -> PortMapping {
+        PortMapping {
+            local: PortRange {
+                from: local.0,
+                to: local.1,
+            },
+            container: PortRange {
+                from: container.0,
+                to: container.1,
+            },
+            protocol: protocol.to_string(),
+        }
+    }
+
     #[test]
-    fn parses_ports() {
+    fn parses_ports_string_form() {
         let config = parse(
             r#"
 project_name: demo
@@ -713,8 +977,95 @@ tasks: {}
         let container = &config.containers["build-env"];
         assert_eq!(
             container.ports,
-            Some(vec!["8080:80".to_string(), "9000:9000/udp".to_string()])
+            Some(vec![
+                port_mapping((8080, 8080), (80, 80), "tcp"),
+                port_mapping((9000, 9000), (9000, 9000), "udp"),
+            ])
         );
+    }
+
+    #[test]
+    fn parses_ports_string_form_with_ranges() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    ports:
+      - "8000-8002:9000-9002/udp"
+tasks: {}
+"#,
+        );
+
+        assert_eq!(
+            config.containers["build-env"].ports,
+            Some(vec![port_mapping((8000, 8002), (9000, 9002), "udp")])
+        );
+    }
+
+    #[test]
+    fn parses_ports_object_form() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    ports:
+      - local: 8080
+        container: 80
+      - local: 8000-8002
+        container: 9000-9002
+        protocol: udp
+tasks: {}
+"#,
+        );
+
+        assert_eq!(
+            config.containers["build-env"].ports,
+            Some(vec![
+                port_mapping((8080, 8080), (80, 80), "tcp"),
+                port_mapping((8000, 8002), (9000, 9002), "udp"),
+            ])
+        );
+    }
+
+    fn try_parse(yaml: &str) -> Result<Config> {
+        noyalib::from_reader(Cursor::new(yaml.as_bytes())).context("failed to parse")
+    }
+
+    #[test]
+    fn parsing_ports_string_form_rejects_mismatched_range_sizes() {
+        let result = try_parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    ports:
+      - "8000-8002:9000-9001"
+tasks: {}
+"#,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parsing_ports_object_form_rejects_mismatched_range_sizes() {
+        let result = try_parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    ports:
+      - local: 8000-8002
+        container: 9000-9001
+tasks: {}
+"#,
+        );
+        assert!(result.is_err());
     }
 
     #[test]
@@ -735,7 +1086,7 @@ tasks: {}
     #[test]
     fn resolve_expressions_leaves_ports_untouched() {
         let mut config = config_with_container(Container {
-            ports: Some(vec!["8080:80".to_string()]),
+            ports: Some(vec![port_mapping((8080, 8080), (80, 80), "tcp")]),
             ..container_with_build("docker", HashMap::new())
         });
 
@@ -745,7 +1096,63 @@ tasks: {}
 
         assert_eq!(
             config.containers["build-env"].ports,
-            Some(vec!["8080:80".to_string()])
+            Some(vec![port_mapping((8080, 8080), (80, 80), "tcp")])
+        );
+    }
+
+    #[test]
+    fn port_range_parses_a_single_port() {
+        assert_eq!(
+            PortRange::parse("8080").unwrap(),
+            PortRange {
+                from: 8080,
+                to: 8080
+            }
+        );
+    }
+
+    #[test]
+    fn port_range_parses_a_range() {
+        assert_eq!(
+            PortRange::parse("8000-8002").unwrap(),
+            PortRange {
+                from: 8000,
+                to: 8002
+            }
+        );
+    }
+
+    #[test]
+    fn port_range_rejects_zero() {
+        assert!(PortRange::parse("0").is_err());
+    }
+
+    #[test]
+    fn port_range_rejects_descending_bounds() {
+        assert!(PortRange::parse("8002-8000").is_err());
+    }
+
+    #[test]
+    fn port_range_rejects_non_numeric_input() {
+        assert!(PortRange::parse("abc").is_err());
+    }
+
+    #[test]
+    fn port_mapping_expand_yields_one_triple_for_a_single_port() {
+        let mapping = port_mapping((8080, 8080), (80, 80), "tcp");
+        assert_eq!(mapping.expand(), vec![(8080, 80, "tcp".to_string())]);
+    }
+
+    #[test]
+    fn port_mapping_expand_zips_a_range_by_position() {
+        let mapping = port_mapping((8000, 8002), (9000, 9002), "udp");
+        assert_eq!(
+            mapping.expand(),
+            vec![
+                (8000, 9000, "udp".to_string()),
+                (8001, 9001, "udp".to_string()),
+                (8002, 9002, "udp".to_string()),
+            ]
         );
     }
 

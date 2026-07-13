@@ -35,18 +35,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     left as Docker's default random short container ID — previously a container was
     reachable *by* its name on the network, but `hostname`/`$HOSTNAME` *inside* it
     resolved to something unrelated.
-- **`ports` and `--disable-ports`**: publishes container ports to the host, Docker's
-  own `-p`/`--publish` mechanism.
-  - New `ports: Option<Vec<String>>` on `Container`, each entry a
-    `"local:container[/protocol]"` string (protocol defaults to `tcp`). Only single
-    ports are supported — no ranges, and no expanded object form, same simplification
-    precedent as `volumes`' own string-only support. Not format-checked at config-parse
-    time (also matching `volumes`) — a malformed entry is only caught when actually
-    applied, by the new pure `docker.rs::parse_port_mapping`/`build_port_config`.
-  - `--disable-ports` suppresses publishing of every container's `ports` regardless of
-    config, matching Batect's flag of the same name; `NetworkOptions` (added for
-    `additional_hostnames`/`additional_hosts` above) gained a `ports` field so this
-    stays one bundled parameter rather than a fourth flat one.
+- **`ports`, `run.ports`, and `--disable-ports`**: publishes container ports to the
+  host, Docker's own `-p`/`--publish` mechanism.
+  - New `ports: Option<Vec<PortMapping>>` on `Container`, accepting both of Batect's
+    forms: a `"local:container[/protocol]"` string (protocol defaults to `tcp`,
+    including port ranges, `"from-to:from-to[/protocol]"`) or the expanded
+    `{local, container, protocol}` object form. New `config.rs::PortRange`/
+    `PortMapping` types with hand-written `Deserialize` impls (accepting either form)
+    validate `local`/`container` cover the same number of ports at config-load time —
+    unlike `volumes`, which is never format-checked.
+  - New `TaskRun.ports`: *additional* port mappings for a specific task's run, added
+    to the container's own `ports` as a union (not an override — matching Batect,
+    which combines these as a `Set`), via the new `engine.rs::merged_ports`.
+  - `--disable-ports` suppresses publishing of every container's `ports` (both
+    `Container.ports` and any `TaskRun.ports`) regardless of config, matching Batect's
+    flag of the same name; `NetworkOptions` (added for `additional_hostnames`/
+    `additional_hosts` above) gained a `ports` field — already-expanded
+    `(local_port, container_port, protocol)` triples, via `PortMapping::expand` — so
+    this stays one bundled parameter rather than a fourth flat one, and `docker.rs`
+    itself never needs to parse or validate a `ports` entry.
 - **Proxy environment variable propagation** (`--no-proxy-vars` to disable): detects
   `http_proxy`/`https_proxy`/`ftp_proxy`/`no_proxy` (either case) from the host
   environment and injects them into every container's environment and every image

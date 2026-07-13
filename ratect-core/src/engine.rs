@@ -1,4 +1,4 @@
-use crate::config::{Config, Container};
+use crate::config::{Config, Container, PortMapping};
 use crate::docker::ContainerRuntime;
 use anyhow::{Context, Result};
 use async_recursion::async_recursion;
@@ -36,6 +36,27 @@ fn merged_environment(
         merged.extend(run_env.clone());
     }
     Some(merged)
+}
+
+/// Expands and concatenates a container's own `ports` with a task run's
+/// *additional* `ports` — a union, not an override (matching Batect, which
+/// combines these as a `Set`, so there's no concept of one entry replacing
+/// another by container port; `run_ports` is `None` for a dependency, which
+/// has no task `run` to add anything from). Each `PortMapping` is expanded
+/// (a range becomes more than one triple — see `PortMapping::expand`)
+/// before docker.rs ever sees it, so `NetworkOptions::ports` only ever
+/// carries already-resolved `(local_port, container_port, protocol)`
+/// triples, never a `PortMapping` needing further interpretation.
+fn merged_ports(
+    container_ports: Option<&Vec<PortMapping>>,
+    run_ports: Option<&Vec<PortMapping>>,
+) -> Vec<(u16, u16, String)> {
+    container_ports
+        .into_iter()
+        .flatten()
+        .chain(run_ports.into_iter().flatten())
+        .flat_map(PortMapping::expand)
+        .collect()
 }
 
 /// Returns `root` plus every container name transitively reachable from it
@@ -426,13 +447,13 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             // gates this on the local process's own stdin/stdout genuinely
             // being terminals before actually attaching a TTY.
             let interactive = top_level;
+            let expanded_ports =
+                merged_ports(container_config.ports.as_ref(), task.run.ports.as_ref());
             let network_options = crate::docker::NetworkOptions {
                 additional_hostnames: container_config.additional_hostnames.as_ref(),
                 additional_hosts: container_config.additional_hosts.as_ref(),
-                ports: self
-                    .publish_ports
-                    .then_some(container_config.ports.as_ref())
-                    .flatten(),
+                ports: (self.publish_ports && !expanded_ports.is_empty())
+                    .then_some(&expanded_ports),
             };
             self.docker
                 .run_container(
@@ -517,13 +538,11 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             dependency_config.environment.as_ref(),
             None,
         );
+        let expanded_ports = merged_ports(dependency_config.ports.as_ref(), None);
         let network_options = crate::docker::NetworkOptions {
             additional_hostnames: dependency_config.additional_hostnames.as_ref(),
             additional_hosts: dependency_config.additional_hosts.as_ref(),
-            ports: self
-                .publish_ports
-                .then_some(dependency_config.ports.as_ref())
-                .flatten(),
+            ports: (self.publish_ports && !expanded_ports.is_empty()).then_some(&expanded_ports),
         };
 
         let container_id = self
@@ -568,7 +587,7 @@ mod tests {
     type NetworkOptionsValue = (
         Option<Vec<String>>,
         Option<HashMap<String, String>>,
-        Option<Vec<String>>,
+        Option<Vec<(u16, u16, String)>>,
     );
     /// Keyed by container name.
     type CapturedNetworkOptions = Arc<Mutex<HashMap<String, NetworkOptionsValue>>>;
@@ -842,6 +861,7 @@ mod tests {
                 container: container.to_string(),
                 command: Some(command.to_string()),
                 environment: None,
+                ports: None,
             },
             prerequisites: None,
         }
@@ -873,6 +893,7 @@ mod tests {
                     container: "build-env".to_string(),
                     command: None,
                     environment: None,
+                    ports: None,
                 },
                 prerequisites: Some(vec!["b".to_string()]),
             },
@@ -884,6 +905,7 @@ mod tests {
                     container: "build-env".to_string(),
                     command: None,
                     environment: None,
+                    ports: None,
                 },
                 prerequisites: Some(vec!["a".to_string()]),
             },
@@ -931,6 +953,7 @@ mod tests {
                 container: "build-env".to_string(),
                 command: Some(command.to_string()),
                 environment: None,
+                ports: None,
             },
             prerequisites,
         };
@@ -1082,6 +1105,7 @@ mod tests {
                     container: "app".to_string(),
                     command: Some("echo hi".to_string()),
                     environment: None,
+                    ports: None,
                 },
                 prerequisites: Some(vec!["setup".to_string()]),
             },
@@ -1323,7 +1347,21 @@ mod tests {
         );
     }
 
-    fn container_with_ports(image: &str, ports: Vec<String>) -> Container {
+    fn single_port(local: u16, container: u16, protocol: &str) -> PortMapping {
+        PortMapping {
+            local: crate::config::PortRange {
+                from: local,
+                to: local,
+            },
+            container: crate::config::PortRange {
+                from: container,
+                to: container,
+            },
+            protocol: protocol.to_string(),
+        }
+    }
+
+    fn container_with_ports(image: &str, ports: Vec<PortMapping>) -> Container {
         Container {
             ports: Some(ports),
             ..container(image, None)
@@ -1335,7 +1373,7 @@ mod tests {
         let mut containers = HashMap::new();
         containers.insert(
             "app".to_string(),
-            container_with_ports("alpine:3.18", vec!["8080:80".to_string()]),
+            container_with_ports("alpine:3.18", vec![single_port(8080, 80, "tcp")]),
         );
         let mut tasks = HashMap::new();
         tasks.insert("run".to_string(), task("app", "echo hi"));
@@ -1352,7 +1390,36 @@ mod tests {
         engine.run_task("run", &[]).await.unwrap();
 
         let (_, _, ports) = docker.network_options_for("app").unwrap();
-        assert_eq!(ports, Some(vec!["8080:80".to_string()]));
+        assert_eq!(ports, Some(vec![(8080, 80, "tcp".to_string())]));
+    }
+
+    #[tokio::test]
+    async fn task_run_ports_are_added_to_the_containers_own_ports() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "app".to_string(),
+            container_with_ports("alpine:3.18", vec![single_port(8080, 80, "tcp")]),
+        );
+        let mut tasks = HashMap::new();
+        let mut task_config = task("app", "echo hi");
+        task_config.run.ports = Some(vec![single_port(9090, 90, "tcp")]);
+        tasks.insert("run".to_string(), task_config);
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        let (_, _, ports) = docker.network_options_for("app").unwrap();
+        let ports = ports.unwrap();
+        assert!(ports.contains(&(8080, 80, "tcp".to_string())));
+        assert!(ports.contains(&(9090, 90, "tcp".to_string())));
     }
 
     #[tokio::test]
@@ -1360,7 +1427,7 @@ mod tests {
         let mut containers = HashMap::new();
         containers.insert(
             "app".to_string(),
-            container_with_ports("alpine:3.18", vec!["8080:80".to_string()]),
+            container_with_ports("alpine:3.18", vec![single_port(8080, 80, "tcp")]),
         );
         let mut tasks = HashMap::new();
         tasks.insert("run".to_string(), task("app", "echo hi"));
@@ -1534,6 +1601,7 @@ mod tests {
                     container: "build-env".to_string(),
                     command: Some("echo two".to_string()),
                     environment: None,
+                    ports: None,
                 },
                 prerequisites: Some(vec!["first".to_string()]),
             },
@@ -2075,6 +2143,7 @@ mod tests {
                     container: "app".to_string(),
                     command: Some("test".to_string()),
                     environment: None,
+                    ports: None,
                 },
                 prerequisites: Some(vec!["migrate".to_string()]),
             },
