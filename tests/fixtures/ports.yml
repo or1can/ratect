@@ -1,0 +1,37 @@
+# Exercises `ports` (publishing a container port to the host) and
+# `--disable-ports`. `server`/`server-disabled-check` are separate
+# containers on separate host ports so the two real-Docker tests that use
+# this fixture can run concurrently without colliding.
+#
+# nginx:alpine's default command serves on port 80 with no configuration
+# needed — Container has no `command` field for dependencies, so a
+# dependency always runs its image's default command.
+project_name: ratect-ports-test
+containers:
+  server:
+    image: nginx:alpine
+    ports:
+      - "18080:80"
+  app:
+    image: alpine:3.18.2
+    dependencies:
+      - server
+  server-disabled-check:
+    image: nginx:alpine
+    ports:
+      - "18081:80"
+  app-disabled-check:
+    image: alpine:3.18.2
+    dependencies:
+      - server-disabled-check
+tasks:
+  serve:
+    run:
+      container: app
+      # A short-lived delay, purely to give the host-side test a window to
+      # reach the published port before ratect tears everything down.
+      command: sleep 5
+  serve-for-disabled-check:
+    run:
+      container: app-disabled-check
+      command: sleep 5

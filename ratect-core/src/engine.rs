@@ -43,6 +43,10 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     /// every task in this invocation instead of creating a fresh one per
     /// task. `None` (the default) preserves today's behavior.
     existing_network: Option<String>,
+    /// `false` when `--disable-ports` was given: suppresses every
+    /// container's `ports` regardless of config, matching Batect's
+    /// `disablePortMappings`. `true` (the default) publishes them.
+    publish_ports: bool,
 }
 
 impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
@@ -55,6 +59,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             built_images: Mutex::new(HashMap::new()),
             in_progress_tasks: Mutex::new(HashSet::new()),
             existing_network: None,
+            publish_ports: true,
         }
     }
 
@@ -64,6 +69,13 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     /// around it. See `run_task_internal`.
     pub fn with_existing_network(mut self, network: String) -> Self {
         self.existing_network = Some(network);
+        self
+    }
+
+    /// Opts into `--disable-ports`: no container's `ports` are ever
+    /// published, regardless of config.
+    pub fn without_port_publishing(mut self) -> Self {
+        self.publish_ports = false;
         self
     }
 
@@ -317,6 +329,10 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             let network_options = crate::docker::NetworkOptions {
                 additional_hostnames: container_config.additional_hostnames.as_ref(),
                 additional_hosts: container_config.additional_hosts.as_ref(),
+                ports: self
+                    .publish_ports
+                    .then_some(container_config.ports.as_ref())
+                    .flatten(),
             };
             self.docker
                 .run_container(
@@ -396,6 +412,10 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         let network_options = crate::docker::NetworkOptions {
             additional_hostnames: dependency_config.additional_hostnames.as_ref(),
             additional_hosts: dependency_config.additional_hosts.as_ref(),
+            ports: self
+                .publish_ports
+                .then_some(dependency_config.ports.as_ref())
+                .flatten(),
         };
 
         let container_id = self
@@ -436,8 +456,12 @@ mod tests {
     type CapturedInteractive = Arc<Mutex<HashMap<String, bool>>>;
     /// `(uid, gid, home_directory)`, keyed by container name.
     type CapturedUserMapping = Arc<Mutex<HashMap<String, Option<(u32, u32, String)>>>>;
-    /// `(additional_hostnames, additional_hosts)`.
-    type NetworkOptionsValue = (Option<Vec<String>>, Option<HashMap<String, String>>);
+    /// `(additional_hostnames, additional_hosts, ports)`.
+    type NetworkOptionsValue = (
+        Option<Vec<String>>,
+        Option<HashMap<String, String>>,
+        Option<Vec<String>>,
+    );
     /// Keyed by container name.
     type CapturedNetworkOptions = Arc<Mutex<HashMap<String, NetworkOptionsValue>>>;
 
@@ -627,6 +651,7 @@ mod tests {
                 (
                     network_options.additional_hostnames.cloned(),
                     network_options.additional_hosts.cloned(),
+                    network_options.ports.cloned(),
                 ),
             );
             self.push(format!("sidecar-start:{alias}:{network}"));
@@ -672,6 +697,7 @@ mod tests {
                 (
                     network_options.additional_hostnames.cloned(),
                     network_options.additional_hosts.cloned(),
+                    network_options.ports.cloned(),
                 ),
             );
             self.push(format!(
@@ -698,6 +724,7 @@ mod tests {
             run_as_current_user: None,
             additional_hostnames: None,
             additional_hosts: None,
+            ports: None,
         }
     }
 
@@ -726,6 +753,7 @@ mod tests {
                 run_as_current_user: None,
                 additional_hostnames: None,
                 additional_hosts: None,
+                ports: None,
             },
         );
 
@@ -786,6 +814,7 @@ mod tests {
                 run_as_current_user: None,
                 additional_hostnames: None,
                 additional_hosts: None,
+                ports: None,
             },
         );
 
@@ -991,6 +1020,7 @@ mod tests {
             }),
             additional_hostnames: None,
             additional_hosts: None,
+            ports: None,
         }
     }
 
@@ -1138,7 +1168,8 @@ mod tests {
                 Some(HashMap::from([(
                     "external-service".to_string(),
                     "10.0.0.1".to_string()
-                )]))
+                )])),
+                None
             ))
         );
     }
@@ -1175,12 +1206,72 @@ mod tests {
 
         assert_eq!(
             docker.network_options_for("database"),
-            Some((Some(vec!["db-alias".to_string()]), None))
+            Some((Some(vec!["db-alias".to_string()]), None, None))
         );
         assert_eq!(
             docker.network_options_for("app"),
-            Some((None, None)),
+            Some((None, None, None)),
             "app itself declared no additional_hostnames/additional_hosts"
+        );
+    }
+
+    fn container_with_ports(image: &str, ports: Vec<String>) -> Container {
+        Container {
+            ports: Some(ports),
+            ..container(image, None)
+        }
+    }
+
+    #[tokio::test]
+    async fn ports_reach_the_container() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "app".to_string(),
+            container_with_ports("alpine:3.18", vec!["8080:80".to_string()]),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("run".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        let (_, _, ports) = docker.network_options_for("app").unwrap();
+        assert_eq!(ports, Some(vec!["8080:80".to_string()]));
+    }
+
+    #[tokio::test]
+    async fn disable_port_publishing_suppresses_configured_ports() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "app".to_string(),
+            container_with_ports("alpine:3.18", vec!["8080:80".to_string()]),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("run".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone()).without_port_publishing();
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        let (_, _, ports) = docker.network_options_for("app").unwrap();
+        assert_eq!(
+            ports, None,
+            "ports were configured but --disable-ports should suppress them"
         );
     }
 
@@ -1202,6 +1293,7 @@ mod tests {
                 }),
                 additional_hostnames: None,
                 additional_hosts: None,
+                ports: None,
             },
         );
         let mut tasks = HashMap::new();
@@ -1239,6 +1331,7 @@ mod tests {
             run_as_current_user: None,
             additional_hostnames: None,
             additional_hosts: None,
+            ports: None,
         }
     }
 
@@ -1460,6 +1553,7 @@ mod tests {
                 run_as_current_user: None,
                 additional_hostnames: None,
                 additional_hosts: None,
+                ports: None,
             },
         );
         let mut tasks = HashMap::new();
@@ -1926,6 +2020,7 @@ mod tests {
                 run_as_current_user: None,
                 additional_hostnames: None,
                 additional_hosts: None,
+                ports: None,
             },
         );
         containers.insert(

@@ -45,6 +45,7 @@ containers:
 | `run_as_current_user` | object (`enabled`, `home_directory`) | no | Runs this container as the host's own user/group instead of the image's default (see [User mapping](#user-mapping) below). |
 | `additional_hostnames` | list of strings | no | Extra network aliases this container is reachable by, beyond its own name. No [expression](#expressions) support. |
 | `additional_hosts` | map of string → string | no | Extra `/etc/hosts` entries in this container, `hostname: ip`, Docker's own `--add-host` mechanism. No expression support. |
+| `ports` | list of strings | no | Publishes container ports to the host, `"local:container[/protocol]"` (protocol defaults to `tcp`), e.g. `"8080:80"`. Only single ports — no ranges, and no expression support. Suppressed entirely by `--disable-ports`, regardless of this field. See [CLI reference](cli-reference.md). |
 
 > **Note:** if a container has *neither* `image` nor `build_directory` set, running a
 > task against it is an error naming the container. A dependency container without

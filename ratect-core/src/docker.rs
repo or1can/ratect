@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use bollard::container::AttachContainerResults;
 use bollard::models::{
     ContainerCreateBody as Config, EndpointSettings, NetworkConnectRequest, NetworkCreateRequest,
+    PortBinding, PortMap,
 };
 use bollard::query_parameters::AttachContainerOptionsBuilder;
 use bollard::query_parameters::BuildImageOptionsBuilder;
@@ -106,6 +107,75 @@ pub struct NetworkOptions<'a> {
     pub additional_hostnames: Option<&'a Vec<String>>,
     /// Extra `/etc/hosts` entries (hostname -> IP).
     pub additional_hosts: Option<&'a HashMap<String, String>>,
+    /// Container ports to publish to the host — see `parse_port_mapping`
+    /// for the supported format. Already filtered to `None` by the caller
+    /// when `--disable-ports` is set, regardless of what `ports` config
+    /// exists — this struct doesn't know about that flag itself.
+    pub ports: Option<&'a Vec<String>>,
+}
+
+/// Parses one `ports` entry (`"local:container[/protocol]"`, protocol
+/// defaulting to `tcp`) into `(local_port, container_port, protocol)`. Only
+/// single ports are supported — no ranges (`"8000-8002:9000-9002"`) and no
+/// object form, unlike Batect's full `PortMapping`/`PortRange`; same
+/// simplification precedent as `volumes`' string-only form. Not called
+/// until a `ports` entry is actually applied (matching `volumes`, which
+/// isn't format-checked at config-parse time either).
+fn parse_port_mapping(spec: &str) -> Result<(u16, u16, String)> {
+    let (local, rest) = spec.split_once(':').ok_or_else(|| {
+        anyhow::anyhow!(
+            "Port mapping '{spec}' is invalid. It must be in the form 'local:container' or \
+             'local:container/protocol'."
+        )
+    })?;
+    let (container, protocol) = match rest.split_once('/') {
+        Some((container, protocol)) => (container, protocol),
+        None => (rest, "tcp"),
+    };
+
+    let invalid = || {
+        anyhow::anyhow!(
+            "Port mapping '{spec}' is invalid. Both the local and container ports must be \
+             positive integers."
+        )
+    };
+    let local_port: u16 = local.parse().map_err(|_| invalid())?;
+    let container_port: u16 = container.parse().map_err(|_| invalid())?;
+    if local_port == 0 || container_port == 0 {
+        return Err(invalid());
+    }
+
+    Ok((local_port, container_port, protocol.to_string()))
+}
+
+/// Builds Docker's `Config.exposed_ports` + `HostConfig.port_bindings` from
+/// a config `ports` list — pure, unit-testable without a daemon. `None`
+/// when `ports` itself is `None` (absent, or already filtered out by
+/// `--disable-ports` — see `NetworkOptions::ports`).
+fn build_port_config(ports: Option<&Vec<String>>) -> Result<Option<(Vec<String>, PortMap)>> {
+    let Some(ports) = ports else {
+        return Ok(None);
+    };
+    if ports.is_empty() {
+        return Ok(None);
+    }
+
+    let mut exposed_ports = Vec::new();
+    let mut port_bindings = PortMap::new();
+    for spec in ports {
+        let (local_port, container_port, protocol) = parse_port_mapping(spec)?;
+        let key = format!("{container_port}/{protocol}");
+        exposed_ports.push(key.clone());
+        port_bindings.insert(
+            key,
+            Some(vec![PortBinding {
+                host_ip: None,
+                host_port: Some(local_port.to_string()),
+            }]),
+        );
+    }
+
+    Ok(Some((exposed_ports, port_bindings)))
 }
 
 /// Builds an in-memory tar of `build_directory`'s contents to use as a
@@ -841,10 +911,12 @@ impl ContainerRuntime for DockerClient {
         if user_mapping.is_some() {
             ensure_host_volume_directories_exist(volumes)?;
         }
+        let port_config = build_port_config(network_options.ports)?;
 
         let host_config = HostConfig {
             binds: volumes.cloned(),
             extra_hosts: build_extra_hosts(network_options.additional_hosts),
+            port_bindings: port_config.as_ref().map(|(_, bindings)| bindings.clone()),
             ..Default::default()
         };
 
@@ -852,6 +924,7 @@ impl ContainerRuntime for DockerClient {
             hostname: Some(alias.to_string()),
             image: Some(image.to_string()),
             env: build_env(environment),
+            exposed_ports: port_config.as_ref().map(|(exposed, _)| exposed.clone()),
             user: user_mapping.map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
             host_config: Some(host_config),
             ..Default::default()
@@ -920,10 +993,12 @@ impl ContainerRuntime for DockerClient {
         if user_mapping.is_some() {
             ensure_host_volume_directories_exist(volumes)?;
         }
+        let port_config = build_port_config(network_options.ports)?;
 
         let host_config = HostConfig {
             binds: volumes.cloned(),
             extra_hosts: build_extra_hosts(network_options.additional_hosts),
+            port_bindings: port_config.as_ref().map(|(_, bindings)| bindings.clone()),
             ..Default::default()
         };
 
@@ -932,6 +1007,7 @@ impl ContainerRuntime for DockerClient {
             image: Some(image.to_string()),
             cmd: build_cmd(command, additional_args),
             env: build_env(environment),
+            exposed_ports: port_config.as_ref().map(|(exposed, _)| exposed.clone()),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             tty: use_tty.then_some(true),
@@ -1036,6 +1112,79 @@ mod tests {
     #[test]
     fn build_extra_hosts_is_none_when_additional_hosts_is_absent() {
         assert_eq!(build_extra_hosts(None), None);
+    }
+
+    #[test]
+    fn parse_port_mapping_without_protocol_defaults_to_tcp() {
+        assert_eq!(
+            parse_port_mapping("8080:80").unwrap(),
+            (8080, 80, "tcp".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_port_mapping_with_protocol_is_honored() {
+        assert_eq!(
+            parse_port_mapping("8080:80/udp").unwrap(),
+            (8080, 80, "udp".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_port_mapping_without_a_colon_is_an_error() {
+        assert!(parse_port_mapping("8080").is_err());
+    }
+
+    #[test]
+    fn parse_port_mapping_with_a_non_numeric_port_is_an_error() {
+        assert!(parse_port_mapping("abc:80").is_err());
+        assert!(parse_port_mapping("8080:abc").is_err());
+    }
+
+    #[test]
+    fn parse_port_mapping_with_a_zero_port_is_an_error() {
+        assert!(parse_port_mapping("0:80").is_err());
+        assert!(parse_port_mapping("8080:0").is_err());
+    }
+
+    #[test]
+    fn build_port_config_is_none_when_ports_is_absent() {
+        assert!(build_port_config(None).unwrap().is_none());
+    }
+
+    #[test]
+    fn build_port_config_is_none_when_ports_is_empty() {
+        assert!(build_port_config(Some(&vec![])).unwrap().is_none());
+    }
+
+    #[test]
+    fn build_port_config_builds_exposed_ports_and_bindings() {
+        let ports = vec!["8080:80".to_string(), "9000:9000/udp".to_string()];
+        let (exposed, bindings) = build_port_config(Some(&ports)).unwrap().unwrap();
+
+        assert_eq!(exposed, vec!["80/tcp".to_string(), "9000/udp".to_string()]);
+        assert_eq!(
+            bindings["80/tcp"],
+            Some(vec![PortBinding {
+                host_ip: None,
+                host_port: Some("8080".to_string()),
+            }])
+        );
+        assert_eq!(
+            bindings["9000/udp"],
+            Some(vec![PortBinding {
+                host_ip: None,
+                host_port: Some("9000".to_string()),
+            }])
+        );
+    }
+
+    #[test]
+    fn build_port_config_propagates_a_malformed_entry_as_an_error() {
+        assert!(build_port_config(Some(&vec!["not-valid".to_string()]))
+            .unwrap_err()
+            .to_string()
+            .contains("not-valid"));
     }
 
     #[test]

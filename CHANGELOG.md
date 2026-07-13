@@ -35,6 +35,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     left as Docker's default random short container ID — previously a container was
     reachable *by* its name on the network, but `hostname`/`$HOSTNAME` *inside* it
     resolved to something unrelated.
+- **`ports` and `--disable-ports`**: publishes container ports to the host, Docker's
+  own `-p`/`--publish` mechanism.
+  - New `ports: Option<Vec<String>>` on `Container`, each entry a
+    `"local:container[/protocol]"` string (protocol defaults to `tcp`). Only single
+    ports are supported — no ranges, and no expanded object form, same simplification
+    precedent as `volumes`' own string-only support. Not format-checked at config-parse
+    time (also matching `volumes`) — a malformed entry is only caught when actually
+    applied, by the new pure `docker.rs::parse_port_mapping`/`build_port_config`.
+  - `--disable-ports` suppresses publishing of every container's `ports` regardless of
+    config, matching Batect's flag of the same name; `NetworkOptions` (added for
+    `additional_hostnames`/`additional_hosts` above) gained a `ports` field so this
+    stays one bundled parameter rather than a fourth flat one.
 
 ## [0.5.0] - 2026-07-13
 

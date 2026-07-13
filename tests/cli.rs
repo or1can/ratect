@@ -69,6 +69,25 @@ fn additional_hostnames_and_hosts_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/additional-hostnames-and-hosts.yml")
 }
 
+fn ports_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ports.yml")
+}
+
+/// Polls `127.0.0.1:<port>` until a TCP connection succeeds or `timeout`
+/// elapses. Just proves the port is reachable — no HTTP semantics needed,
+/// a bare TCP connect is already proof `ports` actually published it.
+fn wait_for_port(port: u16, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+    while Instant::now() < deadline {
+        if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    false
+}
+
 #[test]
 fn list_tasks_lists_sample_tasks() {
     let output = ratect_command()
@@ -939,4 +958,61 @@ fn additional_hostnames_and_hosts_are_applied() {
         "the container's own hostname should be its container name, not a \
          random container ID: {stdout}"
     );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `nginx:alpine`/`alpine:3.18.2`, and free host ports 18080/18081. Run
+/// explicitly with `cargo test -- --ignored`.
+///
+/// Spawns ratect (rather than waiting for it via `.output()`, which would
+/// block until the task's own `sleep 5` command exits) so the host-side
+/// test has a window to reach the published port while the dependency that
+/// published it is still running.
+#[test]
+#[ignore]
+fn ports_publishes_a_container_port_to_the_host() {
+    let mut child = ratect_command()
+        .arg("-f")
+        .arg(ports_config_path())
+        .arg("serve")
+        .spawn()
+        .expect("failed to spawn ratect");
+
+    let reachable = wait_for_port(18080, Duration::from_secs(15));
+
+    let status = child.wait().expect("failed to wait for ratect");
+
+    assert!(
+        reachable,
+        "the published port should have been reachable while the task ran"
+    );
+    assert!(status.success(), "ratect should exit successfully");
+}
+
+/// Same real-Docker requirements as `ports_publishes_a_container_port_to_the_host`.
+/// Uses a separate container/port (18081) from that test so the two can run
+/// concurrently without colliding.
+#[test]
+#[ignore]
+fn disable_ports_flag_suppresses_port_publishing() {
+    let mut child = ratect_command()
+        .arg("-f")
+        .arg(ports_config_path())
+        .arg("--disable-ports")
+        .arg("serve-for-disabled-check")
+        .spawn()
+        .expect("failed to spawn ratect");
+
+    // Short timeout: this is asserting the port is *never* reachable, not
+    // waiting out a real one — the container has plenty of time to start
+    // within this window if the port were (incorrectly) published.
+    let reachable = wait_for_port(18081, Duration::from_secs(5));
+
+    let status = child.wait().expect("failed to wait for ratect");
+
+    assert!(
+        !reachable,
+        "the port should not be reachable when --disable-ports is set"
+    );
+    assert!(status.success(), "ratect should exit successfully");
 }

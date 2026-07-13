@@ -38,6 +38,15 @@ pub struct Container {
     /// `--add-host` mechanism. Plain strings, no expression support — same
     /// reasoning as `additional_hostnames`.
     pub additional_hosts: Option<HashMap<String, String>>,
+    /// Publishes container ports to the host, `"local:container[/protocol]"`
+    /// (protocol defaults to `tcp`). Only the single-port string form is
+    /// supported — same simplification precedent as `volumes`, which also
+    /// only supports its plain string form, not Batect's expanded object
+    /// form; port ranges and the object form aren't supported here either.
+    /// Not format-checked at parse time (like `volumes`) — malformed entries
+    /// are only discovered when actually applied, in
+    /// `docker.rs::parse_port_mapping`.
+    pub ports: Option<Vec<String>>,
 }
 
 /// Runs this container as the host's own user/group instead of whatever the
@@ -501,6 +510,7 @@ tasks: {}
             run_as_current_user: None,
             additional_hostnames: None,
             additional_hosts: None,
+            ports: None,
         }
     }
 
@@ -569,6 +579,7 @@ tasks: {}
             }),
             additional_hostnames: None,
             additional_hosts: None,
+            ports: None,
         }
     }
 
@@ -681,6 +692,60 @@ tasks: {}
                 "external-service".to_string(),
                 "10.0.0.1".to_string()
             )]))
+        );
+    }
+
+    #[test]
+    fn parses_ports() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    ports:
+      - "8080:80"
+      - "9000:9000/udp"
+tasks: {}
+"#,
+        );
+
+        let container = &config.containers["build-env"];
+        assert_eq!(
+            container.ports,
+            Some(vec!["8080:80".to_string(), "9000:9000/udp".to_string()])
+        );
+    }
+
+    #[test]
+    fn parses_absent_ports_as_none() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks: {}
+"#,
+        );
+
+        assert_eq!(config.containers["build-env"].ports, None);
+    }
+
+    #[test]
+    fn resolve_expressions_leaves_ports_untouched() {
+        let mut config = config_with_container(Container {
+            ports: Some(vec!["8080:80".to_string()]),
+            ..container_with_build("docker", HashMap::new())
+        });
+
+        config
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), no_host_env)
+            .unwrap();
+
+        assert_eq!(
+            config.containers["build-env"].ports,
+            Some(vec!["8080:80".to_string()])
         );
     }
 
@@ -954,6 +1019,7 @@ config_variables:
             run_as_current_user: None,
             additional_hostnames: None,
             additional_hosts: None,
+            ports: None,
         }
     }
 

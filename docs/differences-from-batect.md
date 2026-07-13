@@ -91,7 +91,7 @@ host-side substitution step:
 | `image_pull_policy` | Not supported | Ratect always pulls an image at most once per run, with no `Always`-equivalent. |
 | `labels` | Not supported | |
 | `log_driver` / `log_options` | Not supported | |
-| `ports` | Not supported | No port publishing. |
+| `ports` | Partially supported | Only the `local:container[/protocol]` single-port string form — see [config reference](config-reference.md#container). Port ranges and the expanded object form aren't supported, same simplification precedent as `volumes` above. |
 | `privileged` | Not supported | |
 | `run_as_current_user` | Supported | Runs the container as the host user's UID/GID instead of root, so files written to mounted volumes aren't root-owned — see [User mapping](config-reference.md#user-mapping). No equivalent to Batect's "cache mounts" (Ratect has no such config concept), and host-side uid/gid lookup is Unix-only. |
 | `setup_commands` | Not supported | See `health_check` above — this is the other half of Batect's real dependency-readiness check that Ratect doesn't implement. |
@@ -136,7 +136,7 @@ Batect's full flag list, from its [CLI reference](https://github.com/batect/bate
 | `--output` / `-o` | Not supported | Ratect has one output mode; see [how it works](how-it-works.md#5-logging-vs-output) for the stdout/stderr split it uses instead. |
 | `--no-color` | Not supported | Ratect currently has no colored output to disable. |
 | `--no-cleanup`, `--no-cleanup-after-failure`, `--no-cleanup-after-success` | Not supported | Ratect always attempts to remove containers after running; there's no way to leave them for debugging. |
-| `--disable-ports` | N/A | Moot — no port publishing exists to disable. |
+| `--disable-ports` | Supported | Disables publishing of any container's `ports` to the host, regardless of config. |
 | `--use-network` | Supported | Reuses an existing Docker network for every task in the invocation instead of creating a fresh one per task; never removed at cleanup, since Ratect didn't create it. See [task lifecycle](task-lifecycle.md). |
 | `--enable-buildkit` | Not supported | Images are built via Docker's classic (non-BuildKit) build API — no way to opt into BuildKit. |
 | `--tag-image` | Not supported | Built images are tagged `<project_name>-<container_name>` (like Batect's own default) — no way to additionally tag one with a custom name. |

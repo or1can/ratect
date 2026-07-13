@@ -33,6 +33,11 @@ struct Args {
     #[arg(long = "use-network")]
     use_network: Option<String>,
 
+    /// Disable binding of ports on the host, regardless of any `ports`
+    /// configured on a container.
+    #[arg(long = "disable-ports")]
+    disable_ports: bool,
+
     /// Name of the task to run
     task_name: Option<String>,
 
@@ -143,6 +148,9 @@ async fn run() -> Result<()> {
             let mut engine = TaskEngine::new(config, docker);
             if let Some(network) = args.use_network {
                 engine = engine.with_existing_network(network);
+            }
+            if args.disable_ports {
+                engine = engine.without_port_publishing();
             }
             engine.run_task(&task_name, &args.additional_args).await?;
         }
@@ -274,5 +282,17 @@ mod tests {
     fn defaults_use_network_to_none() {
         let args = Args::try_parse_from(["ratect"]).unwrap();
         assert_eq!(args.use_network, None);
+    }
+
+    #[test]
+    fn parses_disable_ports_flag() {
+        let args = Args::try_parse_from(["ratect", "--disable-ports", "build"]).unwrap();
+        assert!(args.disable_ports);
+    }
+
+    #[test]
+    fn defaults_disable_ports_to_false() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert!(!args.disable_ports);
     }
 }
