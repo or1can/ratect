@@ -976,6 +976,45 @@ mod tests {
         assert_eq!(docker.user_mapping_for("app"), None);
     }
 
+    #[tokio::test]
+    async fn run_as_current_user_explicitly_disabled_reaches_the_container_with_no_mapping() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "app".to_string(),
+            Container {
+                build_args: None,
+                image: Some("alpine:3.18".to_string()),
+                build_directory: None,
+                volumes: None,
+                dependencies: None,
+                environment: None,
+                run_as_current_user: Some(crate::config::RunAsCurrentUser {
+                    enabled: false,
+                    home_directory: None,
+                }),
+            },
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("run".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.user_mapping_for("app"),
+            None,
+            "run_as_current_user present but disabled should still resolve to no mapping"
+        );
+    }
+
     fn container_with_build_directory(
         build_directory: &str,
         build_args: Option<HashMap<String, String>>,
