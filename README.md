@@ -32,6 +32,13 @@ Ratect is currently in early development. It supports a subset of Batect's featu
   - User mapping (`run_as_current_user`): runs a container as the host's own
     user/group instead of root, so files it writes to a mounted volume come back
     owned by you, not root.
+  - Networking: `--use-network` reuses an existing Docker network instead of a fresh
+    one per task; `additional_hostnames`/`additional_hosts` for extra network
+    aliases/`/etc/hosts` entries; `ports`/`--disable-ports` for publishing container
+    ports to the host.
+  - Proxy support: `http_proxy`/`https_proxy`/`ftp_proxy`/`no_proxy` are detected from
+    the host environment and propagated into containers and builds automatically
+    (`--no-proxy-vars` to disable).
 - **Expressions**: `$VAR`/`${VAR:-default}` (host environment) and `<name`/`<{name}`
   (config variables, including Batect's built-in `batect.project_directory`) within
   `environment` values, volume host paths, `build_directory`, and `build_args`.

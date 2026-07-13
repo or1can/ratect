@@ -7,14 +7,14 @@ This document outlines the planned journey for Ratect, from achieving parity wit
 The primary goal is to support the core features of Batect to ensure a seamless transition for existing users. This work targets the [`ratect-compat` binary](#two-binaries-ratect-and-ratect-compat) specifically — the `ratect` binary is not expected to maintain 1:1 Batect parity.
 
 - **Image Building**: Building a Docker image from a `Dockerfile` via `build_directory` (always named `Dockerfile`, at `build_directory`'s own root) is implemented, including `build_args` and `.dockerignore` support (0.3.0) — see [config reference](docs/config-reference.md#image-building). Custom Dockerfile naming/location (`dockerfile`), `build_target`, `build_secrets`, `build_ssh`, cross-invocation build caching, and automatic image cleanup are not — see [Differences from Batect](docs/differences-from-batect.md#container-fields).
-- **Full Docker Networking**: Every task execution gets its own isolated network (see [the task lifecycle](docs/task-lifecycle.md)); full Batect-equivalent networking (custom drivers, reusing an existing network via `--use-network`, disabling port bindings, etc.) is not.
+- **Full Docker Networking**: Every task execution gets its own isolated network (see [the task lifecycle](docs/task-lifecycle.md)), `--use-network` reuses an existing one instead, `additional_hostnames`/`additional_hosts` add extra aliases/`/etc/hosts` entries, and `ports`/`--disable-ports` publish container ports to the host (0.6.0) — see [config reference](docs/config-reference.md#container) and [CLI reference](docs/cli-reference.md). `ports` only supports the single-port string form (no ranges or object form) — see [Differences from Batect](docs/differences-from-batect.md#container-fields).
 - **Interactive Mode**: A task's own container gets a real Docker TTY and its stdin forwarded, automatically, when both Ratect's own stdin and stdout are real terminals (0.4.0) — see [Interactive mode](docs/config-reference.md#interactive-mode). Live terminal-resize forwarding and Batect's decoupled stdin-without-TTY support are not — see [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
 - **Full Environment Variable Interpolation & Batect Expressions**: `environment` on containers/tasks, `config_variables` (including Batect's one built-in, `batect.project_directory`), and `$VAR`/`${VAR}`/`${VAR:-default}`/`<name`/`<{name}` expressions are implemented for `environment` values, volume host paths, `build_directory`, and `build_args` — every already-supported field that could meaningfully take one; `build_secrets.path`/`build_ssh.paths` remain moot until those fields themselves exist — see [Expressions](docs/differences-from-batect.md#expressions).
 - **Includes**: Support for splitting configuration across multiple files using the `include` directive.
 - **Full Configuration Parity**: Support for all available Batect configuration options and standard YAML structures. See [Differences from Batect](docs/differences-from-batect.md#configuration-format) for the itemized current status of every field.
 - **Full CLI Options Parity**: Support for all standard Batect CLI flags and options (e.g., `--config-file`, `--override-image`, cleanup control flags, etc.). See [Differences from Batect](docs/differences-from-batect.md#cli-flags) for the itemized current status of every flag.
 - **User Mapping**: A container can run as the host's own user/group (`run_as_current_user`) instead of the image's default, so files it writes to a mounted volume aren't root-owned (0.5.0) — see [User mapping](docs/config-reference.md#user-mapping). No equivalent to Batect's "cache mounts", and host-side uid/gid lookup is Unix-only — see [Differences from Batect](docs/differences-from-batect.md#container-fields).
-- **Proxy Support**: Automatic detection and injection of proxy settings into containers.
+- **Proxy Support**: `http_proxy`/`https_proxy`/`ftp_proxy`/`no_proxy` are detected from the host environment and propagated into containers and image builds automatically, `--no-proxy-vars` to disable (0.6.0) — see [Proxy environment variables](docs/config-reference.md#proxy-environment-variables). `localhost` rewriting only works on macOS/Windows, and there's no Docker-version-gated hostname fallback chain — see [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
 
 ## Two Binaries: `ratect` and `ratect-compat`
 
@@ -168,15 +168,30 @@ Neither bump is ever folded into a feature commit.
     is Unix-only — errors clearly on other platforms rather than guessing, same
     caveat as 0.4.0's `crossterm` usage. Windows containers were never in scope for
     Ratect regardless.
-- **0.6.0** — **Full Docker Networking** and **Proxy Support** together — proxy
-  injection is fundamentally "set environment variables automatically," so it benefits
-  from 0.2.0's environment variable support already existing.
+- **0.6.0** — ~~**Full Docker Networking** and **Proxy Support**~~ — done: `--use-network`
+  reuses an existing Docker network instead of a fresh one per task;
+  `additional_hostnames`/`additional_hosts` add extra network aliases/`/etc/hosts`
+  entries; `ports`/`--disable-ports` publish container ports to the host (single-port
+  string form only — ranges and the object form aren't supported, same simplification
+  precedent as `volumes`); every container's Docker hostname is now set to its own
+  container name, matching Batect, rather than left as a random container ID; and
+  `http_proxy`/`https_proxy`/`ftp_proxy`/`no_proxy` are detected from the host
+  environment and propagated into every container and build automatically
+  (`--no-proxy-vars` to disable). Known gaps, candidates for later work rather than
+  blocking this release:
+  - No custom network driver support for a network Ratect creates itself — the only
+    way to get a different driver is to pre-create the network yourself and point
+    `--use-network` at it, same as Batect.
+  - The proxy `localhost`/`127.0.0.1`/`::1` rewrite (to `host.docker.internal`) only
+    works on macOS/Windows — no automatic Docker-reachable hostname on Linux, and no
+    Docker-version-gated hostname fallback chain the way Batect has for very old
+    Docker installs (not worth chasing for any actively-maintained daemon today).
 - **Beyond 0.6.0** — not yet planned release-by-release, but not optional for 1.0.0
   either: **Includes** (splitting config across files/bundles), and the long tail of
   smaller [Full Configuration](docs/differences-from-batect.md#container-fields) /
   [Full CLI](docs/differences-from-batect.md#cli-flags) parity items (`health_check`,
-  `setup_commands`, `ports`, `labels`, `--skip-prerequisites`, `--override-image`, etc.)
-  that 0.2.0–0.6.0 don't touch.
+  `setup_commands`, `labels`, `--skip-prerequisites`, `--override-image`, etc.) that
+  0.2.0–0.6.0 don't touch.
 - **1.0.0** — the [Batect Parity](#batect-parity) section above substantially checked
   off (all of the above, not just the six headline items through 0.6.0), and verified
   against a handful of real Batect projects, not just the itemized field/flag tables
