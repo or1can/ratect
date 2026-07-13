@@ -162,10 +162,13 @@ tables above:
 - **Interactive mode**: supported for the invoked task's own container (never a
   prerequisite's, a dependency's, or a sidecar's) when both Ratect's own stdin and
   stdout are real terminals — see [Interactive mode](config-reference.md#interactive-mode).
-  Two things simplified relative to Batect: no live terminal-resize forwarding (synced
-  once, at attach time, not tracked for the rest of the session), and stdin forwarding
+  Three things simplified relative to Batect: no live terminal-resize forwarding (synced
+  once, at attach time, not tracked for the rest of the session), stdin forwarding
   isn't decoupled from TTY allocation the way Batect's is (Batect can pipe input into a
-  task without allocating a TTY; Ratect gates both together).
+  task without allocating a TTY; Ratect gates both together), and the host's `TERM`
+  isn't propagated into the container's environment (Batect's environment provider
+  injects it alongside proxy variables, so full-screen terminal programs know the
+  terminal type; set it explicitly via `environment` if a task needs it).
 - **Parallel execution**: prerequisites run sequentially, not in parallel — Batect runs
   independent setup/cleanup steps concurrently.
 - **Proxy support**: `http_proxy`/`https_proxy`/`ftp_proxy`/`no_proxy` are detected from

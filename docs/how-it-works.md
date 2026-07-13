@@ -57,7 +57,9 @@ aren't known at the first:
    (recursively, for nested dependencies) before the task's own container, so it can
    reach them by name. This is scoped to just this one task execution and torn down
    afterward — see [the task lifecycle](task-lifecycle.md) for the full step-by-step
-   detail and diagrams.
+   detail and diagrams. With `--use-network`, an existing network is validated to
+   exist (`ContainerRuntime::network_exists`) and reused instead — never created,
+   and never removed at cleanup, since Ratect didn't create it.
 5. **Resolve and run the image**: `TaskEngine::resolve_image` turns the container's
    `image` or `build_directory` into the image reference to actually run — pulling
    (unless already pulled once this run) if `image` is set, or building (unless already
@@ -70,11 +72,19 @@ aren't known at the first:
    `run_as_current_user` doesn't depend on the task's), unlike `interactive` below,
    which only ever applies to the task's own container — see
    [User mapping](config-reference.md#user-mapping). Then the container runs with the
-   task's `command`, joined to the task's own network, with its `environment` merged
-   with the task's own `run.environment` (which wins on a key collision), and
-   `interactive` set to `top_level` from step 3 — eligibility only; see
-   [Interactive mode](config-reference.md#interactive-mode) and the Docker integration
-   section below for what actually decides whether a TTY gets used.
+   task's `command`, joined to the task's own network, with its `environment` built
+   from three layers — [proxy environment variables](config-reference.md#proxy-environment-variables)
+   (lowest precedence, with every container name in this task appended to
+   `no_proxy`, computed once per task via `container_names_in_task`), then the
+   container's own `environment`, then the task's `run.environment` (each winning
+   over the last on a key collision) — its `NetworkOptions`
+   (`additional_hostnames`/`additional_hosts`, plus `ports` merged with any
+   `run.ports` and expanded to concrete port triples via `merged_ports`, unless
+   `--disable-ports`), and `interactive` set to `top_level` from step 3 —
+   eligibility only; see [Interactive mode](config-reference.md#interactive-mode)
+   and the Docker integration section below for what actually decides whether a TTY
+   gets used. Proxy variables (gated by the same `--no-proxy-vars` flag) are also
+   merged underneath `build_args` when `resolve_image` builds an image.
 
 The "run once", "pull once", and "build once" guarantees are tracked with in-memory
 maps/sets (`executed_tasks`, `pulled_images`, `built_images`, `in_progress_tasks`)
@@ -109,8 +119,13 @@ client, and implements `ContainerRuntime`:
   Docker involved), then streams `docker build` progress the same way `pull_image`
   does.
 - **`run_container`**: creates a container (attaching stdout/stderr, any resolved
-  volume binds, and any resolved `environment` variables), joins it to the task's own
-  network, starts it, streams its output, then removes the container once it exits.
+  volume binds, any resolved `environment` variables, its Docker `hostname` set to
+  its own container name, plus its `NetworkOptions` — `additional_hosts` as
+  `HostConfig.extra_hosts` via the pure `build_extra_hosts`, and already-expanded
+  port triples as `exposed_ports`/`port_bindings` via the pure `build_port_config`),
+  joins it to the task's own network (with `additional_hostnames` as extra aliases
+  beyond its name), starts it, streams its output, then removes the container once
+  it exits.
   Takes one of two paths depending on `should_use_tty` (ANDing the `interactive`
   eligibility the engine passed in against whether Ratect's own stdin *and* stdout are
   real terminals — see [Interactive mode](config-reference.md#interactive-mode)): the
@@ -127,15 +142,18 @@ client, and implements `ContainerRuntime`:
   `/etc/passwd`/`/etc/shadow`/`/etc/group` entries and the declared home directory are
   uploaded into it (`docker.upload_to_container`, via the `build_user_mapping_tar`/
   `build_home_directory_tar` free functions, both unit-testable on their own).
-- **`create_network` / `remove_network`**: thin wrappers over Docker's network API,
-  used for the per-task network every task execution gets (see
-  [task lifecycle](task-lifecycle.md)).
+- **`create_network` / `remove_network` / `network_exists`**: thin wrappers over
+  Docker's network API — create/remove for the per-task network every task execution
+  gets (see [task lifecycle](task-lifecycle.md)), and `network_exists` (backed by
+  `inspect_network`, treating a 404 as `false`) to validate `--use-network`'s target
+  up front with a clear error rather than an unrelated API failure later.
 - **`start_background_container` / `stop_and_remove_container`**: create+start (or
   stop+remove) a container without streaming its logs or waiting for it to exit —
   used for dependency/sidecar containers, which run alongside the task rather than
-  being the thing the task is waiting on. Applies `user_mapping` the same way
-  `run_container` does, if that dependency's own `run_as_current_user` is enabled —
-  independent of whether the task's own container has it enabled.
+  being the thing the task is waiting on. Applies `user_mapping` and
+  `NetworkOptions` (hostname, aliases, extra hosts, ports) the same way
+  `run_container` does, from that dependency's own config — independent of the
+  task's own container's settings.
 
 Container creation/start/removal events are logged at `debug` level via `tracing` (see
 below) — not shown by default, but useful with `RUST_LOG=debug`.
