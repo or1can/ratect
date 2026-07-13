@@ -314,6 +314,10 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             // gates this on the local process's own stdin/stdout genuinely
             // being terminals before actually attaching a TTY.
             let interactive = top_level;
+            let network_options = crate::docker::NetworkOptions {
+                additional_hostnames: container_config.additional_hostnames.as_ref(),
+                additional_hosts: container_config.additional_hosts.as_ref(),
+            };
             self.docker
                 .run_container(
                     &task.run.container,
@@ -325,6 +329,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     &network_name,
                     interactive,
                     user_mapping.as_ref(),
+                    &network_options,
                 )
                 .await?;
 
@@ -388,6 +393,10 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
 
         let image = self.resolve_image(name, dependency_config).await?;
         let user_mapping = self.resolve_user_mapping(dependency_config).await?;
+        let network_options = crate::docker::NetworkOptions {
+            additional_hostnames: dependency_config.additional_hostnames.as_ref(),
+            additional_hosts: dependency_config.additional_hosts.as_ref(),
+        };
 
         let container_id = self
             .docker
@@ -398,6 +407,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 dependency_config.environment.as_ref(),
                 network,
                 user_mapping.as_ref(),
+                &network_options,
             )
             .await?;
 
@@ -426,6 +436,10 @@ mod tests {
     type CapturedInteractive = Arc<Mutex<HashMap<String, bool>>>;
     /// `(uid, gid, home_directory)`, keyed by container name.
     type CapturedUserMapping = Arc<Mutex<HashMap<String, Option<(u32, u32, String)>>>>;
+    /// `(additional_hostnames, additional_hosts)`.
+    type NetworkOptionsValue = (Option<Vec<String>>, Option<HashMap<String, String>>);
+    /// Keyed by container name.
+    type CapturedNetworkOptions = Arc<Mutex<HashMap<String, NetworkOptionsValue>>>;
 
     #[derive(Clone)]
     struct FakeContainerRuntime {
@@ -453,6 +467,9 @@ mod tests {
         // What `network_exists` reports — defaults to `true` so tests that
         // don't care about `--use-network` aren't affected.
         network_exists_result: Arc<Mutex<bool>>,
+        // The `network_options` a prior `run_container`/`start_background_container`
+        // call for a given container name was given (see `network_options_for`).
+        network_options: CapturedNetworkOptions,
     }
 
     impl Default for FakeContainerRuntime {
@@ -466,6 +483,7 @@ mod tests {
                 interactive: Default::default(),
                 user_mapping: Default::default(),
                 network_exists_result: Arc::new(Mutex::new(true)),
+                network_options: Default::default(),
             }
         }
     }
@@ -534,6 +552,13 @@ mod tests {
                 .cloned()
                 .flatten()
         }
+
+        /// The `(additional_hostnames, additional_hosts)` a prior
+        /// `run_container`/`start_background_container` call for `name` was
+        /// given.
+        fn network_options_for(&self, name: &str) -> Option<NetworkOptionsValue> {
+            self.network_options.lock().unwrap().get(name).cloned()
+        }
     }
 
     #[async_trait::async_trait]
@@ -583,6 +608,7 @@ mod tests {
             environment: Option<&HashMap<String, String>>,
             network: &str,
             user_mapping: Option<&crate::docker::UserMapping>,
+            network_options: &crate::docker::NetworkOptions,
         ) -> Result<String> {
             self.environments
                 .lock()
@@ -595,6 +621,13 @@ mod tests {
             self.user_mapping.lock().unwrap().insert(
                 alias.to_string(),
                 user_mapping.map(|m| (m.user.uid, m.user.gid, m.home_directory.clone())),
+            );
+            self.network_options.lock().unwrap().insert(
+                alias.to_string(),
+                (
+                    network_options.additional_hostnames.cloned(),
+                    network_options.additional_hosts.cloned(),
+                ),
             );
             self.push(format!("sidecar-start:{alias}:{network}"));
             Ok(format!("sidecar-id-{alias}"))
@@ -616,6 +649,7 @@ mod tests {
             network: &str,
             interactive: bool,
             user_mapping: Option<&crate::docker::UserMapping>,
+            network_options: &crate::docker::NetworkOptions,
         ) -> Result<()> {
             self.environments
                 .lock()
@@ -632,6 +666,13 @@ mod tests {
             self.user_mapping.lock().unwrap().insert(
                 name.to_string(),
                 user_mapping.map(|m| (m.user.uid, m.user.gid, m.home_directory.clone())),
+            );
+            self.network_options.lock().unwrap().insert(
+                name.to_string(),
+                (
+                    network_options.additional_hostnames.cloned(),
+                    network_options.additional_hosts.cloned(),
+                ),
             );
             self.push(format!(
                 "run:{name}:{}:args=[{}]:{}",
@@ -655,6 +696,8 @@ mod tests {
             dependencies,
             environment: None,
             run_as_current_user: None,
+            additional_hostnames: None,
+            additional_hosts: None,
         }
     }
 
@@ -681,6 +724,8 @@ mod tests {
                 dependencies: None,
                 environment: None,
                 run_as_current_user: None,
+                additional_hostnames: None,
+                additional_hosts: None,
             },
         );
 
@@ -739,6 +784,8 @@ mod tests {
                 dependencies: None,
                 environment: None,
                 run_as_current_user: None,
+                additional_hostnames: None,
+                additional_hosts: None,
             },
         );
 
@@ -942,6 +989,8 @@ mod tests {
                 enabled: true,
                 home_directory: Some(home_directory.to_string()),
             }),
+            additional_hostnames: None,
+            additional_hosts: None,
         }
     }
 
@@ -1040,6 +1089,101 @@ mod tests {
         assert_eq!(docker.user_mapping_for("app"), None);
     }
 
+    fn container_with_network_options(
+        image: &str,
+        dependencies: Option<Vec<String>>,
+        additional_hostnames: Option<Vec<String>>,
+        additional_hosts: Option<HashMap<String, String>>,
+    ) -> Container {
+        Container {
+            additional_hostnames,
+            additional_hosts,
+            ..container(image, dependencies)
+        }
+    }
+
+    #[tokio::test]
+    async fn additional_hostnames_and_hosts_reach_a_tasks_own_container() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "app".to_string(),
+            container_with_network_options(
+                "alpine:3.18",
+                None,
+                Some(vec!["db-alias".to_string()]),
+                Some(HashMap::from([(
+                    "external-service".to_string(),
+                    "10.0.0.1".to_string(),
+                )])),
+            ),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("run".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.network_options_for("app"),
+            Some((
+                Some(vec!["db-alias".to_string()]),
+                Some(HashMap::from([(
+                    "external-service".to_string(),
+                    "10.0.0.1".to_string()
+                )]))
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn additional_hostnames_and_hosts_reach_a_dependency_independently() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        containers.insert(
+            "database".to_string(),
+            container_with_network_options(
+                "postgres:16",
+                None,
+                Some(vec!["db-alias".to_string()]),
+                None,
+            ),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("run".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.network_options_for("database"),
+            Some((Some(vec!["db-alias".to_string()]), None))
+        );
+        assert_eq!(
+            docker.network_options_for("app"),
+            Some((None, None)),
+            "app itself declared no additional_hostnames/additional_hosts"
+        );
+    }
+
     #[tokio::test]
     async fn run_as_current_user_explicitly_disabled_reaches_the_container_with_no_mapping() {
         let mut containers = HashMap::new();
@@ -1056,6 +1200,8 @@ mod tests {
                     enabled: false,
                     home_directory: None,
                 }),
+                additional_hostnames: None,
+                additional_hosts: None,
             },
         );
         let mut tasks = HashMap::new();
@@ -1091,6 +1237,8 @@ mod tests {
             dependencies: None,
             environment: None,
             run_as_current_user: None,
+            additional_hostnames: None,
+            additional_hosts: None,
         }
     }
 
@@ -1310,6 +1458,8 @@ mod tests {
                 dependencies: None,
                 environment: None,
                 run_as_current_user: None,
+                additional_hostnames: None,
+                additional_hosts: None,
             },
         );
         let mut tasks = HashMap::new();
@@ -1774,6 +1924,8 @@ mod tests {
                 dependencies: None,
                 environment: None,
                 run_as_current_user: None,
+                additional_hostnames: None,
+                additional_hosts: None,
             },
         );
         containers.insert(

@@ -30,6 +30,14 @@ pub struct Container {
     pub dependencies: Option<Vec<String>>,
     pub environment: Option<HashMap<String, String>>,
     pub run_as_current_user: Option<RunAsCurrentUser>,
+    /// Extra network aliases this container is reachable by, beyond its own
+    /// name. Plain strings, no [expression](#expressions) support — matching
+    /// Batect, which types this as `Set<String>`, not `Set<Expression>`.
+    pub additional_hostnames: Option<Vec<String>>,
+    /// Extra `/etc/hosts` entries (hostname -> IP), Docker's own
+    /// `--add-host` mechanism. Plain strings, no expression support — same
+    /// reasoning as `additional_hostnames`.
+    pub additional_hosts: Option<HashMap<String, String>>,
 }
 
 /// Runs this container as the host's own user/group instead of whatever the
@@ -491,6 +499,8 @@ tasks: {}
             dependencies: None,
             environment: None,
             run_as_current_user: None,
+            additional_hostnames: None,
+            additional_hosts: None,
         }
     }
 
@@ -557,6 +567,8 @@ tasks: {}
                 enabled,
                 home_directory: home_directory.map(|s| s.to_string()),
             }),
+            additional_hostnames: None,
+            additional_hosts: None,
         }
     }
 
@@ -592,6 +604,83 @@ tasks: {}
         assert_eq!(
             run_as_current_user.home_directory.as_deref(),
             Some("/home/container-user")
+        );
+    }
+
+    #[test]
+    fn parses_additional_hostnames_and_hosts() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    additional_hostnames:
+      - db-alias
+      - cache-alias
+    additional_hosts:
+      external-service: 10.0.0.1
+tasks: {}
+"#,
+        );
+
+        let container = &config.containers["build-env"];
+        assert_eq!(
+            container.additional_hostnames,
+            Some(vec!["db-alias".to_string(), "cache-alias".to_string()])
+        );
+        assert_eq!(
+            container.additional_hosts,
+            Some(HashMap::from([(
+                "external-service".to_string(),
+                "10.0.0.1".to_string()
+            )]))
+        );
+    }
+
+    #[test]
+    fn parses_absent_additional_hostnames_and_hosts_as_none() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks: {}
+"#,
+        );
+
+        let container = &config.containers["build-env"];
+        assert_eq!(container.additional_hostnames, None);
+        assert_eq!(container.additional_hosts, None);
+    }
+
+    #[test]
+    fn resolve_expressions_leaves_additional_hostnames_and_hosts_untouched() {
+        let mut config = config_with_container(Container {
+            additional_hostnames: Some(vec!["db-alias".to_string()]),
+            additional_hosts: Some(HashMap::from([(
+                "external-service".to_string(),
+                "10.0.0.1".to_string(),
+            )])),
+            ..container_with_build("docker", HashMap::new())
+        });
+
+        config
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), no_host_env)
+            .unwrap();
+
+        let container = &config.containers["build-env"];
+        assert_eq!(
+            container.additional_hostnames,
+            Some(vec!["db-alias".to_string()])
+        );
+        assert_eq!(
+            container.additional_hosts,
+            Some(HashMap::from([(
+                "external-service".to_string(),
+                "10.0.0.1".to_string()
+            )]))
         );
     }
 
@@ -863,6 +952,8 @@ config_variables:
             dependencies: None,
             environment: Some(environment),
             run_as_current_user: None,
+            additional_hostnames: None,
+            additional_hosts: None,
         }
     }
 

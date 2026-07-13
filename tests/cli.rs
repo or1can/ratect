@@ -65,6 +65,10 @@ fn interactive_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/interactive.yml")
 }
 
+fn additional_hostnames_and_hosts_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/additional-hostnames-and-hosts.yml")
+}
+
 #[test]
 fn list_tasks_lists_sample_tasks() {
     let output = ratect_command()
@@ -892,5 +896,47 @@ fn use_network_errors_clearly_for_a_nonexistent_network() {
     assert!(
         stderr.contains("ratect-network-that-does-not-exist"),
         "the error should name the missing network: {stderr}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `redis:7-alpine`/`alpine:3.18.2`. Run explicitly with `cargo test --
+/// --ignored`.
+///
+/// Covers three things at once (all closely related — see
+/// `tests/fixtures/additional-hostnames-and-hosts.yml`): a dependency's
+/// `additional_hostnames` makes it reachable under an extra alias beyond its
+/// container name, a container's own `additional_hosts` adds a real
+/// `/etc/hosts` entry, and every container's Docker hostname is set to its
+/// own container name (not Docker's default random short container ID).
+#[test]
+#[ignore]
+fn additional_hostnames_and_hosts_are_applied() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(additional_hostnames_and_hosts_config_path())
+        .arg("check-network-options")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("0% packet loss"),
+        "the dependency should be reachable by its additional_hostnames alias: {stdout}"
+    );
+    assert!(
+        stdout.contains("10.0.0.9"),
+        "additional_hosts should have added the extra /etc/hosts entry: {stdout}"
+    );
+    assert!(
+        stdout.contains("app"),
+        "the container's own hostname should be its container name, not a \
+         random container ID: {stdout}"
     );
 }

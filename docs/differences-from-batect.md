@@ -74,8 +74,8 @@ host-side substitution step:
 | `volumes` | Partially supported | Only the `local:container[:options]` string form — see [config reference](config-reference.md#volume-path-resolution). The local path supports [expressions](#expressions). The expanded map form, [caches](https://github.com/batect/batect.dev/blob/main/docs/reference/config/containers.md#volumes), and tmpfs mounts aren't supported. |
 | `dependencies` | Supported (simplified) | Starts recursively (nested dependencies too), on a network scoped to one task execution — see [the task lifecycle](task-lifecycle.md). No health-check waiting (`health_check` isn't parsed — see below) and no `setup_commands` support, so a dependency is "ready" as soon as it's started, unlike Batect's real readiness check. Works for dependency containers too, not just a task's own — see `build_directory` below. |
 | `build_directory` | Supported (simplified) | Builds an image from a `Dockerfile` (always that exact name, at `build_directory`'s own root — no custom naming yet) — see [config reference](config-reference.md#image-building). A `.dockerignore` at the root is respected, with real Docker's actual matching rules (not `.gitignore`'s — see [`.dockerignore` semantics](config-reference.md#dockerignore-semantics)). No cross-invocation build caching or automatic image cleanup yet. |
-| `additional_hostnames` | Not supported | |
-| `additional_hosts` | Not supported | |
+| `additional_hostnames` | Supported | Extra network aliases beyond the container's own name — see [config reference](config-reference.md#container). No expression support (matching Batect, which doesn't support it here either). |
+| `additional_hosts` | Supported | Extra `/etc/hosts` entries — see [config reference](config-reference.md#container). No expression support. |
 | `build_args` | Supported | Values support [expressions](#expressions). |
 | `build_target` | Not supported | |
 | `build_secrets` | Not supported | |

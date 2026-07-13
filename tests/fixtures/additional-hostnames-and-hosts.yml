@@ -1,0 +1,25 @@
+# Exercises additional_hostnames (extra network aliases), additional_hosts
+# (extra /etc/hosts entries), and the container hostname fix (each
+# container's Docker hostname is set to its own name, matching Batect) end
+# to end.
+#
+# redis is used for `database` purely because its default command
+# (`redis-server`) stays running with no configuration — Container has no
+# `command` field, so a dependency always runs its image's default command.
+project_name: ratect-additional-hostnames-test
+containers:
+  database:
+    image: redis:7-alpine
+    additional_hostnames:
+      - db-alias
+  app:
+    image: alpine:3.18.2
+    dependencies:
+      - database
+    additional_hosts:
+      external-service: 10.0.0.9
+tasks:
+  check-network-options:
+    run:
+      container: app
+      command: ping -c 1 db-alias && getent hosts external-service && hostname

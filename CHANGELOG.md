@@ -21,6 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `create_network` and `remove_network` for that network — Ratect didn't create it,
     so cleanup never removes it either, matching Batect (which only ever tears down
     networks it created itself).
+- **`additional_hostnames` and `additional_hosts`**: two new per-container fields —
+  `additional_hostnames` adds extra network aliases beyond a container's own name;
+  `additional_hosts` adds extra `/etc/hosts` entries (Docker's own `--add-host`
+  mechanism). Neither takes [expressions](docs/config-reference.md#expressions),
+  matching Batect (which types both as plain strings, not `Expression`, itself).
+  - New `NetworkOptions` (`ratect-core/src/docker.rs`) bundles both, passed as one
+    trailing parameter to `ContainerRuntime::run_container`/
+    `start_background_container` rather than two more flat ones — both methods were
+    already at `#[allow(clippy::too_many_arguments)]`.
+  - Also fixes a related gap found while implementing this: every container's Docker
+    `hostname` is now always set to its own container name (matching Batect), not
+    left as Docker's default random short container ID — previously a container was
+    reachable *by* its name on the network, but `hostname`/`$HOSTNAME` *inside* it
+    resolved to something unrelated.
 
 ## [0.5.0] - 2026-07-13
 

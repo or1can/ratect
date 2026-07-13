@@ -84,6 +84,30 @@ fn build_env(environment: Option<&HashMap<String, String>>) -> Option<Vec<String
     Some(pairs)
 }
 
+/// Builds Docker's `HostConfig.extra_hosts` list (`"name:ip"` entries, its
+/// own `--add-host` mechanism) from a config `additional_hosts` map. Sorted
+/// by key for the same determinism reason as `build_env`.
+fn build_extra_hosts(additional_hosts: Option<&HashMap<String, String>>) -> Option<Vec<String>> {
+    let additional_hosts = additional_hosts?;
+    let mut pairs: Vec<String> = additional_hosts
+        .iter()
+        .map(|(name, address)| format!("{name}:{address}"))
+        .collect();
+    pairs.sort();
+    Some(pairs)
+}
+
+/// Per-container network-facing options shared by `run_container` and
+/// `start_background_container` — bundled together (rather than three more
+/// flat parameters) since both methods were already at
+/// `#[allow(clippy::too_many_arguments)]` before this.
+pub struct NetworkOptions<'a> {
+    /// Extra network aliases beyond the container's own name.
+    pub additional_hostnames: Option<&'a Vec<String>>,
+    /// Extra `/etc/hosts` entries (hostname -> IP).
+    pub additional_hosts: Option<&'a HashMap<String, String>>,
+}
+
 /// Builds an in-memory tar of `build_directory`'s contents to use as a
 /// Docker build context — pure filesystem-in, bytes-out, no Docker
 /// involved, so it's unit-testable without a daemon.
@@ -387,6 +411,10 @@ pub trait ContainerRuntime {
     /// is enabled (independent of whether the task's own container has it
     /// enabled — see `TaskEngine::resolve_user_mapping`) — see `run_container`'s
     /// doc comment for what applying it actually does.
+    ///
+    /// `network_options` carries this container's own `additional_hostnames`/
+    /// `additional_hosts` — see `run_container`'s doc comment.
+    #[allow(clippy::too_many_arguments)]
     async fn start_background_container(
         &self,
         alias: &str,
@@ -395,6 +423,7 @@ pub trait ContainerRuntime {
         environment: Option<&HashMap<String, String>>,
         network: &str,
         user_mapping: Option<&UserMapping>,
+        network_options: &NetworkOptions,
     ) -> Result<String>;
 
     /// Stops and removes a container started with [`start_background_container`](Self::start_background_container).
@@ -434,6 +463,14 @@ pub trait ContainerRuntime {
     /// into it — an arbitrary host uid/gid otherwise has no corresponding
     /// entry in the image's own passwd/group, which many programs need to
     /// function at all.
+    ///
+    /// `network_options` bundles this container's own `additional_hostnames`
+    /// (extra network aliases, beyond `name`, other containers can reach it
+    /// by) and `additional_hosts` (extra `/etc/hosts` entries) — grouped into
+    /// one struct rather than two more flat parameters, since both of these
+    /// methods were already at `#[allow(clippy::too_many_arguments)]` before
+    /// this. The container's Docker `hostname` is always set to `name`
+    /// (matching Batect), independent of `network_options`.
     #[allow(clippy::too_many_arguments)]
     async fn run_container(
         &self,
@@ -446,6 +483,7 @@ pub trait ContainerRuntime {
         network: &str,
         interactive: bool,
         user_mapping: Option<&UserMapping>,
+        network_options: &NetworkOptions,
     ) -> Result<()>;
 }
 
@@ -460,14 +498,24 @@ impl DockerClient {
         Ok(Self { docker })
     }
 
-    async fn join_network(&self, container_id: &str, network: &str, alias: &str) -> Result<()> {
+    async fn join_network(
+        &self,
+        container_id: &str,
+        network: &str,
+        alias: &str,
+        additional_hostnames: Option<&Vec<String>>,
+    ) -> Result<()> {
+        let mut aliases = vec![alias.to_string()];
+        if let Some(additional_hostnames) = additional_hostnames {
+            aliases.extend(additional_hostnames.iter().cloned());
+        }
         self.docker
             .connect_network(
                 network,
                 NetworkConnectRequest {
                     container: container_id.to_string(),
                     endpoint_config: Some(EndpointSettings {
-                        aliases: Some(vec![alias.to_string()]),
+                        aliases: Some(aliases),
                         ..Default::default()
                     }),
                 },
@@ -788,6 +836,7 @@ impl ContainerRuntime for DockerClient {
         environment: Option<&HashMap<String, String>>,
         network: &str,
         user_mapping: Option<&UserMapping>,
+        network_options: &NetworkOptions,
     ) -> Result<String> {
         if user_mapping.is_some() {
             ensure_host_volume_directories_exist(volumes)?;
@@ -795,10 +844,12 @@ impl ContainerRuntime for DockerClient {
 
         let host_config = HostConfig {
             binds: volumes.cloned(),
+            extra_hosts: build_extra_hosts(network_options.additional_hosts),
             ..Default::default()
         };
 
         let config = Config {
+            hostname: Some(alias.to_string()),
             image: Some(image.to_string()),
             env: build_env(environment),
             user: user_mapping.map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
@@ -817,7 +868,13 @@ impl ContainerRuntime for DockerClient {
             self.apply_user_mapping(&container.id, mapping).await?;
         }
 
-        self.join_network(&container.id, network, alias).await?;
+        self.join_network(
+            &container.id,
+            network,
+            alias,
+            network_options.additional_hostnames,
+        )
+        .await?;
 
         self.docker
             .start_container(&container.id, None)
@@ -852,6 +909,7 @@ impl ContainerRuntime for DockerClient {
         network: &str,
         interactive: bool,
         user_mapping: Option<&UserMapping>,
+        network_options: &NetworkOptions,
     ) -> Result<()> {
         let use_tty = should_use_tty(
             interactive,
@@ -865,10 +923,12 @@ impl ContainerRuntime for DockerClient {
 
         let host_config = HostConfig {
             binds: volumes.cloned(),
+            extra_hosts: build_extra_hosts(network_options.additional_hosts),
             ..Default::default()
         };
 
         let config = Config {
+            hostname: Some(name.to_string()),
             image: Some(image.to_string()),
             cmd: build_cmd(command, additional_args),
             env: build_env(environment),
@@ -890,7 +950,13 @@ impl ContainerRuntime for DockerClient {
             self.apply_user_mapping(&container.id, mapping).await?;
         }
 
-        self.join_network(&container.id, network, name).await?;
+        self.join_network(
+            &container.id,
+            network,
+            name,
+            network_options.additional_hostnames,
+        )
+        .await?;
 
         let exit_code = if use_tty {
             self.run_container_interactively(&container.id).await?
@@ -950,6 +1016,26 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn build_extra_hosts_formats_and_sorts_name_ip_pairs() {
+        let mut hosts = HashMap::new();
+        hosts.insert("zeta-service".to_string(), "10.0.0.2".to_string());
+        hosts.insert("alpha-service".to_string(), "10.0.0.1".to_string());
+
+        assert_eq!(
+            build_extra_hosts(Some(&hosts)),
+            Some(vec![
+                "alpha-service:10.0.0.1".to_string(),
+                "zeta-service:10.0.0.2".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn build_extra_hosts_is_none_when_additional_hosts_is_absent() {
+        assert_eq!(build_extra_hosts(None), None);
     }
 
     #[test]
