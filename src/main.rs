@@ -28,6 +28,11 @@ struct Args {
     #[arg(long = "config-vars-file")]
     config_vars_file: Option<PathBuf>,
 
+    /// Existing Docker network to use for all tasks. If not set, a new
+    /// network is created (and removed) for each task.
+    #[arg(long = "use-network")]
+    use_network: Option<String>,
+
     /// Name of the task to run
     task_name: Option<String>,
 
@@ -135,7 +140,10 @@ async fn run() -> Result<()> {
     match args.task_name {
         Some(task_name) => {
             let docker = DockerClient::new()?;
-            let engine = TaskEngine::new(config, docker);
+            let mut engine = TaskEngine::new(config, docker);
+            if let Some(network) = args.use_network {
+                engine = engine.with_existing_network(network);
+            }
             engine.run_task(&task_name, &args.additional_args).await?;
         }
         None => {
@@ -253,5 +261,18 @@ mod tests {
         let args = Args::try_parse_from(["ratect"]).unwrap();
         assert!(args.config_var.is_empty());
         assert_eq!(args.config_vars_file, None);
+    }
+
+    #[test]
+    fn parses_use_network_flag() {
+        let args =
+            Args::try_parse_from(["ratect", "--use-network", "my-network", "build"]).unwrap();
+        assert_eq!(args.use_network, Some("my-network".to_string()));
+    }
+
+    #[test]
+    fn defaults_use_network_to_none() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert_eq!(args.use_network, None);
     }
 }

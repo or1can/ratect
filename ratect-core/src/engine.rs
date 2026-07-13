@@ -39,6 +39,10 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     /// — see `resolve_image` for why.
     built_images: Mutex<HashMap<String, String>>,
     in_progress_tasks: Mutex<HashSet<String>>,
+    /// Set via `--use-network`: an existing Docker network to reuse for
+    /// every task in this invocation instead of creating a fresh one per
+    /// task. `None` (the default) preserves today's behavior.
+    existing_network: Option<String>,
 }
 
 impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
@@ -50,7 +54,17 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             pulled_images: Mutex::new(HashSet::new()),
             built_images: Mutex::new(HashMap::new()),
             in_progress_tasks: Mutex::new(HashSet::new()),
+            existing_network: None,
         }
+    }
+
+    /// Opts into `--use-network`: `network` is validated to exist (and
+    /// reused, never torn down) for every task run through this engine,
+    /// instead of each task getting a fresh network created and removed
+    /// around it. See `run_task_internal`.
+    pub fn with_existing_network(mut self, network: String) -> Self {
+        self.existing_network = Some(network);
+        self
     }
 
     /// Resolves `container_config`'s `image` (pulling it, deduped by image
@@ -251,8 +265,26 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         // regardless of outcome. Not shared across tasks — see docs/task-lifecycle.md.
         // Always created, even with no dependencies, so the task's own
         // container is never left on Docker's shared default bridge network.
-        let network_name = format!("ratect-{}", Uuid::new_v4());
-        self.docker.create_network(&network_name).await?;
+        //
+        // Unless `--use-network` was given (`self.existing_network`), in which
+        // case that network is validated to exist and reused instead —
+        // checked fresh on every task execution, never cached — and, since
+        // Ratect didn't create it, it's never removed during cleanup either
+        // (matching Batect: cleanup only ever tears down networks it created
+        // itself).
+        let network_name = match &self.existing_network {
+            Some(name) => {
+                if !self.docker.network_exists(name).await? {
+                    anyhow::bail!("The network '{}' does not exist.", name);
+                }
+                name.clone()
+            }
+            None => {
+                let name = format!("ratect-{}", Uuid::new_v4());
+                self.docker.create_network(&name).await?;
+                name
+            }
+        };
 
         let mut running_sidecars: HashMap<String, String> = HashMap::new();
         let mut resolving: HashSet<String> = HashSet::new();
@@ -309,8 +341,10 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 );
             }
         }
-        if let Err(e) = self.docker.remove_network(&network_name).await {
-            tracing::warn!(network = network_name.as_str(), error = ?e, "Failed to remove network");
+        if self.existing_network.is_none() {
+            if let Err(e) = self.docker.remove_network(&network_name).await {
+                tracing::warn!(network = network_name.as_str(), error = ?e, "Failed to remove network");
+            }
         }
 
         result
@@ -393,7 +427,7 @@ mod tests {
     /// `(uid, gid, home_directory)`, keyed by container name.
     type CapturedUserMapping = Arc<Mutex<HashMap<String, Option<(u32, u32, String)>>>>;
 
-    #[derive(Default, Clone)]
+    #[derive(Clone)]
     struct FakeContainerRuntime {
         events: Arc<Mutex<Vec<String>>>,
         fail_run: Arc<Mutex<bool>>,
@@ -416,6 +450,24 @@ mod tests {
         // The `user_mapping` a prior `run_container`/`start_background_container`
         // call for a given container name was given (see `user_mapping_for`).
         user_mapping: CapturedUserMapping,
+        // What `network_exists` reports — defaults to `true` so tests that
+        // don't care about `--use-network` aren't affected.
+        network_exists_result: Arc<Mutex<bool>>,
+    }
+
+    impl Default for FakeContainerRuntime {
+        fn default() -> Self {
+            Self {
+                events: Default::default(),
+                fail_run: Default::default(),
+                environments: Default::default(),
+                build_args: Default::default(),
+                images: Default::default(),
+                interactive: Default::default(),
+                user_mapping: Default::default(),
+                network_exists_result: Arc::new(Mutex::new(true)),
+            }
+        }
     }
 
     impl FakeContainerRuntime {
@@ -431,6 +483,13 @@ mod tests {
         /// non-zero, the same way the real `DockerClient` does.
         fn failing_run(self) -> Self {
             *self.fail_run.lock().unwrap() = true;
+            self
+        }
+
+        /// Makes `network_exists` report `false` — simulates `--use-network`
+        /// pointing at a network that doesn't exist.
+        fn without_existing_network(self) -> Self {
+            *self.network_exists_result.lock().unwrap() = false;
             self
         }
 
@@ -509,6 +568,11 @@ mod tests {
         async fn remove_network(&self, name: &str) -> Result<()> {
             self.push(format!("network-remove:{name}"));
             Ok(())
+        }
+
+        async fn network_exists(&self, name: &str) -> Result<bool> {
+            self.push(format!("network-exists:{name}"));
+            Ok(*self.network_exists_result.lock().unwrap())
         }
 
         async fn start_background_container(
@@ -1313,6 +1377,69 @@ mod tests {
 
         let network = created[0].strip_prefix("network-create:").unwrap();
         assert!(events.contains(&format!("run:build-env:echo hi:args=[]:{network}")));
+    }
+
+    #[tokio::test]
+    async fn use_network_reuses_an_existing_network_instead_of_creating_one() {
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("build".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine =
+            TaskEngine::new(config, docker.clone()).with_existing_network("my-network".to_string());
+
+        engine.run_task("build", &[]).await.unwrap();
+
+        let events = docker.events();
+        assert!(
+            events.contains(&"network-exists:my-network".to_string()),
+            "the existing network must be checked: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| e.starts_with("network-create:")),
+            "an existing network must not be created: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| e.starts_with("network-remove:")),
+            "an existing network must not be torn down: {events:?}"
+        );
+        assert!(events.contains(&"run:build-env:echo hi:args=[]:my-network".to_string()));
+    }
+
+    #[tokio::test]
+    async fn use_network_errors_clearly_when_the_network_does_not_exist() {
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("build".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default().without_existing_network();
+        let engine =
+            TaskEngine::new(config, docker.clone()).with_existing_network("missing".to_string());
+
+        let result = engine.run_task("build", &[]).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing"));
+        let events = docker.events();
+        assert!(
+            !events.iter().any(|e| e.starts_with("run:")),
+            "nothing should have run: {events:?}"
+        );
     }
 
     #[tokio::test]

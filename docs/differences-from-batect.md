@@ -137,7 +137,7 @@ Batect's full flag list, from its [CLI reference](https://github.com/batect/bate
 | `--no-color` | Not supported | Ratect currently has no colored output to disable. |
 | `--no-cleanup`, `--no-cleanup-after-failure`, `--no-cleanup-after-success` | Not supported | Ratect always attempts to remove containers after running; there's no way to leave them for debugging. |
 | `--disable-ports` | N/A | Moot — no port publishing exists to disable. |
-| `--use-network` | Not supported | A minimal per-task network now exists (see `dependencies`) but there's no way to point it at an existing network instead. Roadmap: [Docker Networking](../ROADMAP.md#batect-parity). |
+| `--use-network` | Supported | Reuses an existing Docker network for every task in the invocation instead of creating a fresh one per task; never removed at cleanup, since Ratect didn't create it. See [task lifecycle](task-lifecycle.md). |
 | `--enable-buildkit` | Not supported | Images are built via Docker's classic (non-BuildKit) build API — no way to opt into BuildKit. |
 | `--tag-image` | Not supported | Built images are tagged `<project_name>-<container_name>` (like Batect's own default) — no way to additionally tag one with a custom name. |
 | `--config-vars-file`, `--config-var` | Supported | See [CLI reference](cli-reference.md) and [Expressions](#expressions). |
@@ -154,9 +154,11 @@ Batect behavior not implemented in task execution, beyond what's covered by the 
 tables above:
 
 - **Docker networking**: every task execution gets its own isolated network (see
-  [`dependencies`](#container-fields) and [the task lifecycle](task-lifecycle.md)), but
-  it's not Batect's fully configurable networking (custom drivers, `--use-network` to
-  reuse an existing network, etc.).
+  [`dependencies`](#container-fields) and [the task lifecycle](task-lifecycle.md)),
+  and `--use-network` can point that at an existing network instead — but it's not
+  Batect's fully configurable networking (custom drivers for a network Ratect creates
+  itself; the only way to get a different driver is to pre-create the network
+  yourself and `--use-network` it).
 - **Interactive mode**: supported for the invoked task's own container (never a
   prerequisite's, a dependency's, or a sidecar's) when both Ratect's own stdin and
   stdout are real terminals — see [Interactive mode](config-reference.md#interactive-mode).

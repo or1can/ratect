@@ -370,6 +370,12 @@ pub trait ContainerRuntime {
 
     async fn remove_network(&self, name: &str) -> Result<()>;
 
+    /// `true` if a network named (or IDed) `name` already exists — used to
+    /// validate `--use-network` up front, with a clear error, rather than
+    /// letting an unrelated Docker API failure surface later when trying to
+    /// join it.
+    async fn network_exists(&self, name: &str) -> Result<bool>;
+
     /// Starts a container in the background (does not wait for it to exit),
     /// joined to `network` with a network alias of `alias` so other
     /// containers on the same network can reach it by that name. Returns the
@@ -760,6 +766,18 @@ impl ContainerRuntime for DockerClient {
             .with_context(|| format!("Failed to remove network '{}'", name))?;
         tracing::debug!(network = name, "removed network");
         Ok(())
+    }
+
+    async fn network_exists(&self, name: &str) -> Result<bool> {
+        match self.docker.inspect_network(name, None).await {
+            Ok(_) => Ok(true),
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => Ok(false),
+            Err(e) => {
+                Err(e).with_context(|| format!("Failed to check whether network '{}' exists", name))
+            }
+        }
     }
 
     async fn start_background_container(

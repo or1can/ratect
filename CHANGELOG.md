@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`--use-network`**: reuses an existing Docker network for every task in an
+  invocation instead of creating (and removing) a fresh one per task, matching
+  Batect's flag of the same name.
+  - New `ContainerRuntime::network_exists` (`ratect-core/src/docker.rs`), backed by
+    `bollard`'s `inspect_network`, validates the named network up front with a clear
+    error (`"The network '{name}' does not exist."`) rather than failing later with an
+    unrelated Docker API error when trying to join it.
+  - `TaskEngine::with_existing_network` (`ratect-core/src/engine.rs`) opts a task
+    engine into reusing a network; when set, `run_task_internal` skips both
+    `create_network` and `remove_network` for that network — Ratect didn't create it,
+    so cleanup never removes it either, matching Batect (which only ever tears down
+    networks it created itself).
+
 ## [0.5.0] - 2026-07-13
 
 ### Added

@@ -804,3 +804,93 @@ tasks:
 
     cleanup();
 }
+
+/// Requires a running Docker daemon. Run explicitly with `cargo test -- --ignored`.
+///
+/// Pre-creates a real Docker network via the `docker` CLI, runs a task with
+/// `--use-network` pointed at it, and proves both halves of the behavior:
+/// the run succeeds (so the container really did join it), and the network
+/// still exists afterward — Ratect didn't create it, so it must not remove
+/// it either, unlike the per-task networks it creates by default.
+#[test]
+#[ignore]
+fn use_network_reuses_an_existing_docker_network() {
+    let network_name = format!(
+        "ratect-use-network-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+
+    let create = Command::new("docker")
+        .args(["network", "create", &network_name])
+        .output()
+        .expect("failed to run docker network create");
+    assert!(
+        create.status.success(),
+        "failed to create test network: {}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+
+    let cleanup = || {
+        let _ = Command::new("docker")
+            .args(["network", "rm", &network_name])
+            .output();
+    };
+
+    let output = ratect_command()
+        .arg("-f")
+        .arg(sample_config_path())
+        .arg("--use-network")
+        .arg(&network_name)
+        .arg("shared-prereq")
+        .output()
+        .expect("failed to run ratect");
+
+    if !output.status.success() {
+        cleanup();
+        panic!(
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let inspect = Command::new("docker")
+        .args(["network", "inspect", &network_name])
+        .output()
+        .expect("failed to run docker network inspect");
+    assert!(
+        inspect.status.success(),
+        "the existing network should still exist after the run, not be removed by ratect"
+    );
+
+    cleanup();
+}
+
+/// Requires a running Docker daemon (to distinguish "network doesn't exist"
+/// from a connection failure). Run explicitly with `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn use_network_errors_clearly_for_a_nonexistent_network() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(sample_config_path())
+        .arg("--use-network")
+        .arg("ratect-network-that-does-not-exist")
+        .arg("shared-prereq")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        !output.status.success(),
+        "ratect should fail when --use-network points at a network that doesn't exist"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ratect-network-that-does-not-exist"),
+        "the error should name the missing network: {stderr}"
+    );
+}

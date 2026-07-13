@@ -71,6 +71,12 @@ If the container has no `dependencies`, the dependency steps (the `loop` above) 
 skipped — but the network is still created and the task's own container still joins
 it, isolating it just the same as a task with dependencies.
 
+Passing `--use-network <name>` skips network creation and teardown entirely for every
+task in this invocation: the named network is checked to exist up front (a clear error
+if it doesn't), and reused instead — dependencies and the task's own container all join
+it exactly as they would a freshly-created one, but it's never removed at cleanup,
+since Ratect didn't create it. See [CLI reference](cli-reference.md).
+
 ## Dependency resolution
 
 Dependencies are resolved **depth-first and recursively**: if a dependency's own
@@ -149,6 +155,8 @@ colliding.
   a time. Parallel task execution generally is a separate
   [roadmap](../ROADMAP.md#rust-enhancements) item.
 - **Minimal networking.** The network created here exists only to make dependency
-  containers reachable by name for the duration of one task. It's not the
-  fully-configurable Docker networking Batect offers (custom drivers, `--use-network`,
-  etc.) — see [differences from Batect](differences-from-batect.md).
+  containers reachable by name for the duration of one task (or, with
+  `--use-network`, an existing network you reuse instead). It's not the
+  fully-configurable Docker networking Batect offers (custom drivers, other than by
+  pre-creating the network yourself) — see
+  [differences from Batect](differences-from-batect.md).
