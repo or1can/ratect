@@ -149,14 +149,10 @@ impl<'de> Deserialize<'de> for PortRange {
     }
 }
 
-impl Serialize for PortRange {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
-    }
-}
+// No `Serialize` impl for `PortRange` on its own: it only ever appears
+// inside a `PortMapping`, whose hand-written `Serialize` below formats the
+// whole `"local:container/protocol"` string itself (via `Display`), so a
+// bare-`PortRange` serializer would be dead code.
 
 /// A `ports` entry: publishes `local` (a container's `container` port, or
 /// range) to the host. Accepts either Batect form — a
@@ -1154,6 +1150,110 @@ tasks: {}
                 (8002, 9002, "udp".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn port_mapping_parse_string_rejects_an_empty_definition() {
+        assert!(PortMapping::parse_string("")
+            .unwrap_err()
+            .to_string()
+            .contains("cannot be empty"));
+    }
+
+    #[test]
+    fn port_mapping_parse_string_rejects_a_definition_without_a_colon() {
+        assert!(PortMapping::parse_string("8080").is_err());
+    }
+
+    #[test]
+    fn port_mapping_parse_string_rejects_an_empty_component() {
+        assert!(PortMapping::parse_string("8080:80/").is_err());
+        assert!(PortMapping::parse_string(":80").is_err());
+        assert!(PortMapping::parse_string("8080:").is_err());
+    }
+
+    #[test]
+    fn parsing_ports_object_form_rejects_an_unknown_field() {
+        let result = try_parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    ports:
+      - local: 8080
+        container: 80
+        banana: 1
+tasks: {}
+"#,
+        );
+        // `{:?}` renders anyhow's full context chain — the serde detail
+        // naming the field sits below `try_parse`'s own outer context.
+        assert!(format!("{:?}", result.unwrap_err()).contains("banana"));
+    }
+
+    #[test]
+    fn parsing_ports_object_form_rejects_a_missing_local_or_container() {
+        for object in ["local: 8080", "container: 80"] {
+            let result = try_parse(&format!(
+                r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    ports:
+      - {object}
+tasks: {{}}
+"#,
+            ));
+            assert!(result.is_err(), "'{object}' alone should be rejected");
+        }
+    }
+
+    #[test]
+    fn parsing_a_port_mapping_that_is_neither_string_nor_object_is_an_error() {
+        let result = try_parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    ports:
+      - true
+tasks: {}
+"#,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parsing_a_port_range_that_is_neither_number_nor_string_is_an_error() {
+        let result = try_parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    ports:
+      - local: true
+        container: 80
+tasks: {}
+"#,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn port_mapping_serializes_to_its_string_form_and_round_trips() {
+        let single = port_mapping((8080, 8080), (80, 80), "tcp");
+        let ranged = port_mapping((8000, 8002), (9000, 9002), "udp");
+
+        for mapping in [single, ranged] {
+            let yaml = noyalib::to_string(&mapping).expect("should serialize");
+            let reparsed: PortMapping = noyalib::from_reader(Cursor::new(yaml.as_bytes()))
+                .expect("the serialized form should re-parse");
+            assert_eq!(reparsed, mapping, "round-trip through: {yaml}");
+        }
     }
 
     #[test]
