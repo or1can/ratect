@@ -7,22 +7,61 @@ use std::path::Path;
 use std::sync::Mutex;
 use uuid::Uuid;
 
-/// Merges a container's `environment` with a task's `run.environment`
-/// (which wins on key collision), matching Batect: the container's is the
-/// baseline, the run's is a per-task override on top of it. `None` only
-/// when neither is set.
+/// The host environment lookup `TaskEngine` reads proxy variables from —
+/// boxed so the real `std::env::var`-backed closure and a fixed test
+/// closure share one field type.
+type HostEnv = Box<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
+/// Merges proxy-derived environment variables (see
+/// `TaskEngine::proxy_environment_variables`), a container's `environment`,
+/// and a task's `run.environment`, each overriding the last on key
+/// collision — proxy vars are the lowest-precedence base, matching Batect
+/// (`terminalEnvironmentVariablesFor + proxyEnvironmentVariables +
+/// substituteEnvironmentVariables`, later entries winning); the
+/// container's `environment` overrides proxy vars, and `run.environment`
+/// overrides both. `None` only when none of the three are set.
 fn merged_environment(
+    proxy_vars: Option<&HashMap<String, String>>,
     container_env: Option<&HashMap<String, String>>,
     run_env: Option<&HashMap<String, String>>,
 ) -> Option<HashMap<String, String>> {
-    if container_env.is_none() && run_env.is_none() {
+    if proxy_vars.is_none() && container_env.is_none() && run_env.is_none() {
         return None;
     }
-    let mut merged = container_env.cloned().unwrap_or_default();
+    let mut merged = proxy_vars.cloned().unwrap_or_default();
+    if let Some(container_env) = container_env {
+        merged.extend(container_env.clone());
+    }
     if let Some(run_env) = run_env {
         merged.extend(run_env.clone());
     }
     Some(merged)
+}
+
+/// Returns `root` plus every container name transitively reachable from it
+/// via `dependencies` — the full set of containers that will share one
+/// task's network. Used as the `no_proxy` "these are local, don't proxy
+/// traffic to them" exemption list passed to
+/// `proxy::proxy_environment_variables`.
+///
+/// Visited-set-guarded so a config cycle can't hang this pure walk — real
+/// cycle detection (which actually rejects a cycle as a user-facing error)
+/// still happens separately, in `TaskEngine::start_dependency`.
+fn container_names_in_task(
+    containers: &HashMap<String, Container>,
+    root: &str,
+) -> std::collections::BTreeSet<String> {
+    let mut names = std::collections::BTreeSet::new();
+    let mut stack = vec![root.to_string()];
+    while let Some(name) = stack.pop() {
+        if !names.insert(name.clone()) {
+            continue;
+        }
+        if let Some(dependencies) = containers.get(&name).and_then(|c| c.dependencies.as_ref()) {
+            stack.extend(dependencies.iter().cloned());
+        }
+    }
+    names
 }
 
 pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
@@ -47,6 +86,16 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     /// container's `ports` regardless of config, matching Batect's
     /// `disablePortMappings`. `true` (the default) publishes them.
     publish_ports: bool,
+    /// `false` when `--no-proxy-vars` was given: suppresses proxy
+    /// environment variable propagation entirely, matching Batect's
+    /// `dontPropagateProxyEnvironmentVariables`. `true` (the default)
+    /// propagates them.
+    propagate_proxy_environment_variables: bool,
+    /// The host environment lookup `proxy::proxy_environment_variables`
+    /// reads from — real `std::env::var` in the real constructor, a fixed
+    /// closure in tests (see `with_host_env`), same reason
+    /// `config.rs::resolve_expressions_with` parameterizes over this.
+    host_env: HostEnv,
 }
 
 impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
@@ -60,6 +109,8 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             in_progress_tasks: Mutex::new(HashSet::new()),
             existing_network: None,
             publish_ports: true,
+            propagate_proxy_environment_variables: true,
+            host_env: Box::new(|name| std::env::var(name).ok()),
         }
     }
 
@@ -77,6 +128,40 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     pub fn without_port_publishing(mut self) -> Self {
         self.publish_ports = false;
         self
+    }
+
+    /// Opts into `--no-proxy-vars`: proxy environment variables are never
+    /// propagated into a container's environment or a build's `build_args`,
+    /// regardless of what's set in the host environment.
+    pub fn without_proxy_environment_variables(mut self) -> Self {
+        self.propagate_proxy_environment_variables = false;
+        self
+    }
+
+    #[cfg(test)]
+    fn with_host_env(
+        mut self,
+        host_env: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+    ) -> Self {
+        self.host_env = Box::new(host_env);
+        self
+    }
+
+    /// The proxy environment variables to inject for a container in this
+    /// task, or `None` when propagation is disabled (`--no-proxy-vars`) or
+    /// the host environment has none set — an empty map is normalized to
+    /// `None` here so `merged_environment`'s "`None` only when nothing at
+    /// all is set" behavior isn't disturbed by an empty-but-`Some` map.
+    fn proxy_environment_variables(
+        &self,
+        extra_no_proxy_entries: &std::collections::BTreeSet<String>,
+    ) -> Option<HashMap<String, String>> {
+        if !self.propagate_proxy_environment_variables {
+            return None;
+        }
+        let host_env = |name: &str| (self.host_env)(name);
+        let vars = crate::proxy::proxy_environment_variables(host_env, extra_no_proxy_entries);
+        (!vars.is_empty()).then_some(vars)
     }
 
     /// Resolves `container_config`'s `image` (pulling it, deduped by image
@@ -127,13 +212,18 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             }
 
             let tag = format!("{}-{}", self.config.project_name, container_name);
+            // No `extra_no_proxy_entries` at build time — matches Batect,
+            // which never adds container names to `no_proxy` for a build
+            // (nothing's running yet to be exempted from proxying).
+            let proxy_vars = self.proxy_environment_variables(&std::collections::BTreeSet::new());
+            let build_args = merged_environment(
+                proxy_vars.as_ref(),
+                container_config.build_args.as_ref(),
+                None,
+            );
             let image_id = self
                 .docker
-                .build_image(
-                    Path::new(build_directory),
-                    container_config.build_args.as_ref(),
-                    &tag,
-                )
+                .build_image(Path::new(build_directory), build_args.as_ref(), &tag)
                 .await?;
 
             let mut built = self.built_images.lock().unwrap();
@@ -300,6 +390,13 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
 
         let mut running_sidecars: HashMap<String, String> = HashMap::new();
         let mut resolving: HashSet<String> = HashSet::new();
+        // Fixed for the whole task, computed once up front — every
+        // container started for this task (the task's own and each
+        // dependency) gets the same `no_proxy` exemption list, matching
+        // Batect's `allContainersInNetwork` being fixed for the whole graph
+        // rather than recomputed per container.
+        let no_proxy_entries =
+            container_names_in_task(&self.config.containers, &task.run.container);
 
         let result: Result<()> = async {
             if let Some(deps) = &container_config.dependencies {
@@ -309,6 +406,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         &network_name,
                         &mut running_sidecars,
                         &mut resolving,
+                        &no_proxy_entries,
                     )
                     .await?;
                 }
@@ -317,7 +415,9 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             let image = self
                 .resolve_image(&task.run.container, container_config)
                 .await?;
+            let proxy_vars = self.proxy_environment_variables(&no_proxy_entries);
             let environment = merged_environment(
+                proxy_vars.as_ref(),
                 container_config.environment.as_ref(),
                 task.run.environment.as_ref(),
             );
@@ -376,12 +476,14 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     /// execution. `running` dedupes within that scope; `resolving` detects
     /// circular container dependencies.
     #[async_recursion]
+    #[allow(clippy::too_many_arguments)]
     async fn start_dependency(
         &self,
         name: &str,
         network: &str,
         running: &mut HashMap<String, String>,
         resolving: &mut HashSet<String>,
+        no_proxy_entries: &std::collections::BTreeSet<String>,
     ) -> Result<()> {
         if running.contains_key(name) {
             return Ok(());
@@ -402,13 +504,19 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
 
         if let Some(nested) = &dependency_config.dependencies {
             for nested_name in nested {
-                self.start_dependency(nested_name, network, running, resolving)
+                self.start_dependency(nested_name, network, running, resolving, no_proxy_entries)
                     .await?;
             }
         }
 
         let image = self.resolve_image(name, dependency_config).await?;
         let user_mapping = self.resolve_user_mapping(dependency_config).await?;
+        let proxy_vars = self.proxy_environment_variables(no_proxy_entries);
+        let environment = merged_environment(
+            proxy_vars.as_ref(),
+            dependency_config.environment.as_ref(),
+            None,
+        );
         let network_options = crate::docker::NetworkOptions {
             additional_hostnames: dependency_config.additional_hostnames.as_ref(),
             additional_hosts: dependency_config.additional_hosts.as_ref(),
@@ -424,7 +532,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 name,
                 &image,
                 dependency_config.volumes.as_ref(),
-                dependency_config.environment.as_ref(),
+                environment.as_ref(),
                 network,
                 user_mapping.as_ref(),
                 &network_options,
@@ -2169,6 +2277,186 @@ mod tests {
 
         let environment = docker.environment_for("build-env").unwrap();
         assert_eq!(environment.get("SHARED"), Some(&"from-run".to_string()));
+    }
+
+    #[tokio::test]
+    async fn proxy_environment_variables_reach_a_tasks_own_container() {
+        let mut containers = HashMap::new();
+        containers.insert("app".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("run".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone()).with_host_env(|name| {
+            (name == "http_proxy").then(|| "http://proxy.example.com".to_string())
+        });
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        let environment = docker.environment_for("app").unwrap();
+        assert_eq!(
+            environment.get("http_proxy"),
+            Some(&"http://proxy.example.com".to_string())
+        );
+        assert_eq!(
+            environment.get("HTTP_PROXY"),
+            Some(&"http://proxy.example.com".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_environment_overrides_a_proxy_derived_value_on_collision() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.environment = Some(HashMap::from([(
+            "http_proxy".to_string(),
+            "http://explicit.example.com".to_string(),
+        )]));
+        let mut containers = HashMap::new();
+        containers.insert("app".to_string(), container_config);
+        let mut tasks = HashMap::new();
+        tasks.insert("run".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone()).with_host_env(|name| {
+            (name == "http_proxy").then(|| "http://proxy.example.com".to_string())
+        });
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        let environment = docker.environment_for("app").unwrap();
+        assert_eq!(
+            environment.get("http_proxy"),
+            Some(&"http://explicit.example.com".to_string()),
+            "the container's own explicit environment should win over the proxy-derived value"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_proxy_vars_flag_suppresses_propagation() {
+        let mut containers = HashMap::new();
+        containers.insert("app".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("run".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone())
+            .with_host_env(|name| {
+                (name == "http_proxy").then(|| "http://proxy.example.com".to_string())
+            })
+            .without_proxy_environment_variables();
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.environment_for("app"),
+            None,
+            "--no-proxy-vars should suppress propagation entirely"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dependencys_name_is_exempted_from_the_tasks_own_no_proxy() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        containers.insert("database".to_string(), container("postgres:16", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("run".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone()).with_host_env(|name| {
+            (name == "http_proxy").then(|| "http://proxy.example.com".to_string())
+        });
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        let app_no_proxy = docker.environment_for("app").unwrap();
+        let app_no_proxy = app_no_proxy.get("no_proxy").unwrap();
+        assert!(app_no_proxy.split(',').any(|entry| entry == "database"));
+        assert!(app_no_proxy.split(',').any(|entry| entry == "app"));
+
+        let database_no_proxy = docker.environment_for("database").unwrap();
+        let database_no_proxy = database_no_proxy.get("no_proxy").unwrap();
+        assert!(database_no_proxy
+            .split(',')
+            .any(|entry| entry == "database"));
+        assert!(database_no_proxy.split(',').any(|entry| entry == "app"));
+    }
+
+    #[tokio::test]
+    async fn build_args_get_proxy_vars_merged_with_explicit_build_args_winning() {
+        let mut build_args = HashMap::new();
+        build_args.insert(
+            "http_proxy".to_string(),
+            "http://explicit.example.com".to_string(),
+        );
+        let mut containers = HashMap::new();
+        containers.insert(
+            "build-env".to_string(),
+            container_with_build_directory("./docker", Some(build_args)),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("build".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone()).with_host_env(|name| match name {
+            "http_proxy" => Some("http://proxy.example.com".to_string()),
+            "no_proxy" => Some("existing.example.com".to_string()),
+            _ => None,
+        });
+
+        engine.run_task("build", &[]).await.unwrap();
+
+        let events = docker.events();
+        let tag = events
+            .iter()
+            .find_map(|e| e.strip_prefix("build:"))
+            .and_then(|rest| rest.split(':').next())
+            .expect("image should have been built");
+        let build_args = docker.build_args_for(tag).unwrap();
+
+        assert_eq!(
+            build_args.get("http_proxy"),
+            Some(&"http://explicit.example.com".to_string()),
+            "explicit build_args should win over the proxy-derived value"
+        );
+        assert_eq!(
+            build_args.get("no_proxy"),
+            Some(&"existing.example.com".to_string()),
+            "a proxy var with no explicit build_arg override should still be merged in"
+        );
     }
 
     #[tokio::test]

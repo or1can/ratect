@@ -144,7 +144,7 @@ Batect's full flag list, from its [CLI reference](https://github.com/batect/bate
 | `--docker-host`, `--docker-context`, `--docker-config`, `--docker-cert-path`, `--docker-tls*` | Not supported | Ratect connects using Docker's local defaults only, with no CLI overrides. |
 | `--cache-type`, `--clean`, `--clean-cache` | N/A | Moot — no cache concept exists (Batect's caches are for build performance, not implemented here). |
 | `--max-parallelism` | N/A | Moot — Ratect doesn't run anything in parallel yet. Roadmap: [Parallel Task Execution](../ROADMAP.md#rust-enhancements). |
-| `--no-proxy-vars` | N/A | Moot — no proxy propagation exists yet. Roadmap: [Proxy Support](../ROADMAP.md#batect-parity). |
+| `--no-proxy-vars` | Supported | Disables proxy environment variable propagation entirely — see [Proxy environment variables](config-reference.md#proxy-environment-variables). |
 | `--log-file` | Different mechanism | Ratect uses `RUST_LOG` + stderr instead of a dedicated log-file flag — see [CLI reference](cli-reference.md#environment-variables). |
 | `--no-update-notification`, `--upgrade`, `--no-wrapper-cache-cleanup` | N/A | Moot — Ratect isn't distributed via a self-updating wrapper script. |
 
@@ -168,6 +168,13 @@ tables above:
   task without allocating a TTY; Ratect gates both together).
 - **Parallel execution**: prerequisites run sequentially, not in parallel — Batect runs
   independent setup/cleanup steps concurrently.
+- **Proxy support**: `http_proxy`/`https_proxy`/`ftp_proxy`/`no_proxy` are detected from
+  the host environment and propagated into containers and builds automatically — see
+  [Proxy environment variables](config-reference.md#proxy-environment-variables). The
+  `localhost`-rewriting half of this only works on macOS/Windows (no automatic
+  Docker-reachable hostname on Linux), and there's no Docker-version-gated hostname
+  fallback chain the way Batect has for very old Docker installs — both accepted gaps,
+  not worth chasing for any actively-maintained Docker daemon.
 
 ## What Ratect *does* support today
 

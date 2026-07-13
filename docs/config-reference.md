@@ -237,6 +237,36 @@ A few things to know about what this doesn't do yet:
   a non-interactive run). Ratect gates both together — no support yet for piping input
   into a task that isn't otherwise running interactively.
 
+## Proxy environment variables
+
+There's no config field for this either — like [interactive mode](#interactive-mode),
+it's automatic, matching Batect's own behavior. Whenever `http_proxy`, `https_proxy`,
+`ftp_proxy`, or `no_proxy` (in either case, e.g. `HTTP_PROXY` too) are set in the
+environment `ratect` itself runs in, they're injected into every container's
+environment and every image build's `build_args` — so a task or a build that needs to
+reach the network through a proxy just works, without repeating proxy settings in
+`environment`/`build_args` by hand.
+
+A few details worth knowing:
+
+- **Precedence**: injected proxy variables are the lowest-precedence layer — a
+  container's own `environment`, and a task's `run.environment`, both override a
+  proxy-derived value on a key collision (see [TaskRun](#taskrun) for how those two
+  combine with each other). `build_args` works the same way for builds.
+- **`no_proxy` is extended automatically**: every container sharing a task's network
+  (the task's own container and each of its dependencies) has its own name appended to
+  `no_proxy`/`NO_PROXY`, so traffic between them isn't sent through the proxy. Not done
+  for image builds — nothing's running yet during a build, so there's nothing to
+  exempt.
+- **`localhost` rewriting**: `http_proxy`/`https_proxy`/`ftp_proxy` values that point at
+  `localhost`, `127.0.0.1`, or `::1` are rewritten to `host.docker.internal`, since
+  `localhost` from *inside* a container refers to the container itself, not the host
+  machine running a proxy. Only rewritten on macOS and Windows (where Docker Desktop
+  provides `host.docker.internal` automatically) — left unchanged on Linux, where
+  there's no automatic equivalent. A value that isn't a `http`/`https` URL, or doesn't
+  refer to the local machine, is also left unchanged.
+- **`--no-proxy-vars`** disables all of this. See [CLI reference](cli-reference.md).
+
 ## ConfigVariable
 
 ```yaml

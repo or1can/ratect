@@ -73,6 +73,10 @@ fn ports_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ports.yml")
 }
 
+fn proxy_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/proxy.yml")
+}
+
 /// Polls `127.0.0.1:<port>` until a TCP connection succeeds or `timeout`
 /// elapses. Just proves the port is reachable — no HTTP semantics needed,
 /// a bare TCP connect is already proof `ports` actually published it.
@@ -1015,4 +1019,75 @@ fn disable_ports_flag_suppresses_port_publishing() {
         "the port should not be reachable when --disable-ports is set"
     );
     assert!(status.success(), "ratect should exit successfully");
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Sets `http_proxy`/`no_proxy` on ratect's own process env (not the
+/// container's — that's the whole point: ratect running on the host reads
+/// its own env and injects the derived values into the container).
+/// `tests/fixtures/proxy.yml`'s `app` container has a dependency
+/// (`database`) sharing its network, so this also proves the automatic
+/// `no_proxy` container-name exemption reaches the real container, not
+/// just the isolated unit-tested merge logic.
+#[test]
+#[ignore]
+fn proxy_environment_variables_are_propagated_into_the_container() {
+    let output = ratect_command()
+        .env("http_proxy", "http://proxy.example.com:8080")
+        .env("no_proxy", "existing.example.com")
+        .arg("-f")
+        .arg(proxy_config_path())
+        .arg("print-proxy-vars")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("HTTP_PROXY=http://proxy.example.com:8080"),
+        "the host's http_proxy should reach the container: {stdout}"
+    );
+    assert!(
+        stdout.contains("existing.example.com"),
+        "the host's own no_proxy value should be preserved: {stdout}"
+    );
+    assert!(
+        stdout.contains("app") && stdout.contains("database"),
+        "both containers sharing this task's network should be auto-exempted \
+         from proxying: {stdout}"
+    );
+}
+
+/// Same real-Docker requirements as
+/// `proxy_environment_variables_are_propagated_into_the_container`.
+#[test]
+#[ignore]
+fn no_proxy_vars_flag_disables_propagation() {
+    let output = ratect_command()
+        .env("http_proxy", "http://proxy.example.com:8080")
+        .arg("-f")
+        .arg(proxy_config_path())
+        .arg("--no-proxy-vars")
+        .arg("print-proxy-vars")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("HTTP_PROXY=") && !stdout.contains("proxy.example.com"),
+        "--no-proxy-vars should suppress propagation entirely: {stdout}"
+    );
 }

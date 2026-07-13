@@ -47,6 +47,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     config, matching Batect's flag of the same name; `NetworkOptions` (added for
     `additional_hostnames`/`additional_hosts` above) gained a `ports` field so this
     stays one bundled parameter rather than a fourth flat one.
+- **Proxy environment variable propagation** (`--no-proxy-vars` to disable): detects
+  `http_proxy`/`https_proxy`/`ftp_proxy`/`no_proxy` (either case) from the host
+  environment and injects them into every container's environment and every image
+  build's `build_args`, matching Batect's automatic behavior.
+  - New `ratect-core/src/proxy.rs` module ports `ProxyEnvironmentVariablesProvider`/
+    `ProxyEnvironmentVariablePreprocessor` in spirit: case-insensitive host lookup,
+    `localhost`/`127.0.0.1`/`::1` URLs rewritten to `host.docker.internal` (macOS/
+    Windows only — no automatic equivalent on Linux, and no Docker-version-gated
+    hostname fallback chain the way Batect has, both accepted gaps), and every other
+    container name sharing a task's network auto-appended to `no_proxy`/`NO_PROXY`.
+  - Injected as the lowest-precedence layer — a container's own `environment`/
+    `run.environment`, or explicit `build_args`, always override a proxy-derived value
+    on a key collision.
+  - New `url` dependency (`ratect-core`) for the `localhost`-rewriting URL parsing —
+    already resolved transitively via `bollard`'s own dependency tree.
 
 ## [0.5.0] - 2026-07-13
 

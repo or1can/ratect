@@ -1,0 +1,17 @@
+# Exercises proxy environment variable propagation: a dependency
+# (`database`) plus the task's own container (`app`) sharing one network,
+# so the auto-appended `no_proxy` exemption (every container name in the
+# task) can be checked on both.
+project_name: ratect-proxy-test
+containers:
+  database:
+    image: alpine:3.18.2
+  app:
+    image: alpine:3.18.2
+    dependencies:
+      - database
+tasks:
+  print-proxy-vars:
+    run:
+      container: app
+      command: echo "HTTP_PROXY=$http_proxy" "NO_PROXY=$no_proxy"

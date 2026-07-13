@@ -38,6 +38,11 @@ struct Args {
     #[arg(long = "disable-ports")]
     disable_ports: bool,
 
+    /// Don't propagate proxy-related environment variables such as
+    /// http_proxy and no_proxy to image builds or containers.
+    #[arg(long = "no-proxy-vars")]
+    no_proxy_vars: bool,
+
     /// Name of the task to run
     task_name: Option<String>,
 
@@ -151,6 +156,9 @@ async fn run() -> Result<()> {
             }
             if args.disable_ports {
                 engine = engine.without_port_publishing();
+            }
+            if args.no_proxy_vars {
+                engine = engine.without_proxy_environment_variables();
             }
             engine.run_task(&task_name, &args.additional_args).await?;
         }
@@ -294,5 +302,17 @@ mod tests {
     fn defaults_disable_ports_to_false() {
         let args = Args::try_parse_from(["ratect"]).unwrap();
         assert!(!args.disable_ports);
+    }
+
+    #[test]
+    fn parses_no_proxy_vars_flag() {
+        let args = Args::try_parse_from(["ratect", "--no-proxy-vars", "build"]).unwrap();
+        assert!(args.no_proxy_vars);
+    }
+
+    #[test]
+    fn defaults_no_proxy_vars_to_false() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert!(!args.no_proxy_vars);
     }
 }
