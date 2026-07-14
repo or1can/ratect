@@ -33,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     without this, a `repo`/submodule URL of the form `ext::sh -c ...` can execute
     arbitrary shell commands, since git otherwise resolves it at "user" trust level for
     a directly-invoked `clone`.
+  - **Containment**: a Git include's `path`, and every `include` entry declared
+    (transitively) by the file it names, must resolve within that repository's own
+    clone directory — an absolute path, a `../..` traversal, or a symlink pointing back
+    out are all rejected, rather than silently reading an arbitrary file elsewhere on
+    the host (verified end-to-end: a crafted bundle could otherwise merge in another
+    project's tasks/`environment` values, e.g. secrets, from outside its own repo). A
+    nested `type: git` include still works — it establishes its own fresh boundary
+    rather than inheriting (or being rejected by) its parent's.
   - Known gaps, deferred as follow-on work rather than blocking this release: no 30-day
     cache eviction sweep and no manual cache-clear CLI subcommand — `~/.ratect/incl`
     grows unbounded until removed by hand. See [config

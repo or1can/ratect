@@ -446,6 +446,67 @@ impl<'de> Deserialize<'de> for IncludeEntry {
     }
 }
 
+/// The Git-clone boundary a file's own further `include` entries must stay
+/// within, once traversal has crossed from the caller's own local project
+/// tree into a Git-included bundle's content — see the security note on
+/// [`Config::load_from_file_with_git_cache`]. Propagated through
+/// [`Config::load_from_file_with_git_cache`]'s traversal queue: a local file
+/// include inherits its declaring file's own boundary unchanged; a `type:
+/// git` include always establishes a fresh one, rooted at its own newly (or
+/// previously) cloned repository, regardless of the declaring file's own
+/// boundary.
+#[derive(Debug, Clone)]
+struct GitBoundary {
+    repo_dir: PathBuf,
+    remote: String,
+    git_ref: String,
+}
+
+impl GitBoundary {
+    /// Purely lexical containment check — deliberately runs before
+    /// `resolved` is confirmed to exist, so a `path` engineered to escape
+    /// (an absolute path, or a `../..` traversal) is rejected without ever
+    /// touching the filesystem at the escaped location.
+    fn check_contains(&self, resolved: &Path) -> Result<()> {
+        if resolved.starts_with(&self.repo_dir) {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "Included file '{}' escapes the Git repository '{}' at '{}' it was included from \
+             — includes reached through a Git include must resolve within that repository.",
+            resolved.display(),
+            self.remote,
+            self.git_ref
+        );
+    }
+
+    /// A second check against the *canonicalized* (symlink-resolved) form
+    /// of both paths, once `resolved` is confirmed to exist — closes the
+    /// gap `check_contains` alone can't: a malicious repository planting a
+    /// symlink inside its own clone that itself points back outside it
+    /// would still lexically "start with" `repo_dir`.
+    fn check_contains_canonical(&self, resolved: &Path) -> Result<()> {
+        let canonical_resolved = resolved
+            .canonicalize()
+            .with_context(|| format!("Failed to resolve {resolved:?}"))?;
+        let canonical_root = self
+            .repo_dir
+            .canonicalize()
+            .with_context(|| format!("Failed to resolve {:?}", self.repo_dir))?;
+        if canonical_resolved.starts_with(&canonical_root) {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "Included file '{}' escapes the Git repository '{}' at '{}' it was included from \
+             (via a symlink) — includes reached through a Git include must resolve within that \
+             repository.",
+            resolved.display(),
+            self.remote,
+            self.git_ref
+        );
+    }
+}
+
 /// One parsed YAML document, before include resolution/merging —
 /// [`Config::load_from_file`]'s traversal over `include` produces one of
 /// these per file (the root file and every included file, however deeply
@@ -548,6 +609,27 @@ impl Config {
     /// `config_variables` are merged across every loaded file, and a name
     /// defined in more than one file is a hard error naming both files —
     /// matching Batect's own `include` semantics.
+    ///
+    /// **Containment**: once an include is reached *through* a Git include —
+    /// the entry itself, or any local file include declared (transitively)
+    /// by the file it named — its resolved path must stay within that Git
+    /// repository's own clone directory. `repo`/`ref`/`path` are supplied by
+    /// a config file that may itself have come from a third-party Git
+    /// repository the caller doesn't fully control, and `path.join` treats
+    /// an absolute `path` as replacing its base entirely (not erroring), so
+    /// without this check a Git-included bundle could declare an absolute
+    /// path, or a `../..` traversal, and pull in an arbitrary file from the
+    /// host running `ratect` (e.g. another project's config, or a file with
+    /// secrets in its `environment` values) rather than something from its
+    /// own repository. The check is purely lexical for paths that don't
+    /// exist yet (so it still rejects before ever touching the filesystem),
+    /// and additionally re-checked against the *canonicalized* (symlink-
+    /// resolved) paths once the target is confirmed to exist, since a
+    /// malicious repository could otherwise plant a symlink inside its own
+    /// clone that itself points back outside it. Local includes declared
+    /// entirely within the caller's own project tree (never having crossed
+    /// a Git include) are unrestricted, as before — matching the trust model
+    /// local file includes already had prior to Git includes existing.
     pub async fn load_from_file_with_git_cache<G: crate::git_include::GitClient>(
         path: &Path,
         git_cache: &crate::git_include::GitIncludeCache<G>,
@@ -561,19 +643,19 @@ impl Config {
 
         let mut git_repo_paths: HashMap<(String, String), PathBuf> = HashMap::new();
 
-        let mut queue: VecDeque<(PathBuf, IncludeEntry)> = root_file
+        let mut queue: VecDeque<(PathBuf, Option<GitBoundary>, IncludeEntry)> = root_file
             .include
             .iter()
             .cloned()
-            .map(|include| (root_dir.clone(), include))
+            .map(|include| (root_dir.clone(), None, include))
             .collect();
 
         let mut loaded: Vec<(PathBuf, PathBuf, ConfigFile)> =
             vec![(root_path, root_dir, root_file)];
 
-        while let Some((containing_dir, include)) = queue.pop_front() {
-            let (base_dir, include_path) = match &include {
-                IncludeEntry::File { path } => (containing_dir, path.clone()),
+        while let Some((containing_dir, boundary, include)) = queue.pop_front() {
+            let (base_dir, include_path, boundary) = match &include {
+                IncludeEntry::File { path } => (containing_dir, path.clone(), boundary),
                 IncludeEntry::Git {
                     repo,
                     git_ref,
@@ -590,16 +672,28 @@ impl Config {
                             dir
                         }
                     };
-                    (repo_dir, path.clone())
+                    let boundary = GitBoundary {
+                        repo_dir: repo_dir.clone(),
+                        remote: repo.clone(),
+                        git_ref: git_ref.clone(),
+                    };
+                    (repo_dir, path.clone(), Some(boundary))
                 }
             };
             let resolved = absolute_path(&base_dir.join(&include_path))?;
+
+            if let Some(boundary) = &boundary {
+                boundary.check_contains(&resolved)?;
+            }
 
             if !resolved.is_file() {
                 if resolved.exists() {
                     anyhow::bail!("Included file '{}' is not a file.", resolved.display());
                 }
                 anyhow::bail!("Included file '{}' does not exist.", resolved.display());
+            }
+            if let Some(boundary) = &boundary {
+                boundary.check_contains_canonical(&resolved)?;
             }
             if !seen.insert(resolved.clone()) {
                 continue;
@@ -619,7 +713,7 @@ impl Config {
                 file.include
                     .iter()
                     .cloned()
-                    .map(|include| (file_dir.clone(), include)),
+                    .map(|include| (file_dir.clone(), boundary.clone(), include)),
             );
             loaded.push((resolved, file_dir, file));
         }
@@ -2393,6 +2487,244 @@ tasks:
         assert!(loaded.config.tasks.contains_key("nested-task"));
 
         std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_git_includes_own_path_escaping_via_an_absolute_path_is_rejected() {
+        let dir = unique_temp_dir();
+        let outside = unique_temp_dir();
+        std::fs::write(
+            outside.join("secret.yml"),
+            "tasks:\n  leaked-task:\n    run:\n      container: build-env\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("batect.yml"),
+            format!(
+                r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+    path: {}
+"#,
+                outside.join("secret.yml").display()
+            ),
+        )
+        .unwrap();
+
+        // The bundle itself doesn't even need to contain the target file —
+        // an absolute `path` bypasses the clone directory entirely via
+        // `PathBuf::join`'s own documented behavior, which is exactly the
+        // bug being guarded against here.
+        let git = FakeGitClient::new().with_files(
+            "https://example.com/bundle.git",
+            "v1.0.0",
+            HashMap::new(),
+        );
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+        let result =
+            Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache).await;
+        assert!(format!("{:?}", result.unwrap_err()).contains("escapes the Git repository"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_git_includes_own_path_escaping_via_dot_dot_traversal_is_rejected() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+    path: ../../../../../../etc/passwd
+"#,
+        )
+        .unwrap();
+
+        let git = FakeGitClient::new().with_files(
+            "https://example.com/bundle.git",
+            "v1.0.0",
+            HashMap::new(),
+        );
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+        let result =
+            Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache).await;
+        assert!(format!("{:?}", result.unwrap_err()).contains("escapes the Git repository"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_nested_local_include_inside_a_git_bundle_escaping_the_clone_is_rejected() {
+        let dir = unique_temp_dir();
+        let outside = unique_temp_dir();
+        std::fs::write(
+            outside.join("secret.yml"),
+            "tasks:\n  leaked-task:\n    run:\n      container: build-env\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+"#,
+        )
+        .unwrap();
+
+        let mut files = HashMap::new();
+        files.insert(
+            "batect-bundle.yml".to_string(),
+            format!(
+                "include:\n  - path: {}\n",
+                outside.join("secret.yml").display()
+            ),
+        );
+        let git =
+            FakeGitClient::new().with_files("https://example.com/bundle.git", "v1.0.0", files);
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+        let result =
+            Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache).await;
+        assert!(format!("{:?}", result.unwrap_err()).contains("escapes the Git repository"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_nested_git_include_inside_a_git_bundle_still_works() {
+        // A Git-included bundle composing in *another* Git repo (a fresh
+        // boundary of its own) must not be rejected by the containment
+        // check meant for local-file escapes.
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/outer.git
+    ref: v1.0.0
+"#,
+        )
+        .unwrap();
+
+        let mut outer_files = HashMap::new();
+        outer_files.insert(
+            "batect-bundle.yml".to_string(),
+            r#"
+include:
+  - type: git
+    repo: https://example.com/inner.git
+    ref: v2.0.0
+"#
+            .to_string(),
+        );
+        let mut inner_files = HashMap::new();
+        inner_files.insert(
+            "batect-bundle.yml".to_string(),
+            "tasks:\n  inner-task:\n    run:\n      container: build-env\n".to_string(),
+        );
+        let git = FakeGitClient::new()
+            .with_files("https://example.com/outer.git", "v1.0.0", outer_files)
+            .with_files("https://example.com/inner.git", "v2.0.0", inner_files);
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+        let loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+            .await
+            .unwrap();
+        assert!(loaded.config.tasks.contains_key("inner-task"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_symlink_inside_a_git_bundle_escaping_the_clone_is_rejected() {
+        let dir = unique_temp_dir();
+        let outside = unique_temp_dir();
+        std::fs::write(
+            outside.join("secret.yml"),
+            "tasks:\n  leaked-task:\n    run:\n      container: build-env\n",
+        )
+        .unwrap();
+
+        // A real repo (needs real git — symlinks committed to a repo are
+        // what this test is actually exercising) whose own bundle file
+        // is a symlink pointing outside the clone entirely.
+        let repo_dir = unique_temp_dir();
+        let run = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo_dir)
+                .args(args)
+                .status()
+                .expect("git must be installed to run this test");
+            assert!(status.success(), "git {args:?} failed");
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            outside.join("secret.yml"),
+            repo_dir.join("batect-bundle.yml"),
+        )
+        .unwrap();
+        run(&["add", "batect-bundle.yml"]);
+        run(&["commit", "--quiet", "-m", "initial"]);
+        run(&["tag", "v1.0.0"]);
+
+        std::fs::write(
+            dir.join("batect.yml"),
+            format!(
+                r#"
+project_name: demo
+include:
+  - type: git
+    repo: {}
+    ref: v1.0.0
+"#,
+                repo_dir.display()
+            ),
+        )
+        .unwrap();
+
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(
+            cache_root.clone(),
+            crate::git_include::SystemGitClient,
+            1000,
+        );
+
+        let result =
+            Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache).await;
+        assert!(format!("{:?}", result.unwrap_err()).contains("escapes the Git repository"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
+        std::fs::remove_dir_all(&repo_dir).unwrap();
         std::fs::remove_dir_all(&cache_root).unwrap();
     }
 

@@ -243,6 +243,21 @@ Neither bump is ever folded into a feature commit.
     inject a `FakeGitClient` instead of needing a real network or `git` binary; a
     `SystemGitClient`-backed test suite exercises the real `git` binary too, against a
     local repository, needing no network).
+  - `repo`/`ref` and every `path` reached through a Git include are treated as
+    untrusted (they're config-file-supplied, possibly transitively from a bundle
+    outside the caller's own control): a leading `-` on `repo`/`ref` is rejected
+    (argv flag smuggling into `git clone`/`git checkout`), `GIT_ALLOW_PROTOCOL` is
+    restricted to `file:git:http:https:ssh` on both commands (blocks the `ext::`
+    transport's arbitrary-shell-command execution, including via a submodule URL
+    reached through `--recurse-submodules`), and a `GitBoundary` (`config.rs`) enforces
+    that a Git include's own `path`, and every `include` it transitively declares, stays
+    within that repository's own clone directory — both lexically (rejects an absolute
+    path or `../..` before ever touching the filesystem) and, once the target is
+    confirmed to exist, against the *canonicalized* form of both paths (rejects a
+    symlink planted inside the clone that points back out). A nested `type: git`
+    include still works — it establishes its own fresh boundary rather than inheriting
+    (or being rejected by) its parent's. Found via automated security review of the
+    initial implementation, not part of the original design pass.
   - Known gaps, deferred as follow-on work rather than blocking this release: no
     30-day cache eviction sweep and no manual cache-clear CLI surface (Batect has
     both; Ratect has no subcommand structure yet to hang a cleanup command off of —

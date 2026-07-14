@@ -91,6 +91,16 @@ any further `include` entries it declares) resolve against the *cloned repositor
 root, the same way a local include's relative paths resolve against its own directory
 (see above) — just rooted at the clone instead of a directory in your project.
 
+**Containment**: a Git include's `path`, and every `include` entry declared
+(transitively) by the file it names, must resolve to somewhere *inside* that
+repository's own clone — an absolute path, a `../..` traversal, or a symlink pointing
+back out are all rejected with a clear error rather than silently reading a file
+elsewhere on the machine running `ratect`. This matters because `repo`/`ref` may point
+at a repository you don't fully control, unlike a local file include (which stays
+unrestricted, since it's always something already in your own project checkout). A
+Git-included bundle *can* still declare a further `type: git` include of its own —
+that's a fresh repository with its own boundary, not an escape from this one.
+
 Cloning requires the system `git` binary to be installed and on `PATH` — Ratect shells
 out to it (`git clone --quiet --no-checkout` followed by
 `git checkout --recurse-submodules <ref>`) rather than embedding a Git library, so
