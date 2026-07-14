@@ -23,6 +23,57 @@ config_variables:
 | `containers` | map of name → [Container](#container) | yes | Container definitions, keyed by name. Referenced from tasks via `run.container`. |
 | `tasks` | map of name → [Task](#task) | yes | Task definitions, keyed by name. Run by name via `ratect <task-name>`. |
 | `config_variables` | map of name → [ConfigVariable](#configvariable) | no | Declares the config variables usable via `<name`/`<{name}` [expressions](#expressions). A name must be declared here before it can be referenced — see [Expressions](#expressions). |
+| `include` | list of string or [Include](#includes) | no | Splits configuration across multiple files — see [Includes](#includes) below. |
+
+## Includes
+
+```yaml
+include:
+  - some-include.yml
+  - path: some-other-include.yml
+    type: file
+```
+
+Each entry is either a bare string path, or the expanded `{path, type}` object form
+(`type` is optional and must be `file` if given — Batect's other include kind, a Git
+bundle, isn't supported yet; see [Differences from Batect](differences-from-batect.md#top-level-fields)).
+
+An included file's path is resolved relative to the directory of the file that
+declares the `include` — *not* the root project directory — so an included file
+further down a subdirectory can itself `include` more files using paths relative to
+its own location. An already-loaded file (by resolved absolute path) is skipped
+rather than reloaded, so it's safe for two files to both include a common third file.
+
+An included file uses the same schema as the root file, with two differences:
+
+- It must not declare `project_name` — that's root-only.
+- `containers`, `tasks`, and `config_variables` may each be omitted entirely (they
+  default to empty) — a file that exists only to `include` further files, or only to
+  add one task, doesn't need to restate the others.
+
+Every loaded file's `containers`, `tasks`, and `config_variables` are merged into one
+flat set. A name defined in more than one file is a hard error naming the conflicting
+files — it's never treated as one file overriding another.
+
+Relative paths *within* a container (a volume's host path, `build_directory`) resolve
+against that container's *own* origin file's directory, not the root project
+directory. Use the built-in [`batect.project_directory`
+config variable](#built-in-config-variable-batectproject_directory) — which always
+resolves to the root's directory regardless of which file a container is defined in —
+to reference the root project directory explicitly from an included file.
+
+For example, given `containers/extra.yml` (included from the root `batect.yml`):
+
+```yaml
+containers:
+  my-other-container:
+    image: alpine:1.2.3
+    volumes:
+      # Resolves relative to containers/, not the root project directory.
+      - ./data:/data
+      # Always the root project directory, regardless of where this file lives.
+      - <{batect.project_directory}/scripts:/scripts
+```
 
 ## Container
 

@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Batect's one built-in config variable, resolvable via `<batect.project_directory`/
 /// `<{batect.project_directory}` without being declared in `config_variables` — always
@@ -328,17 +328,274 @@ pub struct ConfigVariable {
     pub default: Option<String>,
 }
 
+/// One entry in a config file's top-level `include` list. Only local file
+/// includes are implemented (Batect also has Git includes/bundles — see
+/// ROADMAP.md); accepts either a bare string path or the expanded `{type:
+/// file, path: ...}` object form, mirroring [`PortMapping`]'s
+/// string-or-object handling above. Any other `type` (e.g. `"git"`) is
+/// rejected with a clear "not supported yet" error rather than a generic
+/// parse failure.
+#[derive(Debug, Clone)]
+struct IncludeEntry {
+    path: String,
+}
+
+impl<'de> Deserialize<'de> for IncludeEntry {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct IncludeEntryVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for IncludeEntryVisitor {
+            type Value = IncludeEntry;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an include path, or an object with 'path' and optional 'type' fields")
+            }
+
+            fn visit_str<E>(self, v: &str) -> std::result::Result<IncludeEntry, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(IncludeEntry {
+                    path: v.to_string(),
+                })
+            }
+
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<IncludeEntry, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut path: Option<String> = None;
+                let mut include_type: Option<String> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "path" => path = Some(map.next_value()?),
+                        "type" => include_type = Some(map.next_value()?),
+                        other => {
+                            return Err(serde::de::Error::unknown_field(other, &["path", "type"]))
+                        }
+                    }
+                }
+                if let Some(include_type) = &include_type {
+                    if include_type != "file" {
+                        return Err(serde::de::Error::custom(format!(
+                            "Include type '{include_type}' is not supported yet — only 'file' \
+                             includes are implemented."
+                        )));
+                    }
+                }
+                let path = path.ok_or_else(|| serde::de::Error::missing_field("path"))?;
+                Ok(IncludeEntry { path })
+            }
+        }
+
+        deserializer.deserialize_any(IncludeEntryVisitor)
+    }
+}
+
+/// One parsed YAML document, before include resolution/merging —
+/// [`Config::load_from_file`]'s traversal over `include` produces one of
+/// these per file (the root file and every included file, however deeply
+/// nested) and merges them into a single [`Config`]. Kept as a distinct type
+/// rather than making `Config`'s own fields `Option`/defaulted so `Config`
+/// itself — consumed throughout `engine.rs` and this module's own tests via
+/// plain struct literals — never has to change shape for this feature.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConfigFile {
+    project_name: Option<String>,
+    #[serde(default)]
+    containers: HashMap<String, Container>,
+    #[serde(default)]
+    tasks: HashMap<String, Task>,
+    config_variables: Option<HashMap<String, ConfigVariable>>,
+    #[serde(default)]
+    include: Vec<IncludeEntry>,
+}
+
+/// Parses one config file (the root, or an included one) only — no include
+/// resolution, path resolution, or expression interpolation.
+fn parse_config_file(path: &Path) -> Result<ConfigFile> {
+    let file =
+        File::open(path).with_context(|| format!("Failed to open config file {:?}", path))?;
+    noyalib::from_reader(file).with_context(|| format!("Failed to parse config file {:?}", path))
+}
+
+/// Resolves `path` to an absolute, lexically-cleaned path, anchored at the
+/// current directory if `path` is itself relative — same normalization
+/// [`resolve_path`] applies to a resolved value, reused here for include
+/// paths (to de-duplicate an already-loaded file regardless of how many
+/// differently-spelled relative paths reach it, and for clear error
+/// messages) and to compute the directory a loaded file's own relative
+/// paths (`volumes`, `build_directory`) are resolved against.
+fn absolute_path(path: &Path) -> Result<PathBuf> {
+    Ok(std::env::current_dir()?.join(path).clean())
+}
+
+/// The result of [`Config::load_from_file`]: the merged, but not yet
+/// expression-resolved, [`Config`], plus enough information for
+/// [`resolve_expressions`](Self::resolve_expressions) to resolve each
+/// container's relative paths (`volumes` host paths, `build_directory`)
+/// against *its own* origin file's directory rather than always the root
+/// config's directory — see [Includes](../../docs/config-reference.md#includes).
+#[derive(Debug)]
+pub struct LoadedConfig {
+    pub config: Config,
+    container_base_paths: HashMap<String, PathBuf>,
+}
+
+impl LoadedConfig {
+    /// Like [`Config::resolve_expressions`], but resolves each container's
+    /// relative paths against its own origin file's directory (recorded by
+    /// [`Config::load_from_file`]) rather than uniformly against
+    /// `base_path`. Identical behavior to `Config::resolve_expressions` when
+    /// no `include` was used (every container's origin is then the root
+    /// file's own directory anyway).
+    pub fn resolve_expressions(
+        &mut self,
+        base_path: &Path,
+        config_var_overrides: &HashMap<String, String>,
+    ) -> Result<()> {
+        self.config.resolve_expressions_with(
+            base_path,
+            &self.container_base_paths,
+            config_var_overrides,
+            |name| std::env::var(name).ok(),
+        )
+    }
+}
+
 impl Config {
-    /// Parses the config file only — no path resolution or expression
-    /// interpolation. Those need `config_var_overrides` from the CLI
-    /// (`--config-var`/`--config-vars-file`), which aren't known yet at this
-    /// point, so callers must follow up with
-    /// [`resolve_expressions`](Self::resolve_expressions).
-    pub fn load_from_file(path: &Path) -> Result<Self> {
-        let file =
-            File::open(path).with_context(|| format!("Failed to open config file {:?}", path))?;
-        noyalib::from_reader(file)
-            .with_context(|| format!("Failed to parse config file {:?}", path))
+    /// Parses the config file and resolves `include`s — but no path
+    /// resolution or expression interpolation yet. Those need
+    /// `config_var_overrides` from the CLI (`--config-var`/
+    /// `--config-vars-file`), which aren't known yet at this point, so
+    /// callers must follow up with
+    /// [`LoadedConfig::resolve_expressions`].
+    ///
+    /// `include` entries are resolved relative to the directory of the file
+    /// that declares them (not necessarily the root file's directory) and
+    /// traversed breadth-first; an already-loaded file (by cleaned absolute
+    /// path) is skipped rather than reloaded, which also makes an include
+    /// cycle harmless rather than infinite. Only the root file may declare
+    /// `project_name`; `containers`/`tasks`/`config_variables` are merged
+    /// across every loaded file, and a name defined in more than one file is
+    /// a hard error naming both files — matching Batect's own `include`
+    /// semantics.
+    pub fn load_from_file(path: &Path) -> Result<LoadedConfig> {
+        let root_path = absolute_path(path)?;
+        let root_file = parse_config_file(path)?;
+        let root_dir = root_path.parent().unwrap_or(Path::new("")).to_path_buf();
+
+        let mut seen: HashSet<PathBuf> = HashSet::new();
+        seen.insert(root_path.clone());
+
+        let mut queue: VecDeque<(PathBuf, IncludeEntry)> = root_file
+            .include
+            .iter()
+            .cloned()
+            .map(|include| (root_dir.clone(), include))
+            .collect();
+
+        let mut loaded: Vec<(PathBuf, PathBuf, ConfigFile)> =
+            vec![(root_path, root_dir, root_file)];
+
+        while let Some((containing_dir, include)) = queue.pop_front() {
+            let resolved = absolute_path(&containing_dir.join(&include.path))?;
+
+            if !resolved.is_file() {
+                if resolved.exists() {
+                    anyhow::bail!("Included file '{}' is not a file.", resolved.display());
+                }
+                anyhow::bail!("Included file '{}' does not exist.", resolved.display());
+            }
+            if !seen.insert(resolved.clone()) {
+                continue;
+            }
+
+            let file = parse_config_file(&resolved)?;
+            if file.project_name.is_some() {
+                anyhow::bail!(
+                    "Included file '{}' declares 'project_name', but only the root \
+                     configuration file can do so.",
+                    resolved.display()
+                );
+            }
+
+            let file_dir = resolved.parent().unwrap_or(Path::new("")).to_path_buf();
+            queue.extend(
+                file.include
+                    .iter()
+                    .cloned()
+                    .map(|include| (file_dir.clone(), include)),
+            );
+            loaded.push((resolved, file_dir, file));
+        }
+
+        let project_name = loaded[0].2.project_name.clone().ok_or_else(|| {
+            anyhow::anyhow!("Configuration file is missing the required 'project_name' field")
+        })?;
+
+        let mut containers = HashMap::new();
+        let mut container_base_paths = HashMap::new();
+        let mut container_origins: HashMap<String, PathBuf> = HashMap::new();
+        let mut tasks = HashMap::new();
+        let mut task_origins: HashMap<String, PathBuf> = HashMap::new();
+        let mut config_variables = HashMap::new();
+        let mut config_variable_origins: HashMap<String, PathBuf> = HashMap::new();
+
+        for (file_path, file_dir, file) in loaded {
+            for (name, container) in file.containers {
+                if let Some(previous) = container_origins.insert(name.clone(), file_path.clone()) {
+                    anyhow::bail!(
+                        "The container '{name}' is defined in multiple files: '{}' and '{}'",
+                        previous.display(),
+                        file_path.display()
+                    );
+                }
+                container_base_paths.insert(name.clone(), file_dir.clone());
+                containers.insert(name, container);
+            }
+            for (name, task) in file.tasks {
+                if let Some(previous) = task_origins.insert(name.clone(), file_path.clone()) {
+                    anyhow::bail!(
+                        "The task '{name}' is defined in multiple files: '{}' and '{}'",
+                        previous.display(),
+                        file_path.display()
+                    );
+                }
+                tasks.insert(name, task);
+            }
+            for (name, var) in file.config_variables.into_iter().flatten() {
+                if let Some(previous) =
+                    config_variable_origins.insert(name.clone(), file_path.clone())
+                {
+                    anyhow::bail!(
+                        "The config variable '{name}' is defined in multiple files: '{}' and \
+                         '{}'",
+                        previous.display(),
+                        file_path.display()
+                    );
+                }
+                config_variables.insert(name, var);
+            }
+        }
+
+        Ok(LoadedConfig {
+            config: Config {
+                project_name,
+                containers,
+                tasks,
+                config_variables: if config_variables.is_empty() {
+                    None
+                } else {
+                    Some(config_variables)
+                },
+            },
+            container_base_paths,
+        })
     }
 
     /// Loads a `--config-vars-file`: a flat YAML map of config variable
@@ -370,17 +627,21 @@ impl Config {
         base_path: &Path,
         config_var_overrides: &HashMap<String, String>,
     ) -> Result<()> {
-        self.resolve_expressions_with(base_path, config_var_overrides, |name| {
+        self.resolve_expressions_with(base_path, &HashMap::new(), config_var_overrides, |name| {
             std::env::var(name).ok()
         })
     }
 
-    /// The actual implementation behind [`resolve_expressions`](Self::resolve_expressions),
-    /// parameterized over the host environment lookup so tests don't have to
-    /// touch the real process environment.
+    /// The actual implementation behind [`resolve_expressions`](Self::resolve_expressions)
+    /// and [`LoadedConfig::resolve_expressions`], parameterized over the host
+    /// environment lookup so tests don't have to touch the real process
+    /// environment. `container_base_paths` (empty when called from
+    /// `Config::resolve_expressions` directly) overrides `base_path` on a
+    /// per-container basis — see [`LoadedConfig`].
     fn resolve_expressions_with(
         &mut self,
         base_path: &Path,
+        container_base_paths: &HashMap<String, PathBuf>,
         config_var_overrides: &HashMap<String, String>,
         host_env: impl Fn(&str) -> Option<String>,
     ) -> Result<()> {
@@ -436,6 +697,10 @@ impl Config {
         config_vars.insert(PROJECT_DIRECTORY_VAR.to_string(), Some(project_directory));
 
         for (container_name, container) in self.containers.iter_mut() {
+            let container_base_path = container_base_paths
+                .get(container_name)
+                .map(PathBuf::as_path)
+                .unwrap_or(base_path);
             if let Some(environment) = &mut container.environment {
                 for value in environment.values_mut() {
                     *value = crate::expressions::interpolate(value, &host_env, &config_vars)?;
@@ -443,12 +708,16 @@ impl Config {
             }
             if let Some(volumes) = &mut container.volumes {
                 for volume in volumes {
-                    *volume = resolve_volume(volume, base_path, &host_env, &config_vars)?;
+                    *volume = resolve_volume(volume, container_base_path, &host_env, &config_vars)?;
                 }
             }
             if let Some(build_directory) = &mut container.build_directory {
-                *build_directory =
-                    resolve_path(build_directory, base_path, &host_env, &config_vars)?;
+                *build_directory = resolve_path(
+                    build_directory,
+                    container_base_path,
+                    &host_env,
+                    &config_vars,
+                )?;
             }
             if let Some(build_args) = &mut container.build_args {
                 for value in build_args.values_mut() {
@@ -773,7 +1042,12 @@ tasks: {}
         };
 
         config
-            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), no_host_env)
+            .resolve_expressions_with(
+                Path::new("/base"),
+                &HashMap::new(),
+                &HashMap::new(),
+                no_host_env,
+            )
             .unwrap();
 
         assert_eq!(
@@ -797,9 +1071,12 @@ tasks: {}
         };
 
         config
-            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), |name| {
-                (name == "HOST_VAR").then(|| "host-value".to_string())
-            })
+            .resolve_expressions_with(
+                Path::new("/base"),
+                &HashMap::new(),
+                &HashMap::new(),
+                |name| (name == "HOST_VAR").then(|| "host-value".to_string()),
+            )
             .unwrap();
 
         assert_eq!(
@@ -924,7 +1201,12 @@ tasks: {}
         });
 
         config
-            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), no_host_env)
+            .resolve_expressions_with(
+                Path::new("/base"),
+                &HashMap::new(),
+                &HashMap::new(),
+                no_host_env,
+            )
             .unwrap();
 
         let container = &config.containers["build-env"];
@@ -1087,7 +1369,12 @@ tasks: {}
         });
 
         config
-            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), no_host_env)
+            .resolve_expressions_with(
+                Path::new("/base"),
+                &HashMap::new(),
+                &HashMap::new(),
+                no_host_env,
+            )
             .unwrap();
 
         assert_eq!(
@@ -1260,8 +1547,12 @@ tasks: {}
     fn resolve_expressions_errors_when_run_as_current_user_enabled_without_home_directory() {
         let mut config = config_with_container(container_with_run_as_current_user(true, None));
 
-        let result =
-            config.resolve_expressions_with(Path::new("/base"), &HashMap::new(), no_host_env);
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            no_host_env,
+        );
 
         assert!(result
             .unwrap_err()
@@ -1276,8 +1567,12 @@ tasks: {}
             Some("/home/container-user"),
         ));
 
-        let result =
-            config.resolve_expressions_with(Path::new("/base"), &HashMap::new(), no_host_env);
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            no_host_env,
+        );
 
         assert!(result
             .unwrap_err()
@@ -1292,8 +1587,12 @@ tasks: {}
             Some("home/container-user"),
         ));
 
-        let result =
-            config.resolve_expressions_with(Path::new("/base"), &HashMap::new(), no_host_env);
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            no_host_env,
+        );
 
         assert!(result
             .unwrap_err()
@@ -1309,9 +1608,12 @@ tasks: {}
         ));
 
         config
-            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), |name| {
-                (name == "HOST_VAR").then(|| "container-user".to_string())
-            })
+            .resolve_expressions_with(
+                Path::new("/base"),
+                &HashMap::new(),
+                &HashMap::new(),
+                |name| (name == "HOST_VAR").then(|| "container-user".to_string()),
+            )
             .unwrap();
 
         assert_eq!(
@@ -1330,7 +1632,12 @@ tasks: {}
         let mut config = config_with_container(container_with_run_as_current_user(false, None));
 
         config
-            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), no_host_env)
+            .resolve_expressions_with(
+                Path::new("/base"),
+                &HashMap::new(),
+                &HashMap::new(),
+                no_host_env,
+            )
             .unwrap();
 
         let run_as_current_user = config.containers["build-env"]
@@ -1386,10 +1693,13 @@ tasks: {}
         )
         .unwrap();
 
-        let mut config = Config::load_from_file(&config_path).unwrap();
-        config.resolve_expressions(&dir, &HashMap::new()).unwrap();
+        let mut loaded = Config::load_from_file(&config_path).unwrap();
+        loaded.resolve_expressions(&dir, &HashMap::new()).unwrap();
 
-        let volume = &config.containers["build-env"].volumes.as_ref().unwrap()[0];
+        let volume = &loaded.config.containers["build-env"]
+            .volumes
+            .as_ref()
+            .unwrap()[0];
         assert_eq!(*volume, format!("{}:/code", dir.join("code").display()));
 
         std::fs::remove_dir_all(&dir).unwrap();
@@ -1420,6 +1730,375 @@ tasks: {}
 
         let result = Config::load_from_file(&config_path);
         assert!(result.is_err());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn include_merges_containers_tasks_and_config_variables_from_another_file() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+include:
+  - extra.yml
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("extra.yml"),
+            r#"
+tasks:
+  extra-task:
+    run:
+      container: build-env
+config_variables:
+  extra_var:
+    default: value
+"#,
+        )
+        .unwrap();
+
+        let loaded = Config::load_from_file(&dir.join("batect.yml")).unwrap();
+        assert!(loaded.config.containers.contains_key("build-env"));
+        assert!(loaded.config.tasks.contains_key("extra-task"));
+        assert!(loaded
+            .config
+            .config_variables
+            .as_ref()
+            .unwrap()
+            .contains_key("extra_var"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn nested_includes_are_resolved_transitively() {
+        let dir = unique_temp_dir();
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - a.yml
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("a.yml"),
+            r#"
+containers:
+  build-env:
+    image: alpine:3.18
+include:
+  - nested/b.yml
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("nested/b.yml"),
+            r#"
+tasks:
+  deep-task:
+    run:
+      container: build-env
+"#,
+        )
+        .unwrap();
+
+        let loaded = Config::load_from_file(&dir.join("batect.yml")).unwrap();
+        assert!(loaded.config.containers.contains_key("build-env"));
+        assert!(loaded.config.tasks.contains_key("deep-task"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_included_from_two_places_is_only_loaded_once() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - a.yml
+  - b.yml
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("a.yml"),
+            r#"
+include:
+  - shared.yml
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("b.yml"),
+            r#"
+include:
+  - shared.yml
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("shared.yml"),
+            r#"
+tasks:
+  shared-task:
+    run:
+      container: build-env
+"#,
+        )
+        .unwrap();
+
+        // If `shared.yml` were (incorrectly) loaded twice, this would fail
+        // with a "defined in multiple files" error instead.
+        let loaded = Config::load_from_file(&dir.join("batect.yml")).unwrap();
+        assert!(loaded.config.tasks.contains_key("shared-task"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_task_defined_in_two_different_files_is_an_error() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+tasks:
+  build:
+    run:
+      container: build-env
+include:
+  - extra.yml
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("extra.yml"),
+            r#"
+tasks:
+  build:
+    run:
+      container: build-env
+"#,
+        )
+        .unwrap();
+
+        let result = Config::load_from_file(&dir.join("batect.yml"));
+        assert!(format!("{:?}", result.unwrap_err()).contains("build"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn project_name_in_an_included_file_is_an_error() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - extra.yml
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("extra.yml"),
+            r#"
+project_name: not-allowed
+"#,
+        )
+        .unwrap();
+
+        let result = Config::load_from_file(&dir.join("batect.yml"));
+        assert!(format!("{:?}", result.unwrap_err()).contains("project_name"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_missing_include_path_errors_clearly() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - does-not-exist.yml
+"#,
+        )
+        .unwrap();
+
+        let result = Config::load_from_file(&dir.join("batect.yml"));
+        assert!(format!("{:?}", result.unwrap_err()).contains("does not exist"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_include_path_that_is_a_directory_errors_clearly() {
+        let dir = unique_temp_dir();
+        std::fs::create_dir_all(dir.join("a-directory")).unwrap();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - a-directory
+"#,
+        )
+        .unwrap();
+
+        let result = Config::load_from_file(&dir.join("batect.yml"));
+        assert!(format!("{:?}", result.unwrap_err()).contains("is not a file"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_relative_volume_path_in_an_included_file_resolves_against_its_own_directory() {
+        let dir = unique_temp_dir();
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - nested/extra.yml
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("nested/extra.yml"),
+            r#"
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - code:/code
+"#,
+        )
+        .unwrap();
+
+        let mut loaded = Config::load_from_file(&dir.join("batect.yml")).unwrap();
+        loaded.resolve_expressions(&dir, &HashMap::new()).unwrap();
+
+        let volume = &loaded.config.containers["build-env"]
+            .volumes
+            .as_ref()
+            .unwrap()[0];
+        assert_eq!(
+            *volume,
+            format!("{}:/code", dir.join("nested").join("code").display())
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn project_directory_var_in_an_included_file_resolves_to_the_root_directory() {
+        let dir = unique_temp_dir();
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - nested/extra.yml
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("nested/extra.yml"),
+            r#"
+containers:
+  build-env:
+    image: alpine:3.18
+    environment:
+      PROJECT_DIR: <batect.project_directory
+"#,
+        )
+        .unwrap();
+
+        let mut loaded = Config::load_from_file(&dir.join("batect.yml")).unwrap();
+        loaded.resolve_expressions(&dir, &HashMap::new()).unwrap();
+
+        let value = &loaded.config.containers["build-env"]
+            .environment
+            .as_ref()
+            .unwrap()["PROJECT_DIR"];
+        assert_eq!(*value, dir.display().to_string());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn include_accepts_both_bare_string_and_object_form() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("extra.yml"),
+            r#"
+tasks:
+  extra-task:
+    run:
+      container: build-env
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("string-form.yml"),
+            r#"
+project_name: demo
+include:
+  - extra.yml
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("object-form.yml"),
+            r#"
+project_name: demo
+include:
+  - type: file
+    path: extra.yml
+"#,
+        )
+        .unwrap();
+
+        let loaded = Config::load_from_file(&dir.join("string-form.yml")).unwrap();
+        assert!(loaded.config.tasks.contains_key("extra-task"));
+
+        let loaded = Config::load_from_file(&dir.join("object-form.yml")).unwrap();
+        assert!(loaded.config.tasks.contains_key("extra-task"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn include_with_unsupported_type_errors_clearly() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - type: git
+    path: bundle.yml
+"#,
+        )
+        .unwrap();
+
+        let result = Config::load_from_file(&dir.join("batect.yml"));
+        assert!(format!("{:?}", result.unwrap_err()).contains("not supported"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1545,9 +2224,12 @@ config_variables:
         };
 
         config
-            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), |name| {
-                (name == "HOST_VAR").then(|| "host-value".to_string())
-            })
+            .resolve_expressions_with(
+                Path::new("/base"),
+                &HashMap::new(),
+                &HashMap::new(),
+                |name| (name == "HOST_VAR").then(|| "host-value".to_string()),
+            )
             .unwrap();
 
         assert_eq!(
@@ -1571,7 +2253,9 @@ config_variables:
         };
 
         config
-            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), |_| None)
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+                None
+            })
             .unwrap();
 
         assert_eq!(
@@ -1594,7 +2278,12 @@ config_variables:
             config_variables: None,
         };
 
-        let result = config.resolve_expressions_with(Path::new("/base"), &HashMap::new(), |_| None);
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            |_| None,
+        );
         assert!(result.is_err());
     }
 
@@ -1621,7 +2310,7 @@ config_variables:
 
         let overrides = HashMap::from([("env_name".to_string(), "prod".to_string())]);
         config
-            .resolve_expressions_with(Path::new("/base"), &overrides, |_| None)
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &overrides, |_| None)
             .unwrap();
 
         assert_eq!(
@@ -1652,7 +2341,9 @@ config_variables:
         };
 
         config
-            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), |_| None)
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+                None
+            })
             .unwrap();
 
         assert_eq!(
@@ -1675,7 +2366,12 @@ config_variables:
             config_variables: None,
         };
 
-        let result = config.resolve_expressions_with(Path::new("/base"), &HashMap::new(), |_| None);
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            |_| None,
+        );
         assert!(result.is_err());
     }
 
@@ -1695,7 +2391,12 @@ config_variables:
             config_variables: Some(config_variables),
         };
 
-        let result = config.resolve_expressions_with(Path::new("/base"), &HashMap::new(), |_| None);
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            |_| None,
+        );
         assert!(result.is_err());
     }
 
@@ -1709,7 +2410,12 @@ config_variables:
         };
 
         let overrides = HashMap::from([("unknown".to_string(), "value".to_string())]);
-        let result = config.resolve_expressions_with(Path::new("/base"), &overrides, |_| None);
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &overrides,
+            |_| None,
+        );
         assert!(result.is_err());
     }
 
@@ -1728,7 +2434,9 @@ config_variables:
         };
 
         config
-            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), |_| None)
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+                None
+            })
             .unwrap();
 
         assert_eq!(
@@ -1752,7 +2460,9 @@ config_variables:
         };
 
         config
-            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), |_| None)
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+                None
+            })
             .unwrap();
 
         assert_eq!(
@@ -1775,7 +2485,9 @@ config_variables:
         };
 
         config
-            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), |_| None)
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+                None
+            })
             .unwrap();
 
         assert_eq!(
@@ -1803,7 +2515,7 @@ config_variables:
         };
 
         config
-            .resolve_expressions_with(Path::new(""), &HashMap::new(), |_| None)
+            .resolve_expressions_with(Path::new(""), &HashMap::new(), &HashMap::new(), |_| None)
             .unwrap();
 
         let resolved = &config.containers["build-env"].environment.as_ref().unwrap()["FOO"];
@@ -1829,7 +2541,12 @@ config_variables:
             config_variables: Some(config_variables),
         };
 
-        let result = config.resolve_expressions_with(Path::new("/base"), &HashMap::new(), |_| None);
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            |_| None,
+        );
         assert!(result.is_err());
     }
 
@@ -1846,7 +2563,12 @@ config_variables:
             "batect.project_directory".to_string(),
             "/hijacked".to_string(),
         )]);
-        let result = config.resolve_expressions_with(Path::new("/base"), &overrides, |_| None);
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &overrides,
+            |_| None,
+        );
         assert!(result.is_err());
     }
 }

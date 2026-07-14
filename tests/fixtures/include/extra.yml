@@ -1,0 +1,9 @@
+# Included from ../include.yml. Its own relative volume path (below) must
+# resolve against *this* directory (tests/fixtures/include), not
+# tests/fixtures - proving per-file base path resolution, not just that
+# includes merge.
+containers:
+  build-env:
+    image: alpine:3.18.2
+    volumes:
+      - .:/mnt

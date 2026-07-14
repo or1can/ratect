@@ -10,7 +10,7 @@ The primary goal is to support the core features of Batect to ensure a seamless 
 - **Full Docker Networking**: Every task execution gets its own isolated network (see [the task lifecycle](docs/task-lifecycle.md)), `--use-network` reuses an existing one instead, `additional_hostnames`/`additional_hosts` add extra aliases/`/etc/hosts` entries, and `ports`/`--disable-ports` publish container ports to the host, including port ranges and the expanded object form, plus additional per-task `run.ports` (0.6.0) — see [config reference](docs/config-reference.md#port-mappings) and [CLI reference](docs/cli-reference.md).
 - **Interactive Mode**: A task's own container gets a real Docker TTY and its stdin forwarded, automatically, when both Ratect's own stdin and stdout are real terminals (0.4.0) — see [Interactive mode](docs/config-reference.md#interactive-mode). Live terminal-resize forwarding and Batect's decoupled stdin-without-TTY support are not — see [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
 - **Full Environment Variable Interpolation & Batect Expressions**: `environment` on containers/tasks, `config_variables` (including Batect's one built-in, `batect.project_directory`), and `$VAR`/`${VAR}`/`${VAR:-default}`/`<name`/`<{name}` expressions are implemented for `environment` values, volume host paths, `build_directory`, and `build_args` — every already-supported field that could meaningfully take one; `build_secrets.path`/`build_ssh.paths` remain moot until those fields themselves exist — see [Expressions](docs/differences-from-batect.md#expressions).
-- **Includes**: Support for splitting configuration across multiple files using the `include` directive.
+- **Includes**: Local file includes — splitting one project's configuration across multiple files via the top-level `include` directive, resolved relative to each declaring file's own directory and merged into one flat `containers`/`tasks`/`config_variables` set (0.7.0) — see [config reference](docs/config-reference.md#includes). Git includes/bundles (importing shared tasks/containers from a separate repository) are not implemented — see [Differences from Batect](docs/differences-from-batect.md#top-level-fields).
 - **Full Configuration Parity**: Support for all available Batect configuration options and standard YAML structures. See [Differences from Batect](docs/differences-from-batect.md#configuration-format) for the itemized current status of every field.
 - **Full CLI Options Parity**: Support for all standard Batect CLI flags and options (e.g., `--config-file`, `--override-image`, cleanup control flags, etc.). See [Differences from Batect](docs/differences-from-batect.md#cli-flags) for the itemized current status of every flag.
 - **User Mapping**: A container can run as the host's own user/group (`run_as_current_user`) instead of the image's default, so files it writes to a mounted volume aren't root-owned (0.5.0) — see [User mapping](docs/config-reference.md#user-mapping). No equivalent to Batect's "cache mounts", and host-side uid/gid lookup is Unix-only — see [Differences from Batect](docs/differences-from-batect.md#container-fields).
@@ -188,11 +188,20 @@ Neither bump is ever folded into a feature commit.
     works on macOS/Windows — no automatic Docker-reachable hostname on Linux, and no
     Docker-version-gated hostname fallback chain the way Batect has for very old
     Docker installs (not worth chasing for any actively-maintained daemon today).
-- **0.7.0** — **Includes**: local file includes, splitting one project's configuration
-  across multiple files. Git bundle includes (importing shared tasks/containers from a
-  separate repository) are deferred to a later, undecided release — a materially
+- **0.7.0** — ~~**Includes**: local file includes, splitting one project's
+  configuration across multiple files~~ — done: a config file's top-level `include`
+  list (bare string path or expanded `{path, type: file}` form) is resolved relative to
+  the directory of the file that declares it, recursively, de-duplicated by resolved
+  path (an include cycle or a file included from two places is harmless); every loaded
+  file's `containers`/`tasks`/`config_variables` merge into one flat set (a name
+  defined in more than one file is a hard error naming both files), only the root file
+  may declare `project_name`, and each container's relative paths resolve against its
+  own origin file's directory while `<batect.project_directory` still always resolves
+  to the root's. Git bundle includes (importing shared tasks/containers from a
+  separate repository) remain deferred to a later, undecided release — a materially
   larger feature (remote fetch, caching) that shouldn't block the simpler
-  file-splitting case.
+  file-splitting case; a `type: git` include entry is rejected with a clear
+  "not supported yet" error rather than silently ignored.
 - **0.8.0** — **Dependency Readiness**: `health_check` and `setup_commands`, replacing
   today's "started = ready" simplification (see
   [Container fields](docs/differences-from-batect.md#container-fields)) with Batect's

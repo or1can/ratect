@@ -1,0 +1,12 @@
+# Exercises local file `include`. This root file only declares project_name
+# and a task; `build-env` (the container the task runs) is defined entirely
+# in tests/fixtures/include/extra.yml - proving containers/tasks merge
+# across files, referencing each other by name across the file boundary.
+project_name: ratect-include-test
+tasks:
+  print-include-dir:
+    run:
+      container: build-env
+      command: ls /mnt
+include:
+  - include/extra.yml

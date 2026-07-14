@@ -77,6 +77,10 @@ fn proxy_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/proxy.yml")
 }
 
+fn include_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/include.yml")
+}
+
 /// Polls `127.0.0.1:<port>` until a TCP connection succeeds or `timeout`
 /// elapses. Just proves the port is reachable — no HTTP semantics needed,
 /// a bare TCP connect is already proof `ports` actually published it.
@@ -510,6 +514,43 @@ fn batect_project_directory_resolves_to_the_configs_own_directory() {
         stdout.contains("project-directory.yml"),
         "expected the volume mount (at /mnt) to list this fixture's own \
          directory contents, proving it mounted the right path:\n{}",
+        stdout
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Covers local file `include` end to end (see
+/// `tests/fixtures/include.yml`/`tests/fixtures/include/extra.yml`): the
+/// task run here (`print-include-dir`, declared in the root file) references
+/// `build-env`, a container declared only in the included file - proving
+/// containers/tasks actually merge across files, not just parse
+/// independently - and that container's relative volume path resolves
+/// against *its own* file's directory (`tests/fixtures/include`), not the
+/// root config's directory (`tests/fixtures`).
+#[test]
+#[ignore]
+fn include_merges_containers_and_tasks_across_files() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(include_config_path())
+        .arg("print-include-dir")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("extra.yml"),
+        "expected the volume mount (at /mnt) to list tests/fixtures/include's own \
+         directory contents, proving its relative volume path resolved against \
+         that included file's own directory, not the root config's:\n{}",
         stdout
     );
 }

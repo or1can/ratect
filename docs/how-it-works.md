@@ -16,20 +16,28 @@ feed into it.
 This is two separate steps, not one, because the second depends on CLI flags that
 aren't known at the first:
 
-1. **`Config::load_from_file`**: the YAML file (`batect.yml` by default) is parsed into
-   `Config`/`Container`/`Task`/`TaskRun`/`ConfigVariable` structs using
-   [`noyalib`](https://docs.rs/noyalib). Nothing else — no path resolution, no
-   expression interpolation.
-2. **`Config::resolve_expressions`**: called once from `main.rs`, after `--config-var`/
-   `--config-vars-file` have been parsed and merged into an overrides map. In one pass:
+1. **`Config::load_from_file`**: the root YAML file (`batect.yml` by default) is parsed
+   into `Config`/`Container`/`Task`/`TaskRun`/`ConfigVariable` structs using
+   [`noyalib`](https://docs.rs/noyalib), and its top-level `include` list (if any) is
+   resolved — recursively, relative to each declaring file's own directory — with
+   every loaded file's `containers`/`tasks`/`config_variables` merged into one `Config`
+   (see [Includes](config-reference.md#includes)). No expression interpolation yet.
+   The result is a `LoadedConfig`: the merged `Config`, plus a `container_base_paths`
+   map recording which directory each container came from (needed by step 2 below).
+2. **`LoadedConfig::resolve_expressions`**: called once from `main.rs`, after
+   `--config-var`/`--config-vars-file` have been parsed and merged into an overrides
+   map. In one pass:
    - Resolves [expressions](config-reference.md#expressions) (`$VAR`, `${VAR:-default}`,
      `<name`, `<{name}`, plus the built-in `batect.project_directory`) within every
      `environment` value (container and task `run`) and every volume's host path.
    - **Volume path resolution**: *after* interpolating a volume's host path, if the
-     result is relative, it's resolved to an absolute path relative to the directory
-     containing the config file (not the current working directory) — done in this
-     order (interpolate, then resolve) because an expression can itself resolve to an
-     absolute path, which mustn't be treated as a relative fragment.
+     result is relative, it's resolved to an absolute path relative to *that
+     container's own origin file's* directory (via `container_base_paths` — the root
+     config's directory when there's no `include` involved), not the current working
+     directory — done in this order (interpolate, then resolve) because an expression
+     can itself resolve to an absolute path, which mustn't be treated as a relative
+     fragment. `batect.project_directory` itself always resolves to the root config's
+     directory regardless of which file a container came from.
 
    See the [configuration reference](config-reference.md#expressions) for the full
    expression syntax, precedence, and error rules.

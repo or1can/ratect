@@ -22,11 +22,20 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
   See [`docs/how-it-works.md`](docs/how-it-works.md) for the full request-to-container
   pipeline; the notes below are per-module gotchas, not a full walkthrough.
   - **`ratect-core/src/config.rs`**: Data models for the configuration (`batect.yml`),
-    parsed via `noyalib`. `Config::load_from_file` only parses; a separate
-    `Config::resolve_expressions` call (needs CLI-supplied `--config-var`/
-    `--config-vars-file` overrides, so it can't happen inside `load_from_file`)
-    interpolates and resolves paths. `run_as_current_user.home_directory` is
-    interpolated but *not* resolved against `base_path` — it's a container-side path,
+    parsed via `noyalib`. `Config::load_from_file` parses the root file and resolves
+    `include` (local file includes only so far — see
+    [config reference](docs/config-reference.md#includes)), merging every loaded
+    file's `containers`/`tasks`/`config_variables` into one `Config`, returned inside a
+    `LoadedConfig` alongside a `container_base_paths` map (each container name → its
+    own origin file's directory). A separate `LoadedConfig::resolve_expressions` call
+    (needs CLI-supplied `--config-var`/`--config-vars-file` overrides, so it can't
+    happen inside `load_from_file`) interpolates and resolves paths — per-container,
+    against `container_base_paths` rather than a single shared directory, so an
+    included file's relative paths resolve against *its own* directory while
+    `batect.project_directory` still always resolves to the root's (`Config`'s own
+    `resolve_expressions` stays available too, unchanged, for a `Config` built without
+    going through `load_from_file`). `run_as_current_user.home_directory` is
+    interpolated but *not* resolved against a base path — it's a container-side path,
     validated to start with `/` instead. `PortRange`/`PortMapping` have hand-written
     `Deserialize` impls so a `ports` entry can be either Batect's string
     (`"local:container[/protocol]"`) or object form.

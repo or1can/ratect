@@ -31,7 +31,7 @@ Batect's own reference documentation.
 | `containers` | Supported | See [Container fields](#container-fields) below. |
 | `tasks` | Supported | See [Task fields](#task-fields) below. |
 | `config_variables` | Supported | Only `default:` — no `description` field (rejected, per the note above; Ratect has no help/usage output to show one in anyway). See [config reference](config-reference.md#configvariable) and [Expressions](#expressions) below. |
-| `include` | Not supported | No multi-file configuration — neither form: local **file includes** (splitting one project's config across files) nor Git **includes/bundles** (importing shared tasks/containers from a separate Git repository, e.g. a team-wide `bundle.yml`). |
+| `include` | Partially supported | Local **file includes** (splitting one project's config across files) are supported — see [config reference](config-reference.md#includes). Git **includes/bundles** (importing shared tasks/containers from a separate Git repository, e.g. a team-wide `bundle.yml`) are not — a `type: git` include entry is rejected with a clear "not supported yet" error rather than silently ignored. |
 | `forbid_telemetry` | N/A | Ratect doesn't collect telemetry, so there's nothing to forbid. |
 
 ### Expressions

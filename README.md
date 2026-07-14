@@ -16,6 +16,9 @@ Ratect is currently in early development. It supports a subset of Batect's featu
 ## Features
 
 - **YAML Configuration**: Uses `batect.yml` to define containers and tasks.
+- **Includes**: Splits one project's configuration across multiple local files via a
+  top-level `include` list — see
+  [config reference](docs/config-reference.md#includes).
 - **Docker Integration**: Powered by [bollard](https://github.com/fujiapple86/bollard) for direct Docker API communication.
 - **Task Execution**:
   - Prerequisite task handling.

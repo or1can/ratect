@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Local file `include`s**: a config file's top-level `include` list splits one
+  project's configuration across multiple files, matching Batect's local file include
+  semantics (Git bundle includes remain unsupported — see
+  [ROADMAP.md](ROADMAP.md#ratect-compat)).
+  - Each entry is a bare string path, or the expanded `{path, type: file}` object form;
+    any other `type` (e.g. `git`) is rejected with a clear "not supported yet" error.
+  - An included file's path resolves relative to the directory of the file that
+    declares it, traversed recursively (an included file can itself `include` more
+    files) and de-duplicated by resolved path, so an include cycle or a file included
+    from two places is harmless rather than an error or an infinite loop.
+  - Every loaded file's `containers`, `tasks`, and `config_variables` merge into one
+    flat set; a name defined in more than one file is a hard error naming both files.
+    Only the root file may declare `project_name`.
+  - A container's relative paths (`volumes` host paths, `build_directory`) resolve
+    against *its own* origin file's directory, not the root project directory —
+    `<batect.project_directory` still always resolves to the root's directory
+    regardless of which file a container came from. See
+    [config reference](docs/config-reference.md#includes).
+
 ## [0.6.0] - 2026-07-14
 
 ### Added

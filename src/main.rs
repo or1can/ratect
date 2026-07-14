@@ -127,7 +127,7 @@ async fn run() -> Result<()> {
     if !args.config_file.exists() {
         anyhow::bail!("Configuration file {:?} not found.", args.config_file);
     }
-    let mut config = Config::load_from_file(&args.config_file)?;
+    let mut loaded = Config::load_from_file(&args.config_file)?;
 
     let mut config_var_overrides: HashMap<String, String> = match &args.config_vars_file {
         Some(path) => Config::load_config_vars_file(path)?,
@@ -135,7 +135,8 @@ async fn run() -> Result<()> {
     };
     config_var_overrides.extend(args.config_var.iter().cloned());
     let base_path = base_path_for(&args.config_file);
-    config.resolve_expressions(base_path, &config_var_overrides)?;
+    loaded.resolve_expressions(base_path, &config_var_overrides)?;
+    let config = loaded.config;
 
     if args.list_tasks {
         println!("Tasks in {}:", config.project_name);
