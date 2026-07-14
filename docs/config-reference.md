@@ -32,17 +32,16 @@ include:
   - some-include.yml
   - path: some-other-include.yml
     type: file
+  - type: git
+    repo: https://github.com/my-org/my-batect-bundle.git
+    ref: v1.2.3
+    path: bundle.yml
 ```
 
-Each entry is either a bare string path, or the expanded `{path, type}` object form
-(`type` is optional and must be `file` if given — Batect's other include kind, a Git
-bundle, isn't supported yet; see [Differences from Batect](differences-from-batect.md#top-level-fields)).
-
-An included file's path is resolved relative to the directory of the file that
-declares the `include` — *not* the root project directory — so an included file
-further down a subdirectory can itself `include` more files using paths relative to
-its own location. An already-loaded file (by resolved absolute path) is skipped
-rather than reloaded, so it's safe for two files to both include a common third file.
+Each entry is either a bare string path (a local file include), or an object form —
+`{path, type: file}` for another local file, or `{type: git, repo, ref, path}` for a
+Git include (a "bundle": shared tasks/containers imported from a separate Git
+repository). Any other `type` is rejected with a clear error.
 
 An included file uses the same schema as the root file, with two differences:
 
@@ -61,6 +60,42 @@ directory. Use the built-in [`batect.project_directory`
 config variable](#built-in-config-variable-batectproject_directory) — which always
 resolves to the root's directory regardless of which file a container is defined in —
 to reference the root project directory explicitly from an included file.
+
+### Local file includes
+
+A local include's path is resolved relative to the directory of the file that
+declares the `include` — *not* the root project directory — so an included file
+further down a subdirectory can itself `include` more files using paths relative to
+its own location. An already-loaded file (by resolved absolute path) is skipped
+rather than reloaded, so it's safe for two files to both include a common third file.
+
+### Git includes
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `repo` | string | yes | A Git remote — anything `git clone` itself accepts (an HTTPS/SSH URL, or a local path). |
+| `ref` | string | yes | The tag, branch, or commit to check out. **Must be a value that never changes** (in practice, an immutable tag or a pinned commit SHA, not a branch) — see below. |
+| `path` | string | no, default `batect-bundle.yml` | The path, within the repository, of the file to include — resolved relative to the repository's own root, not the file that declared the `include`. |
+
+A `(repo, ref)` pair is cloned **once and cached forever** at
+`~/.ratect/incl/<hash>`, keyed by a hash of the pair — it is never re-fetched, even if
+the remote's `ref` later moves (e.g. a branch, or a tag someone re-pushed). This is why
+`ref` must be pinned to something immutable: Ratect has no update/refresh mechanism yet
+(see [Differences from Batect](differences-from-batect.md#top-level-fields) for the
+known gaps — no cache eviction sweep, no manual cache-clear command). If you need to
+pick up a change made to a bundle, choose a new `ref` (e.g. bump the tag) or delete the
+corresponding directory under `~/.ratect/incl` by hand.
+
+The included file's own relative paths (a volume's host path, `build_directory`, and
+any further `include` entries it declares) resolve against the *cloned repository's*
+root, the same way a local include's relative paths resolve against its own directory
+(see above) — just rooted at the clone instead of a directory in your project.
+
+Cloning requires the system `git` binary to be installed and on `PATH` — Ratect shells
+out to it (`git clone --quiet --no-checkout` followed by
+`git checkout --recurse-submodules <ref>`) rather than embedding a Git library, so
+submodules and any Git configuration (credentials, `.gitconfig` rewrites, etc.) that
+your normal `git clone` already relies on work the same way here.
 
 For example, given `containers/extra.yml` (included from the root `batect.yml`):
 

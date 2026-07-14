@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Git includes**: a config file's top-level `include` list can now use a `type: git`
+  entry (`repo`, `ref`, and an optional `path`, defaulting to `batect-bundle.yml`) to
+  import shared tasks/containers from a separate Git repository — a "bundle" — matching
+  Batect's own Git include semantics.
+  - Shells out to the system `git` binary (`clone --quiet --no-checkout` then
+    `checkout --recurse-submodules <ref>`, then an atomic rename into place) rather than
+    embedding a Git library.
+  - A `(repo, ref)` pair is cloned once and cached forever at `~/.ratect/incl/<hash>` —
+    never re-fetched, so `ref` must be pinned to something immutable (a tag or commit
+    SHA, not a branch). A per-cache-entry lock file (create-exclusive, polled, with a
+    5-minute timeout) makes concurrent `ratect` invocations targeting the same repo/ref
+    safe. Each cached clone gets a `<hash>.toml` sidecar (`type`, `repo.remote`,
+    `repo.ref`, `cloned_with_version`, `last_used`), written via
+    write-to-temp-then-atomic-rename.
+  - A Git-included file's own relative paths (volume host paths, `build_directory`, and
+    any further `include` entries) resolve against the cloned repository's root, the
+    same `container_base_paths` mechanism 0.7.0's local file includes already use.
+  - Known gaps, deferred as follow-on work rather than blocking this release: no 30-day
+    cache eviction sweep and no manual cache-clear CLI subcommand — `~/.ratect/incl`
+    grows unbounded until removed by hand. See [config
+    reference](docs/config-reference.md#git-includes) and [Differences from
+    Batect](docs/differences-from-batect.md#top-level-fields).
+
 ## [0.7.0] - 2026-07-14
 
 ### Added

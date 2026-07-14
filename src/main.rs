@@ -141,7 +141,7 @@ async fn run() -> Result<()> {
     if !args.config_file.exists() {
         anyhow::bail!("Configuration file {:?} not found.", args.config_file);
     }
-    let mut loaded = Config::load_from_file(&args.config_file)?;
+    let mut loaded = Config::load_from_file(&args.config_file).await?;
 
     let mut config_var_overrides: HashMap<String, String> = match &args.config_vars_file {
         Some(path) => Config::load_config_vars_file(path)?,

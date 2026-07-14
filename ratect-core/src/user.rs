@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use anyhow::{Context, Result};
+use std::path::PathBuf;
 
 /// The host user Ratect itself is running as — looked up once per
 /// `run_as_current_user`-enabled container (see
@@ -57,6 +58,30 @@ pub fn current_user() -> Result<CurrentUser> {
 pub fn current_user() -> Result<CurrentUser> {
     Err(anyhow::anyhow!(
         "'run_as_current_user' is only supported on Unix hosts"
+    ))
+}
+
+/// The current host user's home directory — used to anchor the Git include
+/// cache (`~/.ratect/incl`, see `git_include.rs`). Unix-only, same rationale
+/// as `current_user` above; deliberately not `$HOME` (which a user could
+/// override to something inconsistent with their actual passwd entry) —
+/// looked up the same way `current_user` looks up everything else.
+#[cfg(unix)]
+pub fn home_directory() -> Result<PathBuf> {
+    use nix::unistd::{Uid, User};
+
+    let uid = Uid::current();
+    let user = User::from_uid(uid)
+        .context("Failed to look up the current user")?
+        .with_context(|| format!("No passwd entry found for the current user (uid {uid})"))?;
+
+    Ok(user.dir)
+}
+
+#[cfg(not(unix))]
+pub fn home_directory() -> Result<PathBuf> {
+    Err(anyhow::anyhow!(
+        "Git includes are only supported on Unix hosts"
     ))
 }
 

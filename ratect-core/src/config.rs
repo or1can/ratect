@@ -342,16 +342,26 @@ pub struct ConfigVariable {
     pub default: Option<String>,
 }
 
-/// One entry in a config file's top-level `include` list. Only local file
-/// includes are implemented (Batect also has Git includes/bundles — see
-/// ROADMAP.md); accepts either a bare string path or the expanded `{type:
-/// file, path: ...}` object form, mirroring [`PortMapping`]'s
-/// string-or-object handling above. Any other `type` (e.g. `"git"`) is
-/// rejected with a clear "not supported yet" error rather than a generic
-/// parse failure.
+/// The `path` a `type: git` include defaults to when omitted, matching
+/// Batect's own default.
+const DEFAULT_GIT_INCLUDE_PATH: &str = "batect-bundle.yml";
+
+/// One entry in a config file's top-level `include` list — either a local
+/// file (a bare string path, or the expanded `{type: file, path: ...}`
+/// object form, mirroring [`PortMapping`]'s string-or-object handling
+/// above), or a Git bundle (`{type: git, repo, ref, path}` — `path` defaults
+/// to `batect-bundle.yml`). Any other `type` is rejected with a clear "not
+/// supported yet" error rather than a generic parse failure.
 #[derive(Debug, Clone)]
-struct IncludeEntry {
-    path: String,
+enum IncludeEntry {
+    File {
+        path: String,
+    },
+    Git {
+        repo: String,
+        git_ref: String,
+        path: String,
+    },
 }
 
 impl<'de> Deserialize<'de> for IncludeEntry {
@@ -365,14 +375,17 @@ impl<'de> Deserialize<'de> for IncludeEntry {
             type Value = IncludeEntry;
 
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("an include path, or an object with 'path' and optional 'type' fields")
+                f.write_str(
+                    "an include path, or an object with 'path'/'type' fields (plus 'repo'/'ref' \
+                     for 'type: git')",
+                )
             }
 
             fn visit_str<E>(self, v: &str) -> std::result::Result<IncludeEntry, E>
             where
                 E: serde::de::Error,
             {
-                Ok(IncludeEntry {
+                Ok(IncludeEntry::File {
                     path: v.to_string(),
                 })
             }
@@ -383,25 +396,49 @@ impl<'de> Deserialize<'de> for IncludeEntry {
             {
                 let mut path: Option<String> = None;
                 let mut include_type: Option<String> = None;
+                let mut repo: Option<String> = None;
+                let mut git_ref: Option<String> = None;
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "path" => path = Some(map.next_value()?),
                         "type" => include_type = Some(map.next_value()?),
+                        "repo" => repo = Some(map.next_value()?),
+                        "ref" => git_ref = Some(map.next_value()?),
                         other => {
-                            return Err(serde::de::Error::unknown_field(other, &["path", "type"]))
+                            return Err(serde::de::Error::unknown_field(
+                                other,
+                                &["path", "type", "repo", "ref"],
+                            ))
                         }
                     }
                 }
-                if let Some(include_type) = &include_type {
-                    if include_type != "file" {
-                        return Err(serde::de::Error::custom(format!(
-                            "Include type '{include_type}' is not supported yet — only 'file' \
-                             includes are implemented."
-                        )));
+
+                match include_type.as_deref() {
+                    Some("git") => {
+                        let repo = repo.ok_or_else(|| serde::de::Error::missing_field("repo"))?;
+                        let git_ref =
+                            git_ref.ok_or_else(|| serde::de::Error::missing_field("ref"))?;
+                        let path = path.unwrap_or_else(|| DEFAULT_GIT_INCLUDE_PATH.to_string());
+                        Ok(IncludeEntry::Git {
+                            repo,
+                            git_ref,
+                            path,
+                        })
+                    }
+                    Some(other) if other != "file" => Err(serde::de::Error::custom(format!(
+                        "Include type '{other}' is not supported yet — only 'file' and 'git' \
+                         includes are implemented."
+                    ))),
+                    _ => {
+                        if repo.is_some() || git_ref.is_some() {
+                            return Err(serde::de::Error::custom(
+                                "'repo' and 'ref' are only valid for 'type: git' includes",
+                            ));
+                        }
+                        let path = path.ok_or_else(|| serde::de::Error::missing_field("path"))?;
+                        Ok(IncludeEntry::File { path })
                     }
                 }
-                let path = path.ok_or_else(|| serde::de::Error::missing_field("path"))?;
-                Ok(IncludeEntry { path })
             }
         }
 
@@ -482,6 +519,15 @@ impl LoadedConfig {
 }
 
 impl Config {
+    /// Like [`load_from_file_with_git_cache`](Self::load_from_file_with_git_cache),
+    /// using the production Git include cache (`~/.ratect/incl`, the real
+    /// `git` binary) — see that method for the full behavior. Split out so
+    /// tests can inject a fake cache instead.
+    pub async fn load_from_file(path: &Path) -> Result<LoadedConfig> {
+        let git_cache = crate::git_include::GitIncludeCache::new();
+        Self::load_from_file_with_git_cache(path, &git_cache).await
+    }
+
     /// Parses the config file and resolves `include`s — but no path
     /// resolution or expression interpolation yet. Those need
     /// `config_var_overrides` from the CLI (`--config-var`/
@@ -489,22 +535,31 @@ impl Config {
     /// callers must follow up with
     /// [`LoadedConfig::resolve_expressions`].
     ///
-    /// `include` entries are resolved relative to the directory of the file
-    /// that declares them (not necessarily the root file's directory) and
-    /// traversed breadth-first; an already-loaded file (by cleaned absolute
-    /// path) is skipped rather than reloaded, which also makes an include
-    /// cycle harmless rather than infinite. Only the root file may declare
-    /// `project_name`; `containers`/`tasks`/`config_variables` are merged
-    /// across every loaded file, and a name defined in more than one file is
-    /// a hard error naming both files — matching Batect's own `include`
-    /// semantics.
-    pub fn load_from_file(path: &Path) -> Result<LoadedConfig> {
+    /// A local file `include` entry is resolved relative to the directory of
+    /// the file that declares it (not necessarily the root file's
+    /// directory). A `type: git` entry is resolved relative to the root of
+    /// its cloned repository instead — `git_cache` clones it (or reuses an
+    /// existing clone) at most once per distinct `(repo, ref)` per call,
+    /// memoized locally even across multiple include entries naming the same
+    /// repo/ref. Both kinds are traversed breadth-first; an already-loaded
+    /// file (by cleaned absolute path) is skipped rather than reloaded,
+    /// which also makes an include cycle harmless rather than infinite. Only
+    /// the root file may declare `project_name`; `containers`/`tasks`/
+    /// `config_variables` are merged across every loaded file, and a name
+    /// defined in more than one file is a hard error naming both files —
+    /// matching Batect's own `include` semantics.
+    pub async fn load_from_file_with_git_cache<G: crate::git_include::GitClient>(
+        path: &Path,
+        git_cache: &crate::git_include::GitIncludeCache<G>,
+    ) -> Result<LoadedConfig> {
         let root_path = absolute_path(path)?;
         let root_file = parse_config_file(path)?;
         let root_dir = root_path.parent().unwrap_or(Path::new("")).to_path_buf();
 
         let mut seen: HashSet<PathBuf> = HashSet::new();
         seen.insert(root_path.clone());
+
+        let mut git_repo_paths: HashMap<(String, String), PathBuf> = HashMap::new();
 
         let mut queue: VecDeque<(PathBuf, IncludeEntry)> = root_file
             .include
@@ -517,7 +572,28 @@ impl Config {
             vec![(root_path, root_dir, root_file)];
 
         while let Some((containing_dir, include)) = queue.pop_front() {
-            let resolved = absolute_path(&containing_dir.join(&include.path))?;
+            let (base_dir, include_path) = match &include {
+                IncludeEntry::File { path } => (containing_dir, path.clone()),
+                IncludeEntry::Git {
+                    repo,
+                    git_ref,
+                    path,
+                } => {
+                    let key = (repo.clone(), git_ref.clone());
+                    let repo_dir = match git_repo_paths.get(&key) {
+                        Some(dir) => dir.clone(),
+                        None => {
+                            let dir = git_cache.ensure_cached(repo, git_ref).await.with_context(
+                                || format!("Failed to resolve Git include '{repo}' at '{git_ref}'"),
+                            )?;
+                            git_repo_paths.insert(key, dir.clone());
+                            dir
+                        }
+                    };
+                    (repo_dir, path.clone())
+                }
+            };
+            let resolved = absolute_path(&base_dir.join(&include_path))?;
 
             if !resolved.is_file() {
                 if resolved.exists() {
@@ -841,6 +917,7 @@ fn resolve_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git_include::{FakeGitClient, GitIncludeCache};
     use std::io::Cursor;
 
     fn parse(yaml: &str) -> Config {
@@ -1689,8 +1766,8 @@ tasks: {}
         dir
     }
 
-    #[test]
-    fn load_from_file_then_resolve_expressions_resolves_paths() {
+    #[tokio::test]
+    async fn load_from_file_then_resolve_expressions_resolves_paths() {
         let dir = unique_temp_dir();
         let config_path = dir.join("batect.yml");
         std::fs::write(
@@ -1707,7 +1784,7 @@ tasks: {}
         )
         .unwrap();
 
-        let mut loaded = Config::load_from_file(&config_path).unwrap();
+        let mut loaded = Config::load_from_file(&config_path).await.unwrap();
         loaded.resolve_expressions(&dir, &HashMap::new()).unwrap();
 
         let volume = &loaded.config.containers["build-env"]
@@ -1719,14 +1796,14 @@ tasks: {}
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn load_from_file_missing_file_errors() {
-        let result = Config::load_from_file(Path::new("/nonexistent/batect.yml"));
+    #[tokio::test]
+    async fn load_from_file_missing_file_errors() {
+        let result = Config::load_from_file(Path::new("/nonexistent/batect.yml")).await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn load_from_file_unsupported_key_errors() {
+    #[tokio::test]
+    async fn load_from_file_unsupported_key_errors() {
         let dir = unique_temp_dir();
         let config_path = dir.join("batect.yml");
         std::fs::write(
@@ -1742,14 +1819,14 @@ tasks: {}
         )
         .unwrap();
 
-        let result = Config::load_from_file(&config_path);
+        let result = Config::load_from_file(&config_path).await;
         assert!(result.is_err());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn include_merges_containers_tasks_and_config_variables_from_another_file() {
+    #[tokio::test]
+    async fn include_merges_containers_tasks_and_config_variables_from_another_file() {
         let dir = unique_temp_dir();
         std::fs::write(
             dir.join("batect.yml"),
@@ -1777,7 +1854,9 @@ config_variables:
         )
         .unwrap();
 
-        let loaded = Config::load_from_file(&dir.join("batect.yml")).unwrap();
+        let loaded = Config::load_from_file(&dir.join("batect.yml"))
+            .await
+            .unwrap();
         assert!(loaded.config.containers.contains_key("build-env"));
         assert!(loaded.config.tasks.contains_key("extra-task"));
         assert!(loaded
@@ -1790,8 +1869,8 @@ config_variables:
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn nested_includes_are_resolved_transitively() {
+    #[tokio::test]
+    async fn nested_includes_are_resolved_transitively() {
         let dir = unique_temp_dir();
         std::fs::create_dir_all(dir.join("nested")).unwrap();
         std::fs::write(
@@ -1825,15 +1904,17 @@ tasks:
         )
         .unwrap();
 
-        let loaded = Config::load_from_file(&dir.join("batect.yml")).unwrap();
+        let loaded = Config::load_from_file(&dir.join("batect.yml"))
+            .await
+            .unwrap();
         assert!(loaded.config.containers.contains_key("build-env"));
         assert!(loaded.config.tasks.contains_key("deep-task"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn a_file_included_from_two_places_is_only_loaded_once() {
+    #[tokio::test]
+    async fn a_file_included_from_two_places_is_only_loaded_once() {
         let dir = unique_temp_dir();
         std::fs::write(
             dir.join("batect.yml"),
@@ -1874,14 +1955,16 @@ tasks:
 
         // If `shared.yml` were (incorrectly) loaded twice, this would fail
         // with a "defined in multiple files" error instead.
-        let loaded = Config::load_from_file(&dir.join("batect.yml")).unwrap();
+        let loaded = Config::load_from_file(&dir.join("batect.yml"))
+            .await
+            .unwrap();
         assert!(loaded.config.tasks.contains_key("shared-task"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn a_task_defined_in_two_different_files_is_an_error() {
+    #[tokio::test]
+    async fn a_task_defined_in_two_different_files_is_an_error() {
         let dir = unique_temp_dir();
         std::fs::write(
             dir.join("batect.yml"),
@@ -1907,14 +1990,14 @@ tasks:
         )
         .unwrap();
 
-        let result = Config::load_from_file(&dir.join("batect.yml"));
+        let result = Config::load_from_file(&dir.join("batect.yml")).await;
         assert!(format!("{:?}", result.unwrap_err()).contains("build"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn project_name_in_an_included_file_is_an_error() {
+    #[tokio::test]
+    async fn project_name_in_an_included_file_is_an_error() {
         let dir = unique_temp_dir();
         std::fs::write(
             dir.join("batect.yml"),
@@ -1933,14 +2016,14 @@ project_name: not-allowed
         )
         .unwrap();
 
-        let result = Config::load_from_file(&dir.join("batect.yml"));
+        let result = Config::load_from_file(&dir.join("batect.yml")).await;
         assert!(format!("{:?}", result.unwrap_err()).contains("project_name"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn a_missing_include_path_errors_clearly() {
+    #[tokio::test]
+    async fn a_missing_include_path_errors_clearly() {
         let dir = unique_temp_dir();
         std::fs::write(
             dir.join("batect.yml"),
@@ -1952,14 +2035,14 @@ include:
         )
         .unwrap();
 
-        let result = Config::load_from_file(&dir.join("batect.yml"));
+        let result = Config::load_from_file(&dir.join("batect.yml")).await;
         assert!(format!("{:?}", result.unwrap_err()).contains("does not exist"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn an_include_path_that_is_a_directory_errors_clearly() {
+    #[tokio::test]
+    async fn an_include_path_that_is_a_directory_errors_clearly() {
         let dir = unique_temp_dir();
         std::fs::create_dir_all(dir.join("a-directory")).unwrap();
         std::fs::write(
@@ -1972,14 +2055,14 @@ include:
         )
         .unwrap();
 
-        let result = Config::load_from_file(&dir.join("batect.yml"));
+        let result = Config::load_from_file(&dir.join("batect.yml")).await;
         assert!(format!("{:?}", result.unwrap_err()).contains("is not a file"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn a_relative_volume_path_in_an_included_file_resolves_against_its_own_directory() {
+    #[tokio::test]
+    async fn a_relative_volume_path_in_an_included_file_resolves_against_its_own_directory() {
         let dir = unique_temp_dir();
         std::fs::create_dir_all(dir.join("nested")).unwrap();
         std::fs::write(
@@ -2003,7 +2086,9 @@ containers:
         )
         .unwrap();
 
-        let mut loaded = Config::load_from_file(&dir.join("batect.yml")).unwrap();
+        let mut loaded = Config::load_from_file(&dir.join("batect.yml"))
+            .await
+            .unwrap();
         loaded.resolve_expressions(&dir, &HashMap::new()).unwrap();
 
         let volume = &loaded.config.containers["build-env"]
@@ -2018,8 +2103,8 @@ containers:
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn project_directory_var_in_an_included_file_resolves_to_the_root_directory() {
+    #[tokio::test]
+    async fn project_directory_var_in_an_included_file_resolves_to_the_root_directory() {
         let dir = unique_temp_dir();
         std::fs::create_dir_all(dir.join("nested")).unwrap();
         std::fs::write(
@@ -2043,7 +2128,9 @@ containers:
         )
         .unwrap();
 
-        let mut loaded = Config::load_from_file(&dir.join("batect.yml")).unwrap();
+        let mut loaded = Config::load_from_file(&dir.join("batect.yml"))
+            .await
+            .unwrap();
         loaded.resolve_expressions(&dir, &HashMap::new()).unwrap();
 
         let value = &loaded.config.containers["build-env"]
@@ -2055,8 +2142,8 @@ containers:
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn include_accepts_both_bare_string_and_object_form() {
+    #[tokio::test]
+    async fn include_accepts_both_bare_string_and_object_form() {
         let dir = unique_temp_dir();
         std::fs::write(
             dir.join("extra.yml"),
@@ -2088,17 +2175,41 @@ include:
         )
         .unwrap();
 
-        let loaded = Config::load_from_file(&dir.join("string-form.yml")).unwrap();
+        let loaded = Config::load_from_file(&dir.join("string-form.yml"))
+            .await
+            .unwrap();
         assert!(loaded.config.tasks.contains_key("extra-task"));
 
-        let loaded = Config::load_from_file(&dir.join("object-form.yml")).unwrap();
+        let loaded = Config::load_from_file(&dir.join("object-form.yml"))
+            .await
+            .unwrap();
         assert!(loaded.config.tasks.contains_key("extra-task"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn include_with_unsupported_type_errors_clearly() {
+    #[tokio::test]
+    async fn include_with_unsupported_type_errors_clearly() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - type: bundle
+    path: bundle.yml
+"#,
+        )
+        .unwrap();
+
+        let result = Config::load_from_file(&dir.join("batect.yml")).await;
+        assert!(format!("{:?}", result.unwrap_err()).contains("not supported"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_git_include_clones_the_repo_and_merges_containers_and_tasks() {
         let dir = unique_temp_dir();
         std::fs::write(
             dir.join("batect.yml"),
@@ -2106,15 +2217,300 @@ include:
 project_name: demo
 include:
   - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
     path: bundle.yml
 "#,
         )
         .unwrap();
 
-        let result = Config::load_from_file(&dir.join("batect.yml"));
-        assert!(format!("{:?}", result.unwrap_err()).contains("not supported"));
+        let mut files = HashMap::new();
+        files.insert(
+            "bundle.yml".to_string(),
+            r#"
+containers:
+  bundled:
+    image: alpine:3.18
+tasks:
+  bundled-task:
+    run:
+      container: bundled
+"#
+            .to_string(),
+        );
+        let git =
+            FakeGitClient::new().with_files("https://example.com/bundle.git", "v1.0.0", files);
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+        let loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+            .await
+            .unwrap();
+        assert!(loaded.config.containers.contains_key("bundled"));
+        assert!(loaded.config.tasks.contains_key("bundled-task"));
 
         std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_git_include_without_an_explicit_path_defaults_to_batect_bundle_yml() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+"#,
+        )
+        .unwrap();
+
+        let mut files = HashMap::new();
+        files.insert(
+            "batect-bundle.yml".to_string(),
+            r#"
+tasks:
+  bundled-task:
+    run:
+      container: build-env
+"#
+            .to_string(),
+        );
+        let git =
+            FakeGitClient::new().with_files("https://example.com/bundle.git", "v1.0.0", files);
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+        let loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+            .await
+            .unwrap();
+        assert!(loaded.config.tasks.contains_key("bundled-task"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_relative_volume_path_in_a_git_included_file_resolves_against_the_clone_directory() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+"#,
+        )
+        .unwrap();
+
+        let mut files = HashMap::new();
+        files.insert(
+            "batect-bundle.yml".to_string(),
+            r#"
+containers:
+  bundled:
+    image: alpine:3.18
+    volumes:
+      - code:/code
+tasks: {}
+"#
+            .to_string(),
+        );
+        let git =
+            FakeGitClient::new().with_files("https://example.com/bundle.git", "v1.0.0", files);
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+        let mut loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+            .await
+            .unwrap();
+        loaded.resolve_expressions(&dir, &HashMap::new()).unwrap();
+
+        let volume = &loaded.config.containers["bundled"]
+            .volumes
+            .as_ref()
+            .unwrap()[0];
+        let clone_dir = cache_root.join(crate::git_include::cache_key(
+            "https://example.com/bundle.git",
+            "v1.0.0",
+        ));
+        assert_eq!(
+            *volume,
+            format!("{}:/code", clone_dir.join("code").display())
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_local_include_inside_a_git_bundle_resolves_against_the_clone_directory() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+"#,
+        )
+        .unwrap();
+
+        let mut files = HashMap::new();
+        files.insert(
+            "batect-bundle.yml".to_string(),
+            r#"
+include:
+  - nested.yml
+"#
+            .to_string(),
+        );
+        files.insert(
+            "nested.yml".to_string(),
+            r#"
+tasks:
+  nested-task:
+    run:
+      container: build-env
+"#
+            .to_string(),
+        );
+        let git =
+            FakeGitClient::new().with_files("https://example.com/bundle.git", "v1.0.0", files);
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+        let loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+            .await
+            .unwrap();
+        assert!(loaded.config.tasks.contains_key("nested-task"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn two_git_includes_for_the_same_repo_and_ref_only_clone_once() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+    path: a.yml
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+    path: b.yml
+"#,
+        )
+        .unwrap();
+
+        let mut files = HashMap::new();
+        files.insert(
+            "a.yml".to_string(),
+            "tasks:\n  a-task:\n    run:\n      container: build-env\n".to_string(),
+        );
+        files.insert(
+            "b.yml".to_string(),
+            "tasks:\n  b-task:\n    run:\n      container: build-env\n".to_string(),
+        );
+        let git =
+            FakeGitClient::new().with_files("https://example.com/bundle.git", "v1.0.0", files);
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), git.clone(), 1000);
+
+        let loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+            .await
+            .unwrap();
+        assert!(loaded.config.tasks.contains_key("a-task"));
+        assert!(loaded.config.tasks.contains_key("b-task"));
+        assert_eq!(git.clone_count(), 1);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_git_include_missing_repo_or_ref_is_a_clear_parse_error() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - type: git
+    ref: v1.0.0
+"#,
+        )
+        .unwrap();
+
+        let git_cache = GitIncludeCache::for_test(unique_temp_dir(), FakeGitClient::new(), 1000);
+        let result =
+            Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache).await;
+        assert!(result.is_err());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn repo_and_ref_are_rejected_on_a_non_git_include() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - repo: https://example.com/bundle.git
+    ref: v1.0.0
+    path: extra.yml
+"#,
+        )
+        .unwrap();
+
+        let git_cache = GitIncludeCache::for_test(unique_temp_dir(), FakeGitClient::new(), 1000);
+        let result =
+            Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache).await;
+        assert!(format!("{:?}", result.unwrap_err()).contains("only valid for 'type: git'"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_git_clone_failure_surfaces_a_clear_error() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+"#,
+        )
+        .unwrap();
+
+        let git = FakeGitClient::new().failing("simulated network failure");
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+        let result =
+            Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache).await;
+        assert!(format!("{:?}", result.unwrap_err()).contains("simulated network failure"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
     }
 
     #[test]
