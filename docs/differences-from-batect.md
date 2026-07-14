@@ -153,12 +153,6 @@ Batect's full flag list, from its [CLI reference](https://github.com/batect/bate
 Batect behavior not implemented in task execution, beyond what's covered by the field
 tables above:
 
-- **Docker networking**: every task execution gets its own isolated network (see
-  [`dependencies`](#container-fields) and [the task lifecycle](task-lifecycle.md)),
-  and `--use-network` can point that at an existing network instead — but it's not
-  Batect's fully configurable networking (custom drivers for a network Ratect creates
-  itself; the only way to get a different driver is to pre-create the network
-  yourself and `--use-network` it).
 - **Interactive mode**: supported for the invoked task's own container (never a
   prerequisite's, a dependency's, or a sidecar's) when both Ratect's own stdin and
   stdout are real terminals — see [Interactive mode](config-reference.md#interactive-mode).
