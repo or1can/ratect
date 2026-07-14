@@ -10,7 +10,7 @@ The primary goal is to support the core features of Batect to ensure a seamless 
 - **Full Docker Networking**: Every task execution gets its own isolated network (see [the task lifecycle](docs/task-lifecycle.md)), `--use-network` reuses an existing one instead, `additional_hostnames`/`additional_hosts` add extra aliases/`/etc/hosts` entries, and `ports`/`--disable-ports` publish container ports to the host, including port ranges and the expanded object form, plus additional per-task `run.ports` (0.6.0) — see [config reference](docs/config-reference.md#port-mappings) and [CLI reference](docs/cli-reference.md).
 - **Interactive Mode**: A task's own container gets a real Docker TTY and its stdin forwarded, automatically, when both Ratect's own stdin and stdout are real terminals (0.4.0) — see [Interactive mode](docs/config-reference.md#interactive-mode). Live terminal-resize forwarding and Batect's decoupled stdin-without-TTY support are not — see [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
 - **Full Environment Variable Interpolation & Batect Expressions**: `environment` on containers/tasks, `config_variables` (including Batect's one built-in, `batect.project_directory`), and `$VAR`/`${VAR}`/`${VAR:-default}`/`<name`/`<{name}` expressions are implemented for `environment` values, volume host paths, `build_directory`, and `build_args` — every already-supported field that could meaningfully take one; `build_secrets.path`/`build_ssh.paths` remain moot until those fields themselves exist — see [Expressions](docs/differences-from-batect.md#expressions).
-- **Includes**: Local file includes — splitting one project's configuration across multiple files via the top-level `include` directive, resolved relative to each declaring file's own directory and merged into one flat `containers`/`tasks`/`config_variables` set (0.7.0) — see [config reference](docs/config-reference.md#includes). Git includes/bundles (importing shared tasks/containers from a separate repository) are not implemented — see [Differences from Batect](docs/differences-from-batect.md#top-level-fields).
+- **Includes**: Local file includes — splitting one project's configuration across multiple files via the top-level `include` directive, resolved relative to each declaring file's own directory and merged into one flat `containers`/`tasks`/`config_variables` set (0.7.0) — see [config reference](docs/config-reference.md#includes). Git includes/bundles (importing shared tasks/containers from a separate repository) are not implemented yet, planned for 0.8.0 — see [Differences from Batect](docs/differences-from-batect.md#top-level-fields).
 - **Full Configuration Parity**: Support for all available Batect configuration options and standard YAML structures. See [Differences from Batect](docs/differences-from-batect.md#configuration-format) for the itemized current status of every field.
 - **Full CLI Options Parity**: Support for all standard Batect CLI flags and options (e.g., `--config-file`, `--override-image`, cleanup control flags, etc.). See [Differences from Batect](docs/differences-from-batect.md#cli-flags) for the itemized current status of every flag.
 - **User Mapping**: A container can run as the host's own user/group (`run_as_current_user`) instead of the image's default, so files it writes to a mounted volume aren't root-owned (0.5.0) — see [User mapping](docs/config-reference.md#user-mapping). No equivalent to Batect's "cache mounts", and host-side uid/gid lookup is Unix-only — see [Differences from Batect](docs/differences-from-batect.md#container-fields).
@@ -202,27 +202,66 @@ Neither bump is ever folded into a feature commit.
   larger feature (remote fetch, caching) that shouldn't block the simpler
   file-splitting case; a `type: git` include entry is rejected with a clear
   "not supported yet" error rather than silently ignored.
-- **0.8.0** — **Dependency Readiness**: `health_check` and `setup_commands`, replacing
+- **0.8.0** — **Git Includes**: the `type: git` include entry 0.7.0 rejects
+  ("not supported yet") — importing shared tasks/containers from a separate Git
+  repository (a "bundle"), the way real-world Batect projects actually rely on this,
+  not just the simpler local-file-splitting case. Design validated against Batect's
+  own implementation (`libs/git-client/`, `app/.../config/includes/` in the local
+  `batect` checkout):
+  - Shells out to the system `git` binary (`clone --quiet --no-checkout` into a temp
+    dir, then `checkout --recurse-submodules <ref>`, then an atomic rename into
+    place) — no embedded Git library, matching Batect's own approach and keeping this
+    dependency-light.
+  - A repo/ref is cloned **once and never re-fetched** — the cache key is a hash of
+    `(remote, ref)`; if that directory already exists, it's reused forever. This is
+    *why* users are expected to pin immutable tags, not a corner Ratect is cutting
+    relative to Batect. Cache lives at `~/.ratect/incl/<hash>` (Batect: `~/.batect/incl/<hash>`).
+  - A lock file per cache entry (create-exclusive + poll + timeout) makes concurrent
+    `ratect` invocations targeting the same repo/ref safe — guards the clone step
+    only, matching Batect.
+  - Each cached repo gets a small TOML sidecar (`<hash>.toml`: `type`, `repo.remote`,
+    `repo.ref`, `cloned_with_version`, `last_used`) — TOML rather than matching
+    Batect's own JSON, since there's no compatibility requirement (this directory is
+    ratect-specific, never read by Batect). `last_used` is an explicit field rather
+    than filesystem `atime`/`mtime`, since `atime` is unreliable across platforms and
+    especially on CI (`relatime`/`noatime` defaults), `mtime` reflects clone time, not
+    last-used time, and an explicit field is trivially mockable in tests via an
+    injected clock — same reasoning as Batect's own `TimeSource` parameter. Written
+    via write-to-temp-then-atomic-rename (same trick already needed for the clone
+    destination) so it can never be torn/corrupted under concurrent writers, without
+    needing its own lock; a concurrent `last_used` bump can still be lost to a
+    last-write-wins race, same as Batect accepts — low-stakes, since it only feeds
+    cleanup, not correctness.
+  - A git-included file's containers resolve their relative paths against the cloned
+    repo's directory — already covered for free by 0.7.0's `container_base_paths`
+    mechanism (a clone directory is just another "origin directory"), no new
+    resolution logic needed.
+  - Known gaps, deferred as follow-on work rather than blocking this release: no
+    30-day cache eviction sweep and no manual cache-clear CLI surface (Batect has
+    both; Ratect has no subcommand structure yet to hang a cleanup command off of —
+    tracked separately, not part of this item) — `~/.ratect/incl` grows unbounded
+    until removed by hand.
+- **0.9.0** — **Dependency Readiness**: `health_check` and `setup_commands`, replacing
   today's "started = ready" simplification (see
   [Container fields](docs/differences-from-batect.md#container-fields)) with Batect's
   real readiness gate before a container's dependents start.
-- **0.9.0** — **Interactive Mode Completeness**: closes the known gaps left by 0.4.0 —
+- **0.10.0** — **Interactive Mode Completeness**: closes the known gaps left by 0.4.0 —
   live terminal-resize forwarding for the rest of an interactive session (not just
   synced once at attach time), decoupling stdin forwarding from TTY allocation (piping
   input into a non-interactive task), and propagating the host's `TERM` into the
   container's environment alongside proxy variables.
-- **0.10.0** — **Build Customization**: `build_target`, custom `dockerfile`
+- **0.11.0** — **Build Customization**: `build_target`, custom `dockerfile`
   naming/location, `build_secrets`, `build_ssh` — extends 0.3.0's image-building
   support.
-- **0.11.0** — **Container Runtime Options**: `entrypoint` (container and `run`),
+- **0.12.0** — **Container Runtime Options**: `entrypoint` (container and `run`),
   `working_directory` (container and `run`), `labels`,
   `capabilities_to_add`/`capabilities_to_drop`, `privileged`, `shm_size`, `devices`,
   `enable_init_process`, `image_pull_policy` — the remaining container/run fields,
   each largely a direct pass-through to the Docker API.
-- **0.12.0** — **Task Model Completeness**: task-level `dependencies` (sidecars scoped
+- **0.13.0** — **Task Model Completeness**: task-level `dependencies` (sidecars scoped
   to a task, distinct from the container-level field shipped in 0.6.0),
   `description`/`group` (plus corresponding `--list-tasks` output), and `customise`.
-- **0.13.0** — **Parallel Task Execution**: independent prerequisites and tasks run
+- **0.14.0** — **Parallel Task Execution**: independent prerequisites and tasks run
   concurrently via `tokio`, rather than sequentially — closes the last
   [runtime behavior gap](docs/differences-from-batect.md#runtime-behavior-gaps)
   against Batect and delivers the [Parallel Task Execution](#rust-enhancements) item
@@ -230,17 +269,17 @@ Neither bump is ever folded into a feature commit.
   list — it touches the `Mutex`-based shared execution state in
   `ratect-core/src/engine.rs` (see `AGENTS.md`), and dependency-cycle detection has to
   stay correct under concurrency.
-- **0.14.0** — **Output Modes**: `--output`/`-o` (Batect's `fancy`/`simple`/`quiet`/
+- **0.15.0** — **Output Modes**: `--output`/`-o` (Batect's `fancy`/`simple`/`quiet`/
   `all` modes) together with automatic default-mode selection based on terminal
   capabilities — the two can't ship separately, since auto-detection is the logic for
   picking between modes that don't otherwise exist. Also closes `--no-color` (color is
   one axis of the fancy/simple distinction).
-- **0.15.0** — **Remaining CLI Parity**: `--skip-prerequisites`, `--override-image`,
+- **0.16.0** — **Remaining CLI Parity**: `--skip-prerequisites`, `--override-image`,
   `--no-cleanup`/`--no-cleanup-after-failure`/`--no-cleanup-after-success`,
   `--tag-image`, `--enable-buildkit`, `--docker-host`/`--docker-context`/
   `--docker-config`/`--docker-cert-path`/`--docker-tls*`.
 - **1.0.0** — the [Batect Parity](#batect-parity) section above substantially checked
-  off (all of the above, including 0.7.0–0.15.0, not just the items shipped through
+  off (all of the above, including 0.7.0–0.16.0, not just the items shipped through
   0.6.0), and verified against a handful of real Batect projects, not just the
   itemized field/flag tables passing in isolation. Not tagged early for appearances —
   earned once `ratect-compat` can honestly replace `batect` on real projects.
@@ -256,7 +295,7 @@ Batect.
 
 Leveraging Rust's strengths to provide a superior experience compared to the original JVM-based implementation.
 
-- **Parallel Task Execution**: Utilizing `tokio` to execute independent tasks and prerequisites in parallel, significantly reducing execution time. Scheduled as `ratect-compat` [0.13.0](#ratect-compat) rather than left indefinite, since it also closes a Batect parity gap.
+- **Parallel Task Execution**: Utilizing `tokio` to execute independent tasks and prerequisites in parallel, significantly reducing execution time. Scheduled as `ratect-compat` [0.14.0](#ratect-compat) rather than left indefinite, since it also closes a Batect parity gap.
 - **Static Binaries**: Distribution as zero-dependency static binaries (`ratect` and `ratect-compat`) for easy installation and portability.
 - **First-class Cross-platform Support**: Providing a high-performance, native experience across macOS, Linux, and Windows without the overhead or startup latency of a JVM.
 - **Precise Error Reporting**: Utilizing Rust's type system and error handling to provide clear, actionable feedback on configuration errors and execution failures.
