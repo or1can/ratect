@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-14
+
 ### Added
 
 - **Git includes**: a config file's top-level `include` list can now use a `type: git`
