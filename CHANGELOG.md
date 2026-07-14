@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A Git-included file's own relative paths (volume host paths, `build_directory`, and
     any further `include` entries) resolve against the cloned repository's root, the
     same `container_base_paths` mechanism 0.7.0's local file includes already use.
+  - `repo`/`ref` are config-file-supplied (possibly transitively, from a git-included
+    bundle) and treated as untrusted: a leading `-` is rejected outright (argv flag
+    smuggling), and `GIT_ALLOW_PROTOCOL` is restricted to `file:git:http:https:ssh` for
+    both the clone and the checkout (which can itself trigger submodule clones) —
+    without this, a `repo`/submodule URL of the form `ext::sh -c ...` can execute
+    arbitrary shell commands, since git otherwise resolves it at "user" trust level for
+    a directly-invoked `clone`.
   - Known gaps, deferred as follow-on work rather than blocking this release: no 30-day
     cache eviction sweep and no manual cache-clear CLI subcommand — `~/.ratect/incl`
     grows unbounded until removed by hand. See [config

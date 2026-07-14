@@ -47,6 +47,19 @@ pub struct SystemGitClient;
 #[async_trait::async_trait]
 impl GitClient for SystemGitClient {
     async fn clone_repo(&self, remote: &str, git_ref: &str, destination: &Path) -> Result<()> {
+        // Defense against argv flag smuggling: a `repo`/`ref` from a config
+        // file (possibly itself from a git-included bundle) that starts
+        // with `-` could otherwise be parsed as a git flag rather than a
+        // positional argument. `clone` below also has a `--` separator
+        // before `remote`; `checkout` can't safely use one (see the comment
+        // there), so this check is what protects `git_ref` there.
+        if remote.starts_with('-') {
+            anyhow::bail!("Git include 'repo' must not start with '-': '{remote}'");
+        }
+        if git_ref.starts_with('-') {
+            anyhow::bail!("Git include 'ref' must not start with '-': '{git_ref}'");
+        }
+
         let parent = destination
             .parent()
             .context("Git include cache destination has no parent directory")?;
@@ -68,6 +81,17 @@ impl GitClient for SystemGitClient {
         }
 
         let clone_output = Command::new("git")
+            // Restricts which transports git will honor for both this
+            // remote and (via --recurse-submodules below) any submodule
+            // URLs the checked-out ref's .gitmodules declares — without
+            // this, a `repo`/submodule URL of the form `ext::sh -c ...`
+            // is (by default, since it's given directly on the command
+            // line rather than embedded in fetched content) trusted at
+            // git's "user" level and would execute arbitrary shell
+            // commands. `remote`/`ref` ultimately come from a config
+            // file, possibly itself from a git-included bundle, so
+            // they're not fully trusted input.
+            .env("GIT_ALLOW_PROTOCOL", "file:git:http:https:ssh")
             .args(["clone", "--quiet", "--no-checkout", "--", remote])
             .arg(&temp_dir)
             .output()
@@ -82,8 +106,14 @@ impl GitClient for SystemGitClient {
         }
 
         let checkout_output = Command::new("git")
+            .env("GIT_ALLOW_PROTOCOL", "file:git:http:https:ssh")
             .args(["-c", "advice.detachedHead=false", "-C"])
             .arg(&temp_dir)
+            // No `--` here: unlike `clone`, `checkout`'s `--` means "the
+            // rest are pathspecs, not a ref" — adding one would break every
+            // checkout (verified: `git checkout <ref> --` errors with
+            // "pathspec did not match any files"). The `git_ref.starts_with('-')`
+            // check above is what protects this call instead.
             .args(["checkout", "--quiet", "--recurse-submodules", git_ref])
             .output()
             .await
@@ -518,6 +548,67 @@ mod tests {
 
         std::fs::remove_dir_all(&repo_dir).ok();
         std::fs::remove_dir_all(destination.parent().unwrap()).ok();
+    }
+
+    #[tokio::test]
+    async fn system_git_client_rejects_a_remote_starting_with_a_dash() {
+        let destination = unique_temp_dir().join("clone");
+
+        let result = SystemGitClient
+            .clone_repo("--upload-pack=touch pwned", "v1.0.0", &destination)
+            .await;
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must not start with '-'"));
+        assert!(!destination.exists());
+    }
+
+    #[tokio::test]
+    async fn system_git_client_rejects_a_ref_starting_with_a_dash() {
+        let repo_dir = create_test_repo();
+        let destination = unique_temp_dir().join("clone");
+
+        let result = SystemGitClient
+            .clone_repo(
+                &repo_dir.to_string_lossy(),
+                "--upload-pack=touch pwned",
+                &destination,
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must not start with '-'"));
+        assert!(!destination.exists());
+
+        std::fs::remove_dir_all(&repo_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn system_git_client_refuses_the_ext_transport() {
+        // `ext::` runs an arbitrary shell command as git's "remote helper" —
+        // GIT_ALLOW_PROTOCOL is what's supposed to block it. If this test
+        // ever fails because the marker file *was* created, that's a
+        // command-injection regression, not a flaky test.
+        let marker = unique_temp_dir().join("pwned");
+        let destination = unique_temp_dir().join("clone");
+
+        let result = SystemGitClient
+            .clone_repo(
+                &format!("ext::sh -c touch\\ {}", marker.display()),
+                "v1.0.0",
+                &destination,
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert!(!marker.exists(), "ext:: transport was not blocked");
+        assert!(!destination.exists());
     }
 
     #[tokio::test]
