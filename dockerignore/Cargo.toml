@@ -1,6 +1,6 @@
 [package]
 name = "dockerignore"
-version = "0.7.0"
+version = "0.8.0-dev"
 edition = "2021"
 description = "A faithful port of Docker's own .dockerignore pattern matching (github.com/moby/patternmatcher)"
 
