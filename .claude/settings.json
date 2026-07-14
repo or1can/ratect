@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo fmt --all -- --check)",
+      "Bash(cargo clippy --workspace --all-targets --all-features -- -D warnings)",
+      "Bash(cargo test --workspace)",
+      "Bash(cargo test --workspace --test cli -- --ignored)"
+    ]
+  }
+}
