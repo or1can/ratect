@@ -1160,6 +1160,21 @@ impl Config {
                             home_directory
                         );
                     }
+                    // `home_directory` is interpolated raw into a
+                    // colon-delimited `/etc/passwd`/`/etc/shadow` line
+                    // (`user::generate_passwd_file`) — a `:` shifts that
+                    // line's fields, and a newline/other control character
+                    // injects an entirely new (attacker-chosen) entry.
+                    if home_directory.contains(':') || home_directory.chars().any(char::is_control)
+                    {
+                        anyhow::bail!(
+                            "Container '{}' has an invalid 'run_as_current_user.home_directory': \
+                             '{}' contains a ':' or a control character, which would corrupt the \
+                             generated /etc/passwd and /etc/shadow entries",
+                            container_name,
+                            home_directory
+                        );
+                    }
                 } else if run_as_current_user.home_directory.is_some() {
                     anyhow::bail!(
                         "Container '{}' has 'run_as_current_user.home_directory' set, but \
@@ -2299,6 +2314,50 @@ tasks: {}
             .unwrap_err()
             .to_string()
             .contains("is not an absolute path"));
+    }
+
+    #[test]
+    fn resolve_expressions_errors_when_run_as_current_user_home_directory_contains_a_colon() {
+        // SEC-002: a ':' would shift the fields of the colon-delimited
+        // /etc/passwd/etc/shadow line `home_directory` is interpolated into.
+        let mut config = config_with_container(container_with_run_as_current_user(
+            true,
+            Some("/home/x:0:0:root:/root:/bin/sh"),
+        ));
+
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            no_host_env,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("contains a ':' or a control character"));
+    }
+
+    #[test]
+    fn resolve_expressions_errors_when_run_as_current_user_home_directory_contains_a_newline() {
+        // SEC-002: a newline would inject an entirely new, attacker-chosen
+        // /etc/passwd/etc/shadow entry rather than just extending this one.
+        let mut config = config_with_container(container_with_run_as_current_user(
+            true,
+            Some("/home/x\nbackdoor:x:0:0::/root:/bin/sh"),
+        ));
+
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            no_host_env,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("contains a ':' or a control character"));
     }
 
     #[test]
