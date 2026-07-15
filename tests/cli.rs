@@ -75,6 +75,10 @@ fn build_customization_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-customization.yml")
 }
 
+fn build_secrets_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-secrets.yml")
+}
+
 fn build_failure_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-failure.yml")
 }
@@ -766,6 +770,47 @@ fn dockerfile_and_build_target_reach_a_real_docker_build() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(stdout.trim(), "from-builder-stage");
+}
+
+/// Requires a running Docker daemon that supports BuildKit sessions (any
+/// reasonably current Docker Engine) and network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves `build_secrets` reaches a real BuildKit gRPC session build (a
+/// materially different code path from every other build test here — see
+/// `build_image_via_buildkit` in `ratect-core/src/docker.rs`): the
+/// Dockerfile's `RUN --mount=type=secret,id=token` only sees the secret
+/// inside that one instruction's mount, so the task catting the file that
+/// `RUN` copied it into — and seeing this test process's own env var value,
+/// not a baked-in one — proves the secret's value made the full round trip
+/// from host env var through the gRPC session to the build.
+///
+/// No equivalent test exists for `build_ssh`: unlike `build_secrets`,
+/// proving it forwards something real needs a host `ssh-agent` with a
+/// loaded identity, which isn't a safe assumption for a CI runner. It's
+/// covered instead by `ratect-core/src/engine.rs`'s unit tests (proving
+/// `build_ssh` reaches `BuildKitOptions::forward_default_ssh_agent`) and
+/// was manually verified against a real Docker daemon and a local
+/// `ssh-agent` during development.
+#[test]
+#[ignore]
+fn build_secrets_reach_a_real_buildkit_session_build() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(build_secrets_config_path())
+        .arg("print-secret")
+        .env("RATECT_BUILD_SECRETS_TEST_TOKEN", "hello-from-build-secret")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "hello-from-build-secret");
 }
 
 /// Requires a running Docker daemon with network access to pull

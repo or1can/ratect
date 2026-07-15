@@ -43,15 +43,17 @@ for config variables) usable *within* several fields: `environment`, `build_args
 `build_directory`, `build_secrets.path`, `build_ssh.paths`, and volume local paths.
 
 **Ratect implements this within `environment`, volume local paths, `build_directory`,
-and `build_args`** (see [config reference](config-reference.md#expressions) for the
-full syntax, precedence, and error rules, and
-[Volume path resolution](config-reference.md#volume-path-resolution) for how an
-interpolated host path — or `build_directory` — is then resolved relative to the config
-file). Every other field's YAML string value is still used exactly as written, with no
-host-side substitution step:
+`build_args`, and a `build_secrets` entry's `path`** (see
+[config reference](config-reference.md#expressions) for the full syntax, precedence,
+and error rules, and [Volume path resolution](config-reference.md#volume-path-resolution)
+for how an interpolated host path — or `build_directory`/`build_secrets.path` — is then
+resolved relative to the config file). Every other field's YAML string value is still
+used exactly as written, with no host-side substitution step:
 
-- `build_secrets.path` and `build_ssh.paths` are moot until those fields themselves
-  exist — see their "Not supported" entries below.
+- `build_secrets.environment` (the source environment variable's *name*, not its
+  value) and `build_ssh.paths` (unsupported at all — see the `build_ssh` entry below)
+  are not expressions, matching Batect's own typing for the former and moot for the
+  latter.
 - `run.command` is a field where you *will* see `$VAR`-style expansion happen — but
   that's ordinary POSIX shell variable expansion done by `sh -c` **inside the
   container**, using the container's own environment (including anything set via
@@ -78,8 +80,8 @@ host-side substitution step:
 | `additional_hosts` | Supported | Extra `/etc/hosts` entries — see [config reference](config-reference.md#container). No expression support. |
 | `build_args` | Supported | Values support [expressions](#expressions). |
 | `build_target` | Supported | The build stage to stop at, for a multi-stage `FROM ... AS <name>` Dockerfile — Docker's own `--target` mechanism. No expression support (matching Batect's own `String`, not `Expression`, typing for this field). |
-| `build_secrets` | Not supported | |
-| `build_ssh` | Not supported | |
+| `build_secrets` | Supported | Exposes secrets to the build via BuildKit's secret-mount mechanism, without persisting them into the built image's layers — either `{environment: NAME}` (a host env var, read at build time) or `{path: ...}` (a file on the host; supports [expressions](#expressions)), exactly one required per entry. Switches that build to a BuildKit gRPC session and disables its build cache (BuildKit excludes a secret's value from its cache key, which would otherwise let an unrelated change reuse a cached layer built with a stale secret) — see [config reference](config-reference.md#image-building). |
+| `build_ssh` | Supported (simplified) | Forwards an SSH agent from the host for a Dockerfile's `RUN --mount=type=ssh`. **Ratect only supports forwarding the host's running `ssh-agent` (via `SSH_AUTH_SOCK`) under the implicit `default` agent id** — at most one entry, its `id` (if set) must be `"default"`, and its `paths` must be empty. Batect additionally supports multiple named agents and forwarding explicit private key files instead of a running agent (via BuildKit's own `sshprovider.AgentConfig`, `ID`/`Paths` — confirmed by reading Batect's `BuildImageStepRunner.resolveSSHAgent` and its `docker-client`'s `sshAgentsFromRequest`, not assumed from the docs alone); `bollard`, the Docker client this is built on, only exposes a single on/off toggle for the default agent, not either of those — see [config reference](config-reference.md#image-building). |
 | `capabilities_to_add` / `capabilities_to_drop` | Not supported | |
 | `command` | Supported | Only at the container level via the equivalent task-level `run.command` — see [Task fields](#task-fields). |
 | `devices` | Not supported | |

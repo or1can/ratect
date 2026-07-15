@@ -6,7 +6,7 @@ This document outlines the planned journey for Ratect, from achieving parity wit
 
 The primary goal is to support the core features of Batect to ensure a seamless transition for existing users. This work targets the [`ratect-compat` binary](#two-binaries-ratect-and-ratect-compat) specifically — the `ratect` binary is not expected to maintain 1:1 Batect parity.
 
-- **Image Building**: Building a Docker image from a `Dockerfile` via `build_directory` (always named `Dockerfile`, at `build_directory`'s own root) is implemented, including `build_args` and `.dockerignore` support (0.3.0) — see [config reference](docs/config-reference.md#image-building). Custom Dockerfile naming/location (`dockerfile`), `build_target`, `build_secrets`, `build_ssh`, cross-invocation build caching, and automatic image cleanup are not — see [Differences from Batect](docs/differences-from-batect.md#container-fields).
+- **Image Building**: Building a Docker image from a `build_directory`, including `build_args` and `.dockerignore` support (0.3.0), custom Dockerfile naming/location (`dockerfile`), a multi-stage build target (`build_target`), secrets (`build_secrets`), and SSH agent forwarding (`build_ssh`, a single default host agent only — see [Differences from Batect](docs/differences-from-batect.md#container-fields)) (0.11.0) — see [config reference](docs/config-reference.md#image-building). Cross-invocation build caching and automatic image cleanup are not implemented.
 - **Full Docker Networking**: Every task execution gets its own isolated network (see [the task lifecycle](docs/task-lifecycle.md)), `--use-network` reuses an existing one instead, `additional_hostnames`/`additional_hosts` add extra aliases/`/etc/hosts` entries, and `ports`/`--disable-ports` publish container ports to the host, including port ranges and the expanded object form, plus additional per-task `run.ports` (0.6.0) — see [config reference](docs/config-reference.md#port-mappings) and [CLI reference](docs/cli-reference.md).
 - **Interactive Mode**: A task's own container gets a real Docker TTY, automatically, when both Ratect's own stdin and stdout are real terminals (0.4.0); its stdin forwarding and the host's `TERM` propagation both apply more broadly than that (whenever the task is interactive-eligible, not gated on a real TTY), and a real TTY's terminal size stays in sync for the whole session, not just once at attach (0.10.0) — see [Interactive mode](docs/config-reference.md#interactive-mode). One known, deliberate divergence from Batect remains — see [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
 - **Full Environment Variable Interpolation & Batect Expressions**: `environment` on containers/tasks, `config_variables` (including Batect's one built-in, `batect.project_directory`), and `$VAR`/`${VAR}`/`${VAR:-default}`/`<name`/`<{name}` expressions are implemented for `environment` values, volume host paths, `build_directory`, and `build_args` — every already-supported field that could meaningfully take one; `build_secrets.path`/`build_ssh.paths` remain moot until those fields themselves exist — see [Expressions](docs/differences-from-batect.md#expressions).
@@ -327,9 +327,39 @@ Neither bump is ever folded into a feature commit.
     terminals. Also carried forward from 0.4.0: Windows terminal handling is
     implemented but hasn't been verified, and live resize forwarding is additionally
     Unix-only (non-Unix keeps the once-at-attach-only sync instead of erroring).
-- **0.11.0** — **Build Customization**: `build_target`, custom `dockerfile`
+- **0.11.0** — ~~**Build Customization**: `build_target`, custom `dockerfile`
   naming/location, `build_secrets`, `build_ssh` — extends 0.3.0's image-building
-  support.
+  support~~ — done:
+  - `dockerfile` (a path relative to `build_directory`'s own root, defaulting to
+    `Dockerfile` there) and `build_target` (Docker's own `--target`) both land on
+    Docker's classic (non-BuildKit) build API unchanged — no new dependency, no
+    behavior change for any container that doesn't use them.
+  - `build_secrets` (either `{environment: NAME}` or `{path: ...}`, the latter
+    resolved/containment-checked the same way as `build_directory`) and `build_ssh`
+    switch that specific build to a BuildKit gRPC session instead (`bollard`'s `Moby`
+    driver, upgrading the *existing* Docker daemon's own `/session`+`/grpc`
+    endpoints — no separate persistent builder container, unlike `bollard`'s other
+    drivers) — every build using neither field stays on the classic path, completely
+    unaffected. `build_secrets` additionally disables that build's cache: BuildKit
+    deliberately excludes a secret's value from its cache key, which would otherwise
+    silently serve a stale secret from a cached layer after only the secret's value
+    changed (found and fixed during this release's own integration testing, not part
+    of the original design).
+  - **Known, deliberate divergence from Batect**: `build_ssh` only supports
+    forwarding the host's running `ssh-agent` (via `SSH_AUTH_SOCK`) under BuildKit's
+    implicit `default` agent id — at most one entry; a non-`default` id or explicit
+    key `paths` is rejected with a clear error rather than silently ignored. Batect
+    supports multiple named agents and forwarding explicit private key files instead
+    of a running agent (confirmed by reading Batect's own `BuildImageStepRunner`
+    and its `docker-client`'s `sshAgentsFromRequest`, which forward straight through
+    to upstream BuildKit's own `sshprovider.AgentConfig{ID, Paths}` — not assumed
+    from Batect's docs alone); `bollard`, the Docker client `ratect` is built on,
+    only exposes a single on/off toggle for the default agent, not either of those.
+  - `#[async_trait]`'s `Send` bound on every `ContainerRuntime` method (needed since
+    `bollard`'s own BuildKit session machinery isn't `Send`) is worked around by
+    driving the BuildKit build to completion on a dedicated `spawn_blocking` thread
+    via `Handle::block_on`, Tokio's own documented escape hatch for exactly this —
+    see the `bollard` entry in `AGENTS.md`.
 - **0.12.0** — **Container Runtime Options**: `entrypoint` (container and `run`),
   `working_directory` (container and `run`), `labels`,
   `capabilities_to_add`/`capabilities_to_drop`, `privileged`, `shm_size`, `devices`,

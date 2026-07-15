@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{Config, Container, PortMapping};
+use crate::config::{BuildSecret, Config, Container, PortMapping};
 use crate::docker::ContainerRuntime;
 use anyhow::{Context, Result};
 use async_recursion::async_recursion;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use uuid::Uuid;
 
@@ -93,6 +93,42 @@ fn health_check_options(container: &Container) -> Option<crate::docker::HealthCh
             start_period: health_check.start_period,
             timeout: health_check.timeout,
         })
+}
+
+/// Converts a container's parsed `build_secrets`/`build_ssh` config into the
+/// docker-side [`crate::docker::BuildKitOptions`] — `None` when neither is
+/// set, so `build_image` stays on the classic (non-BuildKit) build API for
+/// every container that doesn't use either field. `build_ssh`'s shape (at
+/// most one `default`-id, no-`paths` entry) is already validated by
+/// [`crate::config::Config::resolve_expressions_with`] by the time this
+/// runs — this only reads whether an entry is present at all.
+fn buildkit_options(container: &Container) -> Option<crate::docker::BuildKitOptions> {
+    let secrets = container.build_secrets.as_ref();
+    let ssh = container.build_ssh.as_ref();
+    if secrets.is_none() && ssh.is_none() {
+        return None;
+    }
+    Some(crate::docker::BuildKitOptions {
+        secrets: secrets
+            .map(|secrets| {
+                secrets
+                    .iter()
+                    .map(|(id, secret)| {
+                        let source = match secret {
+                            BuildSecret::Environment(name) => {
+                                crate::docker::BuildSecretSource::Environment(name.clone())
+                            }
+                            BuildSecret::Path(path) => {
+                                crate::docker::BuildSecretSource::File(PathBuf::from(path))
+                            }
+                        };
+                        (id.clone(), source)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        forward_default_ssh_agent: ssh.is_some_and(|agents| !agents.is_empty()),
+    })
 }
 
 /// Returns `root` plus every container name transitively reachable from it
@@ -303,6 +339,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 .dockerfile
                 .as_deref()
                 .unwrap_or("Dockerfile");
+            let buildkit = buildkit_options(container_config);
             let image_id = self
                 .docker
                 .build_image(
@@ -310,6 +347,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     dockerfile,
                     build_args.as_ref(),
                     container_config.build_target.as_deref(),
+                    buildkit.as_ref(),
                     &tag,
                 )
                 .await?;
@@ -715,6 +753,10 @@ mod tests {
     type CapturedBuildArgs = Arc<Mutex<HashMap<String, Option<HashMap<String, String>>>>>;
     /// `(dockerfile, target)`, keyed by the tag `build_image` was called with.
     type CapturedBuildOptions = Arc<Mutex<HashMap<String, (String, Option<String>)>>>;
+    /// The `buildkit` a prior `build_image` call for a given tag was given
+    /// (flattened, same convention as `environment_for`).
+    type CapturedBuildKitOptions =
+        Arc<Mutex<HashMap<String, Option<crate::docker::BuildKitOptions>>>>;
     type CapturedImages = Arc<Mutex<HashMap<String, String>>>;
     type CapturedInteractive = Arc<Mutex<HashMap<String, bool>>>;
     /// `(uid, gid, home_directory)`, keyed by container name.
@@ -752,6 +794,9 @@ mod tests {
         // `(dockerfile, target)` a prior `build_image` call for a given tag
         // was given (see `build_options_for`).
         build_options: CapturedBuildOptions,
+        // The `buildkit` a prior `build_image` call for a given tag was
+        // given (see `buildkit_options_for`).
+        buildkit_options: CapturedBuildKitOptions,
         // The `image` a `run_container`/`start_background_container` call
         // for a given container name actually used — lets tests prove a
         // built tag (not just a pulled image) reached the run, without
@@ -793,6 +838,7 @@ mod tests {
                 environments: Default::default(),
                 build_args: Default::default(),
                 build_options: Default::default(),
+                buildkit_options: Default::default(),
                 images: Default::default(),
                 interactive: Default::default(),
                 user_mapping: Default::default(),
@@ -868,6 +914,17 @@ mod tests {
             self.build_options.lock().unwrap().get(tag).cloned()
         }
 
+        /// The `buildkit` a prior `build_image` call for `tag` was given
+        /// (flattened, same convention as `environment_for`).
+        fn buildkit_options_for(&self, tag: &str) -> Option<crate::docker::BuildKitOptions> {
+            self.buildkit_options
+                .lock()
+                .unwrap()
+                .get(tag)
+                .cloned()
+                .flatten()
+        }
+
         /// The `image` a prior `run_container`/`start_background_container`
         /// call for `name` was given.
         fn image_for(&self, name: &str) -> Option<String> {
@@ -931,6 +988,7 @@ mod tests {
             dockerfile: &str,
             build_args: Option<&HashMap<String, String>>,
             target: Option<&str>,
+            buildkit: Option<&crate::docker::BuildKitOptions>,
             tag: &str,
         ) -> Result<String> {
             self.build_args
@@ -941,6 +999,10 @@ mod tests {
                 tag.to_string(),
                 (dockerfile.to_string(), target.map(|t| t.to_string())),
             );
+            self.buildkit_options
+                .lock()
+                .unwrap()
+                .insert(tag.to_string(), buildkit.cloned());
             self.push(format!("build:{tag}:{}", build_directory.display()));
             // Real Docker returns an image ID distinct from the tag; the fake
             // has no such concept, so it just echoes the tag back — tests
@@ -1108,6 +1170,8 @@ mod tests {
             build_directory: None,
             dockerfile: None,
             build_target: None,
+            build_secrets: None,
+            build_ssh: None,
             volumes: None,
             dependencies,
             environment: None,
@@ -1142,6 +1206,8 @@ mod tests {
                 build_directory: None,
                 dockerfile: None,
                 build_target: None,
+                build_secrets: None,
+                build_ssh: None,
                 volumes: None,
                 dependencies: None,
                 environment: None,
@@ -1209,6 +1275,8 @@ mod tests {
                 build_directory: None,
                 dockerfile: None,
                 build_target: None,
+                build_secrets: None,
+                build_ssh: None,
                 volumes: None,
                 dependencies: None,
                 environment: None,
@@ -1418,6 +1486,8 @@ mod tests {
             build_directory: None,
             dockerfile: None,
             build_target: None,
+            build_secrets: None,
+            build_ssh: None,
             volumes: None,
             dependencies,
             environment: None,
@@ -1738,6 +1808,8 @@ mod tests {
                 build_directory: None,
                 dockerfile: None,
                 build_target: None,
+                build_secrets: None,
+                build_ssh: None,
                 volumes: None,
                 dependencies: None,
                 environment: None,
@@ -1783,6 +1855,8 @@ mod tests {
             build_args,
             dockerfile: None,
             build_target: None,
+            build_secrets: None,
+            build_ssh: None,
             volumes: None,
             dependencies: None,
             environment: None,
@@ -1898,6 +1972,85 @@ mod tests {
             .expect("build_image should have been called for the built container's tag");
         assert_eq!(dockerfile, "Dockerfile");
         assert_eq!(target, None);
+    }
+
+    #[tokio::test]
+    async fn build_directory_container_without_secrets_or_ssh_skips_buildkit() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "build-env".to_string(),
+            container_with_build_directory("./docker", None),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("build".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("build", &[]).await.unwrap();
+
+        assert_eq!(docker.buildkit_options_for("demo-build-env"), None);
+    }
+
+    #[tokio::test]
+    async fn build_directory_container_passes_secrets_and_ssh_through_as_buildkit_options() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "build-env".to_string(),
+            Container {
+                build_secrets: Some(HashMap::from([
+                    (
+                        "token".to_string(),
+                        BuildSecret::Environment("TOKEN".to_string()),
+                    ),
+                    (
+                        "cert".to_string(),
+                        BuildSecret::Path("/base/cert.pem".to_string()),
+                    ),
+                ])),
+                build_ssh: Some(vec![crate::config::SshAgent {
+                    id: Some("default".to_string()),
+                    paths: Vec::new(),
+                }]),
+                ..container_with_build_directory("./docker", None)
+            },
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("build".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("build", &[]).await.unwrap();
+
+        let buildkit = docker
+            .buildkit_options_for("demo-build-env")
+            .expect("build_secrets/build_ssh should have produced BuildKitOptions");
+        assert!(buildkit.forward_default_ssh_agent);
+        assert_eq!(
+            buildkit.secrets.get("token"),
+            Some(&crate::docker::BuildSecretSource::Environment(
+                "TOKEN".to_string()
+            ))
+        );
+        assert_eq!(
+            buildkit.secrets.get("cert"),
+            Some(&crate::docker::BuildSecretSource::File(PathBuf::from(
+                "/base/cert.pem"
+            )))
+        );
     }
 
     #[tokio::test]
@@ -2071,6 +2224,8 @@ mod tests {
                 build_directory: None,
                 dockerfile: None,
                 build_target: None,
+                build_secrets: None,
+                build_ssh: None,
                 volumes: None,
                 dependencies: None,
                 environment: None,
@@ -2786,6 +2941,8 @@ mod tests {
                 build_directory: None,
                 dockerfile: None,
                 build_target: None,
+                build_secrets: None,
+                build_ssh: None,
                 volumes: None,
                 dependencies: None,
                 environment: None,

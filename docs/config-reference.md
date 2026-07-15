@@ -54,8 +54,9 @@ Every loaded file's `containers`, `tasks`, and `config_variables` are merged int
 flat set. A name defined in more than one file is a hard error naming the conflicting
 files — it's never treated as one file overriding another.
 
-Relative paths *within* a container (a volume's host path, `build_directory`) resolve
-against that container's *own* origin file's directory, not the root project
+Relative paths *within* a container (a volume's host path, `build_directory`, a
+`build_secrets` entry's `path`) resolve against that container's *own* origin file's
+directory, not the root project
 directory. Use the built-in [`batect.project_directory`
 config variable](#built-in-config-variable-batectproject_directory) — which always
 resolves to the root's directory regardless of which file a container is defined in —
@@ -86,8 +87,9 @@ known gaps — no cache eviction sweep, no manual cache-clear command). If you n
 pick up a change made to a bundle, choose a new `ref` (e.g. bump the tag) or delete the
 corresponding directory under `~/.ratect/incl` by hand.
 
-The included file's own relative paths (a volume's host path, `build_directory`, and
-any further `include` entries it declares) resolve against the *cloned repository's*
+The included file's own relative paths (a volume's host path, `build_directory`, a
+`build_secrets` entry's `path`, and any further `include` entries it declares) resolve
+against the *cloned repository's*
 root, the same way a local include's relative paths resolve against its own directory
 (see above) — just rooted at the clone instead of a directory in your project.
 
@@ -101,8 +103,9 @@ unrestricted, since it's always something already in your own project checkout).
 Git-included bundle *can* still declare a further `type: git` include of its own —
 that's a fresh repository with its own boundary, not an escape from this one.
 
-The same containment applies to a `volumes` host path or `build_directory` declared by
-a *container* defined inside a Git-included file: it must resolve to somewhere inside
+The same containment applies to a `volumes` host path, `build_directory`, or
+`build_secrets` entry's `path` declared by a *container* defined inside a
+Git-included file: it must resolve to somewhere inside
 that repository's own clone, **or** inside your project directory — an absolute path
 or `../..` traversal escaping both is rejected the same way. The project directory is
 allowed as a second root (rather than requiring pure containment within the clone)
@@ -186,7 +189,25 @@ task's own container, as a dependency, or by more than one task) — but never r
   directory tree becomes the build context, unchanged from before this existed.
   `dockerfile` and `.dockerignore` itself are always included in the build context
   regardless of exclusion patterns, matching Docker's own special-casing.
-- `build_secrets` and `build_ssh` aren't supported yet — see
+- `build_secrets` exposes secrets to the build via BuildKit's secret-mount mechanism
+  (a Dockerfile's `RUN --mount=type=secret,id=<key>`), without persisting them into
+  the built image's layers — keyed by the `id` such a `RUN` instruction references.
+  Each entry is either `{environment: NAME}` (read from *this* `ratect` process's own
+  environment at build time) or `{path: ...}` (read from a file on the host, resolved
+  like `build_directory`); exactly one of the two is required. Using `build_secrets`
+  switches that build to a BuildKit gRPC session instead of Docker's classic build
+  API, and disables the build cache for it entirely — BuildKit deliberately excludes
+  a secret's *value* from its cache key (so it can't leak into one), which would
+  otherwise let an unrelated Dockerfile change reuse a cached layer built with a
+  now-stale secret value.
+- `build_ssh` forwards an SSH agent from the host into the build, for a Dockerfile's
+  `RUN --mount=type=ssh` instructions. **Ratect only supports forwarding the host's
+  running `ssh-agent` (via its `SSH_AUTH_SOCK`) under the implicit `default` agent
+  id** — at most one entry (`build_ssh: [{id: default}]`, or an empty/omitted `id`),
+  and an entry with explicit key `paths` is rejected — see
+  [Differences from Batect](differences-from-batect.md#container-fields) for why.
+  Also switches that build to a BuildKit gRPC session (shared with `build_secrets`
+  above if both are set on the same container) — see
   [Differences from Batect](differences-from-batect.md).
 - The built image is tagged `<project_name>-<container_name>` (matching Batect's own
   default), so it's identifiable in `docker images` rather than showing up as an
@@ -548,12 +569,14 @@ config_variables:
 
 `environment` values (on both [Container](#container) and [TaskRun](#taskrun)), a
 volume's `host_path` (see [Volume path resolution](#volume-path-resolution)),
-`build_directory`, and `build_args` values support two kinds of expression, resolved
-once — after CLI-supplied config variable overrides (`--config-var`/`--config-vars-file`)
-are known, so before any task runs but not at config-parse time itself. Everywhere else
-in the config, a string is used exactly as written, with no substitution — expression
-support is scoped to fields that can meaningfully take one; it'll extend to more fields
-as they themselves get built (e.g. `build_secrets.path`), not automatically. Literal
+`build_directory`, `build_args`, and a `build_secrets` entry's `path` (not its
+`environment` — that's a literal host environment variable *name*, not itself
+interpolated) support two kinds of expression, resolved once — after CLI-supplied
+config variable overrides (`--config-var`/`--config-vars-file`) are known, so before
+any task runs but not at config-parse time itself. Everywhere else in the config, a
+string is used exactly as written, with no substitution — expression support is
+scoped to fields that can meaningfully take one; it'll extend to more fields as they
+themselves get built, not automatically. Literal
 text around an expression is left untouched (`"prefix-$VAR-suffix"` interpolates just
 `$VAR`), and a `$`/`<` not followed by a valid identifier (or an unterminated `${`/`<{`)
 is treated as a literal character rather than an error.

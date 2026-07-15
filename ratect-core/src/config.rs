@@ -57,6 +57,29 @@ pub struct Container {
     /// meaningful alongside `build_directory`; silently ignored for an
     /// `image` container, same as `dockerfile`/`build_args`.
     pub build_target: Option<String>,
+    /// Exposes secrets to a `build_directory` build via BuildKit's
+    /// secret-mount mechanism (a Dockerfile's `RUN
+    /// --mount=type=secret,id=<key>`), without persisting them into the
+    /// built image's layers — keyed by the `id` such a `RUN` instruction
+    /// references. A [`BuildSecret::Path`]'s value supports
+    /// [expressions](#expressions) and is resolved the same way as
+    /// `build_directory`; a [`BuildSecret::Environment`]'s value is a
+    /// literal host environment variable *name*, not itself an expression
+    /// — matching Batect's own typing for both. Only meaningful alongside
+    /// `build_directory`, same as `dockerfile`/`build_target`/`build_args`.
+    pub build_secrets: Option<HashMap<String, BuildSecret>>,
+    /// Forwards an SSH agent from the host into a `build_directory` build,
+    /// for a Dockerfile's `RUN --mount=type=ssh` instructions — Batect's
+    /// `build_ssh` field. **Ratect only supports forwarding the host's
+    /// running ssh-agent (via its `SSH_AUTH_SOCK`) under the implicit
+    /// `default` agent id** — at most one entry, and if given, its `id`
+    /// (if set) must be `"default"` and its `paths` must be empty (checked
+    /// in [`Config::resolve_expressions_with`]). Batect additionally
+    /// supports multiple named agents and forwarding explicit private key
+    /// files instead of a running agent; the underlying Docker client this
+    /// is built on doesn't expose either — see
+    /// [Differences from Batect](https://github.com/or1can/ratect/blob/main/docs/differences-from-batect.md#container-fields).
+    pub build_ssh: Option<Vec<SshAgent>>,
     pub volumes: Option<Vec<String>>,
     pub dependencies: Option<Vec<String>>,
     pub environment: Option<HashMap<String, String>>,
@@ -87,6 +110,105 @@ pub struct Container {
     /// support — matching Batect, which doesn't type these as expressions
     /// either.
     pub setup_commands: Option<Vec<SetupCommand>>,
+}
+
+/// One entry in a container's `build_secrets` map — either an `environment`
+/// variable (read from the *host* process's own environment at build time)
+/// or a `path` to a file on the host, mirroring Batect's own
+/// `EnvironmentSecret`/`FileSecret` split. Exactly one of the two is
+/// required; a hand-written [`Deserialize`] impl (mirroring
+/// [`PortMapping`]'s) enforces this with the same error wording Batect
+/// itself uses for the equivalent mistake.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuildSecret {
+    /// The literal name of a host environment variable to read the
+    /// secret's value from. Not an [expression](#expressions) — matching
+    /// Batect's own `String` (not `Expression`) typing for this field.
+    Environment(String),
+    /// A path to a file on the host containing the secret's value.
+    /// Supports [expressions](#expressions) and is resolved the same way
+    /// as `build_directory` — see [`Config::resolve_expressions_with`].
+    Path(String),
+}
+
+impl<'de> Deserialize<'de> for BuildSecret {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct BuildSecretVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for BuildSecretVisitor {
+            type Value = BuildSecret;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an object with either an 'environment' or a 'path' field")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<BuildSecret, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut environment: Option<String> = None;
+                let mut path: Option<String> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "environment" => environment = Some(map.next_value()?),
+                        "path" => path = Some(map.next_value()?),
+                        other => {
+                            return Err(serde::de::Error::unknown_field(
+                                other,
+                                &["environment", "path"],
+                            ))
+                        }
+                    }
+                }
+
+                match (environment, path) {
+                    (Some(_), Some(_)) => Err(serde::de::Error::custom(
+                        "A secret can have either 'environment' or 'path', but both have been \
+                         provided.",
+                    )),
+                    (Some(environment), None) => Ok(BuildSecret::Environment(environment)),
+                    (None, Some(path)) => Ok(BuildSecret::Path(path)),
+                    (None, None) => Err(serde::de::Error::custom(
+                        "A secret must have either 'environment' or 'path', but neither has \
+                         been provided.",
+                    )),
+                }
+            }
+        }
+
+        deserializer.deserialize_map(BuildSecretVisitor)
+    }
+}
+
+impl Serialize for BuildSecret {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(1))?;
+        match self {
+            BuildSecret::Environment(value) => map.serialize_entry("environment", value)?,
+            BuildSecret::Path(value) => map.serialize_entry("path", value)?,
+        }
+        map.end()
+    }
+}
+
+/// One entry in a container's `build_ssh` list — see [`Container::build_ssh`]
+/// for why Ratect only supports a single `default`-id, agent-forwarding
+/// (no explicit `paths`) entry, checked in
+/// [`Config::resolve_expressions_with`] rather than here (so the error can
+/// name the offending container).
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SshAgent {
+    pub id: Option<String>,
+    #[serde(default)]
+    pub paths: Vec<String>,
 }
 
 /// Overrides the [health check configuration](https://docs.docker.com/engine/reference/builder/#healthcheck)
@@ -1155,6 +1277,55 @@ impl Config {
                     *value = crate::expressions::interpolate(value, &host_env, &config_vars)?;
                 }
             }
+            if let Some(build_secrets) = &mut container.build_secrets {
+                for secret in build_secrets.values_mut() {
+                    // `Environment` is a literal host env var *name*, not
+                    // itself an expression — matches Batect's own `String`
+                    // (not `Expression`) typing for that variant.
+                    if let BuildSecret::Path(path) = secret {
+                        *path = resolve_path(
+                            path,
+                            container_base_path,
+                            &host_env,
+                            &config_vars,
+                            container_boundary,
+                        )?;
+                    }
+                }
+            }
+            if let Some(build_ssh) = &container.build_ssh {
+                if build_ssh.len() > 1 {
+                    anyhow::bail!(
+                        "Container '{}' has {} 'build_ssh' entries, but Ratect only supports \
+                         forwarding a single SSH agent from the host — see \
+                         docs/differences-from-batect.md#container-fields",
+                        container_name,
+                        build_ssh.len()
+                    );
+                }
+                if let Some(agent) = build_ssh.first() {
+                    if let Some(id) = &agent.id {
+                        if id != "default" {
+                            anyhow::bail!(
+                                "Container '{}' has a 'build_ssh' entry with id '{}', but \
+                                 Ratect only supports the implicit 'default' SSH agent id — \
+                                 see docs/differences-from-batect.md#container-fields",
+                                container_name,
+                                id
+                            );
+                        }
+                    }
+                    if !agent.paths.is_empty() {
+                        anyhow::bail!(
+                            "Container '{}' has a 'build_ssh' entry with explicit key \
+                             'paths', but Ratect only supports forwarding the host's \
+                             running ssh-agent (via SSH_AUTH_SOCK), not explicit key files \
+                             — see docs/differences-from-batect.md#container-fields",
+                            container_name
+                        );
+                    }
+                }
+            }
             if let Some(run_as_current_user) = &mut container.run_as_current_user {
                 if run_as_current_user.enabled {
                     let home_directory =
@@ -1386,6 +1557,91 @@ tasks: {}
         assert_eq!(container.build_target, None);
     }
 
+    #[test]
+    fn parses_build_secrets_environment_and_path_variants() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    build_directory: ./docker
+    build_secrets:
+      token:
+        environment: TOKEN
+      cert:
+        path: ./cert.pem
+tasks: {}
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        let secrets = container.build_secrets.as_ref().unwrap();
+        assert_eq!(
+            secrets["token"],
+            BuildSecret::Environment("TOKEN".to_string())
+        );
+        assert_eq!(secrets["cert"], BuildSecret::Path("./cert.pem".to_string()));
+    }
+
+    #[test]
+    fn build_secret_with_both_environment_and_path_is_rejected() {
+        let err = try_parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    build_directory: ./docker
+    build_secrets:
+      token:
+        environment: TOKEN
+        path: ./cert.pem
+tasks: {}
+"#,
+        )
+        .unwrap_err();
+
+        assert!(format!("{err:#}").contains("either 'environment' or 'path', but both"));
+    }
+
+    #[test]
+    fn build_secret_with_neither_environment_nor_path_is_rejected() {
+        let err = try_parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    build_directory: ./docker
+    build_secrets:
+      token: {}
+tasks: {}
+"#,
+        )
+        .unwrap_err();
+
+        assert!(format!("{err:#}").contains("either 'environment' or 'path', but neither"));
+    }
+
+    #[test]
+    fn parses_build_ssh_default_agent() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    build_directory: ./docker
+    build_ssh:
+      - id: default
+tasks: {}
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        let agents = container.build_ssh.as_ref().unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].id.as_deref(), Some("default"));
+        assert!(agents[0].paths.is_empty());
+    }
+
     fn no_host_env(_: &str) -> Option<String> {
         None
     }
@@ -1607,6 +1863,8 @@ tasks: {}
             build_args: Some(build_args),
             dockerfile: None,
             build_target: None,
+            build_secrets: None,
+            build_ssh: None,
             volumes: None,
             dependencies: None,
             environment: None,
@@ -1675,6 +1933,213 @@ tasks: {}
         );
     }
 
+    #[test]
+    fn resolve_expressions_resolves_build_secret_path_relative_to_base() {
+        let mut container = container_with_build("./docker", HashMap::new());
+        container.build_secrets = Some(HashMap::from([(
+            "cert".to_string(),
+            BuildSecret::Path("./cert.pem".to_string()),
+        )]));
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([("build-env".to_string(), container)]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        config
+            .resolve_expressions_with(
+                Path::new("/base"),
+                &HashMap::new(),
+                &HashMap::new(),
+                no_host_env,
+            )
+            .unwrap();
+
+        assert_eq!(
+            config.containers["build-env"]
+                .build_secrets
+                .as_ref()
+                .unwrap()["cert"],
+            BuildSecret::Path("/base/cert.pem".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_expressions_leaves_build_secret_environment_name_unresolved() {
+        let mut container = container_with_build("./docker", HashMap::new());
+        container.build_secrets = Some(HashMap::from([(
+            "token".to_string(),
+            BuildSecret::Environment("$HOST_VAR".to_string()),
+        )]));
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([("build-env".to_string(), container)]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        config
+            .resolve_expressions_with(
+                Path::new("/base"),
+                &HashMap::new(),
+                &HashMap::new(),
+                |name| (name == "HOST_VAR").then(|| "host-value".to_string()),
+            )
+            .unwrap();
+
+        assert_eq!(
+            config.containers["build-env"]
+                .build_secrets
+                .as_ref()
+                .unwrap()["token"],
+            BuildSecret::Environment("$HOST_VAR".to_string())
+        );
+    }
+
+    fn container_with_build_ssh(agents: Vec<SshAgent>) -> Container {
+        let mut container = container_with_build("./docker", HashMap::new());
+        container.build_ssh = Some(agents);
+        container
+    }
+
+    #[test]
+    fn resolve_expressions_accepts_a_single_default_ssh_agent() {
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_build_ssh(vec![SshAgent {
+                    id: Some("default".to_string()),
+                    paths: Vec::new(),
+                }]),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        config
+            .resolve_expressions_with(
+                Path::new("/base"),
+                &HashMap::new(),
+                &HashMap::new(),
+                no_host_env,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn resolve_expressions_accepts_a_build_ssh_agent_with_no_id() {
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_build_ssh(vec![SshAgent {
+                    id: None,
+                    paths: Vec::new(),
+                }]),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        config
+            .resolve_expressions_with(
+                Path::new("/base"),
+                &HashMap::new(),
+                &HashMap::new(),
+                no_host_env,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn resolve_expressions_rejects_more_than_one_build_ssh_agent() {
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_build_ssh(vec![
+                    SshAgent {
+                        id: Some("default".to_string()),
+                        paths: Vec::new(),
+                    },
+                    SshAgent {
+                        id: Some("other".to_string()),
+                        paths: Vec::new(),
+                    },
+                ]),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        let err = config
+            .resolve_expressions_with(
+                Path::new("/base"),
+                &HashMap::new(),
+                &HashMap::new(),
+                no_host_env,
+            )
+            .unwrap_err();
+
+        assert!(format!("{err:#}").contains("only supports forwarding a single SSH agent"));
+    }
+
+    #[test]
+    fn resolve_expressions_rejects_a_non_default_build_ssh_agent_id() {
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_build_ssh(vec![SshAgent {
+                    id: Some("other".to_string()),
+                    paths: Vec::new(),
+                }]),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        let err = config
+            .resolve_expressions_with(
+                Path::new("/base"),
+                &HashMap::new(),
+                &HashMap::new(),
+                no_host_env,
+            )
+            .unwrap_err();
+
+        assert!(format!("{err:#}").contains("implicit 'default' SSH agent id"));
+    }
+
+    #[test]
+    fn resolve_expressions_rejects_build_ssh_explicit_key_paths() {
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_build_ssh(vec![SshAgent {
+                    id: None,
+                    paths: vec!["~/.ssh/id_rsa".to_string()],
+                }]),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        let err = config
+            .resolve_expressions_with(
+                Path::new("/base"),
+                &HashMap::new(),
+                &HashMap::new(),
+                no_host_env,
+            )
+            .unwrap_err();
+
+        assert!(format!("{err:#}").contains("not explicit key files"));
+    }
+
     fn container_with_run_as_current_user(
         enabled: bool,
         home_directory: Option<&str>,
@@ -1685,6 +2150,8 @@ tasks: {}
             build_args: None,
             dockerfile: None,
             build_target: None,
+            build_secrets: None,
+            build_ssh: None,
             volumes: None,
             dependencies: None,
             environment: None,
@@ -3173,6 +3640,51 @@ tasks: {}
     }
 
     #[tokio::test]
+    async fn a_git_included_containers_build_secret_path_escaping_via_dot_dot_traversal_is_rejected(
+    ) {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+"#,
+        )
+        .unwrap();
+
+        let mut files = HashMap::new();
+        files.insert(
+            "batect-bundle.yml".to_string(),
+            r#"
+containers:
+  bundled:
+    build_directory: .
+    build_secrets:
+      token:
+        path: ../../../../../../etc/passwd
+tasks: {}
+"#
+            .to_string(),
+        );
+        let git =
+            FakeGitClient::new().with_files("https://example.com/bundle.git", "v1.0.0", files);
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+        let mut loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+            .await
+            .unwrap();
+        let result = loaded.resolve_expressions(&dir, &HashMap::new());
+        assert!(format!("{:?}", result.unwrap_err()).contains("escapes both the Git repository"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    #[tokio::test]
     async fn a_git_included_containers_volume_referencing_the_project_directory_is_allowed() {
         // Referencing the caller's own project directory (as opposed to an
         // arbitrary host path) is a legitimate, expected use of a shared
@@ -3726,6 +4238,8 @@ config_variables:
             build_directory: None,
             dockerfile: None,
             build_target: None,
+            build_secrets: None,
+            build_ssh: None,
             volumes: None,
             dependencies: None,
             environment: Some(environment),

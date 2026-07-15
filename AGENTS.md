@@ -89,7 +89,7 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
 
 ## Key Dependencies
 
-- **`bollard`**: Asynchronous Docker API client.
+- **`bollard`** (`features = ["buildkit_providerless", "chrono"]`): Asynchronous Docker API client. The classic (non-BuildKit) REST build API is the default path for every `build_directory` build; `buildkit_providerless` additionally exposes a BuildKit gRPC-session build path (`bollard::grpc::driver::moby::Moby` — upgrades the *existing* Docker daemon's own `/session`+`/grpc` endpoints, no separate persistent builder container needed, unlike bollard's other drivers), which `build_image_via_buildkit` (`ratect-core/src/docker.rs`) uses only when a container declares `build_secrets` and/or `build_ssh` — every other build stays on the classic path, unaffected. `chrono` is required transitively (BuildKit OAuth token expiry needs a date/time type; bollard fails to compile without either it or the `time` crate feature once `buildkit_providerless` is on). One catch: `#[async_trait]`-generated futures (used for the whole `ContainerRuntime` trait) must be `Send`, but bollard's own BuildKit session machinery isn't (`Box<dyn DriverTearDownHandler>` inside it isn't `Send`) — `build_image`'s BuildKit branch drives it to completion on a dedicated `spawn_blocking` thread via `Handle::block_on` instead of awaiting it directly, Tokio's own documented escape hatch for exactly this "need to run a non-`Send` future from `Send`-bound async code" situation. A second bollard limitation worth knowing: its `enable_ssh(bool)` only forwards the host's own `SSH_AUTH_SOCK` agent under BuildKit's implicit `default` id — no equivalent to Batect's multiple named agents or forwarding explicit private key files instead of a running agent — see the `build_ssh` config field's docs and `docs/differences-from-batect.md#container-fields`.
 - **`noyalib`**: Safe, pure-Rust YAML parser (used as a modern alternative to `serde_yaml`).
 - **`tokio`**: The asynchronous runtime.
 - **`clap`**: Command-line argument parsing with derive support.
@@ -105,15 +105,18 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
 - **`portable-pty`** (dev-dependency, `tests/cli.rs` only): creates a real (emulated) pseudo-terminal pair in-process, so an integration test can spawn `ratect` attached to something that genuinely passes `IsTerminal` checks and actually drive an interactive session — no existing test infrastructure here could otherwise exercise that path at all. Works in headless CI; no real terminal required. A reusable pattern worth reaching for again for any other feature that's only meaningfully testable from a real terminal.
 - **`nix`** (`features = ["user"]`): looks up the real host user (`Uid`/`Gid::current`, `User`/`Group::from_uid`/`from_gid`) for `run_as_current_user` (`ratect-core/src/user.rs`) — Unix-only, matching Ratect's own Unix-only testing so far. Already resolved in `Cargo.lock` transitively (via `portable-pty`'s own dependency graph in the root crate's dev-dependencies); adding it directly to `ratect-core` was a low-risk addition, not a new unknown quantity.
 - **`url`**: parses/rewrites `localhost`/`127.0.0.1`/`::1` proxy URLs to `host.docker.internal` in `ratect-core/src/proxy.rs`. Already resolved in `Cargo.lock` transitively (via `bollard`'s own dependency graph) — same low-risk-addition reasoning as `nix` above.
+- **`flate2`**: gzip-compresses the build-context tar before handing it to bollard's BuildKit gRPC session upload provider in `build_image_via_buildkit` (`ratect-core/src/docker.rs`) — unlike the classic path's `body_full(tar_bytes)`, which sends the tar uncompressed, the session upload provider expects a gzip-compressed one, matching every bollard example/integration test that uploads a build context this way.
+- **`bytes`**: `bollard::grpc::build::ImageBuildLoadInput::Upload` takes a `bytes::Bytes`, not a plain `Vec<u8>`. Already resolved in `Cargo.lock` transitively (via `bollard`'s own dependency graph) — same low-risk-addition reasoning as `nix`/`url` above.
 
 Dependencies are split across the three `Cargo.toml`s along CLI-vs-core lines: `clap`
 and `tracing-subscriber` are `ratect`-only; `serde`, `noyalib`, `bollard`, `futures`,
 `indicatif`, `async-recursion`, `async-trait`, `uuid`, `tar`, `path-clean`, `crossterm`,
-`nix`, `url`, and the local `dockerignore` crate are `ratect-core`-only (`dockerignore` itself
-depends on `regex` and `path-clean` too); `anyhow`, `tracing`, and `tokio` are needed
-by both. `tokio` is a normal dependency in both crates now — `ratect-core`'s non-test
-code needs it too, for `build_context_tar`'s `tokio::task::spawn_blocking` (it used to
-be a `ratect-core` dev-dependency only, for `#[tokio::test]` in its unit tests).
+`nix`, `url`, `flate2`, `bytes`, and the local `dockerignore` crate are `ratect-core`-only
+(`dockerignore` itself depends on `regex` and `path-clean` too); `anyhow`, `tracing`, and
+`tokio` are needed by both. `tokio` is a normal dependency in both crates now —
+`ratect-core`'s non-test code needs it too, for `build_context_tar`'s
+`tokio::task::spawn_blocking` (it used to be a `ratect-core` dev-dependency only, for
+`#[tokio::test]` in its unit tests).
 `portable-pty` is `ratect`'s (root crate's) first `[dev-dependencies]` entry.
 
 ## Tooling & CI
