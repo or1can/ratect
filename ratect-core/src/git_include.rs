@@ -81,16 +81,18 @@ impl GitClient for SystemGitClient {
         }
 
         let clone_output = Command::new("git")
-            // Restricts which transports git will honor for both this
-            // remote and (via --recurse-submodules below) any submodule
-            // URLs the checked-out ref's .gitmodules declares — without
-            // this, a `repo`/submodule URL of the form `ext::sh -c ...`
-            // is (by default, since it's given directly on the command
-            // line rather than embedded in fetched content) trusted at
-            // git's "user" level and would execute arbitrary shell
-            // commands. `remote`/`ref` ultimately come from a config
-            // file, possibly itself from a git-included bundle, so
-            // they're not fully trusted input.
+            // Restricts which transports git will honor for this remote —
+            // without this, a `repo` of the form `ext::sh -c ...` is (by
+            // default, since it's given directly on the command line
+            // rather than embedded in fetched content) trusted at git's
+            // "user" level and would execute arbitrary shell commands.
+            // `remote` ultimately comes from a config file, possibly
+            // itself from a git-included bundle, so it's not fully
+            // trusted input. `file` stays allowed here (unlike the
+            // checkout step below): a local-path `repo` is a documented,
+            // supported feature (see docs/config-reference.md's `repo`
+            // field), and it's the caller's own config value, not
+            // third-party content the way a submodule URL is.
             .env("GIT_ALLOW_PROTOCOL", "file:git:http:https:ssh")
             .args(["clone", "--quiet", "--no-checkout", "--", remote])
             .arg(&temp_dir)
@@ -106,7 +108,17 @@ impl GitClient for SystemGitClient {
         }
 
         let checkout_output = Command::new("git")
-            .env("GIT_ALLOW_PROTOCOL", "file:git:http:https:ssh")
+            // `file` is deliberately *not* in this list, unlike the clone
+            // step above: `--recurse-submodules` fetches whatever
+            // submodule URLs the checked-out ref's own `.gitmodules`
+            // declares, and that ref may itself have come from an
+            // untrusted git-included bundle — a `file://` submodule URL
+            // would otherwise let such a bundle pull an arbitrary sibling
+            // local repository on the host running `ratect` into its own
+            // clone. Unlike `remote` above, a submodule URL is never the
+            // caller's own config value, so there's no local-path use
+            // case to preserve here.
+            .env("GIT_ALLOW_PROTOCOL", "git:http:https:ssh")
             .args(["-c", "advice.detachedHead=false", "-C"])
             .arg(&temp_dir)
             // No `--` here: unlike `clone`, `checkout`'s `--` means "the
@@ -629,6 +641,63 @@ mod tests {
         assert!(result.is_err());
         assert!(!marker.exists(), "ext:: transport was not blocked");
         assert!(!destination.exists());
+    }
+
+    #[tokio::test]
+    async fn system_git_client_refuses_a_file_url_submodule() {
+        // A malicious bundle's `.gitmodules` can point a submodule at an
+        // arbitrary local path via a `file://` URL — since
+        // `--recurse-submodules` fetches whatever the checked-out ref
+        // itself declares (untrusted content, unlike the top-level
+        // `repo` value), this must stay blocked even though a local-path
+        // top-level `repo` is itself fine (see `clone_repo`'s own
+        // GIT_ALLOW_PROTOCOL for that step).
+        let sibling = create_test_repo();
+        let repo_dir = unique_temp_dir();
+        std::fs::create_dir_all(&repo_dir).unwrap();
+        let run = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo_dir)
+                .args(args)
+                .status()
+                .expect("git must be installed to run this test");
+            assert!(status.success(), "git {args:?} failed");
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        run(&[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            &format!("file://{}", sibling.display()),
+            "evil",
+        ]);
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "-m", "add evil submodule"]);
+        run(&["tag", "v1.0.0"]);
+
+        let destination = unique_temp_dir().join("clone");
+        // Git doesn't fail the overall checkout when a submodule's
+        // transport is disallowed — it silently leaves that submodule's
+        // directory uninitialized instead — so `clone_repo` itself still
+        // succeeds here. The security property under test is that the
+        // submodule's *content* was never fetched, checked below.
+        SystemGitClient
+            .clone_repo(&repo_dir.to_string_lossy(), "v1.0.0", &destination)
+            .await
+            .unwrap();
+
+        assert!(
+            !destination.join("evil").join("file.txt").exists(),
+            "the file:// submodule's content must not have been fetched"
+        );
+
+        std::fs::remove_dir_all(&repo_dir).ok();
+        std::fs::remove_dir_all(&sibling).ok();
+        std::fs::remove_dir_all(destination.parent().unwrap()).ok();
     }
 
     #[tokio::test]
