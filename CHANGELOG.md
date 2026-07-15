@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`dockerfile` and `build_target`**: a container's `build_directory` build can now point at a custom-named or -located Dockerfile (`dockerfile`, a path relative to `build_directory`'s own root, defaulting to `Dockerfile` there) and stop at a given stage of a multi-stage build (`build_target`, Docker's own `--target` mechanism) — see [config reference](docs/config-reference.md#image-building). Both are plain strings with no [expression](docs/config-reference.md#expressions) support, matching Batect's own `String` (not `Expression`) typing for these two fields. `build_context_tar`'s (`ratect-core/src/docker.rs`) force-include logic, which previously hardcoded the literal name `"Dockerfile"` so a broad `.dockerignore` pattern couldn't accidentally exclude it, now force-includes whatever `dockerfile` resolves to instead. Part of 0.11.0's Build Customization (see `ROADMAP.md`).
+
 ## [0.10.0] - 2026-07-15
 
 ### Added

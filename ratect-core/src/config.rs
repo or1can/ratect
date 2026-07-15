@@ -40,6 +40,23 @@ pub struct Container {
     pub image: Option<String>,
     pub build_directory: Option<String>,
     pub build_args: Option<HashMap<String, String>>,
+    /// The Dockerfile to build, as a path relative to `build_directory`'s
+    /// own root — Batect's `dockerfile` field. Defaults to `"Dockerfile"`
+    /// at `build_directory`'s root when omitted, matching Batect and
+    /// Docker's own default. A plain string, not an
+    /// [expression](#expressions) — matching Batect's own `String` (not
+    /// `Expression`) typing for this field, unlike `build_directory`
+    /// itself. Only meaningful alongside `build_directory`; like
+    /// `build_args`, silently ignored for an `image` container (see
+    /// `TaskEngine::resolve_image`).
+    pub dockerfile: Option<String>,
+    /// The build stage to stop at, for a multi-stage `FROM ... AS <name>`
+    /// Dockerfile — Docker's own `--target` build option, and Batect's
+    /// `build_target` field. A plain string, not an
+    /// [expression](#expressions) — same reasoning as `dockerfile`. Only
+    /// meaningful alongside `build_directory`; silently ignored for an
+    /// `image` container, same as `dockerfile`/`build_args`.
+    pub build_target: Option<String>,
     pub volumes: Option<Vec<String>>,
     pub dependencies: Option<Vec<String>>,
     pub environment: Option<HashMap<String, String>>,
@@ -1330,6 +1347,45 @@ tasks: {}
         assert_eq!(container.build_args.as_ref().unwrap()["VERSION"], "1.2.3");
     }
 
+    #[test]
+    fn parses_dockerfile_and_build_target() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    build_directory: ./docker
+    dockerfile: docker/Dockerfile.prod
+    build_target: builder
+tasks: {}
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(
+            container.dockerfile.as_deref(),
+            Some("docker/Dockerfile.prod")
+        );
+        assert_eq!(container.build_target.as_deref(), Some("builder"));
+    }
+
+    #[test]
+    fn dockerfile_and_build_target_default_to_none() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    build_directory: ./docker
+tasks: {}
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.dockerfile, None);
+        assert_eq!(container.build_target, None);
+    }
+
     fn no_host_env(_: &str) -> Option<String> {
         None
     }
@@ -1549,6 +1605,8 @@ tasks: {}
             image: None,
             build_directory: Some(build_directory.to_string()),
             build_args: Some(build_args),
+            dockerfile: None,
+            build_target: None,
             volumes: None,
             dependencies: None,
             environment: None,
@@ -1625,6 +1683,8 @@ tasks: {}
             image: Some("alpine:3.18".to_string()),
             build_directory: None,
             build_args: None,
+            dockerfile: None,
+            build_target: None,
             volumes: None,
             dependencies: None,
             environment: None,
@@ -3664,6 +3724,8 @@ config_variables:
             build_args: None,
             image: Some("alpine:3.18".to_string()),
             build_directory: None,
+            dockerfile: None,
+            build_target: None,
             volumes: None,
             dependencies: None,
             environment: Some(environment),

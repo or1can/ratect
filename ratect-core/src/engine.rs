@@ -299,9 +299,19 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 container_config.build_args.as_ref(),
                 None,
             );
+            let dockerfile = container_config
+                .dockerfile
+                .as_deref()
+                .unwrap_or("Dockerfile");
             let image_id = self
                 .docker
-                .build_image(Path::new(build_directory), build_args.as_ref(), &tag)
+                .build_image(
+                    Path::new(build_directory),
+                    dockerfile,
+                    build_args.as_ref(),
+                    container_config.build_target.as_deref(),
+                    &tag,
+                )
                 .await?;
 
             let mut built = self.built_images.lock().unwrap();
@@ -703,6 +713,8 @@ mod tests {
     /// deterministically.
     type CapturedEnvironments = Arc<Mutex<HashMap<String, Option<HashMap<String, String>>>>>;
     type CapturedBuildArgs = Arc<Mutex<HashMap<String, Option<HashMap<String, String>>>>>;
+    /// `(dockerfile, target)`, keyed by the tag `build_image` was called with.
+    type CapturedBuildOptions = Arc<Mutex<HashMap<String, (String, Option<String>)>>>;
     type CapturedImages = Arc<Mutex<HashMap<String, String>>>;
     type CapturedInteractive = Arc<Mutex<HashMap<String, bool>>>;
     /// `(uid, gid, home_directory)`, keyed by container name.
@@ -737,6 +749,9 @@ mod tests {
         environments: CapturedEnvironments,
         // Keyed by the tag `build_image` was called with.
         build_args: CapturedBuildArgs,
+        // `(dockerfile, target)` a prior `build_image` call for a given tag
+        // was given (see `build_options_for`).
+        build_options: CapturedBuildOptions,
         // The `image` a `run_container`/`start_background_container` call
         // for a given container name actually used — lets tests prove a
         // built tag (not just a pulled image) reached the run, without
@@ -777,6 +792,7 @@ mod tests {
                 fail_run: Default::default(),
                 environments: Default::default(),
                 build_args: Default::default(),
+                build_options: Default::default(),
                 images: Default::default(),
                 interactive: Default::default(),
                 user_mapping: Default::default(),
@@ -846,6 +862,12 @@ mod tests {
             self.build_args.lock().unwrap().get(tag).cloned().flatten()
         }
 
+        /// The `(dockerfile, target)` a prior `build_image` call for `tag`
+        /// was given.
+        fn build_options_for(&self, tag: &str) -> Option<(String, Option<String>)> {
+            self.build_options.lock().unwrap().get(tag).cloned()
+        }
+
         /// The `image` a prior `run_container`/`start_background_container`
         /// call for `name` was given.
         fn image_for(&self, name: &str) -> Option<String> {
@@ -906,13 +928,19 @@ mod tests {
         async fn build_image(
             &self,
             build_directory: &Path,
+            dockerfile: &str,
             build_args: Option<&HashMap<String, String>>,
+            target: Option<&str>,
             tag: &str,
         ) -> Result<String> {
             self.build_args
                 .lock()
                 .unwrap()
                 .insert(tag.to_string(), build_args.cloned());
+            self.build_options.lock().unwrap().insert(
+                tag.to_string(),
+                (dockerfile.to_string(), target.map(|t| t.to_string())),
+            );
             self.push(format!("build:{tag}:{}", build_directory.display()));
             // Real Docker returns an image ID distinct from the tag; the fake
             // has no such concept, so it just echoes the tag back — tests
@@ -1078,6 +1106,8 @@ mod tests {
             build_args: None,
             image: Some(image.to_string()),
             build_directory: None,
+            dockerfile: None,
+            build_target: None,
             volumes: None,
             dependencies,
             environment: None,
@@ -1110,6 +1140,8 @@ mod tests {
                 build_args: None,
                 image: Some("alpine:3.18".to_string()),
                 build_directory: None,
+                dockerfile: None,
+                build_target: None,
                 volumes: None,
                 dependencies: None,
                 environment: None,
@@ -1175,6 +1207,8 @@ mod tests {
                 build_args: None,
                 image: Some("alpine:3.18".to_string()),
                 build_directory: None,
+                dockerfile: None,
+                build_target: None,
                 volumes: None,
                 dependencies: None,
                 environment: None,
@@ -1382,6 +1416,8 @@ mod tests {
             build_args: None,
             image: Some(image.to_string()),
             build_directory: None,
+            dockerfile: None,
+            build_target: None,
             volumes: None,
             dependencies,
             environment: None,
@@ -1700,6 +1736,8 @@ mod tests {
                 build_args: None,
                 image: Some("alpine:3.18".to_string()),
                 build_directory: None,
+                dockerfile: None,
+                build_target: None,
                 volumes: None,
                 dependencies: None,
                 environment: None,
@@ -1743,6 +1781,8 @@ mod tests {
             image: None,
             build_directory: Some(build_directory.to_string()),
             build_args,
+            dockerfile: None,
+            build_target: None,
             volumes: None,
             dependencies: None,
             environment: None,
@@ -1797,6 +1837,67 @@ mod tests {
             Some(tag),
             "the run should use the image that was just built, not a pulled/literal one"
         );
+    }
+
+    #[tokio::test]
+    async fn build_directory_container_passes_dockerfile_and_target_through() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "build-env".to_string(),
+            Container {
+                dockerfile: Some("docker/Dockerfile.prod".to_string()),
+                build_target: Some("builder".to_string()),
+                ..container_with_build_directory("./docker", None)
+            },
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("build".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("build", &[]).await.unwrap();
+
+        let tag = "demo-build-env";
+        let (dockerfile, target) = docker
+            .build_options_for(tag)
+            .expect("build_image should have been called for the built container's tag");
+        assert_eq!(dockerfile, "docker/Dockerfile.prod");
+        assert_eq!(target.as_deref(), Some("builder"));
+    }
+
+    #[tokio::test]
+    async fn build_directory_container_defaults_dockerfile_when_unset() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "build-env".to_string(),
+            container_with_build_directory("./docker", None),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("build".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("build", &[]).await.unwrap();
+
+        let (dockerfile, target) = docker
+            .build_options_for("demo-build-env")
+            .expect("build_image should have been called for the built container's tag");
+        assert_eq!(dockerfile, "Dockerfile");
+        assert_eq!(target, None);
     }
 
     #[tokio::test]
@@ -1968,6 +2069,8 @@ mod tests {
                 build_args: None,
                 image: None,
                 build_directory: None,
+                dockerfile: None,
+                build_target: None,
                 volumes: None,
                 dependencies: None,
                 environment: None,
@@ -2681,6 +2784,8 @@ mod tests {
                 build_args: None,
                 image: None,
                 build_directory: None,
+                dockerfile: None,
+                build_target: None,
                 volumes: None,
                 dependencies: None,
                 environment: None,

@@ -73,17 +73,17 @@ host-side substitution step:
 | `image` | Supported | |
 | `volumes` | Partially supported | Only the `local:container[:options]` string form — see [config reference](config-reference.md#volume-path-resolution). The local path supports [expressions](#expressions). The expanded map form, [caches](https://github.com/batect/batect.dev/blob/main/docs/reference/config/containers.md#volumes), and tmpfs mounts aren't supported. |
 | `dependencies` | Supported | Starts recursively (nested dependencies too), on a network scoped to one task execution — see [the task lifecycle](task-lifecycle.md). Each dependency must become ready (healthy, `setup_commands` completed — see `health_check`/`setup_commands` below) before its dependents start, matching Batect's real readiness gate. Works for dependency containers too, not just a task's own — see `build_directory` below. |
-| `build_directory` | Supported (simplified) | Builds an image from a `Dockerfile` (always that exact name, at `build_directory`'s own root — no custom naming yet) — see [config reference](config-reference.md#image-building). A `.dockerignore` at the root is respected, with real Docker's actual matching rules (not `.gitignore`'s — see [`.dockerignore` semantics](config-reference.md#dockerignore-semantics)). No cross-invocation build caching or automatic image cleanup yet. |
+| `build_directory` | Supported (simplified) | Builds an image from `dockerfile` (a path relative to `build_directory`'s own root, defaulting to `Dockerfile` there) — see [config reference](config-reference.md#image-building). A `.dockerignore` at the root is respected, with real Docker's actual matching rules (not `.gitignore`'s — see [`.dockerignore` semantics](config-reference.md#dockerignore-semantics)). No cross-invocation build caching or automatic image cleanup yet. |
 | `additional_hostnames` | Supported | Extra network aliases beyond the container's own name — see [config reference](config-reference.md#container). No expression support (matching Batect, which doesn't support it here either). |
 | `additional_hosts` | Supported | Extra `/etc/hosts` entries — see [config reference](config-reference.md#container). No expression support. |
 | `build_args` | Supported | Values support [expressions](#expressions). |
-| `build_target` | Not supported | |
+| `build_target` | Supported | The build stage to stop at, for a multi-stage `FROM ... AS <name>` Dockerfile — Docker's own `--target` mechanism. No expression support (matching Batect's own `String`, not `Expression`, typing for this field). |
 | `build_secrets` | Not supported | |
 | `build_ssh` | Not supported | |
 | `capabilities_to_add` / `capabilities_to_drop` | Not supported | |
 | `command` | Supported | Only at the container level via the equivalent task-level `run.command` — see [Task fields](#task-fields). |
 | `devices` | Not supported | |
-| `dockerfile` | Not supported | The Dockerfile is always named `Dockerfile`, at `build_directory`'s own root — no way yet to point at a differently-named or differently-located one. |
+| `dockerfile` | Supported | A path relative to `build_directory`'s own root, defaulting to `Dockerfile` there. No expression support (matching Batect's own `String`, not `Expression`, typing for this field). |
 | `enable_init_process` | Not supported | |
 | `entrypoint` | Not supported | |
 | `environment` | Supported | Values support [expressions](#expressions) (host env vars and config variables). Combines with the equivalent task-level `run.environment` — see [Task run fields](#run-fields) and [config reference](config-reference.md#taskrun). |

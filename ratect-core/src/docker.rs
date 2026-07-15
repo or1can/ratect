@@ -219,8 +219,9 @@ fn build_port_config(ports: Option<&Vec<(u16, u16, String)>>) -> Option<(Vec<Str
 /// included, unchanged from before `.dockerignore` support existed), and
 /// excludes anything it matches via [`dockerignore::PatternMatcher`] — see
 /// that crate's docs for why this isn't the same as `.gitignore`'s
-/// matching rules. `Dockerfile` and `.dockerignore` themselves are always
-/// included regardless of exclusion patterns, mirroring Docker's own
+/// matching rules. `dockerfile` (relative to `build_directory`'s own root,
+/// `"Dockerfile"` for the default case) and `.dockerignore` themselves are
+/// always included regardless of exclusion patterns, mirroring Docker's own
 /// special-casing (otherwise a broad `*` pattern would exclude the file the
 /// build needs).
 ///
@@ -228,7 +229,7 @@ fn build_port_config(ports: Option<&Vec<(u16, u16, String)>>) -> Option<(Vec<Str
 /// contexts; proper support needs tar symlink entries, not just file
 /// copies), and empty directories aren't preserved as their own tar
 /// entries (only added implicitly as the parent of a file within them).
-fn build_context_tar(build_directory: &Path) -> Result<Vec<u8>> {
+fn build_context_tar(build_directory: &Path, dockerfile: &str) -> Result<Vec<u8>> {
     let dockerignore_path = build_directory.join(".dockerignore");
     let patterns = if dockerignore_path.is_file() {
         let file = fs::File::open(&dockerignore_path)
@@ -246,7 +247,7 @@ fn build_context_tar(build_directory: &Path) -> Result<Vec<u8>> {
 
     let mut builder = tar::Builder::new(Vec::new());
     for (absolute_path, relative_path) in entries {
-        let force_include = relative_path == "Dockerfile" || relative_path == ".dockerignore";
+        let force_include = relative_path == dockerfile || relative_path == ".dockerignore";
         if !force_include && matcher.matches_or_parent_matches(&relative_path) {
             continue;
         }
@@ -543,9 +544,12 @@ pub trait ContainerRuntime {
     async fn pull_image(&self, image: &str) -> Result<()>;
 
     /// Builds an image from `build_directory` (already resolved to an
-    /// absolute path), tagging it as `tag`. The Dockerfile is always named
-    /// `Dockerfile`, at `build_directory`'s own root. `build_args` are
-    /// passed through as Docker's own `--build-arg` mechanism.
+    /// absolute path), tagging it as `tag`. `dockerfile` is the Dockerfile
+    /// to build, as a path relative to `build_directory`'s own root
+    /// (`"Dockerfile"` for the default case). `build_args` are passed
+    /// through as Docker's own `--build-arg` mechanism; `target`, when
+    /// `Some`, as `--target` (the build stage to stop at, for a multi-stage
+    /// Dockerfile).
     ///
     /// Returns the built image's ID (e.g. `sha256:...`), not `tag` — `tag` is
     /// applied so the image is identifiable in `docker images`, but isn't
@@ -555,7 +559,9 @@ pub trait ContainerRuntime {
     async fn build_image(
         &self,
         build_directory: &Path,
+        dockerfile: &str,
         build_args: Option<&HashMap<String, String>>,
+        target: Option<&str>,
         tag: &str,
     ) -> Result<String>;
 
@@ -1034,7 +1040,9 @@ impl ContainerRuntime for DockerClient {
     async fn build_image(
         &self,
         build_directory: &Path,
+        dockerfile: &str,
         build_args: Option<&HashMap<String, String>>,
+        target: Option<&str>,
         tag: &str,
     ) -> Result<String> {
         let pb = ProgressBar::new_spinner();
@@ -1047,16 +1055,22 @@ impl ContainerRuntime for DockerClient {
         pb.enable_steady_tick(Duration::from_millis(100));
 
         let build_directory = build_directory.to_path_buf();
-        let tar_bytes = tokio::task::spawn_blocking(move || build_context_tar(&build_directory))
-            .await
-            .context("Failed to build the Docker build context")??;
+        let dockerfile_owned = dockerfile.to_string();
+        let tar_bytes = tokio::task::spawn_blocking(move || {
+            build_context_tar(&build_directory, &dockerfile_owned)
+        })
+        .await
+        .context("Failed to build the Docker build context")??;
 
         let mut options_builder = BuildImageOptionsBuilder::default()
-            .dockerfile("Dockerfile")
+            .dockerfile(dockerfile)
             .t(tag)
             .rm(true);
         if let Some(build_args) = build_args {
             options_builder = options_builder.buildargs(build_args);
+        }
+        if let Some(target) = target {
+            options_builder = options_builder.target(target);
         }
         let options = options_builder.build();
 
@@ -1637,7 +1651,7 @@ mod tests {
         fs::create_dir_all(dir.join("subdir")).unwrap();
         fs::write(dir.join("subdir/nested.txt"), "nested").unwrap();
 
-        let tar_bytes = build_context_tar(&dir).unwrap();
+        let tar_bytes = build_context_tar(&dir, "Dockerfile").unwrap();
         let mut entries = tar_entry_paths(&tar_bytes);
         entries.sort();
 
@@ -1661,7 +1675,7 @@ mod tests {
         fs::write(dir.join("secret.txt"), "shh").unwrap();
         fs::write(dir.join("app.txt"), "hello").unwrap();
 
-        let tar_bytes = build_context_tar(&dir).unwrap();
+        let tar_bytes = build_context_tar(&dir, "Dockerfile").unwrap();
         let entries = tar_entry_paths(&tar_bytes);
 
         assert!(!entries.contains(&"secret.txt".to_string()));
@@ -1677,10 +1691,28 @@ mod tests {
         fs::write(dir.join(".dockerignore"), "*\n").unwrap();
         fs::write(dir.join("app.txt"), "hello").unwrap();
 
-        let tar_bytes = build_context_tar(&dir).unwrap();
+        let tar_bytes = build_context_tar(&dir, "Dockerfile").unwrap();
         let entries = tar_entry_paths(&tar_bytes);
 
         assert!(entries.contains(&"Dockerfile".to_string()));
+        assert!(entries.contains(&".dockerignore".to_string()));
+        assert!(!entries.contains(&"app.txt".to_string()));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn build_context_tar_force_includes_a_custom_named_dockerfile() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("docker")).unwrap();
+        fs::write(dir.join("docker/Dockerfile.prod"), "FROM alpine").unwrap();
+        fs::write(dir.join(".dockerignore"), "*\n").unwrap();
+        fs::write(dir.join("app.txt"), "hello").unwrap();
+
+        let tar_bytes = build_context_tar(&dir, "docker/Dockerfile.prod").unwrap();
+        let entries = tar_entry_paths(&tar_bytes);
+
+        assert!(entries.contains(&"docker/Dockerfile.prod".to_string()));
         assert!(entries.contains(&".dockerignore".to_string()));
         assert!(!entries.contains(&"app.txt".to_string()));
 
@@ -1705,7 +1737,7 @@ mod tests {
         )
         .unwrap();
 
-        let tar_bytes = build_context_tar(&dir).unwrap();
+        let tar_bytes = build_context_tar(&dir, "Dockerfile").unwrap();
         let entries = tar_entry_paths(&tar_bytes);
 
         assert!(!entries.contains(&"build/output.txt".to_string()));

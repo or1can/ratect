@@ -146,6 +146,8 @@ containers:
 | `image` | string | one of `image`/`build_directory` | A Docker image reference to pull and run (e.g. `alpine:3.18`). |
 | `build_directory` | string | one of `image`/`build_directory` | Builds an image from a `Dockerfile` in this directory (see [Image building](#image-building) below) instead of pulling a pre-built one. Supports [expressions](#expressions) and is resolved to an absolute path the same way a volume's `host_path` is — see [Volume path resolution](#volume-path-resolution). |
 | `build_args` | map of string → string | no | Build-time variables passed to `docker build` (Docker's own `--build-arg` mechanism), e.g. `VERSION: "1.2.3"`. Only meaningful alongside `build_directory`. Values support [expressions](#expressions). |
+| `dockerfile` | string | no | The Dockerfile to build, as a path relative to `build_directory`'s own root. Defaults to `Dockerfile` at `build_directory`'s root. Only meaningful alongside `build_directory`. No [expression](#expressions) support. |
+| `build_target` | string | no | The build stage to stop at (Docker's own `--target` mechanism), for a multi-stage `FROM ... AS <name>` Dockerfile. Only meaningful alongside `build_directory`. No expression support. |
 | `volumes` | list of strings | no | Bind mounts in `host_path:container_path` form. `host_path` supports [expressions](#expressions). See [Volume path resolution](#volume-path-resolution) below. |
 | `dependencies` | list of strings | no | Names of other containers to start (recursively, if they themselves have dependencies) before this one, reachable by name over a Docker network created for the duration of the task. Each dependency must become *ready* — healthy, with all its `setup_commands` completed — before its dependents start; see [Dependency readiness](#dependency-readiness) below and [the task lifecycle](task-lifecycle.md) for the full model. |
 | `environment` | map of string → string | no | Environment variables to set in the container, e.g. `FOO: bar`. Values support [expressions](#expressions) (`$VAR`, `${VAR:-default}`, `<name`). A dependency container only ever gets its own `environment` — see [TaskRun](#taskrun) for how a task's own container's `environment` combines with `run.environment`. |
@@ -174,13 +176,17 @@ needed, and reused for the rest of that `ratect` invocation if referenced again 
 task's own container, as a dependency, or by more than one task) — but never reused
 *across* separate `ratect` invocations; each run builds fresh. A few things to know:
 
-- The Dockerfile is always named `Dockerfile`, at `build_directory`'s own root — there's
-  no way yet to point at a differently-named or differently-located one.
+- The Dockerfile built is `dockerfile` (a path relative to `build_directory`'s own
+  root), defaulting to `Dockerfile` at `build_directory`'s own root when omitted.
+- `build_target` stops the build at that stage, for a multi-stage `FROM ... AS <name>`
+  Dockerfile — Docker's own `--target` mechanism.
 - A `.dockerignore` file at `build_directory`'s root, if present, excludes matching
   files from the build context — see [`.dockerignore` semantics](#dockerignore-semantics)
   below for the (non-obvious) matching rules. No `.dockerignore` means the whole
   directory tree becomes the build context, unchanged from before this existed.
-- `build_target`, `build_secrets`, and `build_ssh` aren't supported yet — see
+  `dockerfile` and `.dockerignore` itself are always included in the build context
+  regardless of exclusion patterns, matching Docker's own special-casing.
+- `build_secrets` and `build_ssh` aren't supported yet — see
   [Differences from Batect](differences-from-batect.md).
 - The built image is tagged `<project_name>-<container_name>` (matching Batect's own
   default), so it's identifiable in `docker images` rather than showing up as an

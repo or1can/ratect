@@ -1,0 +1,20 @@
+# Exercises `dockerfile` and `build_target` end-to-end against a real
+# `docker build`: `build_directory`'s own root has no file named
+# `Dockerfile` at all, so a successful build proves `dockerfile`
+# (`docker/Dockerfile.multistage`) actually reached Docker rather than
+# falling back to the default name. `build_target: builder` stops the
+# multi-stage Dockerfile at its first stage — the task then cats
+# `/message.txt`, which differs between stages, so `from-builder-stage`
+# (not `from-final-stage`) proves `build_target` reached the build too, not
+# just that it didn't error.
+project_name: ratect-build-customization-test
+containers:
+  build-env:
+    build_directory: ./build-customization
+    dockerfile: docker/Dockerfile.multistage
+    build_target: builder
+tasks:
+  print-message:
+    run:
+      container: build-env
+      command: cat /message.txt

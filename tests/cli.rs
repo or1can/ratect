@@ -71,6 +71,10 @@ fn build_with_dockerignore_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-with-dockerignore.yml")
 }
 
+fn build_customization_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-customization.yml")
+}
+
 fn build_failure_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-failure.yml")
 }
@@ -731,6 +735,37 @@ fn build_directory_and_build_args_reach_a_real_docker_build() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(stdout.trim(), "hello-from-build-arg");
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2` and build
+/// `tests/fixtures/build-customization/docker/Dockerfile.multistage`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves `dockerfile` and `build_target` both reach a real `docker build`:
+/// the build directory has no file literally named `Dockerfile`, so a
+/// successful build proves the custom `dockerfile` path was used, and the
+/// task's output differs between the multi-stage Dockerfile's two stages,
+/// so seeing the first stage's output (not the second's) proves
+/// `build_target` reached the build too.
+#[test]
+#[ignore]
+fn dockerfile_and_build_target_reach_a_real_docker_build() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(build_customization_config_path())
+        .arg("print-message")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "from-builder-stage");
 }
 
 /// Requires a running Docker daemon with network access to pull
