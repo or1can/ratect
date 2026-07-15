@@ -460,10 +460,16 @@ fn ensure_host_volume_directories_exist(volumes: Option<&Vec<String>>) -> Result
             continue;
         };
         let path = Path::new(host_path);
-        if !path.exists() {
-            fs::create_dir_all(path)
-                .with_context(|| format!("Failed to create host directory {:?}", path))?;
-        }
+        // No `path.exists()` pre-check: `create_dir_all` is already a no-op
+        // success if `path` is an existing directory, so the check bought
+        // nothing but a TOCTOU race (something else removing/replacing
+        // `path` between the check and the create). It also used to mean a
+        // pre-existing *non-directory* at `path` was silently left alone
+        // here, deferring to a more confusing failure later when Docker
+        // tries to bind-mount it — now `create_dir_all` reports that
+        // directly.
+        fs::create_dir_all(path)
+            .with_context(|| format!("Failed to create host directory {:?}", path))?;
     }
 
     Ok(())
@@ -1738,5 +1744,21 @@ mod tests {
     #[test]
     fn ensure_host_volume_directories_exist_does_nothing_when_there_are_no_volumes() {
         ensure_host_volume_directories_exist(None).unwrap();
+    }
+
+    #[test]
+    fn ensure_host_volume_directories_exist_errors_clearly_when_a_file_blocks_the_path() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let host_path = dir.join("blocked");
+        fs::write(&host_path, "not a directory").unwrap();
+        let volumes = vec![format!("{}:/code", host_path.display())];
+
+        let result = ensure_host_volume_directories_exist(Some(&volumes));
+
+        assert!(result.is_err());
+        assert!(host_path.is_file(), "the file must be left untouched");
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 }
