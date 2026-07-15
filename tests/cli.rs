@@ -900,6 +900,82 @@ fn interactive_session_forwards_stdin_and_stdout() {
 }
 
 /// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves stdin forwarding is decoupled from TTY allocation: `ratect` is
+/// spawned with both stdin *and* stdout wired to plain OS pipes — neither
+/// end is a terminal at all, unlike the `portable-pty`-based test above, so
+/// `should_use_tty` is false and no real Docker TTY gets allocated — yet the
+/// invoked task is still the top-level one, so `interactive` (eligibility)
+/// is still `true` and stdin should still reach the container per
+/// `run_container_forwarding_stdin`. A scripted `echo <marker>` is written
+/// to the piped stdin, and the piped stdout is checked for the marker
+/// having round-tripped through stdin -> container -> stdout, exactly like
+/// the TTY-based test, just without a TTY anywhere in the chain.
+#[test]
+#[ignore]
+fn piped_stdin_reaches_a_non_tty_task_container() {
+    use std::process::Stdio;
+
+    let mut child = ratect_command()
+        .arg("-f")
+        .arg(interactive_config_path())
+        .arg("shell")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn ratect");
+
+    let mut stdin = child.stdin.take().expect("child should have piped stdin");
+    let mut stdout = child.stdout.take().expect("child should have piped stdout");
+
+    // Reads in a background thread since `Read::read` blocks; the main
+    // thread polls the accumulated output with a bounded timeout instead of
+    // blocking indefinitely if something hangs — same pattern as the
+    // pty-based test above.
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match stdout.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    let marker = "ratect-piped-stdin-test-marker";
+    writeln!(stdin, "echo {marker}").expect("failed to write to piped stdin");
+    writeln!(stdin, "exit").expect("failed to write to piped stdin");
+    drop(stdin); // let the shell see EOF once it's done reading commands
+
+    let mut output = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !String::from_utf8_lossy(&output).contains(marker) && Instant::now() < deadline {
+        if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(200)) {
+            output.extend_from_slice(&chunk);
+        }
+    }
+
+    let output_str = String::from_utf8_lossy(&output);
+    assert!(
+        output_str.contains(marker),
+        "expected the echoed marker to round-trip through piped stdin -> container -> \
+         piped stdout, even without a TTY: {output_str:?}"
+    );
+
+    let status = child.wait().expect("failed to wait for ratect");
+    assert!(
+        status.success(),
+        "ratect should exit successfully once the shell session ends: {status:?}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
 /// `alpine:3.18.2`, and runs against the real host user (this doesn't need a
 /// TTY, unlike the interactive test above — `run_as_current_user` and
 /// interactive mode are independent features). Run explicitly with

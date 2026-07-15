@@ -863,6 +863,76 @@ impl DockerClient {
 
         self.exit_code(container_id).await
     }
+
+    /// Starts `container_id` (already created) and streams its stdout/stderr
+    /// to the local stdout via Docker's plain (non-TTY) `logs` follow API
+    /// until it exits, then returns its exit code. Shared by the fully
+    /// non-interactive path and `run_container_forwarding_stdin` below —
+    /// both need identical output handling, differing only in whether stdin
+    /// is piped in alongside it.
+    async fn start_and_stream_logs(&self, container_id: &str) -> Result<i64> {
+        self.docker.start_container(container_id, None).await?;
+        tracing::debug!(container_id, "started container");
+
+        let mut logs = self.docker.logs(
+            container_id,
+            Some(LogsOptions {
+                stdout: true,
+                stderr: true,
+                follow: true,
+                ..Default::default()
+            }),
+        );
+
+        while let Some(log) = logs.next().await {
+            match log {
+                Ok(output) => print!("{}", output),
+                Err(e) => return Err(e).context("Failed to get container logs"),
+            }
+        }
+
+        self.exit_code(container_id).await
+    }
+
+    /// Forwards the local process's stdin into `container_id` without
+    /// allocating a real Docker TTY — the `interactive`-but-not-`use_tty`
+    /// case (e.g. `should_use_tty`'s stdin-and-stdout-both-real-terminals
+    /// gate failing because stdout was piped/redirected, even though this
+    /// is still the top-level requested task). Matches Batect's own
+    /// unconditional stdin forwarding for the task's own container,
+    /// independent of its separate (and stricter, here) TTY gate.
+    ///
+    /// Attaches stdin-only *before* starting the container — same
+    /// before-start ordering rationale as `run_container_interactively`, so
+    /// nothing written early is lost — then reuses `start_and_stream_logs`
+    /// for output, since this path's output handling is identical to the
+    /// plain non-interactive case.
+    async fn run_container_forwarding_stdin(&self, container_id: &str) -> Result<i64> {
+        let attach_options = AttachContainerOptionsBuilder::default()
+            .stdin(true)
+            .stream(true)
+            .build();
+        let AttachContainerResults {
+            input: mut attach_input,
+            ..
+        } = self
+            .docker
+            .attach_container(container_id, Some(attach_options))
+            .await
+            .context("Failed to attach to container")?;
+
+        // Same "no natural end of its own" rationale as the interactive
+        // path's stdin pump — aborted once output-following ends, not
+        // awaited to completion.
+        let stdin_pump = tokio::spawn(async move {
+            let mut stdin = tokio::io::stdin();
+            let _ = tokio::io::copy(&mut stdin, &mut attach_input).await;
+        });
+
+        let result = self.start_and_stream_logs(container_id).await;
+        stdin_pump.abort();
+        result
+    }
 }
 
 #[async_trait::async_trait]
@@ -1257,8 +1327,16 @@ impl ContainerRuntime for DockerClient {
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             tty: use_tty.then_some(true),
-            open_stdin: use_tty.then_some(true),
-            attach_stdin: use_tty.then_some(true),
+            // `open_stdin`/`attach_stdin` are gated on `interactive` alone —
+            // deliberately wider than `use_tty` — so piping input into a
+            // task still works even when a real TTY isn't allocated (e.g.
+            // Ratect's own stdout is redirected to a file), matching
+            // Batect's own unconditional stdin forwarding for the task's
+            // own container. `tty`/`stdin_once` stay TTY-only: those control
+            // pty allocation itself, which still requires both stdin and
+            // stdout to be real terminals (`should_use_tty`, unchanged).
+            open_stdin: interactive.then_some(true),
+            attach_stdin: interactive.then_some(true),
             stdin_once: use_tty.then_some(true),
             user: user_mapping.map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
             healthcheck: build_health_config(health_check),
@@ -1283,28 +1361,10 @@ impl ContainerRuntime for DockerClient {
 
         let exit_code = if use_tty {
             self.run_container_interactively(&container.id).await?
+        } else if interactive {
+            self.run_container_forwarding_stdin(&container.id).await?
         } else {
-            self.docker.start_container(&container.id, None).await?;
-            tracing::debug!(container_id = %container.id, "started container");
-
-            let mut logs = self.docker.logs(
-                &container.id,
-                Some(LogsOptions {
-                    stdout: true,
-                    stderr: true,
-                    follow: true,
-                    ..Default::default()
-                }),
-            );
-
-            while let Some(log) = logs.next().await {
-                match log {
-                    Ok(output) => print!("{}", output),
-                    Err(e) => return Err(e).context("Failed to get container logs"),
-                }
-            }
-
-            self.exit_code(&container.id).await?
+            self.start_and_stream_logs(&container.id).await?
         };
 
         self.docker.remove_container(&container.id, None).await?;
