@@ -900,6 +900,134 @@ fn interactive_session_forwards_stdin_and_stdout() {
 }
 
 /// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`, and the ability to allocate a local pseudo-terminal —
+/// see `interactive_session_forwards_stdin_and_stdout` above for why
+/// `portable-pty` makes this work in headless CI too. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// Proves the container's TTY is kept in sync with the local terminal for
+/// the *whole* session, not just once at attach time: resizes the pty's
+/// master side mid-session (`MasterPty::resize`, which delivers a real
+/// `SIGWINCH` to `ratect`, the pty's slave-side foreground process), and
+/// checks the container's own shell actually sees the new geometry via
+/// `stty size` — a precise, end-to-end assertion of the full round trip
+/// (local resize -> `SIGWINCH` -> `resize_tty` -> Docker's
+/// `resize_container_tty` -> the container's own pty).
+#[test]
+#[ignore]
+fn interactive_session_forwards_live_terminal_resizes() {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("failed to open pty");
+
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect"));
+    cmd.arg("-f");
+    cmd.arg(interactive_config_path());
+    cmd.arg("shell");
+
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
+        .expect("failed to spawn ratect in the pty");
+    drop(pair.slave);
+
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .expect("failed to clone pty reader");
+    let mut writer = pair
+        .master
+        .take_writer()
+        .expect("failed to take pty writer");
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    let mut output = Vec::new();
+
+    // Confirm the shell starts out reporting the pty's initial size before
+    // touching resize at all — otherwise a later "40 120" match wouldn't
+    // prove anything actually changed.
+    writeln!(writer, "stty size").expect("failed to write to pty");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !String::from_utf8_lossy(&output).contains("24 80") && Instant::now() < deadline {
+        if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(200)) {
+            output.extend_from_slice(&chunk);
+        }
+    }
+    let initial = String::from_utf8_lossy(&output).to_string();
+    assert!(
+        initial.contains("24 80"),
+        "expected the shell to initially report the pty's opened size (24 rows, 80 cols): {initial:?}"
+    );
+
+    pair.master
+        .resize(PtySize {
+            rows: 40,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("failed to resize pty");
+
+    // Retries `stty size` on a short interval rather than writing it once —
+    // the resize -> SIGWINCH -> Docker API round trip isn't instantaneous,
+    // so this polls (re-issuing the command each time) until the
+    // container-side shell actually reports the new geometry, or the
+    // bounded timeout gives up.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !String::from_utf8_lossy(&output).contains("40 120") && Instant::now() < deadline {
+        writeln!(writer, "stty size").expect("failed to write to pty");
+        let poll_deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < poll_deadline {
+            if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(200)) {
+                output.extend_from_slice(&chunk);
+            }
+        }
+    }
+    let resized = String::from_utf8_lossy(&output).to_string();
+    assert!(
+        resized.contains("40 120"),
+        "expected the container's shell to report the resized pty's new size (40 rows, \
+         120 cols) after a live SIGWINCH-triggered resize: {resized:?}"
+    );
+
+    writeln!(writer, "exit").expect("failed to write to pty");
+
+    let (wait_tx, wait_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = wait_tx.send(child.wait());
+    });
+    let status = wait_rx
+        .recv_timeout(Duration::from_secs(15))
+        .expect("ratect did not exit after the interactive session ended")
+        .expect("failed to wait for ratect");
+
+    assert!(
+        status.success(),
+        "ratect should exit successfully once the shell session ends: {status:?}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
 /// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
 ///
 /// Proves stdin forwarding is decoupled from TTY allocation: `ratect` is

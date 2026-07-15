@@ -308,6 +308,67 @@ impl Drop for RawModeGuard {
     }
 }
 
+/// Resizes `container_id`'s TTY to the local terminal's current size —
+/// shared by the initial attach-time sync and every subsequent local resize
+/// while the session is live (see `run_container_interactively` and
+/// `spawn_resize_listener` below). Takes `&Docker` directly rather than
+/// `&self` so it can also be called from a separately spawned task, holding
+/// its own cloned client rather than borrowing the caller's. Best-effort: a
+/// failure (can't query the local size, or the container has already
+/// exited) is logged and otherwise ignored, matching the previous one-shot
+/// call this replaces.
+async fn resize_tty(docker: &Docker, container_id: &str) {
+    let Ok((cols, rows)) = crossterm::terminal::size() else {
+        return;
+    };
+    let resize_options = ResizeContainerTTYOptionsBuilder::default()
+        .w(cols as i32)
+        .h(rows as i32)
+        .build();
+    if let Err(e) = docker
+        .resize_container_tty(container_id, resize_options)
+        .await
+    {
+        tracing::warn!(container_id, error = ?e, "Failed to resize container TTY");
+    }
+}
+
+/// Listens for `SIGWINCH` (the local terminal being resized) for the
+/// lifetime of one interactive session, re-running `resize_tty` on every
+/// occurrence — closes the "not tracked live" gap `resize_tty`'s own
+/// one-shot call used to leave (see `docs/differences-from-batect.md`).
+/// Deliberately built on `tokio::signal::unix`, not crossterm's
+/// `event`/`EventStream` API — see the `crossterm` entry in CLAUDE.md for
+/// why that API is off-limits here (it would consume/interpret stdin bytes
+/// instead of passing them through raw); a plain OS signal doesn't have
+/// that problem. Unix-only — `SignalKind::window_change()` doesn't exist on
+/// other platforms; the caller's `#[cfg(not(unix))]` side just doesn't spawn
+/// this, falling back to the previous once-at-attach-only behavior rather
+/// than erroring (interactive mode itself stays cross-platform — this is a
+/// narrower, non-fatal gap on non-Unix, unlike `user.rs`'s hard Unix-only
+/// functions).
+#[cfg(unix)]
+fn spawn_resize_listener(docker: Docker, container_id: String) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut sig =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change()) {
+                Ok(sig) => sig,
+                Err(e) => {
+                    tracing::warn!(
+                        error = ?e,
+                        "Failed to install SIGWINCH handler; live terminal-resize forwarding \
+                         disabled for this session"
+                    );
+                    return;
+                }
+            };
+        loop {
+            sig.recv().await;
+            resize_tty(&docker, &container_id).await;
+        }
+    })
+}
+
 /// Recursively collects every regular file under `dir` as `(absolute_path,
 /// path_relative_to_root)` pairs, the latter always `/`-joined regardless
 /// of platform, matching the path style `.dockerignore` patterns use.
@@ -822,22 +883,17 @@ impl DockerClient {
             .context("Failed to start container")?;
         tracing::debug!(container_id, "started container interactively");
 
-        // Best-effort: syncs the container's TTY to the local terminal's
-        // size once, at attach time. Not tracked live if the local terminal
-        // is resized mid-session — see the 0.4.0 plan's known gaps.
-        if let Ok((cols, rows)) = crossterm::terminal::size() {
-            let resize_options = ResizeContainerTTYOptionsBuilder::default()
-                .w(cols as i32)
-                .h(rows as i32)
-                .build();
-            if let Err(e) = self
-                .docker
-                .resize_container_tty(container_id, resize_options)
-                .await
-            {
-                tracing::warn!(container_id, error = ?e, "Failed to resize container TTY");
-            }
-        }
+        // Syncs the container's TTY to the local terminal's size once, at
+        // attach time — then `resize_listener` (Unix only) keeps it in sync
+        // for the rest of the session, on every subsequent local resize.
+        resize_tty(&self.docker, container_id).await;
+        #[cfg(unix)]
+        let resize_listener = Some(spawn_resize_listener(
+            self.docker.clone(),
+            container_id.to_string(),
+        ));
+        #[cfg(not(unix))]
+        let resize_listener: Option<tokio::task::JoinHandle<()>> = None;
 
         // Local stdin has no natural end of its own here — the attach
         // output stream ending (the container exiting) is what ends the
@@ -859,6 +915,9 @@ impl DockerClient {
         }
         .await;
         stdin_pump.abort();
+        if let Some(handle) = resize_listener {
+            handle.abort();
+        }
         output_result?;
 
         self.exit_code(container_id).await
