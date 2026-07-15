@@ -26,23 +26,28 @@ use uuid::Uuid;
 /// closure share one field type.
 type HostEnv = Box<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
-/// Merges proxy-derived environment variables (see
+/// Merges the host's `TERM` (see `TaskEngine::term_environment_variable`),
+/// proxy-derived environment variables (see
 /// `TaskEngine::proxy_environment_variables`), a container's `environment`,
 /// and a task's `run.environment`, each overriding the last on key
-/// collision — proxy vars are the lowest-precedence base, matching Batect
-/// (`terminalEnvironmentVariablesFor + proxyEnvironmentVariables +
+/// collision — `TERM` and proxy vars are the lowest-precedence base,
+/// matching Batect (`terminalEnvironmentVariablesFor + proxyEnvironmentVariables +
 /// substituteEnvironmentVariables`, later entries winning); the
-/// container's `environment` overrides proxy vars, and `run.environment`
-/// overrides both. `None` only when none of the three are set.
+/// container's `environment` overrides both, and `run.environment`
+/// overrides all three. `None` only when none of the four are set.
 fn merged_environment(
+    term_var: Option<&HashMap<String, String>>,
     proxy_vars: Option<&HashMap<String, String>>,
     container_env: Option<&HashMap<String, String>>,
     run_env: Option<&HashMap<String, String>>,
 ) -> Option<HashMap<String, String>> {
-    if proxy_vars.is_none() && container_env.is_none() && run_env.is_none() {
+    if term_var.is_none() && proxy_vars.is_none() && container_env.is_none() && run_env.is_none() {
         return None;
     }
-    let mut merged = proxy_vars.cloned().unwrap_or_default();
+    let mut merged = term_var.cloned().unwrap_or_default();
+    if let Some(proxy_vars) = proxy_vars {
+        merged.extend(proxy_vars.clone());
+    }
     if let Some(container_env) = container_env {
         merged.extend(container_env.clone());
     }
@@ -216,6 +221,26 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         (!vars.is_empty()).then_some(vars)
     }
 
+    /// The host's `TERM` to inject into the invoked task's own container's
+    /// environment, or `None` when this isn't that container (`interactive`
+    /// is `false` — never a prerequisite's, a dependency's, or a sidecar's,
+    /// nor an image build) or the host has no `TERM` set. Gated on
+    /// `interactive` alone — deliberately *not* on whether a real TTY ends
+    /// up being allocated (that's decided later, inside
+    /// `ContainerRuntime::run_container`, from information not yet known
+    /// here) — matching Batect's own `ConsoleInfo.terminalType`/
+    /// `TaskContainerOnlyIOStreamingOptions.terminalTypeForContainer`, both
+    /// unconditional on any TTY check. So a full-screen terminal program
+    /// inside the container knows the terminal type even when piping output
+    /// elsewhere still lets it detect it isn't attached to a real TTY.
+    fn term_environment_variable(&self, interactive: bool) -> Option<HashMap<String, String>> {
+        if !interactive {
+            return None;
+        }
+        let term = (self.host_env)("TERM")?;
+        Some(HashMap::from([("TERM".to_string(), term)]))
+    }
+
     /// Resolves `container_config`'s `image` (pulling it, deduped by image
     /// name) or `build_directory` (building it, deduped by `container_name`)
     /// into the image reference to actually run. Shared by a task's own
@@ -269,6 +294,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             // (nothing's running yet to be exempted from proxying).
             let proxy_vars = self.proxy_environment_variables(&std::collections::BTreeSet::new());
             let build_args = merged_environment(
+                None,
                 proxy_vars.as_ref(),
                 container_config.build_args.as_ref(),
                 None,
@@ -467,17 +493,22 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             let image = self
                 .resolve_image(&task.run.container, container_config)
                 .await?;
+            // Eligibility only — `ContainerRuntime::run_container` further
+            // gates this on the local process's own stdin/stdout genuinely
+            // being terminals before actually attaching a TTY, and stdin
+            // forwarding on `interactive` alone (see `run_container`'s own
+            // docs). Computed here, ahead of the environment merge below,
+            // since `term_environment_variable` needs it.
+            let interactive = top_level;
             let proxy_vars = self.proxy_environment_variables(&no_proxy_entries);
+            let term_var = self.term_environment_variable(interactive);
             let environment = merged_environment(
+                term_var.as_ref(),
                 proxy_vars.as_ref(),
                 container_config.environment.as_ref(),
                 task.run.environment.as_ref(),
             );
             let user_mapping = self.resolve_user_mapping(container_config).await?;
-            // Eligibility only — `ContainerRuntime::run_container` further
-            // gates this on the local process's own stdin/stdout genuinely
-            // being terminals before actually attaching a TTY.
-            let interactive = top_level;
             let expanded_ports =
                 merged_ports(container_config.ports.as_ref(), task.run.ports.as_ref());
             let network_options = crate::docker::NetworkOptions {
@@ -572,6 +603,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         let user_mapping = self.resolve_user_mapping(dependency_config).await?;
         let proxy_vars = self.proxy_environment_variables(no_proxy_entries);
         let environment = merged_environment(
+            None,
             proxy_vars.as_ref(),
             dependency_config.environment.as_ref(),
             None,
@@ -2936,6 +2968,163 @@ mod tests {
             .split(',')
             .any(|entry| entry == "database"));
         assert!(database_no_proxy.split(',').any(|entry| entry == "app"));
+    }
+
+    #[tokio::test]
+    async fn term_env_var_reaches_a_tasks_own_container_when_interactive() {
+        let mut containers = HashMap::new();
+        containers.insert("app".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("run".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone())
+            .with_host_env(|name| (name == "TERM").then(|| "xterm-256color".to_string()));
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        let environment = docker.environment_for("app").unwrap();
+        assert_eq!(environment.get("TERM"), Some(&"xterm-256color".to_string()));
+    }
+
+    #[tokio::test]
+    async fn term_env_var_is_absent_when_host_has_no_term_set() {
+        let mut containers = HashMap::new();
+        containers.insert("app".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("run".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone()).with_host_env(|_| None);
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.environment_for("app"),
+            None,
+            "an absent host TERM shouldn't inject an empty/placeholder value"
+        );
+    }
+
+    #[tokio::test]
+    async fn term_env_var_does_not_reach_a_dependency_container() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        containers.insert("database".to_string(), container("postgres:16", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("run".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone())
+            .with_host_env(|name| (name == "TERM").then(|| "xterm".to_string()));
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        let app_env = docker.environment_for("app").unwrap();
+        assert_eq!(app_env.get("TERM"), Some(&"xterm".to_string()));
+
+        let database_env = docker.environment_for("database");
+        assert!(
+            database_env.is_none_or(|env| !env.contains_key("TERM")),
+            "a dependency should never receive TERM"
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_environment_overrides_term_on_collision() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.environment =
+            Some(HashMap::from([("TERM".to_string(), "dumb".to_string())]));
+        let mut containers = HashMap::new();
+        containers.insert("app".to_string(), container_config);
+        let mut tasks = HashMap::new();
+        tasks.insert("run".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone())
+            .with_host_env(|name| (name == "TERM").then(|| "xterm-256color".to_string()));
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        let environment = docker.environment_for("app").unwrap();
+        assert_eq!(
+            environment.get("TERM"),
+            Some(&"dumb".to_string()),
+            "the container's own explicit environment should win over the host TERM"
+        );
+    }
+
+    #[tokio::test]
+    async fn term_env_var_is_absent_for_a_prerequisite_tasks_own_container() {
+        let mut containers = HashMap::new();
+        containers.insert("app".to_string(), container("alpine:3.18", None));
+        containers.insert("setup".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("setup".to_string(), task("setup", "echo setting up"));
+        tasks.insert(
+            "run".to_string(),
+            Task {
+                run: TaskRun {
+                    container: "app".to_string(),
+                    command: Some("echo hi".to_string()),
+                    environment: None,
+                    ports: None,
+                },
+                prerequisites: Some(vec!["setup".to_string()]),
+            },
+        );
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone())
+            .with_host_env(|name| (name == "TERM").then(|| "xterm".to_string()));
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        let app_env = docker.environment_for("app").unwrap();
+        assert_eq!(
+            app_env.get("TERM"),
+            Some(&"xterm".to_string()),
+            "the top-level task's own container is interactive-eligible"
+        );
+
+        let setup_env = docker.environment_for("setup");
+        assert!(
+            setup_env.is_none_or(|env| !env.contains_key("TERM")),
+            "a prerequisite's own container is never interactive-eligible, so it shouldn't get TERM either"
+        );
     }
 
     #[tokio::test]
