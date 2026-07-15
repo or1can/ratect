@@ -173,10 +173,30 @@ fn real_now() -> u64 {
 /// collision-resistant (SHA-256) rather than anything reversible, since it
 /// only needs to be a good directory name, not human-readable (that's what
 /// the `.toml` sidecar's own `repo` field is for).
+///
+/// Each field is length-prefixed before being fed to the hasher, rather
+/// than joined with a free-text separator (`format!("git {remote}
+/// @{git_ref}")`, this function's own pre-0.10.0 implementation) — with a
+/// bare separator, `remote`/`git_ref` pairs that themselves contain that
+/// separator can collide: `("repo.git @evil-ref", "main")` and
+/// `("repo.git", "evil-ref @main")` would otherwise hash identically.
+/// `remote`/`git_ref` come straight from config (a project's own, or one
+/// reached transitively through a Git-included bundle) with no restriction
+/// on their content beyond rejecting a leading `-`, and the cache they key
+/// into (`~/.ratect/incl`) is shared, clone-once-forever, across every
+/// project on the machine — a collision would let one project's include
+/// silently reuse another, unrelated project's cached clone. Length-
+/// prefixing makes the two fields unambiguously separable regardless of
+/// what characters they contain.
 pub(crate) fn cache_key(remote: &str, git_ref: &str) -> String {
     use sha2::{Digest, Sha256};
 
-    let digest = Sha256::digest(format!("git {remote} @{git_ref}").as_bytes());
+    let mut hasher = Sha256::new();
+    hasher.update(remote.len().to_le_bytes());
+    hasher.update(remote.as_bytes());
+    hasher.update(git_ref.len().to_le_bytes());
+    hasher.update(git_ref.as_bytes());
+    let digest = hasher.finalize();
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
@@ -641,6 +661,17 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_ne!(a, d);
+    }
+
+    #[test]
+    fn cache_key_does_not_collide_across_the_remote_ref_boundary() {
+        // SEC-001 (SECURITY_FINDINGS.md): the pre-0.10.0 implementation
+        // joined the two fields with a bare `" @"` separator, so a
+        // `remote` containing that separator could collide with a
+        // differently-split (remote, ref) pair.
+        let a = cache_key("https://example.com/repo.git @evil-ref", "main");
+        let b = cache_key("https://example.com/repo.git", "evil-ref @main");
+        assert_ne!(a, b);
     }
 
     #[tokio::test]
