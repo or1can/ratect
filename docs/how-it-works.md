@@ -178,7 +178,13 @@ client, and implements `ContainerRuntime`:
   `build_health_config`).
 
 Container creation/start/removal events are logged at `debug` level via `tracing` (see
-below) — not shown by default, but useful with `RUST_LOG=debug`.
+below) — not shown by default, but useful with `RUST_LOG=debug`. This includes each
+`setup_commands` exec's raw output, which is whatever the command itself printed — so
+if a setup command's own output could include something sensitive (a failed connection
+string, a verbose HTTP client dumping request headers), that ends up in the debug log
+too. Treat `RUST_LOG=debug` (or narrower `ratect_core=debug`) output with the same care
+you'd give the command's own output before pasting it into a support ticket, chat
+message, or CI log.
 
 ## 5. Logging vs. output
 
