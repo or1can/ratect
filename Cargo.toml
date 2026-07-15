@@ -3,7 +3,7 @@ members = ["ratect-core", "dockerignore"]
 
 [package]
 name = "ratect"
-version = "0.9.0-dev"
+version = "0.9.0"
 edition = "2021"
 
 [dependencies]
