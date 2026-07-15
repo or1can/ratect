@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Dependency readiness** (`health_check` and `setup_commands` on containers):
+  a started dependency is no longer treated as ready immediately — matching Batect,
+  it must first report healthy and then complete its setup commands before anything
+  that depends on it (another dependency, or the task's own container) starts.
+  - `health_check` (`command`, `interval`, `retries`, `start_period`, `timeout`)
+    overrides the health check configuration baked into the container's image, at
+    container creation. `command` runs via the container's default shell (Docker's
+    `CMD-SHELL` form); durations are Batect's Go-style strings (`2s`, `500ms`,
+    `1m30s`); an omitted field inherits the image's own value.
+  - After a dependency starts, Ratect waits for Docker's own health verdict (via the
+    event stream, replayed from the beginning of time so an early verdict can't be
+    missed). A container with no health check at all — from neither its image nor
+    config — is immediately considered healthy, so configs without health checks
+    behave exactly as before. A dependency reported unhealthy fails the task, with
+    the last health-check run's exit code and output in the error; so does a
+    dependency that exits before any verdict. There is no Ratect-side timeout
+    (matching Batect) — Docker's own `interval`/`retries` bound the wait.
+  - `setup_commands` (each `command`, with optional `working_directory`) then run
+    inside the running dependency via Docker's `exec` mechanism, one at a time in
+    declared order, with the container's own `environment` and (under
+    `run_as_current_user`) the container's own `uid:gid`, each via `sh -c`. A
+    command exiting non-zero fails the task, with its output in the error.
+  - A dependency that starts but never becomes ready is still cleaned up (stopped
+    and removed, its task network deleted) like any other failure.
+  - The task's *own* container's `health_check` is applied (Docker records and runs
+    it) but never gates the task's outcome, and its `setup_commands` don't run —
+    see the new [Dependency readiness](docs/config-reference.md#dependency-readiness)
+    section and [Differences from Batect](docs/differences-from-batect.md#container-fields)
+    for these two deliberate divergences.
+
 ## [0.8.0] - 2026-07-14
 
 ### Added

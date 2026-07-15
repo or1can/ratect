@@ -55,6 +55,12 @@ sequenceDiagram
         Engine->>Docker: pull_image() (unless already pulled this run)
         Engine->>Docker: start_background_container(alias, network)
         Docker-->>Dep: created, started, joined to network
+        Engine->>Docker: wait_for_container_healthy()
+        Docker-->>Engine: healthy (immediate if no health check)
+        loop for each setup command, in declared order
+            Engine->>Docker: exec_in_container(command)
+            Dep-->>Engine: exit code 0 (non-zero fails the task)
+        end
     end
 
     Engine->>Docker: pull_image() (task's own image, unless already pulled)
@@ -107,6 +113,25 @@ Running a task against `app` starts `cache`, then `database`, then `app` — in 
 order — all sharing one network, all reachable by their container-config name (e.g.
 `app`'s command can reach `database:5432` and `cache:6379`).
 
+Started isn't ready, though: each dependency must become **ready** before whatever
+depends on it starts — it must report healthy (immediately so for a container with no
+Docker health check at all, from neither its image nor the `health_check` field), and
+then every one of its [`setup_commands`](config-reference.md#dependency-readiness)
+must succeed, in declared order. In the example above, `database`'s migrations (a
+setup command) provably finish before `app`'s command gets to run. A dependency
+that's reported unhealthy — or that exits before a verdict, or whose setup command
+exits non-zero — fails the task; already-started containers are still cleaned up as
+usual.
+
+Health is a **one-time gate in this sequence, not ongoing monitoring**: Ratect waits
+for Docker's *first* health verdict and never re-checks — matching Batect, a
+dependency that turns unhealthy after its dependents have started doesn't affect the
+rest of the task, even though Docker itself keeps running the check for the
+container's whole lifetime. How long the wait for that first verdict can take (and
+why an unhealthy verdict can't arrive quickly) is Docker's own verdict lifecycle —
+see [How Docker reaches its verdict](config-reference.md#how-docker-reaches-its-verdict)
+in the config reference.
+
 Within one task's resolution, a dependency shared by two others (e.g. two containers
 that both depend on `cache`) is only started **once**. A circular container dependency
 (`a` depends on `b` depends on `a`) is detected and reported as an error rather than
@@ -143,13 +168,11 @@ colliding.
 
 ## Known simplifications relative to Batect
 
-- **No health checks or setup commands.** Ratect doesn't parse `health_check` or
-  `setup_commands` at all. A dependency is considered "ready" as soon as it's
-  started — matching Batect's own fallback behavior for images that don't define a
-  health check, but without the option to wait for a real one. A sidecar that needs
-  its own post-start initialization (e.g. running migrations before an app connects)
-  won't get that automatically — see
-  [differences from Batect](differences-from-batect.md).
+- **The task's own container skips the readiness steps.** Its `health_check` is
+  applied (Docker records and runs it) but nothing waits on the verdict, and its
+  `setup_commands` don't run at all — Batect runs every container through the same
+  per-container steps, task container included (concurrently with its command) — see
+  [differences from Batect](differences-from-batect.md#container-fields).
 - **Sequential, not parallel.** Batect pulls/builds images and waits for network
   readiness in parallel across a task's containers; Ratect starts dependencies one at
   a time. Parallel task execution generally is a separate

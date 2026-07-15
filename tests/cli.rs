@@ -43,6 +43,10 @@ fn unsupported_key_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/unsupported-key.yml")
 }
 
+fn unhealthy_dependency_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/unhealthy-dependency.yml")
+}
+
 fn no_image_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/no-image.yml")
 }
@@ -328,6 +332,138 @@ fn sidecars_are_reachable_by_name_via_docker() {
         "expected a successful ping of all three dependency containers (two \
          siblings plus one nested) by name:\n{}",
         stdout
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves the whole dependency readiness gate with real Docker health
+/// checks and execs, via a chain where each step can only succeed if the
+/// previous one really completed first:
+/// - the dependency's command creates `/tmp/now-healthy` two seconds after
+///   it starts (`tests/fixtures/readiness/Dockerfile`), and its configured
+///   health check probes for that file — so if Ratect didn't actually wait
+///   for the healthy verdict, the setup command (which `test`s for the same
+///   file) would run immediately and fail;
+/// - the setup command drops a marker onto a volume shared with the task's
+///   own container — so if setup commands didn't complete before dependents
+///   start, the task's `test` for that marker would fail.
+///
+/// Writes its own temporary config (same pattern as the user-mapping test
+/// below) since the shared volume needs a scratch host directory.
+#[test]
+#[ignore]
+fn dependency_health_check_and_setup_commands_gate_the_task_via_docker() {
+    let test_id = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let scratch_dir = std::env::temp_dir().join(format!("ratect-readiness-test-{test_id}"));
+    std::fs::create_dir_all(&scratch_dir).unwrap();
+    let config_path = std::env::temp_dir().join(format!("ratect-readiness-test-{test_id}.yml"));
+
+    let config = format!(
+        r#"
+project_name: ratect-readiness-test
+containers:
+  database:
+    build_directory: {build_directory}
+    health_check:
+      command: test -f /tmp/now-healthy
+      interval: 500ms
+      retries: 30
+    setup_commands:
+      - command: test -f /tmp/now-healthy && touch /scratch/setup-ran
+    volumes:
+      - {scratch}:/scratch
+  app:
+    image: alpine:3.18.2
+    volumes:
+      - {scratch}:/scratch
+    dependencies:
+      - database
+tasks:
+  check:
+    run:
+      container: app
+      command: test -f /scratch/setup-ran && echo SETUP-RAN-BEFORE-TASK
+"#,
+        build_directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/readiness")
+            .display(),
+        scratch = scratch_dir.display()
+    );
+    std::fs::write(&config_path, &config).expect("failed to write temp config");
+
+    let cleanup = || {
+        let _ = std::fs::remove_dir_all(&scratch_dir);
+        let _ = std::fs::remove_file(&config_path);
+    };
+
+    let output = ratect_command()
+        .arg("-f")
+        .arg(&config_path)
+        .arg("check")
+        .output()
+        .expect("failed to run ratect");
+
+    if !output.status.success() {
+        cleanup();
+        panic!(
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("SETUP-RAN-BEFORE-TASK"),
+        "the task should only run once the dependency was healthy and its \
+         setup command had completed:\n{stdout}"
+    );
+
+    cleanup();
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `redis:7-alpine` and `alpine:3.18.2`. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// The failure half of the readiness gate: a dependency whose health check
+/// can never pass must fail the task itself — with Docker's real
+/// "unhealthy" verdict surfaced, naming the container — and the task's own
+/// command must never run.
+#[test]
+#[ignore]
+fn unhealthy_dependency_fails_the_task_via_docker() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(unhealthy_dependency_config_path())
+        .arg("check")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        !output.status.success(),
+        "the task must fail when a dependency never becomes healthy"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("'database' did not become healthy"),
+        "the error should name the unhealthy container:\n{stderr}"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("the task should never run"),
+        "the task's own command must never have run:\n{stdout}"
     );
 }
 

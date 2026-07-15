@@ -10,6 +10,13 @@ The primary goal is to support the core features of Batect to ensure a seamless 
 - **Full Docker Networking**: Every task execution gets its own isolated network (see [the task lifecycle](docs/task-lifecycle.md)), `--use-network` reuses an existing one instead, `additional_hostnames`/`additional_hosts` add extra aliases/`/etc/hosts` entries, and `ports`/`--disable-ports` publish container ports to the host, including port ranges and the expanded object form, plus additional per-task `run.ports` (0.6.0) — see [config reference](docs/config-reference.md#port-mappings) and [CLI reference](docs/cli-reference.md).
 - **Interactive Mode**: A task's own container gets a real Docker TTY and its stdin forwarded, automatically, when both Ratect's own stdin and stdout are real terminals (0.4.0) — see [Interactive mode](docs/config-reference.md#interactive-mode). Live terminal-resize forwarding and Batect's decoupled stdin-without-TTY support are not — see [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
 - **Full Environment Variable Interpolation & Batect Expressions**: `environment` on containers/tasks, `config_variables` (including Batect's one built-in, `batect.project_directory`), and `$VAR`/`${VAR}`/`${VAR:-default}`/`<name`/`<{name}` expressions are implemented for `environment` values, volume host paths, `build_directory`, and `build_args` — every already-supported field that could meaningfully take one; `build_secrets.path`/`build_ssh.paths` remain moot until those fields themselves exist — see [Expressions](docs/differences-from-batect.md#expressions).
+- **Dependency Readiness**: A started dependency isn't treated as ready until it
+  reports healthy (its image's own Docker health check, or the `health_check`
+  override) and completes its `setup_commands` — only then do its dependents start
+  (0.9.0) — see [config reference](docs/config-reference.md#dependency-readiness).
+  The task's *own* container's setup commands don't run, and its health verdict
+  never gates the outcome — see
+  [Differences from Batect](docs/differences-from-batect.md#container-fields).
 - **Includes**: Local file includes — splitting one project's configuration across multiple files via the top-level `include` directive, resolved relative to each declaring file's own directory and merged into one flat `containers`/`tasks`/`config_variables` set (0.7.0) — and Git includes/bundles — importing shared tasks/containers from a separate repository, cloned once and cached forever at `~/.ratect/incl` (0.8.0) — see [config reference](docs/config-reference.md#includes). No cache eviction sweep or manual cache-clear command yet — see [Differences from Batect](docs/differences-from-batect.md#top-level-fields).
 - **Full Configuration Parity**: Support for all available Batect configuration options and standard YAML structures. See [Differences from Batect](docs/differences-from-batect.md#configuration-format) for the itemized current status of every field.
 - **Full CLI Options Parity**: Support for all standard Batect CLI flags and options (e.g., `--config-file`, `--override-image`, cleanup control flags, etc.). See [Differences from Batect](docs/differences-from-batect.md#cli-flags) for the itemized current status of every flag.
@@ -263,10 +270,42 @@ Neither bump is ever folded into a feature commit.
     both; Ratect has no subcommand structure yet to hang a cleanup command off of —
     tracked separately, not part of this item) — `~/.ratect/incl` grows unbounded
     until removed by hand.
-- **0.9.0** — **Dependency Readiness**: `health_check` and `setup_commands`, replacing
+- **0.9.0** — ~~**Dependency Readiness**: `health_check` and `setup_commands`, replacing
   today's "started = ready" simplification (see
   [Container fields](docs/differences-from-batect.md#container-fields)) with Batect's
-  real readiness gate before a container's dependents start.
+  real readiness gate before a container's dependents start~~ — done, design validated
+  against Batect's own implementation (`WaitForContainerToBecomeHealthyStepRunner`,
+  `RunContainerSetupCommandsStepRunner`, `RunStagePlanner` in the local `batect`
+  checkout):
+  - `health_check` (`command`, `interval`, `retries`, `start_period`, `timeout` —
+    Batect's Go-style duration strings) overrides the image's own `HEALTHCHECK` at
+    container creation; `command` maps to Docker's `CMD-SHELL` form, and an omitted
+    field inherits the image's own value.
+  - After a dependency starts, Ratect waits on Docker's own event stream
+    (`health_status`/`die`, replayed from the beginning of time, matching Batect, so
+    a verdict emitted before the stream opened still counts). A container with no
+    health check at all is immediately healthy — the old "started = ready" behavior
+    is now just that special case. Unhealthy fails the task with the last
+    health-check run's exit code and output (Batect's message shape, including its
+    "exited 0 just after the timeout expired" special case); exiting before a verdict
+    fails too. No Ratect-side timeout, matching Batect — Docker's own
+    `interval`/`retries` bound the wait.
+  - `setup_commands` then run via Docker's `exec` mechanism, one at a time in
+    declared order, with the container's own environment and (under
+    `run_as_current_user`) the container's own `uid:gid`, each command via `sh -c`
+    (the same shell treatment a task's `command` gets). A non-zero exit fails the
+    task with the command's output. Only after all of them is the dependency "ready"
+    and its dependents allowed to start.
+  - Known gaps, candidates for later work rather than blocking this release: the
+    task's *own* container's `setup_commands` don't run (Batect runs every container
+    through the same per-container steps, so its task container's setup commands run
+    concurrently with the task's command — Ratect's sequential engine has no
+    concurrent exec path until [0.14.0](#ratect-compat)'s parallelism work); its
+    `health_check`, while applied, never gates the task's outcome (in Batect an
+    unhealthy task container can fail the task even as its command runs); and a
+    setup command's omitted `working_directory` falls back straight to the image's
+    default, since the container-level `working_directory` field it should fall back
+    to first doesn't exist until [0.12.0](#ratect-compat).
 - **0.10.0** — **Interactive Mode Completeness**: closes the known gaps left by 0.4.0 —
   live terminal-resize forwarding for the rest of an interactive session (not just
   synced once at attach time), decoupling stdin forwarding from TTY allocation (piping

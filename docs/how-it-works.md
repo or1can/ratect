@@ -162,6 +162,20 @@ client, and implements `ContainerRuntime`:
   `NetworkOptions` (hostname, aliases, extra hosts, ports) the same way
   `run_container` does, from that dependency's own config — independent of the
   task's own container's settings.
+- **`wait_for_container_healthy` / `exec_in_container`**: the two halves of the
+  [dependency readiness gate](config-reference.md#dependency-readiness) the engine
+  runs after starting each dependency. The first inspects the container (no health
+  check at all means immediately healthy) and otherwise blocks on Docker's own event
+  stream — filtered to that container's `health_status`/`die` events, replayed from
+  the beginning of time so a verdict that arrived before the stream opened still
+  counts — turning an *unhealthy* verdict into an error carrying the last
+  health-check run's exit code and output (from `.State.Health.Log`). The second
+  runs one `setup_commands` entry inside the running container via Docker's `exec`
+  API (`sh -c`, the container's own environment and mapped user), returning the exit
+  code and combined output for the engine to judge. A container's `health_check`
+  config override itself is applied earlier, at creation time, by both
+  `run_container` and `start_background_container` (via the pure
+  `build_health_config`).
 
 Container creation/start/removal events are logged at `debug` level via `tracing` (see
 below) — not shown by default, but useful with `RUST_LOG=debug`.

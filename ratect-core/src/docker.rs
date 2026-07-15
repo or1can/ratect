@@ -14,13 +14,16 @@
 
 use anyhow::{Context, Result};
 use bollard::container::AttachContainerResults;
+use bollard::exec::{CreateExecOptions, StartExecResults};
 use bollard::models::{
-    ContainerCreateBody as Config, EndpointSettings, NetworkConnectRequest, NetworkCreateRequest,
-    PortBinding, PortMap,
+    ContainerCreateBody as Config, EndpointSettings, HealthConfig, NetworkConnectRequest,
+    NetworkCreateRequest, PortBinding, PortMap,
 };
 use bollard::query_parameters::AttachContainerOptionsBuilder;
 use bollard::query_parameters::BuildImageOptionsBuilder;
 use bollard::query_parameters::CreateImageOptions;
+use bollard::query_parameters::EventsOptionsBuilder;
+use bollard::query_parameters::InspectContainerOptions;
 use bollard::query_parameters::LogsOptions;
 use bollard::query_parameters::ResizeContainerTTYOptionsBuilder;
 use bollard::query_parameters::UploadToContainerOptionsBuilder;
@@ -129,6 +132,54 @@ pub struct NetworkOptions<'a> {
     /// what `ports` config exists — this struct doesn't know about that
     /// flag itself.
     pub ports: Option<&'a Vec<(u16, u16, String)>>,
+}
+
+/// A container's `health_check` override, applied at container creation on
+/// top of whatever `HEALTHCHECK` its image declares. Mirrors
+/// `config::HealthCheckConfig` as plain values, keeping this module free of
+/// config types (same reasoning as `NetworkOptions::ports`'
+/// already-expanded tuples). Every field is optional — an omitted field
+/// inherits the image's own value (Docker treats an absent/zero field as
+/// "inherit").
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HealthCheckOptions {
+    /// Run via the system's default shell (Docker's `CMD-SHELL` form, same
+    /// as a Dockerfile `HEALTHCHECK CMD <string>`); exit code 0 = healthy.
+    pub command: Option<String>,
+    pub interval: Option<Duration>,
+    pub retries: Option<u32>,
+    pub start_period: Option<Duration>,
+    pub timeout: Option<Duration>,
+}
+
+/// The outcome of one `exec_in_container` run: the exec'd command's exit
+/// code plus its combined stdout/stderr (interleaved — the exec runs with a
+/// TTY, which merges the two streams), so a failed setup command's error can
+/// include what it printed.
+#[derive(Debug)]
+pub struct ExecResult {
+    pub exit_code: i64,
+    pub output: String,
+}
+
+/// Builds Docker's container-creation healthcheck override from a
+/// container's `health_check` config — `None` when the container declares no
+/// override at all, leaving the image's own `HEALTHCHECK` untouched. Pure,
+/// unit-testable without a daemon. Durations become the nanosecond counts
+/// Docker's API expects.
+fn build_health_config(health_check: Option<&HealthCheckOptions>) -> Option<HealthConfig> {
+    let health_check = health_check?;
+    Some(HealthConfig {
+        test: health_check
+            .command
+            .as_ref()
+            .map(|command| vec!["CMD-SHELL".to_string(), command.clone()]),
+        interval: health_check.interval.map(|d| d.as_nanos() as i64),
+        timeout: health_check.timeout.map(|d| d.as_nanos() as i64),
+        retries: health_check.retries.map(i64::from),
+        start_period: health_check.start_period.map(|d| d.as_nanos() as i64),
+        start_interval: None,
+    })
 }
 
 /// Builds Docker's `Config.exposed_ports` + `HostConfig.port_bindings` from
@@ -465,6 +516,11 @@ pub trait ContainerRuntime {
     ///
     /// `network_options` carries this container's own `additional_hostnames`/
     /// `additional_hosts` — see `run_container`'s doc comment.
+    ///
+    /// `health_check` overrides the image's own `HEALTHCHECK` configuration
+    /// at creation — see [`HealthCheckOptions`]. Applying it here is what
+    /// makes [`wait_for_container_healthy`](Self::wait_for_container_healthy)
+    /// meaningful for images with no health check of their own.
     #[allow(clippy::too_many_arguments)]
     async fn start_background_container(
         &self,
@@ -475,7 +531,43 @@ pub trait ContainerRuntime {
         network: &str,
         user_mapping: Option<&UserMapping>,
         network_options: &NetworkOptions,
+        health_check: Option<&HealthCheckOptions>,
     ) -> Result<String>;
+
+    /// Blocks until `container_id` — already started — reports healthy.
+    /// Ported from Batect's `WaitForContainerToBecomeHealthyStepRunner`:
+    ///
+    /// - A container with no health check at all (neither from its image nor
+    ///   from `health_check` config) is immediately considered healthy —
+    ///   "started = ready", exactly Ratect's pre-0.9.0 behavior for every
+    ///   container.
+    /// - Otherwise, waits on Docker's own event stream (`health_status`/
+    ///   `die`, replayed from the beginning of time so a verdict that
+    ///   arrived before this call still counts): reported-healthy returns
+    ///   `Ok`; reported-unhealthy fails with the last health-check run's
+    ///   exit code and output; exiting before a verdict fails too.
+    ///
+    /// No Ratect-side timeout, matching Batect — Docker's own
+    /// `retries`/`interval` bound how long a verdict can take.
+    async fn wait_for_container_healthy(&self, container_id: &str) -> Result<()>;
+
+    /// Runs `command` inside the already-running `container_id` via
+    /// `sh -c` (the same shell treatment a task's `command` gets) and waits
+    /// for it to finish — Docker's `exec` mechanism, used for
+    /// `setup_commands`. Runs with the container's own environment and (when
+    /// `user_mapping` is set) the same `uid:gid` the container itself runs
+    /// as, matching Batect. Failure to *run* the command is an `Err`; the
+    /// command running and exiting non-zero is an `Ok` whose
+    /// [`ExecResult::exit_code`] says so — the caller decides what a
+    /// non-zero setup command means.
+    async fn exec_in_container(
+        &self,
+        container_id: &str,
+        command: &str,
+        working_directory: Option<&str>,
+        environment: Option<&HashMap<String, String>>,
+        user_mapping: Option<&UserMapping>,
+    ) -> Result<ExecResult>;
 
     /// Stops and removes a container started with [`start_background_container`](Self::start_background_container).
     async fn stop_and_remove_container(&self, container_id: &str) -> Result<()>;
@@ -535,6 +627,7 @@ pub trait ContainerRuntime {
         interactive: bool,
         user_mapping: Option<&UserMapping>,
         network_options: &NetworkOptions,
+        health_check: Option<&HealthCheckOptions>,
     ) -> Result<()>;
 }
 
@@ -622,6 +715,48 @@ impl DockerClient {
             "applied user mapping"
         );
         Ok(())
+    }
+
+    /// Explains why a container was reported unhealthy, from its last
+    /// recorded health-check run — ported from Batect's
+    /// `containerBecameUnhealthyMessage`, including its "exited 0 just
+    /// after the timeout" special case. Best-effort: falls back to the
+    /// verdict alone if the inspect (or its health log) is unavailable,
+    /// rather than masking the real failure with an inspection error.
+    async fn unhealthy_details(&self, container_id: &str) -> String {
+        const VERDICT: &str = "The configured health check did not indicate that the container \
+                               was healthy within the timeout period.";
+
+        let last_result = self
+            .docker
+            .inspect_container(container_id, None::<InspectContainerOptions>)
+            .await
+            .ok()
+            .and_then(|inspection| inspection.state)
+            .and_then(|state| state.health)
+            .and_then(|health| health.log)
+            .and_then(|log| log.into_iter().next_back());
+
+        let Some(last_result) = last_result else {
+            return VERDICT.to_string();
+        };
+
+        let exit_code = last_result.exit_code.unwrap_or_default();
+        let output = last_result.output.unwrap_or_default();
+        let details = if exit_code == 0 {
+            "The most recent health check exited with code 0, which usually indicates that the \
+             container became healthy just after the timeout period expired."
+                .to_string()
+        } else if output.is_empty() {
+            format!("The last health check exited with code {exit_code} but did not produce any output.")
+        } else {
+            format!(
+                "The last health check exited with code {exit_code} and output:\n{}",
+                output.trim()
+            )
+        };
+
+        format!("{VERDICT} {details}")
     }
 
     /// Must only be called once the container has already stopped (e.g. after
@@ -888,6 +1023,7 @@ impl ContainerRuntime for DockerClient {
         network: &str,
         user_mapping: Option<&UserMapping>,
         network_options: &NetworkOptions,
+        health_check: Option<&HealthCheckOptions>,
     ) -> Result<String> {
         if user_mapping.is_some() {
             ensure_host_volume_directories_exist(volumes)?;
@@ -907,6 +1043,7 @@ impl ContainerRuntime for DockerClient {
             env: build_env(environment),
             exposed_ports: port_config.as_ref().map(|(exposed, _)| exposed.clone()),
             user: user_mapping.map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
+            healthcheck: build_health_config(health_check),
             host_config: Some(host_config),
             ..Default::default()
         };
@@ -939,6 +1076,127 @@ impl ContainerRuntime for DockerClient {
         Ok(container.id)
     }
 
+    async fn wait_for_container_healthy(&self, container_id: &str) -> Result<()> {
+        let inspection = self
+            .docker
+            .inspect_container(container_id, None::<InspectContainerOptions>)
+            .await
+            .with_context(|| format!("Failed to inspect container '{}'", container_id))?;
+        let has_health_check = inspection
+            .config
+            .as_ref()
+            .and_then(|config| config.healthcheck.as_ref())
+            .and_then(|healthcheck| healthcheck.test.as_ref())
+            .is_some_and(|test| !test.is_empty());
+        if !has_health_check {
+            tracing::debug!(container_id, "no health check, considering healthy");
+            return Ok(());
+        }
+
+        tracing::debug!(container_id, "waiting for container to become healthy");
+
+        // Replayed from the beginning of time (matching Batect), so a
+        // verdict Docker emitted between the container starting and this
+        // stream opening still counts — without `since`, that verdict
+        // would be missed and this wait would hang.
+        let filters = HashMap::from([
+            ("container", vec![container_id]),
+            ("event", vec!["die", "health_status"]),
+        ]);
+        let options = EventsOptionsBuilder::default()
+            .since("0")
+            .filters(&filters)
+            .build();
+        let mut events = self.docker.events(Some(options));
+        let event = events
+            .next()
+            .await
+            .ok_or_else(|| {
+                anyhow::anyhow!("Docker's event stream ended without reporting a health status")
+            })?
+            .context(
+                "Failed to stream Docker events while waiting for the container to become healthy",
+            )?;
+
+        match event.action.as_deref() {
+            Some("health_status: healthy") => {
+                tracing::debug!(container_id, "container became healthy");
+                Ok(())
+            }
+            Some("health_status: unhealthy") => {
+                Err(anyhow::anyhow!(self.unhealthy_details(container_id).await))
+            }
+            Some("die") => Err(anyhow::anyhow!(
+                "The container exited before becoming healthy."
+            )),
+            other => Err(anyhow::anyhow!(
+                "Unexpected event '{}' received while waiting for the container to become healthy",
+                other.unwrap_or("<none>")
+            )),
+        }
+    }
+
+    async fn exec_in_container(
+        &self,
+        container_id: &str,
+        command: &str,
+        working_directory: Option<&str>,
+        environment: Option<&HashMap<String, String>>,
+        user_mapping: Option<&UserMapping>,
+    ) -> Result<ExecResult> {
+        let exec = self
+            .docker
+            .create_exec(
+                container_id,
+                CreateExecOptions {
+                    attach_stdout: Some(true),
+                    attach_stderr: Some(true),
+                    tty: Some(true),
+                    env: build_env(environment),
+                    cmd: Some(vec![
+                        "sh".to_string(),
+                        "-c".to_string(),
+                        command.to_string(),
+                    ]),
+                    user: user_mapping.map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
+                    working_dir: working_directory.map(str::to_string),
+                    ..Default::default()
+                },
+            )
+            .await
+            .with_context(|| format!("Failed to create exec in container '{}'", container_id))?;
+
+        let mut output = String::new();
+        if let StartExecResults::Attached {
+            output: mut stream, ..
+        } = self
+            .docker
+            .start_exec(&exec.id, None)
+            .await
+            .with_context(|| format!("Failed to start exec in container '{}'", container_id))?
+        {
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.context("Failed to stream exec output")?;
+                let text = chunk.to_string();
+                tracing::debug!(container_id, output = %text.trim_end(), "exec output");
+                output.push_str(&text);
+            }
+        }
+
+        let inspection =
+            self.docker.inspect_exec(&exec.id).await.with_context(|| {
+                format!("Failed to inspect exec in container '{}'", container_id)
+            })?;
+        let exit_code = inspection.exit_code.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Docker did not report an exit code for the exec in container '{}'",
+                container_id
+            )
+        })?;
+
+        Ok(ExecResult { exit_code, output })
+    }
+
     async fn stop_and_remove_container(&self, container_id: &str) -> Result<()> {
         self.docker
             .stop_container(container_id, None)
@@ -964,6 +1222,7 @@ impl ContainerRuntime for DockerClient {
         interactive: bool,
         user_mapping: Option<&UserMapping>,
         network_options: &NetworkOptions,
+        health_check: Option<&HealthCheckOptions>,
     ) -> Result<()> {
         let use_tty = should_use_tty(
             interactive,
@@ -996,6 +1255,7 @@ impl ContainerRuntime for DockerClient {
             attach_stdin: use_tty.then_some(true),
             stdin_once: use_tty.then_some(true),
             user: user_mapping.map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
+            healthcheck: build_health_config(health_check),
             host_config: Some(host_config),
             ..Default::default()
         };
@@ -1073,6 +1333,57 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn build_health_config_is_none_without_an_override() {
+        assert_eq!(build_health_config(None), None);
+    }
+
+    #[test]
+    fn build_health_config_maps_all_fields() {
+        let options = HealthCheckOptions {
+            command: Some("pg_isready".to_string()),
+            interval: Some(Duration::from_secs(2)),
+            retries: Some(5),
+            start_period: Some(Duration::from_secs(90)),
+            timeout: Some(Duration::from_millis(500)),
+        };
+
+        assert_eq!(
+            build_health_config(Some(&options)),
+            Some(HealthConfig {
+                test: Some(vec!["CMD-SHELL".to_string(), "pg_isready".to_string()]),
+                interval: Some(2_000_000_000),
+                timeout: Some(500_000_000),
+                retries: Some(5),
+                start_period: Some(90_000_000_000),
+                start_interval: None,
+            })
+        );
+    }
+
+    #[test]
+    fn build_health_config_leaves_omitted_fields_unset_to_inherit_from_the_image() {
+        let options = HealthCheckOptions {
+            command: None,
+            interval: Some(Duration::from_secs(1)),
+            retries: None,
+            start_period: None,
+            timeout: None,
+        };
+
+        assert_eq!(
+            build_health_config(Some(&options)),
+            Some(HealthConfig {
+                test: None,
+                interval: Some(1_000_000_000),
+                timeout: None,
+                retries: None,
+                start_period: None,
+                start_interval: None,
+            })
+        );
     }
 
     #[test]

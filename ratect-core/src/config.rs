@@ -59,6 +59,153 @@ pub struct Container {
     /// (matching ranges, positive ports) at config-parse time, unlike
     /// `volumes`, which is never format-checked.
     pub ports: Option<Vec<PortMapping>>,
+    /// Overrides the health check configuration baked into the image — see
+    /// [`HealthCheckConfig`]. Applied at container creation; a dependency
+    /// container with a health check (from here or from its image) must
+    /// report healthy before its dependents start.
+    pub health_check: Option<HealthCheckConfig>,
+    /// Commands run inside the container (via `docker exec`) after it
+    /// becomes healthy but before its dependents start — see
+    /// [`SetupCommand`]. Plain strings, no [expression](#expressions)
+    /// support — matching Batect, which doesn't type these as expressions
+    /// either.
+    pub setup_commands: Option<Vec<SetupCommand>>,
+}
+
+/// Overrides the [health check configuration](https://docs.docker.com/engine/reference/builder/#healthcheck)
+/// specified in the container's image. Every field is optional — an omitted
+/// field inherits the image's own value, matching Batect (and Docker's `0` =
+/// inherit convention). Durations use Batect's Go-style string format:
+/// `"2s"`, `"1m30s"`, `"500ms"`, `"0"`.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HealthCheckConfig {
+    /// Run via the system's default shell inside the container (Docker's
+    /// `CMD-SHELL` form, same as a Dockerfile `HEALTHCHECK CMD` string) —
+    /// exit code 0 means healthy. Not a Batect expression (no
+    /// interpolation), matching Batect's own `String` typing.
+    pub command: Option<String>,
+    /// The interval between runs of the health check.
+    #[serde(default, with = "duration_string")]
+    pub interval: Option<std::time::Duration>,
+    /// The number of times to perform the health check before considering
+    /// the container unhealthy.
+    pub retries: Option<u32>,
+    /// The time to wait before failing health checks count against the
+    /// retry count.
+    #[serde(default, with = "duration_string")]
+    pub start_period: Option<std::time::Duration>,
+    /// The time to wait before timing out a single health check invocation.
+    #[serde(default, with = "duration_string")]
+    pub timeout: Option<std::time::Duration>,
+}
+
+/// One entry in a container's `setup_commands` list: a command run inside
+/// the started container after it becomes healthy but before its dependents
+/// start. Runs with the container's own environment and user/group, via
+/// `sh -c` (same as a task's `command`).
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetupCommand {
+    pub command: String,
+    /// Falls back to the image's default working directory when omitted
+    /// (Ratect has no container-level `working_directory` field yet to fall
+    /// back to in between — see the config reference).
+    pub working_directory: Option<String>,
+}
+
+/// Parses Batect's duration string format (itself Go-style): one or more
+/// `<number><unit>` components (`ns`, `us`/`µs`/`μs`, `ms`, `s`, `m`, `h`),
+/// numbers optionally fractional, or a bare `0` — e.g. `"2s"`, `"1m30s"`,
+/// `"1.5h"`, `"500ms"`, `"0"`. Ported from Batect's `DurationSerializer`,
+/// except that its (accidental) acceptance of negative durations is
+/// rejected here — Docker's API can't take one anyway, and rejecting it at
+/// config-load time gives a far clearer error.
+pub fn parse_duration(text: &str) -> Result<std::time::Duration> {
+    let invalid = || anyhow::anyhow!("The value '{text}' is not a valid duration.");
+
+    let unsigned = match text.strip_prefix(['+', '-']) {
+        Some(rest) if text.starts_with('-') && rest != "0" => {
+            anyhow::bail!("The duration '{text}' is negative. Durations must be positive.")
+        }
+        Some(rest) => rest,
+        None => text,
+    };
+
+    if unsigned == "0" {
+        return Ok(std::time::Duration::ZERO);
+    }
+
+    let mut remaining = unsigned;
+    let mut total_nanos = 0.0f64;
+
+    if remaining.is_empty() {
+        return Err(invalid());
+    }
+
+    while !remaining.is_empty() {
+        let number_len = remaining
+            .find(|c: char| !c.is_ascii_digit() && c != '.')
+            .ok_or_else(invalid)?;
+        let number_str = &remaining[..number_len];
+        // Batect's grammar: digits with at most one dot and at least one
+        // digit somewhere (`2`, `2.`, `2.5`, `.5` — but never `.` alone).
+        if !number_str.chars().any(|c| c.is_ascii_digit()) || number_str.matches('.').count() > 1 {
+            return Err(invalid());
+        }
+        let number: f64 = number_str.parse().map_err(|_| invalid())?;
+
+        // Two-character units listed before their one-character prefixes,
+        // so `ms` isn't misread as `m`.
+        const UNITS: &[(&str, f64)] = &[
+            ("ns", 1.0),
+            ("us", 1e3),
+            ("µs", 1e3),
+            ("μs", 1e3),
+            ("ms", 1e6),
+            ("s", 1e9),
+            ("m", 60e9),
+            ("h", 3600e9),
+        ];
+        let unit_str = &remaining[number_len..];
+        let (unit, multiplier) = UNITS
+            .iter()
+            .find(|(unit, _)| unit_str.starts_with(unit))
+            .ok_or_else(invalid)?;
+
+        total_nanos += number * multiplier;
+        remaining = &unit_str[unit.len()..];
+    }
+
+    Ok(std::time::Duration::from_nanos(total_nanos.round() as u64))
+}
+
+/// Serde adapter for `Option<Duration>` fields holding Batect duration
+/// strings — see [`parse_duration`]. Serializes back as whole nanoseconds
+/// (`"...ns"`), which the same format round-trips exactly.
+mod duration_string {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(
+        value: &Option<std::time::Duration>,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        match value {
+            Some(duration) => serializer.serialize_str(&format!("{}ns", duration.as_nanos())),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Option<std::time::Duration>, D::Error> {
+        match Option::<String>::deserialize(deserializer)? {
+            Some(text) => super::parse_duration(&text)
+                .map(Some)
+                .map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
+    }
 }
 
 /// Runs this container as the host's own user/group instead of whatever the
@@ -1211,6 +1358,8 @@ tasks: {}
             additional_hostnames: None,
             additional_hosts: None,
             ports: None,
+            health_check: None,
+            setup_commands: None,
         }
     }
 
@@ -1288,6 +1437,8 @@ tasks: {}
             additional_hostnames: None,
             additional_hosts: None,
             ports: None,
+            health_check: None,
+            setup_commands: None,
         }
     }
 
@@ -1544,6 +1695,188 @@ tasks: {}
         );
 
         assert_eq!(config.containers["build-env"].ports, None);
+    }
+
+    #[test]
+    fn parses_health_check_config() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  database:
+    image: postgres:13
+    health_check:
+      command: pg_isready -h localhost
+      interval: 2s
+      retries: 5
+      start_period: 1m30s
+      timeout: 500ms
+tasks: {}
+"#,
+        );
+
+        let health_check = config.containers["database"].health_check.as_ref().unwrap();
+        assert_eq!(
+            health_check.command.as_deref(),
+            Some("pg_isready -h localhost")
+        );
+        assert_eq!(
+            health_check.interval,
+            Some(std::time::Duration::from_secs(2))
+        );
+        assert_eq!(health_check.retries, Some(5));
+        assert_eq!(
+            health_check.start_period,
+            Some(std::time::Duration::from_secs(90))
+        );
+        assert_eq!(
+            health_check.timeout,
+            Some(std::time::Duration::from_millis(500))
+        );
+    }
+
+    #[test]
+    fn parses_partial_health_check_config() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  database:
+    image: postgres:13
+    health_check:
+      command: pg_isready
+tasks: {}
+"#,
+        );
+
+        let health_check = config.containers["database"].health_check.as_ref().unwrap();
+        assert_eq!(health_check.command.as_deref(), Some("pg_isready"));
+        assert_eq!(health_check.interval, None);
+        assert_eq!(health_check.retries, None);
+        assert_eq!(health_check.start_period, None);
+        assert_eq!(health_check.timeout, None);
+    }
+
+    #[test]
+    fn parsing_health_check_rejects_invalid_duration() {
+        let result = try_parse(
+            r#"
+project_name: demo
+containers:
+  database:
+    image: postgres:13
+    health_check:
+      interval: 2 seconds
+tasks: {}
+"#,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parsing_health_check_rejects_unknown_fields() {
+        let result = try_parse(
+            r#"
+project_name: demo
+containers:
+  database:
+    image: postgres:13
+    health_check:
+      cmd: pg_isready
+tasks: {}
+"#,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parses_setup_commands() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  database:
+    image: postgres:13
+    setup_commands:
+      - command: ./apply-migrations.sh
+      - command: ./seed-data.sh
+        working_directory: /setup
+tasks: {}
+"#,
+        );
+
+        let commands = config.containers["database"]
+            .setup_commands
+            .as_ref()
+            .unwrap();
+        assert_eq!(commands.len(), 2);
+        assert_eq!(commands[0].command, "./apply-migrations.sh");
+        assert_eq!(commands[0].working_directory, None);
+        assert_eq!(commands[1].command, "./seed-data.sh");
+        assert_eq!(commands[1].working_directory.as_deref(), Some("/setup"));
+    }
+
+    #[test]
+    fn parsing_setup_commands_rejects_missing_command() {
+        let result = try_parse(
+            r#"
+project_name: demo
+containers:
+  database:
+    image: postgres:13
+    setup_commands:
+      - working_directory: /setup
+tasks: {}
+"#,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_duration_handles_batect_formats() {
+        use std::time::Duration;
+
+        assert_eq!(parse_duration("0").unwrap(), Duration::ZERO);
+        assert_eq!(parse_duration("+0").unwrap(), Duration::ZERO);
+        assert_eq!(parse_duration("-0").unwrap(), Duration::ZERO);
+        assert_eq!(parse_duration("100ns").unwrap(), Duration::from_nanos(100));
+        assert_eq!(parse_duration("2us").unwrap(), Duration::from_micros(2));
+        assert_eq!(parse_duration("2µs").unwrap(), Duration::from_micros(2));
+        assert_eq!(parse_duration("500ms").unwrap(), Duration::from_millis(500));
+        assert_eq!(parse_duration("2s").unwrap(), Duration::from_secs(2));
+        assert_eq!(parse_duration("2.5s").unwrap(), Duration::from_millis(2500));
+        assert_eq!(parse_duration(".5s").unwrap(), Duration::from_millis(500));
+        assert_eq!(parse_duration("2.s").unwrap(), Duration::from_secs(2));
+        assert_eq!(parse_duration("1m").unwrap(), Duration::from_secs(60));
+        assert_eq!(parse_duration("1m30s").unwrap(), Duration::from_secs(90));
+        assert_eq!(parse_duration("1.5h").unwrap(), Duration::from_secs(5400));
+        assert_eq!(
+            parse_duration("1h2m3s4ms").unwrap(),
+            Duration::from_millis(3_723_004)
+        );
+    }
+
+    #[test]
+    fn parse_duration_rejects_invalid_input() {
+        for invalid in [
+            "",
+            "2",
+            "s",
+            ".s",
+            "2 s",
+            "2 seconds",
+            "2S",
+            "abc",
+            "2ss",
+            "2.5.3s",
+            "-2s",
+            "2s-1s",
+        ] {
+            assert!(
+                parse_duration(invalid).is_err(),
+                "expected '{invalid}' to be rejected"
+            );
+        }
     }
 
     #[test]
@@ -2948,6 +3281,8 @@ config_variables:
             additional_hostnames: None,
             additional_hosts: None,
             ports: None,
+            health_check: None,
+            setup_commands: None,
         }
     }
 

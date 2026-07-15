@@ -72,7 +72,7 @@ host-side substitution step:
 |---|---|---|
 | `image` | Supported | |
 | `volumes` | Partially supported | Only the `local:container[:options]` string form — see [config reference](config-reference.md#volume-path-resolution). The local path supports [expressions](#expressions). The expanded map form, [caches](https://github.com/batect/batect.dev/blob/main/docs/reference/config/containers.md#volumes), and tmpfs mounts aren't supported. |
-| `dependencies` | Supported (simplified) | Starts recursively (nested dependencies too), on a network scoped to one task execution — see [the task lifecycle](task-lifecycle.md). No health-check waiting (`health_check` isn't parsed — see below) and no `setup_commands` support, so a dependency is "ready" as soon as it's started, unlike Batect's real readiness check. Works for dependency containers too, not just a task's own — see `build_directory` below. |
+| `dependencies` | Supported | Starts recursively (nested dependencies too), on a network scoped to one task execution — see [the task lifecycle](task-lifecycle.md). Each dependency must become ready (healthy, `setup_commands` completed — see `health_check`/`setup_commands` below) before its dependents start, matching Batect's real readiness gate. Works for dependency containers too, not just a task's own — see `build_directory` below. |
 | `build_directory` | Supported (simplified) | Builds an image from a `Dockerfile` (always that exact name, at `build_directory`'s own root — no custom naming yet) — see [config reference](config-reference.md#image-building). A `.dockerignore` at the root is respected, with real Docker's actual matching rules (not `.gitignore`'s — see [`.dockerignore` semantics](config-reference.md#dockerignore-semantics)). No cross-invocation build caching or automatic image cleanup yet. |
 | `additional_hostnames` | Supported | Extra network aliases beyond the container's own name — see [config reference](config-reference.md#container). No expression support (matching Batect, which doesn't support it here either). |
 | `additional_hosts` | Supported | Extra `/etc/hosts` entries — see [config reference](config-reference.md#container). No expression support. |
@@ -87,14 +87,14 @@ host-side substitution step:
 | `enable_init_process` | Not supported | |
 | `entrypoint` | Not supported | |
 | `environment` | Supported | Values support [expressions](#expressions) (host env vars and config variables). Combines with the equivalent task-level `run.environment` — see [Task run fields](#run-fields) and [config reference](config-reference.md#taskrun). |
-| `health_check` | Not supported | This is why `dependencies` (above) treats "started" as "ready" instead of waiting for real health. |
+| `health_check` | Supported | Overrides the image's own health check configuration (`command`, `interval`, `retries`, `start_period`, `timeout`) — see [Dependency readiness](config-reference.md#dependency-readiness). A dependency with a health check (from config or image) must report healthy before its dependents start. The task's own container's `health_check` is applied (Docker records and runs it) but Ratect never waits on its verdict — a small divergence: Batect's uniform per-container steps mean a task container reporting *unhealthy* can fail the task even as its command runs; in Ratect the task's own exit code alone decides. |
 | `image_pull_policy` | Not supported | Ratect always pulls an image at most once per run, with no `Always`-equivalent. |
 | `labels` | Not supported | |
 | `log_driver` / `log_options` | Not supported | |
 | `ports` | Supported | Both the `local:container[/protocol]` string form (including port ranges) and the expanded `{local, container, protocol}` object form — see [Port mappings](config-reference.md#port-mappings). Validated (matching ranges, positive ports) at config-load time. |
 | `privileged` | Not supported | |
 | `run_as_current_user` | Supported | Runs the container as the host user's UID/GID instead of root, so files written to mounted volumes aren't root-owned — see [User mapping](config-reference.md#user-mapping). No equivalent to Batect's "cache mounts" (Ratect has no such config concept), and host-side uid/gid lookup is Unix-only. |
-| `setup_commands` | Not supported | See `health_check` above — this is the other half of Batect's real dependency-readiness check that Ratect doesn't implement. |
+| `setup_commands` | Supported (simplified) | Run inside a started dependency after it becomes healthy, before its dependents start — see [Dependency readiness](config-reference.md#dependency-readiness). Two gaps: the task's *own* container's `setup_commands` don't run at all (Batect runs them concurrently with the task's command; Ratect's sequential engine has no concurrent exec path yet), and `working_directory` falls back straight to the image's default when omitted (Batect falls back to the container-level `working_directory` first — a field Ratect doesn't support yet, see below). |
 | `shm_size` | Not supported | |
 | `working_directory` | Not supported | |
 

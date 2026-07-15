@@ -1,0 +1,26 @@
+# Exercises the failure half of the dependency readiness gate end to end: a
+# dependency whose health check can never pass (`exit 1`) must fail the task
+# itself — with an error naming the container — and the task's own command
+# must never run. `retries: 2` with a short interval keeps the wait until
+# Docker's "unhealthy" verdict down to about a second.
+#
+# redis is used purely because its default command stays running with no
+# configuration (same reasoning as sidecar.yml) — the health check needs a
+# live container to keep probing.
+project_name: ratect-unhealthy-test
+containers:
+  database:
+    image: redis:7-alpine
+    health_check:
+      command: exit 1
+      interval: 500ms
+      retries: 2
+  app:
+    image: alpine:3.18.2
+    dependencies:
+      - database
+tasks:
+  check:
+    run:
+      container: app
+      command: echo the task should never run

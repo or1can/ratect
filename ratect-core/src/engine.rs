@@ -73,6 +73,23 @@ fn merged_ports(
         .collect()
 }
 
+/// Converts a container's parsed `health_check` config into the docker-side
+/// [`crate::docker::HealthCheckOptions`] — `docker.rs` deliberately doesn't
+/// depend on config types (same conversion boundary as `merged_ports`'
+/// expanded tuples above).
+fn health_check_options(container: &Container) -> Option<crate::docker::HealthCheckOptions> {
+    container
+        .health_check
+        .as_ref()
+        .map(|health_check| crate::docker::HealthCheckOptions {
+            command: health_check.command.clone(),
+            interval: health_check.interval,
+            retries: health_check.retries,
+            start_period: health_check.start_period,
+            timeout: health_check.timeout,
+        })
+}
+
 /// Returns `root` plus every container name transitively reachable from it
 /// via `dependencies` — the full set of containers that will share one
 /// task's network. Used as the `no_proxy` "these are local, don't proxy
@@ -469,6 +486,12 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 ports: (self.publish_ports && !expanded_ports.is_empty())
                     .then_some(&expanded_ports),
             };
+            // The task's own container gets its `health_check` override
+            // applied too (Docker records and runs it), but nothing gates
+            // on its verdict — the task is the container's own command, and
+            // its `setup_commands` don't run either (see
+            // docs/differences-from-batect.md).
+            let health_check = health_check_options(container_config);
             self.docker
                 .run_container(
                     &task.run.container,
@@ -481,6 +504,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     interactive,
                     user_mapping.as_ref(),
                     &network_options,
+                    health_check.as_ref(),
                 )
                 .await?;
 
@@ -559,6 +583,8 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             ports: (self.publish_ports && !expanded_ports.is_empty()).then_some(&expanded_ports),
         };
 
+        let health_check = health_check_options(dependency_config);
+
         let container_id = self
             .docker
             .start_background_container(
@@ -569,11 +595,63 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 network,
                 user_mapping.as_ref(),
                 &network_options,
+                health_check.as_ref(),
             )
             .await?;
 
         resolving.remove(name);
-        running.insert(name.to_string(), container_id);
+        // Registered for cleanup *before* the readiness gate below — a
+        // dependency that starts but never becomes healthy (or whose setup
+        // command fails) still gets stopped and removed.
+        running.insert(name.to_string(), container_id.clone());
+
+        // Batect's readiness gate (see docs/task-lifecycle.md): started
+        // isn't ready. The dependency must report healthy (immediate for a
+        // container with no health check at all), then every one of its
+        // setup commands must succeed, before anything that depends on it
+        // starts.
+        self.docker
+            .wait_for_container_healthy(&container_id)
+            .await
+            .with_context(|| format!("Container '{}' did not become healthy", name))?;
+
+        for setup_command in dependency_config.setup_commands.iter().flatten() {
+            tracing::info!(
+                container = name,
+                command = setup_command.command.as_str(),
+                "Running setup command"
+            );
+            let result = self
+                .docker
+                .exec_in_container(
+                    &container_id,
+                    &setup_command.command,
+                    setup_command.working_directory.as_deref(),
+                    environment.as_ref(),
+                    user_mapping.as_ref(),
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to run setup command '{}' in container '{}'",
+                        setup_command.command, name
+                    )
+                })?;
+            if result.exit_code != 0 {
+                let output = if result.output.trim().is_empty() {
+                    ", and did not produce any output".to_string()
+                } else {
+                    format!(", with output:\n{}", result.output.trim())
+                };
+                anyhow::bail!(
+                    "Setup command '{}' in container '{}' exited with code {}{}",
+                    setup_command.command,
+                    name,
+                    result.exit_code,
+                    output
+                );
+            }
+        }
 
         Ok(())
     }
@@ -605,6 +683,17 @@ mod tests {
     );
     /// Keyed by container name.
     type CapturedNetworkOptions = Arc<Mutex<HashMap<String, NetworkOptionsValue>>>;
+    /// Keyed by container name.
+    type CapturedHealthChecks =
+        Arc<Mutex<HashMap<String, Option<crate::docker::HealthCheckOptions>>>>;
+    /// `(working_directory, environment, (uid, gid))`, keyed by the exec'd
+    /// command string.
+    type ExecValue = (
+        Option<String>,
+        Option<HashMap<String, String>>,
+        Option<(u32, u32)>,
+    );
+    type CapturedExecs = Arc<Mutex<HashMap<String, ExecValue>>>;
 
     #[derive(Clone)]
     struct FakeContainerRuntime {
@@ -635,6 +724,18 @@ mod tests {
         // The `network_options` a prior `run_container`/`start_background_container`
         // call for a given container name was given (see `network_options_for`).
         network_options: CapturedNetworkOptions,
+        // The `health_check` a prior `run_container`/`start_background_container`
+        // call for a given container name was given (see `health_check_for`).
+        health_checks: CapturedHealthChecks,
+        // The options a prior `exec_in_container` call for a given command
+        // was given (see `exec_for`).
+        execs: CapturedExecs,
+        // Container id whose `wait_for_container_healthy` reports unhealthy
+        // (see `with_unhealthy_container`).
+        unhealthy_container: Arc<Mutex<Option<String>>>,
+        // Command whose `exec_in_container` reports a non-zero exit (see
+        // `with_failing_setup_command`).
+        failing_setup_command: Arc<Mutex<Option<String>>>,
     }
 
     impl Default for FakeContainerRuntime {
@@ -649,6 +750,10 @@ mod tests {
                 user_mapping: Default::default(),
                 network_exists_result: Arc::new(Mutex::new(true)),
                 network_options: Default::default(),
+                health_checks: Default::default(),
+                execs: Default::default(),
+                unhealthy_container: Default::default(),
+                failing_setup_command: Default::default(),
             }
         }
     }
@@ -673,6 +778,21 @@ mod tests {
         /// pointing at a network that doesn't exist.
         fn without_existing_network(self) -> Self {
             *self.network_exists_result.lock().unwrap() = false;
+            self
+        }
+
+        /// Makes `wait_for_container_healthy` fail for the given container
+        /// *name* — simulates a dependency that starts but is reported
+        /// unhealthy (or exits) instead of becoming healthy.
+        fn with_unhealthy_container(self, name: &str) -> Self {
+            *self.unhealthy_container.lock().unwrap() = Some(format!("sidecar-id-{name}"));
+            self
+        }
+
+        /// Makes `exec_in_container` report exit code 1 (with some output)
+        /// for the given command — simulates a failing setup command.
+        fn with_failing_setup_command(self, command: &str) -> Self {
+            *self.failing_setup_command.lock().unwrap() = Some(command.to_string());
             self
         }
 
@@ -724,6 +844,24 @@ mod tests {
         fn network_options_for(&self, name: &str) -> Option<NetworkOptionsValue> {
             self.network_options.lock().unwrap().get(name).cloned()
         }
+
+        /// The `health_check` a prior `run_container`/
+        /// `start_background_container` call for `name` was given
+        /// (flattened, same convention as `environment_for`).
+        fn health_check_for(&self, name: &str) -> Option<crate::docker::HealthCheckOptions> {
+            self.health_checks
+                .lock()
+                .unwrap()
+                .get(name)
+                .cloned()
+                .flatten()
+        }
+
+        /// The `(working_directory, environment, (uid, gid))` a prior
+        /// `exec_in_container` call for `command` was given.
+        fn exec_for(&self, command: &str) -> Option<ExecValue> {
+            self.execs.lock().unwrap().get(command).cloned()
+        }
     }
 
     #[async_trait::async_trait]
@@ -774,6 +912,7 @@ mod tests {
             network: &str,
             user_mapping: Option<&crate::docker::UserMapping>,
             network_options: &crate::docker::NetworkOptions,
+            health_check: Option<&crate::docker::HealthCheckOptions>,
         ) -> Result<String> {
             self.environments
                 .lock()
@@ -795,8 +934,51 @@ mod tests {
                     network_options.ports.cloned(),
                 ),
             );
+            self.health_checks
+                .lock()
+                .unwrap()
+                .insert(alias.to_string(), health_check.cloned());
             self.push(format!("sidecar-start:{alias}:{network}"));
             Ok(format!("sidecar-id-{alias}"))
+        }
+
+        async fn wait_for_container_healthy(&self, container_id: &str) -> Result<()> {
+            self.push(format!("wait-healthy:{container_id}"));
+            if self.unhealthy_container.lock().unwrap().as_deref() == Some(container_id) {
+                anyhow::bail!(
+                    "The configured health check did not indicate that the container was \
+                     healthy within the timeout period."
+                );
+            }
+            Ok(())
+        }
+
+        async fn exec_in_container(
+            &self,
+            container_id: &str,
+            command: &str,
+            working_directory: Option<&str>,
+            environment: Option<&HashMap<String, String>>,
+            user_mapping: Option<&crate::docker::UserMapping>,
+        ) -> Result<crate::docker::ExecResult> {
+            self.execs.lock().unwrap().insert(
+                command.to_string(),
+                (
+                    working_directory.map(str::to_string),
+                    environment.cloned(),
+                    user_mapping.map(|m| (m.user.uid, m.user.gid)),
+                ),
+            );
+            self.push(format!("exec:{container_id}:{command}"));
+            let failing = self.failing_setup_command.lock().unwrap().as_deref() == Some(command);
+            Ok(crate::docker::ExecResult {
+                exit_code: if failing { 1 } else { 0 },
+                output: if failing {
+                    "something went wrong\n".to_string()
+                } else {
+                    String::new()
+                },
+            })
         }
 
         async fn stop_and_remove_container(&self, container_id: &str) -> Result<()> {
@@ -816,6 +998,7 @@ mod tests {
             interactive: bool,
             user_mapping: Option<&crate::docker::UserMapping>,
             network_options: &crate::docker::NetworkOptions,
+            health_check: Option<&crate::docker::HealthCheckOptions>,
         ) -> Result<()> {
             self.environments
                 .lock()
@@ -841,6 +1024,10 @@ mod tests {
                     network_options.ports.cloned(),
                 ),
             );
+            self.health_checks
+                .lock()
+                .unwrap()
+                .insert(name.to_string(), health_check.cloned());
             self.push(format!(
                 "run:{name}:{}:args=[{}]:{}",
                 command.unwrap_or_default(),
@@ -866,6 +1053,8 @@ mod tests {
             additional_hostnames: None,
             additional_hosts: None,
             ports: None,
+            health_check: None,
+            setup_commands: None,
         }
     }
 
@@ -896,6 +1085,8 @@ mod tests {
                 additional_hostnames: None,
                 additional_hosts: None,
                 ports: None,
+                health_check: None,
+                setup_commands: None,
             },
         );
 
@@ -959,6 +1150,8 @@ mod tests {
                 additional_hostnames: None,
                 additional_hosts: None,
                 ports: None,
+                health_check: None,
+                setup_commands: None,
             },
         );
 
@@ -1167,6 +1360,8 @@ mod tests {
             additional_hostnames: None,
             additional_hosts: None,
             ports: None,
+            health_check: None,
+            setup_commands: None,
         }
     }
 
@@ -1483,6 +1678,8 @@ mod tests {
                 additional_hostnames: None,
                 additional_hosts: None,
                 ports: None,
+                health_check: None,
+                setup_commands: None,
             },
         );
         let mut tasks = HashMap::new();
@@ -1521,6 +1718,8 @@ mod tests {
             additional_hostnames: None,
             additional_hosts: None,
             ports: None,
+            health_check: None,
+            setup_commands: None,
         }
     }
 
@@ -1744,6 +1943,8 @@ mod tests {
                 additional_hostnames: None,
                 additional_hosts: None,
                 ports: None,
+                health_check: None,
+                setup_commands: None,
             },
         );
         let mut tasks = HashMap::new();
@@ -1933,6 +2134,249 @@ mod tests {
         assert!(
             network_remove_index > run_index,
             "network removal happens after the run: {events:?}"
+        );
+    }
+
+    /// Builds the standard app-depends-on-database config used by the
+    /// readiness tests below, with `database` customized by `configure`.
+    fn config_with_database_dependency(configure: impl FnOnce(&mut Container)) -> Config {
+        let mut database = container("postgres:16", None);
+        configure(&mut database);
+        let mut containers = HashMap::new();
+        containers.insert("database".to_string(), database);
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn dependency_becomes_healthy_and_runs_setup_commands_before_the_task_starts() {
+        let config = config_with_database_dependency(|database| {
+            database.health_check = Some(crate::config::HealthCheckConfig {
+                command: Some("pg_isready".to_string()),
+                interval: Some(std::time::Duration::from_secs(2)),
+                retries: Some(5),
+                start_period: None,
+                timeout: None,
+            });
+            database.setup_commands = Some(vec![
+                crate::config::SetupCommand {
+                    command: "./apply-migrations.sh".to_string(),
+                    working_directory: Some("/setup".to_string()),
+                },
+                crate::config::SetupCommand {
+                    command: "./seed-data.sh".to_string(),
+                    working_directory: None,
+                },
+            ]);
+        });
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        // The readiness gate runs in order — started, then healthy, then
+        // each setup command in declared order — all before the task's own
+        // container runs.
+        let events = docker.events();
+        let ordered_positions: Vec<usize> = [
+            "sidecar-start:database:",
+            "wait-healthy:sidecar-id-database",
+            "exec:sidecar-id-database:./apply-migrations.sh",
+            "exec:sidecar-id-database:./seed-data.sh",
+            "run:app:",
+        ]
+        .iter()
+        .map(|prefix| {
+            events
+                .iter()
+                .position(|e| e.starts_with(prefix))
+                .unwrap_or_else(|| panic!("expected an event starting '{prefix}': {events:?}"))
+        })
+        .collect();
+        assert!(
+            ordered_positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "readiness steps out of order: {events:?}"
+        );
+
+        // The health check override reached container creation.
+        assert_eq!(
+            docker.health_check_for("database"),
+            Some(crate::docker::HealthCheckOptions {
+                command: Some("pg_isready".to_string()),
+                interval: Some(std::time::Duration::from_secs(2)),
+                retries: Some(5),
+                start_period: None,
+                timeout: None,
+            })
+        );
+
+        // A setup command's own working_directory reaches the exec; one
+        // without falls back to the image's default (i.e. none is passed).
+        let (working_directory, _, _) = docker.exec_for("./apply-migrations.sh").unwrap();
+        assert_eq!(working_directory.as_deref(), Some("/setup"));
+        let (working_directory, _, _) = docker.exec_for("./seed-data.sh").unwrap();
+        assert_eq!(working_directory, None);
+    }
+
+    #[tokio::test]
+    async fn setup_commands_run_with_the_containers_own_environment() {
+        let config = config_with_database_dependency(|database| {
+            let mut environment = HashMap::new();
+            environment.insert("POSTGRES_PASSWORD".to_string(), "secret".to_string());
+            database.environment = Some(environment);
+            database.setup_commands = Some(vec![crate::config::SetupCommand {
+                command: "./apply-migrations.sh".to_string(),
+                working_directory: None,
+            }]);
+        });
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        let (_, environment, _) = docker.exec_for("./apply-migrations.sh").unwrap();
+        assert_eq!(
+            environment
+                .unwrap()
+                .get("POSTGRES_PASSWORD")
+                .map(String::as_str),
+            Some("secret")
+        );
+    }
+
+    #[tokio::test]
+    async fn unhealthy_dependency_fails_the_task_and_still_cleans_up() {
+        let config = config_with_database_dependency(|database| {
+            database.health_check = Some(crate::config::HealthCheckConfig {
+                command: Some("pg_isready".to_string()),
+                interval: None,
+                retries: None,
+                start_period: None,
+                timeout: None,
+            });
+        });
+
+        let docker = FakeContainerRuntime::default().with_unhealthy_container("database");
+        let engine = TaskEngine::new(config, docker.clone());
+
+        let result = engine.run_task("start", &[]).await;
+
+        let message = format!("{:#}", result.unwrap_err());
+        assert!(
+            message.contains("'database' did not become healthy"),
+            "error should name the unhealthy container: {message}"
+        );
+
+        let events = docker.events();
+        assert!(
+            !events.iter().any(|e| e.starts_with("run:")),
+            "the task must not run when a dependency never becomes ready: {events:?}"
+        );
+        assert!(
+            events.contains(&"sidecar-stop:sidecar-id-database".to_string()),
+            "the unhealthy dependency must still be cleaned up: {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| e.starts_with("network-remove:")),
+            "the network must still be removed: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn failing_setup_command_fails_the_task_and_still_cleans_up() {
+        let config = config_with_database_dependency(|database| {
+            database.setup_commands = Some(vec![
+                crate::config::SetupCommand {
+                    command: "./apply-migrations.sh".to_string(),
+                    working_directory: None,
+                },
+                crate::config::SetupCommand {
+                    command: "./seed-data.sh".to_string(),
+                    working_directory: None,
+                },
+            ]);
+        });
+
+        let docker = FakeContainerRuntime::default().with_failing_setup_command("./seed-data.sh");
+        let engine = TaskEngine::new(config, docker.clone());
+
+        let result = engine.run_task("start", &[]).await;
+
+        let message = format!("{:#}", result.unwrap_err());
+        assert!(
+            message.contains(
+                "Setup command './seed-data.sh' in container 'database' exited with code 1"
+            ),
+            "error should name the failing command: {message}"
+        );
+        assert!(
+            message.contains("something went wrong"),
+            "error should include the command's output: {message}"
+        );
+
+        let events = docker.events();
+        assert!(
+            !events.iter().any(|e| e.starts_with("run:")),
+            "the task must not run when a setup command fails: {events:?}"
+        );
+        assert!(
+            events.contains(&"sidecar-stop:sidecar-id-database".to_string()),
+            "the dependency must still be cleaned up: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn task_containers_own_health_check_is_applied_but_never_gates_the_run() {
+        let mut containers = HashMap::new();
+        let mut app = container("alpine:3.18", None);
+        app.health_check = Some(crate::config::HealthCheckConfig {
+            command: Some("wget -q localhost".to_string()),
+            interval: None,
+            retries: None,
+            start_period: None,
+            timeout: None,
+        });
+        containers.insert("app".to_string(), app);
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        // The override reaches Docker (it records and runs the check)...
+        assert_eq!(
+            docker.health_check_for("app"),
+            Some(crate::docker::HealthCheckOptions {
+                command: Some("wget -q localhost".to_string()),
+                ..Default::default()
+            })
+        );
+        // ...but nothing waits on its verdict — the task is the container's
+        // own command.
+        let events = docker.events();
+        assert!(
+            !events.iter().any(|e| e.starts_with("wait-healthy:")),
+            "the task's own container must not be gated on health: {events:?}"
         );
     }
 
@@ -2212,6 +2656,8 @@ mod tests {
                 additional_hostnames: None,
                 additional_hosts: None,
                 ports: None,
+                health_check: None,
+                setup_commands: None,
             },
         );
         containers.insert(
