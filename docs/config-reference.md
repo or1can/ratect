@@ -459,26 +459,38 @@ running a task whose command drops you into a shell or otherwise needs your inpu
 (`command: sh`, for example) just works, with no `interactive: true` to remember to
 set anywhere.
 
-A container gets a real Docker TTY and its stdin forwarded when *all* of the following
-hold:
+The invoked task's own container — never a prerequisite's, a dependency's, or a
+sidecar's; only the task actually named on the command line is ever eligible — always
+gets its stdin forwarded and the host's `TERM` environment variable propagated into its
+own environment (see [below](#term-propagation)), independent of whether Ratect's own
+stdin/stdout are real terminals. A real Docker TTY (raw mode locally, live terminal
+resizing) is additionally allocated when *both* Ratect's own stdin *and* stdout are
+genuinely connected to a real terminal — piped output, a redirected non-terminal, or
+running in CI fall back to plain (non-TTY) stdin forwarding and streamed output instead,
+but stdin still reaches the container either way. Nothing extra to configure for either
+case.
 
-- It's the invoked task's own container — never a prerequisite's, a dependency's, or
-  a sidecar's. Only the task actually named on the command line is ever eligible;
-  running it via a prerequisite chain doesn't count, since stdin can only usefully
-  attach to one container at a time.
-- Ratect's own stdin *and* stdout are both genuinely connected to a real terminal.
-  Piped output, a redirected non-terminal, or running in CI all fall back to the
-  normal (non-interactive) streamed output, exactly as if the task didn't need a TTY
-  at all — nothing extra to configure for that case either.
+The container's TTY, when one is allocated, stays in sync with the local terminal's
+size for the whole session (not just once at the start) — a local resize is forwarded
+live via a `SIGWINCH` handler. This tracking is Unix-only; on other platforms the size
+is still synced once, at the start of the session, but not tracked further (interactive
+mode itself works cross-platform either way).
 
-A few things to know about what this doesn't do yet:
+One known, deliberate divergence from Batect remains: Batect's own real-TTY gate checks
+only whether its output is a real terminal; Ratect's requires *both* stdin and stdout to
+be real terminals before allocating one.
 
-- The container's TTY size is synced to the local terminal's size once, at the start
-  of the session — it isn't tracked live if the local terminal is resized mid-session.
-- Stdin forwarding and TTY allocation aren't decoupled the way Batect's are (Batect can
-  forward stdin into a task even without allocating a TTY, e.g. when piping input into
-  a non-interactive run). Ratect gates both together — no support yet for piping input
-  into a task that isn't otherwise running interactively.
+### `TERM` propagation
+
+Ratect's own `TERM` environment variable is copied into the invoked task's own
+container's environment automatically, whenever that container is eligible (the
+top-level task, as above) — not gated on a real TTY actually being allocated, matching
+Batect's own unconditional behavior. Never applied to a prerequisite's, a dependency's,
+or a sidecar's container, and never applied to an image build. A container's own
+explicit `environment`, or a task's `run.environment`, both still override it on a key
+collision (see [TaskRun](#taskrun) for how those two combine with each other) — `TERM`
+is the lowest-precedence layer, the same tier [proxy environment
+variables](#proxy-environment-variables) occupy.
 
 ## Proxy environment variables
 
@@ -509,6 +521,10 @@ A few details worth knowing:
   there's no automatic equivalent. A value that isn't a `http`/`https` URL, or doesn't
   refer to the local machine, is also left unchanged.
 - **`--no-proxy-vars`** disables all of this. See [CLI reference](cli-reference.md).
+
+See also: [`TERM` propagation](#term-propagation) — a similarly automatic,
+lowest-precedence-layer environment injection for the invoked task's own container, but
+gated on interactive eligibility rather than `--no-proxy-vars`.
 
 ## ConfigVariable
 

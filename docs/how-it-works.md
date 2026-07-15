@@ -81,18 +81,22 @@ aren't known at the first:
    which only ever applies to the task's own container — see
    [User mapping](config-reference.md#user-mapping). Then the container runs with the
    task's `command`, joined to the task's own network, with its `environment` built
-   from three layers — [proxy environment variables](config-reference.md#proxy-environment-variables)
-   (lowest precedence, with every container name in this task appended to
-   `no_proxy`, computed once per task via `container_names_in_task`), then the
-   container's own `environment`, then the task's `run.environment` (each winning
-   over the last on a key collision) — its `NetworkOptions`
-   (`additional_hostnames`/`additional_hosts`, plus `ports` merged with any
-   `run.ports` and expanded to concrete port triples via `merged_ports`, unless
-   `--disable-ports`), and `interactive` set to `top_level` from step 3 —
+   from four layers — the host's `TERM` (lowest precedence, gated on `interactive`
+   below rather than a real TTY — see [`TERM`
+   propagation](config-reference.md#term-propagation)), then [proxy environment
+   variables](config-reference.md#proxy-environment-variables) (with every container
+   name in this task appended to `no_proxy`, computed once per task via
+   `container_names_in_task`), then the container's own `environment`, then the
+   task's `run.environment` (each winning over the last on a key collision) — its
+   `NetworkOptions` (`additional_hostnames`/`additional_hosts`, plus `ports` merged
+   with any `run.ports` and expanded to concrete port triples via `merged_ports`,
+   unless `--disable-ports`), and `interactive` set to `top_level` from step 3 —
    eligibility only; see [Interactive mode](config-reference.md#interactive-mode)
-   and the Docker integration section below for what actually decides whether a TTY
-   gets used. Proxy variables (gated by the same `--no-proxy-vars` flag) are also
-   merged underneath `build_args` when `resolve_image` builds an image.
+   and the Docker integration section below for what this eligibility actually
+   unlocks (stdin forwarding and `TERM`, unconditionally) versus what additionally
+   requires a real TTY. Proxy variables (gated by the same `--no-proxy-vars` flag,
+   `TERM` never applies here at all) are also merged underneath `build_args` when
+   `resolve_image` builds an image.
 
 The "run once", "pull once", and "build once" guarantees are tracked with in-memory
 maps/sets (`executed_tasks`, `pulled_images`, `built_images`, `in_progress_tasks`)
@@ -134,16 +138,25 @@ client, and implements `ContainerRuntime`:
   joins it to the task's own network (with `additional_hostnames` as extra aliases
   beyond its name), starts it, streams its output, then removes the container once
   it exits.
-  Takes one of two paths depending on `should_use_tty` (ANDing the `interactive`
-  eligibility the engine passed in against whether Ratect's own stdin *and* stdout are
-  real terminals — see [Interactive mode](config-reference.md#interactive-mode)): the
-  default path creates the container without a TTY and streams `docker logs
-  --follow`; the interactive path additionally sets `tty`/`open_stdin`/`attach_stdin`
-  on the container, attaches to it (`docker.attach_container`, before starting it, so
-  no early output is missed) instead of using `logs`, puts the local terminal into raw
-  mode for the session's duration (restored via a guard's `Drop`, even on an error
-  return), and pumps stdin/stdout between the local terminal and the container
-  concurrently until the attach stream ends. When `user_mapping` is `Some` (see
+  `open_stdin`/`attach_stdin` on the container are set whenever `interactive`
+  (eligibility) is true, independent of whether a real TTY ends up being used; `tty`
+  itself is set only when `should_use_tty` (ANDing that same `interactive` eligibility
+  against whether Ratect's own stdin *and* stdout are real terminals — see [Interactive
+  mode](config-reference.md#interactive-mode)) is true. This gives three paths, not
+  two: the fully non-interactive path creates the container without stdin/a TTY and
+  streams `docker logs --follow`; the `interactive`-but-no-real-TTY path (piping input
+  into a task whose output isn't a real terminal) attaches for stdin only
+  (`docker.attach_container`, before starting, so nothing written early is lost),
+  pumps it into the container, and otherwise streams output the same way the plain
+  path does; the real-TTY path additionally attaches for stdout/stderr too instead of
+  using `logs`, puts the local terminal into raw mode for the session's duration
+  (restored via a guard's `Drop`, even on an error return), pumps stdin/stdout between
+  the local terminal and the container concurrently until the attach stream ends, and
+  keeps the container's TTY size in sync with the local terminal for the *whole*
+  session (not just once, at attach) via a `SIGWINCH` listener (`tokio::signal::unix`,
+  Unix-only — a plain OS signal, unlike a structured terminal-event API, which would
+  consume/interpret stdin bytes instead of passing them through raw). When
+  `user_mapping` is `Some` (see
   [User mapping](config-reference.md#user-mapping)), missing host-side volume
   directories are created first, the container's `User` is set to the mapped
   `uid:gid`, and — after creation, before starting — synthetic

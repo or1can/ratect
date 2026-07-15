@@ -8,7 +8,7 @@ The primary goal is to support the core features of Batect to ensure a seamless 
 
 - **Image Building**: Building a Docker image from a `Dockerfile` via `build_directory` (always named `Dockerfile`, at `build_directory`'s own root) is implemented, including `build_args` and `.dockerignore` support (0.3.0) — see [config reference](docs/config-reference.md#image-building). Custom Dockerfile naming/location (`dockerfile`), `build_target`, `build_secrets`, `build_ssh`, cross-invocation build caching, and automatic image cleanup are not — see [Differences from Batect](docs/differences-from-batect.md#container-fields).
 - **Full Docker Networking**: Every task execution gets its own isolated network (see [the task lifecycle](docs/task-lifecycle.md)), `--use-network` reuses an existing one instead, `additional_hostnames`/`additional_hosts` add extra aliases/`/etc/hosts` entries, and `ports`/`--disable-ports` publish container ports to the host, including port ranges and the expanded object form, plus additional per-task `run.ports` (0.6.0) — see [config reference](docs/config-reference.md#port-mappings) and [CLI reference](docs/cli-reference.md).
-- **Interactive Mode**: A task's own container gets a real Docker TTY and its stdin forwarded, automatically, when both Ratect's own stdin and stdout are real terminals (0.4.0) — see [Interactive mode](docs/config-reference.md#interactive-mode). Live terminal-resize forwarding and Batect's decoupled stdin-without-TTY support are not — see [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
+- **Interactive Mode**: A task's own container gets a real Docker TTY, automatically, when both Ratect's own stdin and stdout are real terminals (0.4.0); its stdin forwarding and the host's `TERM` propagation both apply more broadly than that (whenever the task is interactive-eligible, not gated on a real TTY), and a real TTY's terminal size stays in sync for the whole session, not just once at attach (0.10.0) — see [Interactive mode](docs/config-reference.md#interactive-mode). One known, deliberate divergence from Batect remains — see [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
 - **Full Environment Variable Interpolation & Batect Expressions**: `environment` on containers/tasks, `config_variables` (including Batect's one built-in, `batect.project_directory`), and `$VAR`/`${VAR}`/`${VAR:-default}`/`<name`/`<{name}` expressions are implemented for `environment` values, volume host paths, `build_directory`, and `build_args` — every already-supported field that could meaningfully take one; `build_secrets.path`/`build_ssh.paths` remain moot until those fields themselves exist — see [Expressions](docs/differences-from-batect.md#expressions).
 - **Dependency Readiness**: A started dependency isn't treated as ready until it
   reports healthy (its image's own Docker health check, or the `health_check`
@@ -306,11 +306,27 @@ Neither bump is ever folded into a feature commit.
     setup command's omitted `working_directory` falls back straight to the image's
     default, since the container-level `working_directory` field it should fall back
     to first doesn't exist until [0.12.0](#ratect-compat).
-- **0.10.0** — **Interactive Mode Completeness**: closes the known gaps left by 0.4.0 —
+- **0.10.0** — ~~**Interactive Mode Completeness**: closes the known gaps left by 0.4.0 —
   live terminal-resize forwarding for the rest of an interactive session (not just
   synced once at attach time), decoupling stdin forwarding from TTY allocation (piping
   input into a non-interactive task), and propagating the host's `TERM` into the
-  container's environment alongside proxy variables.
+  container's environment alongside proxy variables~~ — done, design validated against
+  Batect's own implementation (`ConsoleInfo`, `TaskContainerOnlyIOStreamingOptions`,
+  `DockerContainerEnvironmentVariableProvider` in the local `batect` checkout):
+  - Stdin forwarding (`open_stdin`/`attach_stdin`) and `TERM` propagation are now both
+    gated on the task being interactive-eligible alone, independent of whether a real
+    TTY is actually allocated — matching Batect's own unconditional behavior for both,
+    confirmed by reading its source rather than guessing.
+  - A local terminal resize is now forwarded for the whole session via a `SIGWINCH`
+    listener (`tokio::signal::unix`, Unix-only — a plain OS signal, not crossterm's
+    `event`/`EventStream` API, which stays off-limits per the existing `crossterm`
+    entry in `CLAUDE.md`), not just synced once at attach.
+  - Known gap, deliberately not changed as part of this release: Batect's real-TTY
+    gate (`useTTYForContainer`) checks only whether its output is a real terminal;
+    Ratect's (`should_use_tty`) still requires *both* stdin and stdout to be real
+    terminals. Also carried forward from 0.4.0: Windows terminal handling is
+    implemented but hasn't been verified, and live resize forwarding is additionally
+    Unix-only (non-Unix keeps the once-at-attach-only sync instead of erroring).
 - **0.11.0** — **Build Customization**: `build_target`, custom `dockerfile`
   naming/location, `build_secrets`, `build_ssh` — extends 0.3.0's image-building
   support.
