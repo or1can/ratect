@@ -652,6 +652,36 @@ impl GitBoundary {
             self.git_ref
         );
     }
+
+    /// Containment check for a Git-included container's path-bearing fields
+    /// (`volumes` host paths, `build_directory`) — see the security note on
+    /// [`Config::resolve_expressions_with_boundaries`]. Unlike
+    /// `check_contains`/`check_contains_canonical` above (used only for
+    /// further `include` resolution, which must stay entirely within the
+    /// repository), a shared bundle may reasonably want to reference the
+    /// caller's own project directory (e.g.
+    /// `<{batect.project_directory}/output:/output`) — so `project_dir` is
+    /// accepted as a second allowed root alongside the repository's own
+    /// clone directory. Purely lexical, like `check_contains`: a symlink
+    /// inside the clone that itself points back outside both allowed roots
+    /// isn't caught here, since unlike an `include` target (which must exist
+    /// and is read as a file), a `volumes`/`build_directory` path need not
+    /// exist yet at config-resolution time — Docker/`docker build` are the
+    /// ones that ultimately dereference it.
+    fn check_path_allowed(&self, resolved: &Path, project_dir: &Path) -> Result<()> {
+        if resolved.starts_with(&self.repo_dir) || resolved.starts_with(project_dir) {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "Path '{}' escapes both the Git repository '{}' at '{}' it was included from and \
+             the project directory '{}' — a container reached through a Git include must \
+             resolve its 'volumes'/'build_directory' paths within one of the two.",
+            resolved.display(),
+            self.remote,
+            self.git_ref,
+            project_dir.display()
+        );
+    }
 }
 
 /// One parsed YAML document, before include resolution/merging —
@@ -703,23 +733,36 @@ fn absolute_path(path: &Path) -> Result<PathBuf> {
 pub struct LoadedConfig {
     pub config: Config,
     container_base_paths: HashMap<String, PathBuf>,
+    /// The Git boundary a container's `volumes`/`build_directory` paths must
+    /// stay within, for every container whose origin file was reached
+    /// (directly or via a nested local include) through a `type: git`
+    /// include — see [`GitBoundary::check_path_allowed`]. A container absent
+    /// from this map was declared entirely within the caller's own local
+    /// project tree and has no such restriction, matching the trust model
+    /// local includes already had.
+    container_git_boundaries: HashMap<String, GitBoundary>,
 }
 
 impl LoadedConfig {
     /// Like [`Config::resolve_expressions`], but resolves each container's
     /// relative paths against its own origin file's directory (recorded by
     /// [`Config::load_from_file`]) rather than uniformly against
-    /// `base_path`. Identical behavior to `Config::resolve_expressions` when
-    /// no `include` was used (every container's origin is then the root
-    /// file's own directory anyway).
+    /// `base_path`, and additionally confines a Git-included container's
+    /// resolved `volumes`/`build_directory` paths to that repository's own
+    /// clone directory or the project directory (see
+    /// [`GitBoundary::check_path_allowed`]). Identical behavior to
+    /// `Config::resolve_expressions` when no `include` was used (every
+    /// container's origin is then the root file's own directory anyway, and
+    /// `container_git_boundaries` is empty).
     pub fn resolve_expressions(
         &mut self,
         base_path: &Path,
         config_var_overrides: &HashMap<String, String>,
     ) -> Result<()> {
-        self.config.resolve_expressions_with(
+        self.config.resolve_expressions_with_boundaries(
             base_path,
             &self.container_base_paths,
+            &self.container_git_boundaries,
             config_var_overrides,
             |name| std::env::var(name).ok(),
         )
@@ -797,8 +840,8 @@ impl Config {
             .map(|include| (root_dir.clone(), None, include))
             .collect();
 
-        let mut loaded: Vec<(PathBuf, PathBuf, ConfigFile)> =
-            vec![(root_path, root_dir, root_file)];
+        let mut loaded: Vec<(PathBuf, PathBuf, ConfigFile, Option<GitBoundary>)> =
+            vec![(root_path, root_dir, root_file, None)];
 
         while let Some((containing_dir, boundary, include)) = queue.pop_front() {
             let (base_dir, include_path, boundary) = match &include {
@@ -862,7 +905,7 @@ impl Config {
                     .cloned()
                     .map(|include| (file_dir.clone(), boundary.clone(), include)),
             );
-            loaded.push((resolved, file_dir, file));
+            loaded.push((resolved, file_dir, file, boundary));
         }
 
         let project_name = loaded[0].2.project_name.clone().ok_or_else(|| {
@@ -871,13 +914,14 @@ impl Config {
 
         let mut containers = HashMap::new();
         let mut container_base_paths = HashMap::new();
+        let mut container_git_boundaries: HashMap<String, GitBoundary> = HashMap::new();
         let mut container_origins: HashMap<String, PathBuf> = HashMap::new();
         let mut tasks = HashMap::new();
         let mut task_origins: HashMap<String, PathBuf> = HashMap::new();
         let mut config_variables = HashMap::new();
         let mut config_variable_origins: HashMap<String, PathBuf> = HashMap::new();
 
-        for (file_path, file_dir, file) in loaded {
+        for (file_path, file_dir, file, boundary) in loaded {
             for (name, container) in file.containers {
                 if let Some(previous) = container_origins.insert(name.clone(), file_path.clone()) {
                     anyhow::bail!(
@@ -887,6 +931,9 @@ impl Config {
                     );
                 }
                 container_base_paths.insert(name.clone(), file_dir.clone());
+                if let Some(boundary) = &boundary {
+                    container_git_boundaries.insert(name.clone(), boundary.clone());
+                }
                 containers.insert(name, container);
             }
             for (name, task) in file.tasks {
@@ -926,6 +973,7 @@ impl Config {
                 },
             },
             container_base_paths,
+            container_git_boundaries,
         })
     }
 
@@ -963,16 +1011,44 @@ impl Config {
         })
     }
 
+    /// The actual implementation behind [`resolve_expressions`](Self::resolve_expressions),
+    /// for callers that never need [`resolve_expressions_with_boundaries`]'s
+    /// Git-containment checks (i.e. every caller except
+    /// [`LoadedConfig::resolve_expressions`]) — a thin wrapper so their call
+    /// sites don't have to pass an always-empty boundaries map.
+    fn resolve_expressions_with(
+        &mut self,
+        base_path: &Path,
+        container_base_paths: &HashMap<String, PathBuf>,
+        config_var_overrides: &HashMap<String, String>,
+        host_env: impl Fn(&str) -> Option<String>,
+    ) -> Result<()> {
+        self.resolve_expressions_with_boundaries(
+            base_path,
+            container_base_paths,
+            &HashMap::new(),
+            config_var_overrides,
+            host_env,
+        )
+    }
+
     /// The actual implementation behind [`resolve_expressions`](Self::resolve_expressions)
     /// and [`LoadedConfig::resolve_expressions`], parameterized over the host
     /// environment lookup so tests don't have to touch the real process
     /// environment. `container_base_paths` (empty when called from
     /// `Config::resolve_expressions` directly) overrides `base_path` on a
-    /// per-container basis — see [`LoadedConfig`].
-    fn resolve_expressions_with(
+    /// per-container basis — see [`LoadedConfig`]. `container_git_boundaries`
+    /// (likewise empty outside `LoadedConfig::resolve_expressions`) confines
+    /// a Git-included container's resolved `volumes`/`build_directory` paths
+    /// to that repository's own clone directory *or* the project directory
+    /// — see [`GitBoundary::check_path_allowed`] for why the project
+    /// directory is a second allowed root rather than requiring pure
+    /// containment within the clone.
+    fn resolve_expressions_with_boundaries(
         &mut self,
         base_path: &Path,
         container_base_paths: &HashMap<String, PathBuf>,
+        container_git_boundaries: &HashMap<String, GitBoundary>,
         config_var_overrides: &HashMap<String, String>,
         host_env: impl Fn(&str) -> Option<String>,
     ) -> Result<()> {
@@ -1020,11 +1096,8 @@ impl Config {
         // below — `base_path` is frequently "" or "." (e.g. from `-f
         // batect.yml` or `-f ./batect.yml`), which without cleaning would
         // leave a trailing slash or `/.` in every value derived from this.
-        let project_directory = std::env::current_dir()?
-            .join(base_path)
-            .clean()
-            .display()
-            .to_string();
+        let project_directory_path = std::env::current_dir()?.join(base_path).clean();
+        let project_directory = project_directory_path.display().to_string();
         config_vars.insert(PROJECT_DIRECTORY_VAR.to_string(), Some(project_directory));
 
         for (container_name, container) in self.containers.iter_mut() {
@@ -1032,6 +1105,9 @@ impl Config {
                 .get(container_name)
                 .map(PathBuf::as_path)
                 .unwrap_or(base_path);
+            let container_boundary = container_git_boundaries
+                .get(container_name)
+                .map(|boundary| (boundary, project_directory_path.as_path()));
             if let Some(environment) = &mut container.environment {
                 for value in environment.values_mut() {
                     *value = crate::expressions::interpolate(value, &host_env, &config_vars)?;
@@ -1039,7 +1115,13 @@ impl Config {
             }
             if let Some(volumes) = &mut container.volumes {
                 for volume in volumes {
-                    *volume = resolve_volume(volume, container_base_path, &host_env, &config_vars)?;
+                    *volume = resolve_volume(
+                        volume,
+                        container_base_path,
+                        &host_env,
+                        &config_vars,
+                        container_boundary,
+                    )?;
                 }
             }
             if let Some(build_directory) = &mut container.build_directory {
@@ -1048,6 +1130,7 @@ impl Config {
                     container_base_path,
                     &host_env,
                     &config_vars,
+                    container_boundary,
                 )?;
             }
             if let Some(build_args) = &mut container.build_args {
@@ -1111,13 +1194,20 @@ fn resolve_volume(
     base_path: &Path,
     host_env: &impl Fn(&str) -> Option<String>,
     config_vars: &HashMap<String, Option<String>>,
+    container_boundary: Option<(&GitBoundary, &Path)>,
 ) -> Result<String> {
     let parts: Vec<&str> = volume.split(':').collect();
     if parts.len() != 2 {
         return Ok(volume.to_string());
     }
 
-    let resolved_host_path = resolve_path(parts[0], base_path, host_env, config_vars)?;
+    let resolved_host_path = resolve_path(
+        parts[0],
+        base_path,
+        host_env,
+        config_vars,
+        container_boundary,
+    )?;
 
     Ok(format!("{}:{}", resolved_host_path, parts[1]))
 }
@@ -1141,18 +1231,21 @@ fn resolve_path(
     base_path: &Path,
     host_env: &impl Fn(&str) -> Option<String>,
     config_vars: &HashMap<String, Option<String>>,
+    container_boundary: Option<(&GitBoundary, &Path)>,
 ) -> Result<String> {
     let interpolated = crate::expressions::interpolate(path, host_env, config_vars)?;
-    if Path::new(&interpolated).is_relative() {
+    let resolved = if Path::new(&interpolated).is_relative() {
         let absolute_path = base_path.join(&interpolated);
-        Ok(std::env::current_dir()?
-            .join(absolute_path)
-            .clean()
-            .display()
-            .to_string())
+        std::env::current_dir()?.join(absolute_path).clean()
     } else {
-        Ok(interpolated)
+        PathBuf::from(&interpolated)
+    };
+
+    if let Some((boundary, project_dir)) = container_boundary {
+        boundary.check_path_allowed(&resolved, project_dir)?;
     }
+
+    Ok(resolved.display().to_string())
 }
 
 #[cfg(test)]
@@ -1233,6 +1326,7 @@ tasks: {}
             Path::new("/base"),
             &no_host_env,
             &HashMap::new(),
+            None,
         )
         .unwrap();
         assert_eq!(resolved, "/base/code:/code");
@@ -1245,6 +1339,7 @@ tasks: {}
             Path::new("/base"),
             &no_host_env,
             &HashMap::new(),
+            None,
         )
         .unwrap();
         assert_eq!(resolved, "/already/absolute:/code");
@@ -1260,6 +1355,7 @@ tasks: {}
             Path::new("/base"),
             &no_host_env,
             &HashMap::new(),
+            None,
         )
         .unwrap();
         assert_eq!(resolved, "C:/data:/code:ro");
@@ -1273,6 +1369,7 @@ tasks: {}
             Path::new("/base"),
             &no_host_env,
             &config_vars,
+            None,
         )
         .unwrap();
         assert_eq!(resolved, "/base/code:/code");
@@ -1290,6 +1387,7 @@ tasks: {}
             Path::new("/base"),
             &no_host_env,
             &config_vars,
+            None,
         )
         .unwrap();
         assert_eq!(resolved, "/abs/root:/code");
@@ -1297,8 +1395,14 @@ tasks: {}
 
     #[test]
     fn resolve_path_makes_relative_path_absolute() {
-        let resolved =
-            resolve_path("docker", Path::new("/base"), &no_host_env, &HashMap::new()).unwrap();
+        let resolved = resolve_path(
+            "docker",
+            Path::new("/base"),
+            &no_host_env,
+            &HashMap::new(),
+            None,
+        )
+        .unwrap();
         assert_eq!(resolved, "/base/docker");
     }
 
@@ -1309,6 +1413,7 @@ tasks: {}
             Path::new("/base"),
             &no_host_env,
             &HashMap::new(),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1324,6 +1429,7 @@ tasks: {}
             Path::new("/base"),
             &no_host_env,
             &HashMap::new(),
+            None,
         )
         .unwrap();
         assert_eq!(resolved, "/already/absolute");
@@ -1338,9 +1444,86 @@ tasks: {}
             Path::new("/base"),
             &no_host_env,
             &config_vars,
+            None,
         )
         .unwrap();
         assert_eq!(resolved, "/abs/root");
+    }
+
+    #[test]
+    fn resolve_path_rejects_a_git_included_containers_absolute_path_outside_both_allowed_roots() {
+        let boundary = GitBoundary {
+            repo_dir: PathBuf::from("/repo"),
+            remote: "https://example.com/bundle.git".to_string(),
+            git_ref: "v1.0.0".to_string(),
+        };
+        let result = resolve_path(
+            "/etc",
+            Path::new("/repo/sub"),
+            &no_host_env,
+            &HashMap::new(),
+            Some((&boundary, Path::new("/project"))),
+        );
+        assert!(format!("{:?}", result.unwrap_err()).contains("escapes both the Git repository"));
+    }
+
+    #[test]
+    fn resolve_path_rejects_a_git_included_containers_dot_dot_traversal_outside_both_allowed_roots()
+    {
+        let boundary = GitBoundary {
+            repo_dir: PathBuf::from("/repo"),
+            remote: "https://example.com/bundle.git".to_string(),
+            git_ref: "v1.0.0".to_string(),
+        };
+        let result = resolve_path(
+            "../../etc",
+            Path::new("/repo/sub"),
+            &no_host_env,
+            &HashMap::new(),
+            Some((&boundary, Path::new("/project"))),
+        );
+        assert!(format!("{:?}", result.unwrap_err()).contains("escapes both the Git repository"));
+    }
+
+    #[test]
+    fn resolve_path_allows_a_git_included_containers_path_within_the_clone_directory() {
+        let boundary = GitBoundary {
+            repo_dir: PathBuf::from("/repo"),
+            remote: "https://example.com/bundle.git".to_string(),
+            git_ref: "v1.0.0".to_string(),
+        };
+        let resolved = resolve_path(
+            "sub/docker",
+            Path::new("/repo"),
+            &no_host_env,
+            &HashMap::new(),
+            Some((&boundary, Path::new("/project"))),
+        )
+        .unwrap();
+        assert_eq!(resolved, "/repo/sub/docker");
+    }
+
+    #[test]
+    fn resolve_path_allows_a_git_included_containers_path_under_the_project_directory() {
+        // A shared bundle referencing the caller's own project directory
+        // (e.g. `<{batect.project_directory}/output`) is a legitimate use
+        // case, not an escape — the project directory is the caller's own,
+        // fully-trusted tree, distinct from the untrusted repository the
+        // container definition itself came from.
+        let boundary = GitBoundary {
+            repo_dir: PathBuf::from("/repo"),
+            remote: "https://example.com/bundle.git".to_string(),
+            git_ref: "v1.0.0".to_string(),
+        };
+        let resolved = resolve_path(
+            "/project/output",
+            Path::new("/repo"),
+            &no_host_env,
+            &HashMap::new(),
+            Some((&boundary, Path::new("/project"))),
+        )
+        .unwrap();
+        assert_eq!(resolved, "/project/output");
     }
 
     fn container_with_build(
@@ -2770,6 +2953,154 @@ tasks: {}
             *volume,
             format!("{}:/code", clone_dir.join("code").display())
         );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_git_included_containers_volume_with_an_absolute_host_path_outside_the_clone_and_project_directory_is_rejected(
+    ) {
+        // SEC-001: the 0.8.0 fix (commit 6fcd0b8) only contained an
+        // `include`'s own `path` field to its Git repository's clone
+        // directory — it didn't stop a container *declared inside* a
+        // Git-included bundle from mounting an arbitrary host path via
+        // `volumes`, which is exactly what this reproduces.
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+"#,
+        )
+        .unwrap();
+
+        let mut files = HashMap::new();
+        files.insert(
+            "batect-bundle.yml".to_string(),
+            r#"
+containers:
+  bundled:
+    image: alpine:3.18
+    volumes:
+      - /:/hostroot
+tasks: {}
+"#
+            .to_string(),
+        );
+        let git =
+            FakeGitClient::new().with_files("https://example.com/bundle.git", "v1.0.0", files);
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+        let mut loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+            .await
+            .unwrap();
+        let result = loaded.resolve_expressions(&dir, &HashMap::new());
+        assert!(
+            format!("{:?}", result.unwrap_err()).contains("escapes both the Git repository"),
+            "a container declared inside a Git include must not be able to mount an arbitrary \
+             host path"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_git_included_containers_build_directory_escaping_via_dot_dot_traversal_is_rejected()
+    {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+"#,
+        )
+        .unwrap();
+
+        let mut files = HashMap::new();
+        files.insert(
+            "batect-bundle.yml".to_string(),
+            r#"
+containers:
+  bundled:
+    build_directory: ../../../../../../etc
+tasks: {}
+"#
+            .to_string(),
+        );
+        let git =
+            FakeGitClient::new().with_files("https://example.com/bundle.git", "v1.0.0", files);
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+        let mut loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+            .await
+            .unwrap();
+        let result = loaded.resolve_expressions(&dir, &HashMap::new());
+        assert!(format!("{:?}", result.unwrap_err()).contains("escapes both the Git repository"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_git_included_containers_volume_referencing_the_project_directory_is_allowed() {
+        // Referencing the caller's own project directory (as opposed to an
+        // arbitrary host path) is a legitimate, expected use of a shared
+        // bundle — e.g. mounting an output directory back into the
+        // project. It must stay allowed even though it's outside the Git
+        // repository's own clone directory.
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+"#,
+        )
+        .unwrap();
+
+        let mut files = HashMap::new();
+        files.insert(
+            "batect-bundle.yml".to_string(),
+            r#"
+containers:
+  bundled:
+    image: alpine:3.18
+    volumes:
+      - <{batect.project_directory}/output:/output
+tasks: {}
+"#
+            .to_string(),
+        );
+        let git =
+            FakeGitClient::new().with_files("https://example.com/bundle.git", "v1.0.0", files);
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+        let mut loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+            .await
+            .unwrap();
+        loaded.resolve_expressions(&dir, &HashMap::new()).unwrap();
+
+        let volume = &loaded.config.containers["bundled"]
+            .volumes
+            .as_ref()
+            .unwrap()[0];
+        assert_eq!(*volume, format!("{}:/output", dir.join("output").display()));
 
         std::fs::remove_dir_all(&dir).unwrap();
         std::fs::remove_dir_all(&cache_root).unwrap();

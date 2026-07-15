@@ -101,6 +101,17 @@ unrestricted, since it's always something already in your own project checkout).
 Git-included bundle *can* still declare a further `type: git` include of its own —
 that's a fresh repository with its own boundary, not an escape from this one.
 
+The same containment applies to a `volumes` host path or `build_directory` declared by
+a *container* defined inside a Git-included file: it must resolve to somewhere inside
+that repository's own clone, **or** inside your project directory — an absolute path
+or `../..` traversal escaping both is rejected the same way. The project directory is
+allowed as a second root (rather than requiring pure containment within the clone)
+because referencing it explicitly via
+[`batect.project_directory`](#built-in-config-variable-batectproject_directory) (e.g.
+`<{batect.project_directory}/output:/output`) is a legitimate, common thing for a
+shared bundle to do — the project directory is your own fully-trusted tree, distinct
+from the repository the container definition itself came from.
+
 Cloning requires the system `git` binary to be installed and on `PATH` — Ratect shells
 out to it (`git clone --quiet --no-checkout` followed by
 `git checkout --recurse-submodules <ref>`) rather than embedding a Git library, so
