@@ -360,6 +360,17 @@ Neither bump is ever folded into a feature commit.
     driving the BuildKit build to completion on a dedicated `spawn_blocking` thread
     via `Handle::block_on`, Tokio's own documented escape hatch for exactly this —
     see the `bollard` entry in `AGENTS.md`.
+  - Known gaps, candidates for later work rather than blocking this release: a
+    BuildKit-session build's output isn't captured (no `RUST_LOG=debug` transcript;
+    a failure's error names the failing instruction and its exit code but not what
+    that step printed — `bollard`'s session API exposes no log stream), expected to
+    be revisited with [0.15.0](#ratect-compat)'s output-modes work; and Ratect's
+    classic-builder-by-default quietly diverges from Batect, which defaults to the
+    daemon's ping-advertised builder — BuildKit on any modern daemon, making its
+    `--enable-buildkit` flag a force-override rather than the primary switch — so
+    [0.16.0](#ratect-compat)'s "`--enable-buildkit`" item is really builder-version
+    selection including that ping-header default. Both documented in
+    [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
 - **0.12.0** — **Container Runtime Options**: `entrypoint` (container and `run`),
   `working_directory` (container and `run`), `labels`,
   `capabilities_to_add`/`capabilities_to_drop`, `privileged`, `shm_size`, `devices`,
@@ -383,8 +394,11 @@ Neither bump is ever folded into a feature commit.
   one axis of the fancy/simple distinction).
 - **0.16.0** — **Remaining CLI Parity**: `--skip-prerequisites`, `--override-image`,
   `--no-cleanup`/`--no-cleanup-after-failure`/`--no-cleanup-after-success`,
-  `--tag-image`, `--enable-buildkit`, `--docker-host`/`--docker-context`/
-  `--docker-config`/`--docker-cert-path`/`--docker-tls*`.
+  `--tag-image`, `--enable-buildkit` (really full builder-version selection: Batect
+  defaults to the daemon's ping-advertised builder — BuildKit on any modern daemon —
+  with the flag as a force-override, so matching the flag alone wouldn't match its
+  actual default behavior; see 0.11.0's known gaps), `--docker-host`/
+  `--docker-context`/`--docker-config`/`--docker-cert-path`/`--docker-tls*`.
 - **1.0.0** — the [Batect Parity](#batect-parity) section above substantially checked
   off (all of the above, including 0.7.0–0.16.0, not just the items shipped through
   0.6.0), and verified against a handful of real Batect projects, not just the

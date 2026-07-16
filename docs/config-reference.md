@@ -208,7 +208,15 @@ task's own container, as a dependency, or by more than one task) — but never r
   [Differences from Batect](differences-from-batect.md#container-fields) for why.
   Also switches that build to a BuildKit gRPC session (shared with `build_secrets`
   above if both are set on the same container) — see
-  [Differences from Batect](differences-from-batect.md).
+  [Differences from Batect](differences-from-batect.md). The agent is proxied over
+  that session, not mounted as a socket — so this works unchanged on macOS/Windows,
+  where Docker Desktop's VM boundary otherwise blocks mounting host sockets into
+  containers (no `/run/host-services/ssh-auth.sock` workaround involved).
+- A build that uses the BuildKit session path (`build_secrets`/`build_ssh`) doesn't
+  capture build output the way classic builds do: there's no `RUST_LOG=debug`
+  transcript, and a build failure's error reports the failing instruction and its
+  exit code but not what that step printed — see
+  [Differences from Batect](differences-from-batect.md#runtime-behavior-gaps).
 - The built image is tagged `<project_name>-<container_name>` (matching Batect's own
   default), so it's identifiable in `docker images` rather than showing up as an
   opaque generated name. That tag is reused/overwritten on every run, though — it's
