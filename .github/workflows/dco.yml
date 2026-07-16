@@ -1,0 +1,47 @@
+# Enforces the Developer Certificate of Origin (see CONTRIBUTING.md): every
+# commit in a pull request must carry a `Signed-off-by:` trailer matching its
+# author. Deliberately a small self-contained script (`gh` ships on the
+# runners) rather than a third-party action — no supply-chain surface for a
+# check this simple.
+name: DCO
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    name: Signed-off-by
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check every commit is signed off by its author
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # Merge commits (2+ parents) are skipped, matching the standard DCO
+          # bot's behavior — they're created by GitHub, not authored.
+          missing=$(gh api "repos/$REPO/pulls/$PR/commits" --paginate --jq '
+            .[]
+            | select((.parents | length) < 2)
+            | select((.commit.message
+                | contains("Signed-off-by: \(.commit.author.name) <\(.commit.author.email)>"))
+                | not)
+            | "  \(.sha[0:10]) \(.commit.message | split("\n")[0])"')
+          if [ -n "$missing" ]; then
+            echo "The following commits are missing a Signed-off-by trailer matching their author:"
+            # printf, not echo: commit subjects are untrusted input and echo
+            # interprets leading dashes/backslashes on some shells.
+            printf '%s\n' "$missing"
+            echo
+            echo "Sign off your commits with 'git commit -s' (or fix up existing ones with"
+            echo "'git rebase --signoff' and force-push your branch). See CONTRIBUTING.md for"
+            echo "what the sign-off means."
+            exit 1
+          fi
+          echo "All commits are signed off."
