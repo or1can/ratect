@@ -539,6 +539,13 @@ mod tests {
         run(&["init", "--quiet"]);
         run(&["config", "user.email", "test@example.com"]);
         run(&["config", "user.name", "Test"]);
+        // The host's global git config must not leak into the scratch repo's
+        // commits/tags — commit.gpgsign in particular makes `git commit`
+        // shell out to gpg, which fails intermittently when several tests
+        // create commits in parallel (gpg-agent contention), and needlessly
+        // couples the test to the host's signing setup.
+        run(&["config", "commit.gpgsign", "false"]);
+        run(&["config", "tag.gpgsign", "false"]);
         std::fs::write(repo_dir.join("file.txt"), "hello").unwrap();
         run(&["add", "file.txt"]);
         run(&["commit", "--quiet", "-m", "initial commit"]);
@@ -667,6 +674,9 @@ mod tests {
         run(&["init", "--quiet"]);
         run(&["config", "user.email", "test@example.com"]);
         run(&["config", "user.name", "Test"]);
+        // Same host-signing-config isolation as `create_test_repo`.
+        run(&["config", "commit.gpgsign", "false"]);
+        run(&["config", "tag.gpgsign", "false"]);
         run(&[
             "-c",
             "protocol.file.allow=always",
