@@ -1,5 +1,5 @@
-# Exercises a failing build on the BuildKit session path specifically (the
-# `build_secrets` entry is what routes it there): the Dockerfile's `RUN` step
+# Exercises a failing BuildKit build that has session providers in play (the
+# `build_secrets` entry): the Dockerfile's `RUN` step
 # always fails after printing a distinctive line, proving BuildKit's
 # structured status stream is accumulated into the same transcript-in-error
 # the classic path has always had — the exact gap 0.11.0 shipped with (its

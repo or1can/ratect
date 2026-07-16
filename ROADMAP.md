@@ -6,7 +6,7 @@ This document outlines the planned journey for Ratect, from achieving parity wit
 
 The primary goal is to support the core features of Batect to ensure a seamless transition for existing users. This work targets the [`ratect-compat` binary](#two-binaries-ratect-and-ratect-compat) specifically — the `ratect` binary is not expected to maintain 1:1 Batect parity.
 
-- **Image Building**: Building a Docker image from a `build_directory`, including `build_args` and `.dockerignore` support (0.3.0), custom Dockerfile naming/location (`dockerfile`), a multi-stage build target (`build_target`), secrets (`build_secrets`), and SSH agent forwarding (`build_ssh`, a single default host agent only — see [Differences from Batect](docs/differences-from-batect.md#container-fields)) (0.11.0) — see [config reference](docs/config-reference.md#image-building). Builds currently use Docker's classic builder except where `build_secrets`/`build_ssh` require BuildKit; matching Batect's BuildKit-by-default is planned as [0.12.0](#ratect-compat). Cross-invocation build caching and automatic image cleanup are not implemented.
+- **Image Building**: Building a Docker image from a `build_directory`, including `build_args` and `.dockerignore` support (0.3.0), custom Dockerfile naming/location (`dockerfile`), a multi-stage build target (`build_target`), secrets (`build_secrets`), and SSH agent forwarding (`build_ssh`, a single default host agent only — see [Differences from Batect](docs/differences-from-batect.md#container-fields)) (0.11.0), building with the builder the daemon advertises as its default — BuildKit on any modern daemon, matching Batect, with `DOCKER_BUILDKIT` honored as the force-on/off override (0.12.0) — see [config reference](docs/config-reference.md#image-building). Cross-invocation build caching and automatic image cleanup are not implemented.
 - **Full Docker Networking**: Every task execution gets its own isolated network (see [the task lifecycle](docs/task-lifecycle.md)), `--use-network` reuses an existing one instead, `additional_hostnames`/`additional_hosts` add extra aliases/`/etc/hosts` entries, and `ports`/`--disable-ports` publish container ports to the host, including port ranges and the expanded object form, plus additional per-task `run.ports` (0.6.0) — see [config reference](docs/config-reference.md#port-mappings) and [CLI reference](docs/cli-reference.md).
 - **Interactive Mode**: A task's own container gets a real Docker TTY, automatically, when both Ratect's own stdin and stdout are real terminals (0.4.0); its stdin forwarding and the host's `TERM` propagation both apply more broadly than that (whenever the task is interactive-eligible, not gated on a real TTY), and a real TTY's terminal size stays in sync for the whole session, not just once at attach (0.10.0) — see [Interactive mode](docs/config-reference.md#interactive-mode). One known, deliberate divergence from Batect remains — see [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
 - **Full Environment Variable Interpolation & Batect Expressions**: `environment` on containers/tasks, `config_variables` (including Batect's one built-in, `batect.project_directory`), and `$VAR`/`${VAR}`/`${VAR:-default}`/`<name`/`<{name}` expressions are implemented for `environment` values, volume host paths, `build_directory`, and `build_args` — every already-supported field that could meaningfully take one; `build_secrets.path`/`build_ssh.paths` remain moot until those fields themselves exist — see [Expressions](docs/differences-from-batect.md#expressions).
@@ -370,33 +370,43 @@ Neither bump is ever folded into a feature commit.
     documented in
     [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps),
     and both expected to be closed by [0.12.0](#ratect-compat).
-- **0.12.0** — **BuildKit by Default**: build with the builder the daemon's own ping
+- **0.12.0** — ~~**BuildKit by Default**: build with the builder the daemon's own ping
   response advertises (BuildKit on any modern daemon), exactly Batect's rule
   (`DockerConnectivity.kt`) — closing 0.11.0's two known gaps and a live
   incompatibility: the classic builder rejects modern Dockerfile syntax (heredocs,
   `COPY --link`, `RUN --mount=type=cache`) that real Batect projects, which have
-  been building under BuildKit for years, may already use. The plan, validated
-  against `bollard` 0.21.0's source:
-  - Unify all BuildKit builds onto bollard's classic-endpoint+session path
-    (`build_image` with `BuilderBuildKit` + a session), whose response stream
-    already carries full BuildKit progress/logs (`BuildInfoAux::BuildKit`) — which
-    also restores 0.11.0's missing `RUST_LOG=debug` transcript and
+  been building under BuildKit for years, may already use~~ — done, exactly per the
+  plan validated against `bollard` 0.21.0's source before implementation began:
+  - All BuildKit builds unified onto bollard's classic-endpoint+session path
+    (`build_image` with `BuilderBuildKit` + a per-build session), whose response
+    stream carries full BuildKit progress/logs (`BuildInfoAux::BuildKit`) *and* the
+    built image ID — restoring 0.11.0's missing `RUST_LOG=debug` transcript and
     transcript-in-error behavior for `build_secrets`/`build_ssh` builds, replacing
-    the gRPC-driver path (and, expected, its `spawn_blocking` non-`Send`
-    workaround).
-  - The one missing piece in bollard 0.21.0: `build_image`'s internal session only
-    registers auth/file-send providers — no way for a caller to supply the
-    secrets/ssh session services. Fixed via a fork carrying that change, consumed
-    through `[patch.crates-io]`, with the same change PR'd upstream (a second,
-    separable upstream PR: named agents/explicit key files for `build_ssh` parity,
-    which needs an in-process ssh keyring agent). Deliberately *not* switching
-    build libraries: no other Rust BuildKit client supports the Docker daemon's
-    own `/session`+`/grpc` upgrade path or session providers at all (the young
-    `buildkit-client` crate was evaluated and ruled out — standalone-`buildkitd`
-    oriented, no secrets/ssh providers, single-maintainer 0.1.x).
-  - The classic (non-BuildKit) build path stays, as the fallback for a daemon
-    that advertises the legacy builder — and for [0.17.0](#ratect-compat)'s
-    `--enable-buildkit=false` force-override later.
+    both the gRPC-driver path's `spawn_blocking` non-`Send` workaround (the new
+    path's future is `Send`) and its post-build `inspect_image` ID lookup.
+  - The one missing piece in bollard 0.21.0 — `build_image`'s internal session only
+    registers auth/file-send providers, with no way for a caller to supply the
+    secrets/ssh session services — plus `ping_info` (the `/_ping` response's
+    `Builder-Version` header, which plain `ping()` discards) are carried by a fork
+    (`or1can/bollard`, branch `ratect/session-providers-0.21`) consumed through
+    `[patch.crates-io]` and commit-pinned via `Cargo.lock`, with both changes to be
+    PR'd upstream (a third, separable upstream contribution remains open: named
+    agents/explicit key files for full `build_ssh` parity, which needs an
+    in-process ssh keyring agent). Deliberately *not* a build-library switch: no
+    other Rust BuildKit client supports the Docker daemon's own `/session`+`/grpc`
+    upgrade path or session providers at all (the young `buildkit-client` crate was
+    evaluated and ruled out — standalone-`buildkitd` oriented, no secrets/ssh
+    providers, single-maintainer 0.1.x).
+  - Builder selection matches Batect's, including its env override: `DOCKER_BUILDKIT`
+    (`1`/`true`/`0`/`false`, anything else a hard error) wins over the daemon's
+    advertised default; a daemon advertising no default builder falls back to the
+    classic builder. The classic path stays for exactly those two cases — and
+    `DOCKER_BUILDKIT=0` is what keeps it exercised in CI now that the default is
+    BuildKit everywhere. [0.17.0](#ratect-compat)'s `--enable-buildkit` flag becomes
+    pure CLI surface over this already-shipped selection logic.
+  - `build_secrets`/`build_ssh` under a forced (or daemon-imposed) classic builder
+    fail with a clear "requires BuildKit" error rather than silently building
+    without the secret/agent.
 - **0.13.0** — **Container Runtime Options**: `entrypoint` (container and `run`),
   `working_directory` (container and `run`), `labels`,
   `capabilities_to_add`/`capabilities_to_drop`, `privileged`, `shm_size`, `devices`,

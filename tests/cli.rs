@@ -91,6 +91,10 @@ fn build_failure_buildkit_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-failure-buildkit.yml")
 }
 
+fn build_buildkit_default_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-buildkit-default.yml")
+}
+
 fn project_directory_declared_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-directory-declared.yml")
 }
@@ -784,14 +788,14 @@ fn dockerfile_and_build_target_reach_a_real_docker_build() {
 /// reasonably current Docker Engine) and network access to pull
 /// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
 ///
-/// Proves `build_secrets` reaches a real BuildKit gRPC session build (a
-/// materially different code path from every other build test here — see
-/// `build_image_via_buildkit` in `ratect-core/src/docker.rs`): the
-/// Dockerfile's `RUN --mount=type=secret,id=token` only sees the secret
-/// inside that one instruction's mount, so the task catting the file that
-/// `RUN` copied it into — and seeing this test process's own env var value,
-/// not a baked-in one — proves the secret's value made the full round trip
-/// from host env var through the gRPC session to the build.
+/// Proves `build_secrets` reaches a real BuildKit build (its per-build
+/// session is what serves the secret — see `build_image_via_buildkit` in
+/// `ratect-core/src/docker.rs`): the Dockerfile's
+/// `RUN --mount=type=secret,id=token` only sees the secret inside that one
+/// instruction's mount, so the task catting the file that `RUN` copied it
+/// into — and seeing this test process's own env var value, not a baked-in
+/// one — proves the secret's value made the full round trip from host env
+/// var through the build's session to the build.
 ///
 /// See `build_ssh_forwards_a_real_ssh_agent_into_the_build` below for
 /// `build_ssh`'s equivalent.
@@ -914,10 +918,10 @@ impl Drop for ScratchSshAgent {
 /// machine or CI runner). Run explicitly with `cargo test -- --ignored`.
 ///
 /// Proves `build_ssh` forwards a real ssh-agent into a real BuildKit
-/// session build: the test spawns its own throwaway agent with one scratch
+/// build: the test spawns its own throwaway agent with one scratch
 /// key ([`ScratchSshAgent`]), points the child `ratect`'s `SSH_AUTH_SOCK`
 /// at it, and asserts the Dockerfile's `RUN --mount=type=ssh ssh-add -l`
-/// saw exactly that key — the full host-agent → gRPC session → build
+/// saw exactly that key — the full host-agent → build-session → build
 /// sandbox round trip, not just that the right options were passed (that
 /// part is covered by `ratect-core/src/engine.rs`'s unit tests).
 ///
@@ -999,7 +1003,10 @@ fn dockerignore_semantics_hold_against_a_real_docker_build() {
 /// `build_output_suffix`'s unit tests already cover the string formatting in
 /// isolation, but only a real Docker daemon actually exercises the
 /// streaming/`error_detail` wiring in `DockerClient::build_image` that feeds
-/// it.
+/// it. Pinned to the *classic* builder via `DOCKER_BUILDKIT=0` — with
+/// BuildKit now the default, this is what keeps the classic path's failure
+/// wiring covered at all; `failing_buildkit_build_output_reaches_the_error`
+/// below is the BuildKit path's equivalent.
 #[test]
 #[ignore]
 fn failing_build_output_reaches_the_error() {
@@ -1007,6 +1014,7 @@ fn failing_build_output_reaches_the_error() {
         .arg("-f")
         .arg(build_failure_config_path())
         .arg("build")
+        .env("DOCKER_BUILDKIT", "0")
         .output()
         .expect("failed to run ratect");
 
@@ -1027,13 +1035,12 @@ fn failing_build_output_reaches_the_error() {
 /// network access to pull `alpine:3.18.2`. Run explicitly with
 /// `cargo test -- --ignored`.
 ///
-/// Proves a failing build on the *BuildKit session path* specifically (the
-/// fixture's `build_secrets` entry is what routes it there) carries the
-/// failing step's own printed output in `ratect`'s error — the transcript
-/// is assembled from BuildKit's structured status stream rather than the
-/// classic path's plain `stream` lines, so the classic-path test above
-/// doesn't cover this wiring at all. This is the test 0.11.0 couldn't
-/// have: its gRPC-driver BuildKit path exposed no log stream to capture.
+/// Proves a failing BuildKit build with session providers in play (the
+/// fixture's `build_secrets` entry) carries the failing step's own printed
+/// output in `ratect`'s error — the transcript is assembled from BuildKit's
+/// structured status stream rather than the classic path's plain `stream`
+/// lines. This is the test 0.11.0 couldn't have: its gRPC-driver BuildKit
+/// path exposed no log stream to capture.
 #[test]
 #[ignore]
 fn failing_buildkit_build_output_reaches_the_error() {
@@ -1055,6 +1062,124 @@ fn failing_buildkit_build_output_reaches_the_error() {
     assert!(
         stderr.contains("this buildkit line should reach the user"),
         "the Dockerfile's RUN output should be in the error: {stderr}"
+    );
+}
+
+/// Requires a running Docker daemon that advertises BuildKit as its default
+/// builder (any modern daemon — its `/_ping` response's `Builder-Version`
+/// header) and network access to pull `alpine:3.18.2`. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// Proves the *default* builder is the daemon-advertised one (BuildKit),
+/// matching Batect: the fixture's Dockerfile uses heredoc `RUN <<EOF`
+/// syntax the classic builder cannot parse, and declares no
+/// `build_secrets`/`build_ssh` — so this succeeding means a plain,
+/// no-BuildKit-features build genuinely ran under BuildKit by default.
+/// `DOCKER_BUILDKIT` is explicitly cleared so an ambient value on the host
+/// can't mask the default-selection logic under test.
+#[test]
+#[ignore]
+fn default_builder_is_the_daemon_advertised_buildkit() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(build_buildkit_default_config_path())
+        .arg("print-proof")
+        .env_remove("DOCKER_BUILDKIT")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "built with buildkit heredoc support");
+}
+
+/// Requires a running Docker daemon and network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves `DOCKER_BUILDKIT=0` genuinely selects the classic builder (not
+/// just a different code path that still lands on BuildKit): the same
+/// BuildKit-only heredoc Dockerfile that succeeds by default must *fail*
+/// under the override, since the classic builder can't parse it.
+#[test]
+#[ignore]
+fn docker_buildkit_env_zero_genuinely_selects_the_classic_builder() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(build_buildkit_default_config_path())
+        .arg("print-proof")
+        .env("DOCKER_BUILDKIT", "0")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        !output.status.success(),
+        "a heredoc Dockerfile should not build on the classic builder: stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// Requires a running Docker daemon and network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves the classic build path still works when forced via
+/// `DOCKER_BUILDKIT=0` — with BuildKit now the default on any modern
+/// daemon, this override is what keeps the classic path exercised in CI
+/// at all, rather than only ever running against a legacy daemon nobody
+/// tests on.
+#[test]
+#[ignore]
+fn classic_builder_still_works_when_forced_via_docker_buildkit_env() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(build_config_path())
+        .arg("print-message")
+        .env("DOCKER_BUILDKIT", "0")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "hello-from-build-arg");
+}
+
+/// Requires a running Docker daemon. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// Proves `build_secrets`/`build_ssh` fail with a clear error — rather
+/// than silently building without the secret — when the classic builder is
+/// forced, since only BuildKit has a session to serve them over.
+#[test]
+#[ignore]
+fn build_secrets_error_clearly_when_the_classic_builder_is_forced() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(build_secrets_config_path())
+        .arg("print-secret")
+        .env("RATECT_BUILD_SECRETS_TEST_TOKEN", "irrelevant")
+        .env("DOCKER_BUILDKIT", "0")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        !output.status.success(),
+        "the build should have been refused: stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("requires BuildKit"),
+        "the error should name the BuildKit requirement: {stderr}"
     );
 }
 

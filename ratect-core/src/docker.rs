@@ -155,10 +155,12 @@ pub struct HealthCheckOptions {
 /// Configures BuildKit-only build features — `build_image` receives one
 /// only when a container declares `build_secrets` and/or `build_ssh`,
 /// converted from config types the same way as `HealthCheckOptions` above.
-/// `None` keeps `build_image` on Docker's classic (non-BuildKit) build API,
-/// the path every build used before this existed and the only one that
-/// doesn't require the Docker daemon to support BuildKit sessions — so a
-/// project that doesn't use either field sees no behavior change at all.
+/// Independent of *which builder* runs the build (that's
+/// [`select_builder_version`]'s call, from the daemon's advertised default):
+/// `None` just means no session providers to serve. The one interaction:
+/// `Some` requires the BuildKit builder — the classic builder has no session
+/// to serve these over, so `build_image` fails clearly if the classic
+/// builder is selected while providers are present.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BuildKitOptions {
     /// Keyed by the id a Dockerfile's `RUN --mount=type=secret,id=<key>`
@@ -907,13 +909,85 @@ pub trait ContainerRuntime {
 
 pub struct DockerClient {
     docker: Docker,
+    /// The builder every `build_image` call uses, resolved once per client
+    /// (per `ratect` invocation, in practice) on first build — see
+    /// [`select_builder_version`] for the decision itself.
+    builder_version: tokio::sync::OnceCell<bollard::query_parameters::BuilderVersion>,
+}
+
+/// Picks the builder for this invocation's image builds, matching Batect's
+/// own selection (`DockerConnectivity.kt`): an explicit `DOCKER_BUILDKIT`
+/// environment variable wins (`1`/`true` forces BuildKit, `0`/`false` forces
+/// the classic builder — the same env var Batect reads as its
+/// `--enable-buildkit` default, and the docker CLI's own override
+/// convention); otherwise the builder the daemon itself advertises as its
+/// default (the `/_ping` response's `Builder-Version` header — `"2"` is
+/// BuildKit) is used, which is BuildKit on any modern daemon. A missing
+/// header (a daemon old enough to predate it) falls back to the classic
+/// builder. A `DOCKER_BUILDKIT` value that parses as neither is a hard error
+/// naming the value, matching Batect, rather than a silent guess.
+///
+/// Pure (both inputs injected) so the whole decision table is
+/// unit-testable; [`DockerClient`] feeds it the real environment variable
+/// and ping header.
+fn select_builder_version(
+    docker_buildkit_env: Option<&str>,
+    daemon_advertised: Option<&str>,
+) -> Result<bollard::query_parameters::BuilderVersion> {
+    use bollard::query_parameters::BuilderVersion;
+    if let Some(value) = docker_buildkit_env {
+        return match value.to_ascii_lowercase().as_str() {
+            "1" | "true" => Ok(BuilderVersion::BuilderBuildKit),
+            "0" | "false" => Ok(BuilderVersion::BuilderV1),
+            other => Err(anyhow::anyhow!(
+                "The DOCKER_BUILDKIT environment variable is set to '{other}', which is not a \
+                 valid value — use '1'/'true' to force BuildKit or '0'/'false' to force the \
+                 classic builder."
+            )),
+        };
+    }
+    Ok(match daemon_advertised {
+        Some("2") => BuilderVersion::BuilderBuildKit,
+        _ => BuilderVersion::BuilderV1,
+    })
 }
 
 impl DockerClient {
     pub fn new() -> Result<Self> {
         let docker =
             Docker::connect_with_local_defaults().context("Failed to connect to Docker")?;
-        Ok(Self { docker })
+        Ok(Self {
+            docker,
+            builder_version: tokio::sync::OnceCell::new(),
+        })
+    }
+
+    /// The builder this invocation's image builds use — resolved on first
+    /// call (one `/_ping` round trip) and cached for the client's lifetime;
+    /// see [`select_builder_version`].
+    async fn builder_version(&self) -> Result<bollard::query_parameters::BuilderVersion> {
+        self.builder_version
+            .get_or_try_init(|| async {
+                let env_value = std::env::var("DOCKER_BUILDKIT").ok();
+                let ping_info = self
+                    .docker
+                    .ping_info()
+                    .await
+                    .context("Failed to query the Docker daemon's default builder")?;
+                let selected = select_builder_version(
+                    env_value.as_deref(),
+                    ping_info.builder_version.as_deref(),
+                )?;
+                tracing::debug!(
+                    env = ?env_value,
+                    daemon_advertised = ?ping_info.builder_version,
+                    selected = ?selected,
+                    "selected image builder"
+                );
+                Ok(selected)
+            })
+            .await
+            .copied()
     }
 
     async fn join_network(
@@ -1247,17 +1321,34 @@ impl ContainerRuntime for DockerClient {
         buildkit: Option<&BuildKitOptions>,
         tag: &str,
     ) -> Result<String> {
-        if buildkit.is_some() {
-            return build_image_via_buildkit(
-                &self.docker,
-                build_directory,
-                dockerfile,
-                build_args,
-                target,
-                buildkit,
-                tag,
-            )
-            .await;
+        match self.builder_version().await? {
+            bollard::query_parameters::BuilderVersion::BuilderBuildKit => {
+                return build_image_via_buildkit(
+                    &self.docker,
+                    build_directory,
+                    dockerfile,
+                    build_args,
+                    target,
+                    buildkit,
+                    tag,
+                )
+                .await;
+            }
+            bollard::query_parameters::BuilderVersion::BuilderV1 => {
+                if buildkit.is_some() {
+                    // The classic builder has no session for the daemon to
+                    // request secret bytes / ssh-agent proxying over —
+                    // these fields are impossible without BuildKit, so fail
+                    // clearly rather than building without them.
+                    anyhow::bail!(
+                        "Building '{}' requires BuildKit ('build_secrets'/'build_ssh' cannot \
+                         be served by the classic builder), but the classic builder is \
+                         selected — the Docker daemon doesn't advertise BuildKit as its \
+                         default builder, or DOCKER_BUILDKIT=0 forces it off.",
+                        tag
+                    );
+                }
+            }
         }
 
         let pb = ProgressBar::new_spinner();
@@ -1981,6 +2072,57 @@ mod tests {
             build_output_suffix(output),
             "\n\nBuild output:\nStep 1/3 : FROM alpine\nStep 2/3 : RUN false"
         );
+    }
+
+    #[test]
+    fn builder_selection_follows_the_daemon_advertised_default() {
+        use bollard::query_parameters::BuilderVersion;
+        assert_eq!(
+            select_builder_version(None, Some("2")).unwrap(),
+            BuilderVersion::BuilderBuildKit
+        );
+        assert_eq!(
+            select_builder_version(None, Some("1")).unwrap(),
+            BuilderVersion::BuilderV1
+        );
+    }
+
+    #[test]
+    fn builder_selection_falls_back_to_classic_when_the_daemon_advertises_nothing() {
+        use bollard::query_parameters::BuilderVersion;
+        assert_eq!(
+            select_builder_version(None, None).unwrap(),
+            BuilderVersion::BuilderV1
+        );
+    }
+
+    #[test]
+    fn docker_buildkit_env_var_overrides_the_daemon_advertised_default() {
+        use bollard::query_parameters::BuilderVersion;
+        // Forced off, even though the daemon advertises BuildKit…
+        assert_eq!(
+            select_builder_version(Some("0"), Some("2")).unwrap(),
+            BuilderVersion::BuilderV1
+        );
+        assert_eq!(
+            select_builder_version(Some("false"), Some("2")).unwrap(),
+            BuilderVersion::BuilderV1
+        );
+        // …and forced on, even though it doesn't.
+        assert_eq!(
+            select_builder_version(Some("1"), Some("1")).unwrap(),
+            BuilderVersion::BuilderBuildKit
+        );
+        assert_eq!(
+            select_builder_version(Some("TRUE"), None).unwrap(),
+            BuilderVersion::BuilderBuildKit
+        );
+    }
+
+    #[test]
+    fn an_unparseable_docker_buildkit_env_var_is_a_hard_error() {
+        let err = select_builder_version(Some("banana"), Some("2")).unwrap_err();
+        assert!(err.to_string().contains("'banana'"));
     }
 
     #[test]

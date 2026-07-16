@@ -97,9 +97,10 @@ fn health_check_options(container: &Container) -> Option<crate::docker::HealthCh
 
 /// Converts a container's parsed `build_secrets`/`build_ssh` config into the
 /// docker-side [`crate::docker::BuildKitOptions`] — `None` when neither is
-/// set, so `build_image` stays on the classic (non-BuildKit) build API for
-/// every container that doesn't use either field. `build_ssh`'s shape (at
-/// most one `default`-id, no-`paths` entry) is already validated by
+/// set (no session providers to serve; which *builder* runs the build is
+/// decided separately, by the `DockerClient` itself, from the daemon's
+/// advertised default). `build_ssh`'s shape (at most one `default`-id,
+/// no-`paths` entry) is already validated by
 /// [`crate::config::Config::resolve_expressions_with`] by the time this
 /// runs — this only reads whether an entry is present at all.
 fn buildkit_options(container: &Container) -> Option<crate::docker::BuildKitOptions> {

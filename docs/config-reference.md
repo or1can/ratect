@@ -179,6 +179,15 @@ needed, and reused for the rest of that `ratect` invocation if referenced again 
 task's own container, as a dependency, or by more than one task) — but never reused
 *across* separate `ratect` invocations; each run builds fresh. A few things to know:
 
+- **Builder selection**: builds use the builder the Docker daemon itself advertises
+  as its default — BuildKit on any modern daemon — exactly matching Batect. The
+  `DOCKER_BUILDKIT` environment variable overrides this either way (`1`/`true`
+  forces BuildKit, `0`/`false` forces the classic builder; any other value is an
+  error), the same variable the docker CLI honors and that Batect reads as its
+  `--enable-buildkit` default. A daemon old enough not to advertise a default
+  builder at all falls back to the classic builder. Note that `build_secrets` and
+  `build_ssh` *require* BuildKit — combining them with a forced (or daemon-imposed)
+  classic builder is a clear error rather than a silent build without them.
 - The Dockerfile built is `dockerfile` (a path relative to `build_directory`'s own
   root), defaulting to `Dockerfile` at `build_directory`'s own root when omitted.
 - `build_target` stops the build at that stage, for a multi-stage `FROM ... AS <name>`
@@ -194,29 +203,23 @@ task's own container, as a dependency, or by more than one task) — but never r
   the built image's layers — keyed by the `id` such a `RUN` instruction references.
   Each entry is either `{environment: NAME}` (read from *this* `ratect` process's own
   environment at build time) or `{path: ...}` (read from a file on the host, resolved
-  like `build_directory`); exactly one of the two is required. Using `build_secrets`
-  switches that build to a BuildKit gRPC session instead of Docker's classic build
-  API, and disables the build cache for it entirely — BuildKit deliberately excludes
-  a secret's *value* from its cache key (so it can't leak into one), which would
-  otherwise let an unrelated Dockerfile change reuse a cached layer built with a
-  now-stale secret value.
+  like `build_directory`); exactly one of the two is required. Requires the BuildKit
+  builder (see builder selection above). Using `build_secrets` disables the build
+  cache for that build entirely — BuildKit deliberately excludes a secret's *value*
+  from its cache key (so it can't leak into one), which would otherwise let an
+  unrelated Dockerfile change reuse a cached layer built with a now-stale secret
+  value.
 - `build_ssh` forwards an SSH agent from the host into the build, for a Dockerfile's
   `RUN --mount=type=ssh` instructions. **Ratect only supports forwarding the host's
   running `ssh-agent` (via its `SSH_AUTH_SOCK`) under the implicit `default` agent
   id** — at most one entry (`build_ssh: [{id: default}]`, or an empty/omitted `id`),
   and an entry with explicit key `paths` is rejected — see
   [Differences from Batect](differences-from-batect.md#container-fields) for why.
-  Also switches that build to a BuildKit gRPC session (shared with `build_secrets`
-  above if both are set on the same container) — see
-  [Differences from Batect](differences-from-batect.md). The agent is proxied over
-  that session, not mounted as a socket — so this works unchanged on macOS/Windows,
-  where Docker Desktop's VM boundary otherwise blocks mounting host sockets into
-  containers (no `/run/host-services/ssh-auth.sock` workaround involved).
-- A BuildKit build captures output the same way a classic build does: every build
-  step and its output is logged at `debug` level (`RUST_LOG=debug` for a live
-  transcript), and a build failure's error includes the entire accumulated
-  transcript — the failing step's own output included — not just BuildKit's
-  one-line failing-instruction summary.
+  Requires the BuildKit builder (see builder selection above). The agent is proxied
+  over the build's session, not mounted as a socket — so this works unchanged on
+  macOS/Windows, where Docker Desktop's VM boundary otherwise blocks mounting host
+  sockets into containers (no `/run/host-services/ssh-auth.sock` workaround
+  involved).
 - The built image is tagged `<project_name>-<container_name>` (matching Batect's own
   default), so it's identifiable in `docker images` rather than showing up as an
   opaque generated name. That tag is reused/overwritten on every run, though — it's

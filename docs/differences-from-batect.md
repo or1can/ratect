@@ -140,7 +140,7 @@ Batect's full flag list, from its [CLI reference](https://github.com/batect/bate
 | `--no-cleanup`, `--no-cleanup-after-failure`, `--no-cleanup-after-success` | Not supported | Ratect always attempts to remove containers after running; there's no way to leave them for debugging. |
 | `--disable-ports` | Supported | Disables publishing of any container's `ports` to the host, regardless of config. |
 | `--use-network` | Supported | Reuses an existing Docker network for every task in the invocation instead of creating a fresh one per task; never removed at cleanup, since Ratect didn't create it. See [task lifecycle](task-lifecycle.md). |
-| `--enable-buildkit` | Not supported | Images are built via Docker's classic (non-BuildKit) build API — no way to opt into BuildKit. |
+| `--enable-buildkit` | Partially supported | The *behavior* matches Batect fully — images build with the builder the daemon advertises as its default (BuildKit on any modern daemon), and the `DOCKER_BUILDKIT` environment variable forces it on/off (`1`/`true`/`0`/`false`), which is exactly what Batect reads as this flag's default value. Only the flag itself doesn't exist yet — see [config reference](config-reference.md#image-building). |
 | `--tag-image` | Not supported | Built images are tagged `<project_name>-<container_name>` (like Batect's own default) — no way to additionally tag one with a custom name. |
 | `--config-vars-file`, `--config-var` | Supported | See [CLI reference](cli-reference.md) and [Expressions](#expressions). |
 | `--docker-host`, `--docker-context`, `--docker-config`, `--docker-cert-path`, `--docker-tls*` | Not supported | Ratect connects using Docker's local defaults only, with no CLI overrides. |
@@ -167,18 +167,6 @@ tables above:
   divergence remains: Batect's real-TTY gate (`useTTYForContainer`) checks only whether
   its output is a real terminal; Ratect's (`should_use_tty`) still requires *both* stdin
   and stdout to be real terminals — not changed as part of closing the other three gaps.
-- **Builder selection**: Ratect builds with Docker's classic (non-BuildKit) build API
-  by default, switching to a BuildKit gRPC session only for a container that declares
-  `build_secrets` and/or `build_ssh` (which the classic API cannot serve at all).
-  Batect instead defaults to whatever builder the daemon's own ping response
-  advertises (`DockerConnectivity.kt` — confirmed by reading its source), which is
-  BuildKit on any modern daemon, with `--enable-buildkit`/`DOCKER_BUILDKIT` acting as
-  a force-on/force-off override rather than the primary switch. In practice this
-  means Batect builds almost everything with BuildKit today and Ratect builds almost
-  everything without it — same images out for ordinary Dockerfiles, but different
-  layer caching behavior and build log formats. Closing this — builder-version
-  selection following the daemon's ping-advertised default, exactly Batect's rule —
-  is planned as 0.12.0 in `ROADMAP.md`.
 - **Parallel execution**: prerequisites run sequentially, not in parallel — Batect runs
   independent setup/cleanup steps concurrently.
 - **Proxy support**: `http_proxy`/`https_proxy`/`ftp_proxy`/`no_proxy` are detected from

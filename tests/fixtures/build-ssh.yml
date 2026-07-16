@@ -1,5 +1,6 @@
-# Exercises `build_ssh` end-to-end against a real BuildKit gRPC session
-# build and a real (test-spawned, throwaway) ssh-agent: the Dockerfile's
+# Exercises `build_ssh` end-to-end against a real BuildKit build (its
+# per-build session is what proxies the agent) and a real (test-spawned,
+# throwaway) ssh-agent: the Dockerfile's
 # `RUN --mount=type=ssh ssh-add -l` lists the keys visible through the
 # forwarded agent socket, and the task cats the file that `RUN` wrote them
 # into — the test asserts the scratch key it loaded into its own agent

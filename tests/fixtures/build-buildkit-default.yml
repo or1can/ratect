@@ -1,0 +1,17 @@
+# Exercises builder selection: this Dockerfile uses a heredoc `RUN <<EOF`,
+# BuildKit-only Dockerfile syntax the classic builder cannot parse, and the
+# container declares no `build_secrets`/`build_ssh` — so it builds if and
+# only if the *default* builder choice landed on BuildKit. Used both ways:
+# succeeding with no override (the daemon's advertised default is BuildKit
+# on any modern daemon), and failing under DOCKER_BUILDKIT=0 (proving the
+# override genuinely selects the classic builder, not just a different
+# code path that still ends up at BuildKit).
+project_name: ratect-buildkit-default-test
+containers:
+  build-env:
+    build_directory: ./build-buildkit-default
+tasks:
+  print-proof:
+    run:
+      container: build-env
+      command: cat /heredoc-proof.txt
