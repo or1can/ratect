@@ -3,49 +3,46 @@
 [![CI](https://github.com/or1can/ratect/actions/workflows/ci.yml/badge.svg)](https://github.com/or1can/ratect/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-Ratect is a Rust implementation of [Batect](https://github.com/batect/batect).
+Ratect is a from-scratch Rust implementation of
+[Batect](https://github.com/batect/batect): define your development tasks (build,
+test, lint, a database to develop against, …) once in a `batect.yml`, and run them
+identically on any machine that has Docker — no "works on my machine", no
+per-developer setup drift.
 
-It aims to be a fast, lightweight, and robust CLI application for defining and running development tasks in Docker containers.
+Batect itself is no longer maintained (the upstream repository was archived in
+October 2023). Ratect aims to become a drop-in replacement for its core feature set,
+with the startup speed and footprint of a native binary instead of a JVM. It is an
+independent project, not affiliated with or endorsed by the original Batect project.
 
 ## Status
 
-**Experimental / Work in Progress**
+**Experimental / Work in Progress** — pre-1.0, evolving quickly.
 
-Ratect is currently in early development. It supports a subset of Batect's features.
+Ratect implements a substantial subset of Batect's features, including:
 
-## Features
+- Tasks, prerequisites, and dependency/sidecar containers with Batect's real
+  readiness gates (health checks, setup commands), on an isolated per-task network.
+- Image building — BuildKit by default, matching Batect — with `build_args`, custom
+  `dockerfile`/`build_target`, `build_secrets`, `build_ssh`, and faithful
+  `.dockerignore` semantics.
+- Includes: splitting configuration across local files, and Git-hosted bundles
+  shared between projects.
+- Batect's expression syntax and config variables, environment variables, volumes,
+  port publishing, proxy propagation, user mapping (`run_as_current_user`), and
+  automatic interactive TTY attachment.
 
-- **YAML Configuration**: Uses `batect.yml` to define containers and tasks.
-- **Includes**: Splits one project's configuration across multiple local files via a
-  top-level `include` list — see
-  [config reference](docs/config-reference.md#includes).
-- **Docker Integration**: Powered by [bollard](https://github.com/fujiapple86/bollard) for direct Docker API communication.
-- **Task Execution**:
-  - Prerequisite task handling.
-  - Image pulling with progress bars.
-  - Volume mounting.
-  - Log streaming from containers.
-  - Interactive TTY/stdin attachment for a task's own container (e.g. dropping into a
-    shell) — automatic whenever run from a real terminal, no config needed.
-  - Sidecar/dependency containers, started on a per-task Docker network.
-  - Environment variables, on both containers and individual task runs.
-  - Image building from a `Dockerfile` via `build_directory`, with `build_args` and
-    real `.dockerignore` semantics (not `.gitignore`-compatible — see
-    [config reference](docs/config-reference.md#dockerignore-semantics)).
-  - User mapping (`run_as_current_user`): runs a container as the host's own
-    user/group instead of root, so files it writes to a mounted volume come back
-    owned by you, not root.
-  - Networking: `--use-network` reuses an existing Docker network instead of a fresh
-    one per task; `additional_hostnames`/`additional_hosts` for extra network
-    aliases/`/etc/hosts` entries; `ports`/`--disable-ports` for publishing container
-    ports to the host.
-  - Proxy support: `http_proxy`/`https_proxy`/`ftp_proxy`/`no_proxy` are detected from
-    the host environment and propagated into containers and builds automatically
-    (`--no-proxy-vars` to disable).
-- **Expressions**: `$VAR`/`${VAR:-default}` (host environment) and `<name`/`<{name}`
-  (config variables, including Batect's built-in `batect.project_directory`) within
-  `environment` values, volume host paths, `build_directory`, and `build_args`.
-- **CLI**: Robust command-line interface built with [clap](https://github.com/clap-rs/clap).
+The itemized, per-field and per-flag status — including known divergences — lives in
+[Differences from Batect](docs/differences-from-batect.md), and the direction and
+release history in the [Roadmap](ROADMAP.md).
+
+The destination is
+[two binaries sharing one core](ROADMAP.md#two-binaries-ratect-and-ratect-compat):
+**`ratect-compat`**, a strict, flag-for-flag and field-for-field drop-in replacement
+for the (now-unmaintained) `batect` binary, and **`ratect`**, a forward-looking CLI
+free to diverge from Batect's interface. Today's single `ratect` binary is where the
+parity work lands ahead of that split. Ratect deliberately does not ship a binary
+literally named `batect` — anyone who wants their existing `./batect` wrapper script
+to keep working symlinks or renames `ratect-compat` themselves.
 
 ## Getting Started
 
@@ -59,6 +56,11 @@ Ratect is currently in early development. It supports a subset of Batect's featu
 ```bash
 cargo build
 ```
+
+> Note: the workspace currently carries a `[patch.crates-io]` override for
+> [bollard](https://github.com/fussybeaver/bollard) (a
+> [fork](https://github.com/or1can/bollard) adding BuildKit session support, which
+> is being contributed upstream). Cargo resolves it automatically — no extra setup.
 
 ### Running
 
@@ -102,6 +104,12 @@ assume you've read Batect's docs.
 - [Differences from Batect](docs/differences-from-batect.md)
 - [Roadmap](ROADMAP.md)
 
+## Contributing & Security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get involved, and
+[SECURITY.md](SECURITY.md) for how to report a vulnerability privately.
+
 ## License
 
-Ratect is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+Ratect is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for
+details, and [NOTICE](NOTICE) for third-party attributions.
