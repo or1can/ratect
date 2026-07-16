@@ -13,6 +13,9 @@ bollard = { git = "https://github.com/or1can/bollard.git", branch = "ratect/sess
 name = "ratect"
 version = "0.12.0-dev"
 edition = "2021"
+description = "A fast, lightweight Rust reimplementation of Batect: define development tasks in Docker containers once, run them anywhere"
+license = "Apache-2.0"
+repository = "https://github.com/or1can/ratect"
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }

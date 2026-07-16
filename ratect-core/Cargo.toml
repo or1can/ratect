@@ -2,6 +2,9 @@
 name = "ratect-core"
 version = "0.12.0-dev"
 edition = "2021"
+description = "The core engine behind ratect: configuration parsing, task engine, and Docker integration"
+license = "Apache-2.0"
+repository = "https://github.com/or1can/ratect"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
