@@ -1,0 +1,19 @@
+# Exercises `working_directory` end-to-end: a container-level default and a
+# task `run.working_directory` override, both landing in the real
+# container's actual working directory (proven via `pwd`, not just that the
+# right bollard call was made).
+project_name: ratect-working-directory-test
+containers:
+  build-env:
+    image: alpine:3.18.2
+    working_directory: /tmp
+tasks:
+  print-pwd:
+    run:
+      container: build-env
+      command: pwd
+  print-pwd-overridden:
+    run:
+      container: build-env
+      command: pwd
+      working_directory: /var

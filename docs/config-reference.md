@@ -160,6 +160,7 @@ containers:
 | `ports` | list of strings/objects | no | Publishes container ports to the host (see [Port mappings](#port-mappings) below). No expression support. Suppressed entirely by `--disable-ports`, regardless of this field. See [CLI reference](cli-reference.md). |
 | `health_check` | object | no | Overrides the health check configuration baked into the container's image (see [Dependency readiness](#dependency-readiness) below). No expression support. |
 | `setup_commands` | list of objects (`command`, `working_directory`) | no | Commands run inside the started container after it becomes healthy but before its dependents start (see [Dependency readiness](#dependency-readiness) below). No expression support. |
+| `working_directory` | string | no | Overrides the image's own `WORKDIR`. No [expression](#expressions) support. A task's own container's `working_directory` can be further overridden by the task-level `run.working_directory` — see [TaskRun](#taskrun). A `setup_commands` entry with no `working_directory` of its own falls back to this, then to the image's own default. |
 
 > **Note:** if a container has *neither* `image` nor `build_directory` set, running a
 > task against it is an error naming the container. A dependency container without
@@ -451,7 +452,7 @@ Each `setup_commands` entry takes:
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `command` | string | yes | The command to run, via `sh -c` — the same shell treatment a task's `command` gets. |
-| `working_directory` | string | no | Directory to run it in. Falls back to the image's default working directory when omitted. |
+| `working_directory` | string | no | Directory to run it in. Falls back to the container's own `working_directory` when omitted, and then to the image's own default when neither is set. |
 
 Ratect imposes no timeout of its own on the health wait (matching Batect) — Docker's
 own `interval`/`retries` bound how long a verdict can take, so a health check
@@ -489,6 +490,7 @@ tasks:
 | `command` | string | no | Shell command to run inside the container (executed as `sh -c "<command>"`). If omitted, the container's own default `CMD`/`ENTRYPOINT` runs instead. Any `-- ADDITIONAL_ARGS` from the CLI become this shell's positional parameters (`$1`, `$2`, `$@`) — see [CLI reference](cli-reference.md#using-additional_args-in-a-task-command). |
 | `environment` | map of string → string | no | Environment variables to set for this task's run specifically. Merged with the container's own `environment` (see [Container](#container)): the container's values apply first, and `run.environment` overrides them on a key collision. Values support the same [expressions](#expressions) as `environment` does. |
 | `ports` | list of strings/objects | no | Additional port mappings for this task's run specifically — see [Port mappings](#port-mappings). *Added* to the container's own `ports`, not an override — there's no concept of one replacing an entry from the other. |
+| `working_directory` | string | no | Overrides the container's own `working_directory` for this task's run specifically (see [Container](#container)). No [expression](#expressions) support. |
 
 ## Interactive mode
 

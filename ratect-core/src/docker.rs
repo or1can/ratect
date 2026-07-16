@@ -134,6 +134,17 @@ pub struct NetworkOptions<'a> {
     pub ports: Option<&'a Vec<(u16, u16, String)>>,
 }
 
+/// Per-container runtime options shared by `run_container` and
+/// `start_background_container` — bundled together (following the same
+/// reasoning as `NetworkOptions` above), rather than a growing list of flat
+/// parameters, since Batect has several more of these container-level
+/// fields still to land (see `ROADMAP.md`'s 0.13.0 entry).
+#[derive(Debug, Clone, Default)]
+pub struct ContainerOptions<'a> {
+    /// Overrides the image's own `WORKDIR`. `None` inherits it.
+    pub working_directory: Option<&'a str>,
+}
+
 /// A container's `health_check` override, applied at container creation on
 /// top of whatever `HEALTHCHECK` its image declares. Mirrors
 /// `config::HealthCheckConfig` as plain values, keeping this module free of
@@ -834,6 +845,7 @@ pub trait ContainerRuntime {
         user_mapping: Option<&UserMapping>,
         network_options: &NetworkOptions,
         health_check: Option<&HealthCheckOptions>,
+        container_options: &ContainerOptions,
     ) -> Result<String>;
 
     /// Blocks until `container_id` — already started — reports healthy.
@@ -930,6 +942,7 @@ pub trait ContainerRuntime {
         user_mapping: Option<&UserMapping>,
         network_options: &NetworkOptions,
         health_check: Option<&HealthCheckOptions>,
+        container_options: &ContainerOptions,
     ) -> Result<()>;
 }
 
@@ -1513,6 +1526,7 @@ impl ContainerRuntime for DockerClient {
         user_mapping: Option<&UserMapping>,
         network_options: &NetworkOptions,
         health_check: Option<&HealthCheckOptions>,
+        container_options: &ContainerOptions,
     ) -> Result<String> {
         if user_mapping.is_some() {
             ensure_host_volume_directories_exist(volumes)?;
@@ -1533,6 +1547,7 @@ impl ContainerRuntime for DockerClient {
             exposed_ports: port_config.as_ref().map(|(exposed, _)| exposed.clone()),
             user: user_mapping.map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
             healthcheck: build_health_config(health_check),
+            working_dir: container_options.working_directory.map(str::to_string),
             host_config: Some(host_config),
             ..Default::default()
         };
@@ -1712,6 +1727,7 @@ impl ContainerRuntime for DockerClient {
         user_mapping: Option<&UserMapping>,
         network_options: &NetworkOptions,
         health_check: Option<&HealthCheckOptions>,
+        container_options: &ContainerOptions,
     ) -> Result<()> {
         let use_tty = should_use_tty(
             interactive,
@@ -1753,6 +1769,7 @@ impl ContainerRuntime for DockerClient {
             stdin_once: use_tty.then_some(true),
             user: user_mapping.map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
             healthcheck: build_health_config(health_check),
+            working_dir: container_options.working_directory.map(str::to_string),
             host_config: Some(host_config),
             ..Default::default()
         };

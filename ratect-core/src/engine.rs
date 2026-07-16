@@ -572,6 +572,12 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             // its `setup_commands` don't run either (see
             // docs/differences-from-batect.md).
             let health_check = health_check_options(container_config);
+            let working_directory = task
+                .run
+                .working_directory
+                .as_deref()
+                .or(container_config.working_directory.as_deref());
+            let container_options = crate::docker::ContainerOptions { working_directory };
             self.docker
                 .run_container(
                     &task.run.container,
@@ -585,6 +591,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     user_mapping.as_ref(),
                     &network_options,
                     health_check.as_ref(),
+                    &container_options,
                 )
                 .await?;
 
@@ -665,6 +672,9 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         };
 
         let health_check = health_check_options(dependency_config);
+        let container_options = crate::docker::ContainerOptions {
+            working_directory: dependency_config.working_directory.as_deref(),
+        };
 
         let container_id = self
             .docker
@@ -677,6 +687,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 user_mapping.as_ref(),
                 &network_options,
                 health_check.as_ref(),
+                &container_options,
             )
             .await?;
 
@@ -707,7 +718,10 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 .exec_in_container(
                     &container_id,
                     &setup_command.command,
-                    setup_command.working_directory.as_deref(),
+                    setup_command
+                        .working_directory
+                        .as_deref()
+                        .or(dependency_config.working_directory.as_deref()),
                     environment.as_ref(),
                     user_mapping.as_ref(),
                 )
@@ -773,6 +787,11 @@ mod tests {
     /// Keyed by container name.
     type CapturedHealthChecks =
         Arc<Mutex<HashMap<String, Option<crate::docker::HealthCheckOptions>>>>;
+    /// The `working_directory` a prior `run_container`/
+    /// `start_background_container` call for a given container name was
+    /// given (see `container_options_for`). Grows as more of
+    /// `ContainerOptions`'s fields land.
+    type CapturedContainerOptions = Arc<Mutex<HashMap<String, Option<String>>>>;
     /// `(working_directory, environment, (uid, gid))`, keyed by the exec'd
     /// command string.
     type ExecValue = (
@@ -820,6 +839,9 @@ mod tests {
         // The `health_check` a prior `run_container`/`start_background_container`
         // call for a given container name was given (see `health_check_for`).
         health_checks: CapturedHealthChecks,
+        // The `container_options` a prior `run_container`/`start_background_container`
+        // call for a given container name was given (see `container_options_for`).
+        container_options: CapturedContainerOptions,
         // The options a prior `exec_in_container` call for a given command
         // was given (see `exec_for`).
         execs: CapturedExecs,
@@ -846,6 +868,7 @@ mod tests {
                 network_exists_result: Arc::new(Mutex::new(true)),
                 network_options: Default::default(),
                 health_checks: Default::default(),
+                container_options: Default::default(),
                 execs: Default::default(),
                 unhealthy_container: Default::default(),
                 failing_setup_command: Default::default(),
@@ -974,6 +997,18 @@ mod tests {
         fn exec_for(&self, command: &str) -> Option<ExecValue> {
             self.execs.lock().unwrap().get(command).cloned()
         }
+
+        /// The `container_options.working_directory` a prior `run_container`/
+        /// `start_background_container` call for `name` was given (flattened,
+        /// same convention as `environment_for`).
+        fn working_directory_for(&self, name: &str) -> Option<String> {
+            self.container_options
+                .lock()
+                .unwrap()
+                .get(name)
+                .cloned()
+                .flatten()
+        }
     }
 
     #[async_trait::async_trait]
@@ -1036,6 +1071,7 @@ mod tests {
             user_mapping: Option<&crate::docker::UserMapping>,
             network_options: &crate::docker::NetworkOptions,
             health_check: Option<&crate::docker::HealthCheckOptions>,
+            container_options: &crate::docker::ContainerOptions,
         ) -> Result<String> {
             self.environments
                 .lock()
@@ -1061,6 +1097,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(alias.to_string(), health_check.cloned());
+            self.container_options.lock().unwrap().insert(
+                alias.to_string(),
+                container_options.working_directory.map(str::to_string),
+            );
             self.push(format!("sidecar-start:{alias}:{network}"));
             Ok(format!("sidecar-id-{alias}"))
         }
@@ -1122,6 +1162,7 @@ mod tests {
             user_mapping: Option<&crate::docker::UserMapping>,
             network_options: &crate::docker::NetworkOptions,
             health_check: Option<&crate::docker::HealthCheckOptions>,
+            container_options: &crate::docker::ContainerOptions,
         ) -> Result<()> {
             self.environments
                 .lock()
@@ -1151,6 +1192,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(name.to_string(), health_check.cloned());
+            self.container_options.lock().unwrap().insert(
+                name.to_string(),
+                container_options.working_directory.map(str::to_string),
+            );
             self.push(format!(
                 "run:{name}:{}:args=[{}]:{}",
                 command.unwrap_or_default(),
@@ -1180,6 +1225,7 @@ mod tests {
             additional_hostnames: None,
             additional_hosts: None,
             ports: None,
+            working_directory: None,
             health_check: None,
             setup_commands: None,
         }
@@ -1192,6 +1238,7 @@ mod tests {
                 command: Some(command.to_string()),
                 environment: None,
                 ports: None,
+                working_directory: None,
             },
             prerequisites: None,
         }
@@ -1216,6 +1263,7 @@ mod tests {
                 additional_hostnames: None,
                 additional_hosts: None,
                 ports: None,
+                working_directory: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1230,6 +1278,7 @@ mod tests {
                     command: None,
                     environment: None,
                     ports: None,
+                    working_directory: None,
                 },
                 prerequisites: Some(vec!["b".to_string()]),
             },
@@ -1242,6 +1291,7 @@ mod tests {
                     command: None,
                     environment: None,
                     ports: None,
+                    working_directory: None,
                 },
                 prerequisites: Some(vec!["a".to_string()]),
             },
@@ -1285,6 +1335,7 @@ mod tests {
                 additional_hostnames: None,
                 additional_hosts: None,
                 ports: None,
+                working_directory: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1296,6 +1347,7 @@ mod tests {
                 command: Some(command.to_string()),
                 environment: None,
                 ports: None,
+                working_directory: None,
             },
             prerequisites,
         };
@@ -1448,6 +1500,7 @@ mod tests {
                     command: Some("echo hi".to_string()),
                     environment: None,
                     ports: None,
+                    working_directory: None,
                 },
                 prerequisites: Some(vec!["setup".to_string()]),
             },
@@ -1499,6 +1552,7 @@ mod tests {
             additional_hostnames: None,
             additional_hosts: None,
             ports: None,
+            working_directory: None,
             health_check: None,
             setup_commands: None,
         }
@@ -1821,6 +1875,7 @@ mod tests {
                 additional_hostnames: None,
                 additional_hosts: None,
                 ports: None,
+                working_directory: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1865,6 +1920,7 @@ mod tests {
             additional_hostnames: None,
             additional_hosts: None,
             ports: None,
+            working_directory: None,
             health_check: None,
             setup_commands: None,
         }
@@ -2102,6 +2158,7 @@ mod tests {
                     command: Some("echo two".to_string()),
                     environment: None,
                     ports: None,
+                    working_directory: None,
                 },
                 prerequisites: Some(vec!["first".to_string()]),
             },
@@ -2234,6 +2291,7 @@ mod tests {
                 additional_hostnames: None,
                 additional_hosts: None,
                 ports: None,
+                working_directory: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -2545,6 +2603,44 @@ mod tests {
                 .map(String::as_str),
             Some("secret")
         );
+    }
+
+    #[tokio::test]
+    async fn setup_command_falls_back_to_the_containers_own_working_directory() {
+        let config = config_with_database_dependency(|database| {
+            database.working_directory = Some("/from-container".to_string());
+            database.setup_commands = Some(vec![crate::config::SetupCommand {
+                command: "./apply-migrations.sh".to_string(),
+                working_directory: None,
+            }]);
+        });
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        let (working_directory, _, _) = docker.exec_for("./apply-migrations.sh").unwrap();
+        assert_eq!(working_directory.as_deref(), Some("/from-container"));
+    }
+
+    #[tokio::test]
+    async fn setup_commands_own_working_directory_overrides_the_containers() {
+        let config = config_with_database_dependency(|database| {
+            database.working_directory = Some("/from-container".to_string());
+            database.setup_commands = Some(vec![crate::config::SetupCommand {
+                command: "./apply-migrations.sh".to_string(),
+                working_directory: Some("/from-setup-command".to_string()),
+            }]);
+        });
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        let (working_directory, _, _) = docker.exec_for("./apply-migrations.sh").unwrap();
+        assert_eq!(working_directory.as_deref(), Some("/from-setup-command"));
     }
 
     #[tokio::test]
@@ -2893,6 +2989,7 @@ mod tests {
                     command: Some("test".to_string()),
                     environment: None,
                     ports: None,
+                    working_directory: None,
                 },
                 prerequisites: Some(vec!["migrate".to_string()]),
             },
@@ -2951,6 +3048,7 @@ mod tests {
                 additional_hostnames: None,
                 additional_hosts: None,
                 ports: None,
+                working_directory: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -3101,6 +3199,64 @@ mod tests {
 
         let environment = docker.environment_for("build-env").unwrap();
         assert_eq!(environment.get("SHARED"), Some(&"from-run".to_string()));
+    }
+
+    #[tokio::test]
+    async fn container_working_directory_reaches_the_container() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.working_directory = Some("/app".to_string());
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.working_directory_for("build-env"),
+            Some("/app".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn task_run_working_directory_overrides_container_working_directory() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.working_directory = Some("/from-container".to_string());
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+
+        let mut task_config = task("build-env", "echo hi");
+        task_config.run.working_directory = Some("/from-run".to_string());
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task_config);
+
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.working_directory_for("build-env"),
+            Some("/from-run".to_string())
+        );
     }
 
     #[tokio::test]
@@ -3359,6 +3515,7 @@ mod tests {
                     command: Some("echo hi".to_string()),
                     environment: None,
                     ports: None,
+                    working_directory: None,
                 },
                 prerequisites: Some(vec!["setup".to_string()]),
             },
@@ -3471,6 +3628,36 @@ mod tests {
         assert_eq!(
             environment.get("POSTGRES_PASSWORD"),
             Some(&"secret".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn dependency_container_working_directory_reaches_the_sidecar() {
+        let mut database = container("postgres:16", None);
+        database.working_directory = Some("/var/lib/postgresql".to_string());
+        let mut containers = HashMap::new();
+        containers.insert("database".to_string(), database);
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.working_directory_for("database"),
+            Some("/var/lib/postgresql".to_string())
         );
     }
 }

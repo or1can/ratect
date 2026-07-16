@@ -59,6 +59,10 @@ fn config_vars_file_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/config-vars.yml")
 }
 
+fn working_directory_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/working-directory.yml")
+}
+
 fn project_directory_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-directory.yml")
 }
@@ -198,7 +202,7 @@ fn unsupported_config_key_reports_error() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("unknown field") && stderr.contains("working_directory"),
+        stderr.contains("unknown field") && stderr.contains("log_driver"),
         "stderr:\n{}",
         stderr
     );
@@ -648,6 +652,57 @@ fn config_vars_file_alone_provides_a_declared_variables_value() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(stdout.trim(), "GREETING=hello-fallback ENV_NAME=from-file");
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves a container's `working_directory` reaches the real container (via
+/// `pwd`, not just the right bollard call), overriding the image's own
+/// default `WORKDIR`.
+#[test]
+#[ignore]
+fn container_working_directory_reaches_the_real_container() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(working_directory_config_path())
+        .arg("print-pwd")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "/tmp");
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Same fixture as above, but proves `run.working_directory` overrides the
+/// container's own `working_directory` in the real container.
+#[test]
+#[ignore]
+fn task_run_working_directory_overrides_the_real_container() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(working_directory_config_path())
+        .arg("print-pwd-overridden")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "/var");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.

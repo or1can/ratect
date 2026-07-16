@@ -110,6 +110,11 @@ pub struct Container {
     /// support — matching Batect, which doesn't type these as expressions
     /// either.
     pub setup_commands: Option<Vec<SetupCommand>>,
+    /// Overrides the image's own `WORKDIR`. A plain string, not an
+    /// [expression](#expressions) — matching Batect's own `String` (not
+    /// `Expression`) typing for this field. Overridden by the task-level
+    /// `run.working_directory`, when set — see [`TaskRun::working_directory`].
+    pub working_directory: Option<String>,
 }
 
 /// One entry in a container's `build_secrets` map — either an `environment`
@@ -247,9 +252,9 @@ pub struct HealthCheckConfig {
 #[serde(deny_unknown_fields)]
 pub struct SetupCommand {
     pub command: String,
-    /// Falls back to the image's default working directory when omitted
-    /// (Ratect has no container-level `working_directory` field yet to fall
-    /// back to in between — see the config reference).
+    /// Falls back to the container's own `working_directory`
+    /// ([`Container::working_directory`]) when omitted, and then to the
+    /// image's own default when neither is set — matching Batect.
     pub working_directory: Option<String>,
 }
 
@@ -620,6 +625,9 @@ pub struct TaskRun {
     /// concept of one replacing an entry from the other by container
     /// port). See [`Container::ports`].
     pub ports: Option<Vec<PortMapping>>,
+    /// Overrides the container's own `working_directory` for this task's
+    /// run specifically — see [`Container::working_directory`].
+    pub working_directory: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1558,6 +1566,52 @@ tasks: {}
     }
 
     #[test]
+    fn parses_container_and_run_working_directory() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    working_directory: /app
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+      working_directory: /app/subdir
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.working_directory.as_deref(), Some("/app"));
+        let task = config.tasks.get("test").unwrap();
+        assert_eq!(task.run.working_directory.as_deref(), Some("/app/subdir"));
+    }
+
+    #[test]
+    fn working_directory_defaults_to_none() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.working_directory, None);
+        let task = config.tasks.get("test").unwrap();
+        assert_eq!(task.run.working_directory, None);
+    }
+
+    #[test]
     fn parses_build_secrets_environment_and_path_variants() {
         let config = parse(
             r#"
@@ -1874,6 +1928,7 @@ tasks: {}
             ports: None,
             health_check: None,
             setup_commands: None,
+            working_directory: None,
         }
     }
 
@@ -2164,6 +2219,7 @@ tasks: {}
             ports: None,
             health_check: None,
             setup_commands: None,
+            working_directory: None,
         }
     }
 
@@ -3009,7 +3065,7 @@ project_name: demo
 containers:
   build-env:
     image: alpine:3.18
-    working_directory: /code
+    log_driver: json-file
 tasks: {}
 "#,
         )
@@ -4249,6 +4305,7 @@ config_variables:
             ports: None,
             health_check: None,
             setup_commands: None,
+            working_directory: None,
         }
     }
 
