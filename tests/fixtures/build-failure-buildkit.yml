@@ -1,0 +1,18 @@
+# Exercises a failing build on the BuildKit session path specifically (the
+# `build_secrets` entry is what routes it there): the Dockerfile's `RUN` step
+# always fails after printing a distinctive line, proving BuildKit's
+# structured status stream is accumulated into the same transcript-in-error
+# the classic path has always had — the exact gap 0.11.0 shipped with (its
+# gRPC-driver path exposed no log stream at all to capture).
+project_name: ratect-build-failure-buildkit-test
+containers:
+  build-env:
+    build_directory: ./build-failure-buildkit
+    build_secrets:
+      token:
+        environment: RATECT_BUILD_FAILURE_TEST_TOKEN
+tasks:
+  build:
+    run:
+      container: build-env
+      command: echo unreachable

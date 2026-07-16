@@ -23,5 +23,3 @@ nix = { version = "0.31.3", features = ["user"] }
 url = "2.5.8"
 sha2 = "0.10"
 toml = "0.8"
-flate2 = "1"
-bytes = "1"

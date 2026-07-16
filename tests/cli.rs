@@ -87,6 +87,10 @@ fn build_failure_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-failure.yml")
 }
 
+fn build_failure_buildkit_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-failure-buildkit.yml")
+}
+
 fn project_directory_declared_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-directory-declared.yml")
 }
@@ -1015,6 +1019,41 @@ fn failing_build_output_reaches_the_error() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("this line should reach the user"),
+        "the Dockerfile's RUN output should be in the error: {stderr}"
+    );
+}
+
+/// Requires a running Docker daemon that supports BuildKit sessions and
+/// network access to pull `alpine:3.18.2`. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// Proves a failing build on the *BuildKit session path* specifically (the
+/// fixture's `build_secrets` entry is what routes it there) carries the
+/// failing step's own printed output in `ratect`'s error — the transcript
+/// is assembled from BuildKit's structured status stream rather than the
+/// classic path's plain `stream` lines, so the classic-path test above
+/// doesn't cover this wiring at all. This is the test 0.11.0 couldn't
+/// have: its gRPC-driver BuildKit path exposed no log stream to capture.
+#[test]
+#[ignore]
+fn failing_buildkit_build_output_reaches_the_error() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(build_failure_buildkit_config_path())
+        .arg("build")
+        .env("RATECT_BUILD_FAILURE_TEST_TOKEN", "irrelevant")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        !output.status.success(),
+        "the build should have failed: stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("this buildkit line should reach the user"),
         "the Dockerfile's RUN output should be in the error: {stderr}"
     );
 }

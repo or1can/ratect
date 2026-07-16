@@ -295,33 +295,30 @@ fn build_context_tar(build_directory: &Path, dockerfile: &str) -> Result<Vec<u8>
         .context("Failed to finalize build context archive")
 }
 
-/// Builds `build_directory` via a BuildKit gRPC session instead of Docker's
-/// classic build API — the only build path that can serve `build_secrets`/
-/// `build_ssh` requests, since those need an active session to answer
-/// BuildKit's requests for secret bytes / ssh-agent proxying during the
-/// build (the classic API has no such channel at all). Uses bollard's
-/// "Moby" driver, which upgrades the *existing* Docker daemon's own
-/// `/session`+`/grpc` endpoints — no separate persistent builder container
-/// needed, unlike bollard's other (`docker-container`/`buildkitd`) drivers.
+/// Builds `build_directory` via Docker's BuildKit builder — the same classic
+/// `/build` endpoint the non-BuildKit path uses, but with
+/// `BuilderVersion::BuilderBuildKit` and a per-build session: the channel the
+/// daemon calls back over to have `build_secrets`/`build_ssh` requests served
+/// mid-build (the pre-BuildKit builder has no such channel at all). The
+/// session upgrades the *existing* Docker daemon's own `/session`+`/grpc`
+/// endpoints — no separate persistent builder container needed. Requires the
+/// session-providers support carried by this workspace's `[patch.crates-io]`
+/// bollard fork (see the root `Cargo.toml`) until it lands upstream.
 ///
-/// Known simplifications versus the classic path above, both consequences
-/// of what bollard's own session API exposes (or doesn't): a build failure's
-/// error is BuildKit's own final gRPC status message only, not the
-/// accumulated build transcript `build_output_suffix` captures for the
-/// classic path (this API has no streamed-log equivalent to capture one
-/// from); and the returned image ID comes from a post-build
-/// `inspect_image(tag)` call rather than being read directly out of the
-/// build response (this API doesn't return one at all) — a narrower window
-/// for the same tag-reuse race `TaskEngine::resolve_image`'s own design
-/// comment describes, since it's not a single atomic request/response the
-/// way the classic path's `aux.id` is.
+/// Unlike the classic path's plain `stream` lines, BuildKit reports progress
+/// as structured `StatusResponse` messages — vertexes (build steps) plus
+/// their raw log chunks. Both are accumulated into the same kind of
+/// transcript the classic path keeps: logged at `debug` live, and folded
+/// into a failure's error via `build_output_suffix`. The built image ID
+/// arrives in the same stream (a final `Default` aux message), same as the
+/// classic path — no post-build lookup needed.
 async fn build_image_via_buildkit(
     docker: &Docker,
     build_directory: &Path,
     dockerfile: &str,
     build_args: Option<&HashMap<String, String>>,
     target: Option<&str>,
-    buildkit: &BuildKitOptions,
+    buildkit: Option<&BuildKitOptions>,
     tag: &str,
 ) -> Result<String> {
     let pb = ProgressBar::new_spinner();
@@ -340,83 +337,129 @@ async fn build_image_via_buildkit(
             .await
             .context("Failed to build the Docker build context")??;
 
-    // The session's upload provider expects a gzip-compressed tar, unlike
-    // the classic path's `body_full(tar_bytes)` above — matches every
-    // bollard example/integration test that uploads a build context this
-    // way.
-    let compressed = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
-        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        std::io::Write::write_all(&mut encoder, &tar_bytes)
-            .context("Failed to compress the Docker build context")?;
-        encoder
-            .finish()
-            .context("Failed to finalize the compressed Docker build context")
-    })
-    .await
-    .context("Failed to compress the Docker build context")??;
-
-    let mut frontend_builder = bollard::grpc::build::ImageBuildFrontendOptions::builder()
-        .dockerfile(Path::new(dockerfile));
-    if let Some(target) = target {
-        frontend_builder = frontend_builder.target(target);
-    }
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let mut options_builder = BuildImageOptionsBuilder::default()
+        .dockerfile(dockerfile)
+        .t(tag)
+        .rm(true)
+        .version(bollard::query_parameters::BuilderVersion::BuilderBuildKit)
+        .session(&session_id);
     if let Some(build_args) = build_args {
-        for (key, value) in build_args {
-            frontend_builder = frontend_builder.buildarg(key, value);
+        options_builder = options_builder.buildargs(build_args);
+    }
+    if let Some(target) = target {
+        options_builder = options_builder.target(target);
+    }
+
+    let mut providers = bollard::grpc::build::ImageBuildSessionProviders::default();
+    if let Some(buildkit) = buildkit {
+        for (id, secret) in &buildkit.secrets {
+            let source = match secret {
+                BuildSecretSource::Environment(name) => {
+                    bollard::grpc::build::SecretSource::Env(name.clone())
+                }
+                BuildSecretSource::File(path) => {
+                    bollard::grpc::build::SecretSource::File(path.clone())
+                }
+            };
+            providers = providers.set_secret(id, &source);
+        }
+        if !buildkit.secrets.is_empty() {
+            // BuildKit deliberately excludes a secret mount's *value* from its
+            // layer cache key (so a secret's content can't leak into a cache
+            // key/log) — meaning a `RUN --mount=type=secret` layer is a cache
+            // hit even when the secret's value changed and nothing else in the
+            // Dockerfile did, silently serving stale secret content baked into
+            // a previous build. Disabling the cache whenever secrets are in
+            // play avoids that trap; `build_ssh`-only builds are unaffected
+            // (ordinary caching semantics — no equivalent value-vs-cache-key
+            // mismatch, since forwarding *the same* agent isn't expected to
+            // vary the way a secret's value is).
+            options_builder = options_builder.nocache(true);
+        }
+        if buildkit.forward_default_ssh_agent {
+            providers = providers.enable_ssh(true);
         }
     }
-    for (id, secret) in &buildkit.secrets {
-        let source = match secret {
-            BuildSecretSource::Environment(name) => {
-                bollard::grpc::build::SecretSource::Env(name.clone())
+    let options = options_builder.build();
+
+    let mut stream = docker.build_image_with_session_providers(
+        options,
+        None,
+        Some(bollard::body_full(tar_bytes.into())),
+        providers,
+    );
+
+    let mut image_id = None;
+    // The full build transcript — same purpose as the classic path's (see
+    // `build_image` below), just assembled from BuildKit's structured status
+    // messages: each vertex (build step) name once, its raw log output, and
+    // any per-vertex error.
+    let mut output = String::new();
+    let mut seen_vertexes = std::collections::HashSet::new();
+    let mut seen_vertex_errors = std::collections::HashSet::new();
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok(info) => match info.aux {
+                Some(bollard::models::BuildInfoAux::BuildKit(status)) => {
+                    for vertex in &status.vertexes {
+                        // Vertexes are re-sent on every state change
+                        // (started/completed/errored) — record the name once,
+                        // on first sight, and any error once, when it appears.
+                        if seen_vertexes.insert(vertex.digest.clone()) && !vertex.name.is_empty() {
+                            tracing::debug!(image = tag, "{}", vertex.name);
+                            output.push_str(&vertex.name);
+                            output.push('\n');
+                            pb.set_message(format!("{}: {}", tag, vertex.name));
+                        }
+                        if !vertex.error.is_empty()
+                            && seen_vertex_errors.insert(vertex.digest.clone())
+                        {
+                            tracing::debug!(image = tag, "{}", vertex.error);
+                            output.push_str(&vertex.error);
+                            output.push('\n');
+                        }
+                    }
+                    for log in &status.logs {
+                        // Raw output chunks from a step — not necessarily
+                        // whole lines, so appended verbatim rather than
+                        // line-trimmed like the classic path's stream lines.
+                        let msg = String::from_utf8_lossy(&log.msg);
+                        output.push_str(&msg);
+                        let trimmed = msg.trim_end();
+                        if !trimmed.is_empty() {
+                            tracing::debug!(image = tag, "{trimmed}");
+                            pb.set_message(format!("{}: {}", tag, trimmed));
+                        }
+                    }
+                }
+                Some(bollard::models::BuildInfoAux::Default(aux_image_id)) => {
+                    if let Some(id) = aux_image_id.id {
+                        image_id = Some(id);
+                    }
+                }
+                None => {}
+            },
+            Err(e) => {
+                pb.finish_with_message(format!("Failed to build image {}", tag));
+                return Err(e).context(format!(
+                    "Failed to build image '{}'{}",
+                    tag,
+                    build_output_suffix(&output)
+                ));
             }
-            BuildSecretSource::File(path) => bollard::grpc::build::SecretSource::File(path.clone()),
-        };
-        frontend_builder = frontend_builder.set_secret(id, &source);
+        }
     }
-    if !buildkit.secrets.is_empty() {
-        // BuildKit deliberately excludes a secret mount's *value* from its
-        // layer cache key (so a secret's content can't leak into a cache
-        // key/log) — meaning a `RUN --mount=type=secret` layer is a cache
-        // hit even when the secret's value changed and nothing else in the
-        // Dockerfile did, silently serving stale secret content baked into
-        // a previous build. Disabling the cache whenever secrets are in
-        // play avoids that trap; `build_ssh`-only builds are unaffected
-        // (ordinary caching semantics — no equivalent value-vs-cache-key
-        // mismatch, since forwarding *the same* agent isn't expected to
-        // vary the way a secret's value is).
-        frontend_builder = frontend_builder.nocache(true);
-    }
-    if buildkit.forward_default_ssh_agent {
-        frontend_builder = frontend_builder.enable_ssh(true);
-    }
-    let frontend_opts = frontend_builder.build();
 
-    let driver = bollard::grpc::driver::moby::Moby::new(docker);
-    let load_input =
-        bollard::grpc::build::ImageBuildLoadInput::Upload(bytes::Bytes::from(compressed));
-
-    bollard::grpc::driver::Build::docker_build(driver, tag, frontend_opts, load_input, None, None)
-        .await
-        .map_err(|e| {
-            pb.finish_with_message(format!("Failed to build image {}", tag));
-            anyhow::anyhow!("Failed to build image '{}' via BuildKit: {}", tag, e)
-        })?;
-
-    let image_id = docker
-        .inspect_image(tag)
-        .await
-        .with_context(|| format!("Failed to inspect newly built image '{}'", tag))?
-        .id
-        .ok_or_else(|| {
-            anyhow::anyhow!("Docker did not report an image ID after building '{}'", tag)
-        })?;
+    let image_id = image_id.ok_or_else(|| {
+        anyhow::anyhow!("Docker did not report an image ID after building '{}'", tag)
+    })?;
 
     pb.finish_with_message(format!("Image {} built successfully", tag));
     Ok(image_id)
 }
 
-/// Formats `output` (the build log accumulated so far) as a "Build output:"
+/// Formats `output` (the build log accumulated so far) as a "Build output:"/// Formats `output` (the build log accumulated so far) as a "Build output:"
 /// section to append to a build failure message, or an empty string if
 /// nothing was captured yet (e.g. the build failed before Docker streamed
 /// anything). Kept separate from `build_image` so it's unit-testable without
@@ -1204,37 +1247,17 @@ impl ContainerRuntime for DockerClient {
         buildkit: Option<&BuildKitOptions>,
         tag: &str,
     ) -> Result<String> {
-        if let Some(buildkit) = buildkit {
-            // `bollard`'s BuildKit gRPC session machinery (`grpc_handle`'s
-            // `Box<dyn DriverTearDownHandler>` and the `solve()` future it
-            // drives) isn't `Send` — but `#[async_trait]` boxes every
-            // `ContainerRuntime` method as `Send` by default, so it can't be
-            // `.await`ed directly here. Driving it to completion on its own
-            // blocking-pool thread instead (via `Handle::block_on`, Tokio's
-            // own documented escape hatch for exactly this) sidesteps the
-            // bound: only the `Result<String>` it eventually produces needs
-            // to cross back to this (genuinely `Send`) future, not the
-            // non-`Send` future itself.
-            let docker = self.docker.clone();
-            let build_directory = build_directory.to_path_buf();
-            let dockerfile = dockerfile.to_string();
-            let build_args = build_args.cloned();
-            let target = target.map(|t| t.to_string());
-            let buildkit = buildkit.clone();
-            let tag = tag.to_string();
-            return tokio::task::spawn_blocking(move || {
-                tokio::runtime::Handle::current().block_on(build_image_via_buildkit(
-                    &docker,
-                    &build_directory,
-                    &dockerfile,
-                    build_args.as_ref(),
-                    target.as_deref(),
-                    &buildkit,
-                    &tag,
-                ))
-            })
-            .await
-            .context("BuildKit build task panicked")?;
+        if buildkit.is_some() {
+            return build_image_via_buildkit(
+                &self.docker,
+                build_directory,
+                dockerfile,
+                build_args,
+                target,
+                buildkit,
+                tag,
+            )
+            .await;
         }
 
         let pb = ProgressBar::new_spinner();
@@ -1303,8 +1326,8 @@ impl ContainerRuntime for DockerClient {
                     // aux info — `BuildKit` is the other variant, only ever
                     // sent for a build issued with
                     // `BuilderVersion::BuilderBuildKit` (this path never
-                    // sets that), which is how the BuildKit-session build
-                    // path below reports its own progress instead.
+                    // sets that), which is how `build_image_via_buildkit`
+                    // reports its own progress instead.
                     if let Some(bollard::models::BuildInfoAux::Default(aux_image_id)) = info.aux {
                         if let Some(id) = aux_image_id.id {
                             image_id = Some(id);

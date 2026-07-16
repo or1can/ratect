@@ -212,11 +212,11 @@ task's own container, as a dependency, or by more than one task) — but never r
   that session, not mounted as a socket — so this works unchanged on macOS/Windows,
   where Docker Desktop's VM boundary otherwise blocks mounting host sockets into
   containers (no `/run/host-services/ssh-auth.sock` workaround involved).
-- A build that uses the BuildKit session path (`build_secrets`/`build_ssh`) doesn't
-  capture build output the way classic builds do: there's no `RUST_LOG=debug`
-  transcript, and a build failure's error reports the failing instruction and its
-  exit code but not what that step printed — see
-  [Differences from Batect](differences-from-batect.md#runtime-behavior-gaps).
+- A BuildKit build captures output the same way a classic build does: every build
+  step and its output is logged at `debug` level (`RUST_LOG=debug` for a live
+  transcript), and a build failure's error includes the entire accumulated
+  transcript — the failing step's own output included — not just BuildKit's
+  one-line failing-instruction summary.
 - The built image is tagged `<project_name>-<container_name>` (matching Batect's own
   default), so it's identifiable in `docker images` rather than showing up as an
   opaque generated name. That tag is reused/overwritten on every run, though — it's
