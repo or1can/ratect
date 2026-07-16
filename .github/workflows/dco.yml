@@ -24,13 +24,19 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          # Merge commits (2+ parents) are skipped, matching the standard DCO
-          # bot's behavior — they're created by GitHub, not authored.
+          # Merge commits (2+ parents) and bot-authored commits (e.g.
+          # dependabot, which signs off under a different email than it
+          # authors with) are skipped, matching the standard DCO bot's
+          # behavior. The author is bound to a variable because inside
+          # `contains(...)`, `.` is the piped-in message string, not the
+          # commit object.
           missing=$(gh api "repos/$REPO/pulls/$PR/commits" --paginate --jq '
             .[]
             | select((.parents | length) < 2)
+            | select((.author.type // "") != "Bot")
+            | .commit.author as $author
             | select((.commit.message
-                | contains("Signed-off-by: \(.commit.author.name) <\(.commit.author.email)>"))
+                | contains("Signed-off-by: \($author.name) <\($author.email)>"))
                 | not)
             | "  \(.sha[0:10]) \(.commit.message | split("\n")[0])"')
           if [ -n "$missing" ]; then
