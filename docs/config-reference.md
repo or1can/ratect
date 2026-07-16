@@ -451,7 +451,7 @@ Each `setup_commands` entry takes:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `command` | string | yes | The command to run, via `sh -c` — the same shell treatment a task's `command` gets. |
+| `command` | string | yes | The command to run, via `sh -c`. Unlike a task's own `command`/`entrypoint` (tokenized into literal argv, no shell involved — see [TaskRun](#taskrun)), a `setup_commands` entry still runs through a shell. |
 | `working_directory` | string | no | Directory to run it in. Falls back to the container's own `working_directory` when omitted, and then to the image's own default when neither is set. |
 
 Ratect imposes no timeout of its own on the health wait (matching Batect) — Docker's
@@ -487,7 +487,7 @@ tasks:
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `container` | string | yes | Name of a container defined under `containers`. |
-| `command` | string | no | Shell command to run inside the container (executed as `sh -c "<command>"`). If omitted, the container's own default `CMD`/`ENTRYPOINT` runs instead. Any `-- ADDITIONAL_ARGS` from the CLI become this shell's positional parameters (`$1`, `$2`, `$@`) — see [CLI reference](cli-reference.md#using-additional_args-in-a-task-command). |
+| `command` | string | no | Command to run inside the container, tokenized into literal argv (quote/backslash-aware whitespace splitting — no shell involved, matching Batect's own tokenizer exactly). If omitted, the container's own default `CMD`/`ENTRYPOINT` runs instead. Any `-- ADDITIONAL_ARGS` from the CLI are appended as further literal argv entries — see [CLI reference](cli-reference.md#using-additional_args-in-a-task-command). |
 | `environment` | map of string → string | no | Environment variables to set for this task's run specifically. Merged with the container's own `environment` (see [Container](#container)): the container's values apply first, and `run.environment` overrides them on a key collision. Values support the same [expressions](#expressions) as `environment` does. |
 | `ports` | list of strings/objects | no | Additional port mappings for this task's run specifically — see [Port mappings](#port-mappings). *Added* to the container's own `ports`, not an override — there's no concept of one replacing an entry from the other. |
 | `working_directory` | string | no | Overrides the container's own `working_directory` for this task's run specifically (see [Container](#container)). No [expression](#expressions) support. |

@@ -15,4 +15,4 @@ tasks:
   print-message:
     run:
       container: build-env
-      command: echo "$MESSAGE"
+      command: sh -c "echo $MESSAGE"

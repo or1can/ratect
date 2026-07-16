@@ -27,7 +27,7 @@ missing.
 | Argument | Description |
 |---|---|
 | `TASK_NAME` | The name of the task to run, as defined under `tasks:` in the config file. Optional — if omitted (and `--list-tasks` isn't given), Ratect logs a warning and exits without doing anything. |
-| `-- ADDITIONAL_ARGS...` | Anything after a literal `--` is forwarded to the task's command as positional shell parameters (`$1`, `$2`, `$@`) — see below. Only applies to the task named on the command line, never to its prerequisites. |
+| `-- ADDITIONAL_ARGS...` | Anything after a literal `--` is appended as literal argv entries after the task's own tokenized `command` — see below. Only applies to the task named on the command line, never to its prerequisites. |
 
 ## Examples
 
@@ -53,22 +53,24 @@ ratect --config-vars-file ./ci/config-vars.yml test
 
 ### Using ADDITIONAL_ARGS in a task command
 
-`run.command` always executes via `sh -c '<command>'`, so anything after `--` becomes
-that shell's positional parameters — reference them the same way you would in any
-shell script:
+`run.command` is tokenized into literal argv (quote/backslash-aware whitespace
+splitting, no shell involved — matching Batect's own tokenizer exactly), and anything
+after `--` is appended as further literal argv entries — no special syntax needed in
+`command` itself to receive them:
 
 ```yaml
 tasks:
   test:
     run:
       container: build-env
-      command: cargo test -- "$@"
+      command: cargo test
 ```
 
-Running `ratect test -- --nocapture` here runs `cargo test -- --nocapture` inside the
-container. Args are passed as literal argv entries (not concatenated into the command
-string and re-parsed), so they're safe even if they contain shell metacharacters like
-`;`, `&&`, or backticks — `$@` sees them as opaque values, not as syntax to interpret.
+Running `ratect test -- --nocapture` here runs `cargo test --nocapture` inside the
+container. Args are appended as literal argv entries (never concatenated into the
+command string and re-parsed), so they're safe even if they contain characters that
+would be shell metacharacters elsewhere, like `;`, `&&`, or backticks — Ratect never
+passes `command`/`ADDITIONAL_ARGS` through a shell at all.
 
 If the task's container has no `command` at all, `ADDITIONAL_ARGS` (when given) are
 passed directly as the container's entrypoint arguments instead, matching plain

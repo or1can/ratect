@@ -22,4 +22,4 @@ tasks:
   check-network-options:
     run:
       container: app
-      command: ping -c 1 db-alias && getent hosts external-service && hostname
+      command: sh -c "ping -c 1 db-alias && getent hosts external-service && hostname"

@@ -16,6 +16,6 @@ tasks:
   print-env:
     run:
       container: build-env
-      command: echo "GREETING=$GREETING" "ENV_NAME=$ENV_NAME"
+      command: sh -c "echo GREETING=$GREETING ENV_NAME=$ENV_NAME"
       environment:
         ENV_NAME: <env_name

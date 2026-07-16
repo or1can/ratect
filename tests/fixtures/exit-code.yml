@@ -10,11 +10,11 @@ tasks:
   succeeds:
     run:
       container: build-env
-      command: exit 0
+      command: sh -c "exit 0"
   fails:
     run:
       container: build-env
-      command: exit 42
+      command: sh -c "exit 42"
   stops-prerequisite-chain:
     prerequisites:
       - fails

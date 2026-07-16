@@ -24,4 +24,4 @@ tasks:
   ping-sidecars:
     run:
       container: app
-      command: ping -c 1 database && ping -c 1 cache && ping -c 1 metrics
+      command: sh -c "ping -c 1 database && ping -c 1 cache && ping -c 1 metrics"

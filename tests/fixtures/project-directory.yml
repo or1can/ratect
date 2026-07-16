@@ -14,4 +14,4 @@ tasks:
   print-project-dir:
     run:
       container: build-env
-      command: echo "PROJECT_DIR=$PROJECT_DIR" && ls /mnt
+      command: sh -c "echo PROJECT_DIR=$PROJECT_DIR && ls /mnt"

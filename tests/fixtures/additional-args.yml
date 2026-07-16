@@ -1,5 +1,7 @@
-# Exercises `-- ADDITIONAL_ARGS` forwarding: `echo-args`'s command uses `$@`
-# to reference whatever args were passed after `--` on the command line.
+# Exercises `-- ADDITIONAL_ARGS` forwarding: whatever args are passed after
+# `--` on the command line are appended as literal argv after `echo-args`'s
+# own tokenized `command` — matching Batect's own mechanism exactly, no
+# shell involved.
 project_name: ratect-additional-args-test
 containers:
   build-env:
@@ -8,4 +10,4 @@ tasks:
   echo-args:
     run:
       container: build-env
-      command: echo "args:" "$@"
+      command: "echo args:"

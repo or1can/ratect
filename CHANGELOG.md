@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`working_directory`**: a container (and, for a task's own container, the task-level `run.working_directory` override) can now override the image's own `WORKDIR` — see [config reference](docs/config-reference.md#container). A `setup_commands` entry with no `working_directory` of its own now falls back to the container's, then the image's own default, closing a known gap left by 0.9.0's dependency readiness work (see `ROADMAP.md`). Part of 0.13.0's Container Runtime Options (see `ROADMAP.md`).
 
+### Changed
+
+- **`command` (and `-- ADDITIONAL_ARGS`) is now tokenized into literal argv instead of running via `sh -c`**, matching Batect's own `Command.parse` tokenizer exactly (`docker.rs`'s new `tokenize_command_line`, a straight Rust port): whitespace-splitting, quote-aware (`'...'` fully literal, `"..."` processes backslash escapes), with a backslash escaping the next character outside quotes too. `ADDITIONAL_ARGS` are now appended as further literal argv entries — Batect's real mechanism — rather than becoming `sh -c`'s positional parameters (`$1`/`$2`/`$@`). This closes two real divergences (a literal `$VAR`/glob/shell-operator character in `command` no longer gets silently shell-interpreted; `command` no longer needs a shell present in the image at all — e.g. distroless/`FROM scratch` images), but it's a breaking change for any `command` that relied on the old implicit shell: write `command: sh -c "..."` explicitly to keep shell operators. `setup_commands` is unaffected — it still runs via `sh -c` (a separate, narrower, still-open divergence — see `docs/differences-from-batect.md`). Lands ahead of 0.13.0's `entrypoint` field (see `ROADMAP.md`), which reuses the same tokenizer and would otherwise conflict with the old implicit `sh -c` wrap.
+
 ## [0.12.0] - 2026-07-16
 
 ### Changed

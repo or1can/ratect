@@ -14,4 +14,4 @@ tasks:
   print-proxy-vars:
     run:
       container: app
-      command: echo "HTTP_PROXY=$http_proxy" "NO_PROXY=$no_proxy"
+      command: sh -c "echo HTTP_PROXY=$http_proxy NO_PROXY=$no_proxy"

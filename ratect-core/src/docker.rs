@@ -58,34 +58,125 @@ impl fmt::Display for ContainerExitedNonZero {
 
 impl std::error::Error for ContainerExitedNonZero {}
 
+/// The states `tokenize_command_line`'s character-by-character scan moves
+/// through — outside any quote, inside a `'...'` (literal, no escapes), or
+/// inside a `"..."` (backslash escapes processed).
+#[derive(PartialEq)]
+enum TokenizerState {
+    Normal,
+    SingleQuote,
+    DoubleQuote,
+}
+
+/// Splits a `command`/`entrypoint` string into literal argv — ported from
+/// Batect's own `Command.parse` (`batect.os.Command`), the same
+/// whitespace-splitting, quote/backslash-aware tokenizer Batect uses for
+/// both fields. Deliberately *not* a shell: no `$VAR` expansion, no
+/// globbing, no `&&`/`|`/`>` — those characters are just ordinary content.
+/// A backslash escapes the very next character (including outside any
+/// quote); single quotes take everything up to the next single quote
+/// completely literally (no escapes processed inside, matching Batect); double
+/// quotes process backslash escapes. Whitespace-only content between
+/// argument-separating whitespace is discarded, mirroring Batect's own
+/// `isNotBlank()` check — except at the very end of the string, where
+/// even whitespace-only trailing content (only reachable via an escaped
+/// space) is kept, matching Batect's asymmetric `isNotEmpty()` there.
+/// Errors (unbalanced quote, trailing backslash) match Batect's own
+/// messages.
+fn tokenize_command_line(input: &str) -> Result<Vec<String>> {
+    let chars: Vec<char> = input.chars().collect();
+    let mut arguments = Vec::new();
+    let mut current = String::new();
+    let mut state = TokenizerState::Normal;
+    let mut i = 0;
+
+    let dangling_backslash = || {
+        anyhow::anyhow!(
+            "Command `{input}` is invalid: it ends with a backslash (backslashes always \
+             escape the following character, for a literal backslash, use '\\\\')"
+        )
+    };
+
+    while i < chars.len() {
+        let c = chars[i];
+        match state {
+            TokenizerState::Normal => {
+                if c == '\\' {
+                    i += 1;
+                    current.push(*chars.get(i).ok_or_else(dangling_backslash)?);
+                } else if c.is_whitespace() {
+                    if current.chars().any(|c| !c.is_whitespace()) {
+                        arguments.push(std::mem::take(&mut current));
+                    } else {
+                        current.clear();
+                    }
+                } else if c == '\'' {
+                    state = TokenizerState::SingleQuote;
+                } else if c == '"' {
+                    state = TokenizerState::DoubleQuote;
+                } else {
+                    current.push(c);
+                }
+            }
+            TokenizerState::SingleQuote => {
+                if c == '\'' {
+                    state = TokenizerState::Normal;
+                } else {
+                    current.push(c);
+                }
+            }
+            TokenizerState::DoubleQuote => {
+                if c == '"' {
+                    state = TokenizerState::Normal;
+                } else if c == '\\' {
+                    i += 1;
+                    current.push(*chars.get(i).ok_or_else(dangling_backslash)?);
+                } else {
+                    current.push(c);
+                }
+            }
+        }
+        i += 1;
+    }
+
+    match state {
+        TokenizerState::DoubleQuote => {
+            anyhow::bail!("Command `{input}` is invalid: it contains an unbalanced double quote")
+        }
+        TokenizerState::SingleQuote => {
+            anyhow::bail!("Command `{input}` is invalid: it contains an unbalanced single quote")
+        }
+        TokenizerState::Normal => {
+            if !current.is_empty() {
+                arguments.push(current);
+            }
+            Ok(arguments)
+        }
+    }
+}
+
 /// Builds the Docker `cmd` array for a task's container, folding in any
 /// `-- ADDITIONAL_ARGS` from the CLI.
 ///
-/// When `command` is set, `sh -c '<command>' sh arg1 arg2 ...` is used
-/// instead of string concatenation, so the args become the shell's
-/// positional parameters (`$1`, `$2`, `$@`) inside `command` rather than
-/// being re-parsed as shell syntax — safe regardless of what characters
-/// they contain. The `sh` immediately after the command string fills the
-/// `$0` slot; it's conventional and not otherwise meaningful.
+/// `command` is tokenized via [`tokenize_command_line`] — the same literal,
+/// no-shell-involved argv Batect itself would produce — with
+/// `additional_args` appended as further literal argv entries, matching
+/// Batect's own `ADDITIONAL_ARGS` handling exactly (no `sh -c`, no
+/// positional-parameter trick). See `docs/differences-from-batect.md` for
+/// what this means for `$VAR`/glob/shell-operator characters in `command`.
 ///
 /// When `command` is unset, non-empty `additional_args` are passed directly
 /// as argv, letting the image's own entrypoint receive them (matching plain
 /// `docker run <image> <args>`).
-fn build_cmd(command: Option<&str>, additional_args: &[String]) -> Option<Vec<String>> {
-    match (command, additional_args.is_empty()) {
-        (Some(c), true) => Some(vec!["sh".to_string(), "-c".to_string(), c.to_string()]),
-        (Some(c), false) => {
-            let mut cmd = vec![
-                "sh".to_string(),
-                "-c".to_string(),
-                c.to_string(),
-                "sh".to_string(),
-            ];
-            cmd.extend(additional_args.iter().cloned());
-            Some(cmd)
+fn build_cmd(command: Option<&str>, additional_args: &[String]) -> Result<Option<Vec<String>>> {
+    match command {
+        Some(c) => {
+            let mut argv = tokenize_command_line(c)?;
+            argv.extend(additional_args.iter().cloned());
+            Ok(Some(argv))
         }
-        (None, true) => None,
-        (None, false) => Some(additional_args.to_vec()),
+        None if additional_args.is_empty() => Ok(None),
+        None => Ok(Some(additional_args.to_vec())),
     }
 }
 
@@ -866,9 +957,10 @@ pub trait ContainerRuntime {
     async fn wait_for_container_healthy(&self, container_id: &str) -> Result<()>;
 
     /// Runs `command` inside the already-running `container_id` via
-    /// `sh -c` (the same shell treatment a task's `command` gets) and waits
-    /// for it to finish — Docker's `exec` mechanism, used for
-    /// `setup_commands`. Runs with the container's own environment and (when
+    /// `sh -c` — used for `setup_commands`, which (unlike `command`/
+    /// `entrypoint`) still gets this shell treatment; see
+    /// `config::SetupCommand`'s doc comment for why. Docker's `exec`
+    /// mechanism. Runs with the container's own environment and (when
     /// `user_mapping` is set) the same `uid:gid` the container itself runs
     /// as, matching Batect. Failure to *run* the command is an `Err`; the
     /// command running and exiting non-zero is an `Ok` whose
@@ -890,10 +982,10 @@ pub trait ContainerRuntime {
     /// removes it. `name` is this container's own network alias (used when
     /// `network` is set); used for a task's own container.
     ///
-    /// `additional_args` become positional parameters (`$1`, `$2`, ... `$@`)
-    /// within `command` (which always runs via `sh -c`) rather than being
-    /// concatenated into the command string — so they're never re-parsed as
-    /// shell syntax, regardless of what characters they contain. If `command`
+    /// `additional_args` are appended as literal argv entries after
+    /// `command`'s own tokenized argv (see [`build_cmd`]) — matching
+    /// Batect's own `ADDITIONAL_ARGS` mechanism exactly, never re-parsed as
+    /// shell syntax regardless of what characters they contain. If `command`
     /// is `None`, `additional_args` (when non-empty) are passed directly as
     /// the container's argv, letting the image's own entrypoint receive them.
     /// `environment` is the container's own `environment` merged with the
@@ -1738,6 +1830,7 @@ impl ContainerRuntime for DockerClient {
         if user_mapping.is_some() {
             ensure_host_volume_directories_exist(volumes)?;
         }
+        let cmd = build_cmd(command, additional_args)?;
         let port_config = build_port_config(network_options.ports);
 
         let host_config = HostConfig {
@@ -1750,7 +1843,7 @@ impl ContainerRuntime for DockerClient {
         let config = Config {
             hostname: Some(name.to_string()),
             image: Some(image.to_string()),
-            cmd: build_cmd(command, additional_args),
+            cmd,
             env: build_env(environment),
             exposed_ports: port_config.as_ref().map(|(exposed, _)| exposed.clone()),
             attach_stdout: Some(true),
@@ -1938,29 +2031,27 @@ mod tests {
     }
 
     #[test]
-    fn build_cmd_with_command_and_no_additional_args_runs_it_via_sh_c() {
-        let cmd = build_cmd(Some("echo hi"), &[]);
+    fn build_cmd_with_command_and_no_additional_args_tokenizes_it() {
+        let cmd = build_cmd(Some("echo hi there"), &[]).unwrap();
         assert_eq!(
             cmd,
             Some(vec![
-                "sh".to_string(),
-                "-c".to_string(),
-                "echo hi".to_string(),
+                "echo".to_string(),
+                "hi".to_string(),
+                "there".to_string(),
             ])
         );
     }
 
     #[test]
-    fn build_cmd_with_command_and_additional_args_passes_them_as_positional_parameters() {
+    fn build_cmd_with_command_and_additional_args_appends_them_as_literal_argv() {
         let additional_args = vec!["arg1".to_string(), "arg2".to_string()];
-        let cmd = build_cmd(Some("echo $1 $2"), &additional_args);
+        let cmd = build_cmd(Some("echo hi"), &additional_args).unwrap();
         assert_eq!(
             cmd,
             Some(vec![
-                "sh".to_string(),
-                "-c".to_string(),
-                "echo $1 $2".to_string(),
-                "sh".to_string(),
+                "echo".to_string(),
+                "hi".to_string(),
                 "arg1".to_string(),
                 "arg2".to_string(),
             ])
@@ -1972,14 +2063,86 @@ mod tests {
         // `None` (not an empty `Vec`) — bollard/Docker treats an unset `cmd`
         // as "use the image's own default CMD/entrypoint", which an empty
         // array wouldn't.
-        assert_eq!(build_cmd(None, &[]), None);
+        assert_eq!(build_cmd(None, &[]).unwrap(), None);
     }
 
     #[test]
     fn build_cmd_with_no_command_and_additional_args_passes_them_directly_as_argv() {
         let additional_args = vec!["migrate".to_string(), "--up".to_string()];
-        let cmd = build_cmd(None, &additional_args);
+        let cmd = build_cmd(None, &additional_args).unwrap();
         assert_eq!(cmd, Some(vec!["migrate".to_string(), "--up".to_string()]));
+    }
+
+    #[test]
+    fn build_cmd_with_an_invalid_command_and_no_additional_args_fails() {
+        assert!(build_cmd(Some("echo 'unbalanced"), &[]).is_err());
+    }
+
+    #[test]
+    fn tokenize_command_line_splits_on_whitespace() {
+        assert_eq!(
+            tokenize_command_line("echo   hi   there").unwrap(),
+            vec!["echo", "hi", "there"]
+        );
+    }
+
+    #[test]
+    fn tokenize_command_line_treats_single_quoted_content_as_one_literal_argument() {
+        // The classic Batect idiom for forcing `sh -c`'s command string to
+        // stay a single argv token: `entrypoint: /bin/sh -c`, `command:
+        // 'make lint'` (the outer quotes are YAML's; the value is the
+        // literal string `'make lint'`).
+        assert_eq!(
+            tokenize_command_line("'make lint'").unwrap(),
+            vec!["make lint"]
+        );
+    }
+
+    #[test]
+    fn tokenize_command_line_does_not_process_escapes_inside_single_quotes() {
+        assert_eq!(
+            tokenize_command_line(r"'a\b'").unwrap(),
+            vec![r"a\b".to_string()]
+        );
+    }
+
+    #[test]
+    fn tokenize_command_line_processes_escapes_inside_double_quotes() {
+        assert_eq!(
+            tokenize_command_line(r#""a\"b""#).unwrap(),
+            vec![r#"a"b"#.to_string()]
+        );
+    }
+
+    #[test]
+    fn tokenize_command_line_processes_a_backslash_escape_outside_any_quote() {
+        assert_eq!(
+            tokenize_command_line(r"hello\ world").unwrap(),
+            vec!["hello world"]
+        );
+    }
+
+    #[test]
+    fn tokenize_command_line_rejects_a_trailing_backslash() {
+        let err = tokenize_command_line(r"echo hi\").unwrap_err();
+        assert!(err.to_string().contains("ends with a backslash"));
+    }
+
+    #[test]
+    fn tokenize_command_line_rejects_an_unbalanced_single_quote() {
+        let err = tokenize_command_line("echo 'hi").unwrap_err();
+        assert!(err.to_string().contains("unbalanced single quote"));
+    }
+
+    #[test]
+    fn tokenize_command_line_rejects_an_unbalanced_double_quote() {
+        let err = tokenize_command_line(r#"echo "hi"#).unwrap_err();
+        assert!(err.to_string().contains("unbalanced double quote"));
+    }
+
+    #[test]
+    fn tokenize_command_line_of_an_empty_string_produces_no_arguments() {
+        assert_eq!(tokenize_command_line("").unwrap(), Vec::<String>::new());
     }
 
     /// The `/`-joined relative paths of every entry in a tar built by

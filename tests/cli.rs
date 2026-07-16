@@ -415,7 +415,7 @@ tasks:
   check:
     run:
       container: app
-      command: test -f /scratch/setup-ran && echo SETUP-RAN-BEFORE-TASK
+      command: sh -c "test -f /scratch/setup-ran && echo SETUP-RAN-BEFORE-TASK"
 "#,
         build_directory = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/readiness")
@@ -561,9 +561,9 @@ fn failing_prerequisite_stops_the_chain() {
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
 /// Run explicitly with `cargo test -- --ignored`.
 ///
-/// The second arg deliberately contains a space and no shell metacharacters
-/// are involved — proves args arrive as literal positional parameters (via
-/// `sh -c`'s `$0 $1 $2...` mechanism) rather than being concatenated into the
+/// The second arg deliberately contains a space — proves args arrive as
+/// literal argv appended after the tokenized `command`, matching Batect's
+/// own `ADDITIONAL_ARGS` mechanism, rather than being concatenated into the
 /// command string and re-parsed as shell syntax.
 #[test]
 #[ignore]
@@ -1712,7 +1712,7 @@ tasks:
   check:
     run:
       container: app
-      command: id -u && id -g && touch /output/marker
+      command: sh -c "id -u && id -g && touch /output/marker"
 "#,
         volume = scratch_dir.display()
     );
