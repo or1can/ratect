@@ -405,12 +405,22 @@ async fn build_image_via_buildkit(
             Ok(info) => match info.aux {
                 Some(bollard::models::BuildInfoAux::BuildKit(status)) => {
                     for vertex in &status.vertexes {
-                        // Vertexes are re-sent on every state change
-                        // (started/completed/errored) — record the name once,
-                        // on first sight, and any error once, when it appears.
-                        if seen_vertexes.insert(vertex.digest.clone()) && !vertex.name.is_empty() {
-                            tracing::debug!(image = tag, "{}", vertex.name);
+                        // Vertexes are re-sent on every state change — and
+                        // the very first status message announces the *whole*
+                        // build graph upfront, before anything runs, in graph
+                        // (not execution) order. So a step's name is recorded
+                        // when it first reports *started* — execution order,
+                        // matching the docker CLI — not on first sight, which
+                        // would dump the entire plan at once (and reversed).
+                        // Errors are recorded once, when they appear.
+                        if vertex.started.is_some()
+                            && seen_vertexes.insert(vertex.digest.clone())
+                            && !vertex.name.is_empty()
+                        {
+                            let cached_suffix = if vertex.cached { " CACHED" } else { "" };
+                            tracing::debug!(image = tag, "{}{}", vertex.name, cached_suffix);
                             output.push_str(&vertex.name);
+                            output.push_str(cached_suffix);
                             output.push('\n');
                             pb.set_message(format!("{}: {}", tag, vertex.name));
                         }

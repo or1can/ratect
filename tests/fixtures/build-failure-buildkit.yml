@@ -1,9 +1,13 @@
 # Exercises a failing BuildKit build that has session providers in play (the
-# `build_secrets` entry): the Dockerfile's `RUN` step
-# always fails after printing a distinctive line, proving BuildKit's
-# structured status stream is accumulated into the same transcript-in-error
-# the classic path has always had — the exact gap 0.11.0 shipped with (its
-# gRPC-driver path exposed no log stream at all to capture).
+# `build_secrets` entry): the Dockerfile's final `RUN` step always fails
+# after printing a distinctive line, proving BuildKit's structured status
+# stream is accumulated into the same transcript-in-error the classic path
+# has always had — the exact gap 0.11.0 shipped with (its gRPC-driver path
+# exposed no log stream at all to capture). The earlier `RUN` step exists so
+# the test can also assert the transcript's *step ordering*: BuildKit
+# announces the whole build graph upfront in graph (reverse) order, so a
+# transcript recording steps on first sight — rather than when each starts —
+# reads backwards.
 project_name: ratect-build-failure-buildkit-test
 containers:
   build-env:

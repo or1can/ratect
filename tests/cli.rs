@@ -1041,6 +1041,13 @@ fn failing_build_output_reaches_the_error() {
 /// structured status stream rather than the classic path's plain `stream`
 /// lines. This is the test 0.11.0 couldn't have: its gRPC-driver BuildKit
 /// path exposed no log stream to capture.
+///
+/// Also asserts the transcript's step *ordering*: BuildKit's first status
+/// message announces the entire build graph upfront, before anything runs,
+/// in graph (reverse-topological) order — so a transcript that records
+/// steps on first sight, rather than when each one starts, reads backwards
+/// (`[3/3]` down to `[1/3]`). The fixture's Dockerfile has multiple steps
+/// specifically so that regression is observable here.
 #[test]
 #[ignore]
 fn failing_buildkit_build_output_reaches_the_error() {
@@ -1062,6 +1069,32 @@ fn failing_buildkit_build_output_reaches_the_error() {
     assert!(
         stderr.contains("this buildkit line should reach the user"),
         "the Dockerfile's RUN output should be in the error: {stderr}"
+    );
+
+    // Step names are `[stage-0 N/3]`-style; matching on the `N/3]` suffix
+    // keeps this robust to the stage-name prefix. Only the two `RUN` steps
+    // are asserted on — deliberately not the `FROM` step: BuildKit
+    // content-addresses vertexes and shares them across *concurrent* builds,
+    // so a shared step like `FROM alpine:3.18.2` can carry another build's
+    // graph name entirely (e.g. `[1/7] FROM ...` borrowed from a 7-step
+    // fixture building in a parallel test). The `RUN` commands are unique to
+    // this Dockerfile, so their names — and relative order — are stable.
+    // Both must appear in execution order: the whole-graph-upfront
+    // announcement would put them in reverse order if recorded on first
+    // sight instead of on start.
+    let position = |needle: &str| {
+        stderr
+            .find(needle)
+            .unwrap_or_else(|| panic!("'{needle}' should be in the error transcript: {stderr}"))
+    };
+    assert!(
+        position("2/3]") < position("3/3]"),
+        "build steps should appear in execution order in the transcript: {stderr}"
+    );
+    assert!(
+        position("an earlier step that should appear first")
+            < position("this buildkit line should reach the user"),
+        "step output should appear in execution order in the transcript: {stderr}"
     );
 }
 
