@@ -525,8 +525,7 @@ impl Drop for RawModeGuard {
 /// `spawn_resize_listener` below). Takes `&Docker` directly rather than
 /// `&self` so it can also be called from a separately spawned task, holding
 /// its own cloned client rather than borrowing the caller's. Best-effort: a
-/// failure (can't query the local size, or the container has already
-/// exited) is logged and otherwise ignored, matching the previous one-shot
+/// failure is logged and otherwise ignored, matching the previous one-shot
 /// call this replaces.
 async fn resize_tty(docker: &Docker, container_id: &str) {
     let Ok((cols, rows)) = crossterm::terminal::size() else {
@@ -540,7 +539,24 @@ async fn resize_tty(docker: &Docker, container_id: &str) {
         .resize_container_tty(container_id, resize_options)
         .await
     {
-        tracing::warn!(container_id, error = ?e, "Failed to resize container TTY");
+        match &e {
+            // A short-lived interactive task (e.g. a plain `echo`) can exit
+            // before the attach-time size sync lands (409, "is not
+            // running"), or even be cleaned up entirely by the time a
+            // terminal-resize signal arrives (404) — benign races on an
+            // otherwise clean run, nothing a user could act on, so not
+            // worth a warning.
+            bollard::errors::Error::DockerResponseServerError { status_code, .. }
+                if *status_code == 409 || *status_code == 404 =>
+            {
+                tracing::debug!(
+                    container_id,
+                    error = ?e,
+                    "Skipping TTY resize — the container has already exited"
+                );
+            }
+            _ => tracing::warn!(container_id, error = ?e, "Failed to resize container TTY"),
+        }
     }
 }
 

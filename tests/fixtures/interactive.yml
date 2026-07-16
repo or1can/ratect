@@ -12,3 +12,11 @@ tasks:
     run:
       container: shell
       command: sh
+  # Exits the moment it starts — see
+  # `instantly_exiting_interactive_task_does_not_warn_about_tty_resize` in
+  # tests/cli.rs: the attach-time TTY size sync races such a container's own
+  # exit, and losing that race must stay silent (it's benign), not warn.
+  instant:
+    run:
+      container: shell
+      command: echo instant-exit

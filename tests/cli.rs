@@ -1328,6 +1328,90 @@ fn interactive_session_forwards_stdin_and_stdout() {
 /// `portable-pty` makes this work in headless CI too. Run explicitly with
 /// `cargo test -- --ignored`.
 ///
+/// Proves an interactive task that exits the instant it starts doesn't warn
+/// about failing to resize the container's TTY: the attach-time size sync
+/// races such a container's own exit, and losing that race (the daemon
+/// answers 409 "is not running", or 404 once cleanup has already removed
+/// the container) is benign — `resize_tty` must classify it as such rather
+/// than surfacing a warning on an otherwise clean run. The race doesn't
+/// trigger on every run, so a pass here doesn't *alone* prove the
+/// classification — but the fixed code can never emit the warning for
+/// those two status codes, while the pre-fix code warned whenever the race
+/// was lost.
+#[test]
+#[ignore]
+fn instantly_exiting_interactive_task_does_not_warn_about_tty_resize() {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("failed to open pty");
+
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect"));
+    cmd.arg("-f");
+    cmd.arg(interactive_config_path());
+    cmd.arg("instant");
+
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
+        .expect("failed to spawn ratect in the pty");
+    drop(pair.slave);
+
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .expect("failed to clone pty reader");
+
+    // Drain everything the child writes (stdout and stderr both arrive via
+    // the pty) until EOF, in a background thread — the child exits on its
+    // own, no input needed.
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    let (wait_tx, wait_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = wait_tx.send(child.wait());
+    });
+    let status = wait_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("ratect did not exit")
+        .expect("failed to wait for ratect");
+    assert!(status.success(), "the task should succeed: {status:?}");
+
+    let mut output = Vec::new();
+    while let Ok(chunk) = rx.recv_timeout(Duration::from_millis(500)) {
+        output.extend_from_slice(&chunk);
+    }
+    let output_str = String::from_utf8_lossy(&output);
+    assert!(
+        !output_str.contains("Failed to resize container TTY"),
+        "an instantly-exiting task should not warn about TTY resizing: {output_str:?}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`, and the ability to allocate a local pseudo-terminal —
+/// see `interactive_session_forwards_stdin_and_stdout` above for why
+/// `portable-pty` makes this work in headless CI too. Run explicitly with
+/// `cargo test -- --ignored`.
+///
 /// Proves the container's TTY is kept in sync with the local terminal for
 /// the *whole* session, not just once at attach time: resizes the pty's
 /// master side mid-session (`MasterPty::resize`, which delivers a real
