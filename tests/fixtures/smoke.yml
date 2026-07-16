@@ -1,3 +1,9 @@
+# The original smoke-test config (this repo's root `batect.yml` before going
+# public — moved here because a root `batect.yml` reads as *this project's own*
+# dev-task config by the very convention ratect implements, and this is a test
+# fixture, not that). Exercises the basics several `tests/cli.rs` tests share:
+# task listing, a shared prerequisite running exactly once, a volume mount, and
+# a happy-path task run.
 project_name: ratect-test
 containers:
   build-env:

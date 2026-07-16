@@ -24,7 +24,7 @@ fn ratect_command() -> Command {
 }
 
 fn sample_config_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("batect.yml")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/smoke.yml")
 }
 
 fn sidecar_config_path() -> PathBuf {
