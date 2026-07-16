@@ -79,6 +79,10 @@ fn build_secrets_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-secrets.yml")
 }
 
+fn build_ssh_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-ssh.yml")
+}
+
 fn build_failure_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-failure.yml")
 }
@@ -785,13 +789,8 @@ fn dockerfile_and_build_target_reach_a_real_docker_build() {
 /// not a baked-in one — proves the secret's value made the full round trip
 /// from host env var through the gRPC session to the build.
 ///
-/// No equivalent test exists for `build_ssh`: unlike `build_secrets`,
-/// proving it forwards something real needs a host `ssh-agent` with a
-/// loaded identity, which isn't a safe assumption for a CI runner. It's
-/// covered instead by `ratect-core/src/engine.rs`'s unit tests (proving
-/// `build_ssh` reaches `BuildKitOptions::forward_default_ssh_agent`) and
-/// was manually verified against a real Docker daemon and a local
-/// `ssh-agent` during development.
+/// See `build_ssh_forwards_a_real_ssh_agent_into_the_build` below for
+/// `build_ssh`'s equivalent.
 #[test]
 #[ignore]
 fn build_secrets_reach_a_real_buildkit_session_build() {
@@ -811,6 +810,153 @@ fn build_secrets_reach_a_real_buildkit_session_build() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(stdout.trim(), "hello-from-build-secret");
+}
+
+/// A dedicated throwaway `ssh-agent` process spawned for one test, plus a
+/// scratch keypair loaded into it — so the `build_ssh` test below never
+/// depends on (or leaks into) the developer's or CI runner's own agent.
+/// Same spirit as the `portable-pty` trick the interactive-mode tests use:
+/// create the real infrastructure in-process rather than assuming the host
+/// provides it. The agent is killed on `Drop`, even if the test panics.
+struct ScratchSshAgent {
+    socket_path: String,
+    pid: String,
+    key_comment: String,
+    key_dir: PathBuf,
+}
+
+impl ScratchSshAgent {
+    fn spawn() -> Self {
+        let output = Command::new("ssh-agent")
+            .arg("-s")
+            .output()
+            .expect("failed to spawn ssh-agent");
+        assert!(output.status.success(), "ssh-agent -s failed");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        // `ssh-agent -s` prints sh-syntax assignments:
+        //   SSH_AUTH_SOCK=/path/to/agent.sock; export SSH_AUTH_SOCK;
+        //   SSH_AGENT_PID=12345; export SSH_AGENT_PID;
+        let extract = |name: &str| -> String {
+            stdout
+                .lines()
+                .find_map(|line| line.strip_prefix(&format!("{name}=")))
+                .and_then(|rest| rest.split(';').next())
+                .unwrap_or_else(|| panic!("no {name} in ssh-agent output: {stdout}"))
+                .to_string()
+        };
+        let socket_path = extract("SSH_AUTH_SOCK");
+        let pid = extract("SSH_AGENT_PID");
+
+        let key_dir = std::env::temp_dir().join(format!(
+            "ratect-build-ssh-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&key_dir).unwrap();
+        let key_comment = "ratect-build-ssh-test-key".to_string();
+        let key_path = key_dir.join("id_ed25519");
+        let keygen = Command::new("ssh-keygen")
+            .arg("-t")
+            .arg("ed25519")
+            .arg("-N")
+            .arg("")
+            .arg("-C")
+            .arg(&key_comment)
+            .arg("-f")
+            .arg(&key_path)
+            .output()
+            .expect("failed to run ssh-keygen");
+        assert!(
+            keygen.status.success(),
+            "ssh-keygen failed: {}",
+            String::from_utf8_lossy(&keygen.stderr)
+        );
+
+        let add = Command::new("ssh-add")
+            .arg(&key_path)
+            .env("SSH_AUTH_SOCK", &socket_path)
+            .output()
+            .expect("failed to run ssh-add");
+        assert!(
+            add.status.success(),
+            "ssh-add failed: {}",
+            String::from_utf8_lossy(&add.stderr)
+        );
+
+        Self {
+            socket_path,
+            pid,
+            key_comment,
+            key_dir,
+        }
+    }
+}
+
+impl Drop for ScratchSshAgent {
+    fn drop(&mut self) {
+        let _ = Command::new("kill").arg(&self.pid).output();
+        let _ = std::fs::remove_dir_all(&self.key_dir);
+    }
+}
+
+/// Requires a running Docker daemon that supports BuildKit sessions,
+/// network access to pull `alpine:3.18.2` (and `apk add openssh-client`
+/// inside the build), and `ssh-agent`/`ssh-keygen`/`ssh-add` binaries on
+/// the host (standard OpenSSH client tools — present on any Unix dev
+/// machine or CI runner). Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves `build_ssh` forwards a real ssh-agent into a real BuildKit
+/// session build: the test spawns its own throwaway agent with one scratch
+/// key ([`ScratchSshAgent`]), points the child `ratect`'s `SSH_AUTH_SOCK`
+/// at it, and asserts the Dockerfile's `RUN --mount=type=ssh ssh-add -l`
+/// saw exactly that key — the full host-agent → gRPC session → build
+/// sandbox round trip, not just that the right options were passed (that
+/// part is covered by `ratect-core/src/engine.rs`'s unit tests).
+///
+/// The fixture's `CACHE_BUST` build arg (see `build-ssh.yml`) is what
+/// makes this sound across repeated runs — without it, BuildKit's normal
+/// layer caching would serve a previous run's `ssh-add -l` output, since
+/// the instruction text alone never changes and `build_ssh` (unlike
+/// `build_secrets`) doesn't disable the cache.
+#[test]
+#[ignore]
+fn build_ssh_forwards_a_real_ssh_agent_into_the_build() {
+    let agent = ScratchSshAgent::spawn();
+
+    let cache_bust = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let output = ratect_command()
+        .arg("-f")
+        .arg(build_ssh_config_path())
+        .arg("print-keys")
+        .env("SSH_AUTH_SOCK", &agent.socket_path)
+        .env("RATECT_BUILD_SSH_TEST_CACHE_BUST", cache_bust)
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&agent.key_comment),
+        "the build's `ssh-add -l` should have listed the scratch key \
+         '{}', but printed:\n{stdout}",
+        agent.key_comment
+    );
 }
 
 /// Requires a running Docker daemon with network access to pull

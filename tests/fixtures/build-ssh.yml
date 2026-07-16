@@ -1,0 +1,26 @@
+# Exercises `build_ssh` end-to-end against a real BuildKit gRPC session
+# build and a real (test-spawned, throwaway) ssh-agent: the Dockerfile's
+# `RUN --mount=type=ssh ssh-add -l` lists the keys visible through the
+# forwarded agent socket, and the task cats the file that `RUN` wrote them
+# into — the test asserts the scratch key it loaded into its own agent
+# shows up, proving the forwarding made the full round trip.
+#
+# CACHE_BUST exists because a `build_ssh`-only build uses BuildKit's
+# normal layer caching (unlike `build_secrets`, which disables it — see
+# `build_image_via_buildkit`): the `RUN --mount=type=ssh` instruction's
+# text never changes between test runs, so without an every-run-unique
+# build arg consumed by that same `RUN`, a second run would be served a
+# cached layer listing a *previous* run's agent keys.
+project_name: ratect-build-ssh-test
+containers:
+  build-env:
+    build_directory: ./build-ssh
+    build_args:
+      CACHE_BUST: $RATECT_BUILD_SSH_TEST_CACHE_BUST
+    build_ssh:
+      - id: default
+tasks:
+  print-keys:
+    run:
+      container: build-env
+      command: cat /ssh-agent-keys.txt
