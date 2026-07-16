@@ -176,9 +176,9 @@ tables above:
   a force-on/force-off override rather than the primary switch. In practice this
   means Batect builds almost everything with BuildKit today and Ratect builds almost
   everything without it — same images out for ordinary Dockerfiles, but different
-  layer caching behavior and build log formats. Revisiting this (builder-version
-  selection including the ping-header default, not just an `--enable-buildkit` flag)
-  is part of the 0.16.0 CLI-parity work in `ROADMAP.md`.
+  layer caching behavior and build log formats. Closing this — builder-version
+  selection following the daemon's ping-advertised default, exactly Batect's rule —
+  is planned as 0.12.0 in `ROADMAP.md`.
 - **BuildKit build output isn't captured**: for the builds that *do* use the BuildKit
   session path (`build_secrets`/`build_ssh`), no build output is logged during the
   build (no `RUST_LOG=debug` transcript, unlike the classic path) and a failure's
@@ -186,7 +186,8 @@ tables above:
   code (e.g. `process "/bin/sh -c ..." did not complete successfully: exit code: 7`),
   not what that step printed, and no transcript of the steps before it. A limitation
   of the underlying Docker client's session API, which exposes no status/log stream;
-  expected to be revisited as part of the 0.15.0 output-modes work in `ROADMAP.md`.
+  expected to be closed by the 0.12.0 BuildKit-by-default work in `ROADMAP.md`, which
+  moves BuildKit builds onto a path whose response stream does carry build logs.
 - **Parallel execution**: prerequisites run sequentially, not in parallel — Batect runs
   independent setup/cleanup steps concurrently.
 - **Proxy support**: `http_proxy`/`https_proxy`/`ftp_proxy`/`no_proxy` are detected from

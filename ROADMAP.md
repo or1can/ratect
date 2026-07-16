@@ -6,7 +6,7 @@ This document outlines the planned journey for Ratect, from achieving parity wit
 
 The primary goal is to support the core features of Batect to ensure a seamless transition for existing users. This work targets the [`ratect-compat` binary](#two-binaries-ratect-and-ratect-compat) specifically — the `ratect` binary is not expected to maintain 1:1 Batect parity.
 
-- **Image Building**: Building a Docker image from a `build_directory`, including `build_args` and `.dockerignore` support (0.3.0), custom Dockerfile naming/location (`dockerfile`), a multi-stage build target (`build_target`), secrets (`build_secrets`), and SSH agent forwarding (`build_ssh`, a single default host agent only — see [Differences from Batect](docs/differences-from-batect.md#container-fields)) (0.11.0) — see [config reference](docs/config-reference.md#image-building). Cross-invocation build caching and automatic image cleanup are not implemented.
+- **Image Building**: Building a Docker image from a `build_directory`, including `build_args` and `.dockerignore` support (0.3.0), custom Dockerfile naming/location (`dockerfile`), a multi-stage build target (`build_target`), secrets (`build_secrets`), and SSH agent forwarding (`build_ssh`, a single default host agent only — see [Differences from Batect](docs/differences-from-batect.md#container-fields)) (0.11.0) — see [config reference](docs/config-reference.md#image-building). Builds currently use Docker's classic builder except where `build_secrets`/`build_ssh` require BuildKit; matching Batect's BuildKit-by-default is planned as [0.12.0](#ratect-compat). Cross-invocation build caching and automatic image cleanup are not implemented.
 - **Full Docker Networking**: Every task execution gets its own isolated network (see [the task lifecycle](docs/task-lifecycle.md)), `--use-network` reuses an existing one instead, `additional_hostnames`/`additional_hosts` add extra aliases/`/etc/hosts` entries, and `ports`/`--disable-ports` publish container ports to the host, including port ranges and the expanded object form, plus additional per-task `run.ports` (0.6.0) — see [config reference](docs/config-reference.md#port-mappings) and [CLI reference](docs/cli-reference.md).
 - **Interactive Mode**: A task's own container gets a real Docker TTY, automatically, when both Ratect's own stdin and stdout are real terminals (0.4.0); its stdin forwarding and the host's `TERM` propagation both apply more broadly than that (whenever the task is interactive-eligible, not gated on a real TTY), and a real TTY's terminal size stays in sync for the whole session, not just once at attach (0.10.0) — see [Interactive mode](docs/config-reference.md#interactive-mode). One known, deliberate divergence from Batect remains — see [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
 - **Full Environment Variable Interpolation & Batect Expressions**: `environment` on containers/tasks, `config_variables` (including Batect's one built-in, `batect.project_directory`), and `$VAR`/`${VAR}`/`${VAR:-default}`/`<name`/`<{name}` expressions are implemented for `environment` values, volume host paths, `build_directory`, and `build_args` — every already-supported field that could meaningfully take one; `build_secrets.path`/`build_ssh.paths` remain moot until those fields themselves exist — see [Expressions](docs/differences-from-batect.md#expressions).
@@ -300,12 +300,12 @@ Neither bump is ever folded into a feature commit.
     task's *own* container's `setup_commands` don't run (Batect runs every container
     through the same per-container steps, so its task container's setup commands run
     concurrently with the task's command — Ratect's sequential engine has no
-    concurrent exec path until [0.14.0](#ratect-compat)'s parallelism work); its
+    concurrent exec path until [0.15.0](#ratect-compat)'s parallelism work); its
     `health_check`, while applied, never gates the task's outcome (in Batect an
     unhealthy task container can fail the task even as its command runs); and a
     setup command's omitted `working_directory` falls back straight to the image's
     default, since the container-level `working_directory` field it should fall back
-    to first doesn't exist until [0.12.0](#ratect-compat).
+    to first doesn't exist until [0.13.0](#ratect-compat).
 - **0.10.0** — ~~**Interactive Mode Completeness**: closes the known gaps left by 0.4.0 —
   live terminal-resize forwarding for the rest of an interactive session (not just
   synced once at attach time), decoupling stdin forwarding from TTY allocation (piping
@@ -363,23 +363,49 @@ Neither bump is ever folded into a feature commit.
   - Known gaps, candidates for later work rather than blocking this release: a
     BuildKit-session build's output isn't captured (no `RUST_LOG=debug` transcript;
     a failure's error names the failing instruction and its exit code but not what
-    that step printed — `bollard`'s session API exposes no log stream), expected to
-    be revisited with [0.15.0](#ratect-compat)'s output-modes work; and Ratect's
+    that step printed — `bollard`'s session API exposes no log stream), and Ratect's
     classic-builder-by-default quietly diverges from Batect, which defaults to the
     daemon's ping-advertised builder — BuildKit on any modern daemon, making its
-    `--enable-buildkit` flag a force-override rather than the primary switch — so
-    [0.16.0](#ratect-compat)'s "`--enable-buildkit`" item is really builder-version
-    selection including that ping-header default. Both documented in
-    [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
-- **0.12.0** — **Container Runtime Options**: `entrypoint` (container and `run`),
+    `--enable-buildkit` flag a force-override rather than the primary switch. Both
+    documented in
+    [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps),
+    and both expected to be closed by [0.12.0](#ratect-compat).
+- **0.12.0** — **BuildKit by Default**: build with the builder the daemon's own ping
+  response advertises (BuildKit on any modern daemon), exactly Batect's rule
+  (`DockerConnectivity.kt`) — closing 0.11.0's two known gaps and a live
+  incompatibility: the classic builder rejects modern Dockerfile syntax (heredocs,
+  `COPY --link`, `RUN --mount=type=cache`) that real Batect projects, which have
+  been building under BuildKit for years, may already use. The plan, validated
+  against `bollard` 0.21.0's source:
+  - Unify all BuildKit builds onto bollard's classic-endpoint+session path
+    (`build_image` with `BuilderBuildKit` + a session), whose response stream
+    already carries full BuildKit progress/logs (`BuildInfoAux::BuildKit`) — which
+    also restores 0.11.0's missing `RUST_LOG=debug` transcript and
+    transcript-in-error behavior for `build_secrets`/`build_ssh` builds, replacing
+    the gRPC-driver path (and, expected, its `spawn_blocking` non-`Send`
+    workaround).
+  - The one missing piece in bollard 0.21.0: `build_image`'s internal session only
+    registers auth/file-send providers — no way for a caller to supply the
+    secrets/ssh session services. Fixed via a fork carrying that change, consumed
+    through `[patch.crates-io]`, with the same change PR'd upstream (a second,
+    separable upstream PR: named agents/explicit key files for `build_ssh` parity,
+    which needs an in-process ssh keyring agent). Deliberately *not* switching
+    build libraries: no other Rust BuildKit client supports the Docker daemon's
+    own `/session`+`/grpc` upgrade path or session providers at all (the young
+    `buildkit-client` crate was evaluated and ruled out — standalone-`buildkitd`
+    oriented, no secrets/ssh providers, single-maintainer 0.1.x).
+  - The classic (non-BuildKit) build path stays, as the fallback for a daemon
+    that advertises the legacy builder — and for [0.17.0](#ratect-compat)'s
+    `--enable-buildkit=false` force-override later.
+- **0.13.0** — **Container Runtime Options**: `entrypoint` (container and `run`),
   `working_directory` (container and `run`), `labels`,
   `capabilities_to_add`/`capabilities_to_drop`, `privileged`, `shm_size`, `devices`,
   `enable_init_process`, `image_pull_policy` — the remaining container/run fields,
   each largely a direct pass-through to the Docker API.
-- **0.13.0** — **Task Model Completeness**: task-level `dependencies` (sidecars scoped
+- **0.14.0** — **Task Model Completeness**: task-level `dependencies` (sidecars scoped
   to a task, distinct from the container-level field shipped in 0.6.0),
   `description`/`group` (plus corresponding `--list-tasks` output), and `customise`.
-- **0.14.0** — **Parallel Task Execution**: independent prerequisites and tasks run
+- **0.15.0** — **Parallel Task Execution**: independent prerequisites and tasks run
   concurrently via `tokio`, rather than sequentially — closes the last
   [runtime behavior gap](docs/differences-from-batect.md#runtime-behavior-gaps)
   against Batect and delivers the [Parallel Task Execution](#rust-enhancements) item
@@ -387,20 +413,19 @@ Neither bump is ever folded into a feature commit.
   list — it touches the `Mutex`-based shared execution state in
   `ratect-core/src/engine.rs` (see `AGENTS.md`), and dependency-cycle detection has to
   stay correct under concurrency.
-- **0.15.0** — **Output Modes**: `--output`/`-o` (Batect's `fancy`/`simple`/`quiet`/
+- **0.16.0** — **Output Modes**: `--output`/`-o` (Batect's `fancy`/`simple`/`quiet`/
   `all` modes) together with automatic default-mode selection based on terminal
   capabilities — the two can't ship separately, since auto-detection is the logic for
   picking between modes that don't otherwise exist. Also closes `--no-color` (color is
   one axis of the fancy/simple distinction).
-- **0.16.0** — **Remaining CLI Parity**: `--skip-prerequisites`, `--override-image`,
+- **0.17.0** — **Remaining CLI Parity**: `--skip-prerequisites`, `--override-image`,
   `--no-cleanup`/`--no-cleanup-after-failure`/`--no-cleanup-after-success`,
-  `--tag-image`, `--enable-buildkit` (really full builder-version selection: Batect
-  defaults to the daemon's ping-advertised builder — BuildKit on any modern daemon —
-  with the flag as a force-override, so matching the flag alone wouldn't match its
-  actual default behavior; see 0.11.0's known gaps), `--docker-host`/
+  `--tag-image`, `--enable-buildkit` (just the tristate flag surface — the
+  underlying builder-version selection, including the daemon's ping-advertised
+  default, ships in [0.12.0](#ratect-compat)), `--docker-host`/
   `--docker-context`/`--docker-config`/`--docker-cert-path`/`--docker-tls*`.
 - **1.0.0** — the [Batect Parity](#batect-parity) section above substantially checked
-  off (all of the above, including 0.7.0–0.16.0, not just the items shipped through
+  off (all of the above, including 0.7.0–0.17.0, not just the items shipped through
   0.6.0), and verified against a handful of real Batect projects, not just the
   itemized field/flag tables passing in isolation. Not tagged early for appearances —
   earned once `ratect-compat` can honestly replace `batect` on real projects.
@@ -416,7 +441,7 @@ Batect.
 
 Leveraging Rust's strengths to provide a superior experience compared to the original JVM-based implementation.
 
-- **Parallel Task Execution**: Utilizing `tokio` to execute independent tasks and prerequisites in parallel, significantly reducing execution time. Scheduled as `ratect-compat` [0.14.0](#ratect-compat) rather than left indefinite, since it also closes a Batect parity gap.
+- **Parallel Task Execution**: Utilizing `tokio` to execute independent tasks and prerequisites in parallel, significantly reducing execution time. Scheduled as `ratect-compat` [0.15.0](#ratect-compat) rather than left indefinite, since it also closes a Batect parity gap.
 - **Static Binaries**: Distribution as zero-dependency static binaries (`ratect` and `ratect-compat`) for easy installation and portability.
 - **First-class Cross-platform Support**: Providing a high-performance, native experience across macOS, Linux, and Windows without the overhead or startup latency of a JVM.
 - **Precise Error Reporting**: Utilizing Rust's type system and error handling to provide clear, actionable feedback on configuration errors and execution failures.
