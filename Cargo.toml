@@ -2,8 +2,10 @@
 members = ["ratect-core", "dockerignore"]
 
 # Carries two changes PR'd upstream (session providers on `build_image`, so one
-# BuildKit build path serves secrets/ssh *and* streams build output; `ping_info`,
-# exposing the daemon's advertised default builder) — see ROADMAP.md's 0.12.0
+# BuildKit build path serves secrets/ssh *and* streams build output —
+# https://github.com/fussybeaver/bollard/pull/731; `ping_info`, exposing the
+# daemon's advertised default builder —
+# https://github.com/fussybeaver/bollard/pull/732) — see ROADMAP.md's 0.12.0
 # entry. Cargo.lock pins the exact fork commit, so builds stay reproducible.
 # Remove once both land in a bollard release.
 [patch.crates-io]

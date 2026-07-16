@@ -389,8 +389,9 @@ Neither bump is ever folded into a feature commit.
     secrets/ssh session services — plus `ping_info` (the `/_ping` response's
     `Builder-Version` header, which plain `ping()` discards) are carried by a fork
     (`or1can/bollard`, branch `ratect/session-providers-0.21`) consumed through
-    `[patch.crates-io]` and commit-pinned via `Cargo.lock`, with both changes to be
-    PR'd upstream (a third, separable upstream contribution remains open: named
+    `[patch.crates-io]` and commit-pinned via `Cargo.lock`, with both changes PR'd
+    upstream ([bollard#731](https://github.com/fussybeaver/bollard/pull/731),
+    [bollard#732](https://github.com/fussybeaver/bollard/pull/732)) (a third, separable upstream contribution remains open: named
     agents/explicit key files for full `build_ssh` parity, which needs an
     in-process ssh keyring agent). Deliberately *not* a build-library switch: no
     other Rust BuildKit client supports the Docker daemon's own `/session`+`/grpc`
