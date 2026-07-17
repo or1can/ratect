@@ -43,6 +43,24 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     (`capabilities_to_add`/`capabilities_to_drop`) and `ImagePullPolicy` are fixed
     enums validated at parse time — `Capability`'s list is a deliberate *superset* of
     Batect's own (unmaintained) one, not a strict port, see its doc comment.
+    `Task.run` is `Option<TaskRun>` (0.14.0) — a task with only `prerequisites` is
+    valid, but `resolve_expressions_with_boundaries` still requires at least one of
+    `run`/`prerequisites`, and rejects `dependencies` (task-level sidecars,
+    `Task.dependencies` — distinct from `Container.dependencies`, which every task
+    using that container picks up) on a `run`-less task. `customise`
+    (`Task.customise`, a `HashMap<String, TaskContainerCustomisation>` of per-task
+    `environment`/`ports`/`working_directory` overrides for a *non-main* container
+    in the task's graph) is validated only when `run` is present too — on a
+    `run`-less task it's simply never checked or applied, matching Batect (whose
+    equivalent validation lives in a graph that's never built for a
+    prerequisites-only task), not rejected outright like `dependencies` is.
+    `container_names_in_task` (the transitive-dependency walk originally added for
+    the `no_proxy` exemption list) now lives here rather than `engine.rs`, since
+    validating a `customise` entry actually names a container reachable from the
+    task needs the same walk — `engine.rs` calls it, not the other way round.
+    `format_task_list` is the single source of `--list-tasks` formatting (grouping
+    by `Task.group`, `Ungrouped tasks:` bucket, `Task.description` shown inline) —
+    `main.rs` just prints its result.
   - **`ratect-core/src/expressions.rs`**: Batect's expression syntax (`$VAR`,
     `${VAR:-default}`, `<name`/`<{name}` for config variables, including the built-in
     `batect.project_directory`). Host environment and resolved config variable values
@@ -86,7 +104,15 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     `publish_ports`, etc.) are builder methods rather than `TaskEngine::new`
     parameters, so each new one lands without a mass-edit of the ~30 existing call
     sites; and only the task actually named on the command line (never a
-    prerequisite) is ever eligible for interactive-TTY mode.
+    prerequisite) is ever eligible for interactive-TTY mode. `run_task_internal`
+    runs `prerequisites` first, then returns early (no error) if the task itself has
+    no `run` (0.14.0) — everything after that point can assume `run` is present.
+    `start_dependency` takes the task's `customise` map alongside the container
+    graph it's already resolving and threads it through its own recursion
+    unconditionally, so a `customise` entry reaches its target container regardless
+    of how deep it sits in that graph; `container_names_in_task` (used for the
+    `no_proxy` exemption list here) lives in `config.rs` now, not this file — see
+    its own note there.
 - **`dockerignore`** (library crate, `dockerignore/src/`): a from-scratch Rust port of
   Docker's own `.dockerignore` matching (`github.com/moby/patternmatcher`, which
   Docker's documentation cites as the reference implementation) — deliberately **not**
