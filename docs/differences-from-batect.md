@@ -54,7 +54,7 @@ used exactly as written, with no host-side substitution step:
   value) and `build_ssh.paths` (unsupported at all — see the `build_ssh` entry below)
   are not expressions, matching Batect's own typing for the former and moot for the
   latter.
-- `command`/`entrypoint`/`run.command`/`run.working_directory` are tokenized into
+- `command`/`entrypoint`/`run.command`/`run.entrypoint` are tokenized into
   literal argv (matching Batect's own tokenizer — see [config
   reference](config-reference.md#taskrun)), with no shell involved at all, so a
   literal `$VAR` in one of these is never expanded by Ratect either — unrelated to,
@@ -90,7 +90,7 @@ used exactly as written, with no host-side substitution step:
 | `devices` | Not supported | |
 | `dockerfile` | Supported | A path relative to `build_directory`'s own root, defaulting to `Dockerfile` there. No expression support (matching Batect's own `String`, not `Expression`, typing for this field). |
 | `enable_init_process` | Not supported | |
-| `entrypoint` | Not supported | |
+| `entrypoint` | Supported | Overrides the image's own `ENTRYPOINT`. Tokenized into literal argv the same way `command` is — no expression support (matching Batect's own `Command`, not `Expression`, typing for this field). Overridden by the task-level `run.entrypoint` — see [Task run fields](#run-fields) and [config reference](config-reference.md#taskrun). |
 | `environment` | Supported | Values support [expressions](#expressions) (host env vars and config variables). Combines with the equivalent task-level `run.environment` — see [Task run fields](#run-fields) and [config reference](config-reference.md#taskrun). |
 | `health_check` | Supported | Overrides the image's own health check configuration (`command`, `interval`, `retries`, `start_period`, `timeout`) — see [Dependency readiness](config-reference.md#dependency-readiness). A dependency with a health check (from config or image) must report healthy before its dependents start. The task's own container's `health_check` is applied (Docker records and runs it) but Ratect never waits on its verdict — a small divergence: Batect's uniform per-container steps mean a task container reporting *unhealthy* can fail the task even as its command runs; in Ratect the task's own exit code alone decides. |
 | `image_pull_policy` | Not supported | Ratect always pulls an image at most once per run, with no `Always`-equivalent. |
@@ -120,7 +120,7 @@ used exactly as written, with no host-side substitution step:
 |---|---|---|
 | `container` | Supported | |
 | `command` | Supported | |
-| `entrypoint` | Not supported | |
+| `entrypoint` | Supported | Overrides the container's own `entrypoint` for this task's run specifically — see [config reference](config-reference.md#taskrun). Tokenized the same way. No expression support. |
 | `environment` | Supported | Values support [expressions](#expressions). Overrides the container's own `environment` on a key collision — see [config reference](config-reference.md#taskrun). |
 | `ports` | Supported | Additional port mappings for this task's run, added to the container's own `ports` as a union — see [config reference](config-reference.md#port-mappings). |
 | `working_directory` | Supported | Overrides the container's own `working_directory` for this task's run specifically — see [config reference](config-reference.md#taskrun). No expression support. |

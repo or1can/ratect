@@ -1,0 +1,20 @@
+# Exercises `entrypoint` end-to-end: a container-level `entrypoint` combined
+# with a tokenized `command` (the classic Batect `entrypoint: /bin/sh -c` +
+# `command: 'some command'` idiom — Docker execs Entrypoint ++ Cmd, so this
+# must produce exactly `/bin/sh -c "some command"`, no extra shell layer),
+# and a task `run.entrypoint` override replacing the container's own.
+project_name: ratect-entrypoint-test
+containers:
+  build-env:
+    image: alpine:3.18.2
+    entrypoint: /bin/sh -c
+tasks:
+  classic-idiom:
+    run:
+      container: build-env
+      command: "'echo hello-from-sh-c'"
+  run-entrypoint-override:
+    run:
+      container: build-env
+      command: override-worked
+      entrypoint: /bin/echo

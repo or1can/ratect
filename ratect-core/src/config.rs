@@ -115,6 +115,13 @@ pub struct Container {
     /// `Expression`) typing for this field. Overridden by the task-level
     /// `run.working_directory`, when set — see [`TaskRun::working_directory`].
     pub working_directory: Option<String>,
+    /// Overrides the image's own `ENTRYPOINT`. Tokenized into literal argv
+    /// the same way `command` is (`docker.rs`'s `tokenize_command_line`) —
+    /// not an [expression](#expressions), and not run via a shell, matching
+    /// Batect's own `Command`-typed `entrypoint` field exactly. Overridden
+    /// by the task-level `run.entrypoint`, when set — see
+    /// [`TaskRun::entrypoint`].
+    pub entrypoint: Option<String>,
 }
 
 /// One entry in a container's `build_secrets` map — either an `environment`
@@ -632,6 +639,9 @@ pub struct TaskRun {
     /// Overrides the container's own `working_directory` for this task's
     /// run specifically — see [`Container::working_directory`].
     pub working_directory: Option<String>,
+    /// Overrides the container's own `entrypoint` for this task's run
+    /// specifically — see [`Container::entrypoint`].
+    pub entrypoint: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1616,6 +1626,52 @@ tasks:
     }
 
     #[test]
+    fn parses_container_and_run_entrypoint() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    entrypoint: /bin/sh -c
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+      entrypoint: /bin/bash -c
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.entrypoint.as_deref(), Some("/bin/sh -c"));
+        let task = config.tasks.get("test").unwrap();
+        assert_eq!(task.run.entrypoint.as_deref(), Some("/bin/bash -c"));
+    }
+
+    #[test]
+    fn entrypoint_defaults_to_none() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.entrypoint, None);
+        let task = config.tasks.get("test").unwrap();
+        assert_eq!(task.run.entrypoint, None);
+    }
+
+    #[test]
     fn parses_build_secrets_environment_and_path_variants() {
         let config = parse(
             r#"
@@ -1933,6 +1989,7 @@ tasks: {}
             health_check: None,
             setup_commands: None,
             working_directory: None,
+            entrypoint: None,
         }
     }
 
@@ -2224,6 +2281,7 @@ tasks: {}
             health_check: None,
             setup_commands: None,
             working_directory: None,
+            entrypoint: None,
         }
     }
 
@@ -4310,6 +4368,7 @@ config_variables:
             health_check: None,
             setup_commands: None,
             working_directory: None,
+            entrypoint: None,
         }
     }
 

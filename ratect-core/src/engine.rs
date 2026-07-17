@@ -577,7 +577,15 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 .working_directory
                 .as_deref()
                 .or(container_config.working_directory.as_deref());
-            let container_options = crate::docker::ContainerOptions { working_directory };
+            let entrypoint = task
+                .run
+                .entrypoint
+                .as_deref()
+                .or(container_config.entrypoint.as_deref());
+            let container_options = crate::docker::ContainerOptions {
+                working_directory,
+                entrypoint,
+            };
             self.docker
                 .run_container(
                     &task.run.container,
@@ -674,6 +682,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         let health_check = health_check_options(dependency_config);
         let container_options = crate::docker::ContainerOptions {
             working_directory: dependency_config.working_directory.as_deref(),
+            entrypoint: dependency_config.entrypoint.as_deref(),
         };
 
         let container_id = self
@@ -787,11 +796,12 @@ mod tests {
     /// Keyed by container name.
     type CapturedHealthChecks =
         Arc<Mutex<HashMap<String, Option<crate::docker::HealthCheckOptions>>>>;
-    /// The `working_directory` a prior `run_container`/
+    /// `(working_directory, entrypoint)` a prior `run_container`/
     /// `start_background_container` call for a given container name was
-    /// given (see `container_options_for`). Grows as more of
-    /// `ContainerOptions`'s fields land.
-    type CapturedContainerOptions = Arc<Mutex<HashMap<String, Option<String>>>>;
+    /// given (see `working_directory_for`/`entrypoint_for`). Grows as more
+    /// of `ContainerOptions`'s fields land.
+    type ContainerOptionsValue = (Option<String>, Option<String>);
+    type CapturedContainerOptions = Arc<Mutex<HashMap<String, ContainerOptionsValue>>>;
     /// `(working_directory, environment, (uid, gid))`, keyed by the exec'd
     /// command string.
     type ExecValue = (
@@ -999,15 +1009,23 @@ mod tests {
         }
 
         /// The `container_options.working_directory` a prior `run_container`/
-        /// `start_background_container` call for `name` was given (flattened,
-        /// same convention as `environment_for`).
+        /// `start_background_container` call for `name` was given.
         fn working_directory_for(&self, name: &str) -> Option<String> {
             self.container_options
                 .lock()
                 .unwrap()
                 .get(name)
-                .cloned()
-                .flatten()
+                .and_then(|(working_directory, _)| working_directory.clone())
+        }
+
+        /// The `container_options.entrypoint` a prior `run_container`/
+        /// `start_background_container` call for `name` was given.
+        fn entrypoint_for(&self, name: &str) -> Option<String> {
+            self.container_options
+                .lock()
+                .unwrap()
+                .get(name)
+                .and_then(|(_, entrypoint)| entrypoint.clone())
         }
     }
 
@@ -1099,7 +1117,10 @@ mod tests {
                 .insert(alias.to_string(), health_check.cloned());
             self.container_options.lock().unwrap().insert(
                 alias.to_string(),
-                container_options.working_directory.map(str::to_string),
+                (
+                    container_options.working_directory.map(str::to_string),
+                    container_options.entrypoint.map(str::to_string),
+                ),
             );
             self.push(format!("sidecar-start:{alias}:{network}"));
             Ok(format!("sidecar-id-{alias}"))
@@ -1194,7 +1215,10 @@ mod tests {
                 .insert(name.to_string(), health_check.cloned());
             self.container_options.lock().unwrap().insert(
                 name.to_string(),
-                container_options.working_directory.map(str::to_string),
+                (
+                    container_options.working_directory.map(str::to_string),
+                    container_options.entrypoint.map(str::to_string),
+                ),
             );
             self.push(format!(
                 "run:{name}:{}:args=[{}]:{}",
@@ -1226,6 +1250,7 @@ mod tests {
             additional_hosts: None,
             ports: None,
             working_directory: None,
+            entrypoint: None,
             health_check: None,
             setup_commands: None,
         }
@@ -1239,6 +1264,7 @@ mod tests {
                 environment: None,
                 ports: None,
                 working_directory: None,
+                entrypoint: None,
             },
             prerequisites: None,
         }
@@ -1264,6 +1290,7 @@ mod tests {
                 additional_hosts: None,
                 ports: None,
                 working_directory: None,
+                entrypoint: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1279,6 +1306,7 @@ mod tests {
                     environment: None,
                     ports: None,
                     working_directory: None,
+                    entrypoint: None,
                 },
                 prerequisites: Some(vec!["b".to_string()]),
             },
@@ -1292,6 +1320,7 @@ mod tests {
                     environment: None,
                     ports: None,
                     working_directory: None,
+                    entrypoint: None,
                 },
                 prerequisites: Some(vec!["a".to_string()]),
             },
@@ -1336,6 +1365,7 @@ mod tests {
                 additional_hosts: None,
                 ports: None,
                 working_directory: None,
+                entrypoint: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1348,6 +1378,7 @@ mod tests {
                 environment: None,
                 ports: None,
                 working_directory: None,
+                entrypoint: None,
             },
             prerequisites,
         };
@@ -1501,6 +1532,7 @@ mod tests {
                     environment: None,
                     ports: None,
                     working_directory: None,
+                    entrypoint: None,
                 },
                 prerequisites: Some(vec!["setup".to_string()]),
             },
@@ -1553,6 +1585,7 @@ mod tests {
             additional_hosts: None,
             ports: None,
             working_directory: None,
+            entrypoint: None,
             health_check: None,
             setup_commands: None,
         }
@@ -1876,6 +1909,7 @@ mod tests {
                 additional_hosts: None,
                 ports: None,
                 working_directory: None,
+                entrypoint: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1921,6 +1955,7 @@ mod tests {
             additional_hosts: None,
             ports: None,
             working_directory: None,
+            entrypoint: None,
             health_check: None,
             setup_commands: None,
         }
@@ -2159,6 +2194,7 @@ mod tests {
                     environment: None,
                     ports: None,
                     working_directory: None,
+                    entrypoint: None,
                 },
                 prerequisites: Some(vec!["first".to_string()]),
             },
@@ -2292,6 +2328,7 @@ mod tests {
                 additional_hosts: None,
                 ports: None,
                 working_directory: None,
+                entrypoint: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -2990,6 +3027,7 @@ mod tests {
                     environment: None,
                     ports: None,
                     working_directory: None,
+                    entrypoint: None,
                 },
                 prerequisites: Some(vec!["migrate".to_string()]),
             },
@@ -3049,6 +3087,7 @@ mod tests {
                 additional_hosts: None,
                 ports: None,
                 working_directory: None,
+                entrypoint: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -3255,6 +3294,64 @@ mod tests {
 
         assert_eq!(
             docker.working_directory_for("build-env"),
+            Some("/from-run".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn container_entrypoint_reaches_the_container() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.entrypoint = Some("/bin/sh -c".to_string());
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.entrypoint_for("build-env"),
+            Some("/bin/sh -c".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn task_run_entrypoint_overrides_container_entrypoint() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.entrypoint = Some("/from-container".to_string());
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+
+        let mut task_config = task("build-env", "echo hi");
+        task_config.run.entrypoint = Some("/from-run".to_string());
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task_config);
+
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.entrypoint_for("build-env"),
             Some("/from-run".to_string())
         );
     }
@@ -3516,6 +3613,7 @@ mod tests {
                     environment: None,
                     ports: None,
                     working_directory: None,
+                    entrypoint: None,
                 },
                 prerequisites: Some(vec!["setup".to_string()]),
             },
@@ -3658,6 +3756,36 @@ mod tests {
         assert_eq!(
             docker.working_directory_for("database"),
             Some("/var/lib/postgresql".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn dependency_container_entrypoint_reaches_the_sidecar() {
+        let mut database = container("postgres:16", None);
+        database.entrypoint = Some("/entrypoint.sh".to_string());
+        let mut containers = HashMap::new();
+        containers.insert("database".to_string(), database);
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.entrypoint_for("database"),
+            Some("/entrypoint.sh".to_string())
         );
     }
 }

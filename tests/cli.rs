@@ -63,6 +63,10 @@ fn working_directory_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/working-directory.yml")
 }
 
+fn entrypoint_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/entrypoint.yml")
+}
+
 fn project_directory_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-directory.yml")
 }
@@ -703,6 +707,61 @@ fn task_run_working_directory_overrides_the_real_container() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(stdout.trim(), "/var");
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves the classic Batect `entrypoint: /bin/sh -c` + `command: 'some
+/// command'` idiom actually works against a real container — Docker execs
+/// `Entrypoint ++ Cmd`, so this must produce exactly `/bin/sh -c "echo
+/// hello-from-sh-c"`, with neither Ratect's `command` tokenizer nor its
+/// `entrypoint` tokenizer inserting an extra shell layer.
+#[test]
+#[ignore]
+fn container_entrypoint_combines_correctly_with_command_on_the_real_container() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(entrypoint_config_path())
+        .arg("classic-idiom")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "hello-from-sh-c");
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves `run.entrypoint` overrides the container's own `entrypoint` on the
+/// real container: if the override didn't take effect, the container's own
+/// `/bin/sh -c` entrypoint would try (and fail) to run a shell command
+/// literally named `override-worked`, instead of `/bin/echo` printing it.
+#[test]
+#[ignore]
+fn task_run_entrypoint_overrides_the_real_container() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(entrypoint_config_path())
+        .arg("run-entrypoint-override")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "override-worked");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.

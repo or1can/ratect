@@ -234,6 +234,10 @@ pub struct NetworkOptions<'a> {
 pub struct ContainerOptions<'a> {
     /// Overrides the image's own `WORKDIR`. `None` inherits it.
     pub working_directory: Option<&'a str>,
+    /// Overrides the image's own `ENTRYPOINT`. Tokenized into literal argv
+    /// via [`tokenize_command_line`] before reaching Docker — `None`
+    /// inherits the image's own.
+    pub entrypoint: Option<&'a str>,
 }
 
 /// A container's `health_check` override, applied at container creation on
@@ -1623,6 +1627,10 @@ impl ContainerRuntime for DockerClient {
         if user_mapping.is_some() {
             ensure_host_volume_directories_exist(volumes)?;
         }
+        let entrypoint = container_options
+            .entrypoint
+            .map(tokenize_command_line)
+            .transpose()?;
         let port_config = build_port_config(network_options.ports);
 
         let host_config = HostConfig {
@@ -1635,6 +1643,7 @@ impl ContainerRuntime for DockerClient {
         let config = Config {
             hostname: Some(alias.to_string()),
             image: Some(image.to_string()),
+            entrypoint,
             env: build_env(environment),
             exposed_ports: port_config.as_ref().map(|(exposed, _)| exposed.clone()),
             user: user_mapping.map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
@@ -1831,6 +1840,10 @@ impl ContainerRuntime for DockerClient {
             ensure_host_volume_directories_exist(volumes)?;
         }
         let cmd = build_cmd(command, additional_args)?;
+        let entrypoint = container_options
+            .entrypoint
+            .map(tokenize_command_line)
+            .transpose()?;
         let port_config = build_port_config(network_options.ports);
 
         let host_config = HostConfig {
@@ -1844,6 +1857,7 @@ impl ContainerRuntime for DockerClient {
             hostname: Some(name.to_string()),
             image: Some(image.to_string()),
             cmd,
+            entrypoint,
             env: build_env(environment),
             exposed_ports: port_config.as_ref().map(|(exposed, _)| exposed.clone()),
             attach_stdout: Some(true),
@@ -2096,6 +2110,21 @@ mod tests {
             tokenize_command_line("'make lint'").unwrap(),
             vec!["make lint"]
         );
+    }
+
+    #[test]
+    fn entrypoint_and_command_combine_correctly_for_the_classic_sh_c_idiom() {
+        // `entrypoint: /bin/sh -c` alongside `command: 'make lint'` is a
+        // real, working Batect idiom — Docker execs `Entrypoint ++ Cmd`, so
+        // this must produce exactly `/bin/sh -c "make lint"`, with neither
+        // side inserting its own extra shell layer (the bug an earlier,
+        // sh-c-wrapped `build_cmd` would have had once `entrypoint` support
+        // landed — see CHANGELOG.md).
+        let entrypoint = tokenize_command_line("/bin/sh -c").unwrap();
+        assert_eq!(entrypoint, vec!["/bin/sh", "-c"]);
+
+        let cmd = build_cmd(Some("'make lint'"), &[]).unwrap();
+        assert_eq!(cmd, Some(vec!["make lint".to_string()]));
     }
 
     #[test]

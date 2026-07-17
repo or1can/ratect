@@ -161,6 +161,7 @@ containers:
 | `health_check` | object | no | Overrides the health check configuration baked into the container's image (see [Dependency readiness](#dependency-readiness) below). No expression support. |
 | `setup_commands` | list of objects (`command`, `working_directory`) | no | Commands run inside the started container after it becomes healthy but before its dependents start (see [Dependency readiness](#dependency-readiness) below). No expression support. |
 | `working_directory` | string | no | Overrides the image's own `WORKDIR`. No [expression](#expressions) support. A task's own container's `working_directory` can be further overridden by the task-level `run.working_directory` — see [TaskRun](#taskrun). A `setup_commands` entry with no `working_directory` of its own falls back to this, then to the image's own default. |
+| `entrypoint` | string | no | Overrides the image's own `ENTRYPOINT`. Tokenized into literal argv the same way `command` is (quote/backslash-aware whitespace splitting, no shell involved — matching Batect's own tokenizer exactly). No [expression](#expressions) support. A task's own container's `entrypoint` can be further overridden by the task-level `run.entrypoint` — see [TaskRun](#taskrun). |
 
 > **Note:** if a container has *neither* `image` nor `build_directory` set, running a
 > task against it is an error naming the container. A dependency container without
@@ -491,6 +492,7 @@ tasks:
 | `environment` | map of string → string | no | Environment variables to set for this task's run specifically. Merged with the container's own `environment` (see [Container](#container)): the container's values apply first, and `run.environment` overrides them on a key collision. Values support the same [expressions](#expressions) as `environment` does. |
 | `ports` | list of strings/objects | no | Additional port mappings for this task's run specifically — see [Port mappings](#port-mappings). *Added* to the container's own `ports`, not an override — there's no concept of one replacing an entry from the other. |
 | `working_directory` | string | no | Overrides the container's own `working_directory` for this task's run specifically (see [Container](#container)). No [expression](#expressions) support. |
+| `entrypoint` | string | no | Overrides the container's own `entrypoint` for this task's run specifically (see [Container](#container)). Tokenized the same way. No [expression](#expressions) support. |
 
 ## Interactive mode
 
