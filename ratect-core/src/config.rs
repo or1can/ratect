@@ -141,6 +141,92 @@ pub struct Container {
     /// matching Batect's own default. Container level only, matching
     /// Batect (no task-level `run` override in either).
     pub privileged: Option<bool>,
+    /// The size of `/dev/shm`, in bytes — Docker's `--shm-size`. Accepts
+    /// Batect's own size-string format (`"128"`, `"128b"`, `"128k"`,
+    /// `"128m"`, `"128g"` — a bare number means bytes; see
+    /// [`parse_byte_size`]) or a plain YAML integer (also bytes), already
+    /// converted to bytes here rather than deferred like `dockerfile`/
+    /// `build_target`'s plain strings, since Docker's own API wants a byte
+    /// count, not a string. `None` inherits Docker's own default (64 MiB).
+    /// Container level only, matching Batect (no task-level `run` override
+    /// in either).
+    #[serde(default, deserialize_with = "deserialize_shm_size")]
+    pub shm_size: Option<i64>,
+}
+
+/// Parses Batect's own size-string format (its `BinarySize` regex,
+/// `^(\d+)\s*([mkg]?)b?$`, case-insensitive): a non-negative integer,
+/// optionally followed by a unit (`k`/`m`/`g`, 1024-based) and/or a
+/// trailing literal `b` (bytes when there's no unit, e.g. `"128b"`) —
+/// `"128"`, `"128b"`, `"128k"`, `"128m"`, and `"128g"` are all valid.
+fn parse_byte_size(value: &str) -> std::result::Result<i64, String> {
+    let invalid = || {
+        format!(
+            "Invalid size '{value}'. It must be in the format '123', '123b', '123k', '123m' or \
+             '123g'."
+        )
+    };
+
+    let lower = value.trim().to_ascii_lowercase();
+    let without_b = lower.strip_suffix('b').unwrap_or(&lower);
+    let (digits, multiplier) = if let Some(rest) = without_b.strip_suffix('k') {
+        (rest, 1024_i64)
+    } else if let Some(rest) = without_b.strip_suffix('m') {
+        (rest, 1024_i64 * 1024)
+    } else if let Some(rest) = without_b.strip_suffix('g') {
+        (rest, 1024_i64 * 1024 * 1024)
+    } else {
+        (without_b, 1)
+    };
+    let digits = digits.trim_end();
+
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(invalid());
+    }
+    let count: i64 = digits.parse().map_err(|_| invalid())?;
+    count.checked_mul(multiplier).ok_or_else(invalid)
+}
+
+/// `serde` `deserialize_with` for [`Container::shm_size`] — accepts either
+/// a Batect-style size string ([`parse_byte_size`]) or a plain integer
+/// (bytes). Only invoked when the field is actually present; `#[serde(default)]`
+/// handles the absent case.
+fn deserialize_shm_size<'de, D>(deserializer: D) -> std::result::Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct ShmSizeVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for ShmSizeVisitor {
+        type Value = Option<i64>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a size like '128', '128b', '128k', '128m', or '128g'")
+        }
+
+        fn visit_str<E>(self, v: &str) -> std::result::Result<Option<i64>, E>
+        where
+            E: serde::de::Error,
+        {
+            parse_byte_size(v).map(Some).map_err(E::custom)
+        }
+
+        fn visit_u64<E>(self, v: u64) -> std::result::Result<Option<i64>, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(Some(v as i64))
+        }
+
+        fn visit_i64<E>(self, v: i64) -> std::result::Result<Option<i64>, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(Some(v))
+        }
+    }
+
+    deserializer.deserialize_any(ShmSizeVisitor)
 }
 
 /// A Linux capability name, validated at config-parse time — an unknown name
@@ -1981,6 +2067,108 @@ tasks:
     }
 
     #[test]
+    fn parse_byte_size_handles_batects_own_format() {
+        assert_eq!(parse_byte_size("0"), Ok(0));
+        assert_eq!(parse_byte_size("128"), Ok(128));
+        assert_eq!(parse_byte_size("128b"), Ok(128));
+        assert_eq!(parse_byte_size("128B"), Ok(128));
+        assert_eq!(parse_byte_size("128k"), Ok(128 * 1024));
+        assert_eq!(parse_byte_size("128K"), Ok(128 * 1024));
+        assert_eq!(parse_byte_size("128m"), Ok(128 * 1024 * 1024));
+        assert_eq!(parse_byte_size("1g"), Ok(1024 * 1024 * 1024));
+        assert_eq!(parse_byte_size(" 128m "), Ok(128 * 1024 * 1024));
+    }
+
+    #[test]
+    fn parse_byte_size_rejects_invalid_input() {
+        assert!(parse_byte_size("").is_err());
+        assert!(parse_byte_size("m").is_err());
+        assert!(parse_byte_size("128x").is_err());
+        assert!(parse_byte_size("-128m").is_err());
+        assert!(parse_byte_size("128m b").is_err());
+    }
+
+    #[test]
+    fn parses_shm_size_as_a_batect_style_string() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    shm_size: 128m
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.shm_size, Some(128 * 1024 * 1024));
+    }
+
+    #[test]
+    fn parses_shm_size_as_a_plain_integer() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    shm_size: 268435456
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.shm_size, Some(268435456));
+    }
+
+    #[test]
+    fn shm_size_defaults_to_none() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.shm_size, None);
+    }
+
+    #[test]
+    fn an_invalid_shm_size_string_is_rejected() {
+        let yaml = r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    shm_size: not-a-size
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#;
+        let result: Result<Config, _> = noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn an_unknown_capability_name_is_rejected() {
         let yaml = r#"
 project_name: demo
@@ -2322,6 +2510,7 @@ tasks: {}
             capabilities_to_add: None,
             capabilities_to_drop: None,
             privileged: None,
+            shm_size: None,
         }
     }
 
@@ -2618,6 +2807,7 @@ tasks: {}
             capabilities_to_add: None,
             capabilities_to_drop: None,
             privileged: None,
+            shm_size: None,
         }
     }
 
@@ -4709,6 +4899,7 @@ config_variables:
             capabilities_to_add: None,
             capabilities_to_drop: None,
             privileged: None,
+            shm_size: None,
         }
     }
 

@@ -166,6 +166,7 @@ containers:
 | `capabilities_to_add` | list of strings | no | Linux capabilities to add beyond Docker's own default set (Docker's `--cap-add`), e.g. `NET_ADMIN`. Validated at config-load time against a fixed list based on Batect's own `Capability` enum plus `BPF`/`CHECKPOINT_RESTORE`/`PERFMON` (added to Docker after Batect's last release — see [Differences from Batect](differences-from-batect.md#container-fields)) — an unknown name is rejected with a clear error. Container level only. No expression support. |
 | `capabilities_to_drop` | list of strings | no | Linux capabilities to drop from Docker's own default set (Docker's `--cap-drop`), e.g. `CHOWN`. Same validation/scope as `capabilities_to_add`. |
 | `privileged` | boolean | no | Runs the container with extended (nearly all host) privileges — Docker's `--privileged`. Defaults to `false`. Container level only. No [expression](#expressions) support. |
+| `shm_size` | string or integer | no | The size of `/dev/shm` — Docker's `--shm-size`. Accepts Batect's own size-string format (`"128"`, `"128b"`, `"128k"`, `"128m"`, `"128g"` — a bare number means bytes) or a plain YAML integer (also bytes). Defaults to Docker's own default (64 MiB). Container level only. No expression support. |
 
 > **Note:** if a container has *neither* `image` nor `build_directory` set, running a
 > task against it is an error naming the container. A dependency container without

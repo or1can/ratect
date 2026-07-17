@@ -1,0 +1,13 @@
+# Exercises `shm_size` end-to-end: `/dev/shm` is a tmpfs mount, so its
+# actual size is directly observable via `df -k` — no Docker-metadata-only
+# check needed here, unlike `labels`.
+project_name: ratect-shm-size-test
+containers:
+  custom-shm:
+    image: alpine:3.18.2
+    shm_size: 128m
+tasks:
+  print-shm-size:
+    run:
+      container: custom-shm
+      command: sh -c "df -k /dev/shm | tail -1"

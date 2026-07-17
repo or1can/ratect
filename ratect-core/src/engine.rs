@@ -609,6 +609,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 capabilities_to_add: capabilities_to_add.as_ref(),
                 capabilities_to_drop: capabilities_to_drop.as_ref(),
                 privileged: container_config.privileged,
+                shm_size: container_config.shm_size,
             };
             self.docker
                 .run_container(
@@ -714,6 +715,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             capabilities_to_add: capabilities_to_add.as_ref(),
             capabilities_to_drop: capabilities_to_drop.as_ref(),
             privileged: dependency_config.privileged,
+            shm_size: dependency_config.shm_size,
         };
 
         let container_id = self
@@ -841,6 +843,7 @@ mod tests {
         capabilities_to_add: Option<Vec<String>>,
         capabilities_to_drop: Option<Vec<String>>,
         privileged: Option<bool>,
+        shm_size: Option<i64>,
     }
     type CapturedContainerOptions = Arc<Mutex<HashMap<String, ContainerOptionsValue>>>;
     /// `(working_directory, environment, (uid, gid))`, keyed by the exec'd
@@ -1110,6 +1113,16 @@ mod tests {
                 .get(name)
                 .and_then(|options| options.privileged)
         }
+
+        /// The `container_options.shm_size` a prior `run_container`/
+        /// `start_background_container` call for `name` was given.
+        fn shm_size_for(&self, name: &str) -> Option<i64> {
+            self.container_options
+                .lock()
+                .unwrap()
+                .get(name)
+                .and_then(|options| options.shm_size)
+        }
     }
 
     #[async_trait::async_trait]
@@ -1207,6 +1220,7 @@ mod tests {
                     capabilities_to_add: container_options.capabilities_to_add.cloned(),
                     capabilities_to_drop: container_options.capabilities_to_drop.cloned(),
                     privileged: container_options.privileged,
+                    shm_size: container_options.shm_size,
                 },
             );
             self.push(format!("sidecar-start:{alias}:{network}"));
@@ -1309,6 +1323,7 @@ mod tests {
                     capabilities_to_add: container_options.capabilities_to_add.cloned(),
                     capabilities_to_drop: container_options.capabilities_to_drop.cloned(),
                     privileged: container_options.privileged,
+                    shm_size: container_options.shm_size,
                 },
             );
             self.push(format!(
@@ -1346,6 +1361,7 @@ mod tests {
             capabilities_to_add: None,
             capabilities_to_drop: None,
             privileged: None,
+            shm_size: None,
             health_check: None,
             setup_commands: None,
         }
@@ -1390,6 +1406,7 @@ mod tests {
                 capabilities_to_add: None,
                 capabilities_to_drop: None,
                 privileged: None,
+                shm_size: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1469,6 +1486,7 @@ mod tests {
                 capabilities_to_add: None,
                 capabilities_to_drop: None,
                 privileged: None,
+                shm_size: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1693,6 +1711,7 @@ mod tests {
             capabilities_to_add: None,
             capabilities_to_drop: None,
             privileged: None,
+            shm_size: None,
             health_check: None,
             setup_commands: None,
         }
@@ -2021,6 +2040,7 @@ mod tests {
                 capabilities_to_add: None,
                 capabilities_to_drop: None,
                 privileged: None,
+                shm_size: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -2071,6 +2091,7 @@ mod tests {
             capabilities_to_add: None,
             capabilities_to_drop: None,
             privileged: None,
+            shm_size: None,
             health_check: None,
             setup_commands: None,
         }
@@ -2448,6 +2469,7 @@ mod tests {
                 capabilities_to_add: None,
                 capabilities_to_drop: None,
                 privileged: None,
+                shm_size: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -3211,6 +3233,7 @@ mod tests {
                 capabilities_to_add: None,
                 capabilities_to_drop: None,
                 privileged: None,
+                shm_size: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -3541,6 +3564,31 @@ mod tests {
         engine.run_task("test", &[]).await.unwrap();
 
         assert_eq!(docker.privileged_for("build-env"), Some(true));
+    }
+
+    #[tokio::test]
+    async fn container_shm_size_reaches_the_container() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.shm_size = Some(128 * 1024 * 1024);
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        assert_eq!(docker.shm_size_for("build-env"), Some(128 * 1024 * 1024));
     }
 
     #[tokio::test]
@@ -4097,5 +4145,32 @@ mod tests {
         engine.run_task("start", &[]).await.unwrap();
 
         assert_eq!(docker.privileged_for("database"), Some(true));
+    }
+
+    #[tokio::test]
+    async fn dependency_container_shm_size_reaches_the_sidecar() {
+        let mut database = container("postgres:16", None);
+        database.shm_size = Some(256 * 1024 * 1024);
+        let mut containers = HashMap::new();
+        containers.insert("database".to_string(), database);
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        assert_eq!(docker.shm_size_for("database"), Some(256 * 1024 * 1024));
     }
 }

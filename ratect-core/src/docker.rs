@@ -254,6 +254,9 @@ pub struct ContainerOptions<'a> {
     /// Docker's `--privileged`. `None`/`Some(false)` both behave like
     /// Docker's own unset default.
     pub privileged: Option<bool>,
+    /// The size of `/dev/shm`, in bytes — Docker's `--shm-size`. `None`
+    /// inherits Docker's own default (64 MiB).
+    pub shm_size: Option<i64>,
 }
 
 /// A container's `health_check` override, applied at container creation on
@@ -1656,6 +1659,7 @@ impl ContainerRuntime for DockerClient {
             cap_add: container_options.capabilities_to_add.cloned(),
             cap_drop: container_options.capabilities_to_drop.cloned(),
             privileged: container_options.privileged,
+            shm_size: container_options.shm_size,
             ..Default::default()
         };
 
@@ -1873,6 +1877,7 @@ impl ContainerRuntime for DockerClient {
             cap_add: container_options.capabilities_to_add.cloned(),
             cap_drop: container_options.capabilities_to_drop.cloned(),
             privileged: container_options.privileged,
+            shm_size: container_options.shm_size,
             ..Default::default()
         };
 

@@ -75,6 +75,10 @@ fn privileged_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/privileged.yml")
 }
 
+fn shm_size_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/shm-size.yml")
+}
+
 fn project_directory_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-directory.yml")
 }
@@ -858,6 +862,39 @@ fn privileged_grants_a_larger_capability_set_on_the_real_container() {
         privileged > normal,
         "privileged CapEff ({privileged:#x}) should exceed normal CapEff ({normal:#x})"
     );
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves `shm_size` reaches the real container: `/dev/shm` is a tmpfs
+/// mount, so `128m` must make its actual `df` size exactly 131072 1K-blocks
+/// (128 * 1024).
+#[test]
+#[ignore]
+fn shm_size_reaches_the_real_container() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(shm_size_config_path())
+        .arg("print-shm-size")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let blocks: u64 = stdout
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or_else(|| panic!("unexpected df output: {stdout}"))
+        .parse()
+        .unwrap_or_else(|e| panic!("failed to parse df output '{stdout}': {e}"));
+
+    assert_eq!(blocks, 128 * 1024, "df output:\n{stdout}");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
