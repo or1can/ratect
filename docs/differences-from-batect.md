@@ -94,7 +94,7 @@ used exactly as written, with no host-side substitution step:
 | `environment` | Supported | Values support [expressions](#expressions) (host env vars and config variables). Combines with the equivalent task-level `run.environment` — see [Task run fields](#run-fields) and [config reference](config-reference.md#taskrun). |
 | `health_check` | Supported | Overrides the image's own health check configuration (`command`, `interval`, `retries`, `start_period`, `timeout`) — see [Dependency readiness](config-reference.md#dependency-readiness). A dependency with a health check (from config or image) must report healthy before its dependents start. The task's own container's `health_check` is applied (Docker records and runs it) but Ratect never waits on its verdict — a small divergence: Batect's uniform per-container steps mean a task container reporting *unhealthy* can fail the task even as its command runs; in Ratect the task's own exit code alone decides. |
 | `image_pull_policy` | Not supported | Ratect always pulls an image at most once per run, with no `Always`-equivalent. |
-| `labels` | Not supported | |
+| `labels` | Supported | Docker labels applied to the container. Container level only, matching Batect (no equivalent task-level `run` override in either). No expression support. |
 | `log_driver` / `log_options` | Not supported | |
 | `ports` | Supported | Both the `local:container[/protocol]` string form (including port ranges) and the expanded `{local, container, protocol}` object form — see [Port mappings](config-reference.md#port-mappings). Validated (matching ranges, positive ports) at config-load time. |
 | `privileged` | Not supported | |

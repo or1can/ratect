@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`working_directory`**: a container (and, for a task's own container, the task-level `run.working_directory` override) can now override the image's own `WORKDIR` — see [config reference](docs/config-reference.md#container). A `setup_commands` entry with no `working_directory` of its own now falls back to the container's, then the image's own default, closing a known gap left by 0.9.0's dependency readiness work (see `ROADMAP.md`). Part of 0.13.0's Container Runtime Options (see `ROADMAP.md`).
 - **`entrypoint`**: a container (and, for a task's own container, the task-level `run.entrypoint` override) can now override the image's own `ENTRYPOINT` — see [config reference](docs/config-reference.md#container). Tokenized into literal argv the same way `command` is, via the tokenizer landed just ahead of this in `Unreleased` — so the classic Batect idiom of `entrypoint: /bin/sh -c` combined with a single-quoted `command: 'some command'` (forcing it to stay one argv token) produces exactly `/bin/sh -c "some command"`, with neither field inserting its own extra shell layer. Part of 0.13.0's Container Runtime Options (see `ROADMAP.md`).
+- **`labels`**: a container can now set Docker labels — see [config reference](docs/config-reference.md#container). Container level only, matching Batect (no task-level `run` override in either). Part of 0.13.0's Container Runtime Options (see `ROADMAP.md`).
 
 ### Changed
 

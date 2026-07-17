@@ -162,6 +162,7 @@ containers:
 | `setup_commands` | list of objects (`command`, `working_directory`) | no | Commands run inside the started container after it becomes healthy but before its dependents start (see [Dependency readiness](#dependency-readiness) below). No expression support. |
 | `working_directory` | string | no | Overrides the image's own `WORKDIR`. No [expression](#expressions) support. A task's own container's `working_directory` can be further overridden by the task-level `run.working_directory` — see [TaskRun](#taskrun). A `setup_commands` entry with no `working_directory` of its own falls back to this, then to the image's own default. |
 | `entrypoint` | string | no | Overrides the image's own `ENTRYPOINT`. Tokenized into literal argv the same way `command` is (quote/backslash-aware whitespace splitting, no shell involved — matching Batect's own tokenizer exactly). No [expression](#expressions) support. A task's own container's `entrypoint` can be further overridden by the task-level `run.entrypoint` — see [TaskRun](#taskrun). |
+| `labels` | map of string → string | no | Docker labels applied to the container. Container level only — no task-level `run` override. No [expression](#expressions) support. |
 
 > **Note:** if a container has *neither* `image` nor `build_directory` set, running a
 > task against it is an error naming the container. A dependency container without

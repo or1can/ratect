@@ -585,6 +585,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             let container_options = crate::docker::ContainerOptions {
                 working_directory,
                 entrypoint,
+                labels: container_config.labels.as_ref(),
             };
             self.docker
                 .run_container(
@@ -683,6 +684,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         let container_options = crate::docker::ContainerOptions {
             working_directory: dependency_config.working_directory.as_deref(),
             entrypoint: dependency_config.entrypoint.as_deref(),
+            labels: dependency_config.labels.as_ref(),
         };
 
         let container_id = self
@@ -796,11 +798,15 @@ mod tests {
     /// Keyed by container name.
     type CapturedHealthChecks =
         Arc<Mutex<HashMap<String, Option<crate::docker::HealthCheckOptions>>>>;
-    /// `(working_directory, entrypoint)` a prior `run_container`/
+    /// `(working_directory, entrypoint, labels)` a prior `run_container`/
     /// `start_background_container` call for a given container name was
-    /// given (see `working_directory_for`/`entrypoint_for`). Grows as more
-    /// of `ContainerOptions`'s fields land.
-    type ContainerOptionsValue = (Option<String>, Option<String>);
+    /// given (see `working_directory_for`/`entrypoint_for`/`labels_for`).
+    /// Grows as more of `ContainerOptions`'s fields land.
+    type ContainerOptionsValue = (
+        Option<String>,
+        Option<String>,
+        Option<HashMap<String, String>>,
+    );
     type CapturedContainerOptions = Arc<Mutex<HashMap<String, ContainerOptionsValue>>>;
     /// `(working_directory, environment, (uid, gid))`, keyed by the exec'd
     /// command string.
@@ -1015,7 +1021,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .get(name)
-                .and_then(|(working_directory, _)| working_directory.clone())
+                .and_then(|(working_directory, _, _)| working_directory.clone())
         }
 
         /// The `container_options.entrypoint` a prior `run_container`/
@@ -1025,7 +1031,17 @@ mod tests {
                 .lock()
                 .unwrap()
                 .get(name)
-                .and_then(|(_, entrypoint)| entrypoint.clone())
+                .and_then(|(_, entrypoint, _)| entrypoint.clone())
+        }
+
+        /// The `container_options.labels` a prior `run_container`/
+        /// `start_background_container` call for `name` was given.
+        fn labels_for(&self, name: &str) -> Option<HashMap<String, String>> {
+            self.container_options
+                .lock()
+                .unwrap()
+                .get(name)
+                .and_then(|(_, _, labels)| labels.clone())
         }
     }
 
@@ -1120,6 +1136,7 @@ mod tests {
                 (
                     container_options.working_directory.map(str::to_string),
                     container_options.entrypoint.map(str::to_string),
+                    container_options.labels.cloned(),
                 ),
             );
             self.push(format!("sidecar-start:{alias}:{network}"));
@@ -1218,6 +1235,7 @@ mod tests {
                 (
                     container_options.working_directory.map(str::to_string),
                     container_options.entrypoint.map(str::to_string),
+                    container_options.labels.cloned(),
                 ),
             );
             self.push(format!(
@@ -1251,6 +1269,7 @@ mod tests {
             ports: None,
             working_directory: None,
             entrypoint: None,
+            labels: None,
             health_check: None,
             setup_commands: None,
         }
@@ -1291,6 +1310,7 @@ mod tests {
                 ports: None,
                 working_directory: None,
                 entrypoint: None,
+                labels: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1366,6 +1386,7 @@ mod tests {
                 ports: None,
                 working_directory: None,
                 entrypoint: None,
+                labels: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1586,6 +1607,7 @@ mod tests {
             ports: None,
             working_directory: None,
             entrypoint: None,
+            labels: None,
             health_check: None,
             setup_commands: None,
         }
@@ -1910,6 +1932,7 @@ mod tests {
                 ports: None,
                 working_directory: None,
                 entrypoint: None,
+                labels: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1956,6 +1979,7 @@ mod tests {
             ports: None,
             working_directory: None,
             entrypoint: None,
+            labels: None,
             health_check: None,
             setup_commands: None,
         }
@@ -2329,6 +2353,7 @@ mod tests {
                 ports: None,
                 working_directory: None,
                 entrypoint: None,
+                labels: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -3088,6 +3113,7 @@ mod tests {
                 ports: None,
                 working_directory: None,
                 entrypoint: None,
+                labels: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -3323,6 +3349,40 @@ mod tests {
         assert_eq!(
             docker.entrypoint_for("build-env"),
             Some("/bin/sh -c".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn container_labels_reach_the_container() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.labels = Some(HashMap::from([(
+            "com.example.owner".to_string(),
+            "platform-team".to_string(),
+        )]));
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.labels_for("build-env"),
+            Some(HashMap::from([(
+                "com.example.owner".to_string(),
+                "platform-team".to_string()
+            )]))
         );
     }
 
@@ -3786,6 +3846,42 @@ mod tests {
         assert_eq!(
             docker.entrypoint_for("database"),
             Some("/entrypoint.sh".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn dependency_container_labels_reach_the_sidecar() {
+        let mut database = container("postgres:16", None);
+        database.labels = Some(HashMap::from([(
+            "com.example.role".to_string(),
+            "database".to_string(),
+        )]));
+        let mut containers = HashMap::new();
+        containers.insert("database".to_string(), database);
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.labels_for("database"),
+            Some(HashMap::from([(
+                "com.example.role".to_string(),
+                "database".to_string()
+            )]))
         );
     }
 }

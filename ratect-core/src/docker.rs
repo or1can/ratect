@@ -238,6 +238,9 @@ pub struct ContainerOptions<'a> {
     /// via [`tokenize_command_line`] before reaching Docker — `None`
     /// inherits the image's own.
     pub entrypoint: Option<&'a str>,
+    /// Docker labels (`key: value`) applied to the container. `None`/empty
+    /// applies none beyond whatever the image's own build already baked in.
+    pub labels: Option<&'a HashMap<String, String>>,
 }
 
 /// A container's `health_check` override, applied at container creation on
@@ -1649,6 +1652,7 @@ impl ContainerRuntime for DockerClient {
             user: user_mapping.map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
             healthcheck: build_health_config(health_check),
             working_dir: container_options.working_directory.map(str::to_string),
+            labels: container_options.labels.cloned(),
             host_config: Some(host_config),
             ..Default::default()
         };
@@ -1877,6 +1881,7 @@ impl ContainerRuntime for DockerClient {
             user: user_mapping.map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
             healthcheck: build_health_config(health_check),
             working_dir: container_options.working_directory.map(str::to_string),
+            labels: container_options.labels.cloned(),
             host_config: Some(host_config),
             ..Default::default()
         };

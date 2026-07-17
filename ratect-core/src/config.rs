@@ -122,6 +122,12 @@ pub struct Container {
     /// by the task-level `run.entrypoint`, when set — see
     /// [`TaskRun::entrypoint`].
     pub entrypoint: Option<String>,
+    /// Docker labels (`key: value`) applied to the container. Container
+    /// level only — no task-level `run` override, matching Batect (its
+    /// `TaskRunConfiguration` has no equivalent field). Plain strings, no
+    /// [expression](#expressions) support — matching Batect's own
+    /// `Map<String, String>` typing.
+    pub labels: Option<HashMap<String, String>>,
 }
 
 /// One entry in a container's `build_secrets` map — either an `environment`
@@ -1672,6 +1678,54 @@ tasks:
     }
 
     #[test]
+    fn parses_labels() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    labels:
+      com.example.owner: platform-team
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(
+            container.labels,
+            Some(HashMap::from([(
+                "com.example.owner".to_string(),
+                "platform-team".to_string()
+            )]))
+        );
+    }
+
+    #[test]
+    fn labels_defaults_to_none() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.labels, None);
+    }
+
+    #[test]
     fn parses_build_secrets_environment_and_path_variants() {
         let config = parse(
             r#"
@@ -1990,6 +2044,7 @@ tasks: {}
             setup_commands: None,
             working_directory: None,
             entrypoint: None,
+            labels: None,
         }
     }
 
@@ -2282,6 +2337,7 @@ tasks: {}
             setup_commands: None,
             working_directory: None,
             entrypoint: None,
+            labels: None,
         }
     }
 
@@ -4369,6 +4425,7 @@ config_variables:
             setup_commands: None,
             working_directory: None,
             entrypoint: None,
+            labels: None,
         }
     }
 
