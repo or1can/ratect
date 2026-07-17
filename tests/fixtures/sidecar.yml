@@ -1,6 +1,11 @@
 # Exercises dependency (sidecar) container resolution end to end: multiple
 # sibling dependencies (database, cache) plus a nested one (metrics, only
 # reachable via database) all sharing one task-scoped network with `app`.
+# Also exercises a task-level `dependencies` entry (queue): a sidecar scoped
+# to one task specifically, distinct from `app`'s own container-level
+# `dependencies` above — `queue` isn't in `app`'s own `dependencies`, so
+# `ping-sidecars` (which doesn't declare it) can't reach it, but
+# `ping-task-level-sidecar` (which does) can.
 #
 # redis is used purely because its default command (`redis-server`) stays
 # running with no configuration — Container has no `command` field, so a
@@ -15,6 +20,8 @@ containers:
       - metrics
   cache:
     image: redis:7-alpine
+  queue:
+    image: redis:7-alpine
   app:
     image: alpine:3.18.2
     dependencies:
@@ -25,3 +32,9 @@ tasks:
     run:
       container: app
       command: sh -c "ping -c 1 database && ping -c 1 cache && ping -c 1 metrics"
+  ping-task-level-sidecar:
+    run:
+      container: app
+      command: ping -c 1 queue
+    dependencies:
+      - queue

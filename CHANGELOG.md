@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`description`/`group` on a task**: `description` is shown next to the task's name in `--list-tasks` output; `group` heads tasks sharing the same value under their own listing, with an ungrouped task falling into a trailing "Ungrouped tasks:" bucket — only once *some* task in the project declares a `group` at all, otherwise `--list-tasks` stays the flat list it's always been. See [config reference](docs/config-reference.md#list-tasks-output). Part of 0.14.0's Task Model Completeness (see `ROADMAP.md`).
+- **Task-level `dependencies`**: a task can now declare sidecar containers scoped to that task specifically, distinct from a container's own `dependencies` (shipped in 0.6.0), which every task using that container picks up. Unioned with the task's own container's `dependencies` when resolving what to start alongside it, and folded into the same `no_proxy` exemption list. Requires `run`, and can't name `run.container` itself — see [config reference](docs/config-reference.md#task). Part of 0.14.0's Task Model Completeness (see `ROADMAP.md`).
 
 ### Changed
 

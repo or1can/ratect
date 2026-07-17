@@ -109,7 +109,7 @@ used exactly as written, with no host-side substitution step:
 |---|---|---|
 | `run` | Supported | A task with only `prerequisites` and no `run` is valid, matching Batect — see [config reference](config-reference.md#task). |
 | `prerequisites` | Supported | No wildcard (`*`) matching — each name must be listed explicitly. |
-| `dependencies` (task-level sidecars) | Not supported | Distinct from the container-level `dependencies` field above; not parsed at all. |
+| `dependencies` (task-level sidecars) | Supported | Distinct from the container-level `dependencies` field above — scoped to this task specifically, unioned with the task's own container's `dependencies` — see [config reference](config-reference.md#task). |
 | `description` | Supported | Shown next to the task's name in `--list-tasks` output — see [config reference](config-reference.md#list-tasks-output). |
 | `group` | Supported | Groups tasks under a heading in `--list-tasks` output, only once *some* task in the project declares one — see [config reference](config-reference.md#list-tasks-output). |
 | `customise` | Not supported | |

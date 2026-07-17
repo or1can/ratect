@@ -1009,6 +1009,14 @@ pub struct Task {
     /// `TaskEngine::run_task_internal`.
     pub run: Option<TaskRun>,
     pub prerequisites: Option<Vec<String>>,
+    /// Sidecar containers scoped to this task specifically — distinct from
+    /// [`Container::dependencies`], which every task using that container
+    /// picks up. Unioned with the task's own container's `dependencies` when
+    /// resolving what to start alongside it — see
+    /// `TaskEngine::run_task_internal`. Requires `run` (validated in
+    /// [`Config::resolve_expressions_with_boundaries`], matching Batect) and
+    /// can't name `run.container` itself.
+    pub dependencies: Option<Vec<String>>,
     /// Free-text shown next to the task's name in `--list-tasks` output —
     /// see [`format_task_list`].
     pub description: Option<String>,
@@ -1858,6 +1866,24 @@ impl Config {
                     task_name
                 );
             }
+            match (&task.run, &task.dependencies) {
+                (None, Some(dependencies)) if !dependencies.is_empty() => {
+                    anyhow::bail!(
+                        "Task '{}' has 'dependencies' but no 'run' — 'run' is required if \
+                         'dependencies' is provided",
+                        task_name
+                    );
+                }
+                (Some(run), Some(dependencies)) if dependencies.contains(&run.container) => {
+                    anyhow::bail!(
+                        "Task '{}' cannot have container '{}' as both the main task \
+                         container (via 'run') and a task-level dependency",
+                        task_name,
+                        run.container
+                    );
+                }
+                _ => {}
+            }
             if let Some(run) = &mut task.run {
                 if let Some(environment) = &mut run.environment {
                     for value in environment.values_mut() {
@@ -2066,6 +2092,7 @@ tasks:
                 working_directory: None,
                 entrypoint: None,
             }),
+            dependencies: None,
             prerequisites: None,
             description: description.map(str::to_string),
             group: group.map(str::to_string),
@@ -2179,6 +2206,102 @@ tasks:
             .unwrap_err()
             .to_string()
             .contains("Task 'test' must have at least one of 'run' or 'prerequisites'"));
+    }
+
+    #[test]
+    fn parses_task_level_dependencies() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+  queue:
+    image: redis:7-alpine
+tasks:
+  test:
+    run:
+      container: build-env
+    dependencies:
+      - queue
+"#,
+        );
+
+        let task = config.tasks.get("test").unwrap();
+        assert_eq!(
+            task.dependencies.as_ref().unwrap(),
+            &vec!["queue".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_expressions_errors_when_a_task_has_dependencies_but_no_run() {
+        let mut config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+  queue:
+    image: redis:7-alpine
+  other:
+    image: alpine:3.18
+tasks:
+  other:
+    run:
+      container: other
+  test:
+    prerequisites:
+      - other
+    dependencies:
+      - queue
+"#,
+        );
+
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            no_host_env,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("'run' is required if 'dependencies' is provided"));
+    }
+
+    #[test]
+    fn resolve_expressions_errors_when_a_task_dependency_names_its_own_main_container() {
+        let mut config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks:
+  test:
+    run:
+      container: build-env
+    dependencies:
+      - build-env
+"#,
+        );
+
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            no_host_env,
+        );
+
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("Task 'test'"), "message: {message}");
+        assert!(
+            message
+                .contains("both the main task container (via 'run') and a task-level dependency"),
+            "message: {message}"
+        );
     }
 
     #[test]

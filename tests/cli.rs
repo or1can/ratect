@@ -441,6 +441,38 @@ fn sidecars_are_reachable_by_name_via_docker() {
     );
 }
 
+/// Requires a running Docker daemon with network access to pull `redis:7-alpine`
+/// and `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves a task-level `dependencies` entry (`queue`, not in `app`'s own
+/// container-level `dependencies`) is actually started and reachable by
+/// name — distinct from the container-level `dependencies` sidecars proven
+/// reachable in `sidecars_are_reachable_by_name_via_docker`.
+#[test]
+#[ignore]
+fn task_level_dependency_is_reachable_by_name_via_docker() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(sidecar_config_path())
+        .arg("ping-task-level-sidecar")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("0% packet loss"),
+        "expected a successful ping of the task-level dependency 'queue' by \
+         name:\n{}",
+        stdout
+    );
+}
+
 /// Requires a running Docker daemon with network access to pull
 /// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
 ///

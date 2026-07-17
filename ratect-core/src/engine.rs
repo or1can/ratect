@@ -175,15 +175,24 @@ fn buildkit_options(container: &Container) -> Option<crate::docker::BuildKitOpti
 /// traffic to them" exemption list passed to
 /// `proxy::proxy_environment_variables`.
 ///
+/// `task_dependencies` (a task's own task-level `dependencies` — sidecars
+/// scoped to this one task, distinct from `root`'s own container-level
+/// `dependencies`) are unioned in at the root only, matching Batect's
+/// `taskDependencies = task.dependsOnContainers + taskContainer.dependencies`
+/// — each one's *own* container-level `dependencies` still resolve
+/// transitively from there, same as any other dependency.
+///
 /// Visited-set-guarded so a config cycle can't hang this pure walk — real
 /// cycle detection (which actually rejects a cycle as a user-facing error)
 /// still happens separately, in `TaskEngine::start_dependency`.
 fn container_names_in_task(
     containers: &HashMap<String, Container>,
     root: &str,
+    task_dependencies: Option<&[String]>,
 ) -> std::collections::BTreeSet<String> {
     let mut names = std::collections::BTreeSet::new();
     let mut stack = vec![root.to_string()];
+    stack.extend(task_dependencies.into_iter().flatten().cloned());
     while let Some(name) = stack.pop() {
         if !names.insert(name.clone()) {
             continue;
@@ -590,20 +599,24 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         // dependency) gets the same `no_proxy` exemption list, matching
         // Batect's `allContainersInNetwork` being fixed for the whole graph
         // rather than recomputed per container.
-        let no_proxy_entries = container_names_in_task(&self.config.containers, &run.container);
+        let no_proxy_entries = container_names_in_task(
+            &self.config.containers,
+            &run.container,
+            task.dependencies.as_deref(),
+        );
 
         let result: Result<()> = async {
-            if let Some(deps) = &container_config.dependencies {
-                for dep_name in deps {
-                    self.start_dependency(
-                        dep_name,
-                        &network_name,
-                        &mut running_sidecars,
-                        &mut resolving,
-                        &no_proxy_entries,
-                    )
-                    .await?;
-                }
+            let task_dependencies = task.dependencies.iter().flatten();
+            let container_dependencies = container_config.dependencies.iter().flatten();
+            for dep_name in task_dependencies.chain(container_dependencies) {
+                self.start_dependency(
+                    dep_name,
+                    &network_name,
+                    &mut running_sidecars,
+                    &mut resolving,
+                    &no_proxy_entries,
+                )
+                .await?;
             }
 
             let image = self.resolve_image(&run.container, container_config).await?;
@@ -1479,6 +1492,7 @@ mod tests {
                 working_directory: None,
                 entrypoint: None,
             }),
+            dependencies: None,
             prerequisites: None,
             description: None,
             group: None,
@@ -1531,6 +1545,7 @@ mod tests {
                     working_directory: None,
                     entrypoint: None,
                 }),
+                dependencies: None,
                 prerequisites: Some(vec!["b".to_string()]),
                 description: None,
                 group: None,
@@ -1547,6 +1562,7 @@ mod tests {
                     working_directory: None,
                     entrypoint: None,
                 }),
+                dependencies: None,
                 prerequisites: Some(vec!["a".to_string()]),
                 description: None,
                 group: None,
@@ -1616,6 +1632,7 @@ mod tests {
                 entrypoint: None,
             }),
             prerequisites,
+            dependencies: None,
             description: None,
             group: None,
         };
@@ -1803,6 +1820,7 @@ mod tests {
                     working_directory: None,
                     entrypoint: None,
                 }),
+                dependencies: None,
                 prerequisites: Some(vec!["setup".to_string()]),
                 description: None,
                 group: None,
@@ -2491,6 +2509,7 @@ mod tests {
                     working_directory: None,
                     entrypoint: None,
                 }),
+                dependencies: None,
                 prerequisites: Some(vec!["first".to_string()]),
                 description: None,
                 group: None,
@@ -3257,6 +3276,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn task_level_dependency_starts_alongside_container_level_ones() {
+        let mut containers = HashMap::new();
+        containers.insert("cache".to_string(), container("redis:7", None));
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["cache".to_string()])),
+        );
+        containers.insert("queue".to_string(), container("redis:7", None));
+        let mut tasks = HashMap::new();
+        let mut start_task = task("app", "echo hi");
+        start_task.dependencies = Some(vec!["queue".to_string()]);
+        tasks.insert("start".to_string(), start_task);
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        let events = docker.events();
+        // "queue" only exists as a task-level dependency (not in "app"'s own
+        // container-level `dependencies`) — it must still start alongside
+        // "cache", the container-level one.
+        for sidecar in ["cache", "queue"] {
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|e| e.starts_with(&format!("sidecar-start:{sidecar}:")))
+                    .count(),
+                1,
+                "'{sidecar}' should have started exactly once: {events:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn task_level_dependency_shared_with_a_container_level_one_only_starts_once() {
+        let mut containers = HashMap::new();
+        containers.insert("cache".to_string(), container("redis:7", None));
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["cache".to_string()])),
+        );
+        let mut tasks = HashMap::new();
+        // Task-level `dependencies` names the same container "app" already
+        // depends on at the container level — must dedup to a single start,
+        // not start "cache" twice.
+        let mut start_task = task("app", "echo hi");
+        start_task.dependencies = Some(vec!["cache".to_string()]);
+        tasks.insert("start".to_string(), start_task);
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        let events = docker.events();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.starts_with("sidecar-start:cache:"))
+                .count(),
+            1,
+            "a container named by both task-level and container-level \
+             dependencies should still only start once: {events:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn deeply_nested_dependencies_all_start_in_order() {
         // a -> b -> c -> d, four levels total, to prove the recursion isn't
         // accidentally limited to one or two levels.
@@ -3334,6 +3433,7 @@ mod tests {
                     working_directory: None,
                     entrypoint: None,
                 }),
+                dependencies: None,
                 prerequisites: Some(vec!["migrate".to_string()]),
                 description: None,
                 group: None,
@@ -4050,6 +4150,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_task_level_dependencys_name_is_exempted_from_the_tasks_own_no_proxy() {
+        let mut containers = HashMap::new();
+        containers.insert("app".to_string(), container("alpine:3.18", None));
+        containers.insert("queue".to_string(), container("redis:7", None));
+        let mut tasks = HashMap::new();
+        let mut run_task = task("app", "echo hi");
+        run_task.dependencies = Some(vec!["queue".to_string()]);
+        tasks.insert("run".to_string(), run_task);
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone()).with_host_env(|name| {
+            (name == "http_proxy").then(|| "http://proxy.example.com".to_string())
+        });
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        let app_no_proxy = docker.environment_for("app").unwrap();
+        let app_no_proxy = app_no_proxy.get("no_proxy").unwrap();
+        assert!(app_no_proxy.split(',').any(|entry| entry == "queue"));
+    }
+
+    #[tokio::test]
     async fn term_env_var_reaches_a_tasks_own_container_when_interactive() {
         let mut containers = HashMap::new();
         containers.insert("app".to_string(), container("alpine:3.18", None));
@@ -4178,6 +4306,7 @@ mod tests {
                     working_directory: None,
                     entrypoint: None,
                 }),
+                dependencies: None,
                 prerequisites: Some(vec!["setup".to_string()]),
                 description: None,
                 group: None,

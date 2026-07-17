@@ -490,10 +490,13 @@ tasks:
 |---|---|---|---|
 | `run` | [TaskRun](#taskrun) | no* | What to actually execute for this task. |
 | `prerequisites` | list of strings | no* | Names of other tasks to run first, in order. Each prerequisite (and its own prerequisites, transitively) runs at most once per `ratect` invocation, even if shared by multiple tasks. A circular dependency is detected and reported as an error. |
+| `dependencies` | list of strings | no** | Sidecar containers scoped to this task specifically — see below. Requires `run`. |
 | `description` | string | no | Shown next to the task's name in `--list-tasks` output — see below. Purely informational. |
 | `group` | string | no | Groups this task under a heading in `--list-tasks` output, together with every other task sharing the same `group` — see below. Purely a display grouping; has no effect on execution order or prerequisites. |
 
 \* At least one of `run`/`prerequisites` is required. A task with only `prerequisites` and no `run` is valid — its prerequisites still run, then Ratect stops, since there's no container of the task's own left to run.
+
+\*\* `dependencies` here is distinct from a [container](#container)'s own `dependencies` field: this one is scoped to *this task specifically*, rather than to every task that uses the container. It's unioned with the task's own container's `dependencies` — both start together — and can't name `run.container` itself.
 
 ### List-tasks output
 
