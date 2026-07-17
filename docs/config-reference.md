@@ -165,6 +165,7 @@ containers:
 | `labels` | map of string → string | no | Docker labels applied to the container. Container level only — no task-level `run` override. No [expression](#expressions) support. |
 | `capabilities_to_add` | list of strings | no | Linux capabilities to add beyond Docker's own default set (Docker's `--cap-add`), e.g. `NET_ADMIN`. Validated at config-load time against a fixed list based on Batect's own `Capability` enum plus `BPF`/`CHECKPOINT_RESTORE`/`PERFMON` (added to Docker after Batect's last release — see [Differences from Batect](differences-from-batect.md#container-fields)) — an unknown name is rejected with a clear error. Container level only. No expression support. |
 | `capabilities_to_drop` | list of strings | no | Linux capabilities to drop from Docker's own default set (Docker's `--cap-drop`), e.g. `CHOWN`. Same validation/scope as `capabilities_to_add`. |
+| `privileged` | boolean | no | Runs the container with extended (nearly all host) privileges — Docker's `--privileged`. Defaults to `false`. Container level only. No [expression](#expressions) support. |
 
 > **Note:** if a container has *neither* `image` nor `build_directory` set, running a
 > task against it is an error naming the container. A dependency container without

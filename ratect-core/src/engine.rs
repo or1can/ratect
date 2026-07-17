@@ -608,6 +608,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 labels: container_config.labels.as_ref(),
                 capabilities_to_add: capabilities_to_add.as_ref(),
                 capabilities_to_drop: capabilities_to_drop.as_ref(),
+                privileged: container_config.privileged,
             };
             self.docker
                 .run_container(
@@ -712,6 +713,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             labels: dependency_config.labels.as_ref(),
             capabilities_to_add: capabilities_to_add.as_ref(),
             capabilities_to_drop: capabilities_to_drop.as_ref(),
+            privileged: dependency_config.privileged,
         };
 
         let container_id = self
@@ -838,6 +840,7 @@ mod tests {
         labels: Option<HashMap<String, String>>,
         capabilities_to_add: Option<Vec<String>>,
         capabilities_to_drop: Option<Vec<String>>,
+        privileged: Option<bool>,
     }
     type CapturedContainerOptions = Arc<Mutex<HashMap<String, ContainerOptionsValue>>>;
     /// `(working_directory, environment, (uid, gid))`, keyed by the exec'd
@@ -1097,6 +1100,16 @@ mod tests {
                 .get(name)
                 .and_then(|options| options.capabilities_to_drop.clone())
         }
+
+        /// The `container_options.privileged` a prior `run_container`/
+        /// `start_background_container` call for `name` was given.
+        fn privileged_for(&self, name: &str) -> Option<bool> {
+            self.container_options
+                .lock()
+                .unwrap()
+                .get(name)
+                .and_then(|options| options.privileged)
+        }
     }
 
     #[async_trait::async_trait]
@@ -1193,6 +1206,7 @@ mod tests {
                     labels: container_options.labels.cloned(),
                     capabilities_to_add: container_options.capabilities_to_add.cloned(),
                     capabilities_to_drop: container_options.capabilities_to_drop.cloned(),
+                    privileged: container_options.privileged,
                 },
             );
             self.push(format!("sidecar-start:{alias}:{network}"));
@@ -1294,6 +1308,7 @@ mod tests {
                     labels: container_options.labels.cloned(),
                     capabilities_to_add: container_options.capabilities_to_add.cloned(),
                     capabilities_to_drop: container_options.capabilities_to_drop.cloned(),
+                    privileged: container_options.privileged,
                 },
             );
             self.push(format!(
@@ -1330,6 +1345,7 @@ mod tests {
             labels: None,
             capabilities_to_add: None,
             capabilities_to_drop: None,
+            privileged: None,
             health_check: None,
             setup_commands: None,
         }
@@ -1373,6 +1389,7 @@ mod tests {
                 labels: None,
                 capabilities_to_add: None,
                 capabilities_to_drop: None,
+                privileged: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1451,6 +1468,7 @@ mod tests {
                 labels: None,
                 capabilities_to_add: None,
                 capabilities_to_drop: None,
+                privileged: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1674,6 +1692,7 @@ mod tests {
             labels: None,
             capabilities_to_add: None,
             capabilities_to_drop: None,
+            privileged: None,
             health_check: None,
             setup_commands: None,
         }
@@ -2001,6 +2020,7 @@ mod tests {
                 labels: None,
                 capabilities_to_add: None,
                 capabilities_to_drop: None,
+                privileged: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -2050,6 +2070,7 @@ mod tests {
             labels: None,
             capabilities_to_add: None,
             capabilities_to_drop: None,
+            privileged: None,
             health_check: None,
             setup_commands: None,
         }
@@ -2426,6 +2447,7 @@ mod tests {
                 labels: None,
                 capabilities_to_add: None,
                 capabilities_to_drop: None,
+                privileged: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -3188,6 +3210,7 @@ mod tests {
                 labels: None,
                 capabilities_to_add: None,
                 capabilities_to_drop: None,
+                privileged: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -3493,6 +3516,31 @@ mod tests {
             docker.capabilities_to_drop_for("build-env"),
             Some(vec!["CHOWN".to_string()])
         );
+    }
+
+    #[tokio::test]
+    async fn container_privileged_reaches_the_container() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.privileged = Some(true);
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        assert_eq!(docker.privileged_for("build-env"), Some(true));
     }
 
     #[tokio::test]
@@ -4022,5 +4070,32 @@ mod tests {
             docker.capabilities_to_add_for("database"),
             Some(vec!["SYS_PTRACE".to_string()])
         );
+    }
+
+    #[tokio::test]
+    async fn dependency_container_privileged_reaches_the_sidecar() {
+        let mut database = container("postgres:16", None);
+        database.privileged = Some(true);
+        let mut containers = HashMap::new();
+        containers.insert("database".to_string(), database);
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        assert_eq!(docker.privileged_for("database"), Some(true));
     }
 }

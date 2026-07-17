@@ -97,7 +97,7 @@ used exactly as written, with no host-side substitution step:
 | `labels` | Supported | Docker labels applied to the container. Container level only, matching Batect (no equivalent task-level `run` override in either). No expression support. |
 | `log_driver` / `log_options` | Not supported | |
 | `ports` | Supported | Both the `local:container[/protocol]` string form (including port ranges) and the expanded `{local, container, protocol}` object form — see [Port mappings](config-reference.md#port-mappings). Validated (matching ranges, positive ports) at config-load time. |
-| `privileged` | Not supported | |
+| `privileged` | Supported | Runs the container with extended (nearly all host) privileges. Defaults to `false`, matching Batect. Container level only. No expression support. |
 | `run_as_current_user` | Supported | Runs the container as the host user's UID/GID instead of root, so files written to mounted volumes aren't root-owned — see [User mapping](config-reference.md#user-mapping). No equivalent to Batect's "cache mounts" (Ratect has no such config concept), and host-side uid/gid lookup is Unix-only. |
 | `setup_commands` | Supported (simplified) | Run inside a started dependency after it becomes healthy, before its dependents start — see [Dependency readiness](config-reference.md#dependency-readiness). A `working_directory`-less entry falls back to the container's own `working_directory`, then the image's own default, matching Batect. One remaining gap: the task's *own* container's `setup_commands` don't run at all (Batect runs them concurrently with the task's command; Ratect's sequential engine has no concurrent exec path yet). |
 | `shm_size` | Not supported | |

@@ -71,6 +71,10 @@ fn capabilities_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/capabilities.yml")
 }
 
+fn privileged_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/privileged.yml")
+}
+
 fn project_directory_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-directory.yml")
 }
@@ -812,6 +816,47 @@ fn capabilities_to_drop_removes_chown_on_the_real_container() {
         !output.status.success(),
         "chown should fail once CHOWN is dropped:\nstdout:\n{}",
         String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves `privileged` reaches the real container: a `privileged: true`
+/// container's own effective-capabilities bitmask (`/proc/self/status`'s
+/// `CapEff` — read-only, no actual privileged operation exercised) must be
+/// numerically larger than a normal container's, since privileged mode
+/// grants Docker's full capability set.
+#[test]
+#[ignore]
+fn privileged_grants_a_larger_capability_set_on_the_real_container() {
+    let cap_eff = |task: &str| {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(privileged_config_path())
+            .arg(task)
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run ratect: {e}"));
+        assert!(
+            output.status.success(),
+            "stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let hex = stdout
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or_else(|| panic!("unexpected CapEff line: {stdout}"));
+        u64::from_str_radix(hex, 16)
+            .unwrap_or_else(|e| panic!("failed to parse CapEff '{hex}': {e}"))
+    };
+
+    let normal = cap_eff("show-caps-normal");
+    let privileged = cap_eff("show-caps-privileged");
+
+    assert!(
+        privileged > normal,
+        "privileged CapEff ({privileged:#x}) should exceed normal CapEff ({normal:#x})"
     );
 }
 

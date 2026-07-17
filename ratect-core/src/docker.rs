@@ -250,6 +250,10 @@ pub struct ContainerOptions<'a> {
     /// Linux capability names to drop from Docker's own default set
     /// (`--cap-drop`). Same conversion/typing as `capabilities_to_add`.
     pub capabilities_to_drop: Option<&'a Vec<String>>,
+    /// Runs the container with extended (nearly all host) privileges —
+    /// Docker's `--privileged`. `None`/`Some(false)` both behave like
+    /// Docker's own unset default.
+    pub privileged: Option<bool>,
 }
 
 /// A container's `health_check` override, applied at container creation on
@@ -1651,6 +1655,7 @@ impl ContainerRuntime for DockerClient {
             port_bindings: port_config.as_ref().map(|(_, bindings)| bindings.clone()),
             cap_add: container_options.capabilities_to_add.cloned(),
             cap_drop: container_options.capabilities_to_drop.cloned(),
+            privileged: container_options.privileged,
             ..Default::default()
         };
 
@@ -1867,6 +1872,7 @@ impl ContainerRuntime for DockerClient {
             port_bindings: port_config.as_ref().map(|(_, bindings)| bindings.clone()),
             cap_add: container_options.capabilities_to_add.cloned(),
             cap_drop: container_options.capabilities_to_drop.cloned(),
+            privileged: container_options.privileged,
             ..Default::default()
         };
 

@@ -1,0 +1,22 @@
+# Exercises `privileged` end-to-end: compares the container's own effective
+# Linux capabilities bitmask (/proc/self/status's CapEff — a purely
+# read-only, environment-agnostic check, not an actual privileged
+# operation) between a normal and a `privileged: true` container. A
+# privileged container gets Docker's full capability set, so its CapEff
+# must be numerically larger than the default's.
+project_name: ratect-privileged-test
+containers:
+  normal:
+    image: alpine:3.18.2
+  root-privileged:
+    image: alpine:3.18.2
+    privileged: true
+tasks:
+  show-caps-normal:
+    run:
+      container: normal
+      command: sh -c "grep CapEff /proc/self/status"
+  show-caps-privileged:
+    run:
+      container: root-privileged
+      command: sh -c "grep CapEff /proc/self/status"

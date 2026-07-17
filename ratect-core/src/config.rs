@@ -136,6 +136,11 @@ pub struct Container {
     /// Linux capabilities to drop from Docker's own default set — Docker's
     /// `--cap-drop`. Same typing/scope as `capabilities_to_add`.
     pub capabilities_to_drop: Option<HashSet<Capability>>,
+    /// Runs the container with extended (nearly all host) privileges —
+    /// Docker's `--privileged`. `None`/absent behaves like `false`,
+    /// matching Batect's own default. Container level only, matching
+    /// Batect (no task-level `run` override in either).
+    pub privileged: Option<bool>,
 }
 
 /// A Linux capability name, validated at config-parse time — an unknown name
@@ -1935,6 +1940,47 @@ tasks:
     }
 
     #[test]
+    fn parses_privileged() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    privileged: true
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.privileged, Some(true));
+    }
+
+    #[test]
+    fn privileged_defaults_to_none() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.privileged, None);
+    }
+
+    #[test]
     fn an_unknown_capability_name_is_rejected() {
         let yaml = r#"
 project_name: demo
@@ -2275,6 +2321,7 @@ tasks: {}
             labels: None,
             capabilities_to_add: None,
             capabilities_to_drop: None,
+            privileged: None,
         }
     }
 
@@ -2570,6 +2617,7 @@ tasks: {}
             labels: None,
             capabilities_to_add: None,
             capabilities_to_drop: None,
+            privileged: None,
         }
     }
 
@@ -4660,6 +4708,7 @@ config_variables:
             labels: None,
             capabilities_to_add: None,
             capabilities_to_drop: None,
+            privileged: None,
         }
     }
 
