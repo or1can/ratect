@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-07-17
+
 ### Added
 
 - **`description`/`group` on a task**: `description` is shown next to the task's name in `--list-tasks` output; `group` heads tasks sharing the same value under their own listing, with an ungrouped task falling into a trailing "Ungrouped tasks:" bucket — only once *some* task in the project declares a `group` at all, otherwise `--list-tasks` stays the flat list it's always been. See [config reference](docs/config-reference.md#list-tasks-output). Part of 0.14.0's Task Model Completeness (see `ROADMAP.md`).
