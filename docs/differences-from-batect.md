@@ -145,7 +145,7 @@ Batect's full flag list, from its [CLI reference](https://github.com/batect/bate
 | `--tag-image` | Not supported | Built images are tagged `<project_name>-<container_name>` (like Batect's own default) — no way to additionally tag one with a custom name. |
 | `--config-vars-file`, `--config-var` | Supported | See [CLI reference](cli-reference.md) and [Expressions](#expressions). |
 | `--docker-host`, `--docker-context`, `--docker-config`, `--docker-cert-path`, `--docker-tls*` | Not supported | Ratect connects using Docker's local defaults only, with no CLI overrides. |
-| `--cache-type`, `--clean`, `--clean-cache` | N/A | Moot — no cache concept exists (Batect's caches are for build performance, not implemented here). |
+| `--cache-type`, `--clean`, `--clean-cache` | Not supported | Tied to `volumes`' `cache` mount type (a named, persistent-between-runs volume — see the `volumes` row above), which isn't implemented yet, so these flags have nothing to act on. Not a build-performance feature (the Docker build cache itself is unaffected either way) — these govern Batect's own cache *volumes*, a distinct mechanism. |
 | `--max-parallelism` | Not supported | Ratect's own within-task container concurrency (0.15.0) is unbounded, same as Batect's default when this flag isn't passed — there's just no CLI surface yet to cap it. |
 | `--no-proxy-vars` | Supported | Disables proxy environment variable propagation entirely — see [Proxy environment variables](config-reference.md#proxy-environment-variables). |
 | `--log-file` | Different mechanism | Ratect uses `RUST_LOG` + stderr instead of a dedicated log-file flag — see [CLI reference](cli-reference.md#environment-variables). |

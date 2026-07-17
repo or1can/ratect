@@ -90,6 +90,14 @@ actual behavior — it doesn't yet distinguish "nothing to do" from "success":
   `RUST_LOG`-filterable, formatted stderr channel as everything else — see
   [how it works](how-it-works.md#5-logging-vs-output)), rather than a raw, differently
   formatted panic-style message.
+- A misspelled task name (whether given directly on the command line, or as a
+  [`prerequisites`](config-reference.md#task) entry) gets a `Did you mean 'x'?`
+  suggestion appended to the error, for every existing task name within a Levenshtein
+  edit distance of 3 — ported from Batect's own `TaskSuggester`/`EditDistanceCalculator`
+  (confirmed by reading Batect's source). Multiple equally-close matches are all
+  suggested, e.g. `Did you mean 'build' or 'bulid'?` — Batect's own implementation
+  can silently drop one of two equally-close suggestions (its sorting comparator
+  doubles as its de-duplication key), which Ratect's deliberately doesn't replicate.
 - **A failing command *inside* the container fails the `ratect` process too, with the
   same exit code.** Ratect waits for the container to exit and inspects its status —
   a task whose command is `exit 42` makes `ratect` itself exit `42`, matching

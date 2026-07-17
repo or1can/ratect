@@ -2656,6 +2656,43 @@ tasks:
     }
 
     #[test]
+    fn yaml_anchors_aliases_and_merge_keys_are_resolved() {
+        // Not a Ratect-specific feature to implement — anchors (`&name`),
+        // aliases (`*name`), and merge keys (`<<:`) are core YAML syntax, so
+        // any spec-compliant parser (including `noyalib`) resolves them
+        // before Ratect's own `Deserialize` impls ever see the document.
+        // Locked in here as a regression test rather than left as an
+        // untested assumption, since a future parser swap could plausibly
+        // regress it silently.
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env: &base
+    image: alpine:3.18
+    environment:
+      SHARED_VAR: shared-value
+  other-env:
+    <<: *base
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let base = config.containers.get("build-env").unwrap();
+        let merged = config.containers.get("other-env").unwrap();
+        assert_eq!(merged.image, base.image);
+        assert_eq!(merged.environment, base.environment);
+        assert_eq!(
+            merged.environment.as_ref().unwrap().get("SHARED_VAR"),
+            Some(&"shared-value".to_string())
+        );
+    }
+
+    #[test]
     fn parses_container_and_run_command() {
         let config = parse(
             r#"

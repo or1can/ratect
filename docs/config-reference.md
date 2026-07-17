@@ -5,6 +5,23 @@ This documents the schema Ratect actually parses today (`ratect-core/src/config.
 **subset** of Batect's configuration format. See
 [differences from Batect](differences-from-batect.md) for what's not yet supported.
 
+Standard YAML features — anchors (`&name`), aliases (`*name`), and merge keys
+(`<<:`) — work throughout the file, not just in specific fields: they're core
+YAML syntax handled by the parser itself (`noyalib`) before any of the schema
+below ever sees the document, not something Ratect implements or could disable.
+Useful for factoring out a shared base container definition, for example:
+
+```yaml
+containers:
+  base: &base
+    image: alpine:3.18
+    environment:
+      COMMON_VAR: shared-value
+  worker:
+    <<: *base
+    working_directory: /worker
+```
+
 ## Top level
 
 ```yaml

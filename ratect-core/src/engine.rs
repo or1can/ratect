@@ -331,6 +331,80 @@ fn expand_prerequisite_wildcards(
     Ok(expanded)
 }
 
+/// Levenshtein edit distance between `a` and `b` — a textbook Wagner-Fischer
+/// implementation, ported from Batect's own `EditDistanceCalculator`.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut previous_row: Vec<usize> = (0..=b.len()).collect();
+    let mut current_row = vec![0usize; b.len() + 1];
+
+    for i in 1..=a.len() {
+        current_row[0] = i;
+        for j in 1..=b.len() {
+            current_row[j] = if a[i - 1] == b[j - 1] {
+                previous_row[j - 1]
+            } else {
+                1 + previous_row[j - 1]
+                    .min(previous_row[j])
+                    .min(current_row[j - 1])
+            };
+        }
+        std::mem::swap(&mut previous_row, &mut current_row);
+    }
+
+    previous_row[b.len()]
+}
+
+/// Suggests likely-intended task names for a mistyped `name` — ported from
+/// Batect's own `TaskSuggester`: every task name within edit distance 3,
+/// closest first. Deliberately not a literal port of Batect's own tie
+/// handling: Batect's `suggestCorrections` sorts via a `Comparator` that
+/// only compares by distance, and — because that same comparator also
+/// decides the backing `TreeMap`'s key uniqueness — two task names that tie
+/// on distance are treated as "equal" and silently collapse to just one
+/// suggestion, dropping the other. This breaks ties alphabetically instead,
+/// so a tie shows every equally-close match rather than an arbitrary one of
+/// them.
+fn suggest_task_names(tasks: &HashMap<String, Task>, name: &str) -> Vec<String> {
+    let mut suggestions: Vec<(usize, &String)> = tasks
+        .keys()
+        .map(|task_name| (edit_distance(name, task_name), task_name))
+        .filter(|(distance, _)| *distance <= 3)
+        .collect();
+    suggestions.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+    suggestions
+        .into_iter()
+        .map(|(_, task_name)| task_name.clone())
+        .collect()
+}
+
+/// Joins `items` into a human-readable list — `["a"]` → `"a"`, `["a", "b"]`
+/// → `"a or b"`, `["a", "b", "c"]` → `"a, b or c"` (no Oxford comma) — ported
+/// from Batect's own `Collection<String>.asHumanReadableList`.
+fn human_readable_list(items: &[String], conjunction: &str) -> String {
+    match items {
+        [] => String::new(),
+        [only] => only.clone(),
+        _ => {
+            let (last, rest) = items.split_last().expect("non-empty, checked above");
+            format!("{} {} {}", rest.join(", "), conjunction, last)
+        }
+    }
+}
+
+/// Builds the `" Did you mean 'x' or 'y'?"` suffix Batect appends to a
+/// "task does not exist" error — an empty string when nothing is close
+/// enough to suggest. See `suggest_task_names`.
+fn format_task_suggestions(tasks: &HashMap<String, Task>, name: &str) -> String {
+    let suggestions = suggest_task_names(tasks, name);
+    if suggestions.is_empty() {
+        return String::new();
+    }
+    let quoted: Vec<String> = suggestions.iter().map(|s| format!("'{}'", s)).collect();
+    format!(" Did you mean {}?", human_readable_list(&quoted, "or"))
+}
+
 pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     config: Config,
     docker: D,
@@ -665,11 +739,13 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         additional_args: &[String],
         top_level: bool,
     ) -> Result<()> {
-        let task = self
-            .config
-            .tasks
-            .get(task_name)
-            .with_context(|| format!("Task '{}' not found", task_name))?;
+        let task = self.config.tasks.get(task_name).with_context(|| {
+            format!(
+                "Task '{}' not found.{}",
+                task_name,
+                format_task_suggestions(&self.config.tasks, task_name)
+            )
+        })?;
 
         // Run prerequisites (never with additional args, and never eligible
         // for interactive TTY attachment — both scoped to only the
@@ -4162,6 +4238,74 @@ mod tests {
 
         let err = engine.run_task("does-not-exist", &[]).await.unwrap_err();
         assert!(err.to_string().contains("Task 'does-not-exist' not found"));
+    }
+
+    #[tokio::test]
+    async fn a_slightly_misspelled_task_name_suggests_the_real_one() {
+        let docker = DockerClient::new().expect("constructing a Docker client is infallible here");
+        let engine = TaskEngine::new(config_with_shared_prerequisite(), docker);
+
+        let err = engine.run_task("tst-task", &[]).await.unwrap_err();
+        assert!(
+            err.to_string().contains("Did you mean 'test-task'?"),
+            "error should suggest the close match: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_wildly_misspelled_task_name_suggests_nothing() {
+        let docker = DockerClient::new().expect("constructing a Docker client is infallible here");
+        let engine = TaskEngine::new(config_with_shared_prerequisite(), docker);
+
+        let err = engine
+            .run_task("completely-unrelated-name", &[])
+            .await
+            .unwrap_err();
+        assert!(
+            !err.to_string().contains("Did you mean"),
+            "nothing should be close enough to suggest: {err}"
+        );
+    }
+
+    #[test]
+    fn suggests_multiple_close_matches_as_a_human_readable_list() {
+        let mut tasks = HashMap::new();
+        for name in ["test", "text", "tent", "unrelated"] {
+            tasks.insert(
+                name.to_string(),
+                Task {
+                    run: None,
+                    prerequisites: None,
+                    dependencies: None,
+                    description: None,
+                    group: None,
+                    customise: None,
+                },
+            );
+        }
+
+        let suggestions = suggest_task_names(&tasks, "test");
+
+        // "test" itself is an exact match (distance 0); "text"/"tent" are
+        // both distance 1; "unrelated" is far outside the distance-3 cutoff.
+        assert_eq!(
+            suggestions,
+            vec!["test".to_string(), "tent".to_string(), "text".to_string()],
+            "ties should break alphabetically, and nothing beyond the distance-3 cutoff should appear"
+        );
+    }
+
+    #[test]
+    fn human_readable_list_formats_one_two_and_three_items() {
+        assert_eq!(human_readable_list(&["a".to_string()], "or"), "a");
+        assert_eq!(
+            human_readable_list(&["a".to_string(), "b".to_string()], "or"),
+            "a or b"
+        );
+        assert_eq!(
+            human_readable_list(&["a".to_string(), "b".to_string(), "c".to_string()], "or"),
+            "a, b or c"
+        );
     }
 
     #[tokio::test]
