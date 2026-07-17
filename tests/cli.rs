@@ -67,6 +67,10 @@ fn entrypoint_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/entrypoint.yml")
 }
 
+fn capabilities_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/capabilities.yml")
+}
+
 fn project_directory_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-directory.yml")
 }
@@ -762,6 +766,53 @@ fn task_run_entrypoint_overrides_the_real_container() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(stdout.trim(), "override-worked");
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Contrast case for `capabilities_to_drop` below: without dropping
+/// anything, `chown` succeeds (Docker grants CHOWN by default).
+#[test]
+#[ignore]
+fn chown_succeeds_without_a_dropped_capability() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(capabilities_config_path())
+        .arg("chown-succeeds")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "chown-worked");
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves `capabilities_to_drop` reaches the real container: dropping CHOWN
+/// makes `chown` fail even as root, unlike the contrast case above.
+#[test]
+#[ignore]
+fn capabilities_to_drop_removes_chown_on_the_real_container() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(capabilities_config_path())
+        .arg("chown-fails-without-capability")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        !output.status.success(),
+        "chown should fail once CHOWN is dropped:\nstdout:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.

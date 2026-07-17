@@ -1,0 +1,23 @@
+# Exercises `capabilities_to_drop` end-to-end: dropping CHOWN reliably makes
+# `chown` fail even as root (Docker grants CHOWN by default) — a genuinely
+# observable effect, unlike testing `capabilities_to_add` reliably, which
+# tends to hit Docker's default seccomp profile regardless of capabilities.
+# `normal` (no drop) is the contrast case, proving the same command succeeds
+# without it.
+project_name: ratect-capabilities-test
+containers:
+  normal:
+    image: alpine:3.18.2
+  no-chown:
+    image: alpine:3.18.2
+    capabilities_to_drop:
+      - CHOWN
+tasks:
+  chown-succeeds:
+    run:
+      container: normal
+      command: sh -c "touch /tmp/f && chown 1000:1000 /tmp/f && echo chown-worked"
+  chown-fails-without-capability:
+    run:
+      container: no-chown
+      command: sh -c "touch /tmp/f && chown 1000:1000 /tmp/f && echo chown-worked"

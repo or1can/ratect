@@ -241,6 +241,15 @@ pub struct ContainerOptions<'a> {
     /// Docker labels (`key: value`) applied to the container. `None`/empty
     /// applies none beyond whatever the image's own build already baked in.
     pub labels: Option<&'a HashMap<String, String>>,
+    /// Linux capability names to add beyond Docker's own default set
+    /// (`--cap-add`) — already converted from `config::Capability` to plain
+    /// strings by the caller (`docker.rs` deliberately doesn't depend on
+    /// config types), each Docker's own capability name (e.g.
+    /// `"DAC_OVERRIDE"`, `"ALL"`).
+    pub capabilities_to_add: Option<&'a Vec<String>>,
+    /// Linux capability names to drop from Docker's own default set
+    /// (`--cap-drop`). Same conversion/typing as `capabilities_to_add`.
+    pub capabilities_to_drop: Option<&'a Vec<String>>,
 }
 
 /// A container's `health_check` override, applied at container creation on
@@ -1640,6 +1649,8 @@ impl ContainerRuntime for DockerClient {
             binds: volumes.cloned(),
             extra_hosts: build_extra_hosts(network_options.additional_hosts),
             port_bindings: port_config.as_ref().map(|(_, bindings)| bindings.clone()),
+            cap_add: container_options.capabilities_to_add.cloned(),
+            cap_drop: container_options.capabilities_to_drop.cloned(),
             ..Default::default()
         };
 
@@ -1854,6 +1865,8 @@ impl ContainerRuntime for DockerClient {
             binds: volumes.cloned(),
             extra_hosts: build_extra_hosts(network_options.additional_hosts),
             port_bindings: port_config.as_ref().map(|(_, bindings)| bindings.clone()),
+            cap_add: container_options.capabilities_to_add.cloned(),
+            cap_drop: container_options.capabilities_to_drop.cloned(),
             ..Default::default()
         };
 

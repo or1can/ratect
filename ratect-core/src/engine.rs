@@ -95,6 +95,22 @@ fn health_check_options(container: &Container) -> Option<crate::docker::HealthCh
         })
 }
 
+/// Converts a `capabilities_to_add`/`capabilities_to_drop` set of
+/// `config::Capability` into the plain Docker capability name strings
+/// `docker.rs`'s `ContainerOptions` expects — `docker.rs` deliberately
+/// doesn't depend on config types (same conversion boundary as
+/// `health_check_options` above). `None` when the set itself is `None`.
+fn capability_names(
+    capabilities: Option<&HashSet<crate::config::Capability>>,
+) -> Option<Vec<String>> {
+    Some(
+        capabilities?
+            .iter()
+            .map(|capability| capability.as_str().to_string())
+            .collect(),
+    )
+}
+
 /// Converts a container's parsed `build_secrets`/`build_ssh` config into the
 /// docker-side [`crate::docker::BuildKitOptions`] — `None` when neither is
 /// set (no session providers to serve; which *builder* runs the build is
@@ -582,10 +598,16 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 .entrypoint
                 .as_deref()
                 .or(container_config.entrypoint.as_deref());
+            let capabilities_to_add =
+                capability_names(container_config.capabilities_to_add.as_ref());
+            let capabilities_to_drop =
+                capability_names(container_config.capabilities_to_drop.as_ref());
             let container_options = crate::docker::ContainerOptions {
                 working_directory,
                 entrypoint,
                 labels: container_config.labels.as_ref(),
+                capabilities_to_add: capabilities_to_add.as_ref(),
+                capabilities_to_drop: capabilities_to_drop.as_ref(),
             };
             self.docker
                 .run_container(
@@ -681,10 +703,15 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         };
 
         let health_check = health_check_options(dependency_config);
+        let capabilities_to_add = capability_names(dependency_config.capabilities_to_add.as_ref());
+        let capabilities_to_drop =
+            capability_names(dependency_config.capabilities_to_drop.as_ref());
         let container_options = crate::docker::ContainerOptions {
             working_directory: dependency_config.working_directory.as_deref(),
             entrypoint: dependency_config.entrypoint.as_deref(),
             labels: dependency_config.labels.as_ref(),
+            capabilities_to_add: capabilities_to_add.as_ref(),
+            capabilities_to_drop: capabilities_to_drop.as_ref(),
         };
 
         let container_id = self
@@ -798,15 +825,20 @@ mod tests {
     /// Keyed by container name.
     type CapturedHealthChecks =
         Arc<Mutex<HashMap<String, Option<crate::docker::HealthCheckOptions>>>>;
-    /// `(working_directory, entrypoint, labels)` a prior `run_container`/
+    /// The `ContainerOptions` a prior `run_container`/
     /// `start_background_container` call for a given container name was
-    /// given (see `working_directory_for`/`entrypoint_for`/`labels_for`).
-    /// Grows as more of `ContainerOptions`'s fields land.
-    type ContainerOptionsValue = (
-        Option<String>,
-        Option<String>,
-        Option<HashMap<String, String>>,
-    );
+    /// given (see `working_directory_for`/`entrypoint_for`/`labels_for`/
+    /// `capabilities_to_add_for`/`capabilities_to_drop_for`). A named struct
+    /// (not a positional tuple) since `ContainerOptions` keeps growing —
+    /// see `ROADMAP.md`'s 0.13.0 entry.
+    #[derive(Debug, Clone, Default)]
+    struct ContainerOptionsValue {
+        working_directory: Option<String>,
+        entrypoint: Option<String>,
+        labels: Option<HashMap<String, String>>,
+        capabilities_to_add: Option<Vec<String>>,
+        capabilities_to_drop: Option<Vec<String>>,
+    }
     type CapturedContainerOptions = Arc<Mutex<HashMap<String, ContainerOptionsValue>>>;
     /// `(working_directory, environment, (uid, gid))`, keyed by the exec'd
     /// command string.
@@ -1021,7 +1053,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .get(name)
-                .and_then(|(working_directory, _, _)| working_directory.clone())
+                .and_then(|options| options.working_directory.clone())
         }
 
         /// The `container_options.entrypoint` a prior `run_container`/
@@ -1031,7 +1063,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .get(name)
-                .and_then(|(_, entrypoint, _)| entrypoint.clone())
+                .and_then(|options| options.entrypoint.clone())
         }
 
         /// The `container_options.labels` a prior `run_container`/
@@ -1041,7 +1073,29 @@ mod tests {
                 .lock()
                 .unwrap()
                 .get(name)
-                .and_then(|(_, _, labels)| labels.clone())
+                .and_then(|options| options.labels.clone())
+        }
+
+        /// The `container_options.capabilities_to_add` a prior
+        /// `run_container`/`start_background_container` call for `name` was
+        /// given.
+        fn capabilities_to_add_for(&self, name: &str) -> Option<Vec<String>> {
+            self.container_options
+                .lock()
+                .unwrap()
+                .get(name)
+                .and_then(|options| options.capabilities_to_add.clone())
+        }
+
+        /// The `container_options.capabilities_to_drop` a prior
+        /// `run_container`/`start_background_container` call for `name` was
+        /// given.
+        fn capabilities_to_drop_for(&self, name: &str) -> Option<Vec<String>> {
+            self.container_options
+                .lock()
+                .unwrap()
+                .get(name)
+                .and_then(|options| options.capabilities_to_drop.clone())
         }
     }
 
@@ -1133,11 +1187,13 @@ mod tests {
                 .insert(alias.to_string(), health_check.cloned());
             self.container_options.lock().unwrap().insert(
                 alias.to_string(),
-                (
-                    container_options.working_directory.map(str::to_string),
-                    container_options.entrypoint.map(str::to_string),
-                    container_options.labels.cloned(),
-                ),
+                ContainerOptionsValue {
+                    working_directory: container_options.working_directory.map(str::to_string),
+                    entrypoint: container_options.entrypoint.map(str::to_string),
+                    labels: container_options.labels.cloned(),
+                    capabilities_to_add: container_options.capabilities_to_add.cloned(),
+                    capabilities_to_drop: container_options.capabilities_to_drop.cloned(),
+                },
             );
             self.push(format!("sidecar-start:{alias}:{network}"));
             Ok(format!("sidecar-id-{alias}"))
@@ -1232,11 +1288,13 @@ mod tests {
                 .insert(name.to_string(), health_check.cloned());
             self.container_options.lock().unwrap().insert(
                 name.to_string(),
-                (
-                    container_options.working_directory.map(str::to_string),
-                    container_options.entrypoint.map(str::to_string),
-                    container_options.labels.cloned(),
-                ),
+                ContainerOptionsValue {
+                    working_directory: container_options.working_directory.map(str::to_string),
+                    entrypoint: container_options.entrypoint.map(str::to_string),
+                    labels: container_options.labels.cloned(),
+                    capabilities_to_add: container_options.capabilities_to_add.cloned(),
+                    capabilities_to_drop: container_options.capabilities_to_drop.cloned(),
+                },
             );
             self.push(format!(
                 "run:{name}:{}:args=[{}]:{}",
@@ -1270,6 +1328,8 @@ mod tests {
             working_directory: None,
             entrypoint: None,
             labels: None,
+            capabilities_to_add: None,
+            capabilities_to_drop: None,
             health_check: None,
             setup_commands: None,
         }
@@ -1311,6 +1371,8 @@ mod tests {
                 working_directory: None,
                 entrypoint: None,
                 labels: None,
+                capabilities_to_add: None,
+                capabilities_to_drop: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1387,6 +1449,8 @@ mod tests {
                 working_directory: None,
                 entrypoint: None,
                 labels: None,
+                capabilities_to_add: None,
+                capabilities_to_drop: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1608,6 +1672,8 @@ mod tests {
             working_directory: None,
             entrypoint: None,
             labels: None,
+            capabilities_to_add: None,
+            capabilities_to_drop: None,
             health_check: None,
             setup_commands: None,
         }
@@ -1933,6 +1999,8 @@ mod tests {
                 working_directory: None,
                 entrypoint: None,
                 labels: None,
+                capabilities_to_add: None,
+                capabilities_to_drop: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1980,6 +2048,8 @@ mod tests {
             working_directory: None,
             entrypoint: None,
             labels: None,
+            capabilities_to_add: None,
+            capabilities_to_drop: None,
             health_check: None,
             setup_commands: None,
         }
@@ -2354,6 +2424,8 @@ mod tests {
                 working_directory: None,
                 entrypoint: None,
                 labels: None,
+                capabilities_to_add: None,
+                capabilities_to_drop: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -3114,6 +3186,8 @@ mod tests {
                 working_directory: None,
                 entrypoint: None,
                 labels: None,
+                capabilities_to_add: None,
+                capabilities_to_drop: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -3383,6 +3457,41 @@ mod tests {
                 "com.example.owner".to_string(),
                 "platform-team".to_string()
             )]))
+        );
+    }
+
+    #[tokio::test]
+    async fn container_capabilities_reach_the_container() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.capabilities_to_add =
+            Some(HashSet::from([crate::config::Capability::NetAdmin]));
+        container_config.capabilities_to_drop =
+            Some(HashSet::from([crate::config::Capability::Chown]));
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.capabilities_to_add_for("build-env"),
+            Some(vec!["NET_ADMIN".to_string()])
+        );
+        assert_eq!(
+            docker.capabilities_to_drop_for("build-env"),
+            Some(vec!["CHOWN".to_string()])
         );
     }
 
@@ -3882,6 +3991,36 @@ mod tests {
                 "com.example.role".to_string(),
                 "database".to_string()
             )]))
+        );
+    }
+
+    #[tokio::test]
+    async fn dependency_container_capabilities_reach_the_sidecar() {
+        let mut database = container("postgres:16", None);
+        database.capabilities_to_add = Some(HashSet::from([crate::config::Capability::SysPtrace]));
+        let mut containers = HashMap::new();
+        containers.insert("database".to_string(), database);
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.capabilities_to_add_for("database"),
+            Some(vec!["SYS_PTRACE".to_string()])
         );
     }
 }

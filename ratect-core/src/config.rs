@@ -128,6 +128,114 @@ pub struct Container {
     /// [expression](#expressions) support — matching Batect's own
     /// `Map<String, String>` typing.
     pub labels: Option<HashMap<String, String>>,
+    /// Linux capabilities to add beyond Docker's own default set — Docker's
+    /// `--cap-add`. Container level only, matching Batect (no task-level
+    /// `run` override in either). No [expression](#expressions) support —
+    /// matching Batect's own `Set<Capability>` typing.
+    pub capabilities_to_add: Option<HashSet<Capability>>,
+    /// Linux capabilities to drop from Docker's own default set — Docker's
+    /// `--cap-drop`. Same typing/scope as `capabilities_to_add`.
+    pub capabilities_to_drop: Option<HashSet<Capability>>,
+}
+
+/// A Linux capability name, validated at config-parse time against exactly
+/// the set Batect itself supports (`batect.config.Capability`, based on
+/// `capabilities(7)`) — an unknown name is rejected with a clear error
+/// rather than silently reaching Docker's API to fail there (or, worse,
+/// being silently ignored). `serde`'s `SCREAMING_SNAKE_CASE` rename matches
+/// every variant to its Docker capability name unchanged (e.g. `DacOverride`
+/// -> `"DAC_OVERRIDE"`); [`Capability::as_str`] provides the same string
+/// back out for building Docker's own `--cap-add`/`--cap-drop` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Capability {
+    AuditControl,
+    AuditRead,
+    AuditWrite,
+    BlockSuspend,
+    Chown,
+    DacOverride,
+    DacReadSearch,
+    Fowner,
+    Fsetid,
+    IpcLock,
+    IpcOwner,
+    Kill,
+    Lease,
+    LinuxImmutable,
+    MacAdmin,
+    MacOverride,
+    Mknod,
+    NetAdmin,
+    NetBindService,
+    NetBroadcast,
+    NetRaw,
+    Setgid,
+    Setfcap,
+    Setpcap,
+    Setuid,
+    SysAdmin,
+    SysBoot,
+    SysChroot,
+    SysModule,
+    SysNice,
+    SysPacct,
+    SysPtrace,
+    SysRawio,
+    SysResource,
+    SysTime,
+    SysTtyConfig,
+    Syslog,
+    WakeAlarm,
+    All,
+}
+
+impl Capability {
+    /// The exact Docker/Batect capability name (e.g. `"DAC_OVERRIDE"`) —
+    /// what `docker.rs` sends as a `--cap-add`/`--cap-drop` entry.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Capability::AuditControl => "AUDIT_CONTROL",
+            Capability::AuditRead => "AUDIT_READ",
+            Capability::AuditWrite => "AUDIT_WRITE",
+            Capability::BlockSuspend => "BLOCK_SUSPEND",
+            Capability::Chown => "CHOWN",
+            Capability::DacOverride => "DAC_OVERRIDE",
+            Capability::DacReadSearch => "DAC_READ_SEARCH",
+            Capability::Fowner => "FOWNER",
+            Capability::Fsetid => "FSETID",
+            Capability::IpcLock => "IPC_LOCK",
+            Capability::IpcOwner => "IPC_OWNER",
+            Capability::Kill => "KILL",
+            Capability::Lease => "LEASE",
+            Capability::LinuxImmutable => "LINUX_IMMUTABLE",
+            Capability::MacAdmin => "MAC_ADMIN",
+            Capability::MacOverride => "MAC_OVERRIDE",
+            Capability::Mknod => "MKNOD",
+            Capability::NetAdmin => "NET_ADMIN",
+            Capability::NetBindService => "NET_BIND_SERVICE",
+            Capability::NetBroadcast => "NET_BROADCAST",
+            Capability::NetRaw => "NET_RAW",
+            Capability::Setgid => "SETGID",
+            Capability::Setfcap => "SETFCAP",
+            Capability::Setpcap => "SETPCAP",
+            Capability::Setuid => "SETUID",
+            Capability::SysAdmin => "SYS_ADMIN",
+            Capability::SysBoot => "SYS_BOOT",
+            Capability::SysChroot => "SYS_CHROOT",
+            Capability::SysModule => "SYS_MODULE",
+            Capability::SysNice => "SYS_NICE",
+            Capability::SysPacct => "SYS_PACCT",
+            Capability::SysPtrace => "SYS_PTRACE",
+            Capability::SysRawio => "SYS_RAWIO",
+            Capability::SysResource => "SYS_RESOURCE",
+            Capability::SysTime => "SYS_TIME",
+            Capability::SysTtyConfig => "SYS_TTY_CONFIG",
+            Capability::Syslog => "SYSLOG",
+            Capability::WakeAlarm => "WAKE_ALARM",
+            Capability::All => "ALL",
+        }
+    }
 }
 
 /// One entry in a container's `build_secrets` map — either an `environment`
@@ -1726,6 +1834,78 @@ tasks:
     }
 
     #[test]
+    fn parses_capabilities_to_add_and_drop() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    capabilities_to_add:
+      - NET_ADMIN
+      - SYS_PTRACE
+    capabilities_to_drop:
+      - CHOWN
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(
+            container.capabilities_to_add,
+            Some(HashSet::from([Capability::NetAdmin, Capability::SysPtrace]))
+        );
+        assert_eq!(
+            container.capabilities_to_drop,
+            Some(HashSet::from([Capability::Chown]))
+        );
+    }
+
+    #[test]
+    fn capabilities_default_to_none() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.capabilities_to_add, None);
+        assert_eq!(container.capabilities_to_drop, None);
+    }
+
+    #[test]
+    fn an_unknown_capability_name_is_rejected() {
+        let yaml = r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    capabilities_to_add:
+      - NOT_A_REAL_CAPABILITY
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#;
+        let result: Result<Config, _> = noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn parses_build_secrets_environment_and_path_variants() {
         let config = parse(
             r#"
@@ -2045,6 +2225,8 @@ tasks: {}
             working_directory: None,
             entrypoint: None,
             labels: None,
+            capabilities_to_add: None,
+            capabilities_to_drop: None,
         }
     }
 
@@ -2338,6 +2520,8 @@ tasks: {}
             working_directory: None,
             entrypoint: None,
             labels: None,
+            capabilities_to_add: None,
+            capabilities_to_drop: None,
         }
     }
 
@@ -4426,6 +4610,8 @@ config_variables:
             working_directory: None,
             entrypoint: None,
             labels: None,
+            capabilities_to_add: None,
+            capabilities_to_drop: None,
         }
     }
 

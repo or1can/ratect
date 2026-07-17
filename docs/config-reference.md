@@ -163,6 +163,8 @@ containers:
 | `working_directory` | string | no | Overrides the image's own `WORKDIR`. No [expression](#expressions) support. A task's own container's `working_directory` can be further overridden by the task-level `run.working_directory` — see [TaskRun](#taskrun). A `setup_commands` entry with no `working_directory` of its own falls back to this, then to the image's own default. |
 | `entrypoint` | string | no | Overrides the image's own `ENTRYPOINT`. Tokenized into literal argv the same way `command` is (quote/backslash-aware whitespace splitting, no shell involved — matching Batect's own tokenizer exactly). No [expression](#expressions) support. A task's own container's `entrypoint` can be further overridden by the task-level `run.entrypoint` — see [TaskRun](#taskrun). |
 | `labels` | map of string → string | no | Docker labels applied to the container. Container level only — no task-level `run` override. No [expression](#expressions) support. |
+| `capabilities_to_add` | list of strings | no | Linux capabilities to add beyond Docker's own default set (Docker's `--cap-add`), e.g. `NET_ADMIN`. Validated against exactly the capability names Batect itself supports (based on `capabilities(7)`) — an unknown name is rejected at config-load time. Container level only. No expression support. |
+| `capabilities_to_drop` | list of strings | no | Linux capabilities to drop from Docker's own default set (Docker's `--cap-drop`), e.g. `CHOWN`. Same validation/scope as `capabilities_to_add`. |
 
 > **Note:** if a container has *neither* `image` nor `build_directory` set, running a
 > task against it is an error naming the container. A dependency container without
