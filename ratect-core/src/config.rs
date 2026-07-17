@@ -648,12 +648,16 @@ pub struct HealthCheckConfig {
 
 /// One entry in a container's `setup_commands` list: a command run inside
 /// the started container after it becomes healthy but before its dependents
-/// start. Runs with the container's own environment and user/group, via
-/// `sh -c` — unlike `command`/`entrypoint`, which are tokenized into literal
-/// argv with no shell involved (see `tokenize_command_line` in `docker.rs`);
-/// real Batect actually tokenizes its own `SetupCommand.command` the same
-/// way as `command`/`entrypoint` too, so this is a known, narrow divergence
-/// — not deliberately preserved, just not yet closed.
+/// start. Runs with the container's own environment and user/group.
+/// Tokenized into literal argv the same way `command`/`entrypoint` are (see
+/// `tokenize_command_line` in `docker.rs`) — no shell involved, matching
+/// Batect's own `SetupCommand.command` exactly (typed `Command`, the same
+/// type as `Container.command`/`entrypoint`, and passed to Docker's exec API
+/// as already-parsed argv — confirmed by reading
+/// `RunContainerSetupCommandsStepRunner.runSetupCommand`, not assumed from
+/// Batect's docs). A command relying on shell operators (`&&`, `$VAR`
+/// expansion, etc.) needs an explicit `sh -c '...'` wrapper, same as
+/// `command`/`entrypoint`.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SetupCommand {

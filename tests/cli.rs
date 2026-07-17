@@ -546,7 +546,7 @@ containers:
       interval: 500ms
       retries: 30
     setup_commands:
-      - command: test -f /tmp/now-healthy && touch /scratch/setup-ran
+      - command: sh -c "test -f /tmp/now-healthy && touch /scratch/setup-ran"
     volumes:
       - {scratch}:/scratch
   app:

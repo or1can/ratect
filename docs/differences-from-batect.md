@@ -54,14 +54,12 @@ used exactly as written, with no host-side substitution step:
   value) and `build_ssh.paths` (unsupported at all — see the `build_ssh` entry below)
   are not expressions, matching Batect's own typing for the former and moot for the
   latter.
-- `command`/`entrypoint`/`run.command`/`run.entrypoint` are tokenized into
-  literal argv (matching Batect's own tokenizer — see [config
-  reference](config-reference.md#taskrun)), with no shell involved at all, so a
-  literal `$VAR` in one of these is never expanded by Ratect either — unrelated to,
-  and not to be confused with, Batect's own expression syntax, which substitutes
-  values from the **host** before the container even starts. `setup_commands` is the
-  one remaining field that still runs via `sh -c` inside the container — see the
-  [container fields table](#container-fields) below.
+- `command`/`entrypoint`/`run.command`/`run.entrypoint`/`setup_commands.command`
+  are all tokenized into literal argv (matching Batect's own tokenizer — see
+  [config reference](config-reference.md#taskrun)), with no shell involved at
+  all, so a literal `$VAR` in one of these is never expanded by Ratect either —
+  unrelated to, and not to be confused with, Batect's own expression syntax,
+  which substitutes values from the **host** before the container even starts.
 - Batect has exactly one implicit built-in variable, `batect.project_directory`
   (the absolute path of the directory containing the config file), and Ratect
   supports it too — resolvable via `<batect.project_directory`/

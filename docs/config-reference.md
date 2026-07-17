@@ -461,7 +461,7 @@ Each `setup_commands` entry takes:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `command` | string | yes | The command to run, via `sh -c`. Unlike a task's own `command`/`entrypoint` (tokenized into literal argv, no shell involved — see [TaskRun](#taskrun)), a `setup_commands` entry still runs through a shell. |
+| `command` | string | yes | The command to run. Tokenized into literal argv the same way a container's own `command`/`entrypoint` is (see [TaskRun](#taskrun)) — no shell involved. A command relying on shell operators (`&&`, `$VAR` expansion, etc.) needs an explicit `sh -c '...'` wrapper. |
 | `working_directory` | string | no | Directory to run it in. Falls back to the container's own `working_directory` when omitted, and then to the image's own default when neither is set. |
 
 Ratect imposes no timeout of its own on the health wait (matching Batect) — Docker's

@@ -73,10 +73,11 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     worth knowing before touching it: the interactive path's `RawModeGuard` restores
     the terminal on `Drop`, even on an error return; since Ratect has no `--output`
     streaming mode, a failed build's full log transcript (not just Docker's one-line
-    summary) is folded into the returned error instead; `command`/`entrypoint` are
-    tokenized into literal argv by `tokenize_command_line` (a from-scratch port of
-    Batect's own `Command.parse`) rather than run via a shell — `setup_commands` is
-    the one remaining `sh -c` exception, a known, narrower, still-open divergence (see
+    summary) is folded into the returned error instead; `command`/`entrypoint`/
+    `setup_commands.command` are all tokenized into literal argv by
+    `tokenize_command_line` (a from-scratch port of Batect's own `Command.parse`)
+    rather than run via a shell — `setup_commands` used to be a `sh -c` exception
+    (closed once noticed it was never actually deliberate; see
     `config::SetupCommand`'s doc comment); and `ContainerOptions` bundles the
     still-growing set of per-container Docker options shared by `run_container`/
     `start_background_container` (0.13.0's `working_directory` through

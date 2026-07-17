@@ -1033,10 +1033,14 @@ pub trait ContainerRuntime {
     /// `retries`/`interval` bound how long a verdict can take.
     async fn wait_for_container_healthy(&self, container_id: &str) -> Result<()>;
 
-    /// Runs `command` inside the already-running `container_id` via
-    /// `sh -c` — used for `setup_commands`, which (unlike `command`/
-    /// `entrypoint`) still gets this shell treatment; see
-    /// `config::SetupCommand`'s doc comment for why. Docker's `exec`
+    /// Runs `command` inside the already-running `container_id` — used for
+    /// `setup_commands`. Tokenized into literal argv via
+    /// [`tokenize_command_line`], the same as `command`/`entrypoint` — no
+    /// shell involved, matching Batect's own `SetupCommand.command` (typed
+    /// `Command`, the same type as `Container.command`/`entrypoint`, and
+    /// passed to Docker's exec API as already-parsed argv — confirmed by
+    /// reading `RunContainerSetupCommandsStepRunner.runSetupCommand`, not
+    /// assumed from Batect's docs). Docker's `exec`
     /// mechanism. Runs with the container's own environment and (when
     /// `user_mapping` is set) the same `uid:gid` the container itself runs
     /// as, matching Batect. Failure to *run* the command is an `Err`; the
@@ -1853,11 +1857,7 @@ impl ContainerRuntime for DockerClient {
                     attach_stderr: Some(true),
                     tty: Some(true),
                     env: build_env(environment),
-                    cmd: Some(vec![
-                        "sh".to_string(),
-                        "-c".to_string(),
-                        command.to_string(),
-                    ]),
+                    cmd: Some(tokenize_command_line(command)?),
                     user: user_mapping.map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
                     working_dir: working_directory.map(str::to_string),
                     ..Default::default()
