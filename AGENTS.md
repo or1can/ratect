@@ -36,9 +36,13 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     `resolve_expressions` stays available too, unchanged, for a `Config` built without
     going through `load_from_file`). `run_as_current_user.home_directory` is
     interpolated but *not* resolved against a base path — it's a container-side path,
-    validated to start with `/` instead. `PortRange`/`PortMapping` have hand-written
-    `Deserialize` impls so a `ports` entry can be either Batect's string
-    (`"local:container[/protocol]"`) or object form.
+    validated to start with `/` instead. `PortRange`/`PortMapping` and
+    `DeviceMapping` (`devices`) have hand-written `Deserialize` impls so an entry can
+    be either Batect's string form (`"local:container[/protocol]"` /
+    `"local:container[:options]"`) or the expanded object form. `Capability`
+    (`capabilities_to_add`/`capabilities_to_drop`) and `ImagePullPolicy` are fixed
+    enums validated at parse time — `Capability`'s list is a deliberate *superset* of
+    Batect's own (unmaintained) one, not a strict port, see its doc comment.
   - **`ratect-core/src/expressions.rs`**: Batect's expression syntax (`$VAR`,
     `${VAR:-default}`, `<name`/`<{name}` for config variables, including the built-in
     `batect.project_directory`). Host environment and resolved config variable values
@@ -49,11 +53,20 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     sidecar/dependency containers, the interactive-mode TTY attach path
     ([docs](docs/config-reference.md#interactive-mode)), and the user-mapping upload
     path ([docs](docs/config-reference.md#user-mapping)). Exposes a `ContainerRuntime`
-    trait so the engine can be tested against a fake instead of a live daemon. Two
-    gotchas worth knowing before touching it: the interactive path's `RawModeGuard`
-    restores the terminal on `Drop`, even on an error return; and since Ratect has no
-    `--output` streaming mode, a failed build's full log transcript (not just Docker's
-    one-line summary) is folded into the returned error instead.
+    trait so the engine can be tested against a fake instead of a live daemon. Gotchas
+    worth knowing before touching it: the interactive path's `RawModeGuard` restores
+    the terminal on `Drop`, even on an error return; since Ratect has no `--output`
+    streaming mode, a failed build's full log transcript (not just Docker's one-line
+    summary) is folded into the returned error instead; `command`/`entrypoint` are
+    tokenized into literal argv by `tokenize_command_line` (a from-scratch port of
+    Batect's own `Command.parse`) rather than run via a shell — `setup_commands` is
+    the one remaining `sh -c` exception, a known, narrower, still-open divergence (see
+    `config::SetupCommand`'s doc comment); and `ContainerOptions` bundles the
+    still-growing set of per-container Docker options shared by `run_container`/
+    `start_background_container` (0.13.0's `working_directory` through
+    `enable_init_process`) — add new container-level fields there rather than as more
+    flat parameters, converting from config types to plain values in `engine.rs`
+    (`docker.rs` deliberately never depends on `config` types directly).
   - **`ratect-core/src/user.rs`**: Host user lookup (`current_user`, via the `nix`
     crate — Unix-only) and the pure `/etc/passwd`/`/etc/shadow`/`/etc/group` content
     generators `docker.rs` uses — ported from Batect's
