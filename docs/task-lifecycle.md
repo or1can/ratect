@@ -69,8 +69,8 @@ sequenceDiagram
 
     Engine->>Docker: create_network()
 
-    loop for each dependency, nested ones first
-        Engine->>Docker: pull_image() (per image_pull_policy, unless already decided this run)
+    par independent branches of the dependency graph
+        Engine->>Docker: pull_image()/build_image() (per image_pull_policy, unless already decided this run)
         Engine->>Docker: start_background_container(alias, network)
         Docker-->>Dep: created, started, joined to network
         Engine->>Docker: wait_for_container_healthy()
@@ -80,6 +80,8 @@ sequenceDiagram
             Dep-->>Engine: exit code 0 (non-zero fails the task)
         end
     end
+
+    Note over Engine: a container with dependencies of its own doesn't start<br/>its own branch above until all of them are ready
 
     Engine->>Docker: pull_image() (task's own image, per image_pull_policy, unless already decided)
     Engine->>Docker: run_container(name, network)
@@ -111,9 +113,10 @@ since Ratect didn't create it. See [CLI reference](cli-reference.md).
 
 ## Dependency resolution
 
-Dependencies are resolved **depth-first and recursively**: if a dependency's own
-container config also declares `dependencies`, those are started first, on the same
-task-scoped network. For example:
+Dependencies are resolved **concurrently, gated by readiness**: a container with
+dependencies of its own never starts before every one of them is ready (see below),
+but two containers with no dependency relationship to each other start at the same
+time rather than one after the other. For example:
 
 ```yaml
 containers:
@@ -135,17 +138,27 @@ graph TD
     database --> cache
 ```
 
-Running a task against `app` starts `cache`, then `database`, then `app` — in that
-order — all sharing one network, all reachable by their container-config name (e.g.
-`app`'s command can reach `database:5432` and `cache:6379`).
+Running a task against `app` starts `cache` first (nothing else is holding it back),
+then `database` once `cache` is ready, then `app` once `database` is ready — a
+straight chain, so each one is genuinely waiting on the last. All three share one
+network and are reachable by their container-config name (e.g. `app`'s command can
+reach `database:5432` and `cache:6379`).
+
+Add a container with *no* dependency relationship to any of these — say `queue`,
+also one of `app`'s dependencies but sharing nothing with `database`/`cache` — and it
+starts concurrently with `cache` (or with `database`, whichever is still pending at
+the time), not after the whole `cache` → `database` chain finishes. `app` itself
+still waits for *both* `database` and `queue` to be ready before it starts, since
+both are its own direct dependencies.
 
 A task's own `dependencies` (sidecars scoped to that task specifically) join this
 same resolution at the root, alongside `app`'s own — each still resolves its *own*
 container-level `dependencies` transitively from there, same as any other
-dependency. And a task's `customise` map, if it has one, is checked against
-whichever dependency is starting: a match overrides that container's
-`environment`/`ports`/`working_directory` for this task's run of it specifically
-(merged the same way a task's own `run` overrides its main container — see [config
+dependency, and is just as eligible to start concurrently with an unrelated branch.
+And a task's `customise` map, if it has one, is checked against whichever dependency
+is starting: a match overrides that container's `environment`/`ports`/
+`working_directory` for this task's run of it specifically (merged the same way a
+task's own `run` overrides its main container — see [config
 reference](config-reference.md#taskcontainercustomisation)), before it starts,
 regardless of how deep in this graph it sits.
 
@@ -169,9 +182,11 @@ see [How Docker reaches its verdict](config-reference.md#how-docker-reaches-its-
 in the config reference.
 
 Within one task's resolution, a dependency shared by two others (e.g. two containers
-that both depend on `cache`) is only started **once**. A circular container dependency
-(`a` depends on `b` depends on `a`) is detected and reported as an error rather than
-hanging.
+that both depend on `cache`) is only started **once** — including when both reach it
+concurrently: the second to arrive waits on the first's already-in-flight start
+rather than starting a second instance or double-pulling its image. A circular
+container dependency (`a` depends on `b` depends on `a`) is detected up front, before
+any container starts, and reported as an error rather than hanging.
 
 ## Cross-task isolation
 
@@ -209,10 +224,14 @@ colliding.
   `setup_commands` don't run at all — Batect runs every container through the same
   per-container steps, task container included (concurrently with its command) — see
   [differences from Batect](differences-from-batect.md#container-fields).
-- **Sequential, not parallel.** Batect pulls/builds images and waits for network
-  readiness in parallel across a task's containers; Ratect starts dependencies one at
-  a time. Parallel task execution generally is a separate
-  [roadmap](../ROADMAP.md#rust-enhancements) item.
+- **Prerequisite tasks stay sequential, matching Batect exactly** — `prerequisites`
+  entries run one after another, each to completion, never concurrently with each
+  other or with the task that named them (see "Task ordering" above). This is Batect's
+  own behavior (`TaskExecutionOrderResolver`/`SessionRunner`), not a Ratect
+  simplification — Batect doesn't parallelize independent prerequisite tasks either.
+  Running independent prerequisites concurrently remains a possible Rust-specific
+  enhancement beyond Batect, tracked under [Rust
+  Enhancements](../ROADMAP.md#rust-enhancements), not something planned currently.
 - **Minimal networking.** The network created here exists only to make dependency
   containers reachable by name for the duration of one task (or, with
   `--use-network`, an existing network you reuse instead). It's not the

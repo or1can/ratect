@@ -21,7 +21,8 @@ use anyhow::{Context, Result};
 use async_recursion::async_recursion;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use tokio::sync::OnceCell;
 use uuid::Uuid;
 
 /// The host environment lookup `TaskEngine` reads proxy variables from —
@@ -172,19 +173,131 @@ fn buildkit_options(container: &Container) -> Option<crate::docker::BuildKitOpti
     })
 }
 
+/// The outcome of a memoized async operation (an image pull/build, or a
+/// dependency container reaching "ready") shared across every concurrent
+/// caller that reaches the same cache key. `anyhow::Error` isn't `Clone`, so
+/// a failure is wrapped in `Arc` — every waiter that shares a [`ReadyCell`]
+/// sees the same outcome without re-attempting the underlying Docker call.
+type SharedResult<T> = Result<T, Arc<anyhow::Error>>;
+
+/// A lazily-created, memoized cell holding the eventual outcome (image name/
+/// ID, or a started container's ID) for one cache key (an image name, or a
+/// container name) — see `get_or_create_cell`. `tokio::sync::OnceCell`
+/// (rather than `get_or_try_init`, which does *not* cache a failure) so a
+/// failed pull/build/start is cached just like a successful one: a later
+/// caller sharing the same key sees the same `Err` instead of retrying the
+/// real Docker call.
+type ReadyCell = Arc<OnceCell<SharedResult<String>>>;
+
+/// Gets (or lazily creates) the shared cell for `key` in `cells`, under a
+/// short synchronous lock — the lock is dropped before the returned cell is
+/// ever `.await`ed on (by the caller, via `.get_or_init`), so it's held only
+/// for a `HashMap` lookup/insert, never across `.await` — same
+/// double-checked-lock convention this file already used for
+/// `pulled_images`/`built_images` pre-0.15.0.
+fn get_or_create_cell(cells: &Mutex<HashMap<String, ReadyCell>>, key: &str) -> ReadyCell {
+    let mut cells = cells.lock().unwrap();
+    cells
+        .entry(key.to_string())
+        .or_insert_with(|| Arc::new(OnceCell::new()))
+        .clone()
+}
+
+/// Flattens a cached [`SharedResult`] back into a plain, owned `Result` at
+/// the point it's actually returned to a caller — the shared `Arc<Error>` is
+/// reformatted via its `Debug` (which anyhow's `Error` renders as the full
+/// context chain) rather than just its `Display` (the top message only),
+/// since this may be the only place a waiter *other than* the one that hit
+/// the real failure ever sees it.
+fn unshare(result: &SharedResult<String>) -> Result<String> {
+    result.clone().map_err(|e| anyhow::anyhow!("{:?}", e))
+}
+
+/// Builds the deduplicated container dependency graph for one task
+/// execution: `root` (the task's own container) plus any task-level
+/// `dependencies` (unioned into `root`'s own adjacency list — the same union
+/// `run_task_internal` computes for its dependency startup, and the same one
+/// `container_names_in_task` uses for the `no_proxy` exemption list); every
+/// other node's adjacency list is just its own `container.dependencies`.
+///
+/// Detects a circular container dependency eagerly, via an explicit DFS
+/// ancestor path: a name already on the current path is a real cycle; a name
+/// already fully built into the returned graph is a *diamond* (shared, not
+/// circular) and is skipped without re-visiting — mirrors Batect's own
+/// `ContainerDependencyGraph`, run once, synchronously, before any concurrent
+/// execution begins. This static split is why `ensure_container_ready` no
+/// longer needs its own runtime cycle guard (pre-0.15.0's `resolving` set) —
+/// a graph returned from here is already proven acyclic.
+fn build_dependency_graph(
+    containers: &HashMap<String, Container>,
+    root: &str,
+    task_dependencies: Option<&[String]>,
+) -> Result<HashMap<String, Vec<String>>> {
+    fn visit(
+        containers: &HashMap<String, Container>,
+        name: &str,
+        extra_root_dependencies: Option<&[String]>,
+        path: &mut Vec<String>,
+        graph: &mut HashMap<String, Vec<String>>,
+    ) -> Result<()> {
+        if graph.contains_key(name) {
+            return Ok(());
+        }
+        if path.iter().any(|ancestor| ancestor == name) {
+            anyhow::bail!(
+                "Circular container dependency detected involving '{}'",
+                name
+            );
+        }
+        path.push(name.to_string());
+
+        let container = containers
+            .get(name)
+            .with_context(|| format!("Container '{}' not found", name))?;
+        let mut dependencies = container.dependencies.clone().unwrap_or_default();
+        if let Some(extra) = extra_root_dependencies {
+            dependencies.extend(extra.iter().cloned());
+        }
+        dependencies.sort();
+        dependencies.dedup();
+
+        for dependency in &dependencies {
+            visit(containers, dependency, None, path, graph)?;
+        }
+
+        path.pop();
+        graph.insert(name.to_string(), dependencies);
+        Ok(())
+    }
+
+    let mut graph = HashMap::new();
+    let mut path = Vec::new();
+    visit(containers, root, task_dependencies, &mut path, &mut graph)?;
+    Ok(graph)
+}
+
 pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     config: Config,
     docker: D,
     executed_tasks: Mutex<HashSet<String>>,
-    pulled_images: Mutex<HashSet<String>>,
-    /// Container name -> ID of the image built for it, so a container with
-    /// `build_directory` is only ever built once per invocation even if
-    /// referenced by multiple tasks or as both a dependency and a task's
-    /// own container. Keyed by container name (not build directory) since
-    /// a given name always has the same `build_directory`/`build_args`
-    /// within one `Config`. Stores the image ID (not the human-readable tag)
-    /// — see `resolve_image` for why.
-    built_images: Mutex<HashMap<String, String>>,
+    /// Image name -> the shared, memoized pull outcome for that name, so an
+    /// image referenced by multiple containers (across tasks, or by
+    /// concurrent branches of one task's own dependency graph — 0.15.0) is
+    /// only ever decided/pulled once per invocation. A `ReadyCell` rather
+    /// than a plain `HashSet`+check-then-act specifically so two containers
+    /// racing to resolve the same image concurrently share one in-flight
+    /// pull instead of double-pulling.
+    pulled_images: Mutex<HashMap<String, ReadyCell>>,
+    /// Container name -> the shared, memoized build outcome (the built image
+    /// ID) for that container, so a container with `build_directory` is only
+    /// ever built once per invocation even if referenced by multiple tasks,
+    /// as both a dependency and a task's own container, or reached
+    /// concurrently by two branches of one task's dependency graph (0.15.0).
+    /// Keyed by container name (not build directory) since a given name
+    /// always has the same `build_directory`/`build_args` within one
+    /// `Config`. Stores the image ID (not the human-readable tag) — see
+    /// `resolve_image` for why.
+    built_images: Mutex<HashMap<String, ReadyCell>>,
     in_progress_tasks: Mutex<HashSet<String>>,
     /// Set via `--use-network`: an existing Docker network to reuse for
     /// every task in this invocation instead of creating a fresh one per
@@ -212,7 +325,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             config,
             docker,
             executed_tasks: Mutex::new(HashSet::new()),
-            pulled_images: Mutex::new(HashSet::new()),
+            pulled_images: Mutex::new(HashMap::new()),
             built_images: Mutex::new(HashMap::new()),
             in_progress_tasks: Mutex::new(HashSet::new()),
             existing_network: None,
@@ -327,68 +440,68 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         container_config: &Container,
     ) -> Result<String> {
         if let Some(image) = &container_config.image {
-            let needs_decision = {
-                let pulled = self.pulled_images.lock().unwrap();
-                !pulled.contains(image)
-            };
-
-            if needs_decision {
-                let policy = container_config.image_pull_policy.unwrap_or_default();
-                let should_pull = match policy {
-                    crate::config::ImagePullPolicy::Always => true,
-                    crate::config::ImagePullPolicy::IfNotPresent => {
-                        !self.docker.image_exists_locally(image).await?
+            let cell = get_or_create_cell(&self.pulled_images, image);
+            let policy = container_config.image_pull_policy.unwrap_or_default();
+            let result = cell
+                .get_or_init(|| async {
+                    let outcome: Result<String> = async {
+                        let should_pull = match policy {
+                            crate::config::ImagePullPolicy::Always => true,
+                            crate::config::ImagePullPolicy::IfNotPresent => {
+                                !self.docker.image_exists_locally(image).await?
+                            }
+                        };
+                        if should_pull {
+                            self.docker.pull_image(image).await?;
+                        }
+                        Ok(image.clone())
                     }
-                };
-                if should_pull {
-                    self.docker.pull_image(image).await?;
-                }
-                let mut pulled = self.pulled_images.lock().unwrap();
-                pulled.insert(image.to_string());
-            }
+                    .await;
+                    outcome.map_err(Arc::new)
+                })
+                .await;
 
-            Ok(image.clone())
+            unshare(result)
         } else if let Some(build_directory) = &container_config.build_directory {
-            let existing_image_id = {
-                let built = self.built_images.lock().unwrap();
-                built.get(container_name).cloned()
-            };
-            if let Some(image_id) = existing_image_id {
-                return Ok(image_id);
-            }
+            let cell = get_or_create_cell(&self.built_images, container_name);
+            let result = cell
+                .get_or_init(|| async {
+                    let outcome: Result<String> = async {
+                        let tag = format!("{}-{}", self.config.project_name, container_name);
+                        // No `extra_no_proxy_entries` at build time — matches
+                        // Batect, which never adds container names to
+                        // `no_proxy` for a build (nothing's running yet to be
+                        // exempted from proxying).
+                        let proxy_vars =
+                            self.proxy_environment_variables(&std::collections::BTreeSet::new());
+                        let build_args = merged_environment(
+                            None,
+                            proxy_vars.as_ref(),
+                            container_config.build_args.as_ref(),
+                            None,
+                        );
+                        let dockerfile = container_config
+                            .dockerfile
+                            .as_deref()
+                            .unwrap_or("Dockerfile");
+                        let buildkit = buildkit_options(container_config);
+                        self.docker
+                            .build_image(
+                                Path::new(build_directory),
+                                dockerfile,
+                                build_args.as_ref(),
+                                container_config.build_target.as_deref(),
+                                buildkit.as_ref(),
+                                &tag,
+                            )
+                            .await
+                    }
+                    .await;
+                    outcome.map_err(Arc::new)
+                })
+                .await;
 
-            let tag = format!("{}-{}", self.config.project_name, container_name);
-            // No `extra_no_proxy_entries` at build time — matches Batect,
-            // which never adds container names to `no_proxy` for a build
-            // (nothing's running yet to be exempted from proxying).
-            let proxy_vars = self.proxy_environment_variables(&std::collections::BTreeSet::new());
-            let build_args = merged_environment(
-                None,
-                proxy_vars.as_ref(),
-                container_config.build_args.as_ref(),
-                None,
-            );
-            let dockerfile = container_config
-                .dockerfile
-                .as_deref()
-                .unwrap_or("Dockerfile");
-            let buildkit = buildkit_options(container_config);
-            let image_id = self
-                .docker
-                .build_image(
-                    Path::new(build_directory),
-                    dockerfile,
-                    build_args.as_ref(),
-                    container_config.build_target.as_deref(),
-                    buildkit.as_ref(),
-                    &tag,
-                )
-                .await?;
-
-            let mut built = self.built_images.lock().unwrap();
-            built.insert(container_name.to_string(), image_id.clone());
-
-            Ok(image_id)
+            unshare(result)
         } else {
             Err(anyhow::anyhow!(
                 "Container '{}' has neither 'image' nor 'build_directory' set",
@@ -560,8 +673,21 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             }
         };
 
-        let mut running_sidecars: HashMap<String, String> = HashMap::new();
-        let mut resolving: HashSet<String> = HashSet::new();
+        // Populated concurrently as each dependency starts (before its own
+        // readiness gate — see `ensure_container_ready`), so cleanup below
+        // still tears down every container that got as far as starting, even
+        // one that never became ready. `Mutex`-guarded (rather than owned
+        // `&mut`, pre-0.15.0) since independent branches of the dependency
+        // graph now start concurrently and each registers itself here from
+        // its own task.
+        let running_sidecars: Mutex<HashMap<String, String>> = Mutex::new(HashMap::new());
+        // Memoizes each container's own readiness future for this one task
+        // execution — see `ensure_container_ready`/`ReadyCell`. Reset per
+        // task (unlike `pulled_images`/`built_images`, which persist for the
+        // whole invocation): a dependency is deliberately re-started fresh
+        // for every task that uses it — see docs/task-lifecycle.md's
+        // "Cross-task isolation".
+        let ready_cells: Mutex<HashMap<String, ReadyCell>> = Mutex::new(HashMap::new());
         // Fixed for the whole task, computed once up front — every
         // container started for this task (the task's own and each
         // dependency) gets the same `no_proxy` exemption list, matching
@@ -574,19 +700,33 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         );
 
         let result: Result<()> = async {
-            let task_dependencies = task.dependencies.iter().flatten();
-            let container_dependencies = container_config.dependencies.iter().flatten();
-            for dep_name in task_dependencies.chain(container_dependencies) {
-                self.start_dependency(
-                    dep_name,
+            // Static, up-front cycle check (see `build_dependency_graph`) —
+            // proves the whole graph acyclic before any concurrent execution
+            // starts, so `ensure_container_ready` doesn't need its own
+            // runtime cycle guard.
+            let graph = build_dependency_graph(
+                &self.config.containers,
+                &run.container,
+                task.dependencies.as_deref(),
+            )?;
+            let root_dependencies = graph.get(&run.container).cloned().unwrap_or_default();
+            // Independent branches of the dependency graph start
+            // concurrently; a dependent container's own
+            // `ensure_container_ready` call still waits on its dependencies
+            // first (see that function) — matching Batect's own within-task
+            // container concurrency (see docs/task-lifecycle.md).
+            futures::future::try_join_all(root_dependencies.iter().map(|dependency_name| {
+                self.ensure_container_ready(
+                    dependency_name,
+                    &graph,
                     &network_name,
-                    &mut running_sidecars,
-                    &mut resolving,
+                    &ready_cells,
+                    &running_sidecars,
                     &no_proxy_entries,
                     task.customise.as_ref(),
                 )
-                .await?;
-            }
+            }))
+            .await?;
 
             let image = self.resolve_image(&run.container, container_config).await?;
             // Eligibility only — `ContainerRuntime::run_container` further
@@ -663,6 +803,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         }
         .await;
 
+        let running_sidecars = running_sidecars.into_inner().unwrap();
         for (name, container_id) in &running_sidecars {
             if let Err(e) = self.docker.stop_and_remove_container(container_id).await {
                 tracing::warn!(
@@ -681,171 +822,191 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         result
     }
 
-    /// Recursively starts `name` (and, first, any containers it depends on)
-    /// as a background container on `network`, scoped to a single task's
-    /// execution. `running` dedupes within that scope; `resolving` detects
-    /// circular container dependencies.
+    /// Ensures `name`'s container is started and *ready* (healthy, then every
+    /// one of its `setup_commands` succeeded) on `network`, memoized per this
+    /// one task execution via `cells` — concurrent callers reaching the same
+    /// node (a diamond in the dependency graph) share one `ReadyCell`, so the
+    /// second awaits the first's in-flight work instead of starting it
+    /// twice. Fans out to `name`'s own dependencies (`graph[name]`)
+    /// concurrently, via `try_join_all`, before doing any of its own work —
+    /// this and the memoization together are what let independent branches
+    /// of one task's dependency graph run at the same time while a container
+    /// with dependencies of its own still waits for them first (see
+    /// docs/task-lifecycle.md). No cycle guard here any more (pre-0.15.0's
+    /// `resolving`/`running` params): `graph` is already proven acyclic by
+    /// `build_dependency_graph`, run once, synchronously, before this is
+    /// ever called.
     #[async_recursion]
     #[allow(clippy::too_many_arguments)]
-    async fn start_dependency(
+    async fn ensure_container_ready(
         &self,
         name: &str,
+        graph: &HashMap<String, Vec<String>>,
         network: &str,
-        running: &mut HashMap<String, String>,
-        resolving: &mut HashSet<String>,
+        cells: &Mutex<HashMap<String, ReadyCell>>,
+        running: &Mutex<HashMap<String, String>>,
         no_proxy_entries: &std::collections::BTreeSet<String>,
         customisations: Option<&HashMap<String, TaskContainerCustomisation>>,
-    ) -> Result<()> {
-        if running.contains_key(name) {
-            return Ok(());
-        }
-        if resolving.contains(name) {
-            return Err(anyhow::anyhow!(
-                "Circular container dependency detected involving '{}'",
-                name
-            ));
-        }
-        resolving.insert(name.to_string());
+    ) -> Result<String> {
+        let cell = get_or_create_cell(cells, name);
+        let result = cell
+            .get_or_init(|| async {
+                let outcome: Result<String> = async {
+                    let empty = Vec::new();
+                    let dependencies = graph.get(name).unwrap_or(&empty);
+                    futures::future::try_join_all(dependencies.iter().map(|dependency_name| {
+                        self.ensure_container_ready(
+                            dependency_name,
+                            graph,
+                            network,
+                            cells,
+                            running,
+                            no_proxy_entries,
+                            customisations,
+                        )
+                    }))
+                    .await?;
 
-        let dependency_config = self
-            .config
-            .containers
-            .get(name)
-            .with_context(|| format!("Container '{}' not found", name))?;
+                    let dependency_config = self
+                        .config
+                        .containers
+                        .get(name)
+                        .with_context(|| format!("Container '{}' not found", name))?;
 
-        if let Some(nested) = &dependency_config.dependencies {
-            for nested_name in nested {
-                self.start_dependency(
-                    nested_name,
-                    network,
-                    running,
-                    resolving,
-                    no_proxy_entries,
-                    customisations,
-                )
-                .await?;
-            }
-        }
+                    // A `customise` entry for this container specifically —
+                    // applied on top of its own base config, same precedence
+                    // as a task's `run` overriding its own main container
+                    // (see `Config::resolve_expressions_with_boundaries` for
+                    // the validation ensuring this can never target the main
+                    // task container or a container outside this task's own
+                    // graph).
+                    let customisation = customisations.and_then(|c| c.get(name));
 
-        // A `customise` entry for this container specifically — applied on
-        // top of its own base config, same precedence as a task's `run`
-        // overriding its own main container (see `Config::resolve_expressions_with_boundaries`
-        // for the validation ensuring this can never target the main task
-        // container or a container outside this task's own graph).
-        let customisation = customisations.and_then(|c| c.get(name));
+                    let image = self.resolve_image(name, dependency_config).await?;
+                    let user_mapping = self.resolve_user_mapping(dependency_config).await?;
+                    let proxy_vars = self.proxy_environment_variables(no_proxy_entries);
+                    let environment = merged_environment(
+                        None,
+                        proxy_vars.as_ref(),
+                        dependency_config.environment.as_ref(),
+                        customisation.and_then(|c| c.environment.as_ref()),
+                    );
+                    let expanded_ports = merged_ports(
+                        dependency_config.ports.as_ref(),
+                        customisation.and_then(|c| c.ports.as_ref()),
+                    );
+                    let network_options = crate::docker::NetworkOptions {
+                        additional_hostnames: dependency_config.additional_hostnames.as_ref(),
+                        additional_hosts: dependency_config.additional_hosts.as_ref(),
+                        ports: (self.publish_ports && !expanded_ports.is_empty())
+                            .then_some(&expanded_ports),
+                    };
 
-        let image = self.resolve_image(name, dependency_config).await?;
-        let user_mapping = self.resolve_user_mapping(dependency_config).await?;
-        let proxy_vars = self.proxy_environment_variables(no_proxy_entries);
-        let environment = merged_environment(
-            None,
-            proxy_vars.as_ref(),
-            dependency_config.environment.as_ref(),
-            customisation.and_then(|c| c.environment.as_ref()),
-        );
-        let expanded_ports = merged_ports(
-            dependency_config.ports.as_ref(),
-            customisation.and_then(|c| c.ports.as_ref()),
-        );
-        let network_options = crate::docker::NetworkOptions {
-            additional_hostnames: dependency_config.additional_hostnames.as_ref(),
-            additional_hosts: dependency_config.additional_hosts.as_ref(),
-            ports: (self.publish_ports && !expanded_ports.is_empty()).then_some(&expanded_ports),
-        };
+                    let health_check = health_check_options(dependency_config);
+                    let capabilities_to_add =
+                        capability_names(dependency_config.capabilities_to_add.as_ref());
+                    let capabilities_to_drop =
+                        capability_names(dependency_config.capabilities_to_drop.as_ref());
+                    let devices = device_triples(dependency_config.devices.as_ref());
+                    let working_directory = customisation
+                        .and_then(|c| c.working_directory.as_deref())
+                        .or(dependency_config.working_directory.as_deref());
+                    let container_options = crate::docker::ContainerOptions {
+                        working_directory,
+                        entrypoint: dependency_config.entrypoint.as_deref(),
+                        labels: dependency_config.labels.as_ref(),
+                        capabilities_to_add: capabilities_to_add.as_ref(),
+                        capabilities_to_drop: capabilities_to_drop.as_ref(),
+                        privileged: dependency_config.privileged,
+                        shm_size: dependency_config.shm_size,
+                        devices: devices.as_ref(),
+                        enable_init_process: dependency_config.enable_init_process,
+                    };
 
-        let health_check = health_check_options(dependency_config);
-        let capabilities_to_add = capability_names(dependency_config.capabilities_to_add.as_ref());
-        let capabilities_to_drop =
-            capability_names(dependency_config.capabilities_to_drop.as_ref());
-        let devices = device_triples(dependency_config.devices.as_ref());
-        let working_directory = customisation
-            .and_then(|c| c.working_directory.as_deref())
-            .or(dependency_config.working_directory.as_deref());
-        let container_options = crate::docker::ContainerOptions {
-            working_directory,
-            entrypoint: dependency_config.entrypoint.as_deref(),
-            labels: dependency_config.labels.as_ref(),
-            capabilities_to_add: capabilities_to_add.as_ref(),
-            capabilities_to_drop: capabilities_to_drop.as_ref(),
-            privileged: dependency_config.privileged,
-            shm_size: dependency_config.shm_size,
-            devices: devices.as_ref(),
-            enable_init_process: dependency_config.enable_init_process,
-        };
+                    let container_id = self
+                        .docker
+                        .start_background_container(
+                            name,
+                            &image,
+                            dependency_config.volumes.as_ref(),
+                            environment.as_ref(),
+                            network,
+                            user_mapping.as_ref(),
+                            &network_options,
+                            health_check.as_ref(),
+                            &container_options,
+                        )
+                        .await?;
 
-        let container_id = self
-            .docker
-            .start_background_container(
-                name,
-                &image,
-                dependency_config.volumes.as_ref(),
-                environment.as_ref(),
-                network,
-                user_mapping.as_ref(),
-                &network_options,
-                health_check.as_ref(),
-                &container_options,
-            )
-            .await?;
+                    // Registered for cleanup *before* the readiness gate
+                    // below — a dependency that starts but never becomes
+                    // healthy (or whose setup command fails) still gets
+                    // stopped and removed.
+                    running
+                        .lock()
+                        .unwrap()
+                        .insert(name.to_string(), container_id.clone());
 
-        resolving.remove(name);
-        // Registered for cleanup *before* the readiness gate below — a
-        // dependency that starts but never becomes healthy (or whose setup
-        // command fails) still gets stopped and removed.
-        running.insert(name.to_string(), container_id.clone());
+                    // Batect's readiness gate (see docs/task-lifecycle.md):
+                    // started isn't ready. The dependency must report
+                    // healthy (immediate for a container with no health
+                    // check at all), then every one of its setup commands
+                    // must succeed, before anything that depends on it
+                    // starts.
+                    self.docker
+                        .wait_for_container_healthy(&container_id)
+                        .await
+                        .with_context(|| format!("Container '{}' did not become healthy", name))?;
 
-        // Batect's readiness gate (see docs/task-lifecycle.md): started
-        // isn't ready. The dependency must report healthy (immediate for a
-        // container with no health check at all), then every one of its
-        // setup commands must succeed, before anything that depends on it
-        // starts.
-        self.docker
-            .wait_for_container_healthy(&container_id)
-            .await
-            .with_context(|| format!("Container '{}' did not become healthy", name))?;
+                    for setup_command in dependency_config.setup_commands.iter().flatten() {
+                        tracing::info!(
+                            container = name,
+                            command = setup_command.command.as_str(),
+                            "Running setup command"
+                        );
+                        let result = self
+                            .docker
+                            .exec_in_container(
+                                &container_id,
+                                &setup_command.command,
+                                setup_command
+                                    .working_directory
+                                    .as_deref()
+                                    .or(working_directory),
+                                environment.as_ref(),
+                                user_mapping.as_ref(),
+                            )
+                            .await
+                            .with_context(|| {
+                                format!(
+                                    "Failed to run setup command '{}' in container '{}'",
+                                    setup_command.command, name
+                                )
+                            })?;
+                        if result.exit_code != 0 {
+                            let output = if result.output.trim().is_empty() {
+                                ", and did not produce any output".to_string()
+                            } else {
+                                format!(", with output:\n{}", result.output.trim())
+                            };
+                            anyhow::bail!(
+                                "Setup command '{}' in container '{}' exited with code {}{}",
+                                setup_command.command,
+                                name,
+                                result.exit_code,
+                                output
+                            );
+                        }
+                    }
 
-        for setup_command in dependency_config.setup_commands.iter().flatten() {
-            tracing::info!(
-                container = name,
-                command = setup_command.command.as_str(),
-                "Running setup command"
-            );
-            let result = self
-                .docker
-                .exec_in_container(
-                    &container_id,
-                    &setup_command.command,
-                    setup_command
-                        .working_directory
-                        .as_deref()
-                        .or(working_directory),
-                    environment.as_ref(),
-                    user_mapping.as_ref(),
-                )
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to run setup command '{}' in container '{}'",
-                        setup_command.command, name
-                    )
-                })?;
-            if result.exit_code != 0 {
-                let output = if result.output.trim().is_empty() {
-                    ", and did not produce any output".to_string()
-                } else {
-                    format!(", with output:\n{}", result.output.trim())
-                };
-                anyhow::bail!(
-                    "Setup command '{}' in container '{}' exited with code {}{}",
-                    setup_command.command,
-                    name,
-                    result.exit_code,
-                    output
-                );
-            }
-        }
+                    Ok(container_id)
+                }
+                .await;
+                outcome.map_err(Arc::new)
+            })
+            .await;
 
-        Ok(())
+        unshare(result)
     }
 }
 
@@ -967,6 +1128,13 @@ mod tests {
         // about `image_pull_policy` see the "always needs a pull" behavior
         // that matches an `IfNotPresent` container whose image is missing.
         locally_present_images: Arc<Mutex<HashSet<String>>>,
+        // Artificial `tokio::time::sleep` durations `start_background_container`/
+        // `pull_image` wait out before doing anything else (see
+        // `with_start_delay`/`with_pull_delay`) — lets a `#[tokio::test(start_paused
+        // = true)]` test prove two independent operations actually overlap in
+        // (virtual) time, rather than just asserting on event order/counts.
+        start_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
+        pull_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
     }
 
     impl Default for FakeContainerRuntime {
@@ -989,6 +1157,8 @@ mod tests {
                 unhealthy_container: Default::default(),
                 failing_setup_command: Default::default(),
                 locally_present_images: Default::default(),
+                start_delays: Default::default(),
+                pull_delays: Default::default(),
             }
         }
     }
@@ -1038,6 +1208,33 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(image.to_string());
+            self
+        }
+
+        /// Makes `start_background_container` for container name `name`
+        /// artificially `tokio::time::sleep` for `delay` before doing
+        /// anything else — used with `#[tokio::test(start_paused = true)]`
+        /// to prove two independent dependencies actually start
+        /// concurrently (overlapping in virtual time), not sequentially.
+        fn with_start_delay(self, name: &str, delay: std::time::Duration) -> Self {
+            self.start_delays
+                .lock()
+                .unwrap()
+                .insert(name.to_string(), delay);
+            self
+        }
+
+        /// Makes `pull_image` for `image` artificially `tokio::time::sleep`
+        /// for `delay` before doing anything else — used with
+        /// `#[tokio::test(start_paused = true)]` to prove an image shared by
+        /// two concurrently-starting dependencies is still only pulled once,
+        /// even when the race window between "decided to pull" and "pull
+        /// finished" is held open long enough for both to actually overlap.
+        fn with_pull_delay(self, image: &str, delay: std::time::Duration) -> Self {
+            self.pull_delays
+                .lock()
+                .unwrap()
+                .insert(image.to_string(), delay);
             self
         }
 
@@ -1222,6 +1419,10 @@ mod tests {
     #[async_trait::async_trait]
     impl ContainerRuntime for FakeContainerRuntime {
         async fn pull_image(&self, image: &str) -> Result<()> {
+            let delay = self.pull_delays.lock().unwrap().get(image).copied();
+            if let Some(delay) = delay {
+                tokio::time::sleep(delay).await;
+            }
             self.push(format!("pull:{image}"));
             Ok(())
         }
@@ -1285,6 +1486,10 @@ mod tests {
             health_check: Option<&crate::docker::HealthCheckOptions>,
             container_options: &crate::docker::ContainerOptions,
         ) -> Result<String> {
+            let delay = self.start_delays.lock().unwrap().get(alias).copied();
+            if let Some(delay) = delay {
+                tokio::time::sleep(delay).await;
+            }
             self.environments
                 .lock()
                 .unwrap()
@@ -3211,6 +3416,90 @@ mod tests {
             "a nested dependency must start before the container that depends on it: {events:?}"
         );
         assert!(database_index < run_index);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn independent_dependencies_start_concurrently_not_sequentially() {
+        // "dep-a" and "dep-b" share no dependency relationship — 0.15.0
+        // should start both at once rather than one after the other.
+        let mut containers = HashMap::new();
+        containers.insert("dep-a".to_string(), container("alpine:3.18", None));
+        containers.insert("dep-b".to_string(), container("alpine:3.18", None));
+        containers.insert(
+            "app".to_string(),
+            container(
+                "alpine:3.18",
+                Some(vec!["dep-a".to_string(), "dep-b".to_string()]),
+            ),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let delay = std::time::Duration::from_millis(100);
+        let docker = FakeContainerRuntime::default()
+            .with_start_delay("dep-a", delay)
+            .with_start_delay("dep-b", delay);
+        let engine = TaskEngine::new(config, docker);
+
+        let start = tokio::time::Instant::now();
+        engine.run_task("start", &[]).await.unwrap();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < delay * 2,
+            "two independent dependencies with a {delay:?} delay each should overlap, not run \
+             sequentially (elapsed: {elapsed:?})"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn concurrent_dependencies_sharing_an_image_only_pull_it_once() {
+        // "dep-a" and "dep-b" are independent (no dependency relationship
+        // between them) but share one image — with a delay long enough that
+        // both branches genuinely overlap while the first one is still
+        // deciding/pulling, proving the pull is memoized rather than raced.
+        let mut containers = HashMap::new();
+        containers.insert("dep-a".to_string(), container("shared-image:1", None));
+        containers.insert("dep-b".to_string(), container("shared-image:1", None));
+        containers.insert(
+            "app".to_string(),
+            container(
+                "alpine:3.18",
+                Some(vec!["dep-a".to_string(), "dep-b".to_string()]),
+            ),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default()
+            .with_pull_delay("shared-image:1", std::time::Duration::from_millis(50));
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        let pulls: Vec<_> = docker
+            .events()
+            .iter()
+            .filter(|e| e.starts_with("pull:shared-image:1"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            pulls,
+            vec!["pull:shared-image:1".to_string()],
+            "an image shared by two concurrently-starting dependencies should only be pulled once"
+        );
     }
 
     #[tokio::test]

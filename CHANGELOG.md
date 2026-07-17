@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Within-task container startup is now concurrent**: independent branches of one task's own container dependency graph (image pulls/builds, container starts, health-check waits, setup commands) now run at the same time instead of one after another, gated only by each container's own `dependencies` actually being ready — matching Batect's own `ParallelExecutionManager`/`ContainerDependencyGraph` behavior (confirmed by reading Batect's source before implementing this, not assumed). `ratect-core/src/engine.rs` gained a static, up-front `build_dependency_graph` pass (cycle detection via DFS ancestor path, mirroring Batect's `ContainerDependencyGraph`) ahead of a rewritten `ensure_container_ready` (formerly `start_dependency`), memoized per task execution via `Arc<tokio::sync::OnceCell<...>>` so two concurrent branches sharing a dependency (a diamond) converge on one in-flight start instead of double-starting it. Also fixes a latent race this exposed in image pull/build dedup (`pulled_images`/`built_images`), which used a check-then-act pattern only safe under the old fully-sequential execution — both now use the same memoization, so two containers concurrently resolving the same image share one in-flight pull/build. `prerequisites` deliberately stay strictly sequential — this matches Batect exactly (it doesn't parallelize independent prerequisite tasks either), not a shortfall. See [task lifecycle](docs/task-lifecycle.md#dependency-resolution) and `ROADMAP.md`'s 0.15.0 entry.
+
 ## [0.14.0] - 2026-07-17
 
 ### Added

@@ -148,7 +148,7 @@ Batect's full flag list, from its [CLI reference](https://github.com/batect/bate
 | `--config-vars-file`, `--config-var` | Supported | See [CLI reference](cli-reference.md) and [Expressions](#expressions). |
 | `--docker-host`, `--docker-context`, `--docker-config`, `--docker-cert-path`, `--docker-tls*` | Not supported | Ratect connects using Docker's local defaults only, with no CLI overrides. |
 | `--cache-type`, `--clean`, `--clean-cache` | N/A | Moot — no cache concept exists (Batect's caches are for build performance, not implemented here). |
-| `--max-parallelism` | N/A | Moot — Ratect doesn't run anything in parallel yet. Roadmap: [Parallel Task Execution](../ROADMAP.md#rust-enhancements). |
+| `--max-parallelism` | Not supported | Ratect's own within-task container concurrency (0.15.0) is unbounded, same as Batect's default when this flag isn't passed — there's just no CLI surface yet to cap it. |
 | `--no-proxy-vars` | Supported | Disables proxy environment variable propagation entirely — see [Proxy environment variables](config-reference.md#proxy-environment-variables). |
 | `--log-file` | Different mechanism | Ratect uses `RUST_LOG` + stderr instead of a dedicated log-file flag — see [CLI reference](cli-reference.md#environment-variables). |
 | `--no-update-notification`, `--upgrade`, `--no-wrapper-cache-cleanup` | N/A | Moot — Ratect isn't distributed via a self-updating wrapper script. |
@@ -170,8 +170,6 @@ tables above:
   divergence remains: Batect's real-TTY gate (`useTTYForContainer`) checks only whether
   its output is a real terminal; Ratect's (`should_use_tty`) still requires *both* stdin
   and stdout to be real terminals — not changed as part of closing the other three gaps.
-- **Parallel execution**: prerequisites run sequentially, not in parallel — Batect runs
-  independent setup/cleanup steps concurrently.
 - **Proxy support**: `http_proxy`/`https_proxy`/`ftp_proxy`/`no_proxy` are detected from
   the host environment and propagated into containers and builds automatically — see
   [Proxy environment variables](config-reference.md#proxy-environment-variables). The
@@ -188,4 +186,5 @@ For the positive list — what's actually implemented and working — see:
 - [Configuration reference](config-reference.md) for the supported schema
 - [CLI reference](cli-reference.md) for the supported flags
 - [How it works](how-it-works.md) for the execution model (prerequisites, dependency
-  cycle detection, once-per-run dedup of tasks and image pulls)
+  cycle detection, once-per-run dedup of tasks and image pulls, and — as of 0.15.0 —
+  concurrent startup of independent branches of one task's own dependency graph)

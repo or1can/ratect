@@ -467,14 +467,39 @@ Neither bump is ever folded into a feature commit.
     equivalent property on `run` instead) or a container outside the task's
     graph — both validated at config-load time, matching Batect's own
     `Task`/`ContainerDependencyGraph` checks.
-- **0.15.0** — **Parallel Task Execution**: independent prerequisites and tasks run
-  concurrently via `tokio`, rather than sequentially — closes the last
-  [runtime behavior gap](docs/differences-from-batect.md#runtime-behavior-gaps)
-  against Batect and delivers the [Parallel Task Execution](#rust-enhancements) item
-  ahead of the rest of that section. The single biggest architectural change in this
-  list — it touches the `Mutex`-based shared execution state in
-  `ratect-core/src/engine.rs` (see `AGENTS.md`), and dependency-cycle detection has to
-  stay correct under concurrency.
+- **0.15.0** — ~~**Parallel Task Execution**: independent prerequisites and tasks run
+  concurrently via `tokio`, rather than sequentially~~ — done, scoped down from this
+  headline after checking the real Batect implementation (`ContainerDependencyGraph`/
+  `RunStagePlanner`/`ParallelExecutionManager`, plus `TaskExecutionOrderResolver`/
+  `SessionRunner` in the local `batect` checkout) before building: Batect itself never
+  parallelizes independent `prerequisites` — only *within one task's own container
+  graph* (image pulls/builds, container starts, health-check waits, setup commands).
+  That's exactly what shipped:
+  - `ratect-core/src/engine.rs` gained a static, up-front phase
+    (`build_dependency_graph`) that builds one task's deduplicated container
+    dependency graph and detects a circular container dependency via DFS ancestor
+    path — mirroring Batect's `ContainerDependencyGraph`, and replacing the old
+    *dynamic* `resolving`/`running` cycle check, which would have falsely flagged a
+    diamond dependency as circular once siblings could start concurrently.
+  - `start_dependency` became `ensure_container_ready`: memoized per task execution
+    via `Arc<tokio::sync::OnceCell<...>>` (`ReadyCell`) keyed by container name, fanning
+    out to a container's own dependencies concurrently (`futures::try_join_all`) before
+    doing its own work. Two concurrent branches reaching the same node (a diamond)
+    converge on one `OnceCell` instead of double-starting it — Rust's async/await
+    achieving the same per-container dedup Batect gets from
+    `ParallelExecutionManager`'s thread-pool/event-bus, without porting that machinery.
+  - Fixed a latent race this also exposed: `pulled_images`/`built_images`'s
+    check-then-act dedup was only safe under fully sequential execution. Both now use
+    the same `ReadyCell` memoization, so two containers concurrently resolving the same
+    image share one in-flight pull/build instead of racing to do it twice.
+  - `prerequisites` staying strictly sequential is a deliberate scope decision, not a
+    shortfall — it matches Batect's own behavior exactly. Running independent
+    prerequisites concurrently remains a possible Rust-specific enhancement beyond
+    Batect for later (see [Rust Enhancements](#rust-enhancements)), not committed to.
+  - Closes the container-startup half of the
+    [runtime behavior gap](docs/differences-from-batect.md#runtime-behavior-gaps)
+    against Batect (see docs/task-lifecycle.md's "Dependency resolution" and "Known
+    simplifications" sections for the full behavior).
 - **0.16.0** — **Output Modes**: `--output`/`-o` (Batect's `fancy`/`simple`/`quiet`/
   `all` modes) together with automatic default-mode selection based on terminal
   capabilities — the two can't ship separately, since auto-detection is the logic for
@@ -503,7 +528,7 @@ Batect.
 
 Leveraging Rust's strengths to provide a superior experience compared to the original JVM-based implementation.
 
-- **Parallel Task Execution**: Utilizing `tokio` to execute independent tasks and prerequisites in parallel, significantly reducing execution time. Scheduled as `ratect-compat` [0.15.0](#ratect-compat) rather than left indefinite, since it also closes a Batect parity gap.
+- **Parallel Task Execution**: within-task container startup (image pulls/builds, health-check waits, setup commands for independent branches of one task's dependency graph) now runs concurrently via `tokio` — shipped as `ratect-compat` [0.15.0](#ratect-compat), since it also closed a Batect parity gap (Batect does exactly this, just not more). Running independent *prerequisite tasks* concurrently too — which Batect itself doesn't do — remains a possible Rust-specific enhancement for later, not currently scheduled.
 - **Static Binaries**: Distribution as zero-dependency static binaries (`ratect` and `ratect-compat`) for easy installation and portability.
 - **First-class Cross-platform Support**: Providing a high-performance, native experience across macOS, Linux, and Windows without the overhead or startup latency of a JVM.
 - **Precise Error Reporting**: Utilizing Rust's type system and error handling to provide clear, actionable feedback on configuration errors and execution failures.

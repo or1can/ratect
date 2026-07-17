@@ -124,13 +124,26 @@ maps/sets (`executed_tasks`, `pulled_images`, `built_images`, `in_progress_tasks
 scoped to a single `ratect` invocation — nothing persists between runs (a
 `build_directory` container is rebuilt fresh every invocation, retagging
 `<project_name>-<container_name>` each time — see
-[config reference](config-reference.md#image-building)).
+[config reference](config-reference.md#image-building)). `pulled_images`/
+`built_images` cache a memoized, shareable future per key (`Arc<tokio::sync::OnceCell<...>>`,
+see `engine.rs`'s `ReadyCell`) rather than a plain set/map, so two containers that
+concurrently resolve the same image (0.15.0) share one in-flight pull/build instead of
+racing to do it twice.
 Dependency/network state, by contrast, is scoped to a single *task* execution, not the
-whole invocation — see [the task lifecycle](task-lifecycle.md).
+whole invocation — a task's own dependency-readiness cache (the same `ReadyCell`
+mechanism, keyed by container name this time) is built fresh per task execution and
+discarded once it finishes — see [the task lifecycle](task-lifecycle.md).
 
-Task execution is currently **sequential**: prerequisites run one after another, not in
-parallel, even when they're independent of each other. Parallel execution is on the
-[roadmap](../ROADMAP.md#rust-enhancements).
+Task execution is a mix of the two, matching Batect exactly: **prerequisites run
+sequentially** — one after another, to completion, even when they're independent of
+each other (Batect doesn't parallelize these either — see
+[task lifecycle](task-lifecycle.md#known-simplifications-relative-to-batect)) —
+while **a single task's own dependency startup is concurrent** (0.15.0): independent
+branches of one task's container dependency graph pull/build/start/wait-healthy at
+the same time, gated only by each container's own `dependencies` actually being
+ready — see [task lifecycle](task-lifecycle.md#dependency-resolution). Running
+independent prerequisites concurrently too remains a possible Rust-specific
+enhancement beyond Batect's own behavior — see the [roadmap](../ROADMAP.md#rust-enhancements).
 
 ### Testability
 

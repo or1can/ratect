@@ -26,3 +26,11 @@ nix = { version = "0.31.3", features = ["user"] }
 url = "2.5.8"
 sha2 = "0.10"
 toml = "0.8"
+
+# Cargo unifies features for a crate that's both a normal and a dev
+# dependency, so this just adds `test-util` (needed for
+# `#[tokio::test(start_paused = true)]`, engine.rs's concurrency-proof tests)
+# on top of the `full` set above for test builds only — not linked into the
+# real binary.
+[dev-dependencies]
+tokio = { version = "1.52", features = ["test-util"] }
