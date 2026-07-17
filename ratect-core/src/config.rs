@@ -138,14 +138,21 @@ pub struct Container {
     pub capabilities_to_drop: Option<HashSet<Capability>>,
 }
 
-/// A Linux capability name, validated at config-parse time against exactly
-/// the set Batect itself supports (`batect.config.Capability`, based on
-/// `capabilities(7)`) — an unknown name is rejected with a clear error
-/// rather than silently reaching Docker's API to fail there (or, worse,
-/// being silently ignored). `serde`'s `SCREAMING_SNAKE_CASE` rename matches
-/// every variant to its Docker capability name unchanged (e.g. `DacOverride`
-/// -> `"DAC_OVERRIDE"`); [`Capability::as_str`] provides the same string
-/// back out for building Docker's own `--cap-add`/`--cap-drop` values.
+/// A Linux capability name, validated at config-parse time — an unknown name
+/// is rejected with a clear error rather than silently reaching Docker's API
+/// to fail there (or, worse, being silently ignored). `serde`'s
+/// `SCREAMING_SNAKE_CASE` rename matches every variant to its Docker
+/// capability name unchanged (e.g. `DacOverride` -> `"DAC_OVERRIDE"`);
+/// [`Capability::as_str`] provides the same string back out for building
+/// Docker's own `--cap-add`/`--cap-drop` values.
+///
+/// Based on Batect's own `batect.config.Capability` (in turn based on
+/// `capabilities(7)`), but **not** a strict 1:1 port: Batect's last release
+/// predates `BPF`/`CHECKPOINT_RESTORE`/`PERFMON` (added to Docker in 20.10,
+/// briefly reverted, permanently supported since — see
+/// [moby#41563](https://github.com/moby/moby/pull/41563)), so this list adds
+/// all three rather than inheriting that gap. A superset, not a divergence —
+/// every config Batect accepts here still parses identically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Capability {
@@ -153,6 +160,8 @@ pub enum Capability {
     AuditRead,
     AuditWrite,
     BlockSuspend,
+    Bpf,
+    CheckpointRestore,
     Chown,
     DacOverride,
     DacReadSearch,
@@ -170,6 +179,7 @@ pub enum Capability {
     NetBindService,
     NetBroadcast,
     NetRaw,
+    Perfmon,
     Setgid,
     Setfcap,
     Setpcap,
@@ -199,6 +209,8 @@ impl Capability {
             Capability::AuditRead => "AUDIT_READ",
             Capability::AuditWrite => "AUDIT_WRITE",
             Capability::BlockSuspend => "BLOCK_SUSPEND",
+            Capability::Bpf => "BPF",
+            Capability::CheckpointRestore => "CHECKPOINT_RESTORE",
             Capability::Chown => "CHOWN",
             Capability::DacOverride => "DAC_OVERRIDE",
             Capability::DacReadSearch => "DAC_READ_SEARCH",
@@ -216,6 +228,7 @@ impl Capability {
             Capability::NetBindService => "NET_BIND_SERVICE",
             Capability::NetBroadcast => "NET_BROADCAST",
             Capability::NetRaw => "NET_RAW",
+            Capability::Perfmon => "PERFMON",
             Capability::Setgid => "SETGID",
             Capability::Setfcap => "SETFCAP",
             Capability::Setpcap => "SETPCAP",
@@ -1862,6 +1875,41 @@ tasks:
         assert_eq!(
             container.capabilities_to_drop,
             Some(HashSet::from([Capability::Chown]))
+        );
+    }
+
+    #[test]
+    fn parses_capabilities_missing_from_batects_own_stale_list() {
+        // BPF/CHECKPOINT_RESTORE/PERFMON, added to Docker in 20.10 — after
+        // Batect's own Capability enum was last updated. See the doc
+        // comment on `Capability` for why this is a deliberate superset,
+        // not a strict Batect port.
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    capabilities_to_add:
+      - BPF
+      - CHECKPOINT_RESTORE
+      - PERFMON
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(
+            container.capabilities_to_add,
+            Some(HashSet::from([
+                Capability::Bpf,
+                Capability::CheckpointRestore,
+                Capability::Perfmon,
+            ]))
         );
     }
 
