@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-07-17
+
 ### Added
 
 - **Task name suggestions**: a misspelled task name (given directly on the command line, or as a `prerequisites` entry) now gets a `Did you mean 'x'?` suggestion appended to the "task not found" error, for every existing task name within a Levenshtein edit distance of 3 — ported from Batect's own `TaskSuggester`/`EditDistanceCalculator` (confirmed by reading Batect's source). Deliberately not a literal port of Batect's own tie-breaking: its sort comparator only compares by distance, and since that same comparator also decides its backing `TreeMap`'s key uniqueness, two equally-close task names silently collapse to just one suggestion there — Ratect's breaks ties alphabetically instead, so every equally-close match is suggested. See [CLI reference](docs/cli-reference.md#exit-codes-and-error-reporting).

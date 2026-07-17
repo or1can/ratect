@@ -502,6 +502,14 @@ Neither bump is ever folded into a feature commit.
     [runtime behavior gap](docs/differences-from-batect.md#runtime-behavior-gaps)
     against Batect (see docs/task-lifecycle.md's "Dependency resolution" and "Known
     simplifications" sections for the full behavior).
+  - This release also carries four unrelated fixes found while hand-testing the above
+    (see `CHANGELOG.md` for full detail on each): a container's own `command` field
+    (previously only reachable via a task's `run.command`, missed alongside 0.13.0's
+    other container runtime options); `setup_commands.command` tokenized into literal
+    argv instead of running via `sh -c` (closing a divergence left open since that same
+    0.13.0 work); wildcard (`*`) `prerequisites` (missed alongside 0.14.0's Task Model
+    Completeness); and task name suggestions ("Did you mean...?", ported from Batect's
+    `TaskSuggester`).
 - **0.16.0** — **Output Modes**: `--output`/`-o` (Batect's `fancy`/`simple`/`quiet`/
   `all` modes) together with automatic default-mode selection based on terminal
   capabilities — the two can't ship separately, since auto-detection is the logic for
