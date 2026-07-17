@@ -112,7 +112,7 @@ used exactly as written, with no host-side substitution step:
 | `dependencies` (task-level sidecars) | Supported | Distinct from the container-level `dependencies` field above — scoped to this task specifically, unioned with the task's own container's `dependencies` — see [config reference](config-reference.md#task). |
 | `description` | Supported | Shown next to the task's name in `--list-tasks` output — see [config reference](config-reference.md#list-tasks-output). |
 | `group` | Supported | Groups tasks under a heading in `--list-tasks` output, only once *some* task in the project declares one — see [config reference](config-reference.md#list-tasks-output). |
-| `customise` | Not supported | |
+| `customise` | Supported | Per-task `environment`/`ports`/`working_directory` overrides for a non-main container in the task's own graph — see [config reference](config-reference.md#taskcontainercustomisation). |
 
 ### `run` fields
 

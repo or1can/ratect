@@ -445,9 +445,28 @@ Neither bump is ever folded into a feature commit.
     container, not just ones that opt into the field. Scoped to `image` containers
     only — Ratect doesn't implement Batect's separate use of this same field to
     force-pull a `build_directory` build's base image.
-- **0.14.0** — **Task Model Completeness**: task-level `dependencies` (sidecars scoped
-  to a task, distinct from the container-level field shipped in 0.6.0),
-  `description`/`group` (plus corresponding `--list-tasks` output), and `customise`.
+- **0.14.0** — ~~**Task Model Completeness**: task-level `dependencies` (sidecars
+  scoped to a task, distinct from the container-level field shipped in 0.6.0),
+  `description`/`group` (plus corresponding `--list-tasks` output), and
+  `customise`.~~ — done, plus one addition found while scoping the work:
+  - `run` is no longer required on a task — a task with only `prerequisites` and
+    no `run` is now valid, matching Batect (previously rejected outright); its
+    prerequisites still execute, then Ratect stops there, since there's no
+    container of the task's own left to run.
+  - Task-level `dependencies`: sidecars scoped to one task specifically, unioned
+    with the task's own container's `dependencies` (and folded into the same
+    `no_proxy` exemption list) when resolving what to start alongside it.
+    Requires `run`, and can't name `run.container` itself.
+  - `description`/`group`: shown in `--list-tasks` output — grouped under a
+    `{group}:` heading (plus a trailing `Ungrouped tasks:` bucket) once *any*
+    task in the project declares a `group`; otherwise the pre-0.14.0 flat list
+    stays unchanged.
+  - `customise`: per-task `environment`/`ports`/`working_directory` overrides
+    for a *non-main* container used anywhere in the task's own container graph
+    (at any depth). Can't target the main task container itself (set the
+    equivalent property on `run` instead) or a container outside the task's
+    graph — both validated at config-load time, matching Batect's own
+    `Task`/`ContainerDependencyGraph` checks.
 - **0.15.0** — **Parallel Task Execution**: independent prerequisites and tasks run
   concurrently via `tokio`, rather than sequentially — closes the last
   [runtime behavior gap](docs/differences-from-batect.md#runtime-behavior-gaps)

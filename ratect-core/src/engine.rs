@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{BuildSecret, Config, Container, PortMapping};
+use crate::config::{
+    container_names_in_task, BuildSecret, Config, Container, PortMapping,
+    TaskContainerCustomisation,
+};
 use crate::docker::ContainerRuntime;
 use anyhow::{Context, Result};
 use async_recursion::async_recursion;
@@ -167,41 +170,6 @@ fn buildkit_options(container: &Container) -> Option<crate::docker::BuildKitOpti
             .unwrap_or_default(),
         forward_default_ssh_agent: ssh.is_some_and(|agents| !agents.is_empty()),
     })
-}
-
-/// Returns `root` plus every container name transitively reachable from it
-/// via `dependencies` — the full set of containers that will share one
-/// task's network. Used as the `no_proxy` "these are local, don't proxy
-/// traffic to them" exemption list passed to
-/// `proxy::proxy_environment_variables`.
-///
-/// `task_dependencies` (a task's own task-level `dependencies` — sidecars
-/// scoped to this one task, distinct from `root`'s own container-level
-/// `dependencies`) are unioned in at the root only, matching Batect's
-/// `taskDependencies = task.dependsOnContainers + taskContainer.dependencies`
-/// — each one's *own* container-level `dependencies` still resolve
-/// transitively from there, same as any other dependency.
-///
-/// Visited-set-guarded so a config cycle can't hang this pure walk — real
-/// cycle detection (which actually rejects a cycle as a user-facing error)
-/// still happens separately, in `TaskEngine::start_dependency`.
-fn container_names_in_task(
-    containers: &HashMap<String, Container>,
-    root: &str,
-    task_dependencies: Option<&[String]>,
-) -> std::collections::BTreeSet<String> {
-    let mut names = std::collections::BTreeSet::new();
-    let mut stack = vec![root.to_string()];
-    stack.extend(task_dependencies.into_iter().flatten().cloned());
-    while let Some(name) = stack.pop() {
-        if !names.insert(name.clone()) {
-            continue;
-        }
-        if let Some(dependencies) = containers.get(&name).and_then(|c| c.dependencies.as_ref()) {
-            stack.extend(dependencies.iter().cloned());
-        }
-    }
-    names
 }
 
 pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
@@ -615,6 +583,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     &mut running_sidecars,
                     &mut resolving,
                     &no_proxy_entries,
+                    task.customise.as_ref(),
                 )
                 .await?;
             }
@@ -725,6 +694,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         running: &mut HashMap<String, String>,
         resolving: &mut HashSet<String>,
         no_proxy_entries: &std::collections::BTreeSet<String>,
+        customisations: Option<&HashMap<String, TaskContainerCustomisation>>,
     ) -> Result<()> {
         if running.contains_key(name) {
             return Ok(());
@@ -745,10 +715,24 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
 
         if let Some(nested) = &dependency_config.dependencies {
             for nested_name in nested {
-                self.start_dependency(nested_name, network, running, resolving, no_proxy_entries)
-                    .await?;
+                self.start_dependency(
+                    nested_name,
+                    network,
+                    running,
+                    resolving,
+                    no_proxy_entries,
+                    customisations,
+                )
+                .await?;
             }
         }
+
+        // A `customise` entry for this container specifically — applied on
+        // top of its own base config, same precedence as a task's `run`
+        // overriding its own main container (see `Config::resolve_expressions_with_boundaries`
+        // for the validation ensuring this can never target the main task
+        // container or a container outside this task's own graph).
+        let customisation = customisations.and_then(|c| c.get(name));
 
         let image = self.resolve_image(name, dependency_config).await?;
         let user_mapping = self.resolve_user_mapping(dependency_config).await?;
@@ -757,9 +741,12 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             None,
             proxy_vars.as_ref(),
             dependency_config.environment.as_ref(),
-            None,
+            customisation.and_then(|c| c.environment.as_ref()),
         );
-        let expanded_ports = merged_ports(dependency_config.ports.as_ref(), None);
+        let expanded_ports = merged_ports(
+            dependency_config.ports.as_ref(),
+            customisation.and_then(|c| c.ports.as_ref()),
+        );
         let network_options = crate::docker::NetworkOptions {
             additional_hostnames: dependency_config.additional_hostnames.as_ref(),
             additional_hosts: dependency_config.additional_hosts.as_ref(),
@@ -771,8 +758,11 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         let capabilities_to_drop =
             capability_names(dependency_config.capabilities_to_drop.as_ref());
         let devices = device_triples(dependency_config.devices.as_ref());
+        let working_directory = customisation
+            .and_then(|c| c.working_directory.as_deref())
+            .or(dependency_config.working_directory.as_deref());
         let container_options = crate::docker::ContainerOptions {
-            working_directory: dependency_config.working_directory.as_deref(),
+            working_directory,
             entrypoint: dependency_config.entrypoint.as_deref(),
             labels: dependency_config.labels.as_ref(),
             capabilities_to_add: capabilities_to_add.as_ref(),
@@ -828,7 +818,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     setup_command
                         .working_directory
                         .as_deref()
-                        .or(dependency_config.working_directory.as_deref()),
+                        .or(working_directory),
                     environment.as_ref(),
                     user_mapping.as_ref(),
                 )
@@ -1496,6 +1486,7 @@ mod tests {
             prerequisites: None,
             description: None,
             group: None,
+            customise: None,
         }
     }
 
@@ -1549,6 +1540,7 @@ mod tests {
                 prerequisites: Some(vec!["b".to_string()]),
                 description: None,
                 group: None,
+                customise: None,
             },
         );
         tasks.insert(
@@ -1566,6 +1558,7 @@ mod tests {
                 prerequisites: Some(vec!["a".to_string()]),
                 description: None,
                 group: None,
+                customise: None,
             },
         );
 
@@ -1635,6 +1628,7 @@ mod tests {
             dependencies: None,
             description: None,
             group: None,
+            customise: None,
         };
 
         let mut tasks = HashMap::new();
@@ -1824,6 +1818,7 @@ mod tests {
                 prerequisites: Some(vec!["setup".to_string()]),
                 description: None,
                 group: None,
+                customise: None,
             },
         );
         let config = Config {
@@ -2513,6 +2508,7 @@ mod tests {
                 prerequisites: Some(vec!["first".to_string()]),
                 description: None,
                 group: None,
+                customise: None,
             },
         );
         let config = Config {
@@ -3437,6 +3433,7 @@ mod tests {
                 prerequisites: Some(vec!["migrate".to_string()]),
                 description: None,
                 group: None,
+                customise: None,
             },
         );
         let config = Config {
@@ -4178,6 +4175,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn customise_overrides_a_dependencys_working_directory_environment_and_ports() {
+        let mut containers = HashMap::new();
+        let mut database =
+            container_with_ports("postgres:16", vec![single_port(5432, 5432, "tcp")]);
+        database.environment = Some(HashMap::from([("BASE".to_string(), "base".to_string())]));
+        database.working_directory = Some("/from-container".to_string());
+        containers.insert("database".to_string(), database);
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        let mut tasks = HashMap::new();
+        let mut run_task = task("app", "echo hi");
+        run_task.customise = Some(HashMap::from([(
+            "database".to_string(),
+            TaskContainerCustomisation {
+                environment: Some(HashMap::from([(
+                    "BASE".to_string(),
+                    "overridden".to_string(),
+                )])),
+                ports: Some(vec![single_port(6543, 6543, "tcp")]),
+                working_directory: Some("/from-customise".to_string()),
+            },
+        )]));
+        tasks.insert("run".to_string(), run_task);
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("run", &[]).await.unwrap();
+
+        let database_env = docker.environment_for("database").unwrap();
+        assert_eq!(database_env.get("BASE"), Some(&"overridden".to_string()));
+        assert_eq!(
+            docker.working_directory_for("database").as_deref(),
+            Some("/from-customise")
+        );
+        let (_, _, ports) = docker.network_options_for("database").unwrap();
+        let ports = ports.unwrap();
+        assert!(ports.contains(&(5432, 5432, "tcp".to_string())));
+        assert!(ports.contains(&(6543, 6543, "tcp".to_string())));
+
+        // The main task container ("app") must be entirely unaffected — the
+        // customisation targets "database" specifically.
+        assert_eq!(docker.working_directory_for("app"), None);
+    }
+
+    #[tokio::test]
     async fn term_env_var_reaches_a_tasks_own_container_when_interactive() {
         let mut containers = HashMap::new();
         containers.insert("app".to_string(), container("alpine:3.18", None));
@@ -4310,6 +4361,7 @@ mod tests {
                 prerequisites: Some(vec!["setup".to_string()]),
                 description: None,
                 group: None,
+                customise: None,
             },
         );
         let config = Config {

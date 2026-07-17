@@ -493,10 +493,43 @@ tasks:
 | `dependencies` | list of strings | no** | Sidecar containers scoped to this task specifically — see below. Requires `run`. |
 | `description` | string | no | Shown next to the task's name in `--list-tasks` output — see below. Purely informational. |
 | `group` | string | no | Groups this task under a heading in `--list-tasks` output, together with every other task sharing the same `group` — see below. Purely a display grouping; has no effect on execution order or prerequisites. |
+| `customise` | map of string → [TaskContainerCustomisation](#taskcontainercustomisation) | no | Per-task `environment`/`ports`/`working_directory` overrides, keyed by container name — see below. |
 
 \* At least one of `run`/`prerequisites` is required. A task with only `prerequisites` and no `run` is valid — its prerequisites still run, then Ratect stops, since there's no container of the task's own left to run.
 
 \*\* `dependencies` here is distinct from a [container](#container)'s own `dependencies` field: this one is scoped to *this task specifically*, rather than to every task that uses the container. It's unioned with the task's own container's `dependencies` — both start together — and can't name `run.container` itself.
+
+### TaskContainerCustomisation
+
+Applies to a *non-main* container used somewhere in this task's own container graph
+(a task-level or container-level dependency, at any depth) — keyed by container name
+under `customise`:
+
+```yaml
+tasks:
+  test:
+    run:
+      container: build-env
+    dependencies:
+      - queue
+    customise:
+      queue:
+        environment:
+          MODE: test
+        working_directory: /custom
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `environment` | map of string → string | no | Merged with the container's own `environment` (see [Container](#container)): the container's values apply first, and this overrides them on a key collision. Values support the same [expressions](#expressions) as `environment` does. |
+| `ports` | list of strings/objects | no | *Added* to the container's own `ports`, not an override — see [Port mappings](#port-mappings). |
+| `working_directory` | string | no | Overrides the container's own `working_directory`. No [expression](#expressions) support. |
+
+A `customise` entry can't target `run.container` itself — that's a config error;
+set the equivalent property on [`run`](#taskrun) instead. It also can't name a
+container that isn't actually part of this task's own container graph (whether
+because the name doesn't exist at all, or exists but isn't reachable from
+`run.container` via `dependencies` — container-level or task-level).
 
 ### List-tasks output
 

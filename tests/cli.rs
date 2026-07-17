@@ -474,6 +474,36 @@ fn task_level_dependency_is_reachable_by_name_via_docker() {
 }
 
 /// Requires a running Docker daemon with network access to pull
+/// `redis:7-alpine` and `alpine:3.18.2`. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// Proves a task's `customise` entry for a dependency container
+/// (`configurable`) actually reaches the real container: `configurable`'s
+/// `setup_commands` entry only exits `0` once its environment/
+/// `working_directory` are the *customised* values, not its own base ones —
+/// so the task succeeding is only possible if the customisation was applied
+/// before that setup command ran.
+#[test]
+#[ignore]
+fn customise_overrides_a_dependencys_config_via_docker() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(sidecar_config_path())
+        .arg("customise-sidecar")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("customise-sidecar-ok"));
+}
+
+/// Requires a running Docker daemon with network access to pull
 /// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
 ///
 /// Proves the whole dependency readiness gate with real Docker health

@@ -1025,6 +1025,69 @@ pub struct Task {
     /// [`format_task_list`]. Purely a display grouping; has no effect on
     /// execution order or prerequisites.
     pub group: Option<String>,
+    /// Per-task overrides for a *non-main* container used somewhere in this
+    /// task's own container graph (a task-level or container-level
+    /// dependency, at any depth) — keyed by container name. Can't target
+    /// `run.container` itself (set the equivalent property on `run`
+    /// instead) or a container outside this task's graph — both validated
+    /// in [`Config::resolve_expressions_with_boundaries`], matching
+    /// Batect's own `Task`/`ContainerDependencyGraph` checks. Applied in
+    /// `TaskEngine::start_dependency`.
+    pub customise: Option<HashMap<String, TaskContainerCustomisation>>,
+}
+
+/// One entry in a task's `customise` map — see [`Task::customise`].
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskContainerCustomisation {
+    /// Merged with the container's own `environment` (see
+    /// [`Container::environment`]): the container's values apply first, and
+    /// this overrides them on a key collision — same precedence as
+    /// [`TaskRun::environment`] over the main container's.
+    pub environment: Option<HashMap<String, String>>,
+    /// *Added* to the container's own `ports`, not an override — same
+    /// union semantics as [`TaskRun::ports`].
+    pub ports: Option<Vec<PortMapping>>,
+    /// Overrides the container's own `working_directory` — same semantics
+    /// as [`TaskRun::working_directory`].
+    pub working_directory: Option<String>,
+}
+
+/// Returns `root` plus every container name transitively reachable from it
+/// via `dependencies` — the full set of containers that will share one
+/// task's network. Used both as the `no_proxy` "these are local, don't
+/// proxy traffic to them" exemption list passed to
+/// `proxy::proxy_environment_variables`, and to validate a `customise`
+/// entry actually names a container that's part of the task (see
+/// [`Config::resolve_expressions_with_boundaries`]).
+///
+/// `task_dependencies` (a task's own task-level `dependencies` — sidecars
+/// scoped to this one task, distinct from `root`'s own container-level
+/// `dependencies`) are unioned in at the root only, matching Batect's
+/// `taskDependencies = task.dependsOnContainers + taskContainer.dependencies`
+/// — each one's *own* container-level `dependencies` still resolve
+/// transitively from there, same as any other dependency.
+///
+/// Visited-set-guarded so a config cycle can't hang this pure walk — real
+/// cycle detection (which actually rejects a cycle as a user-facing error)
+/// still happens separately, in `TaskEngine::start_dependency`.
+pub fn container_names_in_task(
+    containers: &HashMap<String, Container>,
+    root: &str,
+    task_dependencies: Option<&[String]>,
+) -> std::collections::BTreeSet<String> {
+    let mut names = std::collections::BTreeSet::new();
+    let mut stack = vec![root.to_string()];
+    stack.extend(task_dependencies.into_iter().flatten().cloned());
+    while let Some(name) = stack.pop() {
+        if !names.insert(name.clone()) {
+            continue;
+        }
+        if let Some(dependencies) = containers.get(&name).and_then(|c| c.dependencies.as_ref()) {
+            stack.extend(dependencies.iter().cloned());
+        }
+    }
+    names
 }
 
 /// Formats `--list-tasks` output: every task's name (and `description`, if
@@ -1884,6 +1947,32 @@ impl Config {
                 }
                 _ => {}
             }
+            if let (Some(run), Some(customise)) = (&task.run, &task.customise) {
+                if let Some(customisation_name) = customise.keys().find(|n| *n == &run.container) {
+                    anyhow::bail!(
+                        "Cannot apply customisations to main task container '{}' in task \
+                         '{}'. Set the corresponding properties on 'run' instead",
+                        customisation_name,
+                        task_name
+                    );
+                }
+                let names_in_task = container_names_in_task(
+                    &self.containers,
+                    &run.container,
+                    task.dependencies.as_deref(),
+                );
+                if let Some(customisation_name) =
+                    customise.keys().find(|n| !names_in_task.contains(*n))
+                {
+                    anyhow::bail!(
+                        "Task '{}' has customisations for container '{}', but the container \
+                         '{}' will not be started as part of the task",
+                        task_name,
+                        customisation_name,
+                        customisation_name
+                    );
+                }
+            }
             if let Some(run) = &mut task.run {
                 if let Some(environment) = &mut run.environment {
                     for value in environment.values_mut() {
@@ -2096,6 +2185,7 @@ tasks:
             prerequisites: None,
             description: description.map(str::to_string),
             group: group.map(str::to_string),
+            customise: None,
         }
     }
 
@@ -2302,6 +2392,138 @@ tasks:
                 .contains("both the main task container (via 'run') and a task-level dependency"),
             "message: {message}"
         );
+    }
+
+    #[test]
+    fn parses_task_customise() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+  queue:
+    image: redis:7-alpine
+tasks:
+  test:
+    run:
+      container: build-env
+    dependencies:
+      - queue
+    customise:
+      queue:
+        environment:
+          FOO: bar
+        ports:
+          - 6543:6543
+        working_directory: /custom
+"#,
+        );
+
+        let task = config.tasks.get("test").unwrap();
+        let customisation = task.customise.as_ref().unwrap().get("queue").unwrap();
+        assert_eq!(
+            customisation.environment.as_ref().unwrap().get("FOO"),
+            Some(&"bar".to_string())
+        );
+        assert_eq!(customisation.ports.as_ref().unwrap().len(), 1);
+        assert_eq!(customisation.working_directory.as_deref(), Some("/custom"));
+    }
+
+    #[test]
+    fn resolve_expressions_errors_when_customise_targets_the_main_task_container() {
+        let mut config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks:
+  test:
+    run:
+      container: build-env
+    customise:
+      build-env:
+        working_directory: /custom
+"#,
+        );
+
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            no_host_env,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Cannot apply customisations to main task container 'build-env'"));
+    }
+
+    #[test]
+    fn resolve_expressions_errors_when_customise_targets_a_container_outside_the_tasks_graph() {
+        let mut config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+  unrelated:
+    image: alpine:3.18
+tasks:
+  test:
+    run:
+      container: build-env
+    customise:
+      unrelated:
+        working_directory: /custom
+"#,
+        );
+
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            no_host_env,
+        );
+
+        assert!(result.unwrap_err().to_string().contains(
+            "Task 'test' has customisations for container 'unrelated', but the container \
+             'unrelated' will not be started as part of the task"
+        ));
+    }
+
+    #[test]
+    fn resolve_expressions_allows_customise_for_a_task_level_dependency() {
+        let mut config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+  queue:
+    image: redis:7-alpine
+tasks:
+  test:
+    run:
+      container: build-env
+    dependencies:
+      - queue
+    customise:
+      queue:
+        working_directory: /custom
+"#,
+        );
+
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            no_host_env,
+        );
+
+        assert!(result.is_ok(), "{:?}", result.unwrap_err());
     }
 
     #[test]
