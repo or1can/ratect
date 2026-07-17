@@ -31,6 +31,21 @@ tasks:
 Running `ratect test` here runs `compile` to completion first, fully cleaning up
 after it, then runs `test`.
 
+A task doesn't strictly need a `run` of its own — a task with only `prerequisites`
+is valid (see [config reference](config-reference.md#task)), and exists purely to
+chain other tasks together:
+
+```yaml
+tasks:
+  ci:
+    prerequisites:
+      - compile
+      - test
+```
+
+Running `ratect ci` here runs `compile` then `test` to completion, same as above,
+then stops — there's no container of `ci`'s own left to run.
+
 ## Per-task steps
 
 Every task execution gets its own Docker network, whether or not its container
@@ -38,7 +53,10 @@ declares `dependencies` — so a task's container is never left running on Docke
 shared default bridge network, reachable by or able to reach anything else on the
 host. If the container *does* declare `dependencies`, those are started on that
 network *before* the task's own container, so the task's container can reach them by
-name. All of this — network, dependencies, and the task's own container — is scoped
+name — and so is anything named in the *task's own* `dependencies` (sidecars scoped
+to this task specifically, distinct from the container-level field — see [config
+reference](config-reference.md#task)), unioned in alongside the container-level ones.
+All of this — network, dependencies, and the task's own container — is scoped
 to **this one task execution** and torn down before moving on, regardless of whether
 the task succeeded:
 
@@ -120,6 +138,16 @@ graph TD
 Running a task against `app` starts `cache`, then `database`, then `app` — in that
 order — all sharing one network, all reachable by their container-config name (e.g.
 `app`'s command can reach `database:5432` and `cache:6379`).
+
+A task's own `dependencies` (sidecars scoped to that task specifically) join this
+same resolution at the root, alongside `app`'s own — each still resolves its *own*
+container-level `dependencies` transitively from there, same as any other
+dependency. And a task's `customise` map, if it has one, is checked against
+whichever dependency is starting: a match overrides that container's
+`environment`/`ports`/`working_directory` for this task's run of it specifically
+(merged the same way a task's own `run` overrides its main container — see [config
+reference](config-reference.md#taskcontainercustomisation)), before it starts,
+regardless of how deep in this graph it sits.
 
 Started isn't ready, though: each dependency must become **ready** before whatever
 depends on it starts — it must report healthy (immediately so for a container with no

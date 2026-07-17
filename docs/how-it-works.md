@@ -57,17 +57,30 @@ aren't known at the first:
    (`top_level: true`). That flag is what decides interactive-TTY eligibility in step 5
    below — a prerequisite chain isn't the thing being "run" interactively, so only the
    originally-requested task's own container is ever eligible, however deeply nested
-   its prerequisites are.
+   its prerequisites are. If the task itself has no `run` (valid since 0.14.0 — a task
+   can exist purely to chain `prerequisites` together, see [config
+   reference](config-reference.md#task)), `run_task_internal` stops right here and
+   returns success: there's no container of the task's own left to run, matching
+   Batect's own `TaskRunner`.
 4. **Create the task's network**: every task execution gets its own Docker network,
    whether or not its container declares `dependencies` — a task's container is
-   never left running on Docker's shared default bridge network. If the container
-   *does* declare `dependencies`, those containers are started on that network
-   (recursively, for nested dependencies) before the task's own container, so it can
-   reach them by name. This is scoped to just this one task execution and torn down
-   afterward — see [the task lifecycle](task-lifecycle.md) for the full step-by-step
-   detail and diagrams. With `--use-network`, an existing network is validated to
-   exist (`ContainerRuntime::network_exists`) and reused instead — never created,
-   and never removed at cleanup, since Ratect didn't create it.
+   never left running on Docker's shared default bridge network. Everything in the
+   task's own container graph is started on that network before the task's own
+   container, so it can reach them by name: the container's own `dependencies`,
+   unioned with the task's own `dependencies` (0.14.0 — sidecars scoped to this one
+   task specifically, distinct from the container-level field — see [config
+   reference](config-reference.md#task)), resolved recursively for nested
+   dependencies via `container_names_in_task`/`start_dependency`. A task's
+   `customise` map (0.14.0 — per-task `environment`/`ports`/`working_directory`
+   overrides for a non-main container somewhere in that graph, at any depth — see
+   [config reference](config-reference.md#taskcontainercustomisation)) is threaded
+   through this same resolution and applied to whichever dependency it targets, on
+   top of that container's own base config. This is scoped to just this one task
+   execution and torn down afterward — see [the task lifecycle](task-lifecycle.md)
+   for the full step-by-step detail and diagrams. With `--use-network`, an existing
+   network is validated to exist (`ContainerRuntime::network_exists`) and reused
+   instead — never created, and never removed at cleanup, since Ratect didn't
+   create it.
 5. **Resolve and run the image**: `TaskEngine::resolve_image` turns the container's
    `image` or `build_directory` into the image reference to actually run — pulling (per
    `image_pull_policy`: `IfNotPresent`, the default, skips the pull if
