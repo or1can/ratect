@@ -290,6 +290,10 @@ pub struct ContainerOptions<'a> {
     /// (same conversion boundary as `NetworkOptions::ports`'
     /// already-expanded tuples).
     pub devices: Option<&'a Vec<(String, String, Option<String>)>>,
+    /// Runs Docker's own tini-based init process as PID 1 ahead of the
+    /// actual command — Docker's `--init`. `None`/`Some(false)` both
+    /// behave like Docker's own unset default.
+    pub enable_init_process: Option<bool>,
 }
 
 /// A container's `health_check` override, applied at container creation on
@@ -1694,6 +1698,7 @@ impl ContainerRuntime for DockerClient {
             privileged: container_options.privileged,
             shm_size: container_options.shm_size,
             devices: build_devices(container_options.devices),
+            init: container_options.enable_init_process,
             ..Default::default()
         };
 
@@ -1913,6 +1918,7 @@ impl ContainerRuntime for DockerClient {
             privileged: container_options.privileged,
             shm_size: container_options.shm_size,
             devices: build_devices(container_options.devices),
+            init: container_options.enable_init_process,
             ..Default::default()
         };
 

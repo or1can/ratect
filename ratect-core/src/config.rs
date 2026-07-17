@@ -158,6 +158,13 @@ pub struct Container {
     /// for `DeviceMount.localPath`. Container level only, matching Batect
     /// (no task-level `run` override in either).
     pub devices: Option<Vec<DeviceMapping>>,
+    /// Runs an init process (Docker's own tini-based one, e.g. reaping
+    /// zombie processes and forwarding signals) as PID 1 inside the
+    /// container, ahead of the actual command — Docker's `--init`.
+    /// `None`/absent behaves like `false`, matching both Docker's and
+    /// Batect's own default. Container level only, matching Batect (no
+    /// task-level `run` override in either).
+    pub enable_init_process: Option<bool>,
 }
 
 /// One entry in a container's `devices` list — a host device path made
@@ -2387,6 +2394,47 @@ tasks:
     }
 
     #[test]
+    fn parses_enable_init_process() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    enable_init_process: true
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.enable_init_process, Some(true));
+    }
+
+    #[test]
+    fn enable_init_process_defaults_to_none() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.enable_init_process, None);
+    }
+
+    #[test]
     fn an_unknown_capability_name_is_rejected() {
         let yaml = r#"
 project_name: demo
@@ -2730,6 +2778,7 @@ tasks: {}
             privileged: None,
             shm_size: None,
             devices: None,
+            enable_init_process: None,
         }
     }
 
@@ -3028,6 +3077,7 @@ tasks: {}
             privileged: None,
             shm_size: None,
             devices: None,
+            enable_init_process: None,
         }
     }
 
@@ -5121,6 +5171,7 @@ config_variables:
             privileged: None,
             shm_size: None,
             devices: None,
+            enable_init_process: None,
         }
     }
 

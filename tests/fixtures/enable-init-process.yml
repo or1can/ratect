@@ -1,0 +1,20 @@
+# Exercises `enable_init_process` end-to-end: without it, the container's
+# own command runs directly as PID 1; with it, Docker's own init process
+# wraps it as PID 1 instead, and the command runs as a child — directly
+# observable via /proc/1/comm.
+project_name: ratect-init-process-test
+containers:
+  no-init:
+    image: alpine:3.18.2
+  with-init:
+    image: alpine:3.18.2
+    enable_init_process: true
+tasks:
+  show-pid1-normal:
+    run:
+      container: no-init
+      command: sh -c "cat /proc/1/comm"
+  show-pid1-with-init:
+    run:
+      container: with-init
+      command: sh -c "cat /proc/1/comm"

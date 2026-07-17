@@ -633,6 +633,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 privileged: container_config.privileged,
                 shm_size: container_config.shm_size,
                 devices: devices.as_ref(),
+                enable_init_process: container_config.enable_init_process,
             };
             self.docker
                 .run_container(
@@ -741,6 +742,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             privileged: dependency_config.privileged,
             shm_size: dependency_config.shm_size,
             devices: devices.as_ref(),
+            enable_init_process: dependency_config.enable_init_process,
         };
 
         let container_id = self
@@ -870,6 +872,7 @@ mod tests {
         privileged: Option<bool>,
         shm_size: Option<i64>,
         devices: Option<Vec<(String, String, Option<String>)>>,
+        enable_init_process: Option<bool>,
     }
     type CapturedContainerOptions = Arc<Mutex<HashMap<String, ContainerOptionsValue>>>;
     /// `(working_directory, environment, (uid, gid))`, keyed by the exec'd
@@ -1159,6 +1162,17 @@ mod tests {
                 .get(name)
                 .and_then(|options| options.devices.clone())
         }
+
+        /// The `container_options.enable_init_process` a prior
+        /// `run_container`/`start_background_container` call for `name`
+        /// was given.
+        fn enable_init_process_for(&self, name: &str) -> Option<bool> {
+            self.container_options
+                .lock()
+                .unwrap()
+                .get(name)
+                .and_then(|options| options.enable_init_process)
+        }
     }
 
     #[async_trait::async_trait]
@@ -1258,6 +1272,7 @@ mod tests {
                     privileged: container_options.privileged,
                     shm_size: container_options.shm_size,
                     devices: container_options.devices.cloned(),
+                    enable_init_process: container_options.enable_init_process,
                 },
             );
             self.push(format!("sidecar-start:{alias}:{network}"));
@@ -1362,6 +1377,7 @@ mod tests {
                     privileged: container_options.privileged,
                     shm_size: container_options.shm_size,
                     devices: container_options.devices.cloned(),
+                    enable_init_process: container_options.enable_init_process,
                 },
             );
             self.push(format!(
@@ -1401,6 +1417,7 @@ mod tests {
             privileged: None,
             shm_size: None,
             devices: None,
+            enable_init_process: None,
             health_check: None,
             setup_commands: None,
         }
@@ -1447,6 +1464,7 @@ mod tests {
                 privileged: None,
                 shm_size: None,
                 devices: None,
+                enable_init_process: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1528,6 +1546,7 @@ mod tests {
                 privileged: None,
                 shm_size: None,
                 devices: None,
+                enable_init_process: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1754,6 +1773,7 @@ mod tests {
             privileged: None,
             shm_size: None,
             devices: None,
+            enable_init_process: None,
             health_check: None,
             setup_commands: None,
         }
@@ -2084,6 +2104,7 @@ mod tests {
                 privileged: None,
                 shm_size: None,
                 devices: None,
+                enable_init_process: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -2136,6 +2157,7 @@ mod tests {
             privileged: None,
             shm_size: None,
             devices: None,
+            enable_init_process: None,
             health_check: None,
             setup_commands: None,
         }
@@ -2515,6 +2537,7 @@ mod tests {
                 privileged: None,
                 shm_size: None,
                 devices: None,
+                enable_init_process: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -3280,6 +3303,7 @@ mod tests {
                 privileged: None,
                 shm_size: None,
                 devices: None,
+                enable_init_process: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -3671,6 +3695,31 @@ mod tests {
                 Some("rwm".to_string())
             )])
         );
+    }
+
+    #[tokio::test]
+    async fn container_enable_init_process_reaches_the_container() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.enable_init_process = Some(true);
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        assert_eq!(docker.enable_init_process_for("build-env"), Some(true));
     }
 
     #[tokio::test]
@@ -4292,5 +4341,32 @@ mod tests {
                 None
             )])
         );
+    }
+
+    #[tokio::test]
+    async fn dependency_container_enable_init_process_reaches_the_sidecar() {
+        let mut database = container("postgres:16", None);
+        database.enable_init_process = Some(true);
+        let mut containers = HashMap::new();
+        containers.insert("database".to_string(), database);
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        assert_eq!(docker.enable_init_process_for("database"), Some(true));
     }
 }

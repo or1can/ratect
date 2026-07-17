@@ -83,6 +83,10 @@ fn devices_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/devices.yml")
 }
 
+fn enable_init_process_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/enable-init-process.yml")
+}
+
 fn project_directory_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-directory.yml")
 }
@@ -925,6 +929,46 @@ fn devices_reaches_the_real_container() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(stdout.trim(), "device-mapped");
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves `enable_init_process` reaches the real container: without it, the
+/// container's own command runs directly as PID 1 (`/proc/1/comm` reports
+/// the actual command image — alpine's `sh -c` execs its single final
+/// command in place rather than forking, so this is `cat`, not `sh`); with
+/// it, Docker's own init process wraps it as PID 1 instead, so
+/// `/proc/1/comm` must report something else entirely.
+#[test]
+#[ignore]
+fn enable_init_process_wraps_pid_1_on_the_real_container() {
+    let pid1_comm = |task: &str| {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(enable_init_process_config_path())
+            .arg(task)
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run ratect: {e}"));
+        assert!(
+            output.status.success(),
+            "stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+
+    let normal = pid1_comm("show-pid1-normal");
+    let with_init = pid1_comm("show-pid1-with-init");
+
+    assert_eq!(
+        normal, "cat",
+        "without enable_init_process, cat should be PID 1"
+    );
+    assert_ne!(
+        with_init, "cat",
+        "with enable_init_process, Docker's own init should be PID 1 instead"
+    );
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
