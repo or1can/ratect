@@ -350,6 +350,32 @@ fn test_task_runs_end_to_end_via_docker() {
     assert!(stdout.contains("Hello from ratect!"));
 }
 
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves a task with only `prerequisites` and no `run` of its own still runs
+/// its prerequisites end to end, then stops cleanly (exit 0) — no container
+/// of the task's own to run.
+#[test]
+#[ignore]
+fn task_with_only_prerequisites_and_no_run_runs_its_prerequisites_via_docker() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(sample_config_path())
+        .arg("prerequisites-only-task")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("I should only run once"));
+}
+
 /// Requires a running Docker daemon with network access to pull `redis:7-alpine`
 /// and `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
 ///

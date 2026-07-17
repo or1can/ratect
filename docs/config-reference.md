@@ -488,8 +488,10 @@ tasks:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `run` | [TaskRun](#taskrun) | yes | What to actually execute for this task. |
-| `prerequisites` | list of strings | no | Names of other tasks to run first, in order. Each prerequisite (and its own prerequisites, transitively) runs at most once per `ratect` invocation, even if shared by multiple tasks. A circular dependency is detected and reported as an error. |
+| `run` | [TaskRun](#taskrun) | no* | What to actually execute for this task. |
+| `prerequisites` | list of strings | no* | Names of other tasks to run first, in order. Each prerequisite (and its own prerequisites, transitively) runs at most once per `ratect` invocation, even if shared by multiple tasks. A circular dependency is detected and reported as an error. |
+
+\* At least one of `run`/`prerequisites` is required. A task with only `prerequisites` and no `run` is valid — its prerequisites still run, then Ratect stops, since there's no container of the task's own left to run.
 
 ## TaskRun
 

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`run` is no longer required on a task**: a task with only `prerequisites` and no `run` is now valid, matching Batect — its prerequisites still execute, then Ratect stops there (there's no container of the task's own left to run). A task must still have at least one of `run`/`prerequisites` — see [config reference](docs/config-reference.md#task). Part of 0.14.0's Task Model Completeness (see `ROADMAP.md`).
+
 ## [0.13.0] - 2026-07-17
 
 ### Added

@@ -2,8 +2,8 @@
 # public — moved here because a root `batect.yml` reads as *this project's own*
 # dev-task config by the very convention ratect implements, and this is a test
 # fixture, not that). Exercises the basics several `tests/cli.rs` tests share:
-# task listing, a shared prerequisite running exactly once, a volume mount, and
-# a happy-path task run.
+# task listing, a shared prerequisite running exactly once, a volume mount, a
+# happy-path task run, and a task with only `prerequisites` and no `run`.
 project_name: ratect-test
 containers:
   build-env:
@@ -34,3 +34,6 @@ tasks:
     prerequisites:
       - prereq-task
       - list-volume-task
+  prerequisites-only-task:
+    prerequisites:
+      - shared-prereq

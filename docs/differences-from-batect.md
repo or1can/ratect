@@ -107,7 +107,7 @@ used exactly as written, with no host-side substitution step:
 
 | Field | Status | Notes |
 |---|---|---|
-| `run` | Supported, but **required** | Batect allows a task with only `prerequisites` and no `run`; Ratect requires `run` on every task. |
+| `run` | Supported | A task with only `prerequisites` and no `run` is valid, matching Batect — see [config reference](config-reference.md#task). |
 | `prerequisites` | Supported | No wildcard (`*`) matching — each name must be listed explicitly. |
 | `dependencies` (task-level sidecars) | Not supported | Distinct from the container-level `dependencies` field above; not parsed at all. |
 | `description` | Not supported | Rejected — see the note at the top of this page; `--list-tasks` output has no description column. |

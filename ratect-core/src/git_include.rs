@@ -546,6 +546,7 @@ mod tests {
         // couples the test to the host's signing setup.
         run(&["config", "commit.gpgsign", "false"]);
         run(&["config", "tag.gpgsign", "false"]);
+        run(&["config", "tag.forceSignAnnotated", "false"]);
         std::fs::write(repo_dir.join("file.txt"), "hello").unwrap();
         run(&["add", "file.txt"]);
         run(&["commit", "--quiet", "-m", "initial commit"]);
@@ -677,6 +678,7 @@ mod tests {
         // Same host-signing-config isolation as `create_test_repo`.
         run(&["config", "commit.gpgsign", "false"]);
         run(&["config", "tag.gpgsign", "false"]);
+        run(&["config", "tag.forceSignAnnotated", "false"]);
         run(&[
             "-c",
             "protocol.file.allow=always",

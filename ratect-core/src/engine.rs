@@ -535,12 +535,25 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             }
         }
 
+        // A task with only `prerequisites` and no `run` of its own — those
+        // have already executed above; there's no container of the task's
+        // own left to run. Matches Batect's `TaskRunner`, which prints the
+        // equivalent message and stops here rather than treating this as an
+        // error.
+        let Some(run) = &task.run else {
+            tracing::info!(
+                "Task '{}' only defines prerequisite tasks, nothing more to do",
+                task_name
+            );
+            return Ok(());
+        };
+
         // Run the task itself
         let container_config = self
             .config
             .containers
-            .get(&task.run.container)
-            .with_context(|| format!("Container '{}' not found", task.run.container))?;
+            .get(&run.container)
+            .with_context(|| format!("Container '{}' not found", run.container))?;
 
         tracing::info!("Running task '{}'", task_name);
 
@@ -577,8 +590,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         // dependency) gets the same `no_proxy` exemption list, matching
         // Batect's `allContainersInNetwork` being fixed for the whole graph
         // rather than recomputed per container.
-        let no_proxy_entries =
-            container_names_in_task(&self.config.containers, &task.run.container);
+        let no_proxy_entries = container_names_in_task(&self.config.containers, &run.container);
 
         let result: Result<()> = async {
             if let Some(deps) = &container_config.dependencies {
@@ -594,9 +606,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 }
             }
 
-            let image = self
-                .resolve_image(&task.run.container, container_config)
-                .await?;
+            let image = self.resolve_image(&run.container, container_config).await?;
             // Eligibility only — `ContainerRuntime::run_container` further
             // gates this on the local process's own stdin/stdout genuinely
             // being terminals before actually attaching a TTY, and stdin
@@ -610,11 +620,10 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 term_var.as_ref(),
                 proxy_vars.as_ref(),
                 container_config.environment.as_ref(),
-                task.run.environment.as_ref(),
+                run.environment.as_ref(),
             );
             let user_mapping = self.resolve_user_mapping(container_config).await?;
-            let expanded_ports =
-                merged_ports(container_config.ports.as_ref(), task.run.ports.as_ref());
+            let expanded_ports = merged_ports(container_config.ports.as_ref(), run.ports.as_ref());
             let network_options = crate::docker::NetworkOptions {
                 additional_hostnames: container_config.additional_hostnames.as_ref(),
                 additional_hosts: container_config.additional_hosts.as_ref(),
@@ -627,13 +636,11 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             // its `setup_commands` don't run either (see
             // docs/differences-from-batect.md).
             let health_check = health_check_options(container_config);
-            let working_directory = task
-                .run
+            let working_directory = run
                 .working_directory
                 .as_deref()
                 .or(container_config.working_directory.as_deref());
-            let entrypoint = task
-                .run
+            let entrypoint = run
                 .entrypoint
                 .as_deref()
                 .or(container_config.entrypoint.as_deref());
@@ -655,9 +662,9 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             };
             self.docker
                 .run_container(
-                    &task.run.container,
+                    &run.container,
                     &image,
-                    task.run.command.as_deref(),
+                    run.command.as_deref(),
                     additional_args,
                     container_config.volumes.as_ref(),
                     environment.as_ref(),
@@ -1464,14 +1471,14 @@ mod tests {
 
     fn task(container: &str, command: &str) -> Task {
         Task {
-            run: TaskRun {
+            run: Some(TaskRun {
                 container: container.to_string(),
                 command: Some(command.to_string()),
                 environment: None,
                 ports: None,
                 working_directory: None,
                 entrypoint: None,
-            },
+            }),
             prerequisites: None,
         }
     }
@@ -1514,28 +1521,28 @@ mod tests {
         tasks.insert(
             "a".to_string(),
             Task {
-                run: TaskRun {
+                run: Some(TaskRun {
                     container: "build-env".to_string(),
                     command: None,
                     environment: None,
                     ports: None,
                     working_directory: None,
                     entrypoint: None,
-                },
+                }),
                 prerequisites: Some(vec!["b".to_string()]),
             },
         );
         tasks.insert(
             "b".to_string(),
             Task {
-                run: TaskRun {
+                run: Some(TaskRun {
                     container: "build-env".to_string(),
                     command: None,
                     environment: None,
                     ports: None,
                     working_directory: None,
                     entrypoint: None,
-                },
+                }),
                 prerequisites: Some(vec!["a".to_string()]),
             },
         );
@@ -1594,14 +1601,14 @@ mod tests {
         );
 
         let task = |command: &str, prerequisites: Option<Vec<String>>| Task {
-            run: TaskRun {
+            run: Some(TaskRun {
                 container: "build-env".to_string(),
                 command: Some(command.to_string()),
                 environment: None,
                 ports: None,
                 working_directory: None,
                 entrypoint: None,
-            },
+            }),
             prerequisites,
         };
 
@@ -1686,6 +1693,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_task_with_only_prerequisites_and_no_run_still_runs_its_prerequisites() {
+        let docker = FakeContainerRuntime::default();
+        let mut config = config_with_shared_prerequisite();
+        config.tasks.get_mut("test-task").unwrap().run = None;
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test-task", &[]).await.unwrap();
+
+        let events = docker.events();
+
+        // "test-task" itself has no `run`, so it gets no container and no
+        // network of its own — only its three (transitive) prerequisites do.
+        let networks_created = events
+            .iter()
+            .filter(|e| e.starts_with("network-create:"))
+            .count();
+        assert_eq!(networks_created, 3, "events: {events:?}");
+
+        let runs: Vec<_> = events.iter().filter(|e| e.starts_with("run:")).collect();
+        assert_eq!(runs.len(), 3, "events: {events:?}");
+        assert!(runs
+            .iter()
+            .any(|r| r.starts_with("run:build-env:shared-prereq:")));
+        assert!(runs
+            .iter()
+            .any(|r| r.starts_with("run:build-env:prereq-task:")));
+        assert!(runs
+            .iter()
+            .any(|r| r.starts_with("run:build-env:list-volume-task:")));
+    }
+
+    #[tokio::test]
     async fn additional_args_reach_only_the_requested_task_not_its_prerequisites() {
         let docker = FakeContainerRuntime::default();
         let engine = TaskEngine::new(config_with_shared_prerequisite(), docker.clone());
@@ -1748,14 +1787,14 @@ mod tests {
         tasks.insert(
             "run".to_string(),
             Task {
-                run: TaskRun {
+                run: Some(TaskRun {
                     container: "app".to_string(),
                     command: Some("echo hi".to_string()),
                     environment: None,
                     ports: None,
                     working_directory: None,
                     entrypoint: None,
-                },
+                }),
                 prerequisites: Some(vec!["setup".to_string()]),
             },
         );
@@ -2067,7 +2106,7 @@ mod tests {
         );
         let mut tasks = HashMap::new();
         let mut task_config = task("app", "echo hi");
-        task_config.run.ports = Some(vec![single_port(9090, 90, "tcp")]);
+        task_config.run.as_mut().unwrap().ports = Some(vec![single_port(9090, 90, "tcp")]);
         tasks.insert("run".to_string(), task_config);
         let config = Config {
             project_name: "demo".to_string(),
@@ -2434,14 +2473,14 @@ mod tests {
         tasks.insert(
             "second".to_string(),
             Task {
-                run: TaskRun {
+                run: Some(TaskRun {
                     container: "build-env".to_string(),
                     command: Some("echo two".to_string()),
                     environment: None,
                     ports: None,
                     working_directory: None,
                     entrypoint: None,
-                },
+                }),
                 prerequisites: Some(vec!["first".to_string()]),
             },
         );
@@ -3275,14 +3314,14 @@ mod tests {
         tasks.insert(
             "test".to_string(),
             Task {
-                run: TaskRun {
+                run: Some(TaskRun {
                     container: "app".to_string(),
                     command: Some("test".to_string()),
                     environment: None,
                     ports: None,
                     working_directory: None,
                     entrypoint: None,
-                },
+                }),
                 prerequisites: Some(vec!["migrate".to_string()]),
             },
         );
@@ -3441,7 +3480,7 @@ mod tests {
         containers.insert("build-env".to_string(), container_config);
 
         let mut task_config = task("build-env", "echo hi");
-        task_config.run.environment = Some(HashMap::from([(
+        task_config.run.as_mut().unwrap().environment = Some(HashMap::from([(
             "RUN_VAR".to_string(),
             "run-value".to_string(),
         )]));
@@ -3479,7 +3518,7 @@ mod tests {
         containers.insert("build-env".to_string(), container_config);
 
         let mut task_config = task("build-env", "echo hi");
-        task_config.run.environment = Some(HashMap::from([(
+        task_config.run.as_mut().unwrap().environment = Some(HashMap::from([(
             "SHARED".to_string(),
             "from-run".to_string(),
         )]));
@@ -3538,7 +3577,7 @@ mod tests {
         containers.insert("build-env".to_string(), container_config);
 
         let mut task_config = task("build-env", "echo hi");
-        task_config.run.working_directory = Some("/from-run".to_string());
+        task_config.run.as_mut().unwrap().working_directory = Some("/from-run".to_string());
         let mut tasks = HashMap::new();
         tasks.insert("test".to_string(), task_config);
 
@@ -3844,7 +3883,7 @@ mod tests {
         containers.insert("build-env".to_string(), container_config);
 
         let mut task_config = task("build-env", "echo hi");
-        task_config.run.entrypoint = Some("/from-run".to_string());
+        task_config.run.as_mut().unwrap().entrypoint = Some("/from-run".to_string());
         let mut tasks = HashMap::new();
         tasks.insert("test".to_string(), task_config);
 
@@ -4117,14 +4156,14 @@ mod tests {
         tasks.insert(
             "run".to_string(),
             Task {
-                run: TaskRun {
+                run: Some(TaskRun {
                     container: "app".to_string(),
                     command: Some("echo hi".to_string()),
                     environment: None,
                     ports: None,
                     working_directory: None,
                     entrypoint: None,
-                },
+                }),
                 prerequisites: Some(vec!["setup".to_string()]),
             },
         );

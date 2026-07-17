@@ -1001,7 +1001,13 @@ impl Serialize for PortMapping {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Task {
-    pub run: TaskRun,
+    /// Absent for a task that only exists to chain `prerequisites` together
+    /// — validated in [`Config::resolve_expressions_with_boundaries`] to
+    /// require at least one of `run`/`prerequisites`, matching Batect. A
+    /// `run`-less task's prerequisites still execute; there's just no
+    /// container of the task's own to run afterwards — see
+    /// `TaskEngine::run_task_internal`.
+    pub run: Option<TaskRun>,
     pub prerequisites: Option<Vec<String>>,
 }
 
@@ -1776,10 +1782,18 @@ impl Config {
             }
         }
 
-        for task in self.tasks.values_mut() {
-            if let Some(environment) = &mut task.run.environment {
-                for value in environment.values_mut() {
-                    *value = crate::expressions::interpolate(value, &host_env, &config_vars)?;
+        for (task_name, task) in self.tasks.iter_mut() {
+            if task.run.is_none() && task.prerequisites.as_ref().is_none_or(|p| p.is_empty()) {
+                anyhow::bail!(
+                    "Task '{}' must have at least one of 'run' or 'prerequisites'",
+                    task_name
+                );
+            }
+            if let Some(run) = &mut task.run {
+                if let Some(environment) = &mut run.environment {
+                    for value in environment.values_mut() {
+                        *value = crate::expressions::interpolate(value, &host_env, &config_vars)?;
+                    }
                 }
             }
         }
@@ -1894,12 +1908,94 @@ tasks:
         );
 
         let task = config.tasks.get("test").unwrap();
-        assert_eq!(task.run.container, "build-env");
-        assert_eq!(task.run.command.as_deref(), Some("echo hi"));
+        assert_eq!(task.run.as_ref().unwrap().container, "build-env");
+        assert_eq!(
+            task.run.as_ref().unwrap().command.as_deref(),
+            Some("echo hi")
+        );
         assert_eq!(
             task.prerequisites.as_ref().unwrap(),
             &vec!["other".to_string()]
         );
+    }
+
+    #[test]
+    fn parses_a_task_with_only_prerequisites_and_no_run() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks:
+  other:
+    run:
+      container: build-env
+  test:
+    prerequisites:
+      - other
+"#,
+        );
+
+        let task = config.tasks.get("test").unwrap();
+        assert!(task.run.is_none());
+        assert_eq!(
+            task.prerequisites.as_ref().unwrap(),
+            &vec!["other".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_expressions_errors_when_a_task_has_neither_run_nor_prerequisites() {
+        let mut config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks:
+  test: {}
+"#,
+        );
+
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            no_host_env,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Task 'test' must have at least one of 'run' or 'prerequisites'"));
+    }
+
+    #[test]
+    fn resolve_expressions_errors_when_a_task_has_empty_prerequisites_and_no_run() {
+        let mut config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks:
+  test:
+    prerequisites: []
+"#,
+        );
+
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            no_host_env,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Task 'test' must have at least one of 'run' or 'prerequisites'"));
     }
 
     #[test]
@@ -1981,7 +2077,10 @@ tasks:
         let container = config.containers.get("build-env").unwrap();
         assert_eq!(container.working_directory.as_deref(), Some("/app"));
         let task = config.tasks.get("test").unwrap();
-        assert_eq!(task.run.working_directory.as_deref(), Some("/app/subdir"));
+        assert_eq!(
+            task.run.as_ref().unwrap().working_directory.as_deref(),
+            Some("/app/subdir")
+        );
     }
 
     #[test]
@@ -2003,7 +2102,7 @@ tasks:
         let container = config.containers.get("build-env").unwrap();
         assert_eq!(container.working_directory, None);
         let task = config.tasks.get("test").unwrap();
-        assert_eq!(task.run.working_directory, None);
+        assert_eq!(task.run.as_ref().unwrap().working_directory, None);
     }
 
     #[test]
@@ -2027,7 +2126,10 @@ tasks:
         let container = config.containers.get("build-env").unwrap();
         assert_eq!(container.entrypoint.as_deref(), Some("/bin/sh -c"));
         let task = config.tasks.get("test").unwrap();
-        assert_eq!(task.run.entrypoint.as_deref(), Some("/bin/bash -c"));
+        assert_eq!(
+            task.run.as_ref().unwrap().entrypoint.as_deref(),
+            Some("/bin/bash -c")
+        );
     }
 
     #[test]
@@ -2049,7 +2151,7 @@ tasks:
         let container = config.containers.get("build-env").unwrap();
         assert_eq!(container.entrypoint, None);
         let task = config.tasks.get("test").unwrap();
-        assert_eq!(task.run.entrypoint, None);
+        assert_eq!(task.run.as_ref().unwrap().entrypoint, None);
     }
 
     #[test]
@@ -4986,6 +5088,12 @@ include:
         run(&["init", "--quiet"]);
         run(&["config", "user.email", "test@example.com"]);
         run(&["config", "user.name", "Test"]);
+        // The host's global git config must not leak into the scratch repo's
+        // commits/tags — see the equivalent isolation in
+        // `git_include.rs`'s `create_test_repo`.
+        run(&["config", "commit.gpgsign", "false"]);
+        run(&["config", "tag.gpgsign", "false"]);
+        run(&["config", "tag.forceSignAnnotated", "false"]);
         #[cfg(unix)]
         std::os::unix::fs::symlink(
             outside.join("secret.yml"),
@@ -5212,7 +5320,13 @@ tasks:
 
         let task = config.tasks.get("test").unwrap();
         assert_eq!(
-            task.run.environment.as_ref().unwrap().get("RUN_VAR"),
+            task.run
+                .as_ref()
+                .unwrap()
+                .environment
+                .as_ref()
+                .unwrap()
+                .get("RUN_VAR"),
             Some(&"run-value".to_string())
         );
     }
