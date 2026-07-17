@@ -52,7 +52,7 @@ sequenceDiagram
     Engine->>Docker: create_network()
 
     loop for each dependency, nested ones first
-        Engine->>Docker: pull_image() (unless already pulled this run)
+        Engine->>Docker: pull_image() (per image_pull_policy, unless already decided this run)
         Engine->>Docker: start_background_container(alias, network)
         Docker-->>Dep: created, started, joined to network
         Engine->>Docker: wait_for_container_healthy()
@@ -63,7 +63,7 @@ sequenceDiagram
         end
     end
 
-    Engine->>Docker: pull_image() (task's own image, unless already pulled)
+    Engine->>Docker: pull_image() (task's own image, per image_pull_policy, unless already decided)
     Engine->>Docker: run_container(name, network)
     Docker-->>Main: created, started, joined to network
     Main-->>Engine: runs to completion, logs streamed live to stdout
@@ -76,6 +76,14 @@ sequenceDiagram
 If the container has no `dependencies`, the dependency steps (the `loop` above) are
 skipped — but the network is still created and the task's own container still joins
 it, isolating it just the same as a task with dependencies.
+
+`pull_image()` in the diagram above is conditional on `image_pull_policy` (see [config
+reference](config-reference.md#container)): `IfNotPresent`, the default, checks whether
+the image already exists locally first and skips the pull entirely if so; `Always`
+skips that check and pulls unconditionally. Either way, the *decision* (pull or don't)
+is made once per image name per `ratect` invocation, same as before this field
+existed — a dependency and the task's own container sharing an image name don't
+re-decide for each other.
 
 Passing `--use-network <name>` skips network creation and teardown entirely for every
 task in this invocation: the named network is checked to exist up front (a clear error

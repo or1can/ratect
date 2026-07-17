@@ -69,11 +69,13 @@ aren't known at the first:
    exist (`ContainerRuntime::network_exists`) and reused instead — never created,
    and never removed at cleanup, since Ratect didn't create it.
 5. **Resolve and run the image**: `TaskEngine::resolve_image` turns the container's
-   `image` or `build_directory` into the image reference to actually run — pulling
-   (unless already pulled once this run) if `image` is set, or building (unless already
-   built once this run — see below) if `build_directory` is set, or erroring if neither
-   is. The same method is used for a task's own container and for dependency
-   containers (in step 4), so both support either form identically.
+   `image` or `build_directory` into the image reference to actually run — pulling (per
+   `image_pull_policy`: `IfNotPresent`, the default, skips the pull if
+   `ContainerRuntime::image_exists_locally` already says yes; `Always` never checks —
+   either way, decided once per image name per run) if `image` is set, or building
+   (unless already built once this run — see below) if `build_directory` is set, or
+   erroring if neither is. The same method is used for a task's own container and for
+   dependency containers (in step 4), so both support either form identically.
    `TaskEngine::resolve_user_mapping` similarly turns a container's
    `run_as_current_user` (if enabled) into a `UserMapping` — also called for both a
    task's own container and each dependency independently (a dependency's own
@@ -90,8 +92,14 @@ aren't known at the first:
    task's `run.environment` (each winning over the last on a key collision) — its
    `NetworkOptions` (`additional_hostnames`/`additional_hosts`, plus `ports` merged
    with any `run.ports` and expanded to concrete port triples via `merged_ports`,
-   unless `--disable-ports`), and `interactive` set to `top_level` from step 3 —
-   eligibility only; see [Interactive mode](config-reference.md#interactive-mode)
+   unless `--disable-ports`), its `ContainerOptions` (`working_directory` and
+   `entrypoint` — each the task-level `run` override if set, else the container's
+   own; `labels`, `capabilities_to_add`/`capabilities_to_drop` (converted from
+   `config::Capability` to plain Docker capability names via `capability_names`),
+   `privileged`, `shm_size`, `devices` (converted from `config::DeviceMapping` via
+   `device_triples`), and `enable_init_process` — these eight are container level
+   only, no `run` override, matching Batect), and `interactive` set to `top_level`
+   from step 3 — eligibility only; see [Interactive mode](config-reference.md#interactive-mode)
    and the Docker integration section below for what this eligibility actually
    unlocks (stdin forwarding and `TERM`, unconditionally) versus what additionally
    requires a real TTY. Proxy variables (gated by the same `--no-proxy-vars` flag,
@@ -138,6 +146,14 @@ client, and implements `ContainerRuntime`:
   joins it to the task's own network (with `additional_hostnames` as extra aliases
   beyond its name), starts it, streams its output, then removes the container once
   it exits.
+  `cmd` is `command` tokenized into literal argv via `tokenize_command_line` (a
+  from-scratch port of Batect's own `Command.parse`) with `additional_args`
+  appended, no shell involved at all — same for `Config.entrypoint`, from
+  `ContainerOptions::entrypoint`. The rest of `ContainerOptions` maps onto
+  `HostConfig`/`Config` directly: `cap_add`/`cap_drop` (via `capability_names`),
+  `privileged`, `shm_size`, `devices` (via the pure `build_devices` — which fills in
+  Docker's `"rwm"` cgroup-permissions default itself, since the raw API, unlike the
+  `docker` CLI, applies none), and `init`.
   `open_stdin`/`attach_stdin` on the container are set whenever `interactive`
   (eligibility) is true, independent of whether a real TTY ends up being used; `tty`
   itself is set only when `should_use_tty` (ANDing that same `interactive` eligibility
@@ -171,10 +187,12 @@ client, and implements `ContainerRuntime`:
 - **`start_background_container` / `stop_and_remove_container`**: create+start (or
   stop+remove) a container without streaming its logs or waiting for it to exit —
   used for dependency/sidecar containers, which run alongside the task rather than
-  being the thing the task is waiting on. Applies `user_mapping` and
-  `NetworkOptions` (hostname, aliases, extra hosts, ports) the same way
-  `run_container` does, from that dependency's own config — independent of the
-  task's own container's settings.
+  being the thing the task is waiting on. Applies `user_mapping`, `NetworkOptions`
+  (hostname, aliases, extra hosts, ports), and `ContainerOptions` the same way
+  `run_container` does (no `cmd` here, though — a dependency has no task `command` of
+  its own; its image's own `CMD`/`ENTRYPOINT` runs, unless `ContainerOptions::entrypoint`
+  overrides it), from that dependency's own config — independent of the task's own
+  container's settings.
 - **`wait_for_container_healthy` / `exec_in_container`**: the two halves of the
   [dependency readiness gate](config-reference.md#dependency-readiness) the engine
   runs after starting each dependency. The first inspects the container (no health
