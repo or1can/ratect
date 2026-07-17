@@ -111,6 +111,27 @@ fn capability_names(
     )
 }
 
+/// Converts a `devices` list of `config::DeviceMapping` into the plain
+/// `(local, container, options)` triples `docker.rs`'s `ContainerOptions`
+/// expects — `docker.rs` deliberately doesn't depend on config types (same
+/// conversion boundary as `capability_names` above).
+fn device_triples(
+    devices: Option<&Vec<crate::config::DeviceMapping>>,
+) -> Option<Vec<(String, String, Option<String>)>> {
+    Some(
+        devices?
+            .iter()
+            .map(|device| {
+                (
+                    device.local.clone(),
+                    device.container.clone(),
+                    device.options.clone(),
+                )
+            })
+            .collect(),
+    )
+}
+
 /// Converts a container's parsed `build_secrets`/`build_ssh` config into the
 /// docker-side [`crate::docker::BuildKitOptions`] — `None` when neither is
 /// set (no session providers to serve; which *builder* runs the build is
@@ -602,6 +623,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 capability_names(container_config.capabilities_to_add.as_ref());
             let capabilities_to_drop =
                 capability_names(container_config.capabilities_to_drop.as_ref());
+            let devices = device_triples(container_config.devices.as_ref());
             let container_options = crate::docker::ContainerOptions {
                 working_directory,
                 entrypoint,
@@ -610,6 +632,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 capabilities_to_drop: capabilities_to_drop.as_ref(),
                 privileged: container_config.privileged,
                 shm_size: container_config.shm_size,
+                devices: devices.as_ref(),
             };
             self.docker
                 .run_container(
@@ -708,6 +731,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         let capabilities_to_add = capability_names(dependency_config.capabilities_to_add.as_ref());
         let capabilities_to_drop =
             capability_names(dependency_config.capabilities_to_drop.as_ref());
+        let devices = device_triples(dependency_config.devices.as_ref());
         let container_options = crate::docker::ContainerOptions {
             working_directory: dependency_config.working_directory.as_deref(),
             entrypoint: dependency_config.entrypoint.as_deref(),
@@ -716,6 +740,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             capabilities_to_drop: capabilities_to_drop.as_ref(),
             privileged: dependency_config.privileged,
             shm_size: dependency_config.shm_size,
+            devices: devices.as_ref(),
         };
 
         let container_id = self
@@ -844,6 +869,7 @@ mod tests {
         capabilities_to_drop: Option<Vec<String>>,
         privileged: Option<bool>,
         shm_size: Option<i64>,
+        devices: Option<Vec<(String, String, Option<String>)>>,
     }
     type CapturedContainerOptions = Arc<Mutex<HashMap<String, ContainerOptionsValue>>>;
     /// `(working_directory, environment, (uid, gid))`, keyed by the exec'd
@@ -1123,6 +1149,16 @@ mod tests {
                 .get(name)
                 .and_then(|options| options.shm_size)
         }
+
+        /// The `container_options.devices` a prior `run_container`/
+        /// `start_background_container` call for `name` was given.
+        fn devices_for(&self, name: &str) -> Option<Vec<(String, String, Option<String>)>> {
+            self.container_options
+                .lock()
+                .unwrap()
+                .get(name)
+                .and_then(|options| options.devices.clone())
+        }
     }
 
     #[async_trait::async_trait]
@@ -1221,6 +1257,7 @@ mod tests {
                     capabilities_to_drop: container_options.capabilities_to_drop.cloned(),
                     privileged: container_options.privileged,
                     shm_size: container_options.shm_size,
+                    devices: container_options.devices.cloned(),
                 },
             );
             self.push(format!("sidecar-start:{alias}:{network}"));
@@ -1324,6 +1361,7 @@ mod tests {
                     capabilities_to_drop: container_options.capabilities_to_drop.cloned(),
                     privileged: container_options.privileged,
                     shm_size: container_options.shm_size,
+                    devices: container_options.devices.cloned(),
                 },
             );
             self.push(format!(
@@ -1362,6 +1400,7 @@ mod tests {
             capabilities_to_drop: None,
             privileged: None,
             shm_size: None,
+            devices: None,
             health_check: None,
             setup_commands: None,
         }
@@ -1407,6 +1446,7 @@ mod tests {
                 capabilities_to_drop: None,
                 privileged: None,
                 shm_size: None,
+                devices: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1487,6 +1527,7 @@ mod tests {
                 capabilities_to_drop: None,
                 privileged: None,
                 shm_size: None,
+                devices: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -1712,6 +1753,7 @@ mod tests {
             capabilities_to_drop: None,
             privileged: None,
             shm_size: None,
+            devices: None,
             health_check: None,
             setup_commands: None,
         }
@@ -2041,6 +2083,7 @@ mod tests {
                 capabilities_to_drop: None,
                 privileged: None,
                 shm_size: None,
+                devices: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -2092,6 +2135,7 @@ mod tests {
             capabilities_to_drop: None,
             privileged: None,
             shm_size: None,
+            devices: None,
             health_check: None,
             setup_commands: None,
         }
@@ -2470,6 +2514,7 @@ mod tests {
                 capabilities_to_drop: None,
                 privileged: None,
                 shm_size: None,
+                devices: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -3234,6 +3279,7 @@ mod tests {
                 capabilities_to_drop: None,
                 privileged: None,
                 shm_size: None,
+                devices: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -3589,6 +3635,42 @@ mod tests {
         engine.run_task("test", &[]).await.unwrap();
 
         assert_eq!(docker.shm_size_for("build-env"), Some(128 * 1024 * 1024));
+    }
+
+    #[tokio::test]
+    async fn container_devices_reach_the_container() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.devices = Some(vec![crate::config::DeviceMapping {
+            local: "/dev/sda".to_string(),
+            container: "/dev/xvda".to_string(),
+            options: Some("rwm".to_string()),
+        }]);
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.devices_for("build-env"),
+            Some(vec![(
+                "/dev/sda".to_string(),
+                "/dev/xvda".to_string(),
+                Some("rwm".to_string())
+            )])
+        );
     }
 
     #[tokio::test]
@@ -4172,5 +4254,43 @@ mod tests {
         engine.run_task("start", &[]).await.unwrap();
 
         assert_eq!(docker.shm_size_for("database"), Some(256 * 1024 * 1024));
+    }
+
+    #[tokio::test]
+    async fn dependency_container_devices_reach_the_sidecar() {
+        let mut database = container("postgres:16", None);
+        database.devices = Some(vec![crate::config::DeviceMapping {
+            local: "/dev/sdb".to_string(),
+            container: "/dev/xvdb".to_string(),
+            options: None,
+        }]);
+        let mut containers = HashMap::new();
+        containers.insert("database".to_string(), database);
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.devices_for("database"),
+            Some(vec![(
+                "/dev/sdb".to_string(),
+                "/dev/xvdb".to_string(),
+                None
+            )])
+        );
     }
 }

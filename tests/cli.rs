@@ -79,6 +79,10 @@ fn shm_size_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/shm-size.yml")
 }
 
+fn devices_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/devices.yml")
+}
+
 fn project_directory_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-directory.yml")
 }
@@ -895,6 +899,32 @@ fn shm_size_reaches_the_real_container() {
         .unwrap_or_else(|e| panic!("failed to parse df output '{stdout}': {e}"));
 
     assert_eq!(blocks, 128 * 1024, "df output:\n{stdout}");
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves `devices` reaches the real container: remapping the host's
+/// `/dev/null` to `/dev/xnull` must make `/dev/xnull` exist as a character
+/// device inside the container — no image ships with it by default.
+#[test]
+#[ignore]
+fn devices_reaches_the_real_container() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(devices_config_path())
+        .arg("check-device")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "device-mapped");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.

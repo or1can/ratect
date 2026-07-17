@@ -1,0 +1,16 @@
+# Exercises `devices` end-to-end: remaps the host's /dev/null (always
+# present, safe, harmless) to a custom container-side path. No image ships
+# with /dev/xnull by default, so its existence proves the device mapping
+# genuinely reached Docker - a safer, more portable proof than requiring a
+# specific rare host device.
+project_name: ratect-devices-test
+containers:
+  build-env:
+    image: alpine:3.18.2
+    devices:
+      - /dev/null:/dev/xnull
+tasks:
+  check-device:
+    run:
+      container: build-env
+      command: sh -c "test -c /dev/xnull && echo device-mapped"

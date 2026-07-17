@@ -16,8 +16,8 @@ use anyhow::{Context, Result};
 use bollard::container::AttachContainerResults;
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use bollard::models::{
-    ContainerCreateBody as Config, EndpointSettings, HealthConfig, NetworkConnectRequest,
-    NetworkCreateRequest, PortBinding, PortMap,
+    ContainerCreateBody as Config, DeviceMapping, EndpointSettings, HealthConfig,
+    NetworkConnectRequest, NetworkCreateRequest, PortBinding, PortMap,
 };
 use bollard::query_parameters::AttachContainerOptionsBuilder;
 use bollard::query_parameters::BuildImageOptionsBuilder;
@@ -206,6 +206,33 @@ fn build_extra_hosts(additional_hosts: Option<&HashMap<String, String>>) -> Opti
     Some(pairs)
 }
 
+/// Builds Docker's `HostConfig.devices` from already-expanded
+/// `(local_path, container_path, cgroup_permissions)` triples — pure,
+/// unit-testable without a daemon. `None` when `devices` itself is `None`.
+fn build_devices(
+    devices: Option<&Vec<(String, String, Option<String>)>>,
+) -> Option<Vec<DeviceMapping>> {
+    let devices = devices?;
+    Some(
+        devices
+            .iter()
+            .map(|(local, container, options)| DeviceMapping {
+                path_on_host: Some(local.clone()),
+                path_in_container: Some(container.clone()),
+                // Docker's own API has no default for this field — leaving
+                // it unset makes runc fail outright ("device access at 16
+                // field cannot be empty"). The `docker` CLI papers over
+                // this with its own client-side default of "rwm"
+                // (read/write/mknod, matching a device's default cgroup
+                // permissions) when `--device`'s third field is omitted;
+                // bollard talks to the API directly, so Ratect has to
+                // apply that same default itself.
+                cgroup_permissions: Some(options.clone().unwrap_or_else(|| "rwm".to_string())),
+            })
+            .collect(),
+    )
+}
+
 /// Per-container network-facing options shared by `run_container` and
 /// `start_background_container` — bundled together (rather than three more
 /// flat parameters) since both methods were already at
@@ -257,6 +284,12 @@ pub struct ContainerOptions<'a> {
     /// The size of `/dev/shm`, in bytes — Docker's `--shm-size`. `None`
     /// inherits Docker's own default (64 MiB).
     pub shm_size: Option<i64>,
+    /// Host devices to make available inside the container — Docker's
+    /// `--device`. `(local_path, container_path, cgroup_permissions)`
+    /// triples — `docker.rs` deliberately doesn't depend on config types
+    /// (same conversion boundary as `NetworkOptions::ports`'
+    /// already-expanded tuples).
+    pub devices: Option<&'a Vec<(String, String, Option<String>)>>,
 }
 
 /// A container's `health_check` override, applied at container creation on
@@ -1660,6 +1693,7 @@ impl ContainerRuntime for DockerClient {
             cap_drop: container_options.capabilities_to_drop.cloned(),
             privileged: container_options.privileged,
             shm_size: container_options.shm_size,
+            devices: build_devices(container_options.devices),
             ..Default::default()
         };
 
@@ -1878,6 +1912,7 @@ impl ContainerRuntime for DockerClient {
             cap_drop: container_options.capabilities_to_drop.cloned(),
             privileged: container_options.privileged,
             shm_size: container_options.shm_size,
+            devices: build_devices(container_options.devices),
             ..Default::default()
         };
 
@@ -2036,6 +2071,50 @@ mod tests {
     #[test]
     fn build_extra_hosts_is_none_when_additional_hosts_is_absent() {
         assert_eq!(build_extra_hosts(None), None);
+    }
+
+    #[test]
+    fn build_devices_maps_local_container_and_options() {
+        let devices = vec![
+            (
+                "/dev/sda".to_string(),
+                "/dev/xvda".to_string(),
+                Some("rwm".to_string()),
+            ),
+            ("/dev/sdb".to_string(), "/dev/xvdb".to_string(), None),
+        ];
+
+        assert_eq!(
+            build_devices(Some(&devices)),
+            Some(vec![
+                DeviceMapping {
+                    path_on_host: Some("/dev/sda".to_string()),
+                    path_in_container: Some("/dev/xvda".to_string()),
+                    cgroup_permissions: Some("rwm".to_string()),
+                },
+                DeviceMapping {
+                    path_on_host: Some("/dev/sdb".to_string()),
+                    path_in_container: Some("/dev/xvdb".to_string()),
+                    cgroup_permissions: Some("rwm".to_string()),
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn build_devices_defaults_missing_options_to_rwm() {
+        // Docker's own API has no default for cgroup_permissions — an
+        // absent value makes runc fail outright. See build_devices' doc
+        // comment for why this must be filled in here.
+        let devices = vec![("/dev/sda".to_string(), "/dev/xvda".to_string(), None)];
+
+        let result = build_devices(Some(&devices)).unwrap();
+        assert_eq!(result[0].cgroup_permissions, Some("rwm".to_string()));
+    }
+
+    #[test]
+    fn build_devices_is_none_when_devices_is_absent() {
+        assert_eq!(build_devices(None), None);
     }
 
     #[test]

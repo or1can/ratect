@@ -152,6 +152,136 @@ pub struct Container {
     /// in either).
     #[serde(default, deserialize_with = "deserialize_shm_size")]
     pub shm_size: Option<i64>,
+    /// Host devices to make available inside the container — Docker's
+    /// `--device`. Plain strings/objects, no [expression](#expressions)
+    /// support — matching Batect's own `String` (not `Expression`) typing
+    /// for `DeviceMount.localPath`. Container level only, matching Batect
+    /// (no task-level `run` override in either).
+    pub devices: Option<Vec<DeviceMapping>>,
+}
+
+/// One entry in a container's `devices` list — a host device path made
+/// available inside the container (Docker's `--device`), optionally under a
+/// different container-side path and/or with non-default cgroup
+/// permissions. Accepts both of Batect's forms — a
+/// `"local:container[:options]"` string and the expanded object form
+/// (`{local, container, options}`) — mirroring [`PortMapping`]'s
+/// string-or-object handling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceMapping {
+    pub local: String,
+    pub container: String,
+    /// Docker's cgroup permissions string (e.g. `"rwm"` — read/write/mknod).
+    /// `None` lets Docker apply its own default.
+    pub options: Option<String>,
+}
+
+impl DeviceMapping {
+    /// Parses Batect's `"local_path:container_path[:options]"` string form
+    /// — ported from Batect's own `DeviceMountConfigSerializer.deserializeFromString`.
+    fn parse_string(value: &str) -> Result<Self> {
+        let invalid = || {
+            anyhow::anyhow!(
+                "Device mount definition '{value}' is invalid. It must be in the form \
+                 'local_path:container_path' or 'local_path:container_path:options'."
+            )
+        };
+        if value.is_empty() {
+            anyhow::bail!("Device mount definition cannot be empty.");
+        }
+        let mut parts = value.splitn(4, ':');
+        let local = parts.next().ok_or_else(invalid)?;
+        let container = parts.next().ok_or_else(invalid)?;
+        let options = parts.next();
+        if parts.next().is_some() {
+            // A fourth colon-separated segment — Batect's own regex (each
+            // segment is `[^:]+`, no further colons allowed) rejects this
+            // too.
+            return Err(invalid());
+        }
+        if local.is_empty() || container.is_empty() {
+            return Err(invalid());
+        }
+
+        Ok(Self {
+            local: local.to_string(),
+            container: container.to_string(),
+            options: options.map(|s| s.to_string()),
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for DeviceMapping {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct DeviceMappingVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for DeviceMappingVisitor {
+            type Value = DeviceMapping;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(
+                    "a device mount string ('local_path:container_path[:options]') or an \
+                     object with 'local'/'container'/'options' fields",
+                )
+            }
+
+            fn visit_str<E>(self, v: &str) -> std::result::Result<DeviceMapping, E>
+            where
+                E: serde::de::Error,
+            {
+                DeviceMapping::parse_string(v).map_err(serde::de::Error::custom)
+            }
+
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<DeviceMapping, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut local: Option<String> = None;
+                let mut container: Option<String> = None;
+                let mut options: Option<String> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "local" => local = Some(map.next_value()?),
+                        "container" => container = Some(map.next_value()?),
+                        "options" => options = Some(map.next_value()?),
+                        other => {
+                            return Err(serde::de::Error::unknown_field(
+                                other,
+                                &["local", "container", "options"],
+                            ))
+                        }
+                    }
+                }
+                let local = local.ok_or_else(|| serde::de::Error::missing_field("local"))?;
+                let container =
+                    container.ok_or_else(|| serde::de::Error::missing_field("container"))?;
+                Ok(DeviceMapping {
+                    local,
+                    container,
+                    options,
+                })
+            }
+        }
+
+        deserializer.deserialize_any(DeviceMappingVisitor)
+    }
+}
+
+impl Serialize for DeviceMapping {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match &self.options {
+            Some(options) => {
+                serializer.serialize_str(&format!("{}:{}:{}", self.local, self.container, options))
+            }
+            None => serializer.serialize_str(&format!("{}:{}", self.local, self.container)),
+        }
+    }
 }
 
 /// Parses Batect's own size-string format (its `BinarySize` regex,
@@ -2169,6 +2299,94 @@ tasks:
     }
 
     #[test]
+    fn device_mapping_parse_string_handles_batects_own_format() {
+        assert_eq!(
+            DeviceMapping::parse_string("/dev/sda:/dev/xvda").unwrap(),
+            DeviceMapping {
+                local: "/dev/sda".to_string(),
+                container: "/dev/xvda".to_string(),
+                options: None,
+            }
+        );
+        assert_eq!(
+            DeviceMapping::parse_string("/dev/sda:/dev/xvda:rwm").unwrap(),
+            DeviceMapping {
+                local: "/dev/sda".to_string(),
+                container: "/dev/xvda".to_string(),
+                options: Some("rwm".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn device_mapping_parse_string_rejects_invalid_input() {
+        assert!(DeviceMapping::parse_string("").is_err());
+        assert!(DeviceMapping::parse_string("/dev/sda").is_err());
+        assert!(DeviceMapping::parse_string("/dev/sda:/dev/xvda:rwm:extra").is_err());
+        assert!(DeviceMapping::parse_string(":/dev/xvda").is_err());
+        assert!(DeviceMapping::parse_string("/dev/sda:").is_err());
+    }
+
+    #[test]
+    fn parses_devices_as_strings_and_objects() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    devices:
+      - /dev/sda:/dev/xvda
+      - local: /dev/sdb
+        container: /dev/xvdb
+        options: rwm
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(
+            container.devices,
+            Some(vec![
+                DeviceMapping {
+                    local: "/dev/sda".to_string(),
+                    container: "/dev/xvda".to_string(),
+                    options: None,
+                },
+                DeviceMapping {
+                    local: "/dev/sdb".to_string(),
+                    container: "/dev/xvdb".to_string(),
+                    options: Some("rwm".to_string()),
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn devices_defaults_to_none() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.devices, None);
+    }
+
+    #[test]
     fn an_unknown_capability_name_is_rejected() {
         let yaml = r#"
 project_name: demo
@@ -2511,6 +2729,7 @@ tasks: {}
             capabilities_to_drop: None,
             privileged: None,
             shm_size: None,
+            devices: None,
         }
     }
 
@@ -2808,6 +3027,7 @@ tasks: {}
             capabilities_to_drop: None,
             privileged: None,
             shm_size: None,
+            devices: None,
         }
     }
 
@@ -4900,6 +5120,7 @@ config_variables:
             capabilities_to_drop: None,
             privileged: None,
             shm_size: None,
+            devices: None,
         }
     }
 

@@ -167,6 +167,7 @@ containers:
 | `capabilities_to_drop` | list of strings | no | Linux capabilities to drop from Docker's own default set (Docker's `--cap-drop`), e.g. `CHOWN`. Same validation/scope as `capabilities_to_add`. |
 | `privileged` | boolean | no | Runs the container with extended (nearly all host) privileges — Docker's `--privileged`. Defaults to `false`. Container level only. No [expression](#expressions) support. |
 | `shm_size` | string or integer | no | The size of `/dev/shm` — Docker's `--shm-size`. Accepts Batect's own size-string format (`"128"`, `"128b"`, `"128k"`, `"128m"`, `"128g"` — a bare number means bytes) or a plain YAML integer (also bytes). Defaults to Docker's own default (64 MiB). Container level only. No expression support. |
+| `devices` | list of strings/objects | no | Host devices to make available inside the container — Docker's `--device` (see [Volume path resolution](#volume-path-resolution) for the similar `volumes` string form; devices use the same `local:container[:options]` shape and object form, but with no path resolution — no [expression](#expressions) support either). `options` (cgroup permissions, e.g. `"rwm"`) defaults to `"rwm"` when omitted, matching the `docker` CLI's own default. Container level only. |
 
 > **Note:** if a container has *neither* `image` nor `build_directory` set, running a
 > task against it is an error naming the container. A dependency container without
