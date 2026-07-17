@@ -38,6 +38,16 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 pub struct Container {
     pub image: Option<String>,
+    /// Controls whether an `image` container's image is pulled fresh or
+    /// only when missing locally — Docker's own pull semantics. Only
+    /// meaningful alongside `image`; a `build_directory` container is
+    /// never pulled, so this is silently ignored for it (Ratect doesn't
+    /// implement Batect's separate use of this same field to force-pull a
+    /// build's base image — see
+    /// [Differences from Batect](https://github.com/or1can/ratect/blob/main/docs/differences-from-batect.md#container-fields)).
+    /// `None` defaults to [`ImagePullPolicy::IfNotPresent`], matching
+    /// Batect's own default.
+    pub image_pull_policy: Option<ImagePullPolicy>,
     pub build_directory: Option<String>,
     pub build_args: Option<HashMap<String, String>>,
     /// The Dockerfile to build, as a path relative to `build_directory`'s
@@ -364,6 +374,22 @@ where
     }
 
     deserializer.deserialize_any(ShmSizeVisitor)
+}
+
+/// Controls whether `TaskEngine::resolve_image` pulls an `image` container's
+/// image fresh or reuses whatever's already present locally — matching
+/// Batect's own `ImagePullPolicy` exactly, including its wire values
+/// (`serde`'s default enum serialization already matches Rust's own PascalCase
+/// variant names, so no `rename_all` is needed here, unlike [`Capability`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ImagePullPolicy {
+    /// Pull only if the image doesn't already exist locally — Batect's own
+    /// default.
+    #[default]
+    IfNotPresent,
+    /// Always pull, even if the image already exists locally — Ratect's
+    /// entire pre-0.13.0 behavior for every `image` container.
+    Always,
 }
 
 /// A Linux capability name, validated at config-parse time — an unknown name
@@ -2435,6 +2461,69 @@ tasks:
     }
 
     #[test]
+    fn parses_image_pull_policy() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    image_pull_policy: Always
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.image_pull_policy, Some(ImagePullPolicy::Always));
+    }
+
+    #[test]
+    fn image_pull_policy_defaults_to_none_which_means_if_not_present() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.image_pull_policy, None);
+        assert_eq!(
+            container.image_pull_policy.unwrap_or_default(),
+            ImagePullPolicy::IfNotPresent
+        );
+    }
+
+    #[test]
+    fn an_unknown_image_pull_policy_is_rejected() {
+        let yaml = r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    image_pull_policy: WheneverIFeelLikeIt
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#;
+        let result: Result<Config, _> = noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn an_unknown_capability_name_is_rejected() {
         let yaml = r#"
 project_name: demo
@@ -2755,6 +2844,7 @@ tasks: {}
     ) -> Container {
         Container {
             image: None,
+            image_pull_policy: None,
             build_directory: Some(build_directory.to_string()),
             build_args: Some(build_args),
             dockerfile: None,
@@ -3051,6 +3141,7 @@ tasks: {}
     ) -> Container {
         Container {
             image: Some("alpine:3.18".to_string()),
+            image_pull_policy: None,
             build_directory: None,
             build_args: None,
             dockerfile: None,
@@ -5149,6 +5240,7 @@ config_variables:
         Container {
             build_args: None,
             image: Some("alpine:3.18".to_string()),
+            image_pull_policy: None,
             build_directory: None,
             dockerfile: None,
             build_target: None,

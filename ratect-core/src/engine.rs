@@ -322,6 +322,15 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     /// nothing else, which is also why dependency containers now support
     /// `build_directory` (they didn't before this was unified).
     ///
+    /// `image`'s `image_pull_policy` (`IfNotPresent` by default, matching
+    /// Batect) decides whether a pull actually reaches the registry the
+    /// first time an image name is seen this session: `IfNotPresent` skips
+    /// it entirely when `ContainerRuntime::image_exists_locally` already
+    /// says yes; `Always` never checks. Either way, once decided for a
+    /// given image name, later containers reusing that same name within
+    /// this session reuse the decision rather than re-checking or
+    /// re-pulling.
+    ///
     /// Built images are tagged `<project_name>-<container_name>` — the same
     /// convention Batect uses — so `docker images` shows something a user can
     /// actually identify, rather than an opaque generated name. That tag is
@@ -341,13 +350,22 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         container_config: &Container,
     ) -> Result<String> {
         if let Some(image) = &container_config.image {
-            let needs_pull = {
+            let needs_decision = {
                 let pulled = self.pulled_images.lock().unwrap();
                 !pulled.contains(image)
             };
 
-            if needs_pull {
-                self.docker.pull_image(image).await?;
+            if needs_decision {
+                let policy = container_config.image_pull_policy.unwrap_or_default();
+                let should_pull = match policy {
+                    crate::config::ImagePullPolicy::Always => true,
+                    crate::config::ImagePullPolicy::IfNotPresent => {
+                        !self.docker.image_exists_locally(image).await?
+                    }
+                };
+                if should_pull {
+                    self.docker.pull_image(image).await?;
+                }
                 let mut pulled = self.pulled_images.lock().unwrap();
                 pulled.insert(image.to_string());
             }
@@ -934,6 +952,11 @@ mod tests {
         // Command whose `exec_in_container` reports a non-zero exit (see
         // `with_failing_setup_command`).
         failing_setup_command: Arc<Mutex<Option<String>>>,
+        // Images `image_exists_locally` reports as already present (see
+        // `with_local_image`) — defaults to empty, so tests that don't care
+        // about `image_pull_policy` see the "always needs a pull" behavior
+        // that matches an `IfNotPresent` container whose image is missing.
+        locally_present_images: Arc<Mutex<HashSet<String>>>,
     }
 
     impl Default for FakeContainerRuntime {
@@ -955,6 +978,7 @@ mod tests {
                 execs: Default::default(),
                 unhealthy_container: Default::default(),
                 failing_setup_command: Default::default(),
+                locally_present_images: Default::default(),
             }
         }
     }
@@ -994,6 +1018,16 @@ mod tests {
         /// for the given command — simulates a failing setup command.
         fn with_failing_setup_command(self, command: &str) -> Self {
             *self.failing_setup_command.lock().unwrap() = Some(command.to_string());
+            self
+        }
+
+        /// Makes `image_exists_locally` report `true` for `image` — used to
+        /// exercise `image_pull_policy: IfNotPresent` skipping a pull.
+        fn with_local_image(self, image: &str) -> Self {
+            self.locally_present_images
+                .lock()
+                .unwrap()
+                .insert(image.to_string());
             self
         }
 
@@ -1180,6 +1214,10 @@ mod tests {
         async fn pull_image(&self, image: &str) -> Result<()> {
             self.push(format!("pull:{image}"));
             Ok(())
+        }
+
+        async fn image_exists_locally(&self, image: &str) -> Result<bool> {
+            Ok(self.locally_present_images.lock().unwrap().contains(image))
         }
 
         async fn build_image(
@@ -1397,6 +1435,7 @@ mod tests {
         Container {
             build_args: None,
             image: Some(image.to_string()),
+            image_pull_policy: None,
             build_directory: None,
             dockerfile: None,
             build_target: None,
@@ -1444,6 +1483,7 @@ mod tests {
             Container {
                 build_args: None,
                 image: Some("alpine:3.18".to_string()),
+                image_pull_policy: None,
                 build_directory: None,
                 dockerfile: None,
                 build_target: None,
@@ -1526,6 +1566,7 @@ mod tests {
             Container {
                 build_args: None,
                 image: Some("alpine:3.18".to_string()),
+                image_pull_policy: None,
                 build_directory: None,
                 dockerfile: None,
                 build_target: None,
@@ -1750,6 +1791,7 @@ mod tests {
         Container {
             build_args: None,
             image: Some(image.to_string()),
+            image_pull_policy: None,
             build_directory: None,
             dockerfile: None,
             build_target: None,
@@ -2081,6 +2123,7 @@ mod tests {
             Container {
                 build_args: None,
                 image: Some("alpine:3.18".to_string()),
+                image_pull_policy: None,
                 build_directory: None,
                 dockerfile: None,
                 build_target: None,
@@ -2136,6 +2179,7 @@ mod tests {
     ) -> Container {
         Container {
             image: None,
+            image_pull_policy: None,
             build_directory: Some(build_directory.to_string()),
             build_args,
             dockerfile: None,
@@ -2517,6 +2561,7 @@ mod tests {
             Container {
                 build_args: None,
                 image: None,
+                image_pull_policy: None,
                 build_directory: None,
                 dockerfile: None,
                 build_target: None,
@@ -3283,6 +3328,7 @@ mod tests {
             Container {
                 build_args: None,
                 image: None,
+                image_pull_policy: None,
                 build_directory: None,
                 dockerfile: None,
                 build_target: None,
@@ -3720,6 +3766,74 @@ mod tests {
         engine.run_task("test", &[]).await.unwrap();
 
         assert_eq!(docker.enable_init_process_for("build-env"), Some(true));
+    }
+
+    #[tokio::test]
+    async fn if_not_present_policy_pulls_when_the_image_is_missing_locally() {
+        // No image_pull_policy set — IfNotPresent is the default.
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        assert!(docker.events().contains(&"pull:alpine:3.18".to_string()));
+    }
+
+    #[tokio::test]
+    async fn if_not_present_policy_skips_the_pull_when_the_image_already_exists_locally() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.image_pull_policy = Some(crate::config::ImagePullPolicy::IfNotPresent);
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        assert!(!docker.events().contains(&"pull:alpine:3.18".to_string()));
+    }
+
+    #[tokio::test]
+    async fn always_policy_pulls_even_when_the_image_already_exists_locally() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.image_pull_policy = Some(crate::config::ImagePullPolicy::Always);
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        assert!(docker.events().contains(&"pull:alpine:3.18".to_string()));
     }
 
     #[tokio::test]

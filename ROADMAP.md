@@ -408,11 +408,43 @@ Neither bump is ever folded into a feature commit.
   - `build_secrets`/`build_ssh` under a forced (or daemon-imposed) classic builder
     fail with a clear "requires BuildKit" error rather than silently building
     without the secret/agent.
-- **0.13.0** — **Container Runtime Options**: `entrypoint` (container and `run`),
+- **0.13.0** — ~~**Container Runtime Options**: `entrypoint` (container and `run`),
   `working_directory` (container and `run`), `labels`,
   `capabilities_to_add`/`capabilities_to_drop`, `privileged`, `shm_size`, `devices`,
   `enable_init_process`, `image_pull_policy` — the remaining container/run fields,
-  each largely a direct pass-through to the Docker API.
+  each largely a direct pass-through to the Docker API~~ — done, all nine fields,
+  each proven against a real Docker daemon (not just unit tests against the fake
+  runtime):
+  - `working_directory` and `entrypoint` support both a container-level default and
+    a task-level `run` override; the other seven are container level only, matching
+    Batect exactly (none of them exist on Batect's own `TaskRunConfiguration` either).
+  - Landing `entrypoint` exposed a real bug in Ratect's own pre-existing `command`
+    handling: `command` had always run via an implicit `sh -c` wrap (a divergence
+    from Batect's own tokenizer, `Command.parse`), which would have silently
+    double-wrapped once a container also set `entrypoint` (the classic Batect idiom
+    `entrypoint: /bin/sh -c` + a single-quoted `command: 'some command'`). Fixed
+    ahead of `entrypoint` by porting Batect's tokenizer (`tokenize_command_line`,
+    `docker.rs`) and dropping the `sh -c` wrap entirely — a breaking change to
+    `command`'s existing behavior, acceptable this early (no external configs yet to
+    break): `command: sh -c "..."` now needs to be written explicitly for shell
+    operators. `setup_commands` is intentionally left on `sh -c` for now, a narrower,
+    separate, still-open divergence.
+  - `capabilities_to_add`/`capabilities_to_drop` validate against a fixed capability
+    list based on Batect's own `Capability` enum — extended with `BPF`/
+    `CHECKPOINT_RESTORE`/`PERFMON`, which Batect's own (unmaintained) list predates
+    ([moby#41563](https://github.com/moby/moby/pull/41563)); a superset, not a
+    divergence.
+  - `devices` uncovered a genuine bollard/Docker API gap during its own
+    integration test: an omitted `options` (cgroup permissions) makes `runc` fail
+    outright, since Docker's raw API — unlike the `docker` CLI — applies no default;
+    `build_devices` now applies the CLI's own `"rwm"` default itself.
+  - `image_pull_policy` changes an existing default, not just adds a field:
+    `IfNotPresent` (Batect's own default) now skips a container's pull entirely when
+    the image already exists locally (new `ContainerRuntime::image_exists_locally`),
+    replacing Ratect's previous unconditional-pull behavior for every `image`
+    container, not just ones that opt into the field. Scoped to `image` containers
+    only — Ratect doesn't implement Batect's separate use of this same field to
+    force-pull a `build_directory` build's base image.
 - **0.14.0** — **Task Model Completeness**: task-level `dependencies` (sidecars scoped
   to a task, distinct from the container-level field shipped in 0.6.0),
   `description`/`group` (plus corresponding `--list-tasks` output), and `customise`.

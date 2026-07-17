@@ -2314,3 +2314,101 @@ fn no_proxy_vars_flag_disables_propagation() {
         "--no-proxy-vars should suppress propagation entirely: {stdout}"
     );
 }
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves `image_pull_policy` reaches the real container's pull decision, by
+/// tagging a locally-present image under a name that exists on no registry
+/// anywhere: `IfNotPresent` (the default) must succeed, since the image is
+/// already local and no pull is attempted; `Always` must genuinely fail,
+/// since it forces a real pull attempt against that nonexistent remote repo.
+#[test]
+#[ignore]
+fn image_pull_policy_controls_whether_a_real_pull_is_attempted() {
+    let tag = format!(
+        "ratect-image-pull-policy-test-{}-{}:local",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+
+    let pull = Command::new("docker")
+        .args(["pull", "alpine:3.18.2"])
+        .output()
+        .expect("failed to run docker pull");
+    assert!(
+        pull.status.success(),
+        "failed to pre-pull alpine:3.18.2: {}",
+        String::from_utf8_lossy(&pull.stderr)
+    );
+
+    let docker_tag = Command::new("docker")
+        .args(["tag", "alpine:3.18.2", &tag])
+        .output()
+        .expect("failed to run docker tag");
+    assert!(
+        docker_tag.status.success(),
+        "failed to tag test image: {}",
+        String::from_utf8_lossy(&docker_tag.stderr)
+    );
+
+    let cleanup = || {
+        let _ = Command::new("docker").args(["rmi", &tag]).output();
+    };
+
+    let config = format!(
+        r#"
+project_name: ratect-image-pull-policy-test
+containers:
+  if-not-present:
+    image: {tag}
+  always:
+    image: {tag}
+    image_pull_policy: Always
+tasks:
+  run-if-not-present:
+    run:
+      container: if-not-present
+      command: echo ran
+  run-always:
+    run:
+      container: always
+      command: echo ran
+"#,
+    );
+    let config_path = std::env::temp_dir().join(format!(
+        "ratect-image-pull-policy-test-{}.yml",
+        std::process::id()
+    ));
+    std::fs::write(&config_path, &config).expect("failed to write temp config");
+
+    let if_not_present_output = ratect_command()
+        .arg("-f")
+        .arg(&config_path)
+        .arg("run-if-not-present")
+        .output()
+        .expect("failed to run ratect");
+
+    let always_output = ratect_command()
+        .arg("-f")
+        .arg(&config_path)
+        .arg("run-always")
+        .output()
+        .expect("failed to run ratect");
+
+    let _ = std::fs::remove_file(&config_path);
+    cleanup();
+
+    assert!(
+        if_not_present_output.status.success(),
+        "IfNotPresent should succeed without attempting a pull:\nstderr:\n{}",
+        String::from_utf8_lossy(&if_not_present_output.stderr)
+    );
+    assert!(
+        !always_output.status.success(),
+        "Always should fail attempting a real pull of a tag that exists on no registry"
+    );
+}

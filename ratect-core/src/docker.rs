@@ -931,6 +931,12 @@ fn ensure_host_volume_directories_exist(volumes: Option<&Vec<String>>) -> Result
 pub trait ContainerRuntime {
     async fn pull_image(&self, image: &str) -> Result<()>;
 
+    /// `true` if `image` already exists in the local Docker image cache —
+    /// used by `image_pull_policy: IfNotPresent` (the default) to decide
+    /// whether a pull is needed at all, matching Batect's own semantics.
+    /// Mirrors `network_exists`'s own 404-as-false convention.
+    async fn image_exists_locally(&self, image: &str) -> Result<bool>;
+
     /// Builds an image from `build_directory` (already resolved to an
     /// absolute path), tagging it as `tag`. `dockerfile` is the Dockerfile
     /// to build, as a path relative to `build_directory`'s own root
@@ -1501,6 +1507,18 @@ impl ContainerRuntime for DockerClient {
 
         pb.finish_with_message(format!("Image {} pulled successfully", image));
         Ok(())
+    }
+
+    async fn image_exists_locally(&self, image: &str) -> Result<bool> {
+        match self.docker.inspect_image(image).await {
+            Ok(_) => Ok(true),
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => Ok(false),
+            Err(e) => Err(e).with_context(|| {
+                format!("Failed to check whether image '{}' exists locally", image)
+            }),
+        }
     }
 
     async fn build_image(
