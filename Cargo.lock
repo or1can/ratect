@@ -1529,6 +1529,7 @@ dependencies = [
  "nix 0.31.3",
  "noyalib",
  "path-clean",
+ "regex",
  "serde",
  "sha2",
  "tar",

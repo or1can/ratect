@@ -490,7 +490,7 @@ tasks:
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `run` | [TaskRun](#taskrun) | no* | What to actually execute for this task. |
-| `prerequisites` | list of strings | no* | Names of other tasks to run first, in order. Each prerequisite (and its own prerequisites, transitively) runs at most once per `ratect` invocation, even if shared by multiple tasks. A circular dependency is detected and reported as an error. |
+| `prerequisites` | list of strings | no* | Names of other tasks to run first, in order. Each prerequisite (and its own prerequisites, transitively) runs at most once per `ratect` invocation, even if shared by multiple tasks. A circular dependency is detected and reported as an error. A name containing `*` is a wildcard, expanded against every task name at run time (see [Wildcard prerequisites](#wildcard-prerequisites) below) rather than looked up literally. |
 | `dependencies` | list of strings | no** | Sidecar containers scoped to this task specifically — see below. Requires `run`. |
 | `description` | string | no | Shown next to the task's name in `--list-tasks` output — see below. Purely informational. |
 | `group` | string | no | Groups this task under a heading in `--list-tasks` output, together with every other task sharing the same `group` — see below. Purely a display grouping; has no effect on execution order or prerequisites. |
@@ -499,6 +499,35 @@ tasks:
 \* At least one of `run`/`prerequisites` is required. A task with only `prerequisites` and no `run` is valid — its prerequisites still run, then Ratect stops, since there's no container of the task's own left to run.
 
 \*\* `dependencies` here is distinct from a [container](#container)'s own `dependencies` field: this one is scoped to *this task specifically*, rather than to every task that uses the container. It's unioned with the task's own container's `dependencies` — both start together — and can't name `run.container` itself.
+
+#### Wildcard prerequisites
+
+A `prerequisites` entry containing `*` is expanded against every task name in the
+project, rather than looked up literally:
+
+```yaml
+tasks:
+  lint:go:
+    run:
+      container: build-env
+      command: golangci-lint run
+  lint:markdown:
+    run:
+      container: build-env
+      command: markdownlint .
+  ci:
+    prerequisites:
+      - "lint:*"
+```
+
+Running `ratect ci` here runs both `lint:go` and `lint:markdown` (in alphabetical
+order) before `ci` itself. A single `*` matches zero or more characters — `"lint:*"`
+would also match a task literally named `lint:` — and a wildcard matching multiple
+tasks always runs them in alphabetical order, regardless of the project's own
+`tasks` declaration order. **A wildcard matching zero tasks is not an error** — it
+simply contributes nothing. If a task is named both explicitly and by a wildcard in
+the same `prerequisites` list, it still only runs once. Quote a wildcard entry
+(`"lint:*"`, not `lint:*`) to avoid YAML parsing `*` as an anchor reference.
 
 ### TaskContainerCustomisation
 

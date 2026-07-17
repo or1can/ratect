@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::config::{
-    container_names_in_task, BuildSecret, Config, Container, PortMapping,
+    container_names_in_task, BuildSecret, Config, Container, PortMapping, Task,
     TaskContainerCustomisation,
 };
 use crate::docker::ContainerRuntime;
@@ -274,6 +274,61 @@ fn build_dependency_graph(
     let mut path = Vec::new();
     visit(containers, root, task_dependencies, &mut path, &mut graph)?;
     Ok(graph)
+}
+
+/// Builds the anchored, case-sensitive regex a `*`-wildcard prerequisite
+/// pattern expands to — a direct port of Batect's own
+/// `TaskExecutionOrderResolver.toWildcardRegex`: each literal segment
+/// between `*`s is regex-escaped (so a task name containing regex
+/// metacharacters like `.`/`+`/`(` is matched literally, not interpreted),
+/// and `*` itself becomes `.*` (zero or more characters) — equivalent to
+/// escaping every `*`-delimited segment and joining them with `.*`.
+fn wildcard_to_regex(pattern: &str) -> Result<regex::Regex> {
+    let escaped_segments: Vec<String> = pattern.split('*').map(regex::escape).collect();
+    let pattern = format!("^{}$", escaped_segments.join(".*"));
+    regex::Regex::new(&pattern)
+        .with_context(|| format!("Invalid wildcard prerequisite pattern '{}'", pattern))
+}
+
+/// Expands any `*`-wildcard entry in a task's `prerequisites` against the
+/// full set of task names — a direct port of Batect's own
+/// `TaskExecutionOrderResolver.resolveWildcards`. An entry with no `*` passes
+/// through unchanged, so a nonexistent literal prerequisite name still
+/// surfaces its usual "Task not found" error later (from `run_task_scoped`),
+/// rather than being silently dropped here. A wildcard matching zero tasks
+/// contributes nothing — not an error, matching Batect ("if a wildcard does
+/// not match any tasks, no error is raised"). Multiple matches for one
+/// wildcard are sorted alphabetically, matching Batect too.
+///
+/// A name appearing more than once in the returned list (an explicit name
+/// also matched by a wildcard, or matched by two overlapping wildcards) is
+/// left as-is, deliberately not deduplicated here: Ratect's existing
+/// per-invocation `executed_tasks` tracking (see `run_task_scoped`) already
+/// collapses repeated runs of the same task down to a single actual run,
+/// using whichever occurrence comes first — matching Batect's own "if a task
+/// is listed explicitly and also matches a wildcard, the first occurrence is
+/// used" rule as a natural side effect, with no extra list-level dedup
+/// needed here.
+fn expand_prerequisite_wildcards(
+    tasks: &HashMap<String, Task>,
+    patterns: &[String],
+) -> Result<Vec<String>> {
+    let mut expanded = Vec::new();
+    for pattern in patterns {
+        if !pattern.contains('*') {
+            expanded.push(pattern.clone());
+            continue;
+        }
+        let regex = wildcard_to_regex(pattern)?;
+        let mut matches: Vec<String> = tasks
+            .keys()
+            .filter(|name| regex.is_match(name))
+            .cloned()
+            .collect();
+        matches.sort();
+        expanded.extend(matches);
+    }
+    Ok(expanded)
 }
 
 pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
@@ -618,9 +673,16 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
 
         // Run prerequisites (never with additional args, and never eligible
         // for interactive TTY attachment — both scoped to only the
-        // originally-requested task).
+        // originally-requested task). A `*`-wildcard entry is expanded
+        // against the full task list first — see
+        // `expand_prerequisite_wildcards` — then run through the same
+        // sequential loop as any other prerequisite; its own dedup/cycle
+        // detection (see `run_task_scoped`) already collapses a name reached
+        // more than once (e.g. named explicitly *and* matched by a wildcard)
+        // to a single actual run.
         if let Some(prerequisites) = &task.prerequisites {
-            for prerequisite in prerequisites {
+            let prerequisites = expand_prerequisite_wildcards(&self.config.tasks, prerequisites)?;
+            for prerequisite in &prerequisites {
                 self.run_task_scoped(prerequisite, &[], false).await?;
             }
         }
@@ -1946,6 +2008,202 @@ mod tests {
         assert!(runs[1..3]
             .iter()
             .any(|r| r.starts_with("run:build-env:list-volume-task:args=[]:")));
+    }
+
+    fn config_with_wildcard_prerequisite_tasks() -> Config {
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container("alpine:3.18", None));
+
+        let mut tasks = HashMap::new();
+        tasks.insert("lint:bar".to_string(), task("build-env", "lint-bar"));
+        tasks.insert("lint:foo".to_string(), task("build-env", "lint-foo"));
+        tasks.insert("build".to_string(), task("build-env", "build"));
+
+        let mut ci_task = task("build-env", "ci");
+        ci_task.prerequisites = Some(vec!["lint:*".to_string()]);
+        tasks.insert("ci".to_string(), ci_task);
+
+        Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn wildcard_prerequisite_expands_to_matching_tasks_in_alphabetical_order() {
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config_with_wildcard_prerequisite_tasks(), docker.clone());
+
+        engine.run_task("ci", &[]).await.unwrap();
+
+        let events = docker.events();
+        let runs: Vec<_> = events.iter().filter(|e| e.starts_with("run:")).collect();
+        assert_eq!(
+            runs.len(),
+            3,
+            "'lint:*' should match exactly 'lint:bar' and 'lint:foo', not 'build': {events:?}"
+        );
+        assert!(
+            runs[0].starts_with("run:build-env:lint-bar:"),
+            "'lint:bar' should run before 'lint:foo' (alphabetical order): {events:?}"
+        );
+        assert!(runs[1].starts_with("run:build-env:lint-foo:"));
+        assert!(runs[2].starts_with("run:build-env:ci:"));
+    }
+
+    #[tokio::test]
+    async fn wildcard_prerequisite_matching_no_tasks_is_not_an_error() {
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        let mut ci_task = task("build-env", "ci");
+        ci_task.prerequisites = Some(vec!["nonexistent:*".to_string()]);
+        tasks.insert("ci".to_string(), ci_task);
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("ci", &[]).await.unwrap();
+
+        let events = docker.events();
+        let runs: Vec<_> = events.iter().filter(|e| e.starts_with("run:")).collect();
+        assert_eq!(
+            runs.len(),
+            1,
+            "only 'ci' itself should run — a wildcard matching nothing isn't an error: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_prerequisite_and_overlapping_wildcard_only_runs_once() {
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("lint:foo".to_string(), task("build-env", "lint-foo"));
+        let mut ci_task = task("build-env", "ci");
+        ci_task.prerequisites = Some(vec!["lint:foo".to_string(), "lint:*".to_string()]);
+        tasks.insert("ci".to_string(), ci_task);
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("ci", &[]).await.unwrap();
+
+        let events = docker.events();
+        let lint_foo_runs = events
+            .iter()
+            .filter(|e| e.starts_with("run:build-env:lint-foo:"))
+            .count();
+        assert_eq!(
+            lint_foo_runs, 1,
+            "named explicitly and also matched by a wildcard — should still only run once: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn nonexistent_literal_prerequisite_still_errors() {
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        let mut ci_task = task("build-env", "ci");
+        ci_task.prerequisites = Some(vec!["does-not-exist".to_string()]);
+        tasks.insert("ci".to_string(), ci_task);
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        let err = engine.run_task("ci", &[]).await.unwrap_err();
+        assert!(err.to_string().contains("Task 'does-not-exist' not found"));
+    }
+
+    #[tokio::test]
+    async fn wildcard_pattern_with_multiple_asterisks_matches() {
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert(
+            "lint:foo:unit".to_string(),
+            task("build-env", "lint-foo-unit"),
+        );
+        tasks.insert(
+            "lint:bar:unit".to_string(),
+            task("build-env", "lint-bar-unit"),
+        );
+        tasks.insert(
+            "lint:foo:integration".to_string(),
+            task("build-env", "lint-foo-integration"),
+        );
+        let mut ci_task = task("build-env", "ci");
+        ci_task.prerequisites = Some(vec!["lint:*:unit".to_string()]);
+        tasks.insert("ci".to_string(), ci_task);
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("ci", &[]).await.unwrap();
+
+        let events = docker.events();
+        let runs: Vec<_> = events.iter().filter(|e| e.starts_with("run:")).collect();
+        assert_eq!(runs.len(), 3, "events: {events:?}");
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.starts_with("run:build-env:lint-foo-integration:")),
+            "'lint:*:unit' should not match 'lint:foo:integration': {events:?}"
+        );
+    }
+
+    #[test]
+    fn wildcard_expansion_treats_regex_metacharacters_in_task_names_literally() {
+        fn minimal_task() -> Task {
+            Task {
+                run: None,
+                prerequisites: None,
+                dependencies: None,
+                description: None,
+                group: None,
+                customise: None,
+            }
+        }
+
+        let mut tasks = HashMap::new();
+        tasks.insert("build.env".to_string(), minimal_task());
+        tasks.insert("buildXenv".to_string(), minimal_task());
+
+        let expanded = expand_prerequisite_wildcards(&tasks, &["build.*".to_string()]).unwrap();
+
+        assert_eq!(
+            expanded,
+            vec!["build.env".to_string()],
+            "the literal '.' in the pattern should only match a literal '.', not any character \
+             (so 'buildXenv' must not match)"
+        );
     }
 
     #[tokio::test]
