@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`description`/`group` on a task**: `description` is shown next to the task's name in `--list-tasks` output; `group` heads tasks sharing the same value under their own listing, with an ungrouped task falling into a trailing "Ungrouped tasks:" bucket — only once *some* task in the project declares a `group` at all, otherwise `--list-tasks` stays the flat list it's always been. See [config reference](docs/config-reference.md#list-tasks-output). Part of 0.14.0's Task Model Completeness (see `ROADMAP.md`).
+
 ### Changed
 
 - **`run` is no longer required on a task**: a task with only `prerequisites` and no `run` is now valid, matching Batect — its prerequisites still execute, then Ratect stops there (there's no container of the task's own left to run). A task must still have at least one of `run`/`prerequisites` — see [config reference](docs/config-reference.md#task). Part of 0.14.0's Task Model Completeness (see `ROADMAP.md`).

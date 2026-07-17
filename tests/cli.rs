@@ -31,6 +31,10 @@ fn sidecar_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sidecar.yml")
 }
 
+fn task_groups_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/task-groups.yml")
+}
+
 fn exit_code_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/exit-code.yml")
 }
@@ -186,6 +190,34 @@ fn list_tasks_lists_sample_tasks() {
             stdout
         );
     }
+}
+
+#[test]
+fn list_tasks_groups_by_group_and_shows_descriptions() {
+    let output = ratect_command()
+        .args(["--list-tasks", "-f"])
+        .arg(task_groups_config_path())
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim_end(),
+        "Tasks in ratect-task-groups-test:\n\
+         \n\
+         compilation:\n\
+         - build: Builds the app\n\
+         \n\
+         verification:\n\
+         - lint\n\
+         - test: Runs the test suite\n\
+         \n\
+         Ungrouped tasks:\n\
+         - clean",
+        "stdout:\n{}",
+        stdout
+    );
 }
 
 #[test]

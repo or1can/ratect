@@ -1480,6 +1480,8 @@ mod tests {
                 entrypoint: None,
             }),
             prerequisites: None,
+            description: None,
+            group: None,
         }
     }
 
@@ -1530,6 +1532,8 @@ mod tests {
                     entrypoint: None,
                 }),
                 prerequisites: Some(vec!["b".to_string()]),
+                description: None,
+                group: None,
             },
         );
         tasks.insert(
@@ -1544,6 +1548,8 @@ mod tests {
                     entrypoint: None,
                 }),
                 prerequisites: Some(vec!["a".to_string()]),
+                description: None,
+                group: None,
             },
         );
 
@@ -1610,6 +1616,8 @@ mod tests {
                 entrypoint: None,
             }),
             prerequisites,
+            description: None,
+            group: None,
         };
 
         let mut tasks = HashMap::new();
@@ -1796,6 +1804,8 @@ mod tests {
                     entrypoint: None,
                 }),
                 prerequisites: Some(vec!["setup".to_string()]),
+                description: None,
+                group: None,
             },
         );
         let config = Config {
@@ -2482,6 +2492,8 @@ mod tests {
                     entrypoint: None,
                 }),
                 prerequisites: Some(vec!["first".to_string()]),
+                description: None,
+                group: None,
             },
         );
         let config = Config {
@@ -3323,6 +3335,8 @@ mod tests {
                     entrypoint: None,
                 }),
                 prerequisites: Some(vec!["migrate".to_string()]),
+                description: None,
+                group: None,
             },
         );
         let config = Config {
@@ -4165,6 +4179,8 @@ mod tests {
                     entrypoint: None,
                 }),
                 prerequisites: Some(vec!["setup".to_string()]),
+                description: None,
+                group: None,
             },
         );
         let config = Config {

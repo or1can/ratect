@@ -1009,6 +1009,75 @@ pub struct Task {
     /// `TaskEngine::run_task_internal`.
     pub run: Option<TaskRun>,
     pub prerequisites: Option<Vec<String>>,
+    /// Free-text shown next to the task's name in `--list-tasks` output —
+    /// see [`format_task_list`].
+    pub description: Option<String>,
+    /// Groups this task under a heading in `--list-tasks` output, together
+    /// with every other task sharing the same `group` — see
+    /// [`format_task_list`]. Purely a display grouping; has no effect on
+    /// execution order or prerequisites.
+    pub group: Option<String>,
+}
+
+/// Formats `--list-tasks` output: every task's name (and `description`, if
+/// set) under a `Tasks in {project_name}:` header. Groups tasks under a
+/// `{group}:` heading — with a task that declares no `group` falling into a
+/// trailing `Ungrouped tasks:` bucket — but only once *some* task in the
+/// project actually declares one; a project with no `group` usage at all
+/// (the common case, and Ratect's pre-0.14.0 behavior) stays a single flat
+/// list with no extra headings. Matches Batect's own `ListTasksCommand`
+/// human-readable format: groups sorted alphabetically with the ungrouped
+/// bucket last, tasks sorted alphabetically within a group.
+pub fn format_task_list(project_name: &str, tasks: &HashMap<String, Task>) -> String {
+    let mut lines = vec![format!("Tasks in {}:", project_name)];
+
+    if tasks.values().all(|task| task.group.is_none()) {
+        let mut names: Vec<_> = tasks.keys().collect();
+        names.sort();
+        for name in names {
+            lines.push(format_task_line(name, tasks[name].description.as_deref()));
+        }
+        return lines.join("\n");
+    }
+
+    let mut groups: HashMap<Option<&str>, Vec<&String>> = HashMap::new();
+    for (name, task) in tasks {
+        groups.entry(task.group.as_deref()).or_default().push(name);
+    }
+    for names in groups.values_mut() {
+        names.sort();
+    }
+
+    let mut group_keys: Vec<_> = groups.keys().copied().collect();
+    group_keys.sort_by(|a, b| match (a, b) {
+        (None, None) => std::cmp::Ordering::Equal,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (Some(a), Some(b)) => a.cmp(b),
+    });
+
+    lines.push(String::new());
+    for (i, key) in group_keys.iter().enumerate() {
+        lines.push(match key {
+            Some(name) => format!("{}:", name),
+            None => "Ungrouped tasks:".to_string(),
+        });
+        for name in &groups[key] {
+            lines.push(format_task_line(name, tasks[*name].description.as_deref()));
+        }
+        if i + 1 < group_keys.len() {
+            lines.push(String::new());
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn format_task_line(name: &str, description: Option<&str>) -> String {
+    match description {
+        Some(description) => format!("- {}: {}", name, description),
+        None => format!("- {}", name),
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1942,6 +2011,120 @@ tasks:
         assert_eq!(
             task.prerequisites.as_ref().unwrap(),
             &vec!["other".to_string()]
+        );
+    }
+
+    #[test]
+    fn parses_task_description_and_group() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks:
+  test:
+    description: Runs the test suite
+    group: verification
+    run:
+      container: build-env
+"#,
+        );
+
+        let task = config.tasks.get("test").unwrap();
+        assert_eq!(task.description.as_deref(), Some("Runs the test suite"));
+        assert_eq!(task.group.as_deref(), Some("verification"));
+    }
+
+    #[test]
+    fn task_description_and_group_default_to_none() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks:
+  test:
+    run:
+      container: build-env
+"#,
+        );
+
+        let task = config.tasks.get("test").unwrap();
+        assert_eq!(task.description, None);
+        assert_eq!(task.group, None);
+    }
+
+    fn task_with_description_and_group(description: Option<&str>, group: Option<&str>) -> Task {
+        Task {
+            run: Some(TaskRun {
+                container: "build-env".to_string(),
+                command: None,
+                environment: None,
+                ports: None,
+                working_directory: None,
+                entrypoint: None,
+            }),
+            prerequisites: None,
+            description: description.map(str::to_string),
+            group: group.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn format_task_list_is_a_flat_sorted_list_when_no_task_declares_a_group() {
+        let tasks = HashMap::from([
+            (
+                "build".to_string(),
+                task_with_description_and_group(Some("Builds the app"), None),
+            ),
+            (
+                "test".to_string(),
+                task_with_description_and_group(None, None),
+            ),
+        ]);
+
+        assert_eq!(
+            format_task_list("demo", &tasks),
+            "Tasks in demo:\n- build: Builds the app\n- test"
+        );
+    }
+
+    #[test]
+    fn format_task_list_groups_tasks_with_the_ungrouped_bucket_sorted_last() {
+        let tasks = HashMap::from([
+            (
+                "lint".to_string(),
+                task_with_description_and_group(None, Some("verification")),
+            ),
+            (
+                "test".to_string(),
+                task_with_description_and_group(Some("Runs the test suite"), Some("verification")),
+            ),
+            (
+                "build".to_string(),
+                task_with_description_and_group(None, Some("compilation")),
+            ),
+            (
+                "clean".to_string(),
+                task_with_description_and_group(None, None),
+            ),
+        ]);
+
+        assert_eq!(
+            format_task_list("demo", &tasks),
+            "Tasks in demo:\n\
+             \n\
+             compilation:\n\
+             - build\n\
+             \n\
+             verification:\n\
+             - lint\n\
+             - test: Runs the test suite\n\
+             \n\
+             Ungrouped tasks:\n\
+             - clean"
         );
     }
 

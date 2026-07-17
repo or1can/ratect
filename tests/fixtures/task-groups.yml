@@ -1,0 +1,31 @@
+# Exercises `--list-tasks` output for tasks that declare `description`/
+# `group`: grouped tasks under their own heading (sorted alphabetically),
+# a task with no `group` falling into a trailing "Ungrouped tasks:" bucket,
+# and a task's `description` appended after its name. No container is ever
+# actually run — this only needs to parse and list.
+project_name: ratect-task-groups-test
+containers:
+  build-env:
+    image: alpine:3.18.2
+tasks:
+  build:
+    description: Builds the app
+    group: compilation
+    run:
+      container: build-env
+      command: echo build
+  lint:
+    group: verification
+    run:
+      container: build-env
+      command: echo lint
+  test:
+    description: Runs the test suite
+    group: verification
+    run:
+      container: build-env
+      command: echo test
+  clean:
+    run:
+      container: build-env
+      command: echo clean

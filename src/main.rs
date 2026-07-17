@@ -14,7 +14,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use ratect_core::config::Config;
+use ratect_core::config::{format_task_list, Config};
 use ratect_core::docker::DockerClient;
 use ratect_core::engine::TaskEngine;
 use std::collections::HashMap;
@@ -153,12 +153,7 @@ async fn run() -> Result<()> {
     let config = loaded.config;
 
     if args.list_tasks {
-        println!("Tasks in {}:", config.project_name);
-        let mut tasks: Vec<_> = config.tasks.keys().collect();
-        tasks.sort();
-        for task in tasks {
-            println!("- {}", task);
-        }
+        println!("{}", format_task_list(&config.project_name, &config.tasks));
         return Ok(());
     }
 
