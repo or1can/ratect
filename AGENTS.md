@@ -51,6 +51,14 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     `engine.rs`) since both the `no_proxy` exemption list and `customise`'s
     graph-membership check need the same transitive-dependency walk.
     `format_task_list` is the single source of `--list-tasks` formatting.
+    `Container.command` (a container's own default `CMD` override, symmetric with
+    `Container.entrypoint`) was missed when 0.13.0's container runtime options
+    landed — `run.command` covered the task's own container, but a dependency had
+    no way to set a command of its own at all, silently defaulting to the image's
+    own `CMD` regardless. Closed once noticed, threading through
+    `ContainerRuntime::start_background_container` (a new `command` parameter,
+    reusing `docker.rs`'s existing `build_cmd`/`tokenize_command_line`) the same
+    way `run_container`'s already did.
   - **`ratect-core/src/expressions.rs`**: Batect's expression syntax (`$VAR`,
     `${VAR:-default}`, `<name`/`<{name}` for config variables, including the built-in
     `batect.project_directory`). Host environment and resolved config variable values

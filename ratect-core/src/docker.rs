@@ -979,6 +979,16 @@ pub trait ContainerRuntime {
     /// containers. `environment` is that container's own `environment` field
     /// (a dependency has no task `run`, so nothing to layer on top of it).
     ///
+    /// `command` is this container's own `command` — unlike `working_directory`/
+    /// `ports`, `customise` has no override for it (matching Batect's own
+    /// `TaskContainerCustomisation`, which doesn't either), so this is always
+    /// the container's own value, verbatim. Tokenized via
+    /// [`tokenize_command_line`] the same way `run_container`'s is — `None`
+    /// runs the image's own default `CMD` instead. Unlike `run_container`,
+    /// there's no `additional_args` here — a dependency never receives
+    /// `-- ADDITIONAL_ARGS` (only the top-level requested task's own
+    /// container can).
+    ///
     /// `user_mapping` is `Some` when this container's own `run_as_current_user`
     /// is enabled (independent of whether the task's own container has it
     /// enabled — see `TaskEngine::resolve_user_mapping`) — see `run_container`'s
@@ -996,6 +1006,7 @@ pub trait ContainerRuntime {
         &self,
         alias: &str,
         image: &str,
+        command: Option<&str>,
         volumes: Option<&Vec<String>>,
         environment: Option<&HashMap<String, String>>,
         network: &str,
@@ -1690,6 +1701,7 @@ impl ContainerRuntime for DockerClient {
         &self,
         alias: &str,
         image: &str,
+        command: Option<&str>,
         volumes: Option<&Vec<String>>,
         environment: Option<&HashMap<String, String>>,
         network: &str,
@@ -1705,6 +1717,7 @@ impl ContainerRuntime for DockerClient {
             .entrypoint
             .map(tokenize_command_line)
             .transpose()?;
+        let cmd = build_cmd(command, &[])?;
         let port_config = build_port_config(network_options.ports);
 
         let host_config = HostConfig {
@@ -1723,6 +1736,7 @@ impl ContainerRuntime for DockerClient {
         let config = Config {
             hostname: Some(alias.to_string()),
             image: Some(image.to_string()),
+            cmd,
             entrypoint,
             env: build_env(environment),
             exposed_ports: port_config.as_ref().map(|(exposed, _)| exposed.clone()),

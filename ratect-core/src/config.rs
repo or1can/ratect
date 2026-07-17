@@ -125,6 +125,20 @@ pub struct Container {
     /// `Expression`) typing for this field. Overridden by the task-level
     /// `run.working_directory`, when set — see [`TaskRun::working_directory`].
     pub working_directory: Option<String>,
+    /// The command to run inside the container, in place of the image's own
+    /// default `CMD`. Tokenized into literal argv the same way `entrypoint`
+    /// is (`docker.rs`'s `tokenize_command_line`) — not an
+    /// [expression](#expressions), and not run via a shell, matching
+    /// Batect's own `Command`-typed `command` field exactly. Applies as-is
+    /// to a dependency/sidecar container; for a task's own container,
+    /// overridden by the task-level `run.command`, when set — see
+    /// [`TaskRun::command`]. Symmetric with `entrypoint` below, and added
+    /// alongside it in spirit — this field was missed when `entrypoint` and
+    /// the rest of 0.13.0's container runtime options landed, since
+    /// `run.command` already covered the task's own container and the gap
+    /// (no way to set a dependency's own command at all) wasn't noticed
+    /// until later.
+    pub command: Option<String>,
     /// Overrides the image's own `ENTRYPOINT`. Tokenized into literal argv
     /// the same way `command` is (`docker.rs`'s `tokenize_command_line`) —
     /// not an [expression](#expressions), and not run via a shell, matching
@@ -1155,6 +1169,10 @@ fn format_task_line(name: &str, description: Option<&str>) -> String {
 #[serde(deny_unknown_fields)]
 pub struct TaskRun {
     pub container: String,
+    /// Overrides the container's own `command` for this task's run
+    /// specifically — see [`Container::command`]. If neither this nor the
+    /// container's own `command` is set, the image's own default `CMD`
+    /// runs instead.
     pub command: Option<String>,
     pub environment: Option<HashMap<String, String>>,
     /// Additional port mappings for this task's run specifically —
@@ -2634,6 +2652,54 @@ tasks:
     }
 
     #[test]
+    fn parses_container_and_run_command() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  database:
+    image: postgres:16
+    command: postgres -c max_connections=200
+tasks:
+  test:
+    run:
+      container: database
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("database").unwrap();
+        assert_eq!(
+            container.command.as_deref(),
+            Some("postgres -c max_connections=200")
+        );
+        let task = config.tasks.get("test").unwrap();
+        assert_eq!(
+            task.run.as_ref().unwrap().command.as_deref(),
+            Some("echo hi")
+        );
+    }
+
+    #[test]
+    fn container_command_defaults_to_none() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  database:
+    image: postgres:16
+tasks:
+  test:
+    run:
+      container: database
+"#,
+        );
+
+        let container = config.containers.get("database").unwrap();
+        assert_eq!(container.command, None);
+    }
+
+    #[test]
     fn parses_container_and_run_entrypoint() {
         let config = parse(
             r#"
@@ -3491,6 +3557,7 @@ tasks: {}
             health_check: None,
             setup_commands: None,
             working_directory: None,
+            command: None,
             entrypoint: None,
             labels: None,
             capabilities_to_add: None,
@@ -3791,6 +3858,7 @@ tasks: {}
             health_check: None,
             setup_commands: None,
             working_directory: None,
+            command: None,
             entrypoint: None,
             labels: None,
             capabilities_to_add: None,
@@ -5898,6 +5966,7 @@ config_variables:
             health_check: None,
             setup_commands: None,
             working_directory: None,
+            command: None,
             entrypoint: None,
             labels: None,
             capabilities_to_add: None,

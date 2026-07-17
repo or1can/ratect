@@ -758,6 +758,10 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             // its `setup_commands` don't run either (see
             // docs/differences-from-batect.md).
             let health_check = health_check_options(container_config);
+            let command = run
+                .command
+                .as_deref()
+                .or(container_config.command.as_deref());
             let working_directory = run
                 .working_directory
                 .as_deref()
@@ -786,7 +790,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 .run_container(
                     &run.container,
                     &image,
-                    run.command.as_deref(),
+                    command,
                     additional_args,
                     container_config.volumes.as_ref(),
                     environment.as_ref(),
@@ -928,6 +932,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         .start_background_container(
                             name,
                             &image,
+                            dependency_config.command.as_deref(),
                             dependency_config.volumes.as_ref(),
                             environment.as_ref(),
                             network,
@@ -1031,6 +1036,14 @@ mod tests {
     type CapturedBuildKitOptions =
         Arc<Mutex<HashMap<String, Option<crate::docker::BuildKitOptions>>>>;
     type CapturedImages = Arc<Mutex<HashMap<String, String>>>;
+    /// The `command` a prior `start_background_container` call for a given
+    /// container name was given (flattened, same convention as
+    /// `environment_for`) — `run_container`'s own `command` is instead baked
+    /// into the `events()` string (see `run_container`'s own push), since
+    /// existing tests already assert against that; this is a separate,
+    /// smaller map specifically for dependency containers, which have no
+    /// such event.
+    type CapturedCommands = Arc<Mutex<HashMap<String, Option<String>>>>;
     type CapturedInteractive = Arc<Mutex<HashMap<String, bool>>>;
     /// `(uid, gid, home_directory)`, keyed by container name.
     type CapturedUserMapping = Arc<Mutex<HashMap<String, Option<(u32, u32, String)>>>>;
@@ -1094,6 +1107,9 @@ mod tests {
         // built tag (not just a pulled image) reached the run, without
         // changing the existing exact-string `events()` assertions.
         images: CapturedImages,
+        // The `command` a prior `start_background_container` call for a
+        // given container name was given (see `command_for`).
+        commands: CapturedCommands,
         // The `interactive` a prior `run_container` call for a given
         // container name was given — lets tests prove interactive
         // eligibility is scoped to only the top-level requested task's own
@@ -1147,6 +1163,7 @@ mod tests {
                 build_options: Default::default(),
                 buildkit_options: Default::default(),
                 images: Default::default(),
+                commands: Default::default(),
                 interactive: Default::default(),
                 user_mapping: Default::default(),
                 network_exists_result: Arc::new(Mutex::new(true)),
@@ -1277,6 +1294,13 @@ mod tests {
         /// call for `name` was given.
         fn image_for(&self, name: &str) -> Option<String> {
             self.images.lock().unwrap().get(name).cloned()
+        }
+
+        /// The `command` a prior `start_background_container` call for
+        /// `name` was given (flattened, same convention as
+        /// `environment_for`).
+        fn command_for(&self, name: &str) -> Option<String> {
+            self.commands.lock().unwrap().get(name).cloned().flatten()
         }
 
         /// The `interactive` a prior `run_container` call for `name` was
@@ -1478,6 +1502,7 @@ mod tests {
             &self,
             alias: &str,
             image: &str,
+            command: Option<&str>,
             _volumes: Option<&Vec<String>>,
             environment: Option<&HashMap<String, String>>,
             network: &str,
@@ -1490,6 +1515,10 @@ mod tests {
             if let Some(delay) = delay {
                 tokio::time::sleep(delay).await;
             }
+            self.commands
+                .lock()
+                .unwrap()
+                .insert(alias.to_string(), command.map(str::to_string));
             self.environments
                 .lock()
                 .unwrap()
@@ -1664,6 +1693,7 @@ mod tests {
             additional_hosts: None,
             ports: None,
             working_directory: None,
+            command: None,
             entrypoint: None,
             labels: None,
             capabilities_to_add: None,
@@ -1716,6 +1746,7 @@ mod tests {
                 additional_hosts: None,
                 ports: None,
                 working_directory: None,
+                command: None,
                 entrypoint: None,
                 labels: None,
                 capabilities_to_add: None,
@@ -1807,6 +1838,7 @@ mod tests {
                 additional_hosts: None,
                 ports: None,
                 working_directory: None,
+                command: None,
                 entrypoint: None,
                 labels: None,
                 capabilities_to_add: None,
@@ -2075,6 +2107,7 @@ mod tests {
             additional_hosts: None,
             ports: None,
             working_directory: None,
+            command: None,
             entrypoint: None,
             labels: None,
             capabilities_to_add: None,
@@ -2407,6 +2440,7 @@ mod tests {
                 additional_hosts: None,
                 ports: None,
                 working_directory: None,
+                command: None,
                 entrypoint: None,
                 labels: None,
                 capabilities_to_add: None,
@@ -2461,6 +2495,7 @@ mod tests {
             additional_hosts: None,
             ports: None,
             working_directory: None,
+            command: None,
             entrypoint: None,
             labels: None,
             capabilities_to_add: None,
@@ -2846,6 +2881,7 @@ mod tests {
                 additional_hosts: None,
                 ports: None,
                 working_directory: None,
+                command: None,
                 entrypoint: None,
                 labels: None,
                 capabilities_to_add: None,
@@ -3781,6 +3817,7 @@ mod tests {
                 additional_hosts: None,
                 ports: None,
                 working_directory: None,
+                command: None,
                 entrypoint: None,
                 labels: None,
                 capabilities_to_add: None,
@@ -3996,6 +4033,58 @@ mod tests {
         assert_eq!(
             docker.working_directory_for("build-env"),
             Some("/from-run".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn container_command_reaches_the_container_when_run_command_is_unset() {
+        // Before this, a container had no `command` field at all — a task's
+        // own container could only get a command via `run.command`. This
+        // proves the container-level default now reaches the container when
+        // the task's own `run` doesn't set one.
+        let mut container_config = container("alpine:3.18", None);
+        container_config.command = Some("/from-container".to_string());
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+
+        let mut tasks = HashMap::new();
+        tasks.insert(
+            "test".to_string(),
+            Task {
+                run: Some(TaskRun {
+                    container: "build-env".to_string(),
+                    command: None,
+                    environment: None,
+                    ports: None,
+                    working_directory: None,
+                    entrypoint: None,
+                }),
+                dependencies: None,
+                prerequisites: None,
+                description: None,
+                group: None,
+                customise: None,
+            },
+        );
+
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        let events = docker.events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with("run:build-env:/from-container:args=[]:")),
+            "the container's own command should reach the run when run.command is unset: {events:?}"
         );
     }
 
@@ -4273,6 +4362,37 @@ mod tests {
         engine.run_task("test", &[]).await.unwrap();
 
         assert!(docker.events().contains(&"pull:alpine:3.18".to_string()));
+    }
+
+    #[tokio::test]
+    async fn task_run_command_overrides_container_command() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.command = Some("/from-container".to_string());
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "/from-run"));
+
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        let events = docker.events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with("run:build-env:/from-run:args=[]:")),
+            "run.command should override the container's own command: {events:?}"
+        );
     }
 
     #[tokio::test]
@@ -4821,6 +4941,41 @@ mod tests {
         assert_eq!(
             docker.entrypoint_for("database"),
             Some("/entrypoint.sh".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn dependency_container_command_reaches_the_sidecar() {
+        // Before this, a dependency/sidecar container had no way at all to
+        // set its own command — only a task's own container could, via
+        // `run.command`. redis's default command is what `sidecar.yml`
+        // relies on staying alive instead; this proves a dependency can now
+        // set an explicit one of its own.
+        let mut database = container("postgres:16", None);
+        database.command = Some("postgres -c max_connections=200".to_string());
+        let mut containers = HashMap::new();
+        containers.insert("database".to_string(), database);
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.command_for("database"),
+            Some("postgres -c max_connections=200".to_string())
         );
     }
 
