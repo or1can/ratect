@@ -521,7 +521,7 @@ dependencies = [
 
 [[package]]
 name = "dockerignore"
-version = "0.13.0-dev"
+version = "0.13.0"
 dependencies = [
  "path-clean",
  "regex",
@@ -1503,7 +1503,7 @@ checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
 name = "ratect"
-version = "0.13.0-dev"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1516,7 +1516,7 @@ dependencies = [
 
 [[package]]
 name = "ratect-core"
-version = "0.13.0-dev"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "async-recursion",

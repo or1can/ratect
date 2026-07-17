@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-17
+
 ### Added
 
 - **`working_directory`**: a container (and, for a task's own container, the task-level `run.working_directory` override) can now override the image's own `WORKDIR` — see [config reference](docs/config-reference.md#container). A `setup_commands` entry with no `working_directory` of its own now falls back to the container's, then the image's own default, closing a known gap left by 0.9.0's dependency readiness work (see `ROADMAP.md`). Part of 0.13.0's Container Runtime Options (see `ROADMAP.md`).
