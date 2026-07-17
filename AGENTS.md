@@ -43,24 +43,14 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     (`capabilities_to_add`/`capabilities_to_drop`) and `ImagePullPolicy` are fixed
     enums validated at parse time — `Capability`'s list is a deliberate *superset* of
     Batect's own (unmaintained) one, not a strict port, see its doc comment.
-    `Task.run` is `Option<TaskRun>` (0.14.0) — a task with only `prerequisites` is
-    valid, but `resolve_expressions_with_boundaries` still requires at least one of
-    `run`/`prerequisites`, and rejects `dependencies` (task-level sidecars,
-    `Task.dependencies` — distinct from `Container.dependencies`, which every task
-    using that container picks up) on a `run`-less task. `customise`
-    (`Task.customise`, a `HashMap<String, TaskContainerCustomisation>` of per-task
-    `environment`/`ports`/`working_directory` overrides for a *non-main* container
-    in the task's graph) is validated only when `run` is present too — on a
-    `run`-less task it's simply never checked or applied, matching Batect (whose
-    equivalent validation lives in a graph that's never built for a
-    prerequisites-only task), not rejected outright like `dependencies` is.
-    `container_names_in_task` (the transitive-dependency walk originally added for
-    the `no_proxy` exemption list) now lives here rather than `engine.rs`, since
-    validating a `customise` entry actually names a container reachable from the
-    task needs the same walk — `engine.rs` calls it, not the other way round.
-    `format_task_list` is the single source of `--list-tasks` formatting (grouping
-    by `Task.group`, `Ungrouped tasks:` bucket, `Task.description` shown inline) —
-    `main.rs` just prints its result.
+    `Task.run` is `Option<TaskRun>` (0.14.0, see docs/task-lifecycle.md) — still
+    requires at least one of `run`/`prerequisites`. `dependencies` (task-level
+    sidecars, distinct from `Container.dependencies`) requires `run` and is
+    rejected without it; `customise` requires `run` too but is merely inert
+    without it, matching Batect. `container_names_in_task` lives here (moved from
+    `engine.rs`) since both the `no_proxy` exemption list and `customise`'s
+    graph-membership check need the same transitive-dependency walk.
+    `format_task_list` is the single source of `--list-tasks` formatting.
   - **`ratect-core/src/expressions.rs`**: Batect's expression syntax (`$VAR`,
     `${VAR:-default}`, `<name`/`<{name}` for config variables, including the built-in
     `batect.project_directory`). Host environment and resolved config variable values
@@ -106,13 +96,9 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     sites; and only the task actually named on the command line (never a
     prerequisite) is ever eligible for interactive-TTY mode. `run_task_internal`
     runs `prerequisites` first, then returns early (no error) if the task itself has
-    no `run` (0.14.0) — everything after that point can assume `run` is present.
-    `start_dependency` takes the task's `customise` map alongside the container
-    graph it's already resolving and threads it through its own recursion
-    unconditionally, so a `customise` entry reaches its target container regardless
-    of how deep it sits in that graph; `container_names_in_task` (used for the
-    `no_proxy` exemption list here) lives in `config.rs` now, not this file — see
-    its own note there.
+    no `run` (0.14.0) — everything after can assume `run` is present. `customise`
+    threads through `start_dependency`'s own recursion unconditionally, so it
+    reaches its target regardless of depth in the dependency graph.
 - **`dockerignore`** (library crate, `dockerignore/src/`): a from-scratch Rust port of
   Docker's own `.dockerignore` matching (`github.com/moby/patternmatcher`, which
   Docker's documentation cites as the reference implementation) — deliberately **not**
@@ -128,7 +114,7 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
 
 ## Key Dependencies
 
-- **`bollard`** (`features = ["buildkit_providerless", "chrono"]`, **consumed via a `[patch.crates-io]` fork** — see the root `Cargo.toml`): Asynchronous Docker API client. Both build paths go through the same classic `/build` endpoint (`Docker::build_image`): the non-BuildKit path as before, and the BuildKit path (`build_image_via_buildkit`, `ratect-core/src/docker.rs`) by additionally setting `BuilderVersion::BuilderBuildKit` plus a per-build session — the channel the daemon calls back over to have `build_secrets`/`build_ssh` served mid-build. The session upgrades the *existing* daemon's own `/session`+`/grpc` endpoints (no separate persistent builder container), and the endpoint's response stream carries BuildKit's structured progress (`BuildInfoAux::BuildKit` — vertexes/logs, accumulated into the same transcript-in-error the classic path keeps) *and* the built image ID (`BuildInfoAux::Default`). The fork (`or1can/bollard`, branch `ratect/session-providers-0.21`; both commits PR'd upstream) carries the two pieces 0.21.0 is missing: `build_image_with_session_providers` (upstream `build_image`'s internal session only registers auth/file-send services — no way to supply the secrets/ssh providers; its gRPC-driver path has the providers but drops the log stream and isn't `Send`-compatible with `#[async_trait]`, which is why Ratect no longer uses it) and `ping_info` (exposes the `/_ping` response's `Builder-Version` header — the daemon's advertised default builder, which `ping()` discards). `chrono` is required transitively (BuildKit OAuth token expiry needs a date/time type; bollard fails to compile without either it or the `time` crate feature once `buildkit_providerless` is on). One remaining limitation worth knowing: bollard's ssh forwarding only serves the host's own `SSH_AUTH_SOCK` agent under BuildKit's implicit `default` id — no equivalent to Batect's multiple named agents or forwarding explicit private key files instead of a running agent (a second, separable upstream contribution) — see the `build_ssh` config field's docs and `docs/differences-from-batect.md#container-fields`.
+- **`bollard`** (`features = ["buildkit_providerless", "chrono"]`, **consumed via a `[patch.crates-io]` fork** — see the root `Cargo.toml`): Asynchronous Docker API client. The fork (`or1can/bollard`, branch `ratect/session-providers-0.21`, both commits PR'd upstream) adds session-provider support to `build_image` (needed for `build_secrets`/`build_ssh` mid-build) and `ping_info` (the daemon's advertised default builder) — see `ROADMAP.md`'s 0.12.0 entry for the full fork mechanics, PR links, and the build_ssh single-agent limitation. Remove the patch once both land in a bollard release. `chrono` is required transitively once `buildkit_providerless` is on (BuildKit OAuth token expiry needs a date/time type) — bollard won't compile without it or the `time` feature.
 - **`noyalib`**: Safe, pure-Rust YAML parser (used as a modern alternative to `serde_yaml`).
 - **`tokio`**: The asynchronous runtime.
 - **`clap`**: Command-line argument parsing with derive support.
