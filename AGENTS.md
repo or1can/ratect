@@ -108,6 +108,21 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     no `run` (0.14.0) — everything after can assume `run` is present. `customise`
     threads through `start_dependency`'s own recursion unconditionally, so it
     reaches its target regardless of depth in the dependency graph.
+  - **`ratect-core/src/ui/`**: The user-facing output layer (0.16.0's output-modes
+    work) — a port of Batect's `TaskEventSink`/`EventLogger` design: `engine.rs`
+    posts typed `TaskEvent` milestones and `docker.rs` posts fine-grained
+    pull/build progress to an injected `EventSink` (both default to the silent
+    `NullEventSink`; `main.rs` wires the real logger into both so one sink sees
+    the whole stream), and the selected logger decides what each event renders
+    as — never `println!` from `engine.rs`/`docker.rs` directly. Loggers must
+    serialize rendering internally (events arrive concurrently since 0.15.0);
+    `Console` keeps color and (future) cursor movement as *independent* axes,
+    deliberately unlike Batect's single `enableComplexOutput` flag — that
+    coupling is the only reason Batect rejects `fancy` + `--no-color`, a
+    combination Ratect supports instead. Milestone events are keyed by
+    container/task name (engine's vocabulary); progress events by image/tag
+    (all `docker.rs` knows) — a logger maps one to the other via the config it
+    was constructed with.
 - **`dockerignore`** (library crate, `dockerignore/src/`): a from-scratch Rust port of
   Docker's own `.dockerignore` matching (`github.com/moby/patternmatcher`, which
   Docker's documentation cites as the reference implementation) — deliberately **not**
@@ -127,7 +142,6 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
 - **`noyalib`**: Safe, pure-Rust YAML parser (used as a modern alternative to `serde_yaml`).
 - **`tokio`**: The asynchronous runtime.
 - **`clap`**: Command-line argument parsing with derive support.
-- **`indicatif`**: Used for displaying progress bars during image pulls.
 - **`anyhow`**: Simplified error handling with context.
 - **`tracing` / `tracing-subscriber`**: Structured, leveled logging. The subscriber is initialized in `main.rs`, filtered via `RUST_LOG` (defaults to `info`), and writes to stderr.
 - **`async-trait`**: Used for the `ContainerRuntime` trait in `ratect-core/src/docker.rs`, so it can have async methods and be implemented by both the real `DockerClient` and test fakes.
@@ -142,7 +156,7 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
 
 Dependencies are split across the three `Cargo.toml`s along CLI-vs-core lines: `clap`
 and `tracing-subscriber` are `ratect`-only; `serde`, `noyalib`, `bollard`, `futures`,
-`indicatif`, `async-recursion`, `async-trait`, `uuid`, `tar`, `path-clean`, `crossterm`,
+`async-recursion`, `async-trait`, `uuid`, `tar`, `path-clean`, `crossterm`,
 `nix`, `url`, and the local `dockerignore` crate are `ratect-core`-only (`dockerignore`
 itself depends on `regex` and `path-clean` too); `anyhow`, `tracing`, and `tokio` are
 needed by both. `tokio` is a normal dependency in both crates now — `ratect-core`'s

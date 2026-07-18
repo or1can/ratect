@@ -45,9 +45,11 @@ Tasks in my-project:
 ratect test
 ```
 
-The first run pulls the `alpine:3.18` image (with a progress spinner), then creates,
-starts, and runs the container. Whatever the container writes to stdout/stderr is
-streamed live and printed as-is — that's the actual output of your task.
+The first run pulls the `alpine:3.18` image (printing "Pulling alpine:3.18..." /
+"Pulled alpine:3.18." around it), then creates, starts, and runs the container.
+Whatever the container writes to stdout/stderr is streamed live and printed as-is —
+that's the actual output of your task — framed by Ratect's own progress lines
+("Running test...", then a "finished with exit code 0" summary).
 
 ## 4. Prerequisites
 

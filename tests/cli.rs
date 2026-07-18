@@ -23,6 +23,32 @@ fn ratect_command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ratect"))
 }
 
+/// Extracts the task's own container output from ratect's framed stdout.
+///
+/// Since the 0.16.0 output-modes work, stdout also carries milestone lines
+/// (see `ratect-core/src/ui/`): the container's own output sits between the
+/// task container's "Running `<command>` in `<container>`..." line and the
+/// blank line before "Cleaning up...". Tests asserting on exactly what the
+/// container printed use this instead of raw stdout — deliberately still
+/// exact-match on the extracted chunk, not weakened to `contains`, so they
+/// keep proving the container printed that and nothing else.
+fn task_output(stdout: &str) -> String {
+    let lines: Vec<&str> = stdout.lines().collect();
+    let start = lines
+        .iter()
+        .rposition(|line| {
+            line.starts_with("Running ") && line.contains(" in ") && line.ends_with("...")
+        })
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let end = lines[start..]
+        .iter()
+        .position(|line| *line == "Cleaning up...")
+        .map(|index| start + index)
+        .unwrap_or(lines.len());
+    lines[start..end].join("\n").trim().to_string()
+}
+
 fn sample_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/smoke.yml")
 }
@@ -372,14 +398,91 @@ fn test_task_runs_end_to_end_via_docker() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    // Exact line match, not a substring count — the milestone line "Running
+    // echo "I should only run once" in build-env..." quotes the command, so
+    // the substring appears once per run even when the task only ran once.
     assert_eq!(
-        stdout.matches("I should only run once").count(),
+        stdout
+            .lines()
+            .filter(|line| *line == "I should only run once")
+            .count(),
         1,
         "shared prerequisite should only execute once:\n{}",
         stdout
     );
     assert!(stdout.contains("I am a prerequisite"));
     assert!(stdout.contains("Hello from ratect!"));
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves the output format itself (0.16.0's output-modes work, simple
+/// style — the non-TTY default): the milestone lines frame the task's own
+/// output in the documented order, on stdout. Every other e2e test merely
+/// *tolerates* these lines (via `task_output`); this one is what actually
+/// pins them, end to end through `main.rs`'s real logger wiring — a unit
+/// test of `SimpleEventLogger` can't prove the binary wired it up at all.
+#[test]
+#[ignore]
+fn simple_output_format_frames_task_output_via_docker() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(sample_config_path())
+        .arg("shared-prereq")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    // The image may or may not already be local ("Pulling"/"Pulled" lines
+    // are correctly absent when it is), so match the invariant frame, not
+    // an exact transcript.
+    let running_task = lines
+        .iter()
+        .position(|line| *line == "Running shared-prereq...")
+        .unwrap_or_else(|| panic!("missing task milestone line:\n{stdout}"));
+    let running_container = lines
+        .iter()
+        .position(|line| *line == r#"Running echo "I should only run once" in build-env..."#)
+        .unwrap_or_else(|| panic!("missing container run milestone line:\n{stdout}"));
+    let task_output_line = lines
+        .iter()
+        .position(|line| *line == "I should only run once")
+        .unwrap_or_else(|| panic!("missing task output:\n{stdout}"));
+    let cleaning_up = lines
+        .iter()
+        .position(|line| *line == "Cleaning up...")
+        .unwrap_or_else(|| panic!("missing cleanup milestone line:\n{stdout}"));
+    let finished = lines
+        .iter()
+        .position(|line| {
+            line.starts_with("shared-prereq finished with exit code 0 in ") && line.ends_with('.')
+        })
+        .unwrap_or_else(|| panic!("missing task summary line:\n{stdout}"));
+
+    let order = [
+        running_task,
+        running_container,
+        task_output_line,
+        cleaning_up,
+        finished,
+    ];
+    assert!(
+        order.windows(2).all(|pair| pair[0] < pair[1]),
+        "milestone lines out of order ({order:?}):\n{stdout}"
+    );
+    assert_eq!(
+        lines[cleaning_up - 1],
+        "",
+        "a blank line should separate task output from cleanup:\n{stdout}"
+    );
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -729,7 +832,7 @@ fn additional_args_are_forwarded_to_the_task_command() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(stdout.trim(), "args: foo bar baz");
+    assert_eq!(task_output(&stdout), "args: foo bar baz");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -764,7 +867,7 @@ fn environment_and_config_variables_reach_the_real_container() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(
-        stdout.trim(),
+        task_output(&stdout),
         "GREETING=hello-fallback ENV_NAME=from-cli",
         "--config-var should take precedence over --config-vars-file"
     );
@@ -795,7 +898,10 @@ fn config_vars_file_alone_provides_a_declared_variables_value() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(stdout.trim(), "GREETING=hello-fallback ENV_NAME=from-file");
+    assert_eq!(
+        task_output(&stdout),
+        "GREETING=hello-fallback ENV_NAME=from-file"
+    );
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -821,7 +927,7 @@ fn container_working_directory_reaches_the_real_container() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(stdout.trim(), "/tmp");
+    assert_eq!(task_output(&stdout), "/tmp");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -846,7 +952,7 @@ fn task_run_working_directory_overrides_the_real_container() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(stdout.trim(), "/var");
+    assert_eq!(task_output(&stdout), "/var");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -874,7 +980,7 @@ fn container_entrypoint_combines_correctly_with_command_on_the_real_container() 
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(stdout.trim(), "hello-from-sh-c");
+    assert_eq!(task_output(&stdout), "hello-from-sh-c");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -901,7 +1007,7 @@ fn task_run_entrypoint_overrides_the_real_container() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(stdout.trim(), "override-worked");
+    assert_eq!(task_output(&stdout), "override-worked");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -926,7 +1032,7 @@ fn chown_succeeds_without_a_dropped_capability() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(stdout.trim(), "chown-worked");
+    assert_eq!(task_output(&stdout), "chown-worked");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -974,7 +1080,7 @@ fn privileged_grants_a_larger_capability_set_on_the_real_container() {
             "stderr:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stdout = task_output(&String::from_utf8_lossy(&output.stdout));
         let hex = stdout
             .split_whitespace()
             .nth(1)
@@ -1014,7 +1120,7 @@ fn shm_size_reaches_the_real_container() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = task_output(&String::from_utf8_lossy(&output.stdout));
     let blocks: u64 = stdout
         .split_whitespace()
         .nth(1)
@@ -1048,7 +1154,7 @@ fn devices_reaches_the_real_container() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(stdout.trim(), "device-mapped");
+    assert_eq!(task_output(&stdout), "device-mapped");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -1075,7 +1181,7 @@ fn enable_init_process_wraps_pid_1_on_the_real_container() {
             "stderr:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        String::from_utf8_lossy(&output.stdout).trim().to_string()
+        task_output(&String::from_utf8_lossy(&output.stdout))
     };
 
     let normal = pid1_comm("show-pid1-normal");
@@ -1191,7 +1297,7 @@ fn build_directory_and_build_args_reach_a_real_docker_build() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(stdout.trim(), "hello-from-build-arg");
+    assert_eq!(task_output(&stdout), "hello-from-build-arg");
 }
 
 /// Requires a running Docker daemon with network access to pull
@@ -1222,7 +1328,7 @@ fn dockerfile_and_build_target_reach_a_real_docker_build() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(stdout.trim(), "from-builder-stage");
+    assert_eq!(task_output(&stdout), "from-builder-stage");
 }
 
 /// Requires a running Docker daemon that supports BuildKit sessions (any
@@ -1258,7 +1364,7 @@ fn build_secrets_reach_a_real_buildkit_session_build() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(stdout.trim(), "hello-from-build-secret");
+    assert_eq!(task_output(&stdout), "hello-from-build-secret");
 }
 
 /// A dedicated throwaway `ssh-agent` process spawned for one test, plus a
@@ -1569,7 +1675,7 @@ fn default_builder_is_the_daemon_advertised_buildkit() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(stdout.trim(), "built with buildkit heredoc support");
+    assert_eq!(task_output(&stdout), "built with buildkit heredoc support");
 }
 
 /// Requires a running Docker daemon and network access to pull
@@ -1623,7 +1729,7 @@ fn classic_builder_still_works_when_forced_via_docker_buildkit_env() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(stdout.trim(), "hello-from-build-arg");
+    assert_eq!(task_output(&stdout), "hello-from-build-arg");
 }
 
 /// Requires a running Docker daemon. Run explicitly with
@@ -2142,7 +2248,7 @@ tasks:
     )
     .unwrap();
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = task_output(&String::from_utf8_lossy(&output.stdout));
     let mut lines = stdout.lines();
     let container_uid = lines.next().unwrap_or_default();
     let container_gid = lines.next().unwrap_or_default();

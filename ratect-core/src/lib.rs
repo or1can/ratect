@@ -18,4 +18,5 @@ pub mod engine;
 pub mod expressions;
 pub mod git_include;
 pub mod proxy;
+pub mod ui;
 pub mod user;

@@ -17,6 +17,7 @@ use crate::config::{
     TaskContainerCustomisation,
 };
 use crate::docker::ContainerRuntime;
+use crate::ui::{EventSink, NullEventSink, TaskEvent};
 use anyhow::{Context, Result};
 use async_recursion::async_recursion;
 use std::collections::{HashMap, HashSet};
@@ -446,6 +447,10 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     /// closure in tests (see `with_host_env`), same reason
     /// `config.rs::resolve_expressions_with` parameterizes over this.
     host_env: HostEnv,
+    /// Where task-execution milestones go for the user to see —
+    /// [`NullEventSink`] (silent) by default, a real output-mode logger via
+    /// `with_event_sink`. See `crate::ui`.
+    event_sink: Arc<dyn EventSink>,
 }
 
 impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
@@ -461,7 +466,16 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             publish_ports: true,
             propagate_proxy_environment_variables: true,
             host_env: Box::new(|name| std::env::var(name).ok()),
+            event_sink: Arc::new(NullEventSink),
         }
+    }
+
+    /// Injects the output-mode logger task-execution milestones render
+    /// through. Without this, the engine is silent (aside from `tracing`
+    /// diagnostics) — the default every unit test relies on.
+    pub fn with_event_sink(mut self, event_sink: Arc<dyn EventSink>) -> Self {
+        self.event_sink = event_sink;
+        self
     }
 
     /// Opts into `--use-network`: `network` is validated to exist (and
@@ -581,7 +595,16 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                             }
                         };
                         if should_pull {
+                            // Milestones post only when a pull actually
+                            // happens — a skip (image already local under
+                            // `IfNotPresent`) stays silent, matching Batect.
+                            self.event_sink.post(TaskEvent::ImagePullStarting {
+                                image: image.clone(),
+                            });
                             self.docker.pull_image(image).await?;
+                            self.event_sink.post(TaskEvent::ImagePullCompleted {
+                                image: image.clone(),
+                            });
                         }
                         Ok(image.clone())
                     }
@@ -614,7 +637,11 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                             .as_deref()
                             .unwrap_or("Dockerfile");
                         let buildkit = buildkit_options(container_config);
-                        self.docker
+                        self.event_sink.post(TaskEvent::ImageBuildStarting {
+                            container: container_name.to_string(),
+                        });
+                        let image_id = self
+                            .docker
                             .build_image(
                                 Path::new(build_directory),
                                 dockerfile,
@@ -623,7 +650,11 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                                 buildkit.as_ref(),
                                 &tag,
                             )
-                            .await
+                            .await?;
+                        self.event_sink.post(TaskEvent::ImageBuildCompleted {
+                            container: container_name.to_string(),
+                        });
+                        Ok(image_id)
                     }
                     .await;
                     outcome.map_err(Arc::new)
@@ -783,7 +814,14 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             .get(&run.container)
             .with_context(|| format!("Container '{}' not found", run.container))?;
 
-        tracing::info!("Running task '{}'", task_name);
+        // The user-facing "Running <task>..." line is the event sink's job
+        // now (see `crate::ui`) — this stays at `debug` so `RUST_LOG=info`
+        // doesn't duplicate it on stderr.
+        tracing::debug!("Running task '{}'", task_name);
+        self.event_sink.post(TaskEvent::TaskStarting {
+            task: task_name.to_string(),
+        });
+        let task_started_at = std::time::Instant::now();
 
         // A task-scoped network + its dependency containers: created fresh for
         // this one task execution and torn down before this function returns,
@@ -924,6 +962,10 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 devices: devices.as_ref(),
                 enable_init_process: container_config.enable_init_process,
             };
+            self.event_sink.post(TaskEvent::RunningTaskContainer {
+                container: run.container.clone(),
+                command: command.map(str::to_string),
+            });
             self.docker
                 .run_container(
                     &run.container,
@@ -946,6 +988,9 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         .await;
 
         let running_sidecars = running_sidecars.into_inner().unwrap();
+        if !running_sidecars.is_empty() || self.existing_network.is_none() {
+            self.event_sink.post(TaskEvent::CleanupStarting);
+        }
         for (name, container_id) in &running_sidecars {
             if let Err(e) = self.docker.stop_and_remove_container(container_id).await {
                 tracing::warn!(
@@ -959,6 +1004,27 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             if let Err(e) = self.docker.remove_network(&network_name).await {
                 tracing::warn!(network = network_name.as_str(), error = ?e, "Failed to remove network");
             }
+        }
+
+        // "Finished" means the task's own command ran to completion and
+        // reported an exit code — zero (`Ok`) or not (the
+        // `ContainerExitedNonZero` error, which still propagates to become
+        // ratect's own exit code). An infrastructure failure posts nothing.
+        // Posted after cleanup, matching Batect's `onTaskFinished` (called
+        // once `ParallelExecutionManager.run()` — cleanup included — has
+        // returned).
+        let exit_code = match &result {
+            Ok(()) => Some(0),
+            Err(error) => error
+                .downcast_ref::<crate::docker::ContainerExitedNonZero>()
+                .map(|failure| failure.exit_code),
+        };
+        if let Some(exit_code) = exit_code {
+            self.event_sink.post(TaskEvent::TaskFinished {
+                task: task_name.to_string(),
+                exit_code,
+                duration: task_started_at.elapsed(),
+            });
         }
 
         result
@@ -1065,6 +1131,9 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         enable_init_process: dependency_config.enable_init_process,
                     };
 
+                    self.event_sink.post(TaskEvent::DependencyStarting {
+                        container: name.to_string(),
+                    });
                     let container_id = self
                         .docker
                         .start_background_container(
@@ -1080,6 +1149,9 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                             &container_options,
                         )
                         .await?;
+                    self.event_sink.post(TaskEvent::DependencyStarted {
+                        container: name.to_string(),
+                    });
 
                     // Registered for cleanup *before* the readiness gate
                     // below — a dependency that starts but never becomes
@@ -1100,13 +1172,34 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         .wait_for_container_healthy(&container_id)
                         .await
                         .with_context(|| format!("Container '{}' did not become healthy", name))?;
+                    self.event_sink.post(TaskEvent::ContainerBecameHealthy {
+                        container: name.to_string(),
+                    });
 
-                    for setup_command in dependency_config.setup_commands.iter().flatten() {
-                        tracing::info!(
+                    let setup_command_total = dependency_config
+                        .setup_commands
+                        .as_ref()
+                        .map_or(0, Vec::len);
+                    for (setup_command_index, setup_command) in dependency_config
+                        .setup_commands
+                        .iter()
+                        .flatten()
+                        .enumerate()
+                    {
+                        // The user-facing setup-command line is the event
+                        // sink's job now (see `crate::ui`) — `debug` so
+                        // `RUST_LOG=info` doesn't duplicate it on stderr.
+                        tracing::debug!(
                             container = name,
                             command = setup_command.command.as_str(),
                             "Running setup command"
                         );
+                        self.event_sink.post(TaskEvent::RunningSetupCommand {
+                            container: name.to_string(),
+                            command: setup_command.command.clone(),
+                            index: setup_command_index + 1,
+                            total: setup_command_total,
+                        });
                         let result = self
                             .docker
                             .exec_in_container(
@@ -1140,6 +1233,11 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                                 output
                             );
                         }
+                    }
+                    if setup_command_total > 0 {
+                        self.event_sink.post(TaskEvent::SetupCommandsCompleted {
+                            container: name.to_string(),
+                        });
                     }
 
                     Ok(container_id)
@@ -5564,5 +5662,160 @@ mod tests {
         engine.run_task("start", &[]).await.unwrap();
 
         assert_eq!(docker.enable_init_process_for("database"), Some(true));
+    }
+
+    /// Records every posted [`TaskEvent`] in order, so tests can assert on
+    /// the user-facing event stream the same way `FakeContainerRuntime`
+    /// asserts on Docker calls.
+    #[derive(Clone, Default)]
+    struct RecordingEventSink {
+        events: Arc<Mutex<Vec<TaskEvent>>>,
+    }
+
+    impl RecordingEventSink {
+        fn events(&self) -> Vec<TaskEvent> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+
+    impl EventSink for RecordingEventSink {
+        fn post(&self, event: TaskEvent) {
+            self.events.lock().unwrap().push(event);
+        }
+    }
+
+    #[tokio::test]
+    async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "build-env".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        let mut database = container("postgres:15", None);
+        database.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./init.sh".to_string(),
+            working_directory: None,
+        }]);
+        containers.insert("database".to_string(), database);
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "cargo test"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let sink = RecordingEventSink::default();
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker).with_event_sink(Arc::new(sink.clone()));
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        let events = sink.events();
+        let expected_prefix = [
+            TaskEvent::TaskStarting {
+                task: "test".into(),
+            },
+            TaskEvent::ImagePullStarting {
+                image: "postgres:15".into(),
+            },
+            TaskEvent::ImagePullCompleted {
+                image: "postgres:15".into(),
+            },
+            TaskEvent::DependencyStarting {
+                container: "database".into(),
+            },
+            TaskEvent::DependencyStarted {
+                container: "database".into(),
+            },
+            TaskEvent::ContainerBecameHealthy {
+                container: "database".into(),
+            },
+            TaskEvent::RunningSetupCommand {
+                container: "database".into(),
+                command: "./init.sh".into(),
+                index: 1,
+                total: 1,
+            },
+            TaskEvent::SetupCommandsCompleted {
+                container: "database".into(),
+            },
+            TaskEvent::ImagePullStarting {
+                image: "alpine:3.18".into(),
+            },
+            TaskEvent::ImagePullCompleted {
+                image: "alpine:3.18".into(),
+            },
+            TaskEvent::RunningTaskContainer {
+                container: "build-env".into(),
+                command: Some("cargo test".into()),
+            },
+            TaskEvent::CleanupStarting,
+        ];
+        assert_eq!(
+            &events[..expected_prefix.len()],
+            &expected_prefix,
+            "full stream: {events:?}"
+        );
+        // `TaskFinished` carries a wall-clock duration, so match on the
+        // variant rather than a full value.
+        assert!(
+            matches!(
+                events.last(),
+                Some(TaskEvent::TaskFinished {
+                    task,
+                    exit_code: 0,
+                    ..
+                }) if task == "test"
+            ),
+            "full stream: {events:?}"
+        );
+        assert_eq!(events.len(), expected_prefix.len() + 1);
+    }
+
+    #[tokio::test]
+    async fn posts_pull_events_only_when_a_pull_actually_happens() {
+        // `Config` isn't `Clone`, so build a fresh one per engine.
+        let config = || {
+            let mut containers = HashMap::new();
+            containers.insert("build-env".to_string(), container("alpine:3.18", None));
+            let mut tasks = HashMap::new();
+            tasks.insert("test".to_string(), task("build-env", "cargo test"));
+            Config {
+                project_name: "demo".to_string(),
+                containers,
+                tasks,
+                config_variables: None,
+            }
+        };
+
+        // Image not local in the fake -> the pull happens and posts events.
+        let sink = RecordingEventSink::default();
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config(), docker).with_event_sink(Arc::new(sink.clone()));
+        engine.run_task("test", &[]).await.unwrap();
+        let events = sink.events();
+        assert!(events.contains(&TaskEvent::ImagePullStarting {
+            image: "alpine:3.18".into()
+        }));
+        assert!(events.contains(&TaskEvent::ImagePullCompleted {
+            image: "alpine:3.18".into()
+        }));
+
+        // Image already local -> `IfNotPresent` (the default) skips the
+        // pull, and no pull events post.
+        let sink = RecordingEventSink::default();
+        let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
+        let engine = TaskEngine::new(config(), docker).with_event_sink(Arc::new(sink.clone()));
+        engine.run_task("test", &[]).await.unwrap();
+        let events = sink.events();
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                TaskEvent::ImagePullStarting { .. } | TaskEvent::ImagePullCompleted { .. }
+            )),
+            "no pull events expected: {events:?}"
+        );
     }
 }

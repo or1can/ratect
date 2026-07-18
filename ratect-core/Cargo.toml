@@ -12,7 +12,6 @@ noyalib = { version = "0.0.13", features = ["compat-serde-yaml"] }
 bollard = { version = "0.21", features = ["buildkit_providerless", "chrono"] }
 anyhow = "1.0"
 futures = "0.3"
-indicatif = "0.18"
 tracing = "0.1"
 async-recursion = "1.1"
 async-trait = "0.1"

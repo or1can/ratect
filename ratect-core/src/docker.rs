@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::ui::{EventSink, NullEventSink, TaskEvent};
 use anyhow::{Context, Result};
 use bollard::container::AttachContainerResults;
 use bollard::exec::{CreateExecOptions, StartExecResults};
@@ -31,7 +32,6 @@ use bollard::query_parameters::WaitContainerOptions;
 use bollard::service::HostConfig;
 use bollard::Docker;
 use futures::StreamExt;
-use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
@@ -476,8 +476,10 @@ fn build_context_tar(build_directory: &Path, dockerfile: &str) -> Result<Vec<u8>
 /// into a failure's error via `build_output_suffix`. The built image ID
 /// arrives in the same stream (a final `Default` aux message), same as the
 /// classic path — no post-build lookup needed.
+#[allow(clippy::too_many_arguments)]
 async fn build_image_via_buildkit(
     docker: &Docker,
+    event_sink: &dyn EventSink,
     build_directory: &Path,
     dockerfile: &str,
     build_args: Option<&HashMap<String, String>>,
@@ -485,15 +487,6 @@ async fn build_image_via_buildkit(
     buildkit: Option<&BuildKitOptions>,
     tag: &str,
 ) -> Result<String> {
-    let pb = ProgressBar::new_spinner();
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} [{elapsed_precise}] {msg}")
-            .unwrap(),
-    );
-    pb.set_message(format!("Building image {} (BuildKit)...", tag));
-    pb.enable_steady_tick(Duration::from_millis(100));
-
     let build_directory = build_directory.to_path_buf();
     let dockerfile_owned = dockerfile.to_string();
     let tar_bytes =
@@ -584,7 +577,10 @@ async fn build_image_via_buildkit(
                             output.push_str(&vertex.name);
                             output.push_str(cached_suffix);
                             output.push('\n');
-                            pb.set_message(format!("{}: {}", tag, vertex.name));
+                            event_sink.post(TaskEvent::ImageBuildProgress {
+                                tag: tag.to_string(),
+                                message: format!("{}{}", vertex.name, cached_suffix),
+                            });
                         }
                         if !vertex.error.is_empty()
                             && seen_vertex_errors.insert(vertex.digest.clone())
@@ -603,7 +599,10 @@ async fn build_image_via_buildkit(
                         let trimmed = msg.trim_end();
                         if !trimmed.is_empty() {
                             tracing::debug!(image = tag, "{trimmed}");
-                            pb.set_message(format!("{}: {}", tag, trimmed));
+                            event_sink.post(TaskEvent::ImageBuildProgress {
+                                tag: tag.to_string(),
+                                message: trimmed.to_string(),
+                            });
                         }
                     }
                 }
@@ -615,7 +614,6 @@ async fn build_image_via_buildkit(
                 None => {}
             },
             Err(e) => {
-                pb.finish_with_message(format!("Failed to build image {}", tag));
                 return Err(e).context(format!(
                     "Failed to build image '{}'{}",
                     tag,
@@ -629,7 +627,6 @@ async fn build_image_via_buildkit(
         anyhow::anyhow!("Docker did not report an image ID after building '{}'", tag)
     })?;
 
-    pb.finish_with_message(format!("Image {} built successfully", tag));
     Ok(image_id)
 }
 
@@ -1125,6 +1122,12 @@ pub struct DockerClient {
     /// (per `ratect` invocation, in practice) on first build — see
     /// [`select_builder_version`] for the decision itself.
     builder_version: tokio::sync::OnceCell<bollard::query_parameters::BuilderVersion>,
+    /// Where streamed pull/build progress detail goes for the user to see —
+    /// `docker.rs` only ever posts the fine-grained progress variants (the
+    /// milestones around them are `engine.rs`'s job, which knows the
+    /// container/task names). [`NullEventSink`] (silent) by default, a real
+    /// output-mode logger via `with_event_sink`. See `crate::ui`.
+    event_sink: std::sync::Arc<dyn EventSink>,
 }
 
 /// Picks the builder for this invocation's image builds, matching Batect's
@@ -1171,7 +1174,16 @@ impl DockerClient {
         Ok(Self {
             docker,
             builder_version: tokio::sync::OnceCell::new(),
+            event_sink: std::sync::Arc::new(NullEventSink),
         })
+    }
+
+    /// Injects the output-mode logger streamed pull/build progress renders
+    /// through — the same sink `main.rs` gives the `TaskEngine`, so one
+    /// logger sees the whole event stream in order.
+    pub fn with_event_sink(mut self, event_sink: std::sync::Arc<dyn EventSink>) -> Self {
+        self.event_sink = event_sink;
+        self
     }
 
     /// The builder this invocation's image builds use — resolved on first
@@ -1490,15 +1502,6 @@ impl DockerClient {
 #[async_trait::async_trait]
 impl ContainerRuntime for DockerClient {
     async fn pull_image(&self, image: &str) -> Result<()> {
-        let pb = ProgressBar::new_spinner();
-        pb.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.green} [{elapsed_precise}] {msg}")
-                .unwrap(),
-        );
-        pb.set_message(format!("Pulling image {}...", image));
-        pb.enable_steady_tick(Duration::from_millis(100));
-
         let options = CreateImageOptions {
             from_image: Some(image.to_string()),
             ..Default::default()
@@ -1510,17 +1513,18 @@ impl ContainerRuntime for DockerClient {
             match result {
                 Ok(output) => {
                     if let Some(status) = output.status {
-                        pb.set_message(format!("{}: {}", image, status));
+                        self.event_sink.post(TaskEvent::ImagePullProgress {
+                            image: image.to_string(),
+                            message: status,
+                        });
                     }
                 }
                 Err(e) => {
-                    pb.finish_with_message(format!("Failed to pull image {}", image));
                     return Err(e).context(format!("Failed to pull image {}", image));
                 }
             }
         }
 
-        pb.finish_with_message(format!("Image {} pulled successfully", image));
         Ok(())
     }
 
@@ -1549,6 +1553,7 @@ impl ContainerRuntime for DockerClient {
             bollard::query_parameters::BuilderVersion::BuilderBuildKit => {
                 return build_image_via_buildkit(
                     &self.docker,
+                    self.event_sink.as_ref(),
                     build_directory,
                     dockerfile,
                     build_args,
@@ -1574,15 +1579,6 @@ impl ContainerRuntime for DockerClient {
                 }
             }
         }
-
-        let pb = ProgressBar::new_spinner();
-        pb.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.green} [{elapsed_precise}] {msg}")
-                .unwrap(),
-        );
-        pb.set_message(format!("Building image {}...", tag));
-        pb.enable_steady_tick(Duration::from_millis(100));
 
         let build_directory = build_directory.to_path_buf();
         let dockerfile_owned = dockerfile.to_string();
@@ -1611,16 +1607,13 @@ impl ContainerRuntime for DockerClient {
         let mut image_id = None;
         // The full build transcript, so a failure's error carries everything
         // that led up to it (not just Docker's own one-line summary) — the
-        // only other place this streamed output goes is the ephemeral
-        // spinner message below, which is gone the instant the next line
-        // arrives and never rendered at all on a non-TTY (CI, redirected
-        // output).
+        // only other place each streamed line goes is a progress event,
+        // which the selected output mode may well not render at all.
         let mut output = String::new();
         while let Some(result) = stream.next().await {
             match result {
                 Ok(info) => {
                     if let Some(message) = info.error_detail.and_then(|detail| detail.message) {
-                        pb.finish_with_message(format!("Failed to build image {}", tag));
                         return Err(anyhow::anyhow!(
                             "Failed to build image '{}': {}{}",
                             tag,
@@ -1634,7 +1627,10 @@ impl ContainerRuntime for DockerClient {
                             tracing::debug!(image = tag, "{trimmed}");
                             output.push_str(trimmed);
                             output.push('\n');
-                            pb.set_message(format!("{}: {}", tag, trimmed));
+                            self.event_sink.post(TaskEvent::ImageBuildProgress {
+                                tag: tag.to_string(),
+                                message: trimmed.to_string(),
+                            });
                         }
                     }
                     // Classic (non-BuildKit) builds always report `Default`
@@ -1650,7 +1646,6 @@ impl ContainerRuntime for DockerClient {
                     }
                 }
                 Err(e) => {
-                    pb.finish_with_message(format!("Failed to build image {}", tag));
                     return Err(e).context(format!(
                         "Failed to build image '{}'{}",
                         tag,
@@ -1664,7 +1659,6 @@ impl ContainerRuntime for DockerClient {
             anyhow::anyhow!("Docker did not report an image ID after building '{}'", tag)
         })?;
 
-        pb.finish_with_message(format!("Image {} built successfully", tag));
         Ok(image_id)
     }
 

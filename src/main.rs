@@ -17,8 +17,11 @@ use clap::Parser;
 use ratect_core::config::{format_task_list, Config};
 use ratect_core::docker::DockerClient;
 use ratect_core::engine::TaskEngine;
+use ratect_core::ui::simple::SimpleEventLogger;
+use ratect_core::ui::EventSink;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
@@ -159,8 +162,14 @@ async fn run() -> Result<()> {
 
     match args.task_name {
         Some(task_name) => {
-            let docker = DockerClient::new()?;
-            let mut engine = TaskEngine::new(config, docker);
+            // The output-mode logger — one instance shared by the Docker
+            // client (fine-grained pull/build progress) and the engine
+            // (lifecycle milestones), so it sees the whole event stream in
+            // order. Only `simple` exists so far; `--output` mode selection
+            // arrives with the rest of the 0.16.0 output-modes work.
+            let event_sink: Arc<dyn EventSink> = Arc::new(SimpleEventLogger::stdout());
+            let docker = DockerClient::new()?.with_event_sink(Arc::clone(&event_sink));
+            let mut engine = TaskEngine::new(config, docker).with_event_sink(event_sink);
             if let Some(network) = args.use_network {
                 engine = engine.with_existing_network(network);
             }

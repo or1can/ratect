@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Task progress is now reported as plain milestone lines on stdout instead of an ephemeral spinner**, as the first step of 0.16.0's output-modes work (see `ROADMAP.md`): task execution now prints Batect-`simple`-style lines — "Running `<task>`...", "Pulling `<image>`..."/"Pulled `<image>`.", "Building/Built `<container>`.", "Starting/Started `<dependency>`.", health/setup-command milestones, "Cleaning up...", and a final "`<task>` finished with exit code `<n>` in `<duration>`." summary (exit code green/red when stdout is a terminal) — replacing the previous `indicatif` spinner during image pulls/builds (the `indicatif` dependency is removed entirely; none of Batect's output modes use a spinner — its `fancy` mode is a cursor-movement line repaint, arriving later in 0.16.0). Internally this lands Batect's `EventLogger` architecture (`ratect-core/src/ui/`, ported from its `TaskEventSink`/`EventLogger` design): `engine.rs` posts typed milestone events and `docker.rs` posts streamed pull/build progress events to an injected `EventSink`, and the selected logger decides what each event renders as — the seam the `--output` mode selection (`fancy`/`simple`/`quiet`/`all`) plugs into next. Also fixes concurrent pulls/builds (possible since 0.15.0's within-task parallelism) racing their uncoordinated spinners onto the same terminal line. The engine's "Running task"/setup-command `tracing::info` diagnostics dropped to `debug` so `RUST_LOG=info` doesn't duplicate the new stdout lines on stderr. See [how it works](docs/how-it-works.md#5-logging-vs-output).
+
 ## [0.15.0] - 2026-07-17
 
 ### Added

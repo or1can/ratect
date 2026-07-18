@@ -157,8 +157,10 @@ unit-tested with a fake implementation instead of a real Docker daemon.
 `DockerClient` wraps [`bollard`](https://docs.rs/bollard), Ratect's async Docker API
 client, and implements `ContainerRuntime`:
 
-- **`pull_image`**: streams `docker create-image` progress and displays it via a
-  spinner (using [`indicatif`](https://docs.rs/indicatif)).
+- **`pull_image`**: streams `docker create-image` progress, forwarding each status
+  line as a progress event to the output layer (see
+  [Logging vs. output](#5-logging-vs-output) — what, if anything, a progress event
+  renders as is the selected output style's decision, not `docker.rs`'s).
 - **`build_image`**: builds an in-memory tar of the build directory (via the
   `build_context_tar` free function, `.dockerignore`-aware — see the
   [`dockerignore`](../dockerignore) crate — and unit-testable on its own, with no
@@ -247,14 +249,22 @@ message, or CI log.
 
 Ratect keeps two channels deliberately separate:
 
-- **stdout**: the actual result of the command you asked for — container log output
-  and `--list-tasks` listings. Safe to pipe.
+- **stdout**: the task's user-facing output — container log output, `--list-tasks`
+  listings, and Ratect's own progress lines ("Running build...", "Pulling
+  alpine:3.18...", "build finished with exit code 0 in 2.3s."), matching where
+  Batect puts them. Internally these progress lines are typed events
+  (`ratect-core/src/ui/`): `engine.rs` and `docker.rs` post task-execution
+  milestones to an event sink instead of printing, and the selected output style
+  decides what each event renders as — currently the plain, append-only line style
+  above (Batect's `simple`), with the full `--output` mode selection
+  (`fancy`/`simple`/`quiet`/`all`) arriving as the rest of the 0.16.0 output-modes
+  work.
 - **stderr**: Ratect's own diagnostics, via [`tracing`](https://docs.rs/tracing) /
   [`tracing-subscriber`](https://docs.rs/tracing-subscriber), filtered by `RUST_LOG`
   (defaults to `info`).
 
-This split is why running a task doesn't pollute its output with Ratect's own status
-messages, and why `--list-tasks` output can be parsed directly.
+Colors (e.g. the exit code in the task summary line) are only emitted when stdout is
+actually a terminal — piped or redirected output gets plain text.
 
 ### Filtering `RUST_LOG`
 
