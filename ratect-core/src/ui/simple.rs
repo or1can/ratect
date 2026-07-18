@@ -47,9 +47,9 @@ impl SimpleEventLogger {
     }
 
     /// The logger `main.rs` actually wires up: real stdout, color iff
-    /// stdout is a terminal.
-    pub fn stdout() -> Self {
-        Self::new(Console::stdout())
+    /// stdout is a terminal and `--no-color` wasn't given.
+    pub fn stdout(no_color: bool) -> Self {
+        Self::new(Console::stdout(no_color))
     }
 }
 

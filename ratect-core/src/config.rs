@@ -1108,6 +1108,26 @@ pub fn container_names_in_task(
     names
 }
 
+/// Formats `--list-tasks` output for `--output quiet`: one task per line,
+/// sorted by name, as `name` alone or `name<TAB>description` (the tab only
+/// present when the task has a non-blank description) — no header, no
+/// grouping, nothing else, so the output is machine-parsable. An exact port
+/// of Batect's own `ListTasksCommand.printMachineReadableFormat`.
+pub fn format_task_list_quiet(tasks: &HashMap<String, Task>) -> String {
+    let mut names: Vec<_> = tasks.keys().collect();
+    names.sort();
+    names
+        .into_iter()
+        .map(|name| match tasks[name].description.as_deref() {
+            Some(description) if !description.trim().is_empty() => {
+                format!("{name}\t{description}")
+            }
+            _ => name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Formats `--list-tasks` output: every task's name (and `description`, if
 /// set) under a `Tasks in {project_name}:` header. Groups tasks under a
 /// `{group}:` heading — with a task that declares no `group` falling into a
@@ -2264,6 +2284,31 @@ tasks:
              \n\
              Ungrouped tasks:\n\
              - clean"
+        );
+    }
+
+    #[test]
+    fn format_task_list_quiet_is_sorted_tab_separated_and_ignores_groups() {
+        let tasks = HashMap::from([
+            (
+                "test".to_string(),
+                task_with_description_and_group(Some("Runs the test suite"), Some("verification")),
+            ),
+            (
+                "build".to_string(),
+                task_with_description_and_group(None, Some("compilation")),
+            ),
+            (
+                "clean".to_string(),
+                // A whitespace-only description gets no tab either,
+                // matching Batect's `isNotBlank` check.
+                task_with_description_and_group(Some("   "), None),
+            ),
+        ]);
+
+        assert_eq!(
+            format_task_list_quiet(&tasks),
+            "build\nclean\ntest\tRuns the test suite"
         );
     }
 

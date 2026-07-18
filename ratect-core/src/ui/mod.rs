@@ -136,6 +136,70 @@ pub enum TaskEvent {
     CleanupStarting,
 }
 
+/// Batect's four output styles — how (and whether) [`TaskEvent`]s render.
+/// `None`/unspecified on the command line means "auto-select" — see
+/// [`select_output_style`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputStyle {
+    /// A live-updating, multi-line progress display (one line per container
+    /// in the task's dependency graph), for interactive terminals.
+    Fancy,
+    /// Plain, append-only milestone lines with no live progress detail —
+    /// the default on any console that doesn't support `Fancy`.
+    Simple,
+    /// Error messages only — task lifecycle stays entirely silent. Also
+    /// switches `--list-tasks` to a machine-readable format.
+    Quiet,
+    /// Line-buffered output from *all* containers (dependencies included),
+    /// each line prefixed with its container's name.
+    All,
+}
+
+/// Picks the output style when `--output` wasn't given — a port of Batect's
+/// `EventLoggerProvider`/`ConsoleInfo.supportsInteractivity` rule: `Fancy`
+/// on a console that can actually support it (stdout is a real terminal,
+/// `TERM` is set and isn't `dumb`, and the terminal's dimensions are
+/// queryable — each an independent signal that live repainting would
+/// misbehave), `Simple` otherwise. `--no-color` also forces `Simple` as the
+/// *default* (matching Batect) — an explicit `--output fancy --no-color`
+/// still gets colorless fancy (a deliberate Ratect extension; see
+/// [`Console`]). `Quiet` and `All` are never auto-selected.
+///
+/// Batect additionally special-cases mintty (a Windows terminal that fails
+/// `isatty`) and a legacy `TRAVIS` environment variable check; Ratect
+/// implements neither — Windows is untested here anyway, and modern CI
+/// doesn't allocate a TTY, so the terminal check already covers it.
+///
+/// Pure (every input injected) so the whole decision table is
+/// unit-testable; `main.rs` feeds it the real terminal facts.
+pub fn select_output_style(
+    requested: Option<OutputStyle>,
+    no_color: bool,
+    stdout_is_terminal: bool,
+    term: Option<&str>,
+    console_dimensions_available: bool,
+) -> OutputStyle {
+    if let Some(style) = requested {
+        return style;
+    }
+    let supports_interactivity = stdout_is_terminal
+        && term.is_some_and(|term| term != "dumb")
+        && console_dimensions_available;
+    if supports_interactivity && !no_color {
+        OutputStyle::Fancy
+    } else {
+        OutputStyle::Simple
+    }
+}
+
+/// Whether the terminal's dimensions are actually queryable — the
+/// "am I really attached to a console" signal [`select_output_style`]
+/// wants beyond plain `isatty` (Batect's `ConsoleDimensions.current !=
+/// null` check).
+pub fn console_dimensions_available() -> bool {
+    crossterm::terminal::size().is_ok()
+}
+
 /// Receives every [`TaskEvent`] a task execution produces. Implementations
 /// must be safe to call from concurrent branches of the dependency graph —
 /// serialize any rendering internally.
@@ -186,10 +250,14 @@ pub struct Console {
 
 impl Console {
     /// A console on the real stdout, with color enabled iff stdout is a
-    /// terminal — colors are never emitted into a pipe or redirection,
-    /// matching Batect's `enableComplexOutput = ... && stdoutIsTTY`.
-    pub fn stdout() -> Self {
-        Self::new(Box::new(std::io::stdout()), std::io::stdout().is_terminal())
+    /// terminal *and* `--no-color` wasn't given — colors are never emitted
+    /// into a pipe or redirection regardless of the flag, matching Batect's
+    /// `enableComplexOutput = !disableColorOutput && stdoutIsTTY`.
+    pub fn stdout(no_color: bool) -> Self {
+        Self::new(
+            Box::new(std::io::stdout()),
+            !no_color && std::io::stdout().is_terminal(),
+        )
     }
 
     pub fn new(writer: Box<dyn Write + Send>, color_enabled: bool) -> Self {
@@ -295,5 +363,74 @@ mod tests {
         console.println("hello");
         console.println("world");
         assert_eq!(buffer.contents(), "hello\nworld\n");
+    }
+
+    /// `select_output_style(requested, no_color, stdout_is_terminal, term,
+    /// console_dimensions_available)` shorthand for the decision-table
+    /// tests below.
+    fn auto(no_color: bool, tty: bool, term: Option<&str>, dimensions: bool) -> OutputStyle {
+        select_output_style(None, no_color, tty, term, dimensions)
+    }
+
+    #[test]
+    fn an_explicit_request_always_wins() {
+        // Even on a console that couldn't support it — an explicitly
+        // requested style is never second-guessed here (fancy's own
+        // interactive-console requirement is enforced at wiring time, with
+        // a clear error, not silently overridden).
+        for style in [
+            OutputStyle::Fancy,
+            OutputStyle::Simple,
+            OutputStyle::Quiet,
+            OutputStyle::All,
+        ] {
+            assert_eq!(
+                select_output_style(Some(style), true, false, None, false),
+                style
+            );
+        }
+    }
+
+    #[test]
+    fn interactive_console_defaults_to_fancy() {
+        assert_eq!(
+            auto(false, true, Some("xterm-256color"), true),
+            OutputStyle::Fancy
+        );
+    }
+
+    #[test]
+    fn each_non_interactive_signal_alone_forces_simple() {
+        // stdout isn't a terminal (piped/redirected/CI).
+        assert_eq!(auto(false, false, Some("xterm"), true), OutputStyle::Simple);
+        // TERM unset.
+        assert_eq!(auto(false, true, None, true), OutputStyle::Simple);
+        // TERM=dumb.
+        assert_eq!(auto(false, true, Some("dumb"), true), OutputStyle::Simple);
+        // Terminal dimensions unavailable.
+        assert_eq!(auto(false, true, Some("xterm"), false), OutputStyle::Simple);
+    }
+
+    #[test]
+    fn no_color_forces_the_default_to_simple_even_on_an_interactive_console() {
+        assert_eq!(auto(true, true, Some("xterm"), true), OutputStyle::Simple);
+    }
+
+    #[test]
+    fn quiet_and_all_are_never_auto_selected() {
+        // Exhaustively: the default is only ever Fancy or Simple.
+        for no_color in [false, true] {
+            for tty in [false, true] {
+                for term in [None, Some("dumb"), Some("xterm")] {
+                    for dimensions in [false, true] {
+                        let style = auto(no_color, tty, term, dimensions);
+                        assert!(
+                            style == OutputStyle::Fancy || style == OutputStyle::Simple,
+                            "auto({no_color}, {tty}, {term:?}, {dimensions}) = {style:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

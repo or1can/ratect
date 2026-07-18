@@ -247,6 +247,49 @@ fn list_tasks_groups_by_group_and_shows_descriptions() {
 }
 
 #[test]
+fn list_tasks_with_quiet_output_is_machine_readable() {
+    let output = ratect_command()
+        .args(["--list-tasks", "-o", "quiet", "-f"])
+        .arg(task_groups_config_path())
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Sorted by name, `name<TAB>description` (tab only when a description
+    // exists), no header, no grouping — Batect's own machine-readable
+    // format.
+    assert_eq!(
+        stdout.trim_end(),
+        "build\tBuilds the app\n\
+         clean\n\
+         lint\n\
+         test\tRuns the test suite",
+        "stdout:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn requesting_an_unimplemented_output_style_fails_with_a_clear_error() {
+    for style in ["fancy", "all"] {
+        let output = ratect_command()
+            .args(["-o", style, "-f"])
+            .arg(sample_config_path())
+            .arg("test-task")
+            .output()
+            .expect("failed to run ratect");
+
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("not implemented yet"),
+            "stderr for '{style}':\n{stderr}"
+        );
+    }
+}
+
+#[test]
 fn missing_config_file_reports_error() {
     let output = ratect_command()
         .args(["--list-tasks", "-f"])
@@ -482,6 +525,67 @@ fn simple_output_format_frames_task_output_via_docker() {
         lines[cleaning_up - 1],
         "",
         "a blank line should separate task output from cleanup:\n{stdout}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves `--output quiet` end to end: stdout is *exactly* the task's own
+/// output — every milestone line suppressed, across a whole prerequisite
+/// chain — so quiet-mode output is safe to pipe.
+#[test]
+#[ignore]
+fn quiet_output_is_exactly_the_tasks_own_output_via_docker() {
+    let output = ratect_command()
+        .args(["-o", "quiet", "-f"])
+        .arg(sample_config_path())
+        .arg("prereq-task")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim_end(),
+        "I should only run once\n\
+         I am a prerequisite",
+        "quiet stdout should carry only the containers' own output:\n{stdout}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// The failure half of quiet's pipe-safety: a failing task must leave
+/// stdout untouched too — no milestone lines, no summary line, nothing but
+/// what the container itself printed (here: nothing) — while the exit code
+/// still propagates and the error still reaches stderr.
+#[test]
+#[ignore]
+fn quiet_output_stays_silent_on_stdout_when_the_task_fails_via_docker() {
+    let output = ratect_command()
+        .args(["-o", "quiet", "-f"])
+        .arg(exit_code_config_path())
+        .arg("fails")
+        .output()
+        .expect("failed to run ratect");
+
+    assert_eq!(output.status.code(), Some(42));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout, "",
+        "quiet stdout must stay empty on failure:\n{stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("exited with code 42") || stderr.contains("code 42"),
+        "the failure should still be reported on stderr:\n{stderr}"
     );
 }
 

@@ -607,6 +607,17 @@ Ungrouped tasks:
 - clean
 ```
 
+With [`--output quiet`](cli-reference.md#output-styles), both forms are replaced by
+a machine-readable listing instead — one task per line, sorted by name, as `name`
+alone or `name<TAB>description`, with no header and no grouping:
+
+```
+build	Builds the app
+clean
+lint
+test	Runs the test suite
+```
+
 ## TaskRun
 
 | Field | Type | Required | Description |

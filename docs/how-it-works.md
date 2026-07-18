@@ -254,10 +254,11 @@ Ratect keeps two channels deliberately separate:
   alpine:3.18...", "build finished with exit code 0 in 2.3s."), matching where
   Batect puts them. Internally these progress lines are typed events
   (`ratect-core/src/ui/`): `engine.rs` and `docker.rs` post task-execution
-  milestones to an event sink instead of printing, and the selected output style
-  decides what each event renders as — currently the plain, append-only line style
-  above (Batect's `simple`), with the full `--output` mode selection
-  (`fancy`/`simple`/`quiet`/`all`) arriving as the rest of the 0.16.0 output-modes
+  milestones to an event sink instead of printing, and the selected
+  [output style](cli-reference.md#output-styles) (`--output`/`-o`) decides what
+  each event renders as — `simple`'s plain, append-only lines by default, nothing
+  at all under `quiet` (whose stdout is then exactly the containers' own output,
+  safe to pipe). `fancy` and `all` arrive as the rest of the 0.16.0 output-modes
   work.
 - **stderr**: Ratect's own diagnostics, via [`tracing`](https://docs.rs/tracing) /
   [`tracing-subscriber`](https://docs.rs/tracing-subscriber), filtered by `RUST_LOG`

@@ -14,12 +14,13 @@
 
 use anyhow::Result;
 use clap::Parser;
-use ratect_core::config::{format_task_list, Config};
+use ratect_core::config::{format_task_list, format_task_list_quiet, Config};
 use ratect_core::docker::DockerClient;
 use ratect_core::engine::TaskEngine;
 use ratect_core::ui::simple::SimpleEventLogger;
-use ratect_core::ui::EventSink;
+use ratect_core::ui::{select_output_style, EventSink, NullEventSink, OutputStyle};
 use std::collections::HashMap;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
@@ -60,12 +61,50 @@ struct Args {
     #[arg(long = "no-proxy-vars")]
     no_proxy_vars: bool,
 
+    /// Force a particular style of output (does not affect task command
+    /// output): simple (plain lines, no updating text), quiet (only error
+    /// messages, and a machine-readable --list-tasks format), fancy or all
+    /// (not implemented yet). Defaults to fancy when the console supports
+    /// it, simple otherwise.
+    #[arg(short = 'o', long = "output", value_enum)]
+    output: Option<OutputStyleArg>,
+
+    /// Disable colored output from Ratect. Does not affect task command
+    /// output. Also makes simple (not fancy) the default output style.
+    #[arg(long = "no-color")]
+    no_color: bool,
+
     /// Name of the task to run
     task_name: Option<String>,
 
     /// Additional arguments to pass to the task command
     #[arg(last = true)]
     additional_args: Vec<String>,
+}
+
+/// The CLI-side `--output` value set — clap's `ValueEnum` derive gives the
+/// lowercase names (`fancy`/`simple`/`quiet`/`all`) and the standard
+/// invalid-value error listing them, matching Batect's own enum-converted
+/// option. Mirrors [`ratect_core::ui::OutputStyle`] rather than deriving on
+/// it directly, keeping `clap` a `ratect`-only dependency (see AGENTS.md's
+/// CLI-vs-core dependency split).
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum OutputStyleArg {
+    Fancy,
+    Simple,
+    Quiet,
+    All,
+}
+
+impl From<OutputStyleArg> for OutputStyle {
+    fn from(arg: OutputStyleArg) -> Self {
+        match arg {
+            OutputStyleArg::Fancy => OutputStyle::Fancy,
+            OutputStyleArg::Simple => OutputStyle::Simple,
+            OutputStyleArg::Quiet => OutputStyle::Quiet,
+            OutputStyleArg::All => OutputStyle::All,
+        }
+    }
 }
 
 /// Parses a `--config-var` value of the form `NAME=VALUE`.
@@ -155,8 +194,21 @@ async fn run() -> Result<()> {
     loaded.resolve_expressions(base_path, &config_var_overrides)?;
     let config = loaded.config;
 
+    let term = std::env::var("TERM").ok();
+    let output_style = select_output_style(
+        args.output.map(OutputStyle::from),
+        args.no_color,
+        std::io::stdout().is_terminal(),
+        term.as_deref(),
+        ratect_core::ui::console_dimensions_available(),
+    );
+
     if args.list_tasks {
-        println!("{}", format_task_list(&config.project_name, &config.tasks));
+        let listing = match output_style {
+            OutputStyle::Quiet => format_task_list_quiet(&config.tasks),
+            _ => format_task_list(&config.project_name, &config.tasks),
+        };
+        println!("{listing}");
         return Ok(());
     }
 
@@ -165,9 +217,31 @@ async fn run() -> Result<()> {
             // The output-mode logger — one instance shared by the Docker
             // client (fine-grained pull/build progress) and the engine
             // (lifecycle milestones), so it sees the whole event stream in
-            // order. Only `simple` exists so far; `--output` mode selection
-            // arrives with the rest of the 0.16.0 output-modes work.
-            let event_sink: Arc<dyn EventSink> = Arc::new(SimpleEventLogger::stdout());
+            // order.
+            let event_sink: Arc<dyn EventSink> = match output_style {
+                OutputStyle::Simple => Arc::new(SimpleEventLogger::stdout(args.no_color)),
+                // Batect's quiet logger renders only task-failure events;
+                // Ratect reports failures via the error chain on stderr
+                // regardless of output style, so quiet's remaining job —
+                // suppressing every milestone — is exactly the null sink.
+                OutputStyle::Quiet => Arc::new(NullEventSink),
+                // Auto-selected fancy (interactive console, no explicit
+                // --output): fall back to simple until the fancy logger
+                // lands (rest of the 0.16.0 output-modes work).
+                OutputStyle::Fancy if args.output.is_none() => {
+                    Arc::new(SimpleEventLogger::stdout(args.no_color))
+                }
+                OutputStyle::Fancy | OutputStyle::All => {
+                    let name = match output_style {
+                        OutputStyle::Fancy => "fancy",
+                        _ => "all",
+                    };
+                    anyhow::bail!(
+                        "--output {name} is not implemented yet (it arrives later in \
+                         0.16.0) — 'simple' and 'quiet' are available today."
+                    );
+                }
+            };
             let docker = DockerClient::new()?.with_event_sink(Arc::clone(&event_sink));
             let mut engine = TaskEngine::new(config, docker).with_event_sink(event_sink);
             if let Some(network) = args.use_network {
@@ -333,5 +407,51 @@ mod tests {
     fn defaults_no_proxy_vars_to_false() {
         let args = Args::try_parse_from(["ratect"]).unwrap();
         assert!(!args.no_proxy_vars);
+    }
+
+    #[test]
+    fn parses_output_style_long_and_short_forms() {
+        let args = Args::try_parse_from(["ratect", "--output", "quiet", "build"]).unwrap();
+        assert_eq!(args.output, Some(OutputStyleArg::Quiet));
+        let args = Args::try_parse_from(["ratect", "-o", "simple", "build"]).unwrap();
+        assert_eq!(args.output, Some(OutputStyleArg::Simple));
+        let args = Args::try_parse_from(["ratect", "-o", "fancy", "build"]).unwrap();
+        assert_eq!(args.output, Some(OutputStyleArg::Fancy));
+        let args = Args::try_parse_from(["ratect", "-o", "all", "build"]).unwrap();
+        assert_eq!(args.output, Some(OutputStyleArg::All));
+    }
+
+    #[test]
+    fn defaults_output_style_to_unset_meaning_auto_select() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert_eq!(args.output, None);
+    }
+
+    #[test]
+    fn rejects_an_unknown_output_style_naming_the_valid_ones() {
+        let error = Args::try_parse_from(["ratect", "-o", "verbose", "build"])
+            .unwrap_err()
+            .to_string();
+        for name in ["fancy", "simple", "quiet", "all"] {
+            assert!(error.contains(name), "error should list '{name}': {error}");
+        }
+    }
+
+    #[test]
+    fn parses_no_color_flag_and_defaults_it_off() {
+        let args = Args::try_parse_from(["ratect", "--no-color", "build"]).unwrap();
+        assert!(args.no_color);
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert!(!args.no_color);
+    }
+
+    #[test]
+    fn fancy_with_no_color_parses_cleanly() {
+        // Deliberately *not* a parse error, unlike Batect (whose console
+        // couples color and cursor movement — Ratect's doesn't, so
+        // colorless fancy is supportable). See docs/differences-from-batect.md.
+        let args = Args::try_parse_from(["ratect", "-o", "fancy", "--no-color", "build"]).unwrap();
+        assert_eq!(args.output, Some(OutputStyleArg::Fancy));
+        assert!(args.no_color);
     }
 }
