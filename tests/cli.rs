@@ -272,21 +272,36 @@ fn list_tasks_with_quiet_output_is_machine_readable() {
 
 #[test]
 fn requesting_an_unimplemented_output_style_fails_with_a_clear_error() {
-    for style in ["fancy", "all"] {
-        let output = ratect_command()
-            .args(["-o", style, "-f"])
-            .arg(sample_config_path())
-            .arg("test-task")
-            .output()
-            .expect("failed to run ratect");
+    let output = ratect_command()
+        .args(["-o", "all", "-f"])
+        .arg(sample_config_path())
+        .arg("test-task")
+        .output()
+        .expect("failed to run ratect");
 
-        assert!(!output.status.success());
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains("not implemented yet"),
-            "stderr for '{style}':\n{stderr}"
-        );
-    }
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not implemented yet"), "stderr:\n{stderr}");
+}
+
+#[test]
+fn requesting_fancy_output_without_an_interactive_console_fails_clearly() {
+    // This test's own spawned process has piped stdout — never a terminal —
+    // so an explicit `-o fancy` must be rejected up front (a deliberate
+    // divergence from Batect, which accepts it and crashes mid-repaint).
+    let output = ratect_command()
+        .args(["-o", "fancy", "-f"])
+        .arg(sample_config_path())
+        .arg("test-task")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("requires an interactive console"),
+        "stderr:\n{stderr}"
+    );
 }
 
 #[test]
@@ -557,6 +572,106 @@ fn quiet_output_is_exactly_the_tasks_own_output_via_docker() {
          I am a prerequisite",
         "quiet stdout should carry only the containers' own output:\n{stdout}"
     );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`, and the ability to allocate a local pseudo-terminal —
+/// see `interactive_session_forwards_stdin_and_stdout` below for why
+/// `portable-pty` makes this work in headless CI too. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// Proves the fancy output mode end to end: on a real (emulated) terminal
+/// it's the auto-selected default — no `-o` flag here, deliberately — and
+/// its live display actually renders: the per-container status block
+/// (cursor-movement repaints included), the frozen block above the task's
+/// own streamed output, and the final summary line.
+#[test]
+#[ignore]
+fn fancy_output_renders_a_live_status_block_on_a_terminal_via_docker() {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 24,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("failed to open pty");
+
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect"));
+    cmd.arg("-f");
+    cmd.arg(sample_config_path());
+    cmd.arg("shared-prereq");
+    cmd.env("TERM", "xterm-256color");
+
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
+        .expect("failed to spawn ratect in the pty");
+    drop(pair.slave);
+
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .expect("failed to clone pty reader");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    let mut output = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !String::from_utf8_lossy(&output).contains("finished with exit code")
+        && Instant::now() < deadline
+    {
+        if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(200)) {
+            output.extend_from_slice(&chunk);
+        }
+    }
+    let output = String::from_utf8_lossy(&output);
+
+    // The task preamble (bold task name — auto-selected fancy implies
+    // color on a terminal).
+    assert!(
+        output.contains("Running \x1b[1mshared-prereq\x1b[0m..."),
+        "missing bold task preamble: {output:?}"
+    );
+    // The status block painted at least once: clear-line control + the
+    // container's bold name and a stage description.
+    assert!(
+        output.contains("\x1b[2K\x1b[1mbuild-env\x1b[0m: "),
+        "missing per-container status line: {output:?}"
+    );
+    // The task's own output streamed below the frozen block.
+    assert!(
+        output.contains("I should only run once"),
+        "missing task output: {output:?}"
+    );
+    // The summary line, with the colored exit code.
+    assert!(
+        output.contains("finished with exit code \x1b[32m0\x1b[0m"),
+        "missing summary line: {output:?}"
+    );
+
+    let (wait_tx, wait_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = wait_tx.send(child.wait());
+    });
+    let status = wait_rx
+        .recv_timeout(Duration::from_secs(15))
+        .expect("ratect did not exit after the task finished")
+        .expect("failed to wait for ratect");
+    assert!(status.success(), "ratect should exit cleanly: {status:?}");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.

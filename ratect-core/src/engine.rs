@@ -885,6 +885,28 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 &run.container,
                 task.dependencies.as_deref(),
             )?;
+            // The resolved graph, for per-container progress displays (see
+            // `TaskEvent::TaskGraphResolved`). A node missing from config
+            // can't happen for a graph that just built successfully, but
+            // degrade to bare info rather than panic if it somehow does.
+            let container_infos = graph
+                .iter()
+                .map(|(name, dependencies)| {
+                    let container_config = self.config.containers.get(name);
+                    crate::ui::TaskContainerInfo {
+                        name: name.clone(),
+                        image: container_config.and_then(|c| c.image.clone()),
+                        build_tag: container_config
+                            .and_then(|c| c.build_directory.as_ref())
+                            .map(|_| format!("{}-{}", self.config.project_name, name)),
+                        dependencies: dependencies.clone(),
+                        is_task_container: name == &run.container,
+                    }
+                })
+                .collect();
+            self.event_sink.post(TaskEvent::TaskGraphResolved {
+                containers: container_infos,
+            });
             let root_dependencies = graph.get(&run.container).cloned().unwrap_or_default();
             // Independent branches of the dependency graph start
             // concurrently; a dependent container's own
@@ -992,15 +1014,21 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             self.event_sink.post(TaskEvent::CleanupStarting);
         }
         for (name, container_id) in &running_sidecars {
-            if let Err(e) = self.docker.stop_and_remove_container(container_id).await {
-                tracing::warn!(
-                    dependency = name.as_str(),
-                    error = ?e,
-                    "Failed to clean up dependency container"
-                );
+            match self.docker.stop_and_remove_container(container_id).await {
+                Ok(()) => self.event_sink.post(TaskEvent::ContainerRemoved {
+                    container: name.clone(),
+                }),
+                Err(e) => {
+                    tracing::warn!(
+                        dependency = name.as_str(),
+                        error = ?e,
+                        "Failed to clean up dependency container"
+                    );
+                }
             }
         }
         if self.existing_network.is_none() {
+            self.event_sink.post(TaskEvent::RemovingNetwork);
             if let Err(e) = self.docker.remove_network(&network_name).await {
                 tracing::warn!(network = network_name.as_str(), error = ?e, "Failed to remove network");
             }
@@ -1024,6 +1052,13 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 task: task_name.to_string(),
                 exit_code,
                 duration: task_started_at.elapsed(),
+            });
+        } else {
+            // Infrastructure failure — the error itself propagates to
+            // stderr via the returned `Err`; this only lets a live display
+            // stop repainting cleanly first.
+            self.event_sink.post(TaskEvent::TaskFailed {
+                task: task_name.to_string(),
             });
         }
 
@@ -5713,6 +5748,27 @@ mod tests {
         engine.run_task("test", &[]).await.unwrap();
 
         let events = sink.events();
+        // The graph event's container order falls out of a HashMap, so
+        // check it structurally here and exclude it from the exact-order
+        // check below.
+        let TaskEvent::TaskGraphResolved { containers } = &events[1] else {
+            panic!("expected TaskGraphResolved second: {events:?}");
+        };
+        let mut infos = containers.clone();
+        infos.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(infos.len(), 2);
+        assert_eq!(infos[0].name, "build-env");
+        assert_eq!(infos[0].image.as_deref(), Some("alpine:3.18"));
+        assert_eq!(infos[0].dependencies, vec!["database".to_string()]);
+        assert!(infos[0].is_task_container);
+        assert_eq!(infos[1].name, "database");
+        assert!(!infos[1].is_task_container);
+        assert!(infos[1].dependencies.is_empty());
+        let events: Vec<TaskEvent> = events
+            .iter()
+            .filter(|event| !matches!(event, TaskEvent::TaskGraphResolved { .. }))
+            .cloned()
+            .collect();
         let expected_prefix = [
             TaskEvent::TaskStarting {
                 task: "test".into(),
@@ -5752,6 +5808,10 @@ mod tests {
                 command: Some("cargo test".into()),
             },
             TaskEvent::CleanupStarting,
+            TaskEvent::ContainerRemoved {
+                container: "database".into(),
+            },
+            TaskEvent::RemovingNetwork,
         ];
         assert_eq!(
             &events[..expected_prefix.len()],

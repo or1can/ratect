@@ -138,8 +138,16 @@ impl EventSink for SimpleEventLogger {
             }
             // No live progress detail in simple mode — the whole point of
             // the mode (matching Batect: `ImagePullProgressEvent`/
-            // `ImageBuildProgressEvent` are unhandled there too).
-            TaskEvent::ImagePullProgress { .. } | TaskEvent::ImageBuildProgress { .. } => {}
+            // `ImageBuildProgressEvent` are unhandled there too). The graph
+            // and per-step cleanup events only feed fancy's live displays,
+            // and a failure's error reaches stderr through the normal error
+            // chain, so none of them get a line here either.
+            TaskEvent::ImagePullProgress { .. }
+            | TaskEvent::ImageBuildProgress { .. }
+            | TaskEvent::TaskGraphResolved { .. }
+            | TaskEvent::ContainerRemoved { .. }
+            | TaskEvent::RemovingNetwork
+            | TaskEvent::TaskFailed { .. } => {}
         }
     }
 }

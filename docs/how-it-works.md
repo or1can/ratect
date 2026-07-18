@@ -256,10 +256,10 @@ Ratect keeps two channels deliberately separate:
   (`ratect-core/src/ui/`): `engine.rs` and `docker.rs` post task-execution
   milestones to an event sink instead of printing, and the selected
   [output style](cli-reference.md#output-styles) (`--output`/`-o`) decides what
-  each event renders as — `simple`'s plain, append-only lines by default, nothing
-  at all under `quiet` (whose stdout is then exactly the containers' own output,
-  safe to pipe). `fancy` and `all` arrive as the rest of the 0.16.0 output-modes
-  work.
+  each event renders as — `fancy`'s live per-container status block on an
+  interactive terminal, `simple`'s plain append-only lines otherwise, nothing at
+  all under `quiet` (whose stdout is then exactly the containers' own output,
+  safe to pipe). `all` arrives as the rest of the 0.16.0 output-modes work.
 - **stderr**: Ratect's own diagnostics, via [`tracing`](https://docs.rs/tracing) /
   [`tracing-subscriber`](https://docs.rs/tracing-subscriber), filtered by `RUST_LOG`
   (defaults to `info`).

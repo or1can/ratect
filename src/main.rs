@@ -17,6 +17,7 @@ use clap::Parser;
 use ratect_core::config::{format_task_list, format_task_list_quiet, Config};
 use ratect_core::docker::DockerClient;
 use ratect_core::engine::TaskEngine;
+use ratect_core::ui::fancy::FancyEventLogger;
 use ratect_core::ui::simple::SimpleEventLogger;
 use ratect_core::ui::{select_output_style, EventSink, NullEventSink, OutputStyle};
 use std::collections::HashMap;
@@ -225,20 +226,31 @@ async fn run() -> Result<()> {
                 // regardless of output style, so quiet's remaining job —
                 // suppressing every milestone — is exactly the null sink.
                 OutputStyle::Quiet => Arc::new(NullEventSink),
-                // Auto-selected fancy (interactive console, no explicit
-                // --output): fall back to simple until the fancy logger
-                // lands (rest of the 0.16.0 output-modes work).
-                OutputStyle::Fancy if args.output.is_none() => {
-                    Arc::new(SimpleEventLogger::stdout(args.no_color))
+                OutputStyle::Fancy => {
+                    // An explicitly requested fancy on a console that can't
+                    // support live repainting fails clearly up front —
+                    // Batect instead accepts it and crashes mid-repaint
+                    // (documented divergence, see
+                    // docs/differences-from-batect.md). Auto-selected fancy
+                    // already implies an interactive console, so this only
+                    // ever fires for an explicit `-o fancy`.
+                    if !ratect_core::ui::supports_interactivity(
+                        std::io::stdout().is_terminal(),
+                        term.as_deref(),
+                        ratect_core::ui::console_dimensions_available(),
+                    ) {
+                        anyhow::bail!(
+                            "Fancy output requires an interactive console (stdout isn't a \
+                             terminal, TERM is unset or 'dumb', or the terminal size can't \
+                             be determined) — use --output simple instead."
+                        );
+                    }
+                    Arc::new(FancyEventLogger::stdout(args.no_color))
                 }
-                OutputStyle::Fancy | OutputStyle::All => {
-                    let name = match output_style {
-                        OutputStyle::Fancy => "fancy",
-                        _ => "all",
-                    };
+                OutputStyle::All => {
                     anyhow::bail!(
-                        "--output {name} is not implemented yet (it arrives later in \
-                         0.16.0) — 'simple' and 'quiet' are available today."
+                        "--output all is not implemented yet (it arrives later in \
+                         0.16.0) — 'fancy', 'simple' and 'quiet' are available today."
                     );
                 }
             };

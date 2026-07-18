@@ -31,6 +31,7 @@
 //! breadcrumbs to stderr, controlled by `RUST_LOG`. Events here are the
 //! product's actual output, on stdout — see docs/how-it-works.md.
 
+pub mod fancy;
 pub mod simple;
 
 use std::io::IsTerminal;
@@ -54,6 +55,16 @@ pub enum TaskEvent {
     /// `run` of its own never posts this.
     TaskStarting {
         task: String,
+    },
+    /// The task's own container dependency graph, resolved and proven
+    /// acyclic — posted right after [`TaskEvent::TaskStarting`], before any
+    /// container work begins. Carries what a per-container progress display
+    /// needs to draw one line per container from the very start (Batect's
+    /// `StartupProgressDisplayProvider` gets the same graph at logger
+    /// construction; Ratect's loggers outlive one task, so it arrives as an
+    /// event instead).
+    TaskGraphResolved {
+        containers: Vec<TaskContainerInfo>,
     },
     /// The task's own container ran to completion — with a zero *or*
     /// non-zero `exit_code`: a command exiting non-zero still "finishes"
@@ -134,6 +145,45 @@ pub enum TaskEvent {
     /// network) is about to begin. Not posted when there's nothing to tear
     /// down (`--use-network` and no dependencies started).
     CleanupStarting,
+    /// A dependency container was stopped and removed during cleanup.
+    ContainerRemoved {
+        container: String,
+    },
+    /// The task's own network is about to be removed — the last cleanup
+    /// step. Never posted under `--use-network` (Ratect didn't create that
+    /// network, so it never removes it).
+    RemovingNetwork,
+    /// The task failed for an infrastructure reason (image build failed, a
+    /// dependency never became healthy, ...) — the counterpart of
+    /// [`TaskEvent::TaskFinished`], which covers the task's own command
+    /// completing (with any exit code). The error itself still propagates
+    /// to stderr through the normal error chain; this event only lets a
+    /// live display stop repainting cleanly before that error prints.
+    TaskFailed {
+        task: String,
+    },
+}
+
+/// One container in a task's dependency graph, as carried by
+/// [`TaskEvent::TaskGraphResolved`] — everything a per-container progress
+/// line needs to describe that container's journey without access to the
+/// `Config` itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskContainerInfo {
+    pub name: String,
+    /// `Some` for an `image` container — the reference
+    /// [`TaskEvent::ImagePullProgress`] events carry.
+    pub image: Option<String>,
+    /// `Some` for a `build_directory` container — the tag
+    /// (`<project>-<name>`) [`TaskEvent::ImageBuildProgress`] events carry.
+    pub build_tag: Option<String>,
+    /// The container's own direct dependencies, for "waiting for X to be
+    /// ready" descriptions.
+    pub dependencies: Vec<String>,
+    /// `true` for the task's own container (the one
+    /// [`TaskEvent::RunningTaskContainer`] is about, whose output streams
+    /// to stdout).
+    pub is_task_container: bool,
 }
 
 /// Batect's four output styles — how (and whether) [`TaskEvent`]s render.
@@ -182,14 +232,25 @@ pub fn select_output_style(
     if let Some(style) = requested {
         return style;
     }
-    let supports_interactivity = stdout_is_terminal
-        && term.is_some_and(|term| term != "dumb")
-        && console_dimensions_available;
-    if supports_interactivity && !no_color {
+    if supports_interactivity(stdout_is_terminal, term, console_dimensions_available) && !no_color {
         OutputStyle::Fancy
     } else {
         OutputStyle::Simple
     }
+}
+
+/// Whether the console can support a live-repainting display — the shared
+/// half of [`select_output_style`]'s auto-selection rule, also used to
+/// validate an *explicit* `--output fancy` up front (with a clear error)
+/// instead of Batect's behavior of accepting it and crashing on the first
+/// repaint. Deliberately excludes `--no-color`: that only influences the
+/// *default*, since colorless fancy works fine (see [`Console`]).
+pub fn supports_interactivity(
+    stdout_is_terminal: bool,
+    term: Option<&str>,
+    console_dimensions_available: bool,
+) -> bool {
+    stdout_is_terminal && term.is_some_and(|term| term != "dumb") && console_dimensions_available
 }
 
 /// Whether the terminal's dimensions are actually queryable — the
@@ -289,6 +350,30 @@ impl Console {
         } else {
             text.to_string()
         }
+    }
+
+    /// `text` wrapped in the ANSI bold escape when color (SGR styling
+    /// generally — `--no-color` suppresses bold too, matching Batect) is
+    /// enabled, unchanged otherwise.
+    pub fn bold(&self, text: &str) -> String {
+        if self.color_enabled {
+            format!("\x1b[1m{text}\x1b[0m")
+        } else {
+            text.to_string()
+        }
+    }
+
+    /// Writes `text` exactly as given (no trailing newline appended),
+    /// flushed immediately, as one atomic write under the console's lock —
+    /// how the fancy display emits a whole repaint (cursor movement plus
+    /// rewritten lines) without another writer's line landing mid-repaint.
+    /// Cursor-movement escapes are deliberately *not* gated on
+    /// `color_enabled` — cursor movement and SGR styling are independent
+    /// axes here (see the type-level docs).
+    pub fn write_raw(&self, text: &str) {
+        let mut writer = self.writer.lock().unwrap();
+        let _ = write!(writer, "{text}");
+        let _ = writer.flush();
     }
 }
 
