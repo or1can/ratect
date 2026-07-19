@@ -64,10 +64,10 @@ struct Args {
     no_proxy_vars: bool,
 
     /// Force a particular style of output (does not affect task command
-    /// output): simple (plain lines, no updating text), quiet (only error
-    /// messages, and a machine-readable --list-tasks format), fancy or all
-    /// (not implemented yet). Defaults to fancy when the console supports
-    /// it, simple otherwise.
+    /// output): fancy (default when the console supports it — a live
+    /// per-container status display), simple (plain lines, no updating
+    /// text), all (interleaved output from all containers), or quiet (only
+    /// error messages, and a machine-readable --list-tasks format).
     #[arg(short = 'o', long = "output", value_enum)]
     output: Option<OutputStyleArg>,
 

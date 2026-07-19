@@ -116,13 +116,20 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     the whole stream), and the selected logger decides what each event renders
     as — never `println!` from `engine.rs`/`docker.rs` directly. Loggers must
     serialize rendering internally (events arrive concurrently since 0.15.0);
-    `Console` keeps color and (future) cursor movement as *independent* axes,
+    `Console` keeps color and cursor movement as *independent* axes,
     deliberately unlike Batect's single `enableComplexOutput` flag — that
     coupling is the only reason Batect rejects `fancy` + `--no-color`, a
-    combination Ratect supports instead. Milestone events are keyed by
-    container/task name (engine's vocabulary); progress events by image/tag
-    (all `docker.rs` knows) — a logger maps one to the other via the config it
-    was constructed with.
+    combination Ratect supports instead (colorless fancy). Milestone events are
+    keyed by container/task name (engine's vocabulary); progress events by
+    image/tag (all `docker.rs` knows) — a logger maps one to the other via the
+    `TaskGraphResolved` event's `TaskContainerInfo`s. The logger also *owns the
+    container I/O policy* (`EventSink::container_io_streaming`, mirroring
+    Batect's `EventLogger.ioStreamingOptions`): `engine.rs` and `docker.rs`
+    consult it rather than being configured separately, which is how `all` mode
+    line-buffers every container's output into `ContainerOutput` events (no
+    TTY/stdin, `TERM=dumb` everywhere) while the other three modes stream the
+    task container raw to stdout — add any future per-mode I/O behavior through
+    that method, not a new engine/docker setting.
 - **`dockerignore`** (library crate, `dockerignore/src/`): a from-scratch Rust port of
   Docker's own `.dockerignore` matching (`github.com/moby/patternmatcher`, which
   Docker's documentation cites as the reference implementation) — deliberately **not**

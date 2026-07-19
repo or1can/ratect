@@ -548,8 +548,7 @@ Leveraging Rust's strengths to provide a superior experience compared to the ori
 Improving the developer experience through better tools and feedback.
 
 - **`ratect doctor`**: A built-in linter and diagnostic tool to validate configuration and environment setup. This will include checks for `latest` image tags, missing health checks on dependencies, and host-container permission issues.
-- **Automatic Output Mode Detection**: Automatically enabling or disabling color and fancy output based on terminal capabilities and TTY detection.
-- **Improved Progress UI**: A more descriptive and visually appealing progress interface for task execution and image management, including build context upload progress.
+- **Improved Progress UI**: Output-mode selection with terminal-capability auto-detection and a live per-container progress display shipped as `ratect-compat` [0.16.0](#ratect-compat) (they were Batect parity work); what remains here is going *beyond* Batect — e.g. build context upload progress, richer pull progress (per-layer byte counts), and any `ratect`-binary-specific presentation ideas.
 - **Watch Mode**: Automatically re-running tasks when source files change.
 
 ## Future Vision
