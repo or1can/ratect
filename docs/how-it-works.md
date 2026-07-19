@@ -259,7 +259,9 @@ Ratect keeps two channels deliberately separate:
   each event renders as — `fancy`'s live per-container status block on an
   interactive terminal, `simple`'s plain append-only lines otherwise, nothing at
   all under `quiet` (whose stdout is then exactly the containers' own output,
-  safe to pipe). `all` arrives as the rest of the 0.16.0 output-modes work.
+  safe to pipe), or `all`'s per-container prefixed lines (the one style where
+  even container stdout routes through the event sink, line-buffered, instead of
+  streaming to stdout directly).
 - **stderr**: Ratect's own diagnostics, via [`tracing`](https://docs.rs/tracing) /
   [`tracing-subscriber`](https://docs.rs/tracing-subscriber), filtered by `RUST_LOG`
   (defaults to `info`).

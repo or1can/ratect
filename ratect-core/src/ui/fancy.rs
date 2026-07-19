@@ -552,6 +552,10 @@ impl EventSink for FancyEventLogger {
                 // (if shown) stays as the last thing on stdout.
                 state.keep_updating_startup = false;
             }
+            // Interleaved-mode events — never posted under this logger's
+            // (default) TaskContainerOnly streaming policy, and setup
+            // command output has no place in the live block regardless.
+            TaskEvent::ContainerOutput { .. } | TaskEvent::SetupCommandOutput { .. } => {}
         }
     }
 }

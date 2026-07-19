@@ -147,7 +147,9 @@ impl EventSink for SimpleEventLogger {
             | TaskEvent::TaskGraphResolved { .. }
             | TaskEvent::ContainerRemoved { .. }
             | TaskEvent::RemovingNetwork
-            | TaskEvent::TaskFailed { .. } => {}
+            | TaskEvent::TaskFailed { .. }
+            | TaskEvent::ContainerOutput { .. }
+            | TaskEvent::SetupCommandOutput { .. } => {}
         }
     }
 }

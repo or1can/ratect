@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::ui::{EventSink, NullEventSink, TaskEvent};
+use crate::ui::{ContainerIoStreaming, EventSink, NullEventSink, TaskEvent};
 use anyhow::{Context, Result};
 use bollard::container::AttachContainerResults;
 use bollard::exec::{CreateExecOptions, StartExecResults};
@@ -1429,12 +1429,15 @@ impl DockerClient {
     }
 
     /// Starts `container_id` (already created) and streams its stdout/stderr
-    /// to the local stdout via Docker's plain (non-TTY) `logs` follow API
-    /// until it exits, then returns its exit code. Shared by the fully
-    /// non-interactive path and `run_container_forwarding_stdin` below —
-    /// both need identical output handling, differing only in whether stdin
-    /// is piped in alongside it.
-    async fn start_and_stream_logs(&self, container_id: &str) -> Result<i64> {
+    /// until it exits, then returns its exit code — raw to the local stdout
+    /// by default, or line-buffered into `ContainerOutput` events under the
+    /// [`ContainerIoStreaming::Interleaved`] policy (the `all` output mode,
+    /// where the logger owns stdout and every line needs a container
+    /// prefix). Uses Docker's plain (non-TTY) `logs` follow API. Shared by
+    /// the fully non-interactive path and `run_container_forwarding_stdin`
+    /// below — both need identical output handling, differing only in
+    /// whether stdin is piped in alongside it.
+    async fn start_and_stream_logs(&self, container_name: &str, container_id: &str) -> Result<i64> {
         self.docker.start_container(container_id, None).await?;
         tracing::debug!(container_id, "started container");
 
@@ -1448,11 +1451,29 @@ impl DockerClient {
             }),
         );
 
+        let interleaved =
+            self.event_sink.container_io_streaming() == ContainerIoStreaming::Interleaved;
+        let mut line_buffer = crate::ui::interleaved::LineBuffer::new();
+        let emit = |line: &str| {
+            self.event_sink.post(TaskEvent::ContainerOutput {
+                container: container_name.to_string(),
+                line: line.to_string(),
+            });
+        };
         while let Some(log) = logs.next().await {
             match log {
-                Ok(output) => print!("{}", output),
+                Ok(output) => {
+                    if interleaved {
+                        line_buffer.push(output.as_ref(), emit);
+                    } else {
+                        print!("{}", output);
+                    }
+                }
                 Err(e) => return Err(e).context("Failed to get container logs"),
             }
+        }
+        if interleaved {
+            line_buffer.flush(emit);
         }
 
         self.exit_code(container_id).await
@@ -1471,7 +1492,11 @@ impl DockerClient {
     /// nothing written early is lost — then reuses `start_and_stream_logs`
     /// for output, since this path's output handling is identical to the
     /// plain non-interactive case.
-    async fn run_container_forwarding_stdin(&self, container_id: &str) -> Result<i64> {
+    async fn run_container_forwarding_stdin(
+        &self,
+        container_name: &str,
+        container_id: &str,
+    ) -> Result<i64> {
         let attach_options = AttachContainerOptionsBuilder::default()
             .stdin(true)
             .stream(true)
@@ -1493,7 +1518,9 @@ impl DockerClient {
             let _ = tokio::io::copy(&mut stdin, &mut attach_input).await;
         });
 
-        let result = self.start_and_stream_logs(container_id).await;
+        let result = self
+            .start_and_stream_logs(container_name, container_id)
+            .await;
         stdin_pump.abort();
         result
     }
@@ -1771,6 +1798,47 @@ impl ContainerRuntime for DockerClient {
             .with_context(|| format!("Failed to start sidecar container '{}'", alias))?;
         tracing::debug!(container_id = %container.id, alias, "started sidecar container");
 
+        // Under the interleaved policy (the `all` output mode — the only
+        // mode that shows dependency output at all), follow this
+        // container's logs in the background for its whole lifetime,
+        // posting each line as an event. Fire-and-forget: the stream ends
+        // on its own when cleanup removes the container (a final buffered
+        // partial line can in principle race process exit, which is
+        // tolerable for log streaming).
+        if self.event_sink.container_io_streaming() == ContainerIoStreaming::Interleaved {
+            let docker = self.docker.clone();
+            let event_sink = std::sync::Arc::clone(&self.event_sink);
+            let container_name = alias.to_string();
+            let container_id = container.id.clone();
+            tokio::spawn(async move {
+                let mut logs = docker.logs(
+                    &container_id,
+                    Some(LogsOptions {
+                        stdout: true,
+                        stderr: true,
+                        follow: true,
+                        ..Default::default()
+                    }),
+                );
+                let mut line_buffer = crate::ui::interleaved::LineBuffer::new();
+                let emit = |line: &str| {
+                    event_sink.post(TaskEvent::ContainerOutput {
+                        container: container_name.clone(),
+                        line: line.to_string(),
+                    });
+                };
+                while let Some(log) = logs.next().await {
+                    match log {
+                        Ok(output) => line_buffer.push(output.as_ref(), emit),
+                        // The stream ending with an error just means the
+                        // container went away — normal during cleanup.
+                        Err(_) => break,
+                    }
+                }
+                line_buffer.flush(emit);
+            });
+        }
+
         Ok(container.id)
     }
 
@@ -1919,6 +1987,13 @@ impl ContainerRuntime for DockerClient {
         health_check: Option<&HealthCheckOptions>,
         container_options: &ContainerOptions,
     ) -> Result<()> {
+        // Under the interleaved policy (the `all` output mode) no container
+        // is ever interactive: no TTY, no stdin — the logger owns stdout
+        // line by line, and a raw TTY stream can't be line-prefixed. The
+        // engine already passes `interactive: false` in that mode; this
+        // enforces the policy's own guarantee independently of the caller.
+        let interactive = interactive
+            && self.event_sink.container_io_streaming() == ContainerIoStreaming::TaskContainerOnly;
         let use_tty = should_use_tty(
             interactive,
             std::io::stdin().is_terminal(),
@@ -1995,9 +2070,10 @@ impl ContainerRuntime for DockerClient {
         let exit_code = if use_tty {
             self.run_container_interactively(&container.id).await?
         } else if interactive {
-            self.run_container_forwarding_stdin(&container.id).await?
+            self.run_container_forwarding_stdin(name, &container.id)
+                .await?
         } else {
-            self.start_and_stream_logs(&container.id).await?
+            self.start_and_stream_logs(name, &container.id).await?
         };
 
         self.docker.remove_container(&container.id, None).await?;

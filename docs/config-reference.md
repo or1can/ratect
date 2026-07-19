@@ -640,7 +640,10 @@ The invoked task's own container — never a prerequisite's, a dependency's, or 
 sidecar's; only the task actually named on the command line is ever eligible — always
 gets its stdin forwarded and the host's `TERM` environment variable propagated into its
 own environment (see [below](#term-propagation)), independent of whether Ratect's own
-stdin/stdout are real terminals. A real Docker TTY (raw mode locally, live terminal
+stdin/stdout are real terminals. The one exception is
+[`--output all`](cli-reference.md#output-styles), whose line-prefixed output can't
+host an interactive session: under it no container gets a TTY or stdin, and every
+container gets `TERM=dumb` instead — matching Batect. A real Docker TTY (raw mode locally, live terminal
 resizing) is additionally allocated when *both* Ratect's own stdin *and* stdout are
 genuinely connected to a real terminal — piped output, a redirected non-terminal, or
 running in CI fall back to plain (non-TTY) stdin forwarding and streamed output instead,

@@ -62,6 +62,14 @@ fn merged_environment(
     Some(merged)
 }
 
+/// The `TERM=dumb` every container gets under the interleaved I/O policy
+/// (the `all` output mode) — a full-screen program shouldn't try terminal
+/// control sequences when its output is being line-buffered and prefixed,
+/// matching Batect's `InterleavedContainerIOStreamingOptions`.
+fn dumb_term_environment() -> HashMap<String, String> {
+    HashMap::from([("TERM".to_string(), "dumb".to_string())])
+}
+
 /// Expands and concatenates a container's own `ports` with a task run's
 /// *additional* `ports` — a union, not an override (matching Batect, which
 /// combines these as a `Set`, so there's no concept of one entry replacing
@@ -476,6 +484,12 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     pub fn with_event_sink(mut self, event_sink: Arc<dyn EventSink>) -> Self {
         self.event_sink = event_sink;
         self
+    }
+
+    /// Whether the selected output mode owns container I/O line by line
+    /// (the `all` mode) — see `crate::ui::ContainerIoStreaming`.
+    fn interleaved_output(&self) -> bool {
+        self.event_sink.container_io_streaming() == crate::ui::ContainerIoStreaming::Interleaved
     }
 
     /// Opts into `--use-network`: `network` is validated to exist (and
@@ -932,10 +946,18 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             // being terminals before actually attaching a TTY, and stdin
             // forwarding on `interactive` alone (see `run_container`'s own
             // docs). Computed here, ahead of the environment merge below,
-            // since `term_environment_variable` needs it.
-            let interactive = top_level;
+            // since `term_environment_variable` needs it. Under the
+            // interleaved I/O policy (the `all` output mode) no container is
+            // ever interactive, and every container gets `TERM=dumb`
+            // instead of the host's own terminal type — matching Batect's
+            // `InterleavedContainerIOStreamingOptions`.
+            let interactive = top_level && !self.interleaved_output();
             let proxy_vars = self.proxy_environment_variables(&no_proxy_entries);
-            let term_var = self.term_environment_variable(interactive);
+            let term_var = if self.interleaved_output() {
+                Some(dumb_term_environment())
+            } else {
+                self.term_environment_variable(interactive)
+            };
             let environment = merged_environment(
                 term_var.as_ref(),
                 proxy_vars.as_ref(),
@@ -1128,8 +1150,13 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     let image = self.resolve_image(name, dependency_config).await?;
                     let user_mapping = self.resolve_user_mapping(dependency_config).await?;
                     let proxy_vars = self.proxy_environment_variables(no_proxy_entries);
+                    // Dependencies get no TERM normally (they're never
+                    // interactive), but the interleaved policy sets
+                    // `TERM=dumb` on every container — see
+                    // `run_task_internal`.
+                    let term_var = self.interleaved_output().then(dumb_term_environment);
                     let environment = merged_environment(
-                        None,
+                        term_var.as_ref(),
                         proxy_vars.as_ref(),
                         dependency_config.environment.as_ref(),
                         customisation.and_then(|c| c.environment.as_ref()),
@@ -1254,6 +1281,18 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                                     setup_command.command, name
                                 )
                             })?;
+                        // The command's output, line by line — exec output
+                        // arrives collected rather than streamed, so this
+                        // posts after completion (success or failure; a
+                        // failure's output additionally lands in the error
+                        // below). Only the `all` output mode renders these.
+                        for line in result.output.lines() {
+                            self.event_sink.post(TaskEvent::SetupCommandOutput {
+                                container: name.to_string(),
+                                index: setup_command_index + 1,
+                                line: line.trim_end_matches('\r').to_string(),
+                            });
+                        }
                         if result.exit_code != 0 {
                             let output = if result.output.trim().is_empty() {
                                 ", and did not produce any output".to_string()
@@ -5877,5 +5916,67 @@ mod tests {
             )),
             "no pull events expected: {events:?}"
         );
+    }
+
+    /// A sink declaring the interleaved I/O policy (the `all` output mode)
+    /// — records events like [`RecordingEventSink`], but the engine must
+    /// also react to the policy itself.
+    #[derive(Clone, Default)]
+    struct InterleavedRecordingSink {
+        inner: RecordingEventSink,
+    }
+
+    impl EventSink for InterleavedRecordingSink {
+        fn post(&self, event: TaskEvent) {
+            self.inner.post(event);
+        }
+
+        fn container_io_streaming(&self) -> crate::ui::ContainerIoStreaming {
+            crate::ui::ContainerIoStreaming::Interleaved
+        }
+    }
+
+    #[tokio::test]
+    async fn interleaved_policy_disables_interactive_and_sets_dumb_term_everywhere() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "build-env".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        containers.insert("database".to_string(), container("postgres:15", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "cargo test"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let sink = InterleavedRecordingSink::default();
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone())
+            .with_event_sink(Arc::new(sink.clone()))
+            // A host TERM that must *not* reach the containers — the
+            // interleaved policy forces `dumb` instead.
+            .with_host_env(|name| (name == "TERM").then(|| "xterm-256color".to_string()));
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        // The top-level task would normally be interactive-eligible; under
+        // the interleaved policy it must not be (no TTY, no stdin).
+        assert_eq!(docker.interactive_for("build-env"), Some(false));
+        // Every container — the task's own and the dependency — gets
+        // TERM=dumb, not the host's own terminal type.
+        for name in ["build-env", "database"] {
+            let environment = docker
+                .environment_for(name)
+                .unwrap_or_else(|| panic!("no environment recorded for '{name}'"));
+            assert_eq!(
+                environment.get("TERM").map(String::as_str),
+                Some("dumb"),
+                "container '{name}' should get TERM=dumb: {environment:?}"
+            );
+        }
     }
 }

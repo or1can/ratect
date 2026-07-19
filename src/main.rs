@@ -18,6 +18,7 @@ use ratect_core::config::{format_task_list, format_task_list_quiet, Config};
 use ratect_core::docker::DockerClient;
 use ratect_core::engine::TaskEngine;
 use ratect_core::ui::fancy::FancyEventLogger;
+use ratect_core::ui::interleaved::InterleavedEventLogger;
 use ratect_core::ui::simple::SimpleEventLogger;
 use ratect_core::ui::{select_output_style, EventSink, NullEventSink, OutputStyle};
 use std::collections::HashMap;
@@ -247,12 +248,7 @@ async fn run() -> Result<()> {
                     }
                     Arc::new(FancyEventLogger::stdout(args.no_color))
                 }
-                OutputStyle::All => {
-                    anyhow::bail!(
-                        "--output all is not implemented yet (it arrives later in \
-                         0.16.0) — 'fancy', 'simple' and 'quiet' are available today."
-                    );
-                }
+                OutputStyle::All => Arc::new(InterleavedEventLogger::stdout(args.no_color)),
             };
             let docker = DockerClient::new()?.with_event_sink(Arc::clone(&event_sink));
             let mut engine = TaskEngine::new(config, docker).with_event_sink(event_sink);

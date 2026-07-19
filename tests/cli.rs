@@ -271,20 +271,6 @@ fn list_tasks_with_quiet_output_is_machine_readable() {
 }
 
 #[test]
-fn requesting_an_unimplemented_output_style_fails_with_a_clear_error() {
-    let output = ratect_command()
-        .args(["-o", "all", "-f"])
-        .arg(sample_config_path())
-        .arg("test-task")
-        .output()
-        .expect("failed to run ratect");
-
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not implemented yet"), "stderr:\n{stderr}");
-}
-
-#[test]
 fn requesting_fancy_output_without_an_interactive_console_fails_clearly() {
     // This test's own spawned process has piped stdout — never a terminal —
     // so an explicit `-o fancy` must be rejected up front (a deliberate
@@ -672,6 +658,74 @@ fn fancy_output_renders_a_live_status_block_on_a_terminal_via_docker() {
         .expect("ratect did not exit after the task finished")
         .expect("failed to wait for ratect");
     assert!(status.success(), "ratect should exit cleanly: {status:?}");
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `redis:7-alpine` and `alpine:3.18.2`. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// Proves `--output all` end to end: every line on stdout carries a padded
+/// container (or task) prefix, and — uniquely to this mode — dependency
+/// containers' own stdout is visible at all (redis's startup log reaching
+/// stdout under the `database` prefix proves the background log-follower
+/// actually attached).
+#[test]
+#[ignore]
+fn all_output_prefixes_every_line_and_shows_dependency_output_via_docker() {
+    let output = ratect_command()
+        .args(["-o", "all", "-f"])
+        .arg(sidecar_config_path())
+        .arg("ping-sidecars")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Width = len("ping-sidecars") = 13, the longest name in play.
+    assert!(
+        stdout.contains("ping-sidecars | Running ping-sidecars..."),
+        "missing task preamble:\n{stdout}"
+    );
+    // Container milestones, prefixed and padded to the same column.
+    assert!(
+        stdout.contains("database      | Container became healthy."),
+        "missing prefixed dependency milestone:\n{stdout}"
+    );
+    // The task container's own output, prefixed.
+    assert!(
+        stdout.contains("app           | ") && stdout.contains("packets transmitted"),
+        "missing prefixed task output:\n{stdout}"
+    );
+    // Dependency stdout — the thing only this mode shows: redis logs its
+    // startup banner well before its health check passes.
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("database      | ") && line.contains("Ready to accept")),
+        "missing dependency container output:\n{stdout}"
+    );
+    // Cleanup + summary lines are task-prefixed.
+    assert!(
+        stdout.contains("ping-sidecars | Cleaning up..."),
+        "missing cleanup line:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ping-sidecars | ping-sidecars finished with exit code 0 in "),
+        "missing summary line:\n{stdout}"
+    );
+    // Every non-empty stdout line is prefixed — nothing bypasses the
+    // interleaved output.
+    for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
+        assert!(
+            line.contains(" | "),
+            "unprefixed line in all-mode output: {line:?}\nfull:\n{stdout}"
+        );
+    }
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.

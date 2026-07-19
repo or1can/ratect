@@ -32,6 +32,7 @@
 //! product's actual output, on stdout — see docs/how-it-works.md.
 
 pub mod fancy;
+pub mod interleaved;
 pub mod simple;
 
 use std::io::IsTerminal;
@@ -162,6 +163,25 @@ pub enum TaskEvent {
     TaskFailed {
         task: String,
     },
+    /// One line of a container's own stdout/stderr — only posted under
+    /// [`ContainerIoStreaming::Interleaved`] (see that type: in every other
+    /// mode the task container's output goes straight to the real stdout
+    /// and dependency output isn't captured at all), line-buffered with
+    /// trailing `\r` stripped by `docker.rs`.
+    ContainerOutput {
+        container: String,
+        line: String,
+    },
+    /// One line of a setup command's output — posted by the engine after
+    /// the command completes (its output arrives collected, not streamed).
+    /// Only the interleaved logger renders these; every other mode
+    /// discards setup-command output, matching Batect.
+    SetupCommandOutput {
+        container: String,
+        /// 1-based, matching [`TaskEvent::RunningSetupCommand`].
+        index: usize,
+        line: String,
+    },
 }
 
 /// One container in a task's dependency graph, as carried by
@@ -261,11 +281,38 @@ pub fn console_dimensions_available() -> bool {
     crossterm::terminal::size().is_ok()
 }
 
+/// How container stdout/stderr reaches the user — decided by the selected
+/// output style, not configured separately, exactly like Batect (whose
+/// `EventLogger` carries its `ioStreamingOptions`): picking the logger *is*
+/// picking the I/O policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerIoStreaming {
+    /// The task's own container streams raw to the real stdout (with
+    /// interactive TTY/stdin eligibility as usual); dependency output isn't
+    /// captured at all. Batect's `TaskContainerOnlyIOStreamingOptions` —
+    /// what `fancy`/`simple`/`quiet` all use.
+    TaskContainerOnly,
+    /// Every container's output (dependencies included) is line-buffered
+    /// and posted as [`TaskEvent::ContainerOutput`] events instead of
+    /// reaching stdout directly; no container gets a TTY or stdin, and
+    /// every container gets `TERM=dumb`. Batect's
+    /// `InterleavedContainerIOStreamingOptions` — what `all` uses.
+    Interleaved,
+}
+
 /// Receives every [`TaskEvent`] a task execution produces. Implementations
 /// must be safe to call from concurrent branches of the dependency graph —
 /// serialize any rendering internally.
 pub trait EventSink: Send + Sync {
     fn post(&self, event: TaskEvent);
+
+    /// The I/O streaming policy this logger needs — see
+    /// [`ContainerIoStreaming`]. `engine.rs` and `docker.rs` consult this
+    /// rather than being configured separately, so the policy can never
+    /// disagree with the selected output style.
+    fn container_io_streaming(&self) -> ContainerIoStreaming {
+        ContainerIoStreaming::TaskContainerOnly
+    }
 }
 
 /// Discards every event — the default sink wired into
@@ -282,15 +329,25 @@ impl EventSink for NullEventSink {
 /// palette up front.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Color {
-    Green,
     Red,
+    Green,
+    Yellow,
+    Blue,
+    Magenta,
+    Cyan,
+    White,
 }
 
 impl Color {
     fn ansi_code(self) -> &'static str {
         match self {
-            Color::Green => "32",
             Color::Red => "31",
+            Color::Green => "32",
+            Color::Yellow => "33",
+            Color::Blue => "34",
+            Color::Magenta => "35",
+            Color::Cyan => "36",
+            Color::White => "37",
         }
     }
 }
