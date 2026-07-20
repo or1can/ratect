@@ -461,6 +461,13 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     /// which is the only other thing that could otherwise trigger this
     /// check; see `run_task_internal`'s `top_level` parameter).
     skip_prerequisites: bool,
+    /// Set via `--override-image <container>=<image>` (repeatable):
+    /// container name -> the image to pull instead of whatever that
+    /// container actually configures. Validated against `config.containers`
+    /// up front (see `with_image_overrides`) rather than left to fail lazily
+    /// the first time an overridden container is reached. See
+    /// `resolve_image`.
+    image_overrides: HashMap<String, String>,
     /// Where task-execution milestones go for the user to see —
     /// [`NullEventSink`] (silent) by default, a real output-mode logger via
     /// `with_event_sink`. See `crate::ui`.
@@ -482,6 +489,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             host_env: Box::new(|name| std::env::var(name).ok()),
             event_sink: Arc::new(NullEventSink),
             skip_prerequisites: false,
+            image_overrides: HashMap::new(),
         }
     }
 
@@ -528,6 +536,24 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     pub fn without_prerequisites(mut self) -> Self {
         self.skip_prerequisites = true;
         self
+    }
+
+    /// Opts into `--override-image <container>=<image>`: every entry's
+    /// container name is validated to exist up front — matching Batect's own
+    /// eager validation and error wording exactly — rather than only failing
+    /// the first time (if ever) that container is actually reached during a
+    /// task run. See `resolve_image`.
+    pub fn with_image_overrides(mut self, overrides: HashMap<String, String>) -> Result<Self> {
+        for name in overrides.keys() {
+            if !self.config.containers.contains_key(name) {
+                anyhow::bail!(
+                    "Cannot override image for container '{name}' because there is no \
+                     container named '{name}' defined."
+                );
+            }
+        }
+        self.image_overrides = overrides;
+        Ok(self)
     }
 
     #[cfg(test)]
@@ -590,6 +616,49 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         Some(HashMap::from([("TERM".to_string(), term)]))
     }
 
+    /// Pulls `image` under `policy` (deduped by image name across the whole
+    /// invocation via `pulled_images` — see `resolve_image`), returning the
+    /// image reference to run. Shared by `resolve_image`'s two pull-shaped
+    /// callers: a container's own configured `image`, and an
+    /// `--override-image` replacement (always `IfNotPresent`, never the
+    /// container's own configured policy).
+    async fn resolve_pulled_image(
+        &self,
+        image: &str,
+        policy: crate::config::ImagePullPolicy,
+    ) -> Result<String> {
+        let cell = get_or_create_cell(&self.pulled_images, image);
+        let result = cell
+            .get_or_init(|| async {
+                let outcome: Result<String> = async {
+                    let should_pull = match policy {
+                        crate::config::ImagePullPolicy::Always => true,
+                        crate::config::ImagePullPolicy::IfNotPresent => {
+                            !self.docker.image_exists_locally(image).await?
+                        }
+                    };
+                    if should_pull {
+                        // Milestones post only when a pull actually happens —
+                        // a skip (image already local under `IfNotPresent`)
+                        // stays silent, matching Batect.
+                        self.event_sink.post(TaskEvent::ImagePullStarting {
+                            image: image.to_string(),
+                        });
+                        self.docker.pull_image(image).await?;
+                        self.event_sink.post(TaskEvent::ImagePullCompleted {
+                            image: image.to_string(),
+                        });
+                    }
+                    Ok(image.to_string())
+                }
+                .await;
+                outcome.map_err(Arc::new)
+            })
+            .await;
+
+        unshare(result)
+    }
+
     /// Resolves `container_config`'s `image` (pulling it, deduped by image
     /// name) or `build_directory` (building it, deduped by `container_name`)
     /// into the image reference to actually run. Shared by a task's own
@@ -624,38 +693,24 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         container_name: &str,
         container_config: &Container,
     ) -> Result<String> {
-        if let Some(image) = &container_config.image {
-            let cell = get_or_create_cell(&self.pulled_images, image);
-            let policy = container_config.image_pull_policy.unwrap_or_default();
-            let result = cell
-                .get_or_init(|| async {
-                    let outcome: Result<String> = async {
-                        let should_pull = match policy {
-                            crate::config::ImagePullPolicy::Always => true,
-                            crate::config::ImagePullPolicy::IfNotPresent => {
-                                !self.docker.image_exists_locally(image).await?
-                            }
-                        };
-                        if should_pull {
-                            // Milestones post only when a pull actually
-                            // happens — a skip (image already local under
-                            // `IfNotPresent`) stays silent, matching Batect.
-                            self.event_sink.post(TaskEvent::ImagePullStarting {
-                                image: image.clone(),
-                            });
-                            self.docker.pull_image(image).await?;
-                            self.event_sink.post(TaskEvent::ImagePullCompleted {
-                                image: image.clone(),
-                            });
-                        }
-                        Ok(image.clone())
-                    }
-                    .await;
-                    outcome.map_err(Arc::new)
-                })
+        // `--override-image` wholesale replaces whatever the container
+        // actually configures (`image` *or* `build_directory`, and that
+        // configured `image`'s own `image_pull_policy`) with a plain pull of
+        // the override value under the default `IfNotPresent` policy —
+        // matching Batect's `TaskSpecialisedConfigurationFactory`, which
+        // replaces the container's entire `imageSource` with a fresh
+        // `PullImage(value)` rather than patching the existing one. A build
+        // is never attempted for an overridden container, even if
+        // `build_directory` is set.
+        if let Some(image) = self.image_overrides.get(container_name) {
+            return self
+                .resolve_pulled_image(image, crate::config::ImagePullPolicy::IfNotPresent)
                 .await;
+        }
 
-            unshare(result)
+        if let Some(image) = &container_config.image {
+            let policy = container_config.image_pull_policy.unwrap_or_default();
+            self.resolve_pulled_image(image, policy).await
         } else if let Some(build_directory) = &container_config.build_directory {
             let cell = get_or_create_cell(&self.built_images, container_name);
             let result = cell
@@ -5077,6 +5132,136 @@ mod tests {
         engine.run_task("test", &[]).await.unwrap();
 
         assert!(docker.events().contains(&"pull:alpine:3.18".to_string()));
+    }
+
+    #[tokio::test]
+    async fn image_override_pulls_the_override_instead_of_the_configured_image() {
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let overrides = HashMap::from([("build-env".to_string(), "ubuntu:22.04".to_string())]);
+        let engine = TaskEngine::new(config, docker.clone())
+            .with_image_overrides(overrides)
+            .unwrap();
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        let events = docker.events();
+        assert!(
+            events.contains(&"pull:ubuntu:22.04".to_string()),
+            "{events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| e.contains("alpine")),
+            "the configured image should never be touched once overridden: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn image_override_ignores_the_containers_configured_pull_policy() {
+        // `Always` on the original container must not leak onto the
+        // override — Batect's own override replaces the whole `imageSource`
+        // with a fresh `PullImage` under its default `IfNotPresent`, not a
+        // patched copy of the original.
+        let mut container_config = container("alpine:3.18", None);
+        container_config.image_pull_policy = Some(crate::config::ImagePullPolicy::Always);
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default().with_local_image("ubuntu:22.04");
+        let overrides = HashMap::from([("build-env".to_string(), "ubuntu:22.04".to_string())]);
+        let engine = TaskEngine::new(config, docker.clone())
+            .with_image_overrides(overrides)
+            .unwrap();
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        assert!(
+            !docker.events().contains(&"pull:ubuntu:22.04".to_string()),
+            "already-local override image should be skipped under the override's own \
+             IfNotPresent policy, not re-pulled per the original container's Always: {:?}",
+            docker.events()
+        );
+    }
+
+    #[tokio::test]
+    async fn image_override_replaces_a_build_directory_container_with_a_pull_instead() {
+        let mut containers = HashMap::new();
+        let mut container_config = container("unused-if-overridden", None);
+        container_config.image = None;
+        container_config.build_directory = Some(".".to_string());
+        containers.insert("build-env".to_string(), container_config);
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let overrides = HashMap::from([("build-env".to_string(), "ubuntu:22.04".to_string())]);
+        let engine = TaskEngine::new(config, docker.clone())
+            .with_image_overrides(overrides)
+            .unwrap();
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        let events = docker.events();
+        assert!(
+            events.contains(&"pull:ubuntu:22.04".to_string()),
+            "{events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| e.starts_with("build:")),
+            "an overridden container must never be built, even with build_directory set: {events:?}"
+        );
+    }
+
+    #[test]
+    fn with_image_overrides_rejects_an_unknown_container_name() {
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let overrides =
+            HashMap::from([("no-such-container".to_string(), "ubuntu:22.04".to_string())]);
+        let err = match TaskEngine::new(config, docker).with_image_overrides(overrides) {
+            Ok(_) => panic!("expected with_image_overrides to reject an unknown container name"),
+            Err(err) => err,
+        };
+
+        assert_eq!(
+            err.to_string(),
+            "Cannot override image for container 'no-such-container' because there is no \
+             container named 'no-such-container' defined."
+        );
     }
 
     #[tokio::test]

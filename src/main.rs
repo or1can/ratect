@@ -64,6 +64,13 @@ struct Args {
     #[arg(long = "skip-prerequisites")]
     skip_prerequisites: bool,
 
+    /// Override the image used by a container, as CONTAINER=IMAGE
+    /// (repeatable). The container's own `image`/`build_directory` and
+    /// `image_pull_policy` are ignored entirely — the override is always
+    /// pulled under the default IfNotPresent policy.
+    #[arg(long = "override-image", value_parser = parse_container_image_override)]
+    override_image: Vec<(String, String)>,
+
     /// Force a particular style of output (does not affect task command
     /// output): fancy (default when the console supports it — a live
     /// per-container status display), simple (plain lines, no updating
@@ -115,6 +122,14 @@ fn parse_config_var(s: &str) -> std::result::Result<(String, String), String> {
     match s.split_once('=') {
         Some((name, value)) => Ok((name.to_string(), value.to_string())),
         None => Err(format!("expected NAME=VALUE, got '{s}'")),
+    }
+}
+
+/// Parses an `--override-image` value of the form `CONTAINER=IMAGE`.
+fn parse_container_image_override(s: &str) -> std::result::Result<(String, String), String> {
+    match s.split_once('=') {
+        Some((container, image)) => Ok((container.to_string(), image.to_string())),
+        None => Err(format!("expected CONTAINER=IMAGE, got '{s}'")),
     }
 }
 
@@ -263,6 +278,9 @@ async fn run() -> Result<()> {
             }
             if args.skip_prerequisites {
                 engine = engine.without_prerequisites();
+            }
+            if !args.override_image.is_empty() {
+                engine = engine.with_image_overrides(args.override_image.into_iter().collect())?;
             }
             engine.run_task(&task_name, &args.additional_args).await?;
         }
@@ -430,6 +448,38 @@ mod tests {
     fn defaults_skip_prerequisites_to_false() {
         let args = Args::try_parse_from(["ratect"]).unwrap();
         assert!(!args.skip_prerequisites);
+    }
+
+    #[test]
+    fn parses_repeated_override_image_flags() {
+        let args = Args::try_parse_from([
+            "ratect",
+            "--override-image",
+            "build-env=alpine:3.18",
+            "--override-image",
+            "test-env=ubuntu:22.04",
+            "build",
+        ])
+        .unwrap();
+        assert_eq!(
+            args.override_image,
+            vec![
+                ("build-env".to_string(), "alpine:3.18".to_string()),
+                ("test-env".to_string(), "ubuntu:22.04".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn defaults_override_image_to_empty() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert!(args.override_image.is_empty());
+    }
+
+    #[test]
+    fn rejects_override_image_without_equals_sign() {
+        let result = Args::try_parse_from(["ratect", "--override-image", "NOEQUALS", "build"]);
+        assert!(result.is_err());
     }
 
     #[test]
