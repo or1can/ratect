@@ -468,6 +468,22 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     /// the first time an overridden container is reached. See
     /// `resolve_image`.
     image_overrides: HashMap<String, String>,
+    /// Set via `--tag-image <container>=<tag>` (repeatable, multiple tags
+    /// per container): container name -> extra tags applied to that
+    /// container's *built* image, in addition to the default
+    /// `<project_name>-<container_name>` tag `resolve_image` already
+    /// applies. Never validated against `config.containers` up front (no
+    /// eager check here, unlike `image_overrides`) — matching Batect, which
+    /// only ever surfaces a problem when the named container is actually
+    /// reached (see `resolve_image`) or, for one that's never reached at
+    /// all, once the whole invocation finishes (see `run_task`).
+    image_tags: HashMap<String, std::collections::HashSet<String>>,
+    /// Every container name `resolve_image` has been asked to resolve so
+    /// far this invocation (task and prerequisites alike) — regardless of
+    /// whether the underlying pull/build was deduped. Used only to answer
+    /// `--tag-image`'s "did this container actually run" check once the
+    /// whole invocation finishes (see `run_task`).
+    containers_used: Mutex<HashSet<String>>,
     /// Where task-execution milestones go for the user to see —
     /// [`NullEventSink`] (silent) by default, a real output-mode logger via
     /// `with_event_sink`. See `crate::ui`.
@@ -490,6 +506,8 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             event_sink: Arc::new(NullEventSink),
             skip_prerequisites: false,
             image_overrides: HashMap::new(),
+            image_tags: HashMap::new(),
+            containers_used: Mutex::new(HashSet::new()),
         }
     }
 
@@ -554,6 +572,19 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         }
         self.image_overrides = overrides;
         Ok(self)
+    }
+
+    /// Opts into `--tag-image <container>=<tag>`: extra tags applied to a
+    /// container's *built* image once it's actually resolved (see
+    /// `resolve_image`) — never validated up front, matching Batect (a
+    /// container name that's never reached, or that ends up using a pulled
+    /// image, is only ever an error once that's actually known).
+    pub fn with_image_tags(
+        mut self,
+        tags: HashMap<String, std::collections::HashSet<String>>,
+    ) -> Self {
+        self.image_tags = tags;
+        self
     }
 
     #[cfg(test)]
@@ -659,6 +690,23 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         unshare(result)
     }
 
+    /// `--tag-image` only ever makes sense for a *built* image — errors
+    /// immediately (rather than silently ignoring the tag request) the
+    /// moment a tagged container name turns out to resolve via a pull
+    /// instead, whether that's its own configured `image` or an
+    /// `--override-image` replacement. Matches Batect's
+    /// `ImageTaggingValidator`/`ContainerUsesPulledImageException` message
+    /// exactly.
+    fn reject_tagged_pulled_image(&self, container_name: &str) -> Result<()> {
+        if self.image_tags.contains_key(container_name) {
+            anyhow::bail!(
+                "The image built for container '{container_name}' was requested to be tagged \
+                 with --tag-image, but '{container_name}' uses a pulled image."
+            );
+        }
+        Ok(())
+    }
+
     /// Resolves `container_config`'s `image` (pulling it, deduped by image
     /// name) or `build_directory` (building it, deduped by `container_name`)
     /// into the image reference to actually run. Shared by a task's own
@@ -693,6 +741,13 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         container_name: &str,
         container_config: &Container,
     ) -> Result<String> {
+        // Recorded unconditionally, regardless of pull/build dedup — see
+        // `containers_used`'s own doc comment for why.
+        self.containers_used
+            .lock()
+            .unwrap()
+            .insert(container_name.to_string());
+
         // `--override-image` wholesale replaces whatever the container
         // actually configures (`image` *or* `build_directory`, and that
         // configured `image`'s own `image_pull_policy`) with a plain pull of
@@ -703,12 +758,14 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         // is never attempted for an overridden container, even if
         // `build_directory` is set.
         if let Some(image) = self.image_overrides.get(container_name) {
+            self.reject_tagged_pulled_image(container_name)?;
             return self
                 .resolve_pulled_image(image, crate::config::ImagePullPolicy::IfNotPresent)
                 .await;
         }
 
         if let Some(image) = &container_config.image {
+            self.reject_tagged_pulled_image(container_name)?;
             let policy = container_config.image_pull_policy.unwrap_or_default();
             self.resolve_pulled_image(image, policy).await
         } else if let Some(build_directory) = &container_config.build_directory {
@@ -751,6 +808,16 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         self.event_sink.post(TaskEvent::ImageBuildCompleted {
                             container: container_name.to_string(),
                         });
+                        // `--tag-image`: applied once here (inside this
+                        // cell's do-once build), never re-applied on a later
+                        // cache hit for the same container this invocation.
+                        if let Some(tags) = self.image_tags.get(container_name) {
+                            if !tags.is_empty() {
+                                let mut tags: Vec<String> = tags.iter().cloned().collect();
+                                tags.sort();
+                                self.docker.tag_image(&image_id, &tags).await?;
+                            }
+                        }
                         Ok(image_id)
                     }
                     .await;
@@ -806,8 +873,44 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     /// Thin wrapper over `run_task_scoped` fixing `top_level` to `true` — the
     /// only externally-visible entry point (called once from `main.rs`), so
     /// it's always the task actually named on the command line.
+    ///
+    /// The `--tag-image` "did every tagged container actually run"
+    /// validation happens here, once, only after the whole task (and every
+    /// prerequisite) has completed successfully — matching Batect's
+    /// `SessionRunner`, which only ever reaches its own equivalent check
+    /// once every task in the run has exited zero; any failure short-
+    /// circuits before it's ever consulted, same as the early `?` here.
     pub async fn run_task(&self, task_name: &str, additional_args: &[String]) -> Result<()> {
-        self.run_task_scoped(task_name, additional_args, true).await
+        self.run_task_scoped(task_name, additional_args, true)
+            .await?;
+
+        let containers_used = self.containers_used.lock().unwrap();
+        let mut untagged: Vec<String> = self
+            .image_tags
+            .keys()
+            .filter(|name| !containers_used.contains(*name))
+            .cloned()
+            .collect();
+        drop(containers_used);
+        if !untagged.is_empty() {
+            untagged.sort();
+            let quoted: Vec<String> = untagged.iter().map(|name| format!("'{name}'")).collect();
+            if quoted.len() == 1 {
+                anyhow::bail!(
+                    "The image for container {} was requested to be tagged with --tag-image, \
+                     but this container did not run as part of the task or its prerequisites.",
+                    quoted[0]
+                );
+            } else {
+                anyhow::bail!(
+                    "The images for containers {} were requested to be tagged with --tag-image, \
+                     but these containers did not run as part of the task or its prerequisites.",
+                    human_readable_list(&quoted, "and")
+                );
+            }
+        }
+
+        Ok(())
     }
 
     /// `top_level` is `true` only for the task actually named on the command
@@ -1914,6 +2017,13 @@ mod tests {
             // has no such concept, so it just echoes the tag back — tests
             // that assert `image_for(name) == tag` still hold either way.
             Ok(tag.to_string())
+        }
+
+        async fn tag_image(&self, image_id: &str, tags: &[String]) -> Result<()> {
+            for tag in tags {
+                self.push(format!("tag:{image_id}:{tag}"));
+            }
+            Ok(())
         }
 
         async fn create_network(&self, name: &str) -> Result<()> {
@@ -5261,6 +5371,136 @@ mod tests {
             err.to_string(),
             "Cannot override image for container 'no-such-container' because there is no \
              container named 'no-such-container' defined."
+        );
+    }
+
+    #[tokio::test]
+    async fn tag_image_tags_a_built_image_in_addition_to_the_default_tag() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "build-env".to_string(),
+            container_with_build_directory(".", None),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let tags = HashMap::from([(
+            "build-env".to_string(),
+            HashSet::from(["my.registry/build-env:v1".to_string()]),
+        )]);
+        let engine = TaskEngine::new(config, docker.clone()).with_image_tags(tags);
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        let events = docker.events();
+        assert!(
+            events.contains(&"tag:demo-build-env:my.registry/build-env:v1".to_string()),
+            "{events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn tag_image_errors_immediately_when_the_container_uses_a_pulled_image() {
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let tags = HashMap::from([(
+            "build-env".to_string(),
+            HashSet::from(["my.registry/build-env:v1".to_string()]),
+        )]);
+        let engine = TaskEngine::new(config, docker).with_image_tags(tags);
+
+        let err = engine.run_task("test", &[]).await.unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "The image built for container 'build-env' was requested to be tagged with \
+             --tag-image, but 'build-env' uses a pulled image."
+        );
+    }
+
+    #[tokio::test]
+    async fn tag_image_errors_immediately_when_an_override_image_replaces_a_build_with_a_pull() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "build-env".to_string(),
+            container_with_build_directory(".", None),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let overrides = HashMap::from([("build-env".to_string(), "ubuntu:22.04".to_string())]);
+        let tags = HashMap::from([(
+            "build-env".to_string(),
+            HashSet::from(["my.registry/build-env:v1".to_string()]),
+        )]);
+        let engine = TaskEngine::new(config, docker)
+            .with_image_overrides(overrides)
+            .unwrap()
+            .with_image_tags(tags);
+
+        let err = engine.run_task("test", &[]).await.unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "The image built for container 'build-env' was requested to be tagged with \
+             --tag-image, but 'build-env' uses a pulled image."
+        );
+    }
+
+    #[tokio::test]
+    async fn tag_image_errors_once_the_task_finishes_if_the_tagged_container_never_ran() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "build-env".to_string(),
+            container_with_build_directory(".", None),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let tags = HashMap::from([(
+            "no-such-container".to_string(),
+            HashSet::from(["my.registry/foo:v1".to_string()]),
+        )]);
+        let engine = TaskEngine::new(config, docker).with_image_tags(tags);
+
+        let err = engine.run_task("test", &[]).await.unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "The image for container 'no-such-container' was requested to be tagged with \
+             --tag-image, but this container did not run as part of the task or its \
+             prerequisites."
         );
     }
 

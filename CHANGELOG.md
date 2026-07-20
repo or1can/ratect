@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`--skip-prerequisites`**: skips the named task's own `prerequisites` — scoped only to the task actually given on the command line; a task reached as someone else's prerequisite still always runs its own prerequisites regardless. Matches Batect's flag of the same name. See [CLI reference](docs/cli-reference.md).
 - **`--override-image <CONTAINER=IMAGE>`**: overrides the image used by `CONTAINER` (repeatable). Wholesale replaces the container's `image`/`build_directory` and `image_pull_policy` — the override is always pulled under the default `IfNotPresent` policy, matching Batect's own `TaskSpecialisedConfigurationFactory` exactly, including its eager "container does not exist" validation. See [CLI reference](docs/cli-reference.md).
+- **`--tag-image <CONTAINER=TAG>`**: tags the image built by `CONTAINER` with `TAG`, in addition to the default `<project_name>-<container_name>` tag (repeatable; a container may be given more than once for multiple tags). Errors immediately if the container ends up using a pulled image instead (whether configured that way or via `--override-image`), and once the whole task and its prerequisites finish if the container never actually ran — matching Batect's `ImageTaggingValidator` exactly. New `ContainerRuntime::tag_image`. See [CLI reference](docs/cli-reference.md).
 
 ## [0.16.0] - 2026-07-20
 

@@ -1022,6 +1022,14 @@ pub trait ContainerRuntime {
         tag: &str,
     ) -> Result<String>;
 
+    /// Tags `image_id` (the ID `build_image` returned) with each of `tags`,
+    /// in addition to `build_image`'s own `tag` — used by `--tag-image`.
+    /// Both bollard's classic and BuildKit build options only ever accept
+    /// one `t` value each, so extra tags are applied as separate `docker
+    /// tag`-equivalent calls after the build completes, rather than folded
+    /// into the build request itself.
+    async fn tag_image(&self, image_id: &str, tags: &[String]) -> Result<()>;
+
     async fn create_network(&self, name: &str) -> Result<()>;
 
     async fn remove_network(&self, name: &str) -> Result<()>;
@@ -1201,6 +1209,24 @@ pub struct DockerClient {
     /// the follower has finished flushing everything it's going to,
     /// instead of the two racing as genuinely fire-and-forget tasks.
     log_followers: std::sync::Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
+}
+
+/// Splits a full image reference (as given to `--tag-image`, e.g.
+/// `myrepo/myimage:v2` or `myrepo/myimage`) into the repository and tag
+/// components Docker's tag API takes separately. A colon before the last
+/// `/` is a registry host's port (e.g. `localhost:5000/myimage` has no tag
+/// component), not a tag separator — mirrors Docker's own image-reference
+/// parsing rule. `None` for the tag means "no tag given"; callers apply
+/// Docker's own implicit `latest` default.
+fn split_image_reference(reference: &str) -> (&str, Option<&str>) {
+    let repo_start = reference.rfind('/').map_or(0, |i| i + 1);
+    match reference[repo_start..].rfind(':') {
+        Some(colon) => (
+            &reference[..repo_start + colon],
+            Some(&reference[repo_start + colon + 1..]),
+        ),
+        None => (reference, None),
+    }
 }
 
 /// Picks the builder for this invocation's image builds, matching Batect's
@@ -1784,6 +1810,22 @@ impl ContainerRuntime for DockerClient {
         })?;
 
         Ok(image_id)
+    }
+
+    async fn tag_image(&self, image_id: &str, tags: &[String]) -> Result<()> {
+        for tag in tags {
+            let (repo, tag_component) = split_image_reference(tag);
+            let options = bollard::query_parameters::TagImageOptionsBuilder::default()
+                .repo(repo)
+                .tag(tag_component.unwrap_or("latest"))
+                .build();
+            self.docker
+                .tag_image(image_id, Some(options))
+                .await
+                .with_context(|| format!("Failed to tag image '{}' as '{}'", image_id, tag))?;
+            tracing::debug!(image_id, tag, "tagged image");
+        }
+        Ok(())
     }
 
     async fn create_network(&self, name: &str) -> Result<()> {
@@ -2771,6 +2813,35 @@ mod tests {
     fn an_unparseable_docker_buildkit_env_var_is_a_hard_error() {
         let err = select_builder_version(Some("banana"), Some("2")).unwrap_err();
         assert!(err.to_string().contains("'banana'"));
+    }
+
+    #[test]
+    fn split_image_reference_separates_repo_and_tag() {
+        assert_eq!(
+            split_image_reference("myrepo/myimage:v2"),
+            ("myrepo/myimage", Some("v2"))
+        );
+        assert_eq!(split_image_reference("myimage:v2"), ("myimage", Some("v2")));
+    }
+
+    #[test]
+    fn split_image_reference_with_no_tag_has_none() {
+        assert_eq!(
+            split_image_reference("myrepo/myimage"),
+            ("myrepo/myimage", None)
+        );
+    }
+
+    #[test]
+    fn split_image_reference_treats_a_registry_ports_colon_as_not_a_tag_separator() {
+        assert_eq!(
+            split_image_reference("localhost:5000/myimage"),
+            ("localhost:5000/myimage", None)
+        );
+        assert_eq!(
+            split_image_reference("localhost:5000/myimage:v2"),
+            ("localhost:5000/myimage", Some("v2"))
+        );
     }
 
     #[test]

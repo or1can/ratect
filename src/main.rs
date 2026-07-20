@@ -68,8 +68,15 @@ struct Args {
     /// (repeatable). The container's own `image`/`build_directory` and
     /// `image_pull_policy` are ignored entirely — the override is always
     /// pulled under the default IfNotPresent policy.
-    #[arg(long = "override-image", value_parser = parse_container_image_override)]
+    #[arg(long = "override-image", value_parser = parse_container_value_pair)]
     override_image: Vec<(String, String)>,
+
+    /// Tag the image built by a container, as CONTAINER=TAG (repeatable;
+    /// a container may be given more than once to apply multiple tags).
+    /// Only valid for a container that actually builds an image — errors
+    /// if it ends up using a pulled image, or if it never runs at all.
+    #[arg(long = "tag-image", value_parser = parse_container_value_pair)]
+    tag_image: Vec<(String, String)>,
 
     /// Force a particular style of output (does not affect task command
     /// output): fancy (default when the console supports it — a live
@@ -125,11 +132,12 @@ fn parse_config_var(s: &str) -> std::result::Result<(String, String), String> {
     }
 }
 
-/// Parses an `--override-image` value of the form `CONTAINER=IMAGE`.
-fn parse_container_image_override(s: &str) -> std::result::Result<(String, String), String> {
+/// Parses a `CONTAINER=VALUE` pair, shared by `--override-image` (VALUE is
+/// an image) and `--tag-image` (VALUE is a tag).
+fn parse_container_value_pair(s: &str) -> std::result::Result<(String, String), String> {
     match s.split_once('=') {
-        Some((container, image)) => Ok((container.to_string(), image.to_string())),
-        None => Err(format!("expected CONTAINER=IMAGE, got '{s}'")),
+        Some((container, value)) => Ok((container.to_string(), value.to_string())),
+        None => Err(format!("expected CONTAINER=VALUE, got '{s}'")),
     }
 }
 
@@ -281,6 +289,14 @@ async fn run() -> Result<()> {
             }
             if !args.override_image.is_empty() {
                 engine = engine.with_image_overrides(args.override_image.into_iter().collect())?;
+            }
+            if !args.tag_image.is_empty() {
+                let mut image_tags: HashMap<String, std::collections::HashSet<String>> =
+                    HashMap::new();
+                for (container, tag) in args.tag_image {
+                    image_tags.entry(container).or_default().insert(tag);
+                }
+                engine = engine.with_image_tags(image_tags);
             }
             engine.run_task(&task_name, &args.additional_args).await?;
         }
@@ -479,6 +495,41 @@ mod tests {
     #[test]
     fn rejects_override_image_without_equals_sign() {
         let result = Args::try_parse_from(["ratect", "--override-image", "NOEQUALS", "build"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parses_repeated_tag_image_flags() {
+        let args = Args::try_parse_from([
+            "ratect",
+            "--tag-image",
+            "build-env=my.registry/app:v1",
+            "--tag-image",
+            "build-env=my.registry/app:latest",
+            "build",
+        ])
+        .unwrap();
+        assert_eq!(
+            args.tag_image,
+            vec![
+                ("build-env".to_string(), "my.registry/app:v1".to_string()),
+                (
+                    "build-env".to_string(),
+                    "my.registry/app:latest".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn defaults_tag_image_to_empty() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert!(args.tag_image.is_empty());
+    }
+
+    #[test]
+    fn rejects_tag_image_without_equals_sign() {
+        let result = Args::try_parse_from(["ratect", "--tag-image", "NOEQUALS", "build"]);
         assert!(result.is_err());
     }
 
