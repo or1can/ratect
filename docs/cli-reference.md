@@ -135,10 +135,12 @@ actual behavior — it doesn't yet distinguish "nothing to do" from "success":
   intentional design; don't rely on it in scripts.
 - A missing or malformed config file (fails to parse), a task/container referenced by
   name that doesn't exist, or a dependency cycle all cause a non-zero (`1`) exit. The
-  error is logged via `tracing::error!` (so it goes through the same
-  `RUST_LOG`-filterable, formatted stderr channel as everything else — see
-  [how it works](how-it-works.md#5-logging-vs-output)), rather than a raw, differently
-  formatted panic-style message.
+  error is printed to stderr as `Error: <message>` — deliberately *not* through
+  `tracing::error!`/`RUST_LOG` (which every other diagnostic goes through — see
+  [how it works](how-it-works.md#5-logging-vs-output)): a fatal error is the reason the
+  process is about to exit non-zero, not an optional diagnostic, so it stays visible
+  even under `RUST_LOG=off` or a filter that excludes Ratect's own target — including
+  under [`-o quiet`](#output-styles), whose whole contract is "only error messages".
 - A misspelled task name (whether given directly on the command line, or as a
   [`prerequisites`](config-reference.md#task) entry) gets a `Did you mean 'x'?`
   suggestion appended to the error, for every existing task name within a Levenshtein

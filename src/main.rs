@@ -147,9 +147,21 @@ async fn main() {
     let exit_code = match run().await {
         Ok(()) => 0,
         Err(err) => {
-            // Use `{:?}` (not `{}`) so the full anyhow context chain is logged,
-            // matching what the default Termination handler would have printed.
-            tracing::error!("{:?}", err);
+            // Printed directly to stderr, not through `tracing::error!` —
+            // `RUST_LOG` can suppress that entirely (e.g. `RUST_LOG=off`,
+            // or any filter that excludes `ratect`'s own target), which
+            // would leave a failed run with a non-zero exit code and no
+            // visible reason anywhere: not on stdout (by design, especially
+            // under `-o quiet`) and not on stderr either. A fatal error is
+            // the reason the process is about to exit non-zero, not an
+            // optional diagnostic — it must always be visible, in every
+            // output mode, including quiet (whose whole documented
+            // contract is "only error messages"). `{:?}` (not `{}`) prints
+            // the full anyhow context chain — exactly what Rust's own
+            // `Termination` impl would have printed had `main` returned a
+            // `Result` directly (see this function's own doc comment,
+            // below, for why it doesn't).
+            eprintln!("Error: {:?}", err);
 
             // If the task's own command exited non-zero, propagate that exact
             // code as ratect's own exit code (matching `docker run`'s

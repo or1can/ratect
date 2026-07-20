@@ -761,6 +761,38 @@ fn quiet_output_stays_silent_on_stdout_when_the_task_fails_via_docker() {
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
 /// Run explicitly with `cargo test -- --ignored`.
 ///
+/// Proves a failing task's fatal error is visible on stderr even with
+/// `RUST_LOG=off` — the error used to reach stderr solely through
+/// `tracing::error!`, which `RUST_LOG` can suppress entirely; a failure
+/// under `-o quiet` (whose whole contract is "only error messages") plus a
+/// suppressed log level would then exit non-zero with no visible reason
+/// anywhere. The error is now printed directly, independent of `RUST_LOG`.
+#[test]
+#[ignore]
+fn fatal_error_reaches_stderr_even_with_logging_disabled() {
+    let output = ratect_command()
+        .args(["-o", "quiet", "-f"])
+        .arg(exit_code_config_path())
+        .arg("fails")
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("failed to run ratect");
+
+    assert_eq!(output.status.code(), Some(42));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.trim().is_empty(),
+        "the fatal error must still reach stderr under RUST_LOG=off"
+    );
+    assert!(
+        stderr.contains("code 42"),
+        "stderr should name the actual failure:\n{stderr}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
 /// Proves a task with only `prerequisites` and no `run` of its own still runs
 /// its prerequisites end to end, then stops cleanly (exit 0) — no container
 /// of the task's own to run.

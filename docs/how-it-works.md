@@ -264,7 +264,11 @@ Ratect keeps two channels deliberately separate:
   streaming to stdout directly).
 - **stderr**: Ratect's own diagnostics, via [`tracing`](https://docs.rs/tracing) /
   [`tracing-subscriber`](https://docs.rs/tracing-subscriber), filtered by `RUST_LOG`
-  (defaults to `info`).
+  (defaults to `info`) — except a *fatal* error (the reason the process is about to
+  exit non-zero), which `main.rs` prints directly (`Error: <message>`) rather than
+  through `tracing::error!`: it must stay visible even when `RUST_LOG` suppresses
+  everything else, since there'd otherwise be no visible explanation at all for the
+  failure under `RUST_LOG=off` combined with [`-o quiet`](cli-reference.md#output-styles).
 
 Colors (e.g. the exit code in the task summary line) are only emitted when stdout is
 actually a terminal — piped or redirected output gets plain text.
