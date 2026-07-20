@@ -303,6 +303,15 @@ impl FancyEventLogger {
         let mut frame = String::new();
         if state.cleanup_shown {
             frame.push_str(CURSOR_UP_ONE_AND_CLEAR);
+        } else {
+            // A blank separator line first, unconditionally — matching
+            // simple mode's blank line before "Cleaning up...". Not just
+            // cosmetic here: the task container's own output streams raw
+            // (`docker.rs`, outside this logger's control) and may not end
+            // in a newline, so painting cleanup directly would land on the
+            // same row as that output — which the *next* repaint's
+            // cursor-up-and-clear would then erase, destroying it.
+            frame.push('\n');
         }
         frame.push_str(&clip_to_width(&self.cleanup_text(state), width));
         frame.push('\n');
@@ -690,6 +699,46 @@ mod tests {
         let contents = buffer.contents();
         assert!(contents.contains("db: ready"), "{contents}");
         assert!(contents.contains("app: waiting to start..."), "{contents}");
+    }
+
+    #[test]
+    fn cleanup_starts_on_a_fresh_line_even_after_unterminated_container_output() {
+        let (logger, mut buffer) = logger_with_width(120);
+        logger.post(TaskEvent::TaskGraphResolved {
+            containers: vec![info("app", Some("app:1"), &[], true)],
+        });
+        logger.post(TaskEvent::RunningTaskContainer {
+            container: "app".into(),
+            command: None,
+        });
+        // The task container's own output streams raw, outside this
+        // logger's control (`docker.rs`) — simulate a final line with no
+        // trailing newline landing directly on the console.
+        use std::io::Write;
+        write!(buffer, "answer: 42").unwrap();
+        let before_cleanup = buffer.contents();
+
+        logger.post(TaskEvent::CleanupStarting);
+        let after_cleanup = buffer.contents();
+        assert_eq!(
+            after_cleanup,
+            format!("{before_cleanup}\nCleaning up...\n"),
+            "cleanup must move to a fresh line, not append to the unterminated \
+             container output — otherwise the next repaint's cursor-up erases it"
+        );
+
+        // Prove the earlier output actually survives a further repaint —
+        // the whole point of moving to a fresh line first.
+        logger.post(TaskEvent::TaskFinished {
+            task: "app".into(),
+            exit_code: 0,
+            duration: Duration::from_millis(100),
+        });
+        assert!(
+            buffer.contents().contains("answer: 42"),
+            "container output must not be erased by cleanup/summary repaints: {:?}",
+            buffer.contents()
+        );
     }
 
     #[test]
