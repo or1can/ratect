@@ -55,6 +55,14 @@ struct State {
     /// How many block lines are currently painted on screen (0 = nothing
     /// painted yet, so the first paint doesn't cursor-up).
     painted_lines: usize,
+    /// The lines' own rendered content (post-clip, pre-cursor-movement)
+    /// from the last repaint that actually wrote anything — lets
+    /// `repaint_startup` skip the write (and its width-query/lock/syscall
+    /// cost) entirely when nothing visible would actually change. Common in
+    /// practice: Docker resends the same coarse pull/build status text many
+    /// times per layer while only the byte-progress detail Ratect doesn't
+    /// render keeps changing underneath it.
+    last_rendered: Option<String>,
     /// `false` once the block froze (task container running, cleanup
     /// started, or the task failed) — no more startup repaints after that.
     keep_updating_startup: bool,
@@ -271,16 +279,26 @@ impl FancyEventLogger {
             return;
         }
         let width = (self.width_source)();
+        let mut rendered = String::new();
+        for line in &state.lines {
+            rendered.push_str("\r\x1b[2K");
+            rendered.push_str(&clip_to_width(&line.render(&self.console), width));
+            rendered.push('\n');
+        }
+        if state.last_rendered.as_deref() == Some(rendered.as_str()) {
+            // Nothing visible would actually change — skip the write
+            // entirely rather than repainting identical content (see
+            // `last_rendered`'s own docs for why this is the common case,
+            // not a rare one).
+            return;
+        }
         let mut frame = String::new();
         if state.painted_lines > 0 {
             frame.push_str(&format!("\x1b[{}A", state.painted_lines));
         }
-        for line in &state.lines {
-            frame.push_str("\r\x1b[2K");
-            frame.push_str(&clip_to_width(&line.render(&self.console), width));
-            frame.push('\n');
-        }
+        frame.push_str(&rendered);
         state.painted_lines = state.lines.len();
+        state.last_rendered = Some(rendered);
         self.console.write_raw(&frame);
     }
 
@@ -373,6 +391,7 @@ impl EventSink for FancyEventLogger {
                     })
                     .collect();
                 state.painted_lines = 0;
+                state.last_rendered = None;
                 // A freshly resolved graph (re)starts the live display —
                 // not just `TaskStarting` — so the block updates even for
                 // an event stream that skips the task-level preamble.
@@ -700,6 +719,44 @@ mod tests {
     }
 
     #[test]
+    fn identical_progress_message_does_not_repaint() {
+        // Docker resends the same coarse status text ("Downloading", say)
+        // many times per layer while streaming — the actual byte-progress
+        // detail changing underneath it lives in a field Ratect doesn't
+        // render at all, so consecutive ImagePullProgress events with the
+        // same message must not trigger a repaint each time.
+        let (logger, buffer) = logger_with_width(120);
+        logger.post(TaskEvent::TaskGraphResolved {
+            containers: vec![info("app", Some("app:1"), &[], true)],
+        });
+        logger.post(TaskEvent::ImagePullProgress {
+            image: "app:1".into(),
+            message: "Downloading".into(),
+        });
+        let after_first = buffer.contents();
+
+        logger.post(TaskEvent::ImagePullProgress {
+            image: "app:1".into(),
+            message: "Downloading".into(),
+        });
+        assert_eq!(
+            buffer.contents(),
+            after_first,
+            "an identical status message shouldn't repaint"
+        );
+
+        // A genuinely different message still repaints normally.
+        logger.post(TaskEvent::ImagePullProgress {
+            image: "app:1".into(),
+            message: "Extracting".into(),
+        });
+        assert!(
+            buffer.contents().len() > after_first.len(),
+            "a changed status message should still repaint"
+        );
+    }
+
+    #[test]
     fn task_container_start_freezes_the_block_behind_a_blank_line() {
         let (logger, buffer) = logger_with_width(120);
         logger.post(TaskEvent::TaskGraphResolved {
@@ -794,21 +851,37 @@ mod tests {
         assert!(buffer.contents().contains("app: waiting to start..."));
         let before = buffer.contents();
 
-        // Only the frame ImageResolved itself paints matters here — the
-        // buffer's full history legitimately contains earlier "waiting for
-        // dependency db..." frames from before `db` became healthy, so
-        // check just what this one event added, not the whole log.
+        // ImageResolved changes nothing visible here (app's line is
+        // already past `Stage::Pending`) — the repaint-skip-when-unchanged
+        // optimization (see `repaint_startup`'s own docs) correctly
+        // suppresses the write entirely rather than repainting identical
+        // content, so the buffer doesn't grow at all.
         logger.post(TaskEvent::ImageResolved {
             container: "app".into(),
         });
-        let added = buffer.contents()[before.len()..].to_string();
+        assert_eq!(
+            buffer.contents(),
+            before,
+            "a no-op ImageResolved shouldn't repaint anything"
+        );
+
+        // Confirm the guard genuinely didn't reset app's progress
+        // underneath that suppressed repaint — force a further one (any
+        // event touching db's own line) and check the newly repainted
+        // frame specifically (not the whole history, which legitimately
+        // contains an earlier "waiting for dependency db" line from before
+        // `db` became healthy) still reflects app's satisfied state.
+        logger.post(TaskEvent::DependencyStarting {
+            container: "db".into(),
+        });
+        let added = &buffer.contents()[before.len()..];
         assert!(
             added.contains("app: waiting to start..."),
-            "the repainted frame should still show the satisfied state: {added:?}"
+            "ImageResolved must not have reset app's already-satisfied dependencies: {added:?}"
         );
         assert!(
             !added.contains("app: waiting for dependency db to be ready..."),
-            "ImageResolved must not reset already-satisfied dependencies: {added:?}"
+            "ImageResolved must not have reset app's already-satisfied dependencies: {added:?}"
         );
     }
 
