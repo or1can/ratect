@@ -160,11 +160,12 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
 - **`portable-pty`** (dev-dependency, `tests/cli.rs` only): creates a real (emulated) pseudo-terminal pair in-process, so an integration test can spawn `ratect` attached to something that genuinely passes `IsTerminal` checks and actually drive an interactive session — no existing test infrastructure here could otherwise exercise that path at all. Works in headless CI; no real terminal required. A reusable pattern worth reaching for again for any other feature that's only meaningfully testable from a real terminal.
 - **`nix`** (`features = ["user"]`): looks up the real host user (`Uid`/`Gid::current`, `User`/`Group::from_uid`/`from_gid`) for `run_as_current_user` (`ratect-core/src/user.rs`) — Unix-only, matching Ratect's own Unix-only testing so far. Already resolved in `Cargo.lock` transitively (via `portable-pty`'s own dependency graph in the root crate's dev-dependencies); adding it directly to `ratect-core` was a low-risk addition, not a new unknown quantity.
 - **`url`**: parses/rewrites `localhost`/`127.0.0.1`/`::1` proxy URLs to `host.docker.internal` in `ratect-core/src/proxy.rs`. Already resolved in `Cargo.lock` transitively (via `bollard`'s own dependency graph) — same low-risk-addition reasoning as `nix` above.
+- **`unicode-width`**: real terminal display-column widths (CJK wide characters count as 2, zero-width/combining marks count as 0) for `ratect-core/src/ui/fancy.rs`'s repaint-width clipping and `ratect-core/src/ui/interleaved.rs`'s prefix-column padding — a plain `char`/byte count under-measures exactly those characters, which let a rendered line silently wrap onto more terminal rows than the fancy logger's own cursor-movement math accounts for. Zero transitive dependencies; the same crate ripgrep/bat/etc. use for this.
 
 Dependencies are split across the three `Cargo.toml`s along CLI-vs-core lines: `clap`
 and `tracing-subscriber` are `ratect`-only; `serde`, `noyalib`, `bollard`, `futures`,
 `async-recursion`, `async-trait`, `uuid`, `tar`, `path-clean`, `crossterm`,
-`nix`, `url`, and the local `dockerignore` crate are `ratect-core`-only (`dockerignore`
+`nix`, `url`, `unicode-width`, and the local `dockerignore` crate are `ratect-core`-only (`dockerignore`
 itself depends on `regex` and `path-clean` too); `anyhow`, `tracing`, and `tokio` are
 needed by both. `tokio` is a normal dependency in both crates now — `ratect-core`'s
 non-test code needs it too, for `build_context_tar`'s `tokio::task::spawn_blocking` (it

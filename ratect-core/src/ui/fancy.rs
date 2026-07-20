@@ -33,6 +33,7 @@
 use super::{Color, Console, EventSink, TaskContainerInfo, TaskEvent};
 use std::collections::BTreeSet;
 use std::sync::Mutex;
+use unicode_width::UnicodeWidthChar;
 
 /// Where the terminal's current width comes from — injected so unit tests
 /// can pin it; the real logger queries crossterm on every repaint (which is
@@ -161,27 +162,31 @@ impl ContainerLine {
     }
 }
 
-/// Truncates `text` to `width` *visible* columns, appending `...` when it
+/// Truncates `text` to `width` *display columns*, appending `...` when it
 /// had to cut — ANSI escape sequences (bold container names) count for
 /// zero, and a truncation that severed one gets a trailing reset so the
-/// styling can't bleed into the next line. Character count approximates
-/// column count, same as Batect's own `TextRun.limitToLength`.
+/// styling can't bleed into the next line. Uses each character's real
+/// Unicode display width (wide CJK characters count as 2, zero-width/
+/// combining marks count as 0) rather than approximating with a plain
+/// character count — a plain count under-measures exactly the characters
+/// most likely to appear in a container name or streamed build output,
+/// which would otherwise let a rendered line wrap onto more terminal rows
+/// than this logger accounts for, desyncing its own repaint math (see
+/// [`display_width`]) from what's actually on screen.
 fn clip_to_width(text: &str, width: Option<u16>) -> String {
     let Some(width) = width else {
         return text.to_string();
     };
     let width = width as usize;
-    let visible_count = visible_chars(text);
-    if visible_count <= width {
+    if display_width(text) <= width {
         return text.to_string();
     }
     let keep = width.saturating_sub(3);
     let mut out = String::new();
-    let mut kept = 0;
-    let mut chars = text.chars().peekable();
+    let mut kept_width = 0;
     let mut in_escape = false;
     let mut saw_escape = false;
-    for c in chars.by_ref() {
+    for c in text.chars() {
         if in_escape {
             out.push(c);
             if c.is_ascii_alphabetic() {
@@ -195,11 +200,12 @@ fn clip_to_width(text: &str, width: Option<u16>) -> String {
             out.push(c);
             continue;
         }
-        if kept == keep {
+        let char_width = c.width().unwrap_or(0);
+        if kept_width + char_width > keep {
             break;
         }
         out.push(c);
-        kept += 1;
+        kept_width += char_width;
     }
     out.push_str("...");
     if saw_escape {
@@ -208,10 +214,11 @@ fn clip_to_width(text: &str, width: Option<u16>) -> String {
     out
 }
 
-/// How many columns `text` occupies, counting ANSI escape sequences as
-/// zero.
-fn visible_chars(text: &str) -> usize {
-    let mut count = 0;
+/// How many terminal display columns `text` occupies — each character's
+/// real Unicode width (0, 1, or 2; see [`UnicodeWidthChar`]), counting ANSI
+/// escape sequences as zero.
+fn display_width(text: &str) -> usize {
+    let mut width = 0;
     let mut in_escape = false;
     for c in text.chars() {
         if in_escape {
@@ -221,10 +228,10 @@ fn visible_chars(text: &str) -> usize {
         } else if c == '\x1b' {
             in_escape = true;
         } else {
-            count += 1;
+            width += c.width().unwrap_or(0);
         }
     }
-    count
+    width
 }
 
 const CURSOR_UP_ONE_AND_CLEAR: &str = "\x1b[1A\r\x1b[2K";
@@ -634,6 +641,21 @@ mod tests {
             clip_to_width(styled, Some(10)),
             "\x1b[1mapp\x1b[0m: so...\x1b[0m"
         );
+    }
+
+    #[test]
+    fn clip_to_width_uses_real_display_width_not_char_count() {
+        // Each of these three CJK characters occupies 2 terminal columns —
+        // a plain char count would under-measure this as 3, letting it
+        // pass a width check it doesn't actually fit, and would keep too
+        // many characters when truncating.
+        let wide = "数据库: ready";
+        assert_eq!(display_width("数据库"), 6);
+        // Fits: 6 (name) + 2 (": ") + 5 ("ready") = 13 columns exactly.
+        assert_eq!(clip_to_width(wide, Some(13)), wide);
+        // Doesn't fit at 8: keep = 8 - 3 = 5 columns. "数"(2) + "据"(2) = 4
+        // fits; adding "库"(2) would make 6 > 5, so it's dropped.
+        assert_eq!(clip_to_width(wide, Some(8)), "数据...");
     }
 
     #[test]

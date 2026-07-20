@@ -30,6 +30,7 @@
 use super::{Color, Console, ContainerIoStreaming, EventSink, TaskEvent};
 use std::collections::HashMap;
 use std::sync::Mutex;
+use unicode_width::UnicodeWidthStr;
 
 /// The prefix colors assigned to containers, round-robin in (sorted) name
 /// order — deliberately excluding white (task-level lines) and red
@@ -63,8 +64,9 @@ struct State {
     /// Container name -> its build tag, mapping `ImageBuildProgress` (keyed
     /// by tag) back to a container.
     build_tags: HashMap<String, String>,
-    /// The common prefix column width: the longest of the container names
-    /// and the task's own name.
+    /// The common prefix column width, in terminal display columns (not
+    /// bytes or `char`s — see [`UnicodeWidthStr`]): the longest of the
+    /// container names and the task's own name.
     prefix_width: usize,
     /// Guards "Cleaning up..." printing once per task.
     started_cleanup: bool,
@@ -85,7 +87,14 @@ impl InterleavedEventLogger {
     }
 
     fn print_prefixed(&self, state: &State, name: &str, color: Color, line: &str) {
-        let padded = format!("{name:width$}", width = state.prefix_width);
+        // Padded by hand (not `format!("{name:width$}")`, which pads by
+        // `char` count) — `prefix_width` is a display-column measurement,
+        // and `char` count agrees with that only for single-width
+        // characters. A CJK container name is 2 display columns per
+        // character but 1 `char` each, so `{:width$}` would under-pad it
+        // and break alignment with every other column.
+        let padding = " ".repeat(state.prefix_width.saturating_sub(name.width()));
+        let padded = format!("{name}{padding}");
         let prefix = self.console.colored(color, &self.console.bold(&padded));
         self.console.println(&format!("{prefix} | {line}"));
     }
@@ -154,10 +163,10 @@ impl EventSink for InterleavedEventLogger {
                 };
             }
             TaskEvent::TaskGraphResolved { containers } => {
-                let task_width = state.task.as_deref().map_or(0, str::len);
+                let task_width = state.task.as_deref().map_or(0, UnicodeWidthStr::width);
                 state.prefix_width = containers
                     .iter()
-                    .map(|info| info.name.len())
+                    .map(|info| info.name.width())
                     .chain([task_width])
                     .max()
                     .unwrap_or(0);
@@ -426,6 +435,34 @@ mod tests {
             "test       | Running test...\n\
              db         | Starting container...\n\
              app-server | hello\n"
+        );
+    }
+
+    #[test]
+    fn prefix_padding_aligns_by_display_width_not_char_count() {
+        // "数据库" is 3 `char`s but 6 terminal columns (2 per CJK
+        // character) — padding by `char` count (Rust's own `{:width$}`)
+        // would under-pad it by 3 columns and misalign every other
+        // column; padding by display width keeps them lined up.
+        let (logger, buffer) = logger();
+        start_task(
+            &logger,
+            vec![
+                info("数据库", Some("postgres:15"), None),
+                info("db", Some("redis:7"), None),
+            ],
+        );
+        logger.post(TaskEvent::DependencyStarting {
+            container: "数据库".into(),
+        });
+        logger.post(TaskEvent::DependencyStarting {
+            container: "db".into(),
+        });
+        assert_eq!(
+            buffer.contents(),
+            "test   | Running test...\n\
+             数据库 | Starting container...\n\
+             db     | Starting container...\n"
         );
     }
 
