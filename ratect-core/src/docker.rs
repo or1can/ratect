@@ -686,6 +686,62 @@ impl Drop for RawModeGuard {
 /// its own cloned client rather than borrowing the caller's. Best-effort: a
 /// failure is logged and otherwise ignored, matching the previous one-shot
 /// call this replaces.
+/// Drives `container_id`'s Docker log stream to completion, line-buffering
+/// its output into [`TaskEvent::ContainerOutput`] events on `event_sink` —
+/// the [`ContainerIoStreaming::Interleaved`] policy's (the `all` output
+/// mode's) per-container streaming, shared by `start_and_stream_logs`'s
+/// interleaved branch (the task's own container, whose stream error should
+/// propagate and fail the task) and `start_background_container`'s spawned
+/// follower (a dependency's whole lifetime, fire-and-forget — that caller
+/// logs and swallows the error instead). Thin wrapper around
+/// [`drain_interleaved_log_stream`] that supplies the real Docker log
+/// stream; split out so the actual line-buffering/flush logic is
+/// unit-testable against a synthetic stream, with no live daemon needed.
+async fn stream_logs_as_interleaved_events(
+    docker: &Docker,
+    event_sink: &std::sync::Arc<dyn EventSink>,
+    container_name: &str,
+    container_id: &str,
+) -> Result<()> {
+    let logs = docker.logs(
+        container_id,
+        Some(LogsOptions {
+            stdout: true,
+            stderr: true,
+            follow: true,
+            ..Default::default()
+        }),
+    );
+    drain_interleaved_log_stream(logs, event_sink, container_name).await
+}
+
+/// The actual line-buffering loop — see [`stream_logs_as_interleaved_events`]
+/// for why it always flushes any buffered partial line before returning,
+/// whether `logs` ended cleanly or with an error.
+async fn drain_interleaved_log_stream(
+    logs: impl futures::Stream<Item = Result<bollard::container::LogOutput, bollard::errors::Error>>,
+    event_sink: &std::sync::Arc<dyn EventSink>,
+    container_name: &str,
+) -> Result<()> {
+    let mut logs = std::pin::pin!(logs);
+    let mut line_buffer = crate::ui::interleaved::LineBuffer::new();
+    let emit = |line: &str| {
+        event_sink.post(TaskEvent::ContainerOutput {
+            container: container_name.to_string(),
+            line: line.to_string(),
+        });
+    };
+    let result = loop {
+        match logs.next().await {
+            Some(Ok(output)) => line_buffer.push(output.as_ref(), emit),
+            Some(Err(e)) => break Err(e).context("Failed to get container logs"),
+            None => break Ok(()),
+        }
+    };
+    line_buffer.flush(emit);
+    result
+}
+
 async fn resize_tty(docker: &Docker, container_id: &str) {
     let Ok((cols, rows)) = crossterm::terminal::size() else {
         return;
@@ -1441,39 +1497,30 @@ impl DockerClient {
         self.docker.start_container(container_id, None).await?;
         tracing::debug!(container_id, "started container");
 
-        let mut logs = self.docker.logs(
-            container_id,
-            Some(LogsOptions {
-                stdout: true,
-                stderr: true,
-                follow: true,
-                ..Default::default()
-            }),
-        );
-
-        let interleaved =
-            self.event_sink.container_io_streaming() == ContainerIoStreaming::Interleaved;
-        let mut line_buffer = crate::ui::interleaved::LineBuffer::new();
-        let emit = |line: &str| {
-            self.event_sink.post(TaskEvent::ContainerOutput {
-                container: container_name.to_string(),
-                line: line.to_string(),
-            });
-        };
-        while let Some(log) = logs.next().await {
-            match log {
-                Ok(output) => {
-                    if interleaved {
-                        line_buffer.push(output.as_ref(), emit);
-                    } else {
-                        print!("{}", output);
-                    }
+        if self.event_sink.container_io_streaming() == ContainerIoStreaming::Interleaved {
+            stream_logs_as_interleaved_events(
+                &self.docker,
+                &self.event_sink,
+                container_name,
+                container_id,
+            )
+            .await?;
+        } else {
+            let mut logs = self.docker.logs(
+                container_id,
+                Some(LogsOptions {
+                    stdout: true,
+                    stderr: true,
+                    follow: true,
+                    ..Default::default()
+                }),
+            );
+            while let Some(log) = logs.next().await {
+                match log {
+                    Ok(output) => print!("{}", output),
+                    Err(e) => return Err(e).context("Failed to get container logs"),
                 }
-                Err(e) => return Err(e).context("Failed to get container logs"),
             }
-        }
-        if interleaved {
-            line_buffer.flush(emit);
         }
 
         self.exit_code(container_id).await
@@ -1811,31 +1858,26 @@ impl ContainerRuntime for DockerClient {
             let container_name = alias.to_string();
             let container_id = container.id.clone();
             tokio::spawn(async move {
-                let mut logs = docker.logs(
+                if let Err(e) = stream_logs_as_interleaved_events(
+                    &docker,
+                    &event_sink,
+                    &container_name,
                     &container_id,
-                    Some(LogsOptions {
-                        stdout: true,
-                        stderr: true,
-                        follow: true,
-                        ..Default::default()
-                    }),
-                );
-                let mut line_buffer = crate::ui::interleaved::LineBuffer::new();
-                let emit = |line: &str| {
-                    event_sink.post(TaskEvent::ContainerOutput {
-                        container: container_name.clone(),
-                        line: line.to_string(),
-                    });
-                };
-                while let Some(log) = logs.next().await {
-                    match log {
-                        Ok(output) => line_buffer.push(output.as_ref(), emit),
-                        // The stream ending with an error just means the
-                        // container went away — normal during cleanup.
-                        Err(_) => break,
-                    }
+                )
+                .await
+                {
+                    // The stream ending with an error overwhelmingly means
+                    // the container went away — normal during cleanup, not
+                    // worth a `warn`. `debug` still leaves a trace for the
+                    // rarer case (a genuine daemon hiccup on a still-running
+                    // dependency, which would otherwise silently end that
+                    // container's visible output for the rest of the task).
+                    tracing::debug!(
+                        container = container_name.as_str(),
+                        error = ?e,
+                        "dependency container log stream ended"
+                    );
                 }
-                line_buffer.flush(emit);
             });
         }
 
@@ -2108,6 +2150,54 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Records every posted `ContainerOutput` event's line, in order — the
+    /// only variant `drain_interleaved_log_stream`'s tests need.
+    #[derive(Default)]
+    struct RecordingEventSink {
+        lines: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl EventSink for RecordingEventSink {
+        fn post(&self, event: TaskEvent) {
+            if let TaskEvent::ContainerOutput { line, .. } = event {
+                self.lines.lock().unwrap().push(line);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn drain_interleaved_log_stream_flushes_a_buffered_partial_line_before_a_stream_error() {
+        // The bug this proves fixed: an unterminated final line (no
+        // trailing newline) followed by the log stream itself erroring
+        // (e.g. the daemon restarting mid-stream) used to be silently
+        // dropped — the early `return Err(...)` on the error skipped the
+        // trailing flush that would have emitted it.
+        let chunks = vec![
+            Ok(bollard::container::LogOutput::StdOut {
+                message: bytes::Bytes::from_static(b"first line\n"),
+            }),
+            Ok(bollard::container::LogOutput::StdOut {
+                message: bytes::Bytes::from_static(b"unterminated final line"),
+            }),
+            Err(bollard::errors::Error::NoHomePathError),
+        ];
+        let stream = futures::stream::iter(chunks);
+        // Kept as the concrete type so its recorded lines are inspectable
+        // after the call, alongside the `Arc<dyn EventSink>` the function
+        // itself needs — both point at the same underlying instance.
+        let sink = std::sync::Arc::new(RecordingEventSink::default());
+        let dyn_sink: std::sync::Arc<dyn EventSink> = sink.clone();
+
+        let result = drain_interleaved_log_stream(stream, &dyn_sink, "app").await;
+
+        assert!(result.is_err(), "the stream error should still propagate");
+        assert_eq!(
+            *sink.lines.lock().unwrap(),
+            vec!["first line", "unterminated final line"],
+            "the unterminated final line must still be flushed despite the stream error"
+        );
     }
 
     #[test]
