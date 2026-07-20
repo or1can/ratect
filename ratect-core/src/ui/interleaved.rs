@@ -196,6 +196,13 @@ impl EventSink for InterleavedEventLogger {
             // (`all` shows pull start/finish lines only — build output is
             // the streamed detail it adds).
             TaskEvent::ImagePullProgress { .. } => {}
+            // No line of its own — this container's own Pulling/Pulled or
+            // Building/Built lines above already cover the "image ready"
+            // moment when a pull/build actually happened; when neither did
+            // (an already-local image, or resolved earlier this
+            // invocation), there was never anything to announce here in
+            // the first place.
+            TaskEvent::ImageResolved { .. } => {}
             TaskEvent::ImagePullCompleted { image } => {
                 for container in Self::containers_for_image(&state, &image) {
                     self.print_for_container(&state, &container, &format!("Pulled {image}."));

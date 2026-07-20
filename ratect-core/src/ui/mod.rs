@@ -109,6 +109,22 @@ pub enum TaskEvent {
     ImageBuildCompleted {
         container: String,
     },
+    /// `container`'s image is resolved and ready to run — posted exactly
+    /// once per container per task execution, regardless of whether a pull
+    /// or build actually happened this time. Unlike
+    /// [`TaskEvent::ImagePullCompleted`]/[`TaskEvent::ImageBuildCompleted`]
+    /// (which only post the *first* time a given image/container is
+    /// resolved in this whole invocation — `resolve_image`'s dedup applies
+    /// across tasks, not just within one), this is the reliable per-task
+    /// "this container's image is ready" signal a display needs: without
+    /// it, a container whose image was already local (`IfNotPresent`, the
+    /// default) or already resolved by an earlier task would never emit
+    /// *any* image-related event, leaving a per-container progress display
+    /// stuck showing "ready to pull/build" for that container's entire
+    /// dependency wait.
+    ImageResolved {
+        container: String,
+    },
     /// A dependency/sidecar container is about to start. The task's own
     /// container instead posts [`TaskEvent::RunningTaskContainer`].
     DependencyStarting {

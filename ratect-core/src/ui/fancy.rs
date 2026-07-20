@@ -434,6 +434,31 @@ impl EventSink for FancyEventLogger {
                 }
                 self.repaint_startup(&mut state);
             }
+            TaskEvent::ImageResolved { container } => {
+                if !state.keep_updating_startup {
+                    return;
+                }
+                if let Some(line) = Self::line_mut(&mut state, &container) {
+                    // Only advance a line still sitting at `Pending` — a
+                    // pull/build that actually happened this task already
+                    // moved it on via `ImagePullCompleted`/
+                    // `ImageBuildCompleted` (posted before this event, since
+                    // `resolve_image` awaits them first). This is purely the
+                    // fallback for when neither ever fired at all — an
+                    // already-local image under the default
+                    // `IfNotPresent` policy, or an image/build this
+                    // invocation already resolved for an earlier task —
+                    // without it the line would otherwise sit at "ready to
+                    // pull/build" for the container's entire dependency
+                    // wait, never showing what it's actually waiting on.
+                    if matches!(line.stage, Stage::Pending) {
+                        line.stage = Stage::WaitingForDependencies(
+                            line.info.dependencies.iter().cloned().collect(),
+                        );
+                    }
+                }
+                self.repaint_startup(&mut state);
+            }
             TaskEvent::DependencyStarting { container } => {
                 if !state.keep_updating_startup {
                     return;
@@ -699,6 +724,71 @@ mod tests {
         let contents = buffer.contents();
         assert!(contents.contains("db: ready"), "{contents}");
         assert!(contents.contains("app: waiting to start..."), "{contents}");
+    }
+
+    #[test]
+    fn image_resolved_advances_a_stalled_line_when_no_pull_or_build_ever_fired() {
+        // Without a pull or build actually happening this task (an
+        // already-local image, or a resolution reused from an earlier
+        // task), a line would otherwise sit at "ready to pull image X" for
+        // its entire dependency wait — ImageResolved is the fallback signal
+        // that advances it anyway.
+        let (logger, buffer) = logger_with_width(120);
+        logger.post(TaskEvent::TaskGraphResolved {
+            containers: vec![info("app", Some("app:1"), &["db"], true)],
+        });
+        assert!(buffer.contents().contains("app: ready to pull image app:1"));
+
+        logger.post(TaskEvent::ImageResolved {
+            container: "app".into(),
+        });
+        assert!(
+            buffer
+                .contents()
+                .contains("app: waiting for dependency db to be ready..."),
+            "{}",
+            buffer.contents()
+        );
+    }
+
+    #[test]
+    fn image_resolved_does_not_undo_progress_from_a_real_pull() {
+        // When a pull DID happen, ImagePullCompleted already advanced the
+        // line (with whatever dependencies remain, some possibly already
+        // healthy) — a later ImageResolved for the same container must not
+        // reset that progress back to the full dependency list.
+        let (logger, buffer) = logger_with_width(120);
+        logger.post(TaskEvent::TaskGraphResolved {
+            containers: vec![
+                info("app", Some("app:1"), &["db"], true),
+                info("db", Some("postgres:15"), &[], false),
+            ],
+        });
+        logger.post(TaskEvent::ImagePullCompleted {
+            image: "app:1".into(),
+        });
+        logger.post(TaskEvent::ContainerBecameHealthy {
+            container: "db".into(),
+        });
+        assert!(buffer.contents().contains("app: waiting to start..."));
+        let before = buffer.contents();
+
+        // Only the frame ImageResolved itself paints matters here — the
+        // buffer's full history legitimately contains earlier "waiting for
+        // dependency db..." frames from before `db` became healthy, so
+        // check just what this one event added, not the whole log.
+        logger.post(TaskEvent::ImageResolved {
+            container: "app".into(),
+        });
+        let added = buffer.contents()[before.len()..].to_string();
+        assert!(
+            added.contains("app: waiting to start..."),
+            "the repainted frame should still show the satisfied state: {added:?}"
+        );
+        assert!(
+            !added.contains("app: waiting for dependency db to be ready..."),
+            "ImageResolved must not reset already-satisfied dependencies: {added:?}"
+        );
     }
 
     #[test]

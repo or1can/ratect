@@ -144,6 +144,7 @@ impl EventSink for SimpleEventLogger {
             // chain, so none of them get a line here either.
             TaskEvent::ImagePullProgress { .. }
             | TaskEvent::ImageBuildProgress { .. }
+            | TaskEvent::ImageResolved { .. }
             | TaskEvent::TaskGraphResolved { .. }
             | TaskEvent::ContainerRemoved { .. }
             | TaskEvent::RemovingNetwork

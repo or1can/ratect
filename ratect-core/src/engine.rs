@@ -953,6 +953,9 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             .await?;
 
             let image = self.resolve_image(&run.container, container_config).await?;
+            self.event_sink.post(TaskEvent::ImageResolved {
+                container: run.container.clone(),
+            });
             // Eligibility only — `ContainerRuntime::run_container` further
             // gates this on the local process's own stdin/stdout genuinely
             // being terminals before actually attaching a TTY, and stdin
@@ -1167,6 +1170,9 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     let customisation = customisations.and_then(|c| c.get(name));
 
                     let image = self.resolve_image(name, dependency_config).await?;
+                    self.event_sink.post(TaskEvent::ImageResolved {
+                        container: name.to_string(),
+                    });
                     let user_mapping = self.resolve_user_mapping(dependency_config).await?;
                     let proxy_vars = self.proxy_environment_variables(no_proxy_entries);
                     // Dependencies get no TERM normally (they're never
@@ -5877,6 +5883,9 @@ mod tests {
             TaskEvent::ImagePullCompleted {
                 image: "postgres:15".into(),
             },
+            TaskEvent::ImageResolved {
+                container: "database".into(),
+            },
             TaskEvent::DependencyStarting {
                 container: "database".into(),
             },
@@ -5900,6 +5909,9 @@ mod tests {
             },
             TaskEvent::ImagePullCompleted {
                 image: "alpine:3.18".into(),
+            },
+            TaskEvent::ImageResolved {
+                container: "build-env".into(),
             },
             TaskEvent::RunningTaskContainer {
                 container: "build-env".into(),
@@ -5974,6 +5986,46 @@ mod tests {
                 TaskEvent::ImagePullStarting { .. } | TaskEvent::ImagePullCompleted { .. }
             )),
             "no pull events expected: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn image_resolved_posts_even_when_no_pull_or_build_happens() {
+        // ImagePullStarting/Completed and ImageBuildStarting/Completed only
+        // post the *first* time a given image/container is resolved this
+        // whole invocation (see `resolve_image`'s cross-task dedup) — an
+        // already-local image under the default `IfNotPresent` policy
+        // never posts any of them at all. ImageResolved is the reliable
+        // per-task "this container's image is ready" signal a display
+        // needs regardless — this proves it posts even in that case.
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "cargo test"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let sink = RecordingEventSink::default();
+        let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
+        let engine = TaskEngine::new(config, docker).with_event_sink(Arc::new(sink.clone()));
+        engine.run_task("test", &[]).await.unwrap();
+
+        let events = sink.events();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, TaskEvent::ImagePullStarting { .. })),
+            "no pull should have happened: {events:?}"
+        );
+        assert!(
+            events.contains(&TaskEvent::ImageResolved {
+                container: "build-env".into()
+            }),
+            "ImageResolved should still post: {events:?}"
         );
     }
 
