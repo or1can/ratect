@@ -27,7 +27,7 @@
 //! drops that inner prefix — the outer one already says whose line it is,
 //! and Ratect's milestone wording is unambiguous about being Ratect's own.
 
-use super::{Color, Console, ContainerIoStreaming, EventSink, TaskEvent};
+use super::{Color, Console, ContainerIoStreaming, EventSink, OnceFlag, TaskEvent};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use unicode_width::UnicodeWidthStr;
@@ -69,7 +69,7 @@ struct State {
     /// container names and the task's own name.
     prefix_width: usize,
     /// Guards "Cleaning up..." printing once per task.
-    started_cleanup: bool,
+    started_cleanup: OnceFlag,
 }
 
 impl InterleavedEventLogger {
@@ -282,8 +282,7 @@ impl EventSink for InterleavedEventLogger {
                 self.print_for_container(&state, &container, &line);
             }
             TaskEvent::CleanupStarting => {
-                if !state.started_cleanup {
-                    state.started_cleanup = true;
+                if state.started_cleanup.fire_once() {
                     self.print_for_task(&state, "Cleaning up...");
                 }
             }
@@ -298,18 +297,9 @@ impl EventSink for InterleavedEventLogger {
                 exit_code,
                 duration,
             } => {
-                let color = if exit_code == 0 {
-                    Color::Green
-                } else {
-                    Color::Red
-                };
-                let exit_code = self.console.colored(color, &exit_code.to_string());
                 self.print_for_task(
                     &state,
-                    &format!(
-                        "{task} finished with exit code {exit_code} in {}.",
-                        super::format_duration(duration)
-                    ),
+                    &super::format_task_summary(&self.console, &task, exit_code, duration),
                 );
             }
             // The error itself reaches stderr through the normal error

@@ -30,7 +30,7 @@
 //! - Colorless fancy works (`--no-color` suppresses bold/color but not
 //!   cursor movement) — see [`Console`]'s independent-axes design.
 
-use super::{Color, Console, EventSink, TaskContainerInfo, TaskEvent};
+use super::{Console, EventSink, TaskContainerInfo, TaskEvent};
 use std::collections::BTreeSet;
 use std::sync::Mutex;
 use unicode_width::UnicodeWidthChar;
@@ -575,16 +575,11 @@ impl EventSink for FancyEventLogger {
                     self.console.write_raw(CURSOR_UP_ONE_AND_CLEAR);
                     state.cleanup_shown = false;
                 }
-                let color = if exit_code == 0 {
-                    Color::Green
-                } else {
-                    Color::Red
-                };
-                let exit_code = self.console.colored(color, &exit_code.to_string());
-                self.console.println(&format!(
-                    "{} finished with exit code {exit_code} in {}.",
-                    self.console.bold(&task),
-                    super::format_duration(duration)
+                self.console.println(&super::format_task_summary(
+                    &self.console,
+                    &self.console.bold(&task),
+                    exit_code,
+                    duration,
                 ));
             }
             TaskEvent::TaskFailed { .. } => {

@@ -433,9 +433,12 @@ impl Console {
         // Deliberately ignore write errors (e.g. a closed pipe on the far
         // end of `ratect ... | head`) rather than panicking or threading a
         // Result through every logger — matching what `println!` would have
-        // aborted on anyway, minus the abort.
+        // aborted on anyway, minus the abort. No explicit `flush()` here
+        // (unlike `write_raw`, below): the real production writer is
+        // `std::io::stdout()`, whose internal `LineWriter` already flushes
+        // on every `\n` this always writes — an extra flush call would just
+        // be a second, redundant syscall per line.
         let _ = writeln!(writer, "{line}");
-        let _ = writer.flush();
     }
 
     /// `text` wrapped in `color`'s ANSI escape when color is enabled,
@@ -471,6 +474,55 @@ impl Console {
         let _ = write!(writer, "{text}");
         let _ = writer.flush();
     }
+}
+
+/// A "do this exactly once, until reset" guard — the `Cleaning up...`
+/// once-per-task pattern `simple.rs`/`interleaved.rs` both need (several
+/// cleanup-worthy events can arrive for one task, but the line prints only
+/// for the first).
+#[derive(Default)]
+pub(crate) struct OnceFlag(bool);
+
+impl OnceFlag {
+    /// `true` (and marks itself fired) only the first call since
+    /// construction or the last [`OnceFlag::reset`]; every call after that
+    /// returns `false` and does nothing.
+    pub(crate) fn fire_once(&mut self) -> bool {
+        if self.0 {
+            false
+        } else {
+            self.0 = true;
+            true
+        }
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.0 = false;
+    }
+}
+
+/// The task summary line every output mode ends a task with —
+/// `<task_label> finished with exit code <n> in <duration>.`, the exit code
+/// colored green for `0` or red otherwise. `task_label` is the already-
+/// formatted task name (fancy passes a bolded one; simple/interleaved pass
+/// it plain) rather than a bare `&str`, so this stays agnostic to which
+/// styling, if any, the caller wants around the name itself.
+pub(crate) fn format_task_summary(
+    console: &Console,
+    task_label: &str,
+    exit_code: i64,
+    duration: Duration,
+) -> String {
+    let color = if exit_code == 0 {
+        Color::Green
+    } else {
+        Color::Red
+    };
+    let exit_code = console.colored(color, &exit_code.to_string());
+    format!(
+        "{task_label} finished with exit code {exit_code} in {}.",
+        format_duration(duration)
+    )
 }
 
 /// `duration` as a short human-readable string for the task summary line —
@@ -550,6 +602,29 @@ mod tests {
         console.println("hello");
         console.println("world");
         assert_eq!(buffer.contents(), "hello\nworld\n");
+    }
+
+    #[test]
+    fn once_flag_fires_exactly_once_until_reset() {
+        let mut flag = OnceFlag::default();
+        assert!(flag.fire_once(), "first call should fire");
+        assert!(!flag.fire_once(), "second call before reset should not");
+        assert!(!flag.fire_once(), "neither should a third");
+        flag.reset();
+        assert!(flag.fire_once(), "fires again after reset");
+    }
+
+    #[test]
+    fn format_task_summary_colors_exit_code_by_outcome() {
+        let console = Console::new(Box::new(std::io::sink()), true);
+        assert_eq!(
+            format_task_summary(&console, "build", 0, Duration::from_millis(2300)),
+            "build finished with exit code \x1b[32m0\x1b[0m in 2.3s."
+        );
+        assert_eq!(
+            format_task_summary(&console, "lint", 3, Duration::from_secs(61)),
+            "lint finished with exit code \x1b[31m3\x1b[0m in 1m 1.0s."
+        );
     }
 
     /// `select_output_style(requested, no_color, stdout_is_terminal, term,

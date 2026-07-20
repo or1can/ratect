@@ -18,7 +18,7 @@
 //! deliberately ignored — only their start/finish milestones print). The
 //! mode every non-interactive console gets by default.
 
-use super::{Color, Console, EventSink, TaskEvent};
+use super::{Console, EventSink, OnceFlag, TaskEvent};
 use std::sync::Mutex;
 
 pub struct SimpleEventLogger {
@@ -35,7 +35,7 @@ struct State {
     printed_a_task: bool,
     /// Guards "Cleaning up..." printing once per task even though several
     /// cleanup-worthy events may follow.
-    started_cleanup: bool,
+    started_cleanup: OnceFlag,
 }
 
 impl SimpleEventLogger {
@@ -66,7 +66,7 @@ impl EventSink for SimpleEventLogger {
                 // task tears down its own network/dependencies (see
                 // docs/task-lifecycle.md), so each prints its own
                 // "Cleaning up...".
-                state.started_cleanup = false;
+                state.started_cleanup.reset();
                 self.console.println(&format!("Running {task}..."));
             }
             TaskEvent::TaskFinished {
@@ -74,15 +74,11 @@ impl EventSink for SimpleEventLogger {
                 exit_code,
                 duration,
             } => {
-                let color = if exit_code == 0 {
-                    Color::Green
-                } else {
-                    Color::Red
-                };
-                let exit_code = self.console.colored(color, &exit_code.to_string());
-                self.console.println(&format!(
-                    "{task} finished with exit code {exit_code} in {}.",
-                    super::format_duration(duration)
+                self.console.println(&super::format_task_summary(
+                    &self.console,
+                    &task,
+                    exit_code,
+                    duration,
                 ));
             }
             TaskEvent::ImagePullStarting { image } => {
@@ -130,8 +126,7 @@ impl EventSink for SimpleEventLogger {
             }
             TaskEvent::CleanupStarting => {
                 let mut state = self.state.lock().unwrap();
-                if !state.started_cleanup {
-                    state.started_cleanup = true;
+                if state.started_cleanup.fire_once() {
                     self.console.println("");
                     self.console.println("Cleaning up...");
                 }
