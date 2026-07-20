@@ -17,10 +17,7 @@ use clap::Parser;
 use ratect_core::config::{format_task_list, format_task_list_quiet, Config};
 use ratect_core::docker::DockerClient;
 use ratect_core::engine::TaskEngine;
-use ratect_core::ui::fancy::FancyEventLogger;
-use ratect_core::ui::interleaved::InterleavedEventLogger;
-use ratect_core::ui::simple::SimpleEventLogger;
-use ratect_core::ui::{select_output_style, EventSink, NullEventSink, OutputStyle};
+use ratect_core::ui::{create_event_sink, select_output_style, OutputStyle};
 use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -208,13 +205,20 @@ async fn run() -> Result<()> {
     loaded.resolve_expressions(base_path, &config_var_overrides)?;
     let config = loaded.config;
 
+    // Gathered once, here, and reused for both the `--list-tasks` quiet-
+    // format decision below and (inside `create_event_sink`) the real
+    // logger construction — rather than each querying stdout/TERM/console
+    // dimensions again on top of the other.
     let term = std::env::var("TERM").ok();
+    let stdout_is_terminal = std::io::stdout().is_terminal();
+    let console_dimensions_available = ratect_core::ui::console_dimensions_available();
+    let requested_style = args.output.map(OutputStyle::from);
     let output_style = select_output_style(
-        args.output.map(OutputStyle::from),
+        requested_style,
         args.no_color,
-        std::io::stdout().is_terminal(),
+        stdout_is_terminal,
         term.as_deref(),
-        ratect_core::ui::console_dimensions_available(),
+        console_dimensions_available,
     );
 
     if args.list_tasks {
@@ -231,37 +235,17 @@ async fn run() -> Result<()> {
             // The output-mode logger — one instance shared by the Docker
             // client (fine-grained pull/build progress) and the engine
             // (lifecycle milestones), so it sees the whole event stream in
-            // order.
-            let event_sink: Arc<dyn EventSink> = match output_style {
-                OutputStyle::Simple => Arc::new(SimpleEventLogger::stdout(args.no_color)),
-                // Batect's quiet logger renders only task-failure events;
-                // Ratect reports failures via the error chain on stderr
-                // regardless of output style, so quiet's remaining job —
-                // suppressing every milestone — is exactly the null sink.
-                OutputStyle::Quiet => Arc::new(NullEventSink),
-                OutputStyle::Fancy => {
-                    // An explicitly requested fancy on a console that can't
-                    // support live repainting fails clearly up front —
-                    // Batect instead accepts it and crashes mid-repaint
-                    // (documented divergence, see
-                    // docs/differences-from-batect.md). Auto-selected fancy
-                    // already implies an interactive console, so this only
-                    // ever fires for an explicit `-o fancy`.
-                    if !ratect_core::ui::supports_interactivity(
-                        std::io::stdout().is_terminal(),
-                        term.as_deref(),
-                        ratect_core::ui::console_dimensions_available(),
-                    ) {
-                        anyhow::bail!(
-                            "Fancy output requires an interactive console (stdout isn't a \
-                             terminal, TERM is unset or 'dumb', or the terminal size can't \
-                             be determined) — use --output simple instead."
-                        );
-                    }
-                    Arc::new(FancyEventLogger::stdout(args.no_color))
-                }
-                OutputStyle::All => Arc::new(InterleavedEventLogger::stdout(args.no_color)),
-            };
+            // order. Selection, construction, and (for an explicit fancy)
+            // validation all live in `create_event_sink` — see its own docs
+            // for why, and for the fancy-on-a-non-interactive-console error
+            // it can return.
+            let event_sink = create_event_sink(
+                requested_style,
+                args.no_color,
+                stdout_is_terminal,
+                term.as_deref(),
+                console_dimensions_available,
+            )?;
             let docker = DockerClient::new()?.with_event_sink(Arc::clone(&event_sink));
             let mut engine = TaskEngine::new(config, docker).with_event_sink(event_sink);
             if let Some(network) = args.use_network {

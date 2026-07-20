@@ -129,7 +129,13 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     line-buffers every container's output into `ContainerOutput` events (no
     TTY/stdin, `TERM=dumb` everywhere) while the other three modes stream the
     task container raw to stdout — add any future per-mode I/O behavior through
-    that method, not a new engine/docker setting.
+    that method, not a new engine/docker setting. Style selection and logger
+    construction (including the explicit-`fancy`-without-an-interactive-console
+    error) live in `ui::create_event_sink`, not `main.rs` — deliberately, so the
+    planned `ratect-compat` binary (see `ROADMAP.md`'s two-binaries section)
+    gets this for free instead of reimplementing the style→logger match itself;
+    `main.rs` only gathers the terminal facts once and hands them to it (and to
+    `select_output_style`, for `--list-tasks`'s own quiet-format decision).
 - **`dockerignore`** (library crate, `dockerignore/src/`): a from-scratch Rust port of
   Docker's own `.dockerignore` matching (`github.com/moby/patternmatcher`, which
   Docker's documentation cites as the reference implementation) — deliberately **not**

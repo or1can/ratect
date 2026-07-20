@@ -37,7 +37,7 @@ pub mod simple;
 
 use std::io::IsTerminal;
 use std::io::Write;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// One milestone (or fine-grained progress line) in a task's execution.
@@ -295,6 +295,58 @@ pub fn supports_interactivity(
 /// null` check).
 pub fn console_dimensions_available() -> bool {
     crossterm::terminal::size().is_ok()
+}
+
+/// Constructs the output-mode logger for a task-running invocation: selects
+/// the style (see [`select_output_style`]) from the given terminal facts,
+/// then builds — and, for an explicit `fancy`, validates — the concrete
+/// logger for it. The one place this selection-plus-construction logic
+/// lives, so a second CLI binary (see ROADMAP.md's two-binaries section)
+/// gets it for free instead of reimplementing the match; callers pass
+/// `stdout_is_terminal`/`term`/`console_dimensions_available` in once
+/// (typically already gathered for their own `select_output_style` call,
+/// e.g. for a `--list-tasks` quiet-format decision that has no logger to
+/// construct) rather than this function querying them again on top of
+/// that.
+///
+/// Errors only for an explicit `fancy` on a console that can't support live
+/// repainting — Batect instead accepts it and crashes on the first repaint
+/// (a documented divergence, see docs/differences-from-batect.md).
+/// Auto-selected fancy already implies an interactive console, so this can
+/// only actually fire for an explicit `-o fancy`.
+pub fn create_event_sink(
+    requested: Option<OutputStyle>,
+    no_color: bool,
+    stdout_is_terminal: bool,
+    term: Option<&str>,
+    console_dimensions_available: bool,
+) -> anyhow::Result<Arc<dyn EventSink>> {
+    let style = select_output_style(
+        requested,
+        no_color,
+        stdout_is_terminal,
+        term,
+        console_dimensions_available,
+    );
+    Ok(match style {
+        OutputStyle::Simple => Arc::new(simple::SimpleEventLogger::stdout(no_color)),
+        // Batect's quiet logger renders only task-failure events; Ratect
+        // reports failures via the error chain on stderr regardless of
+        // output style, so quiet's remaining job — suppressing every
+        // milestone — is exactly the null sink.
+        OutputStyle::Quiet => Arc::new(NullEventSink),
+        OutputStyle::Fancy => {
+            if !supports_interactivity(stdout_is_terminal, term, console_dimensions_available) {
+                anyhow::bail!(
+                    "Fancy output requires an interactive console (stdout isn't a \
+                     terminal, TERM is unset or 'dumb', or the terminal size can't \
+                     be determined) — use --output simple instead."
+                );
+            }
+            Arc::new(fancy::FancyEventLogger::stdout(no_color))
+        }
+        OutputStyle::All => Arc::new(interleaved::InterleavedEventLogger::stdout(no_color)),
+    })
 }
 
 /// How container stdout/stderr reaches the user — decided by the selected
