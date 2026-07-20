@@ -152,6 +152,10 @@ impl EventSink for InterleavedEventLogger {
         ContainerIoStreaming::Interleaved
     }
 
+    fn wants_progress_detail(&self) -> bool {
+        true
+    }
+
     fn post(&self, event: TaskEvent) {
         let mut state = self.state.lock().unwrap();
         match event {

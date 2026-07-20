@@ -555,6 +555,9 @@ async fn build_image_via_buildkit(
     let mut output = String::new();
     let mut seen_vertexes = std::collections::HashSet::new();
     let mut seen_vertex_errors = std::collections::HashSet::new();
+    // Skipped entirely (not just discarded downstream) when the active
+    // logger doesn't render it — see `EventSink::wants_progress_detail`.
+    let wants_progress = event_sink.wants_progress_detail();
     while let Some(result) = stream.next().await {
         match result {
             Ok(info) => match info.aux {
@@ -577,10 +580,12 @@ async fn build_image_via_buildkit(
                             output.push_str(&vertex.name);
                             output.push_str(cached_suffix);
                             output.push('\n');
-                            event_sink.post(TaskEvent::ImageBuildProgress {
-                                tag: tag.to_string(),
-                                message: format!("{}{}", vertex.name, cached_suffix),
-                            });
+                            if wants_progress {
+                                event_sink.post(TaskEvent::ImageBuildProgress {
+                                    tag: tag.to_string(),
+                                    message: format!("{}{}", vertex.name, cached_suffix),
+                                });
+                            }
                         }
                         if !vertex.error.is_empty()
                             && seen_vertex_errors.insert(vertex.digest.clone())
@@ -599,10 +604,12 @@ async fn build_image_via_buildkit(
                         let trimmed = msg.trim_end();
                         if !trimmed.is_empty() {
                             tracing::debug!(image = tag, "{trimmed}");
-                            event_sink.post(TaskEvent::ImageBuildProgress {
-                                tag: tag.to_string(),
-                                message: trimmed.to_string(),
-                            });
+                            if wants_progress {
+                                event_sink.post(TaskEvent::ImageBuildProgress {
+                                    tag: tag.to_string(),
+                                    message: trimmed.to_string(),
+                                });
+                            }
                         }
                     }
                 }
@@ -1615,14 +1622,21 @@ impl ContainerRuntime for DockerClient {
 
         let mut stream = self.docker.create_image(Some(options), None, None);
 
+        // Skipped entirely (not just discarded downstream) when the active
+        // logger doesn't render it — see `EventSink::wants_progress_detail`
+        // — so `simple`/`quiet`/`NullEventSink` runs don't pay a `String`
+        // allocation per pull status line for nothing.
+        let wants_progress = self.event_sink.wants_progress_detail();
         while let Some(result) = stream.next().await {
             match result {
                 Ok(output) => {
-                    if let Some(status) = output.status {
-                        self.event_sink.post(TaskEvent::ImagePullProgress {
-                            image: image.to_string(),
-                            message: status,
-                        });
+                    if wants_progress {
+                        if let Some(status) = output.status {
+                            self.event_sink.post(TaskEvent::ImagePullProgress {
+                                image: image.to_string(),
+                                message: status,
+                            });
+                        }
                     }
                 }
                 Err(e) => {
@@ -1712,10 +1726,12 @@ impl ContainerRuntime for DockerClient {
 
         let mut image_id = None;
         // The full build transcript, so a failure's error carries everything
-        // that led up to it (not just Docker's own one-line summary) — the
-        // only other place each streamed line goes is a progress event,
-        // which the selected output mode may well not render at all.
+        // that led up to it (not just Docker's own one-line summary) —
+        // always built regardless of output mode; the progress *event*
+        // below is the one part skipped when the active logger doesn't
+        // render it (see `EventSink::wants_progress_detail`).
         let mut output = String::new();
+        let wants_progress = self.event_sink.wants_progress_detail();
         while let Some(result) = stream.next().await {
             match result {
                 Ok(info) => {
@@ -1733,10 +1749,12 @@ impl ContainerRuntime for DockerClient {
                             tracing::debug!(image = tag, "{trimmed}");
                             output.push_str(trimmed);
                             output.push('\n');
-                            self.event_sink.post(TaskEvent::ImageBuildProgress {
-                                tag: tag.to_string(),
-                                message: trimmed.to_string(),
-                            });
+                            if wants_progress {
+                                self.event_sink.post(TaskEvent::ImageBuildProgress {
+                                    tag: tag.to_string(),
+                                    message: trimmed.to_string(),
+                                });
+                            }
                         }
                     }
                     // Classic (non-BuildKit) builds always report `Default`

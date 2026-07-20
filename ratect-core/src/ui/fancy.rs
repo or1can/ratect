@@ -338,6 +338,10 @@ impl FancyEventLogger {
 }
 
 impl EventSink for FancyEventLogger {
+    fn wants_progress_detail(&self) -> bool {
+        true
+    }
+
     fn post(&self, event: TaskEvent) {
         let mut state = self.state.lock().unwrap();
         match event {

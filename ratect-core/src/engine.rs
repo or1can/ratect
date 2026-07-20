@@ -1325,13 +1325,19 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         // arrives collected rather than streamed, so this
                         // posts after completion (success or failure; a
                         // failure's output additionally lands in the error
-                        // below). Only the `all` output mode renders these.
-                        for line in result.output.lines() {
-                            self.event_sink.post(TaskEvent::SetupCommandOutput {
-                                container: name.to_string(),
-                                index: setup_command_index + 1,
-                                line: line.trim_end_matches('\r').to_string(),
-                            });
+                        // below). Only the `all` output mode renders these —
+                        // skipped entirely otherwise (see
+                        // `EventSink::wants_progress_detail`) rather than
+                        // allocating and posting one event per line only to
+                        // have every other mode immediately discard it.
+                        if self.event_sink.wants_progress_detail() {
+                            for line in result.output.lines() {
+                                self.event_sink.post(TaskEvent::SetupCommandOutput {
+                                    container: name.to_string(),
+                                    index: setup_command_index + 1,
+                                    line: line.trim_end_matches('\r').to_string(),
+                                });
+                            }
                         }
                         if result.exit_code != 0 {
                             let output = if result.output.trim().is_empty() {
@@ -6046,7 +6052,9 @@ mod tests {
 
     /// A sink declaring the interleaved I/O policy (the `all` output mode)
     /// — records events like [`RecordingEventSink`], but the engine must
-    /// also react to the policy itself.
+    /// also react to the policy itself. Also declares interest in progress
+    /// detail, matching the real `InterleavedEventLogger`'s own override —
+    /// see `wants_progress_detail`'s own docs.
     #[derive(Clone, Default)]
     struct InterleavedRecordingSink {
         inner: RecordingEventSink,
@@ -6060,6 +6068,61 @@ mod tests {
         fn container_io_streaming(&self) -> crate::ui::ContainerIoStreaming {
             crate::ui::ContainerIoStreaming::Interleaved
         }
+
+        fn wants_progress_detail(&self) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn setup_command_output_only_posts_when_the_sink_wants_progress_detail() {
+        // engine.rs skips constructing/posting SetupCommandOutput entirely
+        // when the active sink doesn't render it (every mode but `all`) —
+        // proves both halves: a plain RecordingEventSink (matching
+        // simple/quiet/fancy, none of which render these) sees none, while
+        // an InterleavedRecordingSink (matching `all`) sees the command's
+        // output lines.
+        let config = config_with_database_dependency(|database| {
+            database.setup_commands = Some(vec![crate::config::SetupCommand {
+                command: "./seed-data.sh".to_string(),
+                working_directory: None,
+            }]);
+        });
+        let docker = FakeContainerRuntime::default().with_failing_setup_command("./seed-data.sh");
+        let sink = RecordingEventSink::default();
+        let engine = TaskEngine::new(config, docker).with_event_sink(Arc::new(sink.clone()));
+        engine.run_task("start", &[]).await.unwrap_err();
+        assert!(
+            !sink
+                .events()
+                .iter()
+                .any(|event| matches!(event, TaskEvent::SetupCommandOutput { .. })),
+            "a sink that doesn't want progress detail should see no SetupCommandOutput events: \
+             {:?}",
+            sink.events()
+        );
+
+        let config = config_with_database_dependency(|database| {
+            database.setup_commands = Some(vec![crate::config::SetupCommand {
+                command: "./seed-data.sh".to_string(),
+                working_directory: None,
+            }]);
+        });
+        let docker = FakeContainerRuntime::default().with_failing_setup_command("./seed-data.sh");
+        let sink = InterleavedRecordingSink::default();
+        let engine = TaskEngine::new(config, docker).with_event_sink(Arc::new(sink.clone()));
+        engine.run_task("start", &[]).await.unwrap_err();
+        assert!(
+            sink.inner
+                .events()
+                .contains(&TaskEvent::SetupCommandOutput {
+                    container: "database".into(),
+                    index: 1,
+                    line: "something went wrong".into(),
+                }),
+            "an interleaved sink should see the command's output: {:?}",
+            sink.inner.events()
+        );
     }
 
     #[tokio::test]

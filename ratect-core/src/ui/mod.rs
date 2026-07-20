@@ -352,6 +352,27 @@ pub trait EventSink: Send + Sync {
     fn container_io_streaming(&self) -> ContainerIoStreaming {
         ContainerIoStreaming::TaskContainerOnly
     }
+
+    /// Whether this logger renders any of the fine-grained progress events
+    /// (`ImagePullProgress`/`ImageBuildProgress`/`SetupCommandOutput`) at
+    /// all. `false` by default, matching `simple`/`quiet`/`NullEventSink` —
+    /// none of which render any of the three — so `docker.rs`/`engine.rs`
+    /// can skip constructing (and posting) those events entirely in the
+    /// common case, instead of paying a `String` allocation per pull/build
+    /// status line or setup-command output line only for `post` to
+    /// immediately discard it.
+    ///
+    /// Deliberately coarse — one flag for all three event kinds, not a
+    /// separate query per kind — even though `fancy` and `all` each render
+    /// only some of them (`fancy`: pull+build progress, not setup-command
+    /// output; `all`: build progress and setup-command output, not pull
+    /// progress). The residual cost of occasionally posting an event a
+    /// "rich" mode itself still no-ops on is negligible next to skipping
+    /// construction entirely for every `simple`/`quiet` run, and keeps this
+    /// trait's surface from growing one method per event kind.
+    fn wants_progress_detail(&self) -> bool {
+        false
+    }
 }
 
 /// Discards every event — the default sink wired into
