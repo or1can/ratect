@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-07-20
+
 ### Fixed
 
 - **Fancy mode's cleanup line could erase a task's final output**: `repaint_cleanup` now always starts on a fresh line (a blank separator, matching `simple` mode's own "Cleaning up..." framing) instead of painting directly at the current cursor position — previously, a task command whose last line of output had no trailing newline got "Cleaning up..." appended onto that same terminal row, which the very next repaint's cursor-up-and-clear would then erase, permanently destroying the task's real output. Found during pre-release review of 0.16.0's output-modes work.

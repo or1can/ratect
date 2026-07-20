@@ -510,11 +510,58 @@ Neither bump is ever folded into a feature commit.
     0.13.0 work); wildcard (`*`) `prerequisites` (missed alongside 0.14.0's Task Model
     Completeness); and task name suggestions ("Did you mean...?", ported from Batect's
     `TaskSuggester`).
-- **0.16.0** — **Output Modes**: `--output`/`-o` (Batect's `fancy`/`simple`/`quiet`/
+- **0.16.0** — ~~**Output Modes**: `--output`/`-o` (Batect's `fancy`/`simple`/`quiet`/
   `all` modes) together with automatic default-mode selection based on terminal
   capabilities — the two can't ship separately, since auto-detection is the logic for
   picking between modes that don't otherwise exist. Also closes `--no-color` (color is
-  one axis of the fancy/simple distinction).
+  one axis of the fancy/simple distinction)~~ — done, design validated against Batect's
+  own implementation (`OutputStyle`, `EventLogger`/`EventLoggerProvider`,
+  `ui/{quiet,simple,fancy,interleaved,containerio}/`, `ConsoleInfo`, `Console`, and
+  `CommandLineOptionsParser` in the local `batect` checkout) before building, exactly
+  Batect's four styles:
+  - Landed the seam every style plugs into first: `ratect-core/src/ui/`, a port of
+    Batect's `TaskEventSink`/`EventLogger` design. `engine.rs` and `docker.rs` post
+    typed `TaskEvent`s to an injected `EventSink` instead of printing directly, and the
+    selected logger decides what each event renders as — replacing the previous
+    `indicatif` spinner entirely (no Batect style uses one) and, as a side effect,
+    fixing concurrent pulls/builds (possible since 0.15.0) racing their uncoordinated
+    spinners onto the same terminal line.
+  - `simple` (the non-interactive default) and `quiet` (stdout is exactly the
+    containers' own output; also a machine-readable `--list-tasks`) landed first,
+    followed by `fancy` (a live per-container status block, cursor-movement repainted
+    in place — no spinner, Batect doesn't use one either) and `all` (every container's
+    output, dependencies included, line-prefixed and interleaved — the only mode that
+    shows dependency/setup-command/build output at all). See `CHANGELOG.md`'s Added
+    entries for each style's full behavior.
+  - `--output`'s auto-selection and `--no-color` match Batect's own rule exactly
+    (`EventLoggerProvider`/`ConsoleInfo.supportsInteractivity`, confirmed by reading
+    its source), minus Batect's mintty and legacy `TRAVIS` special cases — deliberately
+    skipped, since Windows is untested here and modern CI doesn't allocate a TTY, so
+    the terminal check already covers it.
+  - Two deliberate divergences from Batect, both documented in
+    [Differences from Batect](docs/differences-from-batect.md#cli-flags): an explicit
+    `-o fancy` on a non-interactive console fails with a clear error up front, where
+    Batect accepts it and crashes on the first repaint; and `-o fancy --no-color`
+    renders colorless fancy (the live repaint stays, only bold/color drop), where
+    Batect's console couples color and cursor movement into one flag and rejects the
+    combination outright.
+  - A pre-release review of this release's own diff (found via the project's own
+    review tooling, not hand-testing) turned up thirteen further issues, all fixed as
+    separate commits before release rather than folded into the feature commits above:
+    two genuine display bugs (fancy's cleanup line could overwrite a task's final
+    unterminated output line; a `--use-network` failure could end the event stream
+    with no `TaskFailed` ever posted, leaving `all` mode's preamble stuck unprinted), a
+    silent-failure gap (a task's fatal error reached stderr solely via
+    `tracing::error!`, which `RUST_LOG` can suppress — a failure under `-o quiet` plus
+    `RUST_LOG=off` could exit non-zero with no visible output anywhere), a `char`-count
+    vs. real terminal-display-width bug in fancy/`all` (new `unicode-width`
+    dependency), a dropped-output bug in `all` mode's log streaming plus the
+    duplicated implementation that caused it, and a background log-follower race that
+    could let `all` mode's dependency output arrive after that container's own
+    removal was reported. The remaining fixes were internal hardening/simplification
+    with no user-visible behavior change (see `git log` and `TODO.md`, which also
+    tracks what was investigated and deliberately left as-is — e.g. `LineBuffer`'s
+    CR-only line buffering, confirmed faithful to Batect's own identical behavior).
 - **0.17.0** — **Remaining CLI Parity**: `--skip-prerequisites`, `--override-image`,
   `--no-cleanup`/`--no-cleanup-after-failure`/`--no-cleanup-after-success`,
   `--tag-image`, `--enable-buildkit` (just the tristate flag surface — the
