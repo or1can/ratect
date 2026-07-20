@@ -1184,6 +1184,16 @@ pub struct DockerClient {
     /// container/task names). [`NullEventSink`] (silent) by default, a real
     /// output-mode logger via `with_event_sink`. See `crate::ui`.
     event_sink: std::sync::Arc<dyn EventSink>,
+    /// Container ID -> the background log-follower task
+    /// `start_background_container` spawned for it under the interleaved
+    /// (`all` output mode) policy. `stop_and_remove_container` awaits (and
+    /// removes) the matching entry before returning, so a dependency's
+    /// follower can never race past the container's own removal —
+    /// `TaskEvent::ContainerRemoved` (which `engine.rs` posts right after
+    /// `stop_and_remove_container` returns) is then only ever posted once
+    /// the follower has finished flushing everything it's going to,
+    /// instead of the two racing as genuinely fire-and-forget tasks.
+    log_followers: std::sync::Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
 }
 
 /// Picks the builder for this invocation's image builds, matching Batect's
@@ -1231,6 +1241,7 @@ impl DockerClient {
             docker,
             builder_version: tokio::sync::OnceCell::new(),
             event_sink: std::sync::Arc::new(NullEventSink),
+            log_followers: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -1571,6 +1582,27 @@ impl DockerClient {
         stdin_pump.abort();
         result
     }
+
+    /// Awaits (and removes) `container_id`'s background log-follower
+    /// handle, if `start_background_container` started one for it (the
+    /// interleaved policy — see `log_followers`' own doc comment for why
+    /// `stop_and_remove_container` needs this ordering). A no-op for any
+    /// container with no follower — every non-interleaved run, and the
+    /// task's own container (which streams via `start_and_stream_logs`
+    /// directly, never through a spawned follower). Split out from
+    /// `stop_and_remove_container` so the awaiting behavior itself is
+    /// unit-testable without a live Docker daemon.
+    async fn await_log_follower(&self, container_id: &str) {
+        let follower = self.log_followers.lock().unwrap().remove(container_id);
+        if let Some(follower) = follower {
+            // A `JoinError` here only means the follower task itself
+            // panicked — already-posted events aren't affected, and
+            // there's nothing this caller could do about it beyond not
+            // hanging, so it's discarded rather than turned into a
+            // container-removal failure.
+            let _ = follower.await;
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -1848,16 +1880,17 @@ impl ContainerRuntime for DockerClient {
         // Under the interleaved policy (the `all` output mode — the only
         // mode that shows dependency output at all), follow this
         // container's logs in the background for its whole lifetime,
-        // posting each line as an event. Fire-and-forget: the stream ends
-        // on its own when cleanup removes the container (a final buffered
-        // partial line can in principle race process exit, which is
-        // tolerable for log streaming).
+        // posting each line as an event. Not fully fire-and-forget: the
+        // handle is kept in `log_followers`, and `stop_and_remove_container`
+        // awaits (and removes) it before returning, so this task's own
+        // exit can never race past the container's actual removal — see
+        // `log_followers`' own doc comment for why that ordering matters.
         if self.event_sink.container_io_streaming() == ContainerIoStreaming::Interleaved {
             let docker = self.docker.clone();
             let event_sink = std::sync::Arc::clone(&self.event_sink);
             let container_name = alias.to_string();
             let container_id = container.id.clone();
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 if let Err(e) = stream_logs_as_interleaved_events(
                     &docker,
                     &event_sink,
@@ -1879,6 +1912,10 @@ impl ContainerRuntime for DockerClient {
                     );
                 }
             });
+            self.log_followers
+                .lock()
+                .unwrap()
+                .insert(container.id.clone(), handle);
         }
 
         Ok(container.id)
@@ -2011,6 +2048,14 @@ impl ContainerRuntime for DockerClient {
             .await
             .with_context(|| format!("Failed to remove container '{}'", container_id))?;
         tracing::debug!(container_id, "stopped and removed container");
+
+        // The caller (`engine.rs`) posts `TaskEvent::ContainerRemoved`
+        // right after this returns — interleaved output must never arrive
+        // after that event, so wait for any background log follower to
+        // actually finish flushing first. See `await_log_follower`/
+        // `log_followers`' own doc comments.
+        self.await_log_follower(container_id).await;
+
         Ok(())
     }
 
@@ -2198,6 +2243,47 @@ mod tests {
             vec!["first line", "unterminated final line"],
             "the unterminated final line must still be flushed despite the stream error"
         );
+    }
+
+    #[tokio::test]
+    async fn await_log_follower_waits_for_the_spawned_task_to_finish() {
+        // `DockerClient::new` only builds a lazily-connecting client (no
+        // handshake), so this doesn't need a live daemon.
+        let client =
+            DockerClient::new().expect("DockerClient::new should not require a live daemon");
+        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let finished_in_task = std::sync::Arc::clone(&finished);
+        let handle = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            finished_in_task.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        client
+            .log_followers
+            .lock()
+            .unwrap()
+            .insert("container-1".to_string(), handle);
+
+        client.await_log_follower("container-1").await;
+
+        assert!(
+            finished.load(std::sync::atomic::Ordering::SeqCst),
+            "await_log_follower should not return before the spawned task finishes — this is \
+             the exact race the fix closes: ContainerRemoved posting before a follower's final \
+             flush"
+        );
+        assert!(
+            client.log_followers.lock().unwrap().is_empty(),
+            "the entry should be removed once awaited, so a later call for the same id is a no-op"
+        );
+    }
+
+    #[tokio::test]
+    async fn await_log_follower_is_a_no_op_for_a_container_with_no_follower() {
+        let client =
+            DockerClient::new().expect("DockerClient::new should not require a live daemon");
+        // Every non-interleaved run (and the task's own container, always)
+        // never inserts an entry at all — must return immediately, not hang.
+        client.await_log_follower("no-such-container").await;
     }
 
     #[test]
