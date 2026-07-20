@@ -455,6 +455,12 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     /// closure in tests (see `with_host_env`), same reason
     /// `config.rs::resolve_expressions_with` parameterizes over this.
     host_env: HostEnv,
+    /// `true` when `--skip-prerequisites` was given: the top-level task's
+    /// own `prerequisites` are never run. Matches Batect's flag of the same
+    /// name — scoped to the named task only (never a prerequisite itself,
+    /// which is the only other thing that could otherwise trigger this
+    /// check; see `run_task_internal`'s `top_level` parameter).
+    skip_prerequisites: bool,
     /// Where task-execution milestones go for the user to see —
     /// [`NullEventSink`] (silent) by default, a real output-mode logger via
     /// `with_event_sink`. See `crate::ui`.
@@ -475,6 +481,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             propagate_proxy_environment_variables: true,
             host_env: Box::new(|name| std::env::var(name).ok()),
             event_sink: Arc::new(NullEventSink),
+            skip_prerequisites: false,
         }
     }
 
@@ -513,6 +520,13 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     /// regardless of what's set in the host environment.
     pub fn without_proxy_environment_variables(mut self) -> Self {
         self.propagate_proxy_environment_variables = false;
+        self
+    }
+
+    /// Opts into `--skip-prerequisites`: the named task's own `prerequisites`
+    /// are never run. See `run_task_internal`.
+    pub fn without_prerequisites(mut self) -> Self {
+        self.skip_prerequisites = true;
         self
     }
 
@@ -815,10 +829,18 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         // detection (see `run_task_scoped`) already collapses a name reached
         // more than once (e.g. named explicitly *and* matched by a wildcard)
         // to a single actual run.
-        if let Some(prerequisites) = &task.prerequisites {
-            let prerequisites = expand_prerequisite_wildcards(&self.config.tasks, prerequisites)?;
-            for prerequisite in &prerequisites {
-                self.run_task_scoped(prerequisite, &[], false).await?;
+        //
+        // Skipped entirely when `--skip-prerequisites` was given and this is
+        // the top-level task — never for a prerequisite task itself, which
+        // always runs its own prerequisites regardless (matching Batect: the
+        // flag only ever names the one task given on the command line).
+        if !(top_level && self.skip_prerequisites) {
+            if let Some(prerequisites) = &task.prerequisites {
+                let prerequisites =
+                    expand_prerequisite_wildcards(&self.config.tasks, prerequisites)?;
+                for prerequisite in &prerequisites {
+                    self.run_task_scoped(prerequisite, &[], false).await?;
+                }
             }
         }
 
@@ -2558,6 +2580,39 @@ mod tests {
                 "prerequisite should not receive additional args: {run}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn without_prerequisites_skips_the_named_tasks_own_prerequisites() {
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config_with_shared_prerequisite(), docker.clone())
+            .without_prerequisites();
+
+        engine.run_task("test-task", &[]).await.unwrap();
+
+        let events = docker.events();
+        let runs: Vec<_> = events.iter().filter(|e| e.starts_with("run:")).collect();
+        assert_eq!(runs.len(), 1, "events: {events:?}");
+        assert!(runs[0].starts_with("run:build-env:test-task:args=[]:"));
+    }
+
+    #[tokio::test]
+    async fn without_prerequisites_scopes_to_whichever_task_is_named_as_top_level() {
+        // The flag scopes to whichever task is actually named on the command
+        // line (whatever `run_task` is called with), not a task hardcoded
+        // inside the engine — running "prereq-task" directly makes *it* the
+        // top-level task this time, so *its* own prerequisite
+        // ("shared-prereq") is what gets skipped.
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config_with_shared_prerequisite(), docker.clone())
+            .without_prerequisites();
+
+        engine.run_task("prereq-task", &[]).await.unwrap();
+
+        let events = docker.events();
+        let runs: Vec<_> = events.iter().filter(|e| e.starts_with("run:")).collect();
+        assert_eq!(runs.len(), 1, "events: {events:?}");
+        assert!(runs[0].starts_with("run:build-env:prereq-task:args=[]:"));
     }
 
     #[tokio::test]

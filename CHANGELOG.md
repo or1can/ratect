@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`--skip-prerequisites`**: skips the named task's own `prerequisites` — scoped only to the task actually given on the command line; a task reached as someone else's prerequisite still always runs its own prerequisites regardless. Matches Batect's flag of the same name. See [CLI reference](docs/cli-reference.md).
+
 ## [0.16.0] - 2026-07-20
 
 ### Fixed

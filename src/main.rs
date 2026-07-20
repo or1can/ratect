@@ -60,6 +60,10 @@ struct Args {
     #[arg(long = "no-proxy-vars")]
     no_proxy_vars: bool,
 
+    /// Don't run prerequisites for the named task.
+    #[arg(long = "skip-prerequisites")]
+    skip_prerequisites: bool,
+
     /// Force a particular style of output (does not affect task command
     /// output): fancy (default when the console supports it — a live
     /// per-container status display), simple (plain lines, no updating
@@ -257,6 +261,9 @@ async fn run() -> Result<()> {
             if args.no_proxy_vars {
                 engine = engine.without_proxy_environment_variables();
             }
+            if args.skip_prerequisites {
+                engine = engine.without_prerequisites();
+            }
             engine.run_task(&task_name, &args.additional_args).await?;
         }
         None => {
@@ -411,6 +418,18 @@ mod tests {
     fn defaults_no_proxy_vars_to_false() {
         let args = Args::try_parse_from(["ratect"]).unwrap();
         assert!(!args.no_proxy_vars);
+    }
+
+    #[test]
+    fn parses_skip_prerequisites_flag() {
+        let args = Args::try_parse_from(["ratect", "--skip-prerequisites", "build"]).unwrap();
+        assert!(args.skip_prerequisites);
+    }
+
+    #[test]
+    fn defaults_skip_prerequisites_to_false() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert!(!args.skip_prerequisites);
     }
 
     #[test]
