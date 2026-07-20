@@ -837,31 +837,15 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         });
         let task_started_at = std::time::Instant::now();
 
-        // A task-scoped network + its dependency containers: created fresh for
-        // this one task execution and torn down before this function returns,
-        // regardless of outcome. Not shared across tasks — see docs/task-lifecycle.md.
-        // Always created, even with no dependencies, so the task's own
-        // container is never left on Docker's shared default bridge network.
-        //
-        // Unless `--use-network` was given (`self.existing_network`), in which
-        // case that network is validated to exist and reused instead —
-        // checked fresh on every task execution, never cached — and, since
-        // Ratect didn't create it, it's never removed during cleanup either
-        // (matching Batect: cleanup only ever tears down networks it created
-        // itself).
-        let network_name = match &self.existing_network {
-            Some(name) => {
-                if !self.docker.network_exists(name).await? {
-                    anyhow::bail!("The network '{}' does not exist.", name);
-                }
-                name.clone()
-            }
-            None => {
-                let name = format!("ratect-{}", Uuid::new_v4());
-                self.docker.create_network(&name).await?;
-                name
-            }
-        };
+        // The task-scoped network's name, resolved *inside* the `result`
+        // block below (not here) so a validation/creation failure is
+        // reported through the same `TaskFailed`/error path as every other
+        // infrastructure failure, instead of an early `?`-return that would
+        // skip it — see the `TaskEvent::TaskFailed` doc comment's contract.
+        // `None` here means "not resolved" (either not attempted yet, or
+        // resolution failed) — the cleanup section below only ever removes
+        // a network it can see was actually created.
+        let network_name_cell: Mutex<Option<String>> = Mutex::new(None);
 
         // Populated concurrently as each dependency starts (before its own
         // readiness gate — see `ensure_container_ready`), so cleanup below
@@ -890,6 +874,34 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         );
 
         let result: Result<()> = async {
+            // Always created, even with no dependencies, so the task's own
+            // container is never left on Docker's shared default bridge
+            // network. Unless `--use-network` was given
+            // (`self.existing_network`), in which case that network is
+            // validated to exist and reused instead — checked fresh on
+            // every task execution, never cached — and, since Ratect didn't
+            // create it, it's never removed during cleanup either (matching
+            // Batect: cleanup only ever tears down networks it created
+            // itself).
+            let network_name = match &self.existing_network {
+                Some(name) => {
+                    if !self.docker.network_exists(name).await? {
+                        anyhow::bail!("The network '{}' does not exist.", name);
+                    }
+                    name.clone()
+                }
+                None => {
+                    let name = format!("ratect-{}", Uuid::new_v4());
+                    self.docker.create_network(&name).await?;
+                    name
+                }
+            };
+            // Recorded for the cleanup section below *before* any further
+            // failure in this block — same "register before the readiness
+            // gate" principle `ensure_container_ready` already applies to
+            // `running_sidecars`.
+            *network_name_cell.lock().unwrap() = Some(network_name.clone());
+
             // Static, up-front cycle check (see `build_dependency_graph`) —
             // proves the whole graph acyclic before any concurrent execution
             // starts, so `ensure_container_ready` doesn't need its own
@@ -1032,7 +1044,13 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         .await;
 
         let running_sidecars = running_sidecars.into_inner().unwrap();
-        if !running_sidecars.is_empty() || self.existing_network.is_none() {
+        // `Some` only if network resolution inside the block above actually
+        // succeeded — `None` both when `--use-network` was given (we never
+        // own that network) and when our own creation failed before ever
+        // recording it.
+        let network_name = network_name_cell.into_inner().unwrap();
+        let owns_network = self.existing_network.is_none() && network_name.is_some();
+        if !running_sidecars.is_empty() || owns_network {
             self.event_sink.post(TaskEvent::CleanupStarting);
         }
         for (name, container_id) in &running_sidecars {
@@ -1049,7 +1067,8 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 }
             }
         }
-        if self.existing_network.is_none() {
+        if owns_network {
+            let network_name = network_name.expect("owns_network implies network_name is Some");
             self.event_sink.post(TaskEvent::RemovingNetwork);
             if let Err(e) = self.docker.remove_network(&network_name).await {
                 tracing::warn!(network = network_name.as_str(), error = ?e, "Failed to remove network");
@@ -3527,6 +3546,46 @@ mod tests {
         assert!(
             !events.iter().any(|e| e.starts_with("run:")),
             "nothing should have run: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_network_still_posts_task_failed() {
+        // A `--use-network` validation failure used to `?`-return before the
+        // block that posts TaskFailed/TaskFinished, silently ending the
+        // event stream right after TaskStarting — this proves that's fixed:
+        // the failure now reaches the same TaskFailed contract every other
+        // infrastructure failure does, with no CleanupStarting/
+        // RemovingNetwork posted (nothing was ever created to clean up).
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("build".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        };
+
+        let sink = RecordingEventSink::default();
+        let docker = FakeContainerRuntime::default().without_existing_network();
+        let engine = TaskEngine::new(config, docker)
+            .with_existing_network("missing".to_string())
+            .with_event_sink(Arc::new(sink.clone()));
+
+        assert!(engine.run_task("build", &[]).await.is_err());
+
+        assert_eq!(
+            sink.events(),
+            vec![
+                TaskEvent::TaskStarting {
+                    task: "build".into()
+                },
+                TaskEvent::TaskFailed {
+                    task: "build".into()
+                },
+            ]
         );
     }
 

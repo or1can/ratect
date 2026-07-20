@@ -102,6 +102,20 @@ impl InterleavedEventLogger {
         self.print_prefixed(state, &task, Color::White, line);
     }
 
+    /// Prints the deferred "Running `<task>`..." preamble if it hasn't
+    /// already gone out — called both once the graph normally arrives
+    /// (`TaskGraphResolved`) and, as a fallback, on `TaskFailed`, so an
+    /// infrastructure failure early enough that the graph never resolved
+    /// still gets this task's own line onto stdout before the error.
+    fn flush_preamble_if_pending(&self, state: &mut State) {
+        if !state.preamble_pending {
+            return;
+        }
+        state.preamble_pending = false;
+        let task = state.task.clone().unwrap_or_default();
+        self.print_for_task(state, &format!("Running {}...", self.console.bold(&task)));
+    }
+
     /// Every container using `image`, sorted — a pull belongs to all of
     /// them at once.
     fn containers_for_image(state: &State, image: &str) -> Vec<String> {
@@ -171,14 +185,7 @@ impl EventSink for InterleavedEventLogger {
                             .map(|tag| (info.name.clone(), tag.clone()))
                     })
                     .collect();
-                if state.preamble_pending {
-                    state.preamble_pending = false;
-                    let task = state.task.clone().unwrap_or_default();
-                    self.print_for_task(
-                        &state,
-                        &format!("Running {}...", self.console.bold(&task)),
-                    );
-                }
+                self.flush_preamble_if_pending(&mut state);
             }
             TaskEvent::ImagePullStarting { image } => {
                 for container in Self::containers_for_image(&state, &image) {
@@ -290,8 +297,18 @@ impl EventSink for InterleavedEventLogger {
                 );
             }
             // The error itself reaches stderr through the normal error
-            // chain.
-            TaskEvent::TaskFailed { .. } => {}
+            // chain — but an infrastructure failure early enough that
+            // TaskGraphResolved never posted (e.g. `--use-network` naming a
+            // nonexistent network) would otherwise leave the deferred
+            // preamble (see TaskStarting/TaskGraphResolved above) stuck
+            // unprinted forever, so this task's prefix never appeared on
+            // stdout at all before the error. Flush it here if so —
+            // `prefix_width` may still be 0 (no graph arrived to size it
+            // against), which just means no padding beyond the task name
+            // itself, same as a single-container task would get anyway.
+            TaskEvent::TaskFailed { .. } => {
+                self.flush_preamble_if_pending(&mut state);
+            }
         }
     }
 }
@@ -461,6 +478,29 @@ mod tests {
             "test | Running test...\n\
              db   | Setup command 2 | initialised\n"
         );
+    }
+
+    #[test]
+    fn task_failed_before_the_graph_resolves_still_flushes_the_preamble() {
+        // An infrastructure failure early enough that TaskGraphResolved
+        // never posts (e.g. a `--use-network` validation failure) must not
+        // leave this task's line unprinted forever — TaskFailed flushes the
+        // deferred preamble itself in that case.
+        let (logger, buffer) = logger();
+        logger.post(TaskEvent::TaskStarting {
+            task: "test".into(),
+        });
+        logger.post(TaskEvent::TaskFailed {
+            task: "test".into(),
+        });
+        assert_eq!(buffer.contents(), "test | Running test...\n");
+
+        // A second TaskFailed (shouldn't happen in practice, but the guard
+        // must not double-print).
+        logger.post(TaskEvent::TaskFailed {
+            task: "test".into(),
+        });
+        assert_eq!(buffer.contents(), "test | Running test...\n");
     }
 
     #[test]
