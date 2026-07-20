@@ -28,7 +28,7 @@ missing.
 
 `--output`/`-o` controls how Ratect reports its own progress on stdout — never what
 the task's command itself prints, which always streams through unmodified. The
-styles are Batect's own four, three of which are implemented so far:
+styles are Batect's own four, all implemented:
 
 - **`fancy`** — a live status block, one line per container in the task's
   dependency graph (`<name>: <what it's doing right now>` — pulling/building with
