@@ -1494,6 +1494,7 @@ dependencies = [
  "path-clean",
  "regex",
  "serde",
+ "serde_json",
  "sha2",
  "tar",
  "tokio",

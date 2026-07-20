@@ -168,12 +168,14 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
 - **`url`**: parses/rewrites `localhost`/`127.0.0.1`/`::1` proxy URLs to `host.docker.internal` in `ratect-core/src/proxy.rs`. Already resolved in `Cargo.lock` transitively (via `bollard`'s own dependency graph) — same low-risk-addition reasoning as `nix` above.
 - **`unicode-width`**: real terminal display-column widths (CJK wide characters count as 2, zero-width/combining marks count as 0) for `ratect-core/src/ui/fancy.rs`'s repaint-width clipping and `ratect-core/src/ui/interleaved.rs`'s prefix-column padding — a plain `char`/byte count under-measures exactly those characters, which let a rendered line silently wrap onto more terminal rows than the fancy logger's own cursor-movement math accounts for. Zero transitive dependencies; the same crate ripgrep/bat/etc. use for this.
 - **`bytes`** (`ratect-core` dev-dependency only): constructs `bollard::container::LogOutput` values directly in `docker.rs`'s own unit tests (`drain_interleaved_log_stream`'s tests, which feed it a synthetic log stream via `futures::stream::iter` instead of needing a live daemon) — `LogOutput`'s variants wrap a `bytes::Bytes` message, which bollard itself doesn't re-export. Already resolved in `Cargo.lock` transitively (via `bollard`/`hyper`'s own dependency graph) — same low-risk-addition reasoning as `nix`/`url` above.
+- **`serde_json`**: parses the Docker CLI's own context-store JSON files for `--docker-context` (`ratect-core/src/docker.rs`'s `docker_context_host`/`active_docker_context`) — `<config_directory>/contexts/meta/<sha256(name)>/meta.json`'s `Endpoints.docker.Host`, and `<config_directory>/config.json`'s `currentContext`. `serde` itself was already a dependency (for `noyalib`'s `compat-serde-yaml`); `serde_json` is the standard, ubiquitous choice for the same derive-based approach applied to actual JSON.
 
 Dependencies are split across the three `Cargo.toml`s along CLI-vs-core lines: `clap`
-and `tracing-subscriber` are `ratect`-only; `serde`, `noyalib`, `bollard`, `futures`,
-`async-recursion`, `async-trait`, `uuid`, `tar`, `path-clean`, `crossterm`,
-`nix`, `url`, `unicode-width`, and the local `dockerignore` crate are `ratect-core`-only (`dockerignore`
-itself depends on `regex` and `path-clean` too); `anyhow`, `tracing`, and `tokio` are
+and `tracing-subscriber` are `ratect`-only; `serde`, `serde_json`, `noyalib`, `bollard`,
+`futures`, `async-recursion`, `async-trait`, `uuid`, `tar`, `path-clean`, `crossterm`,
+`nix`, `url`, `sha2`, `toml`, `regex`, `unicode-width`, and the local `dockerignore` crate
+are `ratect-core`-only (`dockerignore` itself depends on `regex` and `path-clean` too);
+`anyhow`, `tracing`, and `tokio` are
 needed by both. `tokio` is a normal dependency in both crates now — `ratect-core`'s
 non-test code needs it too, for `build_context_tar`'s `tokio::task::spawn_blocking` (it
 used to be a `ratect-core` dev-dependency only, for `#[tokio::test]` in its unit tests).

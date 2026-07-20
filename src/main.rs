@@ -15,7 +15,7 @@
 use anyhow::Result;
 use clap::Parser;
 use ratect_core::config::{format_task_list, format_task_list_quiet, Config};
-use ratect_core::docker::DockerClient;
+use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::TaskEngine;
 use ratect_core::ui::{create_event_sink, select_output_style, OutputStyle};
 use std::collections::HashMap;
@@ -103,6 +103,25 @@ struct Args {
     /// only done via DOCKER_BUILDKIT=0.
     #[arg(long = "enable-buildkit")]
     enable_buildkit: bool,
+
+    /// Docker host to use, e.g. 'unix:///var/run/docker.sock' or
+    /// 'tcp://1.2.3.4:5678'. Defaults to the DOCKER_HOST environment
+    /// variable, then Docker's own local default. Cannot be used together
+    /// with --docker-context.
+    #[arg(long = "docker-host")]
+    docker_host: Option<String>,
+
+    /// Docker CLI context to use. Defaults to the DOCKER_CONTEXT
+    /// environment variable, then the Docker CLI's own active context.
+    /// Cannot be used together with --docker-host.
+    #[arg(long = "docker-context")]
+    docker_context: Option<String>,
+
+    /// Path to the directory containing Docker CLI configuration files
+    /// (context store, config.json). Defaults to the DOCKER_CONFIG
+    /// environment variable, then ~/.docker.
+    #[arg(long = "docker-config")]
+    docker_config: Option<PathBuf>,
 
     /// Force a particular style of output (does not affect task command
     /// output): fancy (default when the console supports it — a live
@@ -299,7 +318,12 @@ async fn run() -> Result<()> {
                 term.as_deref(),
                 console_dimensions_available,
             )?;
-            let docker = DockerClient::new()?
+            let docker_connection = DockerConnectionOptions {
+                host: args.docker_host,
+                context: args.docker_context,
+                config_directory: args.docker_config,
+            };
+            let docker = DockerClient::new(&docker_connection)?
                 .with_event_sink(Arc::clone(&event_sink))
                 .with_enable_buildkit(args.enable_buildkit);
             let mut engine = TaskEngine::new(config, docker).with_event_sink(event_sink);
@@ -599,6 +623,37 @@ mod tests {
     fn defaults_enable_buildkit_to_false() {
         let args = Args::try_parse_from(["ratect"]).unwrap();
         assert!(!args.enable_buildkit);
+    }
+
+    #[test]
+    fn parses_docker_connection_flags() {
+        let args = Args::try_parse_from([
+            "ratect",
+            "--docker-host",
+            "tcp://1.2.3.4:2375",
+            "--docker-config",
+            "/tmp/docker-config",
+            "build",
+        ])
+        .unwrap();
+        assert_eq!(args.docker_host, Some("tcp://1.2.3.4:2375".to_string()));
+        assert_eq!(args.docker_context, None);
+        assert_eq!(
+            args.docker_config,
+            Some(PathBuf::from("/tmp/docker-config"))
+        );
+
+        let args =
+            Args::try_parse_from(["ratect", "--docker-context", "my-context", "build"]).unwrap();
+        assert_eq!(args.docker_context, Some("my-context".to_string()));
+    }
+
+    #[test]
+    fn defaults_docker_connection_flags_to_none() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert_eq!(args.docker_host, None);
+        assert_eq!(args.docker_context, None);
+        assert_eq!(args.docker_config, None);
     }
 
     #[test]

@@ -1308,10 +1308,190 @@ fn select_builder_version(
     })
 }
 
+/// CLI-facing Docker daemon connection selection (`--docker-host`,
+/// `--docker-context`, `--docker-config`) — `None` for anything not
+/// explicitly given on the command line, so `DockerClient::new` falls back
+/// to the real `DOCKER_HOST`/`DOCKER_CONTEXT`/`DOCKER_CONFIG` environment
+/// variables and the Docker CLI's own active-context resolution, exactly
+/// matching Batect's own precedence
+/// (`CommandLineOptionsParser.resolveDockerContext`). `--docker-tls*`/
+/// `--docker-cert-path` aren't here yet — deferred, see `ROADMAP.md`'s
+/// 0.17.0 entry.
+#[derive(Debug, Default, Clone)]
+pub struct DockerConnectionOptions {
+    pub host: Option<String>,
+    pub context: Option<String>,
+    pub config_directory: Option<PathBuf>,
+}
+
+/// The Docker CLI's own context store identifier for a context name —
+/// lowercase hex `sha256(name)`. Matches the Docker CLI's own
+/// `contextdir.go` naming exactly (verified against a real
+/// `~/.docker/contexts/meta/<id>/meta.json` entry on this machine).
+fn docker_context_id(name: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(name.as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// The subset of a context's `meta.json` this needs — just the daemon host
+/// to connect to. Field names/casing match the Docker CLI's own format
+/// exactly (`Endpoints.docker.Host`; `docker` itself is lowercase, unlike
+/// its sibling fields).
+#[derive(serde::Deserialize)]
+struct DockerContextMetadata {
+    #[serde(rename = "Endpoints")]
+    endpoints: DockerContextEndpoints,
+}
+
+#[derive(serde::Deserialize)]
+struct DockerContextEndpoints {
+    docker: DockerContextDockerEndpoint,
+}
+
+#[derive(serde::Deserialize)]
+struct DockerContextDockerEndpoint {
+    #[serde(rename = "Host")]
+    host: String,
+}
+
+/// Reads `<config_directory>/contexts/meta/<sha256(context_name)>/meta.json`
+/// for `context_name`'s daemon host. A missing file (or one that doesn't
+/// parse as expected) is reported as the named context not existing —
+/// matching what `--docker-context` naming an unknown context should feel
+/// like to a user, rather than a raw file-not-found error.
+fn docker_context_host(config_directory: &Path, context_name: &str) -> Result<String> {
+    let meta_path = config_directory
+        .join("contexts")
+        .join("meta")
+        .join(docker_context_id(context_name))
+        .join("meta.json");
+    let contents = fs::read_to_string(&meta_path).with_context(|| {
+        format!(
+            "Docker context '{context_name}' does not exist (expected to find it at {}).",
+            meta_path.display()
+        )
+    })?;
+    let metadata: DockerContextMetadata = serde_json::from_str(&contents).with_context(|| {
+        format!(
+            "Failed to read Docker context '{context_name}' ({})",
+            meta_path.display()
+        )
+    })?;
+    Ok(metadata.endpoints.docker.host)
+}
+
+/// The subset of the Docker CLI's own `config.json` this needs — just the
+/// active context's name.
+#[derive(serde::Deserialize, Default)]
+struct DockerCliConfig {
+    #[serde(rename = "currentContext", default)]
+    current_context: Option<String>,
+}
+
+/// The Docker CLI's own "currently active" context, from
+/// `<config_directory>/config.json`'s `currentContext` field — consulted
+/// only when neither `--docker-context`/`--docker-host` nor `DOCKER_CONTEXT`
+/// says otherwise. `None` (not an error) when the file doesn't exist or sets
+/// no `currentContext` — both mean the same thing as the Docker CLI's own
+/// fallback: use the `default` context.
+fn active_docker_context(config_directory: &Path) -> Option<String> {
+    let contents = fs::read_to_string(config_directory.join("config.json")).ok()?;
+    let config: DockerCliConfig = serde_json::from_str(&contents).ok()?;
+    config.current_context.filter(|name| !name.is_empty())
+}
+
+/// `--docker-config`, else `DOCKER_CONFIG`, else `~/.docker` — the
+/// directory the Docker CLI's own context store and `config.json` live in.
+fn docker_config_directory(options: &DockerConnectionOptions) -> Result<PathBuf> {
+    if let Some(dir) = &options.config_directory {
+        return Ok(dir.clone());
+    }
+    if let Ok(dir) = std::env::var("DOCKER_CONFIG") {
+        return Ok(PathBuf::from(dir));
+    }
+    Ok(crate::user::home_directory()?.join(".docker"))
+}
+
+/// Step 1–3 of `connect`'s own doc comment, as a pure decision: which
+/// context (if any) should be looked up in the store. A `None` return means
+/// "no context — connect via `options.host`/`DOCKER_HOST`/the platform
+/// default instead", covering both an explicit `--docker-host` (which skips
+/// context resolution entirely) and the `default` context name itself
+/// (never looked up in the store — it *means* "no context").
+///
+/// `active_context` is step 4's fallback — reading the store's own "active
+/// context" needs real file I/O, so it's computed by the caller and passed
+/// in already-resolved, keeping this function itself pure (and so
+/// unit-testable without a filesystem) like `select_builder_version`.
+fn resolve_context_name(
+    options: &DockerConnectionOptions,
+    docker_context_env: Option<&str>,
+    active_context: Option<String>,
+) -> Option<String> {
+    let context_name = if let Some(context) = &options.context {
+        Some(context.clone())
+    } else if options.host.is_some() {
+        None
+    } else if let Some(context) = docker_context_env {
+        Some(context.to_string())
+    } else {
+        active_context
+    };
+
+    context_name.filter(|name| name != "default")
+}
+
+/// Resolves and connects to the Docker daemon, matching Batect's own
+/// precedence (`CommandLineOptionsParser.resolveDockerContext`/
+/// `DockerClientConfigurationFactory`) exactly:
+///
+/// 1. An explicit `--docker-context` is looked up by name in the context
+///    store.
+/// 2. Otherwise, an explicit `--docker-host` connects directly to that host
+///    — bypassing the context store entirely, even if `DOCKER_CONTEXT` or
+///    an active context is also set (Batect's own rule: an explicit host
+///    always means "ignore whatever context would otherwise apply").
+/// 3. Otherwise, `DOCKER_CONTEXT` (if set) is looked up the same way as 1.
+/// 4. Otherwise, the Docker CLI's own "active" context
+///    (`~/.docker/config.json`'s `currentContext`) is looked up the same
+///    way, falling back to connecting via `DOCKER_HOST`/bollard's own
+///    platform default (unix socket/named pipe) when that's unset or names
+///    the `default` context.
+fn connect(options: &DockerConnectionOptions) -> Result<Docker> {
+    if options.context.is_some() && options.host.is_some() {
+        anyhow::bail!("Cannot use both --docker-context and --docker-host.");
+    }
+
+    let config_directory = docker_config_directory(options)?;
+    let docker_context_env = std::env::var("DOCKER_CONTEXT").ok();
+    let context_name = resolve_context_name(
+        options,
+        docker_context_env.as_deref(),
+        active_docker_context(&config_directory),
+    );
+
+    if let Some(context_name) = context_name {
+        let host = docker_context_host(&config_directory, &context_name)?;
+        return Docker::connect_with_host(&host).with_context(|| {
+            format!("Failed to connect to Docker context '{context_name}' (host '{host}')")
+        });
+    }
+
+    let host = options
+        .host
+        .clone()
+        .or_else(|| std::env::var("DOCKER_HOST").ok());
+    match host {
+        Some(host) => Docker::connect_with_host(&host)
+            .with_context(|| format!("Failed to connect to Docker host '{host}'")),
+        None => Docker::connect_with_local_defaults().context("Failed to connect to Docker"),
+    }
+}
+
 impl DockerClient {
-    pub fn new() -> Result<Self> {
-        let docker =
-            Docker::connect_with_local_defaults().context("Failed to connect to Docker")?;
+    pub fn new(connection: &DockerConnectionOptions) -> Result<Self> {
+        let docker = connect(connection)?;
         Ok(Self {
             docker,
             builder_version: tokio::sync::OnceCell::new(),
@@ -2373,8 +2553,8 @@ mod tests {
     async fn await_log_follower_waits_for_the_spawned_task_to_finish() {
         // `DockerClient::new` only builds a lazily-connecting client (no
         // handshake), so this doesn't need a live daemon.
-        let client =
-            DockerClient::new().expect("DockerClient::new should not require a live daemon");
+        let client = DockerClient::new(&Default::default())
+            .expect("DockerClient::new should not require a live daemon");
         let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let finished_in_task = std::sync::Arc::clone(&finished);
         let handle = tokio::spawn(async move {
@@ -2403,8 +2583,8 @@ mod tests {
 
     #[tokio::test]
     async fn await_log_follower_is_a_no_op_for_a_container_with_no_follower() {
-        let client =
-            DockerClient::new().expect("DockerClient::new should not require a live daemon");
+        let client = DockerClient::new(&Default::default())
+            .expect("DockerClient::new should not require a live daemon");
         // Every non-interleaved run (and the task's own container, always)
         // never inserts an entry at all — must return immediately, not hang.
         client.await_log_follower("no-such-container").await;
@@ -2922,6 +3102,185 @@ mod tests {
             Some("0")
         );
         assert_eq!(docker_buildkit_env_value(false, None), None);
+    }
+
+    #[test]
+    fn docker_context_id_matches_the_docker_cli_own_hashing() {
+        // Verified against a real `~/.docker/contexts/meta/<id>` entry on
+        // this machine: `printf 'orbstack' | shasum -a 256`.
+        assert_eq!(
+            docker_context_id("orbstack"),
+            "2d89b732b01a00a2d1675ed3cee9fd0f965daadf90603c989dd3afd4569c6896"
+        );
+    }
+
+    fn write_docker_context_meta(config_directory: &Path, context_name: &str, host: &str) {
+        let id = docker_context_id(context_name);
+        let meta_dir = config_directory.join("contexts").join("meta").join(&id);
+        fs::create_dir_all(&meta_dir).unwrap();
+        fs::write(
+            meta_dir.join("meta.json"),
+            format!(
+                r#"{{"Name":"{context_name}","Metadata":{{}},"Endpoints":{{"docker":{{"Host":"{host}","SkipTLSVerify":false}}}}}}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn docker_context_host_reads_the_endpoints_docker_host_field() {
+        let config_directory = unique_temp_dir();
+        write_docker_context_meta(
+            &config_directory,
+            "orbstack",
+            "unix:///Users/kevin/.orbstack/run/docker.sock",
+        );
+
+        let host = docker_context_host(&config_directory, "orbstack").unwrap();
+        assert_eq!(host, "unix:///Users/kevin/.orbstack/run/docker.sock");
+    }
+
+    #[test]
+    fn docker_context_host_errors_clearly_when_the_context_does_not_exist() {
+        let config_directory = unique_temp_dir();
+        let err = docker_context_host(&config_directory, "no-such-context").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Docker context 'no-such-context' does not exist"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn active_docker_context_reads_current_context_from_config_json() {
+        let config_directory = unique_temp_dir();
+        fs::write(
+            config_directory.join("config.json"),
+            r#"{"currentContext":"orbstack"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            active_docker_context(&config_directory),
+            Some("orbstack".to_string())
+        );
+    }
+
+    #[test]
+    fn active_docker_context_is_none_when_config_json_is_missing() {
+        let config_directory = unique_temp_dir();
+        assert_eq!(active_docker_context(&config_directory), None);
+    }
+
+    #[test]
+    fn active_docker_context_is_none_when_current_context_is_unset_or_empty() {
+        let config_directory = unique_temp_dir();
+        fs::write(config_directory.join("config.json"), r#"{}"#).unwrap();
+        assert_eq!(active_docker_context(&config_directory), None);
+
+        fs::write(
+            config_directory.join("config.json"),
+            r#"{"currentContext":""}"#,
+        )
+        .unwrap();
+        assert_eq!(active_docker_context(&config_directory), None);
+    }
+
+    #[test]
+    fn resolve_context_name_prefers_an_explicit_context_over_everything_else() {
+        let options = DockerConnectionOptions {
+            host: None,
+            context: Some("explicit".to_string()),
+            config_directory: None,
+        };
+        assert_eq!(
+            resolve_context_name(&options, Some("env-context"), Some("active".to_string())),
+            Some("explicit".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_context_name_an_explicit_host_skips_context_resolution_entirely() {
+        let options = DockerConnectionOptions {
+            host: Some("tcp://1.2.3.4:2375".to_string()),
+            context: None,
+            config_directory: None,
+        };
+        assert_eq!(
+            resolve_context_name(&options, Some("env-context"), Some("active".to_string())),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_context_name_falls_back_to_the_env_var_then_the_active_context() {
+        let options = DockerConnectionOptions::default();
+        assert_eq!(
+            resolve_context_name(&options, Some("env-context"), Some("active".to_string())),
+            Some("env-context".to_string())
+        );
+        assert_eq!(
+            resolve_context_name(&options, None, Some("active".to_string())),
+            Some("active".to_string())
+        );
+        assert_eq!(resolve_context_name(&options, None, None), None);
+    }
+
+    #[test]
+    fn resolve_context_name_treats_the_default_context_name_as_no_context() {
+        let options = DockerConnectionOptions {
+            host: None,
+            context: Some("default".to_string()),
+            config_directory: None,
+        };
+        assert_eq!(resolve_context_name(&options, None, None), None);
+    }
+
+    #[test]
+    fn connect_rejects_using_both_docker_context_and_docker_host() {
+        let options = DockerConnectionOptions {
+            host: Some("tcp://1.2.3.4:2375".to_string()),
+            context: Some("some-context".to_string()),
+            config_directory: None,
+        };
+        let err = connect(&options).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Cannot use both --docker-context and --docker-host."
+        );
+    }
+
+    #[test]
+    fn connect_via_an_explicit_context_uses_that_contexts_stored_host() {
+        let config_directory = unique_temp_dir();
+        // A `tcp://` address (unlike `unix://`) only builds a
+        // lazily-connecting client (no handshake, no eager socket-existence
+        // check) — see `await_log_follower_waits_for_the_spawned_task_to_finish`'s
+        // own comment for the same property.
+        write_docker_context_meta(&config_directory, "my-context", "tcp://1.2.3.4:2375");
+
+        let options = DockerConnectionOptions {
+            host: None,
+            context: Some("my-context".to_string()),
+            config_directory: Some(config_directory),
+        };
+        connect(&options).expect("connecting via a valid context's stored host should succeed");
+    }
+
+    #[test]
+    fn connect_via_an_explicit_context_errors_clearly_when_it_does_not_exist() {
+        let config_directory = unique_temp_dir();
+        let options = DockerConnectionOptions {
+            host: None,
+            context: Some("no-such-context".to_string()),
+            config_directory: Some(config_directory),
+        };
+        let err = connect(&options).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Docker context 'no-such-context' does not exist"),
+            "{err}"
+        );
     }
 
     #[test]

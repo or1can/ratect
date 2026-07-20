@@ -4870,7 +4870,8 @@ mod tests {
         // DockerClient::new() never contacts a daemon (bollard builds the
         // client lazily), so this exercises the cycle-detection guard
         // without needing Docker to actually be running.
-        let docker = DockerClient::new().expect("constructing a Docker client is infallible here");
+        let docker = DockerClient::new(&Default::default())
+            .expect("constructing a Docker client is infallible here");
         let engine = TaskEngine::new(config_with_cycle(), docker);
 
         let err = engine.run_task("a", &[]).await.unwrap_err();
@@ -4879,7 +4880,8 @@ mod tests {
 
     #[tokio::test]
     async fn missing_task_returns_error() {
-        let docker = DockerClient::new().expect("constructing a Docker client is infallible here");
+        let docker = DockerClient::new(&Default::default())
+            .expect("constructing a Docker client is infallible here");
         let engine = TaskEngine::new(empty_config(), docker);
 
         let err = engine.run_task("does-not-exist", &[]).await.unwrap_err();
@@ -4888,7 +4890,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_slightly_misspelled_task_name_suggests_the_real_one() {
-        let docker = DockerClient::new().expect("constructing a Docker client is infallible here");
+        let docker = DockerClient::new(&Default::default())
+            .expect("constructing a Docker client is infallible here");
         let engine = TaskEngine::new(config_with_shared_prerequisite(), docker);
 
         let err = engine.run_task("tst-task", &[]).await.unwrap_err();
@@ -4900,7 +4903,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_wildly_misspelled_task_name_suggests_nothing() {
-        let docker = DockerClient::new().expect("constructing a Docker client is infallible here");
+        let docker = DockerClient::new(&Default::default())
+            .expect("constructing a Docker client is infallible here");
         let engine = TaskEngine::new(config_with_shared_prerequisite(), docker);
 
         let err = engine
