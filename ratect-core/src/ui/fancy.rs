@@ -35,14 +35,14 @@ use std::collections::BTreeSet;
 use std::sync::Mutex;
 use unicode_width::UnicodeWidthChar;
 
-/// Where the terminal's current width comes from — injected so unit tests
-/// can pin it; the real logger queries crossterm on every repaint (which is
-/// also what keeps a resized terminal rendering correctly).
-pub type WidthSource = Box<dyn Fn() -> Option<u16> + Send + Sync>;
-
 pub struct FancyEventLogger {
     console: Console,
-    width_source: WidthSource,
+    /// A fixed terminal width, overriding live detection — `None` in
+    /// production (`stdout`), which queries the real terminal live on
+    /// every repaint via [`FancyEventLogger::current_width`] instead
+    /// (see its own docs); `Some` only in tests, which need a pinned
+    /// value to make assertions on rendered output deterministic.
+    fixed_width: Option<u16>,
     state: Mutex<State>,
 }
 
@@ -245,10 +245,10 @@ fn display_width(text: &str) -> usize {
 const CURSOR_UP_ONE_AND_CLEAR: &str = "\x1b[1A\r\x1b[2K";
 
 impl FancyEventLogger {
-    pub fn new(console: Console, width_source: WidthSource) -> Self {
+    pub fn new(console: Console) -> Self {
         Self {
             console,
-            width_source,
+            fixed_width: None,
             state: Mutex::new(State::default()),
         }
     }
@@ -258,17 +258,22 @@ impl FancyEventLogger {
     /// live repaint, only dropping bold/color), width queried live from the
     /// terminal.
     pub fn stdout(no_color: bool) -> Self {
-        Self::new(
-            Console::stdout(no_color),
-            // A reported width of 0 (some pseudo-terminals with no size
-            // set, e.g. `script`'s) means "unknown", not "zero columns" —
-            // clipping to it would reduce every line to bare "...".
-            Box::new(|| {
-                crossterm::terminal::size()
-                    .ok()
-                    .and_then(|(width, _)| (width > 0).then_some(width))
-            }),
-        )
+        Self::new(Console::stdout(no_color))
+    }
+
+    /// The terminal's current display width, or `None` if it can't be
+    /// determined at all — `fixed_width` when set (tests only), otherwise
+    /// queried live via crossterm on every call (which is also what keeps
+    /// a resized terminal rendering correctly, with no resize-signal
+    /// listener needed). A reported width of `0` (some pseudo-terminals
+    /// with no size set, e.g. `script`'s) means "unknown", not "zero
+    /// columns" — clipping to it would reduce every line to bare `"..."`.
+    fn current_width(&self) -> Option<u16> {
+        self.fixed_width.or_else(|| {
+            crossterm::terminal::size()
+                .ok()
+                .and_then(|(width, _)| (width > 0).then_some(width))
+        })
     }
 
     /// Repaints the whole startup block in place: cursor up over the
@@ -278,7 +283,7 @@ impl FancyEventLogger {
         if state.lines.is_empty() {
             return;
         }
-        let width = (self.width_source)();
+        let width = self.current_width();
         let mut rendered = String::new();
         for line in &state.lines {
             rendered.push_str("\r\x1b[2K");
@@ -324,7 +329,7 @@ impl FancyEventLogger {
 
     /// Paints (or repaints, in place) the single live cleanup line.
     fn repaint_cleanup(&self, state: &mut State) {
-        let width = (self.width_source)();
+        let width = self.current_width();
         let mut frame = String::new();
         if state.cleanup_shown {
             frame.push_str(CURSOR_UP_ONE_AND_CLEAR);
@@ -632,7 +637,11 @@ mod tests {
         // regardless (the independent-axes design).
         let console = Console::new(Box::new(buffer.clone()), false);
         (
-            FancyEventLogger::new(console, Box::new(move || Some(width))),
+            FancyEventLogger {
+                console,
+                fixed_width: Some(width),
+                state: Mutex::new(State::default()),
+            },
             buffer,
         )
     }
