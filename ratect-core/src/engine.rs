@@ -484,6 +484,21 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     /// `--tag-image`'s "did this container actually run" check once the
     /// whole invocation finishes (see `run_task`).
     containers_used: Mutex<HashSet<String>>,
+    /// `false` when `--no-cleanup`/`--no-cleanup-after-success` was given:
+    /// the task's own container (regardless of exit code — see
+    /// `docker::ContainerRuntime::run_container`'s own doc comment for why
+    /// a nonzero exit is still "success" here), its dependency containers,
+    /// and the task's own network are all left in place instead of removed.
+    /// `true` (the default) always cleans up. See `run_task_internal`.
+    cleanup_after_success: bool,
+    /// `false` when `--no-cleanup`/`--no-cleanup-after-failure` was given:
+    /// same as `cleanup_after_success`, but for a genuine infrastructure
+    /// failure (a build/pull/health-check/setup-command failure, or
+    /// anything else that never reaches the task's own container exiting)
+    /// — matching Batect's own success/failure split for cleanup-gating
+    /// purposes exactly (`TaskEvent::TaskFinished` vs `TaskEvent::TaskFailed`
+    /// already encode it). `true` (the default) always cleans up.
+    cleanup_after_failure: bool,
     /// Where task-execution milestones go for the user to see —
     /// [`NullEventSink`] (silent) by default, a real output-mode logger via
     /// `with_event_sink`. See `crate::ui`.
@@ -508,6 +523,8 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             image_overrides: HashMap::new(),
             image_tags: HashMap::new(),
             containers_used: Mutex::new(HashSet::new()),
+            cleanup_after_success: true,
+            cleanup_after_failure: true,
         }
     }
 
@@ -584,6 +601,20 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         tags: HashMap<String, std::collections::HashSet<String>>,
     ) -> Self {
         self.image_tags = tags;
+        self
+    }
+
+    /// Opts into `--no-cleanup-after-success` (also set by `--no-cleanup`):
+    /// see `cleanup_after_success`'s own doc comment.
+    pub fn without_cleanup_after_success(mut self) -> Self {
+        self.cleanup_after_success = false;
+        self
+    }
+
+    /// Opts into `--no-cleanup-after-failure` (also set by `--no-cleanup`):
+    /// see `cleanup_after_failure`'s own doc comment.
+    pub fn without_cleanup_after_failure(mut self) -> Self {
+        self.cleanup_after_failure = false;
         self
     }
 
@@ -1235,6 +1266,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     &network_options,
                     health_check.as_ref(),
                     &container_options,
+                    self.cleanup_after_success,
                 )
                 .await?;
 
@@ -1249,29 +1281,59 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         // recording it.
         let network_name = network_name_cell.into_inner().unwrap();
         let owns_network = self.existing_network.is_none() && network_name.is_some();
-        if !running_sidecars.is_empty() || owns_network {
-            self.event_sink.post(TaskEvent::CleanupStarting);
-        }
-        for (name, container_id) in &running_sidecars {
-            match self.docker.stop_and_remove_container(container_id).await {
-                Ok(()) => self.event_sink.post(TaskEvent::ContainerRemoved {
-                    container: name.clone(),
-                }),
-                Err(e) => {
-                    tracing::warn!(
-                        dependency = name.as_str(),
-                        error = ?e,
-                        "Failed to clean up dependency container"
-                    );
+
+        // Classifies `result` for both cleanup-gating (below) and the
+        // `TaskFinished`/`TaskFailed` event posted below that: `Some(n)`
+        // means the task's own container actually ran to completion with
+        // exit code `n` — Batect's own "success" cleanup-gating bucket
+        // regardless of whether `n` is zero (see `cleanup_after_success`'s
+        // doc comment) — `None` means a genuine infrastructure failure
+        // (`cleanup_after_failure`'s bucket instead).
+        let exit_code = match &result {
+            Ok(()) => Some(0),
+            Err(error) => error
+                .downcast_ref::<crate::docker::ContainerExitedNonZero>()
+                .map(|failure| failure.exit_code),
+        };
+        let should_cleanup = if exit_code.is_some() {
+            self.cleanup_after_success
+        } else {
+            self.cleanup_after_failure
+        };
+
+        if should_cleanup {
+            if !running_sidecars.is_empty() || owns_network {
+                self.event_sink.post(TaskEvent::CleanupStarting);
+            }
+            for (name, container_id) in &running_sidecars {
+                match self.docker.stop_and_remove_container(container_id).await {
+                    Ok(()) => self.event_sink.post(TaskEvent::ContainerRemoved {
+                        container: name.clone(),
+                    }),
+                    Err(e) => {
+                        tracing::warn!(
+                            dependency = name.as_str(),
+                            error = ?e,
+                            "Failed to clean up dependency container"
+                        );
+                    }
                 }
             }
-        }
-        if owns_network {
-            let network_name = network_name.expect("owns_network implies network_name is Some");
-            self.event_sink.post(TaskEvent::RemovingNetwork);
-            if let Err(e) = self.docker.remove_network(&network_name).await {
-                tracing::warn!(network = network_name.as_str(), error = ?e, "Failed to remove network");
+            if owns_network {
+                let network_name = network_name.expect("owns_network implies network_name is Some");
+                self.event_sink.post(TaskEvent::RemovingNetwork);
+                if let Err(e) = self.docker.remove_network(&network_name).await {
+                    tracing::warn!(network = network_name.as_str(), error = ?e, "Failed to remove network");
+                }
             }
+        } else if !running_sidecars.is_empty() || owns_network {
+            tracing::info!(
+                task = task_name,
+                dependencies = running_sidecars.len(),
+                network = network_name.as_deref(),
+                "cleanup disabled; leaving dependency containers and the task network in place \
+                 for investigation"
+            );
         }
 
         // "Finished" means the task's own command ran to completion and
@@ -1281,12 +1343,6 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         // Posted after cleanup, matching Batect's `onTaskFinished` (called
         // once `ParallelExecutionManager.run()` — cleanup included — has
         // returned).
-        let exit_code = match &result {
-            Ok(()) => Some(0),
-            Err(error) => error
-                .downcast_ref::<crate::docker::ContainerExitedNonZero>()
-                .map(|failure| failure.exit_code),
-        };
         if let Some(exit_code) = exit_code {
             self.event_sink.post(TaskEvent::TaskFinished {
                 task: task_name.to_string(),
@@ -2162,6 +2218,7 @@ mod tests {
             network_options: &crate::docker::NetworkOptions,
             health_check: Option<&crate::docker::HealthCheckOptions>,
             container_options: &crate::docker::ContainerOptions,
+            remove_on_exit: bool,
         ) -> Result<()> {
             self.environments
                 .lock()
@@ -2211,6 +2268,7 @@ mod tests {
                 additional_args.join(","),
                 network
             ));
+            self.push(format!("remove_on_exit:{name}:{remove_on_exit}"));
             if *self.fail_run.lock().unwrap() {
                 return Err(crate::docker::ContainerExitedNonZero { exit_code: 1 }.into());
             }
@@ -4210,6 +4268,116 @@ mod tests {
         assert!(
             events.iter().any(|e| e.starts_with("network-remove:")),
             "network should still be removed after a failed run: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn without_cleanup_after_success_leaves_everything_in_place_on_a_nonzero_exit() {
+        // A nonzero exit is still "success" for cleanup-gating purposes —
+        // matching Batect, which only treats an infrastructure failure as
+        // "failure" here (see `cleanup_after_success`'s own doc comment).
+        let config = config_with_database_dependency(|_| {});
+        let docker = FakeContainerRuntime::default().failing_run();
+        let engine = TaskEngine::new(config, docker.clone()).without_cleanup_after_success();
+
+        let err = engine.run_task("start", &[]).await.unwrap_err();
+        assert!(err.to_string().contains("exited with code"));
+
+        let events = docker.events();
+        assert!(
+            !events.iter().any(|e| e.starts_with("sidecar-stop:")),
+            "dependency should be left running when cleanup-after-success is disabled: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| e.starts_with("network-remove:")),
+            "network should be left in place when cleanup-after-success is disabled: {events:?}"
+        );
+        assert!(
+            events.contains(&"remove_on_exit:app:false".to_string()),
+            "the main container itself must not be removed either: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn without_cleanup_after_success_has_no_effect_on_an_infrastructure_failure() {
+        let config = config_with_database_dependency(|database| {
+            database.health_check = Some(crate::config::HealthCheckConfig {
+                command: Some("pg_isready".to_string()),
+                interval: None,
+                retries: None,
+                start_period: None,
+                timeout: None,
+            });
+        });
+        let docker = FakeContainerRuntime::default().with_unhealthy_container("database");
+        let engine = TaskEngine::new(config, docker.clone()).without_cleanup_after_success();
+
+        engine.run_task("start", &[]).await.unwrap_err();
+
+        let events = docker.events();
+        assert!(
+            events.contains(&"sidecar-stop:sidecar-id-database".to_string()),
+            "cleanup-after-failure is still enabled by default, so the dependency should still \
+             be cleaned up: {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| e.starts_with("network-remove:")),
+            "cleanup-after-failure is still enabled by default, so the network should still be \
+             removed: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn without_cleanup_after_failure_leaves_everything_in_place_on_an_infrastructure_failure()
+    {
+        let config = config_with_database_dependency(|database| {
+            database.health_check = Some(crate::config::HealthCheckConfig {
+                command: Some("pg_isready".to_string()),
+                interval: None,
+                retries: None,
+                start_period: None,
+                timeout: None,
+            });
+        });
+        let docker = FakeContainerRuntime::default().with_unhealthy_container("database");
+        let engine = TaskEngine::new(config, docker.clone()).without_cleanup_after_failure();
+
+        engine.run_task("start", &[]).await.unwrap_err();
+
+        let events = docker.events();
+        assert!(
+            !events.iter().any(|e| e.starts_with("sidecar-stop:")),
+            "dependency should be left running when cleanup-after-failure is disabled: \
+             {events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| e.starts_with("network-remove:")),
+            "network should be left in place when cleanup-after-failure is disabled: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn without_cleanup_after_failure_has_no_effect_on_a_successful_run() {
+        let config = config_with_database_dependency(|_| {});
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone()).without_cleanup_after_failure();
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        let events = docker.events();
+        assert!(
+            events.contains(&"sidecar-stop:sidecar-id-database".to_string()),
+            "cleanup-after-success is still enabled by default, so the dependency should still \
+             be cleaned up: {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| e.starts_with("network-remove:")),
+            "cleanup-after-success is still enabled by default, so the network should still be \
+             removed: {events:?}"
+        );
+        assert!(
+            events.contains(&"remove_on_exit:app:true".to_string()),
+            "the main container should still be removed too: {events:?}"
         );
     }
 

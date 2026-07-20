@@ -1169,6 +1169,13 @@ pub trait ContainerRuntime {
     /// methods were already at `#[allow(clippy::too_many_arguments)]` before
     /// this. The container's Docker `hostname` is always set to `name`
     /// (matching Batect), independent of `network_options`.
+    ///
+    /// `remove_on_exit` is `--no-cleanup`/`--no-cleanup-after-success`'s own
+    /// policy (see `TaskEngine::cleanup_after_success`): `false` leaves the
+    /// exited container behind (never removed) regardless of its exit code
+    /// — a nonzero exit is still "success" for cleanup-gating purposes,
+    /// matching Batect (only an infrastructure failure, which never reaches
+    /// this far, is "failure").
     #[allow(clippy::too_many_arguments)]
     async fn run_container(
         &self,
@@ -1184,6 +1191,7 @@ pub trait ContainerRuntime {
         network_options: &NetworkOptions,
         health_check: Option<&HealthCheckOptions>,
         container_options: &ContainerOptions,
+        remove_on_exit: bool,
     ) -> Result<()>;
 }
 
@@ -2133,6 +2141,7 @@ impl ContainerRuntime for DockerClient {
         network_options: &NetworkOptions,
         health_check: Option<&HealthCheckOptions>,
         container_options: &ContainerOptions,
+        remove_on_exit: bool,
     ) -> Result<()> {
         // Independently re-enforces the same policy `engine.rs` already
         // gated `interactive` on before calling here — see
@@ -2226,8 +2235,16 @@ impl ContainerRuntime for DockerClient {
             self.start_and_stream_logs(name, &container.id).await?
         };
 
-        self.docker.remove_container(&container.id, None).await?;
-        tracing::debug!(container_id = %container.id, exit_code, "removed container");
+        if remove_on_exit {
+            self.docker.remove_container(&container.id, None).await?;
+            tracing::debug!(container_id = %container.id, exit_code, "removed container");
+        } else {
+            tracing::info!(
+                container_id = %container.id,
+                exit_code,
+                "cleanup disabled; leaving container in place for investigation"
+            );
+        }
 
         if exit_code != 0 {
             return Err(ContainerExitedNonZero { exit_code }.into());

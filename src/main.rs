@@ -78,6 +78,24 @@ struct Args {
     #[arg(long = "tag-image", value_parser = parse_container_value_pair)]
     tag_image: Vec<(String, String)>,
 
+    /// If an infrastructure error occurs before the task's own container can
+    /// start, leave all containers created for that task running so the
+    /// issue can be investigated. Equivalent to providing both
+    /// --no-cleanup-after-failure and --no-cleanup-after-success.
+    #[arg(long = "no-cleanup")]
+    no_cleanup: bool,
+
+    /// If an infrastructure error occurs before the task's own container can
+    /// start, leave all containers created for that task running so the
+    /// issue can be investigated.
+    #[arg(long = "no-cleanup-after-failure")]
+    no_cleanup_after_failure: bool,
+
+    /// If the task's own container runs to completion (regardless of its
+    /// exit code), leave all containers created for that task running.
+    #[arg(long = "no-cleanup-after-success")]
+    no_cleanup_after_success: bool,
+
     /// Force a particular style of output (does not affect task command
     /// output): fancy (default when the console supports it — a live
     /// per-container status display), simple (plain lines, no updating
@@ -297,6 +315,12 @@ async fn run() -> Result<()> {
                     image_tags.entry(container).or_default().insert(tag);
                 }
                 engine = engine.with_image_tags(image_tags);
+            }
+            if args.no_cleanup || args.no_cleanup_after_failure {
+                engine = engine.without_cleanup_after_failure();
+            }
+            if args.no_cleanup || args.no_cleanup_after_success {
+                engine = engine.without_cleanup_after_success();
             }
             engine.run_task(&task_name, &args.additional_args).await?;
         }
@@ -531,6 +555,28 @@ mod tests {
     fn rejects_tag_image_without_equals_sign() {
         let result = Args::try_parse_from(["ratect", "--tag-image", "NOEQUALS", "build"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parses_no_cleanup_flags() {
+        let args = Args::try_parse_from(["ratect", "--no-cleanup", "build"]).unwrap();
+        assert!(args.no_cleanup);
+        assert!(!args.no_cleanup_after_failure);
+        assert!(!args.no_cleanup_after_success);
+
+        let args = Args::try_parse_from(["ratect", "--no-cleanup-after-failure", "build"]).unwrap();
+        assert!(args.no_cleanup_after_failure);
+
+        let args = Args::try_parse_from(["ratect", "--no-cleanup-after-success", "build"]).unwrap();
+        assert!(args.no_cleanup_after_success);
+    }
+
+    #[test]
+    fn defaults_no_cleanup_flags_to_false() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert!(!args.no_cleanup);
+        assert!(!args.no_cleanup_after_failure);
+        assert!(!args.no_cleanup_after_success);
     }
 
     #[test]
