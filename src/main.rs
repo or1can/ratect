@@ -96,6 +96,14 @@ struct Args {
     #[arg(long = "no-cleanup-after-success")]
     no_cleanup_after_success: bool,
 
+    /// Use BuildKit for image builds, regardless of the daemon's own
+    /// advertised default or the DOCKER_BUILDKIT environment variable
+    /// (which this flag takes precedence over). There's no
+    /// --disable-buildkit counterpart — forcing the classic builder is
+    /// only done via DOCKER_BUILDKIT=0.
+    #[arg(long = "enable-buildkit")]
+    enable_buildkit: bool,
+
     /// Force a particular style of output (does not affect task command
     /// output): fancy (default when the console supports it — a live
     /// per-container status display), simple (plain lines, no updating
@@ -291,7 +299,9 @@ async fn run() -> Result<()> {
                 term.as_deref(),
                 console_dimensions_available,
             )?;
-            let docker = DockerClient::new()?.with_event_sink(Arc::clone(&event_sink));
+            let docker = DockerClient::new()?
+                .with_event_sink(Arc::clone(&event_sink))
+                .with_enable_buildkit(args.enable_buildkit);
             let mut engine = TaskEngine::new(config, docker).with_event_sink(event_sink);
             if let Some(network) = args.use_network {
                 engine = engine.with_existing_network(network);
@@ -577,6 +587,18 @@ mod tests {
         assert!(!args.no_cleanup);
         assert!(!args.no_cleanup_after_failure);
         assert!(!args.no_cleanup_after_success);
+    }
+
+    #[test]
+    fn parses_enable_buildkit_flag() {
+        let args = Args::try_parse_from(["ratect", "--enable-buildkit", "build"]).unwrap();
+        assert!(args.enable_buildkit);
+    }
+
+    #[test]
+    fn defaults_enable_buildkit_to_false() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert!(!args.enable_buildkit);
     }
 
     #[test]

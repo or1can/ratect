@@ -1217,6 +1217,17 @@ pub struct DockerClient {
     /// the follower has finished flushing everything it's going to,
     /// instead of the two racing as genuinely fire-and-forget tasks.
     log_followers: std::sync::Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
+    /// `true` when `--enable-buildkit` was given: forces BuildKit on for
+    /// every build this client makes, taking precedence over the
+    /// `DOCKER_BUILDKIT` environment variable — matching Batect's own
+    /// `TristateFlagOption`, whose default value provider *is* that same
+    /// environment variable, so an explicit flag on the command line always
+    /// wins over it. `false` (the default) defers to
+    /// `DOCKER_BUILDKIT`/the daemon's own advertised default, unchanged. See
+    /// [`select_builder_version`] — there's no `--disable-buildkit`
+    /// counterpart, matching Batect exactly (forcing it *off* is only ever
+    /// done via `DOCKER_BUILDKIT=0`).
+    enable_buildkit: bool,
 }
 
 /// Splits a full image reference (as given to `--tag-image`, e.g.
@@ -1234,6 +1245,29 @@ fn split_image_reference(reference: &str) -> (&str, Option<&str>) {
             Some(&reference[repo_start + colon + 1..]),
         ),
         None => (reference, None),
+    }
+}
+
+/// The `DOCKER_BUILDKIT` value `select_builder_version` actually sees:
+/// forced to `"1"` when `--enable-buildkit` was given, taking precedence
+/// over `real_env_value` regardless of what it says — matching Batect's own
+/// `TristateFlagOption`, whose default-value provider *is* this same
+/// environment variable, so an explicit flag on the command line always
+/// wins over it. `real_env_value`, verbatim, otherwise. There's no
+/// `--disable-buildkit` counterpart (matching Batect exactly) — forcing the
+/// classic builder is only ever done via `DOCKER_BUILDKIT=0`/`false`.
+///
+/// Pure, so `--enable-buildkit`'s precedence is unit-testable without a live
+/// daemon; [`DockerClient::builder_version`] feeds it the real environment
+/// variable.
+fn docker_buildkit_env_value(
+    enable_buildkit_flag: bool,
+    real_env_value: Option<&str>,
+) -> Option<String> {
+    if enable_buildkit_flag {
+        Some("1".to_string())
+    } else {
+        real_env_value.map(str::to_string)
     }
 }
 
@@ -1283,7 +1317,15 @@ impl DockerClient {
             builder_version: tokio::sync::OnceCell::new(),
             event_sink: std::sync::Arc::new(NullEventSink),
             log_followers: std::sync::Mutex::new(HashMap::new()),
+            enable_buildkit: false,
         })
+    }
+
+    /// Opts into `--enable-buildkit`: see `enable_buildkit`'s own doc
+    /// comment.
+    pub fn with_enable_buildkit(mut self, enable_buildkit: bool) -> Self {
+        self.enable_buildkit = enable_buildkit;
+        self
     }
 
     /// Injects the output-mode logger streamed pull/build progress renders
@@ -1300,7 +1342,9 @@ impl DockerClient {
     async fn builder_version(&self) -> Result<bollard::query_parameters::BuilderVersion> {
         self.builder_version
             .get_or_try_init(|| async {
-                let env_value = std::env::var("DOCKER_BUILDKIT").ok();
+                let real_env_value = std::env::var("DOCKER_BUILDKIT").ok();
+                let env_value =
+                    docker_buildkit_env_value(self.enable_buildkit, real_env_value.as_deref());
                 let ping_info = self
                     .docker
                     .ping_info()
@@ -2859,6 +2903,25 @@ mod tests {
             split_image_reference("localhost:5000/myimage:v2"),
             ("localhost:5000/myimage", Some("v2"))
         );
+    }
+
+    #[test]
+    fn enable_buildkit_flag_forces_buildkit_regardless_of_the_real_env_var() {
+        assert_eq!(
+            docker_buildkit_env_value(true, Some("0")).as_deref(),
+            Some("1"),
+            "the flag must win even when the real env var explicitly forces the classic builder"
+        );
+        assert_eq!(docker_buildkit_env_value(true, None).as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn enable_buildkit_flag_off_defers_to_the_real_env_var() {
+        assert_eq!(
+            docker_buildkit_env_value(false, Some("0")).as_deref(),
+            Some("0")
+        );
+        assert_eq!(docker_buildkit_env_value(false, None), None);
     }
 
     #[test]
