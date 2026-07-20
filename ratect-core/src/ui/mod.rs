@@ -316,6 +316,29 @@ pub enum ContainerIoStreaming {
     Interleaved,
 }
 
+impl ContainerIoStreaming {
+    /// Whether this policy ever allows a container to be interactive (a
+    /// real TTY, stdin forwarding) at all — `false` under `Interleaved`:
+    /// the logger owns stdout line by line there, and a raw TTY stream
+    /// can't be split into prefixed lines. The single source of truth for
+    /// that gate: `engine.rs` consults it when deciding whether to treat
+    /// the task's own container as interactive-eligible in the first
+    /// place, and `docker.rs` consults it again, independently, right
+    /// before actually attaching — both call this instead of hand-rolling
+    /// their own `== `/`!= ` comparison against a specific variant, so a
+    /// future third policy can't leave the two checks disagreeing about
+    /// which containers it applies to (the exhaustive `match` below forces
+    /// an explicit answer for it, at the definition site, the moment it's
+    /// added — unlike a comparison against one already-named variant,
+    /// which would silently keep compiling with the wrong answer).
+    pub fn allows_interactive(self) -> bool {
+        match self {
+            ContainerIoStreaming::TaskContainerOnly => true,
+            ContainerIoStreaming::Interleaved => false,
+        }
+    }
+}
+
 /// Receives every [`TaskEvent`] a task execution produces. Implementations
 /// must be safe to call from concurrent branches of the dependency graph —
 /// serialize any rendering internally.
@@ -504,6 +527,12 @@ mod tests {
     fn format_duration_from_a_minute_up_includes_minutes() {
         assert_eq!(format_duration(Duration::from_secs(63)), "1m 3.0s");
         assert_eq!(format_duration(Duration::from_millis(150_500)), "2m 30.5s");
+    }
+
+    #[test]
+    fn allows_interactive_is_true_only_for_task_container_only() {
+        assert!(ContainerIoStreaming::TaskContainerOnly.allows_interactive());
+        assert!(!ContainerIoStreaming::Interleaved.allows_interactive());
     }
 
     #[test]

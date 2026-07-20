@@ -542,19 +542,33 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         (!vars.is_empty()).then_some(vars)
     }
 
-    /// The host's `TERM` to inject into the invoked task's own container's
-    /// environment, or `None` when this isn't that container (`interactive`
-    /// is `false` — never a prerequisite's, a dependency's, or a sidecar's,
-    /// nor an image build) or the host has no `TERM` set. Gated on
-    /// `interactive` alone — deliberately *not* on whether a real TTY ends
-    /// up being allocated (that's decided later, inside
-    /// `ContainerRuntime::run_container`, from information not yet known
-    /// here) — matching Batect's own `ConsoleInfo.terminalType`/
+    /// The `TERM` to inject into a container's environment — the host's own
+    /// value for the invoked task's own container (`interactive` is `true`),
+    /// `None` for anything else (a prerequisite's, a dependency's, or a
+    /// sidecar's container, or an image build), or `dumb` unconditionally
+    /// under the interleaved I/O policy (the `all` output mode), overriding
+    /// both of those — matching Batect's
+    /// `InterleavedContainerIOStreamingOptions`, which sets `TERM=dumb` on
+    /// every container regardless of whether it would otherwise have been
+    /// the task's own. The single call both `run_task_internal` (the task's
+    /// own container) and `ensure_container_ready` (a dependency, always
+    /// `interactive: false`) make, so the interleaved override lives in
+    /// exactly one place rather than being checked at each call site with
+    /// its own idiom.
+    ///
+    /// Non-interleaved `interactive: true` is gated on `interactive` alone
+    /// — deliberately *not* on whether a real TTY ends up being allocated
+    /// (that's decided later, inside `ContainerRuntime::run_container`, from
+    /// information not yet known here) — matching Batect's own
+    /// `ConsoleInfo.terminalType`/
     /// `TaskContainerOnlyIOStreamingOptions.terminalTypeForContainer`, both
     /// unconditional on any TTY check. So a full-screen terminal program
     /// inside the container knows the terminal type even when piping output
     /// elsewhere still lets it detect it isn't attached to a real TTY.
     fn term_environment_variable(&self, interactive: bool) -> Option<HashMap<String, String>> {
+        if self.interleaved_output() {
+            return Some(dumb_term_environment());
+        }
         if !interactive {
             return None;
         }
@@ -961,18 +975,20 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             // being terminals before actually attaching a TTY, and stdin
             // forwarding on `interactive` alone (see `run_container`'s own
             // docs). Computed here, ahead of the environment merge below,
-            // since `term_environment_variable` needs it. Under the
-            // interleaved I/O policy (the `all` output mode) no container is
-            // ever interactive, and every container gets `TERM=dumb`
-            // instead of the host's own terminal type — matching Batect's
-            // `InterleavedContainerIOStreamingOptions`.
-            let interactive = top_level && !self.interleaved_output();
+            // since `term_environment_variable` needs it. Gated on
+            // `ContainerIoStreaming::allows_interactive` (not the
+            // interleaved-specific `interleaved_output()`) — the same
+            // method `docker.rs`'s own `run_container` independently
+            // re-checks before actually attaching, so the two can't
+            // disagree about which containers a policy allows to be
+            // interactive.
+            let interactive = top_level
+                && self
+                    .event_sink
+                    .container_io_streaming()
+                    .allows_interactive();
             let proxy_vars = self.proxy_environment_variables(&no_proxy_entries);
-            let term_var = if self.interleaved_output() {
-                Some(dumb_term_environment())
-            } else {
-                self.term_environment_variable(interactive)
-            };
+            let term_var = self.term_environment_variable(interactive);
             let environment = merged_environment(
                 term_var.as_ref(),
                 proxy_vars.as_ref(),
@@ -1175,11 +1191,10 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     });
                     let user_mapping = self.resolve_user_mapping(dependency_config).await?;
                     let proxy_vars = self.proxy_environment_variables(no_proxy_entries);
-                    // Dependencies get no TERM normally (they're never
-                    // interactive), but the interleaved policy sets
-                    // `TERM=dumb` on every container — see
-                    // `run_task_internal`.
-                    let term_var = self.interleaved_output().then(dumb_term_environment);
+                    // A dependency is never interactive — see
+                    // `term_environment_variable`'s own docs for the
+                    // interleaved-policy override this still picks up.
+                    let term_var = self.term_environment_variable(false);
                     let environment = merged_environment(
                         term_var.as_ref(),
                         proxy_vars.as_ref(),

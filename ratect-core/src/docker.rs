@@ -2074,13 +2074,16 @@ impl ContainerRuntime for DockerClient {
         health_check: Option<&HealthCheckOptions>,
         container_options: &ContainerOptions,
     ) -> Result<()> {
-        // Under the interleaved policy (the `all` output mode) no container
-        // is ever interactive: no TTY, no stdin — the logger owns stdout
-        // line by line, and a raw TTY stream can't be line-prefixed. The
-        // engine already passes `interactive: false` in that mode; this
-        // enforces the policy's own guarantee independently of the caller.
+        // Independently re-enforces the same policy `engine.rs` already
+        // gated `interactive` on before calling here — see
+        // `ContainerIoStreaming::allows_interactive`'s own docs for why
+        // both sites call the one method rather than each hand-rolling a
+        // comparison against a specific variant.
         let interactive = interactive
-            && self.event_sink.container_io_streaming() == ContainerIoStreaming::TaskContainerOnly;
+            && self
+                .event_sink
+                .container_io_streaming()
+                .allows_interactive();
         let use_tty = should_use_tty(
             interactive,
             std::io::stdin().is_terminal(),
