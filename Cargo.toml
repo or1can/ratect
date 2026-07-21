@@ -13,7 +13,7 @@ bollard = { git = "https://github.com/or1can/bollard.git", branch = "ratect/sess
 
 [package]
 name = "ratect"
-version = "0.17.0-dev"
+version = "0.17.0"
 edition = "2021"
 description = "A fast, lightweight Rust reimplementation of Batect: define development tasks in Docker containers once, run them anywhere"
 license = "Apache-2.0"

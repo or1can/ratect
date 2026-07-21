@@ -562,7 +562,7 @@ Neither bump is ever folded into a feature commit.
     with no user-visible behavior change (see `git log` and `TODO.md`, which also
     tracks what was investigated and deliberately left as-is — e.g. `LineBuffer`'s
     CR-only line buffering, confirmed faithful to Batect's own identical behavior).
-- **0.17.0** — **Remaining CLI Parity**: `--skip-prerequisites`, `--override-image`,
+- **0.17.0** — ~~**Remaining CLI Parity**: `--skip-prerequisites`, `--override-image`,
   `--no-cleanup`/`--no-cleanup-after-failure`/`--no-cleanup-after-success`,
   `--tag-image`, `--enable-buildkit` (just the tristate flag surface — the
   underlying builder-version selection, including the daemon's ping-advertised
@@ -574,7 +574,51 @@ Neither bump is ever folded into a feature commit.
   after the fact, not part of the original scope above — caps image
   pulls/builds, dependency starts, and setup-command execution; narrower than
   Batect's own flag, which also caps health-check waits and container
-  stop/removal — see the differences doc for the full reasoning).
+  stop/removal — see the differences doc for the full reasoning)~~ — done, all
+  six flag groups above shipped, each with unit tests (several using
+  `#[tokio::test(start_paused = true)]` to prove concurrency/ordering
+  deterministically) and a real-Docker smoke test, plus the full `--ignored`
+  end-to-end suite passing throughout with no regressions.
+  - `--docker-tls*` took the verified-only stance a step further than first
+    scoped: rather than mirroring Batect's bare `--docker-tls` (Go's
+    `InsecureSkipVerify`, which disables the whole chain/expiry/hostname check,
+    not just hostname matching), Ratect's `--docker-tls` and
+    `--docker-tls-verify` behave identically — always fully verified, matching
+    `rustls`'s own design (no boolean toggle for this at all; skipping
+    verification means implementing `ServerCertVerifier` from scratch). Comes
+    with a worked example ([CLI
+    reference](docs/cli-reference.md#tls-with-a-private-certificate-authority))
+    for the private-CA setup this pushes users toward instead of skipping
+    verification, and a hermetic `rcgen`-generated (not hand-embedded, so
+    nothing sits around waiting to expire years from now) + `tokio-rustls`
+    in-process handshake test proving both the accept and reject paths for
+    real, not just against mocks.
+  - `--max-parallelism`'s scope was widened mid-implementation: initially just
+    image pulls/builds, extended to also cover dependency container starts and
+    setup-command execution (CPU/disk-intensive, unlike the deliberately
+    ungated health-check poll and stop/removal cleanup) via one invocation-wide
+    semaphore, permits acquired/released around each individual operation and
+    never nested across a whole container's readiness sequence (would deadlock
+    at cap 1).
+  - A documentation audit (prompted by "anything we've missed?" against
+    [Differences from Batect](docs/differences-from-batect.md#cli-flags))
+    found and fixed several real gaps beyond the flags themselves: Batect's
+    `--log-file`, `--no-update-notification`, `--upgrade`, and
+    `--no-wrapper-cache-cleanup` were previously hard `clap` parse errors
+    (exit code 2, killing the *entire* invocation before anything ran,
+    including `--list-tasks`) — a real risk for any Batect script/CI pipeline
+    migrating to Ratect with one already baked in. `--log-file` is now
+    genuinely implemented (tees Ratect's own logs to a file in addition to
+    stderr); the other three are recognized but inert, since there's no
+    self-updating wrapper script here to act on — except `--upgrade`, which
+    prints a one-line notice and exits `0`, since a user invoking it is likely
+    expecting some visible response. `docs/cli-reference.md`'s Environment
+    Variables table and `docs/task-lifecycle.md`'s cleanup/concurrency
+    descriptions were also updated to stay accurate against the new flags.
+  - `--cache-type`/`--clean`/`--clean-cache` were deliberately scoped out —
+    they need the still-unimplemented `volumes` `cache` mount type to do
+    anything, so they're tracked as their own new [0.18.0](#ratect-compat)
+    entry instead of being forced into this release.
 - **0.18.0** — **Cache Volumes**: `volumes`' `cache` mount type (a named
   volume that persists between separate `ratect` invocations — a Docker named
   volume by default, or a host directory under `--cache-type=directory`),
