@@ -3166,3 +3166,119 @@ tasks:
         "Always should fail attempting a real pull of a tag that exists on no registry"
     );
 }
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves `image_pull_policy`'s second use — force-pulling a
+/// `build_directory` container's own base (`FROM`) image before building —
+/// reaches a real `docker build`, using the same nonexistent-registry-tag
+/// trick as `image_pull_policy_controls_whether_a_real_pull_is_attempted`:
+/// `IfNotPresent` (the default) must build successfully from the local
+/// image alone; `Always` must genuinely fail, since it forces a real pull
+/// attempt of the `FROM` image against that nonexistent remote repo before
+/// building at all.
+#[test]
+#[ignore]
+fn image_pull_policy_always_force_pulls_a_build_directorys_base_image() {
+    let tag = format!(
+        "ratect-build-force-pull-test-{}-{}:local",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+
+    let pull = Command::new("docker")
+        .args(["pull", "alpine:3.18.2"])
+        .output()
+        .expect("failed to run docker pull");
+    assert!(
+        pull.status.success(),
+        "failed to pre-pull alpine:3.18.2: {}",
+        String::from_utf8_lossy(&pull.stderr)
+    );
+
+    let docker_tag = Command::new("docker")
+        .args(["tag", "alpine:3.18.2", &tag])
+        .output()
+        .expect("failed to run docker tag");
+    assert!(
+        docker_tag.status.success(),
+        "failed to tag test image: {}",
+        String::from_utf8_lossy(&docker_tag.stderr)
+    );
+
+    let cleanup_tag = || {
+        let _ = Command::new("docker").args(["rmi", &tag]).output();
+    };
+
+    let build_dir = std::env::temp_dir().join(format!(
+        "ratect-build-force-pull-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&build_dir).expect("failed to create temp build directory");
+    std::fs::write(
+        build_dir.join("Dockerfile"),
+        format!("FROM {tag}\nCMD [\"echo\", \"ran\"]\n"),
+    )
+    .expect("failed to write temp Dockerfile");
+
+    let config = format!(
+        r#"
+project_name: ratect-build-force-pull-test
+containers:
+  if-not-present:
+    build_directory: {build_dir}
+  always:
+    build_directory: {build_dir}
+    image_pull_policy: Always
+tasks:
+  run-if-not-present:
+    run:
+      container: if-not-present
+      command: echo ran
+  run-always:
+    run:
+      container: always
+      command: echo ran
+"#,
+        build_dir = build_dir.display(),
+    );
+    let config_path = std::env::temp_dir().join(format!(
+        "ratect-build-force-pull-test-{}.yml",
+        std::process::id()
+    ));
+    std::fs::write(&config_path, &config).expect("failed to write temp config");
+
+    let if_not_present_output = ratect_command()
+        .arg("-f")
+        .arg(&config_path)
+        .arg("run-if-not-present")
+        .output()
+        .expect("failed to run ratect");
+
+    let always_output = ratect_command()
+        .arg("-f")
+        .arg(&config_path)
+        .arg("run-always")
+        .output()
+        .expect("failed to run ratect");
+
+    let _ = std::fs::remove_file(&config_path);
+    let _ = std::fs::remove_dir_all(&build_dir);
+    cleanup_tag();
+
+    assert!(
+        if_not_present_output.status.success(),
+        "IfNotPresent should build successfully from the local base image, without attempting \
+         a pull:\nstderr:\n{}",
+        String::from_utf8_lossy(&if_not_present_output.stderr)
+    );
+    assert!(
+        !always_output.status.success(),
+        "Always should fail attempting a real pull of the base image, tagged under a name \
+         that exists on no registry"
+    );
+}
