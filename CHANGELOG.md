@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-07-21
+
 ### Added
 
 - **`forbid_telemetry` and `config_variables.<name>.description`**: recognized but inert, the same "no effect" treatment already given `--upgrade`/`--no-update-notification`/`--no-wrapper-cache-cleanup` (0.17.0) — both are purely informational in Batect itself (no runtime behavior to diverge from), unlike a field like `log_driver` where silently ignoring it would mean actually doing something other than what the config asked for. Fixes a real gap: a real Batect project using either field previously failed to load at all under Ratect's `deny_unknown_fields` parsing. See [config reference](docs/config-reference.md) and [Differences from Batect](docs/differences-from-batect.md#top-level-fields).
