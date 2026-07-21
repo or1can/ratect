@@ -19,7 +19,7 @@ The primary goal is to support the core features of Batect to ensure a seamless 
   [Differences from Batect](docs/differences-from-batect.md#container-fields).
 - **Includes**: Local file includes — splitting one project's configuration across multiple files via the top-level `include` directive, resolved relative to each declaring file's own directory and merged into one flat `containers`/`tasks`/`config_variables` set (0.7.0) — and Git includes/bundles — importing shared tasks/containers from a separate repository, cloned once and cached forever at `~/.ratect/incl` (0.8.0) — see [config reference](docs/config-reference.md#includes). No cache eviction sweep or manual cache-clear command yet — see [Differences from Batect](docs/differences-from-batect.md#top-level-fields).
 - **Full Configuration Parity**: Support for all available Batect configuration options and standard YAML structures. See [Differences from Batect](docs/differences-from-batect.md#configuration-format) for the itemized current status of every field.
-- **Cache & Tmpfs Volumes**: `volumes` currently only supports Batect's `local:container[:options]` bind-mount form — see [Differences from Batect](docs/differences-from-batect.md#container-fields). Batect's other two mount kinds aren't implemented: `cache` (a named volume that persists between separate `ratect` invocations — a Docker named volume by default, or a host directory under `--cache-type=directory`) and `tmpfs` (an in-memory, ephemeral mount, lost when the container exits). Desirable before 1.0.0; not yet scheduled to a specific version. Would also need the `--cache-type`/`--clean`/`--clean-cache` CLI flags (currently unimplemented — see [Differences from Batect](docs/differences-from-batect.md#cli-flags)) and a project-scoped cache key (Batect's own `batect-cache-<project-key>-<name>` volume naming) to avoid colliding across unrelated projects sharing a cache name.
+- **Cache & Tmpfs Volumes**: `volumes` currently only supports Batect's `local:container[:options]` bind-mount form — see [Differences from Batect](docs/differences-from-batect.md#container-fields). Batect's other two mount kinds aren't implemented: `cache` (a named volume that persists between separate `ratect` invocations — a Docker named volume by default, or a host directory under `--cache-type=directory`), scheduled for [0.18.0](#ratect-compat) along with the `--cache-type`/`--clean`/`--clean-cache` CLI flags it needs to do anything (currently unimplemented — see [Differences from Batect](docs/differences-from-batect.md#cli-flags)) and a project-scoped cache key (Batect's own `batect-cache-<project-key>-<name>` volume naming) to avoid colliding across unrelated projects sharing a cache name; and `tmpfs` (an in-memory, ephemeral mount, lost when the container exits), still not yet scheduled to a specific version.
 - **Config Schema**: A JSON schema describing Ratect's actual accepted `batect.yml` shape, for editor autocompletion/validation — likely generated from `ratect-core/src/config.rs`'s own `Serialize`/`Deserialize` structs (e.g. via the `schemars` crate) rather than hand-maintained separately, though custom `Deserialize` impls (`PortMapping`, `DeviceMapping`, `Capability`, etc.) would need matching `JsonSchema` impls to stay accurate. Deliberately **not** Batect's own published schema (listed in [SchemaStore's catalog](https://www.schemastore.org/api/json/catalog.json) for `batect.yml`/`batect-bundle.yml`, hosted at `ide-integration.batect.dev`) — that reflects Batect's full field set, not Ratect's subset, so it would either validate fields Ratect doesn't actually support (a false pass in the editor) or reject a future Ratect-only extension as invalid (a false failure). Nice to have before 1.0.0, even if not (yet) submitted to SchemaStore itself — that's a separate, later decision.
 - **Full CLI Options Parity**: Support for all standard Batect CLI flags and options (e.g., `--config-file`, `--override-image`, cleanup control flags, etc.). See [Differences from Batect](docs/differences-from-batect.md#cli-flags) for the itemized current status of every flag.
 - **User Mapping**: A container can run as the host's own user/group (`run_as_current_user`) instead of the image's default, so files it writes to a mounted volume aren't root-owned (0.5.0) — see [User mapping](docs/config-reference.md#user-mapping). No equivalent to Batect's "cache mounts", and host-side uid/gid lookup is Unix-only — see [Differences from Batect](docs/differences-from-batect.md#container-fields).
@@ -567,9 +567,27 @@ Neither bump is ever folded into a feature commit.
   `--tag-image`, `--enable-buildkit` (just the tristate flag surface — the
   underlying builder-version selection, including the daemon's ping-advertised
   default, ships in [0.12.0](#ratect-compat)), `--docker-host`/
-  `--docker-context`/`--docker-config`/`--docker-cert-path`/`--docker-tls*`.
+  `--docker-context`/`--docker-config`/`--docker-cert-path`/`--docker-tls*`
+  (verified-only — see [Differences from
+  Batect](docs/differences-from-batect.md#cli-flags) for why there's
+  deliberately no skip-verification mode), and `--max-parallelism` (folded in
+  after the fact, not part of the original scope above — caps image
+  pulls/builds, dependency starts, and setup-command execution; narrower than
+  Batect's own flag, which also caps health-check waits and container
+  stop/removal — see the differences doc for the full reasoning).
+- **0.18.0** — **Cache Volumes**: `volumes`' `cache` mount type (a named
+  volume that persists between separate `ratect` invocations — a Docker named
+  volume by default, or a host directory under `--cache-type=directory`),
+  plus the `--cache-type`/`--clean`/`--clean-cache` CLI flags this needs to
+  actually do anything (currently unimplemented — see [Differences from
+  Batect](docs/differences-from-batect.md#cli-flags)). Needs a project-scoped
+  cache volume naming convention (Batect's own
+  `batect-cache-<project-key>-<name>`) to avoid colliding across unrelated
+  projects that happen to share a cache name. `tmpfs` mounts are a separate,
+  still-unscheduled gap — see [Differences from
+  Batect](docs/differences-from-batect.md#container-fields).
 - **1.0.0** — the [Batect Parity](#batect-parity) section above substantially checked
-  off (all of the above, including 0.7.0–0.17.0, not just the items shipped through
+  off (all of the above, including 0.7.0–0.18.0, not just the items shipped through
   0.6.0), and verified against a handful of real Batect projects, not just the
   itemized field/flag tables passing in isolation. Not tagged early for appearances —
   earned once `ratect-compat` can honestly replace `batect` on real projects.
