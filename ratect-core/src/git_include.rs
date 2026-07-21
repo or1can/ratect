@@ -174,6 +174,11 @@ struct CacheInfoRepo {
 /// field type, same idiom as `engine.rs`'s `HostEnv`.
 type Clock = Box<dyn Fn() -> u64 + Send + Sync>;
 
+/// How long an entry may go unused before [`GitIncludeCache::cleanup_stale`]
+/// removes it — matches Batect's own `GitRepositoryCacheCleanupTask`
+/// exactly (a fixed 30 days, not configurable in Batect either).
+const STALE_AFTER: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
 fn real_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -398,6 +403,79 @@ impl<G: GitClient> GitIncludeCache<G> {
         tokio::fs::rename(&temp_path, info_path)
             .await
             .with_context(|| format!("Failed to finalize {info_path:?}"))?;
+
+        Ok(())
+    }
+
+    /// Removes any cached repo whose `last_used` is more than
+    /// [`STALE_AFTER`] old — matching Batect's own
+    /// `GitRepositoryCacheCleanupTask`/`GitRepositoryCache.delete` exactly.
+    /// Meant to be started unconditionally, once per invocation, as a
+    /// detached background task (see `main.rs`) — never awaited, so a
+    /// failure here is only ever logged. Each stale entry is removed
+    /// independently: one entry's removal failing (its `.toml` sidecar
+    /// unreadable/unparsable, or a filesystem error) is logged and skipped
+    /// rather than aborting the whole sweep, same as Batect's own per-entry
+    /// try/catch.
+    pub async fn cleanup_stale(&self) -> Result<()> {
+        let root = self.root.resolve()?;
+        let mut entries = match tokio::fs::read_dir(&root).await {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e).with_context(|| format!("Failed to list {root:?}")),
+        };
+
+        let now = (self.clock)();
+        let mut stale_keys = Vec::new();
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .with_context(|| format!("Failed to list {root:?}"))?
+        {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+                continue;
+            }
+
+            let content = match tokio::fs::read_to_string(&path).await {
+                Ok(content) => content,
+                Err(e) => {
+                    tracing::warn!("Failed to read Git include cache info file {path:?}: {e}");
+                    continue;
+                }
+            };
+            let info: CacheInfo = match toml::from_str(&content) {
+                Ok(info) => info,
+                Err(e) => {
+                    tracing::warn!("Failed to parse Git include cache info file {path:?}: {e}");
+                    continue;
+                }
+            };
+
+            if now.saturating_sub(info.last_used) > STALE_AFTER.as_secs() {
+                if let Some(key) = path.file_stem().and_then(|stem| stem.to_str()) {
+                    stale_keys.push(key.to_string());
+                }
+            }
+        }
+
+        for key in stale_keys {
+            let working_copy = root.join(&key);
+            let info_path = root.join(format!("{key}.toml"));
+            if working_copy.exists() {
+                if let Err(e) = tokio::fs::remove_dir_all(&working_copy).await {
+                    tracing::warn!(
+                        "Failed to remove stale Git include cache clone {working_copy:?}: {e}"
+                    );
+                    continue;
+                }
+            }
+            if let Err(e) = tokio::fs::remove_file(&info_path).await {
+                tracing::warn!(
+                    "Failed to remove stale Git include cache info file {info_path:?}: {e}"
+                );
+            }
+        }
 
         Ok(())
     }
@@ -864,6 +942,95 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Timed out"));
+
+        tokio::fs::remove_dir_all(&root).await.ok();
+    }
+
+    #[tokio::test]
+    async fn cleanup_stale_removes_an_entry_unused_for_more_than_30_days() {
+        let root = unique_temp_dir();
+        let git = FakeGitClient::new().with_files(
+            "https://example.com/repo.git",
+            "v1.0.0",
+            HashMap::new(),
+        );
+        let cache = GitIncludeCache::for_test(root.clone(), git, 1000);
+        let working_copy = cache
+            .ensure_cached("https://example.com/repo.git", "v1.0.0")
+            .await
+            .unwrap();
+        let key = cache_key("https://example.com/repo.git", "v1.0.0");
+        let info_path = root.join(format!("{key}.toml"));
+
+        let now = 1000 + STALE_AFTER.as_secs() + 1;
+        let sweeper = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), now);
+        sweeper.cleanup_stale().await.unwrap();
+
+        assert!(!working_copy.exists());
+        assert!(!info_path.exists());
+
+        tokio::fs::remove_dir_all(&root).await.ok();
+    }
+
+    #[tokio::test]
+    async fn cleanup_stale_keeps_an_entry_used_within_the_last_30_days() {
+        let root = unique_temp_dir();
+        let git = FakeGitClient::new().with_files(
+            "https://example.com/repo.git",
+            "v1.0.0",
+            HashMap::new(),
+        );
+        let cache = GitIncludeCache::for_test(root.clone(), git, 1000);
+        let working_copy = cache
+            .ensure_cached("https://example.com/repo.git", "v1.0.0")
+            .await
+            .unwrap();
+        let key = cache_key("https://example.com/repo.git", "v1.0.0");
+        let info_path = root.join(format!("{key}.toml"));
+
+        let now = 1000 + STALE_AFTER.as_secs() - 1;
+        let sweeper = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), now);
+        sweeper.cleanup_stale().await.unwrap();
+
+        assert!(working_copy.exists());
+        assert!(info_path.exists());
+
+        tokio::fs::remove_dir_all(&root).await.ok();
+    }
+
+    #[tokio::test]
+    async fn cleanup_stale_is_a_noop_when_the_cache_root_does_not_exist() {
+        let root = unique_temp_dir();
+        let cache = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), 1000);
+
+        cache.cleanup_stale().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cleanup_stale_skips_an_unparsable_info_file_and_removes_other_stale_entries() {
+        let root = unique_temp_dir();
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        tokio::fs::write(root.join("not-toml.toml"), b"not valid toml {{{")
+            .await
+            .unwrap();
+
+        let git = FakeGitClient::new().with_files(
+            "https://example.com/repo.git",
+            "v1.0.0",
+            HashMap::new(),
+        );
+        let cache = GitIncludeCache::for_test(root.clone(), git, 1000);
+        let working_copy = cache
+            .ensure_cached("https://example.com/repo.git", "v1.0.0")
+            .await
+            .unwrap();
+
+        let now = 1000 + STALE_AFTER.as_secs() + 1;
+        let sweeper = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), now);
+        sweeper.cleanup_stale().await.unwrap();
+
+        assert!(!working_copy.exists());
+        assert!(root.join("not-toml.toml").exists());
 
         tokio::fs::remove_dir_all(&root).await.ok();
     }

@@ -17,6 +17,7 @@ use clap::Parser;
 use ratect_core::config::{format_task_list, format_task_list_quiet, Config};
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::TaskEngine;
+use ratect_core::git_include::GitIncludeCache;
 use ratect_core::ui::{create_event_sink, select_output_style, OutputStyle};
 use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
@@ -442,6 +443,20 @@ async fn run(args: Args) -> Result<()> {
 
     match args.task_name {
         Some(task_name) => {
+            // Unconditional, fire-and-forget — matching Batect's own
+            // `GitRepositoryCacheCleanupTask`, an unconditional daemon
+            // thread started on every "run a task" invocation regardless of
+            // whether this particular config uses a Git include. Never
+            // awaited: a failure (or simply not finishing before the
+            // process exits — see `run` below's own doc comment on
+            // `std::process::exit`) is inherently best-effort, same as a
+            // JVM daemon thread not blocking process exit either.
+            tokio::spawn(async {
+                if let Err(e) = GitIncludeCache::new().cleanup_stale().await {
+                    tracing::warn!("Failed to sweep stale Git include cache entries: {e}");
+                }
+            });
+
             // The output-mode logger — one instance shared by the Docker
             // client (fine-grained pull/build progress) and the engine
             // (lifecycle milestones), so it sees the whole event stream in
