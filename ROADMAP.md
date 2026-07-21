@@ -17,7 +17,7 @@ The primary goal is to support the core features of Batect to ensure a seamless 
   The task's *own* container's setup commands don't run, and its health verdict
   never gates the outcome — see
   [Differences from Batect](docs/differences-from-batect.md#container-fields).
-- **Includes**: Local file includes — splitting one project's configuration across multiple files via the top-level `include` directive, resolved relative to each declaring file's own directory and merged into one flat `containers`/`tasks`/`config_variables` set (0.7.0) — and Git includes/bundles — importing shared tasks/containers from a separate repository, cloned once and cached forever at `~/.ratect/incl` (0.8.0) — see [config reference](docs/config-reference.md#includes). No cache eviction sweep or manual cache-clear command yet — see [Differences from Batect](docs/differences-from-batect.md#top-level-fields).
+- **Includes**: Local file includes — splitting one project's configuration across multiple files via the top-level `include` directive, resolved relative to each declaring file's own directory and merged into one flat `containers`/`tasks`/`config_variables` set (0.7.0) — and Git includes/bundles — importing shared tasks/containers from a separate repository, cloned once and cached forever at `~/.ratect/incl` (0.8.0) — see [config reference](docs/config-reference.md#includes). No 30-day automatic cache eviction sweep yet, the one gap versus Batect here (which has no manual clean command for this either — only the automatic sweep), scheduled for [0.19.0](#ratect-compat) — see [Differences from Batect](docs/differences-from-batect.md#top-level-fields).
 - **Full Configuration Parity**: Support for all available Batect configuration options and standard YAML structures. See [Differences from Batect](docs/differences-from-batect.md#configuration-format) for the itemized current status of every field.
 - **Tmpfs Volumes**: `volumes` now supports both of Batect's bind-mount-like kinds — `local` (`local:container[:options]`) and `cache` (a named volume that persists between separate `ratect` invocations — a Docker named volume by default, or a host directory under `--cache-type=directory`, plus `--clean`/`--clean-cache` to clear them out, [0.18.0](#ratect-compat)) — see [Cache volumes](docs/config-reference.md#cache-volumes). Batect's third mount kind, `tmpfs` (an in-memory, ephemeral mount, lost when the container exits), remains unimplemented and not yet scheduled to a specific version — see [Differences from Batect](docs/differences-from-batect.md#container-fields).
 - **Config Schema**: A JSON schema describing Ratect's actual accepted `batect.yml` shape, for editor autocompletion/validation — likely generated from `ratect-core/src/config.rs`'s own `Serialize`/`Deserialize` structs (e.g. via the `schemars` crate) rather than hand-maintained separately, though custom `Deserialize` impls (`PortMapping`, `DeviceMapping`, `Capability`, etc.) would need matching `JsonSchema` impls to stay accurate. Deliberately **not** Batect's own published schema (listed in [SchemaStore's catalog](https://www.schemastore.org/api/json/catalog.json) for `batect.yml`/`batect-bundle.yml`, hosted at `ide-integration.batect.dev`) — that reflects Batect's full field set, not Ratect's subset, so it would either validate fields Ratect doesn't actually support (a false pass in the editor) or reject a future Ratect-only extension as invalid (a false failure). Nice to have before 1.0.0, even if not (yet) submitted to SchemaStore itself — that's a separate, later decision.
@@ -267,11 +267,14 @@ Neither bump is ever folded into a feature commit.
     include still works — it establishes its own fresh boundary rather than inheriting
     (or being rejected by) its parent's. Found via automated security review of the
     initial implementation, not part of the original design pass.
-  - Known gaps, deferred as follow-on work rather than blocking this release: no
-    30-day cache eviction sweep and no manual cache-clear CLI surface (Batect has
-    both; Ratect has no subcommand structure yet to hang a cleanup command off of —
-    tracked separately, not part of this item) — `~/.ratect/incl` grows unbounded
-    until removed by hand.
+  - Known gap, deferred as follow-on work rather than blocking this release: no
+    30-day cache eviction sweep — Batect runs one automatically, unconditionally,
+    on every invocation via a background thread (`GitRepositoryCacheCleanupTask`),
+    deleting any cached repo unused for 30+ days; tracked separately, not part of
+    this item — `~/.ratect/incl` grows unbounded until removed by hand. (Corrected
+    later: an earlier draft of this entry also claimed Batect has a manual
+    cache-clear CLI command for this — it doesn't; only the automatic sweep is
+    real, so there's no matching CLI surface to add.)
 - **0.9.0** — ~~**Dependency Readiness**: `health_check` and `setup_commands`, replacing
   today's "started = ready" simplification (see
   [Container fields](docs/differences-from-batect.md#container-fields)) with Batect's
@@ -642,8 +645,48 @@ Neither bump is ever folded into a feature commit.
   own `CleanupCachesCommand` exactly, including never needing the task
   config to exist. `tmpfs` mounts remain a separate, still-unscheduled gap —
   see [Differences from Batect](docs/differences-from-batect.md#container-fields).
+- **0.19.0** — **Parity Mop-Up**: closes several smaller gaps left over from
+  earlier releases, ahead of 1.0.0:
+  - `forbid_telemetry` and `config_variables.<name>.description` — recognized
+    but inert, the same "no effect" treatment already given
+    `--upgrade`/`--no-update-notification`/`--no-wrapper-cache-cleanup`
+    (0.17.0). Both are purely informational in Batect itself (no runtime
+    behavior to diverge from — Ratect has no telemetry to forbid and no help
+    output to show a description in), unlike a field such as `log_driver`
+    below, where silently ignoring it would mean actually doing something
+    other than what the config asked for — see the note on unsupported
+    fields at the top of [Differences from
+    Batect](docs/differences-from-batect.md). Without this, a real Batect
+    project using either field fails to load at all under Ratect's
+    `deny_unknown_fields` parsing.
+  - **Git-include cache eviction**: a 30-day automatic sweep for
+    `~/.ratect/incl`, matching Batect's own `GitRepositoryCacheCleanupTask`
+    exactly — an unconditional background thread started on every
+    invocation, deleting any cached repo not used in the last 30 days. Not a
+    CLI feature — Batect has no manual clean command for this either, only
+    the automatic sweep (see [Differences from
+    Batect](docs/differences-from-batect.md#top-level-fields), corrected
+    after an earlier draft of the 0.8.0 entry above overstated this gap).
+  - `log_driver`/`log_options` (`Container`) — currently zero support, not
+    partial.
+  - `image_pull_policy`'s second use on a `build_directory` container:
+    force-pulling the build's own base image (`docker build --pull`) before
+    building, distinct from the already-supported `image`-container pull
+    decision.
+- **0.20.0** — **Two-Binary Split**: the workspace actually splits as described
+  in [Two Binaries](#two-binaries-ratect-and-ratect-compat), as its own
+  dedicated structural change — not folded into a feature release or into
+  1.0.0's own version-bump commit. The root package (still plainly named
+  `ratect` today, even though everything shipped under it so far, 0.1.0
+  through 0.19.0, is `ratect-compat`'s own work) moves to a dedicated
+  `ratect-compat` crate, freeing up the `ratect` name for a placeholder crate
+  for the forward-looking binary. At this point it's purely
+  structural/naming — a placeholder, not yet `ratect`-specific functionality
+  — proving the workspace mechanics (Cargo.toml layout, CI, `tests/cli.rs`'s
+  `CARGO_BIN_EXE_ratect` references, `docs/installation.md`) actually work
+  with two binaries before real `ratect`-only feature work starts on top.
 - **1.0.0** — the [Batect Parity](#batect-parity) section above substantially checked
-  off (all of the above, including 0.7.0–0.18.0, not just the items shipped through
+  off (all of the above, including 0.7.0–0.19.0, not just the items shipped through
   0.6.0), and verified against a handful of real Batect projects, not just the
   itemized field/flag tables passing in isolation. Not tagged early for appearances —
   earned once `ratect-compat` can honestly replace `batect` on real projects.
@@ -671,6 +714,15 @@ Improving the developer experience through better tools and feedback.
 - **`ratect doctor`**: A built-in linter and diagnostic tool to validate configuration and environment setup. This will include checks for `latest` image tags, missing health checks on dependencies, and host-container permission issues.
 - **Improved Progress UI**: Output-mode selection with terminal-capability auto-detection and a live per-container progress display shipped as `ratect-compat` [0.16.0](#ratect-compat) (they were Batect parity work); what remains here is going *beyond* Batect — e.g. build context upload progress, richer pull progress (per-layer byte counts), and any `ratect`-binary-specific presentation ideas.
 - **Watch Mode**: Automatically re-running tasks when source files change.
+- **Git-include cache management**: a manual command to list/evict entries from
+  `~/.ratect/incl` on demand, beyond 0.19.0's automatic 30-day sweep — e.g. force
+  a re-clone of one repo without waiting on the sweep, or free disk space
+  immediately. **`ratect`-only**, same reasoning as "Restrict Nested Git
+  Includes" below (see [Future Vision](#future-vision)) — Batect has no
+  equivalent CLI surface at all for this (only the automatic sweep), so there's
+  no parity obligation pulling it into `ratect-compat`, and ROADMAP's own [Two
+  Binaries](#two-binaries-ratect-and-ratect-compat) principle is that
+  `ratect-compat` isn't the place for new ideas.
 
 ## Future Vision
 
