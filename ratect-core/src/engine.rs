@@ -499,6 +499,37 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     /// purposes exactly (`TaskEvent::TaskFinished` vs `TaskEvent::TaskFailed`
     /// already encode it). `true` (the default) always cleans up.
     cleanup_after_failure: bool,
+    /// Set via `--max-parallelism <N>`: caps how many resource-intensive
+    /// operations run concurrently across the whole invocation — image
+    /// pulls/builds (`resolve_pulled_image`/`resolve_image`'s build branch),
+    /// a dependency's own create+start (`ensure_container_ready`'s
+    /// `start_background_container` call), and setup-command execution
+    /// (`ensure_container_ready`'s `exec_in_container` call, one permit per
+    /// command — a single container's own setup commands already run
+    /// sequentially, so this only ever limits how many *different*
+    /// containers' setup commands overlap). `None` (the default) is
+    /// unbounded, matching both Ratect's own pre-existing behavior and
+    /// Batect's own default when the flag isn't passed.
+    ///
+    /// Deliberately *not* applied to `wait_for_container_healthy` (a health
+    /// check is a polling wait, not CPU/disk work — gating it would only
+    /// slow down convergence for no resource-saving benefit) or to
+    /// `stop_and_remove_container` (cleanup teardown isn't resource-
+    /// intensive in practice). Also never applied to the task's own
+    /// container's `run_container` call — matching Batect's own
+    /// `RunContainerStep` exemption (`countsAgainstParallelismCap = false`):
+    /// it's the actual task work, not setup, and is often long-running by
+    /// design (an interactive shell, a dev server), so it must never
+    /// compete for or be blocked by this cap.
+    ///
+    /// Still narrower than Batect's own flag, which schedules *every*
+    /// setup/cleanup step (including the ones excluded here) through a
+    /// dedicated step-scheduling model (`ParallelExecutionManager`) Ratect
+    /// doesn't have — see [Differences from
+    /// Batect](../../docs/differences-from-batect.md#cli-flags). A single
+    /// shared semaphore (rather than one per image/container) is what makes
+    /// this an invocation-wide cap rather than a per-resource one.
+    max_parallelism: Option<Arc<tokio::sync::Semaphore>>,
     /// Where task-execution milestones go for the user to see —
     /// [`NullEventSink`] (silent) by default, a real output-mode logger via
     /// `with_event_sink`. See `crate::ui`.
@@ -525,6 +556,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             containers_used: Mutex::new(HashSet::new()),
             cleanup_after_success: true,
             cleanup_after_failure: true,
+            max_parallelism: None,
         }
     }
 
@@ -618,6 +650,13 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         self
     }
 
+    /// Opts into `--max-parallelism <N>`: see `max_parallelism`'s own doc
+    /// comment for exactly what it caps.
+    pub fn with_max_parallelism(mut self, max: usize) -> Self {
+        self.max_parallelism = Some(Arc::new(tokio::sync::Semaphore::new(max)));
+        self
+    }
+
     #[cfg(test)]
     fn with_host_env(
         mut self,
@@ -678,6 +717,28 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         Some(HashMap::from([("TERM".to_string(), term)]))
     }
 
+    /// Acquires a permit from `max_parallelism`'s semaphore, if configured —
+    /// `None` (a no-op) when `--max-parallelism` wasn't given, unbounded as
+    /// before. Every call site holds this only for the duration of the one
+    /// actual Docker-facing operation it wraps (a pull, a build, a
+    /// create+start, one setup-command exec) — see `max_parallelism`'s own
+    /// doc comment for exactly which operations that is, and why each
+    /// acquire/release is scoped narrowly rather than held across a whole
+    /// container's readiness sequence (nesting two acquisitions from the
+    /// same semaphore in one call chain would deadlock under a cap of 1).
+    async fn acquire_parallelism_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        match &self.max_parallelism {
+            Some(semaphore) => Some(
+                semaphore
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .expect("max_parallelism semaphore is never closed"),
+            ),
+            None => None,
+        }
+    }
+
     /// Pulls `image` under `policy` (deduped by image name across the whole
     /// invocation via `pulled_images` — see `resolve_image`), returning the
     /// image reference to run. Shared by `resolve_image`'s two pull-shaped
@@ -706,6 +767,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         self.event_sink.post(TaskEvent::ImagePullStarting {
                             image: image.to_string(),
                         });
+                        let _permit = self.acquire_parallelism_permit().await;
                         self.docker.pull_image(image).await?;
                         self.event_sink.post(TaskEvent::ImagePullCompleted {
                             image: image.to_string(),
@@ -825,6 +887,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         self.event_sink.post(TaskEvent::ImageBuildStarting {
                             container: container_name.to_string(),
                         });
+                        let _permit = self.acquire_parallelism_permit().await;
                         let image_id = self
                             .docker
                             .build_image(
@@ -1472,21 +1535,29 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     self.event_sink.post(TaskEvent::DependencyStarting {
                         container: name.to_string(),
                     });
-                    let container_id = self
-                        .docker
-                        .start_background_container(
-                            name,
-                            &image,
-                            dependency_config.command.as_deref(),
-                            dependency_config.volumes.as_ref(),
-                            environment.as_ref(),
-                            network,
-                            user_mapping.as_ref(),
-                            &network_options,
-                            health_check.as_ref(),
-                            &container_options,
-                        )
-                        .await?;
+                    let container_id = {
+                        // Held only around the actual create+start call —
+                        // matching `resolve_image`'s own placement, not the
+                        // health-check wait or the readiness bookkeeping
+                        // either side of it. See `max_parallelism`'s own
+                        // doc comment for why starting counts against the
+                        // cap but waiting for healthy doesn't.
+                        let _permit = self.acquire_parallelism_permit().await;
+                        self.docker
+                            .start_background_container(
+                                name,
+                                &image,
+                                dependency_config.command.as_deref(),
+                                dependency_config.volumes.as_ref(),
+                                environment.as_ref(),
+                                network,
+                                user_mapping.as_ref(),
+                                &network_options,
+                                health_check.as_ref(),
+                                &container_options,
+                            )
+                            .await?
+                    };
                     self.event_sink.post(TaskEvent::DependencyStarted {
                         container: name.to_string(),
                     });
@@ -1538,25 +1609,27 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                             index: setup_command_index + 1,
                             total: setup_command_total,
                         });
-                        let result = self
-                            .docker
-                            .exec_in_container(
-                                &container_id,
-                                &setup_command.command,
-                                setup_command
-                                    .working_directory
-                                    .as_deref()
-                                    .or(working_directory),
-                                environment.as_ref(),
-                                user_mapping.as_ref(),
-                            )
-                            .await
-                            .with_context(|| {
-                                format!(
-                                    "Failed to run setup command '{}' in container '{}'",
-                                    setup_command.command, name
+                        let result = {
+                            let _permit = self.acquire_parallelism_permit().await;
+                            self.docker
+                                .exec_in_container(
+                                    &container_id,
+                                    &setup_command.command,
+                                    setup_command
+                                        .working_directory
+                                        .as_deref()
+                                        .or(working_directory),
+                                    environment.as_ref(),
+                                    user_mapping.as_ref(),
                                 )
-                            })?;
+                                .await
+                                .with_context(|| {
+                                    format!(
+                                        "Failed to run setup command '{}' in container '{}'",
+                                        setup_command.command, name
+                                    )
+                                })?
+                        };
                         // The command's output, line by line — exec output
                         // arrives collected rather than streamed, so this
                         // posts after completion (success or failure; a
@@ -1743,6 +1816,13 @@ mod tests {
         // (virtual) time, rather than just asserting on event order/counts.
         start_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
         pull_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
+        // Same idea, for `exec_in_container` (keyed by command) and
+        // `wait_for_container_healthy` (keyed by container id) — used to
+        // prove `--max-parallelism` serializes setup-command execution but
+        // deliberately leaves the health-check wait itself unbounded (see
+        // `TaskEngine::max_parallelism`'s own doc comment for why).
+        exec_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
+        health_check_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
     }
 
     impl Default for FakeContainerRuntime {
@@ -1768,6 +1848,8 @@ mod tests {
                 locally_present_images: Default::default(),
                 start_delays: Default::default(),
                 pull_delays: Default::default(),
+                exec_delays: Default::default(),
+                health_check_delays: Default::default(),
             }
         }
     }
@@ -1844,6 +1926,31 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(image.to_string(), delay);
+            self
+        }
+
+        /// Makes `exec_in_container` for `command` artificially
+        /// `tokio::time::sleep` for `delay` before doing anything else —
+        /// used to prove `--max-parallelism` serializes setup-command
+        /// execution across different containers.
+        fn with_exec_delay(self, command: &str, delay: std::time::Duration) -> Self {
+            self.exec_delays
+                .lock()
+                .unwrap()
+                .insert(command.to_string(), delay);
+            self
+        }
+
+        /// Makes `wait_for_container_healthy` for dependency `name`
+        /// artificially `tokio::time::sleep` for `delay` before doing
+        /// anything else — used to prove `--max-parallelism` deliberately
+        /// leaves the health-check wait itself unbounded (see
+        /// `TaskEngine::max_parallelism`'s own doc comment for why).
+        fn with_health_check_delay(self, name: &str, delay: std::time::Duration) -> Self {
+            self.health_check_delays
+                .lock()
+                .unwrap()
+                .insert(format!("sidecar-id-{name}"), delay);
             self
         }
 
@@ -2161,6 +2268,15 @@ mod tests {
         }
 
         async fn wait_for_container_healthy(&self, container_id: &str) -> Result<()> {
+            let delay = self
+                .health_check_delays
+                .lock()
+                .unwrap()
+                .get(container_id)
+                .copied();
+            if let Some(delay) = delay {
+                tokio::time::sleep(delay).await;
+            }
             self.push(format!("wait-healthy:{container_id}"));
             if self.unhealthy_container.lock().unwrap().as_deref() == Some(container_id) {
                 anyhow::bail!(
@@ -2179,6 +2295,10 @@ mod tests {
             environment: Option<&HashMap<String, String>>,
             user_mapping: Option<&crate::docker::UserMapping>,
         ) -> Result<crate::docker::ExecResult> {
+            let delay = self.exec_delays.lock().unwrap().get(command).copied();
+            if let Some(delay) = delay {
+                tokio::time::sleep(delay).await;
+            }
             self.execs.lock().unwrap().insert(
                 command.to_string(),
                 (
@@ -4515,6 +4635,193 @@ mod tests {
             pulls,
             vec!["pull:shared-image:1".to_string()],
             "an image shared by two concurrently-starting dependencies should only be pulled once"
+        );
+    }
+
+    /// Shared by the two `max_parallelism` tests below: two independent
+    /// dependencies (no relationship to each other) with *different*
+    /// images, so neither the shared-image pull dedup nor the dependency
+    /// graph's own structure could explain serialization — only
+    /// `--max-parallelism`'s own cap could.
+    fn config_with_two_independent_image_pulls() -> Config {
+        let mut containers = HashMap::new();
+        containers.insert("dep-a".to_string(), container("image-a:1", None));
+        containers.insert("dep-b".to_string(), container("image-b:1", None));
+        containers.insert(
+            "app".to_string(),
+            container(
+                "alpine:3.18",
+                Some(vec!["dep-a".to_string(), "dep-b".to_string()]),
+            ),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn max_parallelism_of_one_serializes_independent_image_pulls() {
+        let delay = std::time::Duration::from_millis(100);
+        let docker = FakeContainerRuntime::default()
+            .with_pull_delay("image-a:1", delay)
+            .with_pull_delay("image-b:1", delay);
+        let engine = TaskEngine::new(config_with_two_independent_image_pulls(), docker)
+            .with_max_parallelism(1);
+
+        let start = tokio::time::Instant::now();
+        engine.run_task("start", &[]).await.unwrap();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed >= delay * 2,
+            "with --max-parallelism 1, two independent image pulls should be serialized, not \
+             overlap (elapsed: {elapsed:?})"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn max_parallelism_of_two_still_lets_two_independent_pulls_overlap() {
+        let delay = std::time::Duration::from_millis(100);
+        let docker = FakeContainerRuntime::default()
+            .with_pull_delay("image-a:1", delay)
+            .with_pull_delay("image-b:1", delay);
+        let engine = TaskEngine::new(config_with_two_independent_image_pulls(), docker)
+            .with_max_parallelism(2);
+
+        let start = tokio::time::Instant::now();
+        engine.run_task("start", &[]).await.unwrap();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < delay * 2,
+            "with --max-parallelism 2, both independent image pulls should still overlap \
+             (elapsed: {elapsed:?})"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn default_unbounded_parallelism_still_lets_independent_pulls_overlap() {
+        let delay = std::time::Duration::from_millis(100);
+        let docker = FakeContainerRuntime::default()
+            .with_pull_delay("image-a:1", delay)
+            .with_pull_delay("image-b:1", delay);
+        let engine = TaskEngine::new(config_with_two_independent_image_pulls(), docker);
+
+        let start = tokio::time::Instant::now();
+        engine.run_task("start", &[]).await.unwrap();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < delay * 2,
+            "with no --max-parallelism given, independent image pulls should overlap by \
+             default, matching pre-existing behavior (elapsed: {elapsed:?})"
+        );
+    }
+
+    /// Shared by the three `max_parallelism` tests below covering start/
+    /// setup-command/health-check concurrency: two independent dependencies
+    /// (no relationship to each other), same shape as
+    /// `config_with_two_independent_image_pulls` but sharing one image
+    /// (irrelevant here — nothing in these tests is keyed by image name).
+    fn config_with_two_independent_dependencies() -> Config {
+        let mut containers = HashMap::new();
+        containers.insert("dep-a".to_string(), container("alpine:3.18", None));
+        containers.insert("dep-b".to_string(), container("alpine:3.18", None));
+        containers.insert(
+            "app".to_string(),
+            container(
+                "alpine:3.18",
+                Some(vec!["dep-a".to_string(), "dep-b".to_string()]),
+            ),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn max_parallelism_of_one_serializes_independent_container_starts() {
+        let delay = std::time::Duration::from_millis(100);
+        let docker = FakeContainerRuntime::default()
+            .with_start_delay("dep-a", delay)
+            .with_start_delay("dep-b", delay);
+        let engine = TaskEngine::new(config_with_two_independent_dependencies(), docker)
+            .with_max_parallelism(1);
+
+        let start = tokio::time::Instant::now();
+        engine.run_task("start", &[]).await.unwrap();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed >= delay * 2,
+            "with --max-parallelism 1, two independent dependency starts should be serialized, \
+             not overlap (elapsed: {elapsed:?})"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn max_parallelism_of_one_serializes_independent_setup_command_execution() {
+        let mut config = config_with_two_independent_dependencies();
+        config.containers.get_mut("dep-a").unwrap().setup_commands =
+            Some(vec![crate::config::SetupCommand {
+                command: "setup-a".to_string(),
+                working_directory: None,
+            }]);
+        config.containers.get_mut("dep-b").unwrap().setup_commands =
+            Some(vec![crate::config::SetupCommand {
+                command: "setup-b".to_string(),
+                working_directory: None,
+            }]);
+
+        let delay = std::time::Duration::from_millis(100);
+        let docker = FakeContainerRuntime::default()
+            .with_exec_delay("setup-a", delay)
+            .with_exec_delay("setup-b", delay);
+        let engine = TaskEngine::new(config, docker).with_max_parallelism(1);
+
+        let start = tokio::time::Instant::now();
+        engine.run_task("start", &[]).await.unwrap();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed >= delay * 2,
+            "with --max-parallelism 1, two independent containers' setup commands should be \
+             serialized, not overlap (elapsed: {elapsed:?})"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn max_parallelism_does_not_gate_health_check_waits() {
+        // Every dependency's `wait_for_container_healthy` call happens
+        // regardless of whether it declares a `health_check` at all (an
+        // immediate no-op for one that doesn't — see
+        // `ensure_container_ready`'s own doc comment), so the fake's delay
+        // hook applies here without needing to configure one.
+        let delay = std::time::Duration::from_millis(100);
+        let docker = FakeContainerRuntime::default()
+            .with_health_check_delay("dep-a", delay)
+            .with_health_check_delay("dep-b", delay);
+        let engine = TaskEngine::new(config_with_two_independent_dependencies(), docker)
+            .with_max_parallelism(1);
+
+        let start = tokio::time::Instant::now();
+        engine.run_task("start", &[]).await.unwrap();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < delay * 2,
+            "health-check waits should still overlap even under --max-parallelism 1 — only \
+             pulls/builds, starts, and setup-command execution are gated (elapsed: {elapsed:?})"
         );
     }
 

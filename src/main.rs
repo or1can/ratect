@@ -159,6 +159,11 @@ struct Args {
     #[arg(long = "docker-tls-key")]
     docker_tls_key: Option<PathBuf>,
 
+    /// Maximum number of image pulls/builds to run in parallel when
+    /// running a task. Unset means unbounded.
+    #[arg(long = "max-parallelism", value_parser = clap::value_parser!(u32).range(1..))]
+    max_parallelism: Option<u32>,
+
     /// Force a particular style of output (does not affect task command
     /// output): fancy (default when the console supports it — a live
     /// per-container status display), simple (plain lines, no updating
@@ -397,6 +402,9 @@ async fn run() -> Result<()> {
             }
             if args.no_cleanup || args.no_cleanup_after_success {
                 engine = engine.without_cleanup_after_success();
+            }
+            if let Some(max_parallelism) = args.max_parallelism {
+                engine = engine.with_max_parallelism(max_parallelism as usize);
             }
             engine.run_task(&task_name, &args.additional_args).await?;
         }
@@ -734,6 +742,24 @@ mod tests {
         assert_eq!(args.docker_tls_ca_cert, None);
         assert_eq!(args.docker_tls_cert, None);
         assert_eq!(args.docker_tls_key, None);
+    }
+
+    #[test]
+    fn parses_max_parallelism_flag() {
+        let args = Args::try_parse_from(["ratect", "--max-parallelism", "4", "build"]).unwrap();
+        assert_eq!(args.max_parallelism, Some(4));
+    }
+
+    #[test]
+    fn defaults_max_parallelism_to_none() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert_eq!(args.max_parallelism, None);
+    }
+
+    #[test]
+    fn rejects_a_zero_max_parallelism() {
+        let result = Args::try_parse_from(["ratect", "--max-parallelism", "0", "build"]);
+        assert!(result.is_err());
     }
 
     #[test]
