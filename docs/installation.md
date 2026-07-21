@@ -1,7 +1,7 @@
 # Installation
 
-Ratect is currently **pre-release** (`0.1.0-dev`). There are no published binaries or a
-`crates.io` release yet, so the only way to install it today is to build it from source.
+Ratect is currently **pre-release**. There are no published binaries or a `crates.io`
+release yet, so the only way to install it today is to build it from source.
 
 ## Prerequisites
 

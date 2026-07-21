@@ -58,7 +58,10 @@ to this task specifically, distinct from the container-level field — see [conf
 reference](config-reference.md#task)), unioned in alongside the container-level ones.
 All of this — network, dependencies, and the task's own container — is scoped
 to **this one task execution** and torn down before moving on, regardless of whether
-the task succeeded:
+the task succeeded — unless `--no-cleanup`/`--no-cleanup-after-failure`/
+`--no-cleanup-after-success` says otherwise, in which case everything below is left
+genuinely running instead, for investigation (see [CLI
+reference](cli-reference.md)):
 
 ```mermaid
 sequenceDiagram
@@ -88,7 +91,7 @@ sequenceDiagram
     Docker-->>Main: created, started, joined to network
     Main-->>Engine: runs to completion, logs streamed live to stdout
 
-    Note over Engine: cleanup — runs even if the task's container failed
+    Note over Engine: cleanup — runs even if the task's container failed,<br/>unless --no-cleanup* says otherwise
     Engine->>Docker: stop_and_remove_container() for each dependency
     Engine->>Docker: remove_network()
 ```
@@ -96,6 +99,15 @@ sequenceDiagram
 If the container has no `dependencies`, the dependency steps (the `loop` above) are
 skipped — but the network is still created and the task's own container still joins
 it, isolating it just the same as a task with dependencies.
+
+`--no-cleanup-after-failure` skips the cleanup step above for a genuine infrastructure
+failure (a build/pull/health-check/setup-command failure, or anything else before the
+task's own container gets to run); `--no-cleanup-after-success` skips it when the
+task's own container ran to completion instead, regardless of its exit code (a
+non-zero exit is still "success" for this purpose — it's the task's own container
+actually running that matters, not what it returned); `--no-cleanup` is both at once.
+Either way, everything above is left genuinely running, not just present-but-stopped
+— see [CLI reference](cli-reference.md).
 
 `pull_image()` in the diagram above is conditional on `image_pull_policy` (see [config
 reference](config-reference.md#container)): `IfNotPresent`, the default, checks whether
@@ -144,12 +156,60 @@ straight chain, so each one is genuinely waiting on the last. All three share on
 network and are reachable by their container-config name (e.g. `app`'s command can
 reach `database:5432` and `cache:6379`).
 
-Add a container with *no* dependency relationship to any of these — say `queue`,
-also one of `app`'s dependencies but sharing nothing with `database`/`cache` — and it
-starts concurrently with `cache` (or with `database`, whichever is still pending at
-the time), not after the whole `cache` → `database` chain finishes. `app` itself
-still waits for *both* `database` and `queue` to be ready before it starts, since
-both are its own direct dependencies.
+Add a second container that also depends on `cache` — say `queue`, also one of
+`app`'s dependencies, but with no relationship to `database` — and `cache` is now a
+**shared dependency** of two others, forming a diamond rather than a straight chain:
+
+```mermaid
+graph TD
+    app["app (task's container)"] --> database
+    app --> queue
+    database --> cache
+    queue --> cache
+```
+
+```mermaid
+sequenceDiagram
+    participant Engine as TaskEngine
+    participant Cache as cache
+    participant Database as database
+    participant Queue as queue
+    participant App as app (task's container)
+
+    Note over Engine: cache has no dependencies of its own — starts immediately
+    Engine->>Cache: start, wait for healthy, run setup commands
+    Note over Cache: ready
+
+    par database and queue both depend only on cache — start together,<br/>the moment it's ready, not one after the other
+        Engine->>Database: start, wait for healthy, run setup commands
+        Note over Database: ready
+    and
+        Engine->>Queue: start, wait for healthy, run setup commands
+        Note over Queue: ready
+    end
+
+    Note over Engine: app depends on both database and queue —<br/>waits for whichever is slower before starting
+    Engine->>App: start (runs to completion)
+```
+
+`cache` is only ever started **once**, even though both `database` and `queue` depend
+on it: whichever of the two reaches it first triggers the actual start, and the other
+waits on that same in-flight readiness rather than starting a second instance or
+pulling its image twice (see below — this holds generally, not just for a leaf like
+`cache`). `database` and `queue` then genuinely overlap in time — both start the
+moment `cache`'s readiness gate has actually passed, not just once its container
+exists, and neither waits on the other since they share no relationship. `app` is
+gated on whichever of the two takes longer, not just the first one to finish.
+
+This concurrency is unbounded by default — every independent branch's pull/build,
+create+start, and setup commands can all be in flight at once, across the whole
+invocation, not just within one task. `--max-parallelism <N>` caps it: at most `N` of
+those specific operations run at a time, invocation-wide. The health-check wait itself
+is deliberately *not* capped (it's a polling wait, not real work), so two dependencies
+can still become healthy at the same time even under a low cap — only the pull/build/
+start/setup-command steps queue up behind it. See [CLI
+reference](cli-reference.md#options) and [differences from
+Batect](differences-from-batect.md#cli-flags) for exactly what's covered.
 
 A task's own `dependencies` (sidecars scoped to that task specifically) join this
 same resolution at the root, alongside `app`'s own — each still resolves its *own*
@@ -181,12 +241,13 @@ why an unhealthy verdict can't arrive quickly) is Docker's own verdict lifecycle
 see [How Docker reaches its verdict](config-reference.md#how-docker-reaches-its-verdict)
 in the config reference.
 
-Within one task's resolution, a dependency shared by two others (e.g. two containers
-that both depend on `cache`) is only started **once** — including when both reach it
-concurrently: the second to arrive waits on the first's already-in-flight start
-rather than starting a second instance or double-pulling its image. A circular
-container dependency (`a` depends on `b` depends on `a`) is detected up front, before
-any container starts, and reported as an error rather than hanging.
+More generally, within one task's resolution *any* dependency shared by two others —
+not just a leaf like `cache` above — is only ever started once, no matter how many
+dependents reach it or how deep in the graph they sit, including when they reach it
+genuinely concurrently: the second to arrive waits on the first's already-in-flight
+readiness rather than starting a second instance or double-pulling its image. A
+circular container dependency (`a` depends on `b` depends on `a`) is detected up
+front, before any container starts, and reported as an error rather than hanging.
 
 ## Cross-task isolation
 
