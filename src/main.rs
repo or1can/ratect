@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use ratect_core::config::{format_task_list, format_task_list_quiet, Config};
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
@@ -164,6 +165,25 @@ struct Args {
     #[arg(long = "max-parallelism", value_parser = clap::value_parser!(u32).range(1..))]
     max_parallelism: Option<u32>,
 
+    /// Write Ratect's own internal logs to this file, in addition to
+    /// stderr (still governed by RUST_LOG as usual).
+    #[arg(long = "log-file")]
+    log_file: Option<PathBuf>,
+
+    /// No effect. Ratect is a single native binary, not a self-updating
+    /// wrapper script like Batect — recognized only so an existing Batect
+    /// invocation carrying this flag doesn't fail outright.
+    #[arg(long = "upgrade", hide = true)]
+    upgrade: bool,
+
+    /// No effect — see --upgrade.
+    #[arg(long = "no-update-notification", hide = true)]
+    no_update_notification: bool,
+
+    /// No effect — see --upgrade.
+    #[arg(long = "no-wrapper-cache-cleanup", hide = true)]
+    no_wrapper_cache_cleanup: bool,
+
     /// Force a particular style of output (does not affect task command
     /// output): fancy (default when the console supports it — a live
     /// per-container status display), simple (plain lines, no updating
@@ -242,19 +262,52 @@ fn base_path_for(config_file: &Path) -> &Path {
     config_file.parent().unwrap_or(Path::new("."))
 }
 
-fn init_tracing() {
+/// `log_file`, when given (`--log-file`), tees the same log output into
+/// that file *in addition to* stderr — matching Batect's own `--log-file`
+/// content, though not its silent-by-default behavior (Ratect always logs
+/// to stderr regardless; Batect's own default with no `--log-file` is a
+/// `NullLogSink`, nothing anywhere).
+fn init_tracing(log_file: Option<&Path>) -> Result<()> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let writer = match log_file {
+        Some(path) => {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .with_context(|| format!("Failed to open log file '{}'", path.display()))?;
+            tracing_subscriber::fmt::writer::BoxMakeWriter::new(
+                std::io::stderr.and(std::sync::Mutex::new(file)),
+            )
+        }
+        None => tracing_subscriber::fmt::writer::BoxMakeWriter::new(std::io::stderr),
+    };
     tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_writer(std::io::stderr)
+        // ANSI color codes have no business ending up in a log *file* meant
+        // for later grepping/processing, but this builder has no
+        // per-writer ANSI control, so it's an all-or-nothing choice shared
+        // with stderr's own output. Stderr's own pre-existing behavior is
+        // already unconditionally-ANSI regardless of whether it's a real
+        // terminal (unrelated to `--log-file`, not something to fix here)
+        // — this line only changes anything when `--log-file` is actually
+        // given, trading stderr's color for a plain-text file.
+        .with_ansi(log_file.is_none())
+        .with_writer(writer)
         .init();
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() {
-    init_tracing();
+    let args = Args::parse();
 
-    let exit_code = match run().await {
+    if let Err(err) = init_tracing(args.log_file.as_deref()) {
+        eprintln!("Error: {:?}", err);
+        std::process::exit(1);
+    }
+
+    let exit_code = match run(args).await {
         Ok(()) => 0,
         Err(err) => {
             // Printed directly to stderr, not through `tracing::error!` —
@@ -301,8 +354,14 @@ async fn main() {
     std::process::exit(exit_code.into());
 }
 
-async fn run() -> Result<()> {
-    let args = Args::parse();
+async fn run(args: Args) -> Result<()> {
+    if args.upgrade {
+        eprintln!(
+            "--upgrade has no effect: Ratect is a single native binary, not a self-updating \
+             wrapper script like Batect. Reinstall/rebuild to get a newer version instead."
+        );
+        return Ok(());
+    }
 
     if !args.config_file.exists() {
         anyhow::bail!("Configuration file {:?} not found.", args.config_file);
@@ -760,6 +819,60 @@ mod tests {
     fn rejects_a_zero_max_parallelism() {
         let result = Args::try_parse_from(["ratect", "--max-parallelism", "0", "build"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parses_log_file_flag() {
+        let args =
+            Args::try_parse_from(["ratect", "--log-file", "/tmp/ratect.log", "build"]).unwrap();
+        assert_eq!(args.log_file, Some(PathBuf::from("/tmp/ratect.log")));
+    }
+
+    #[test]
+    fn defaults_log_file_to_none() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert_eq!(args.log_file, None);
+    }
+
+    #[test]
+    fn parses_batect_wrapper_flags_without_erroring() {
+        // These have no effect in Ratect (see each field's own doc comment)
+        // but must still parse cleanly — a Batect invocation carrying them
+        // shouldn't hard-fail just because Ratect doesn't have a
+        // self-updating wrapper script to apply them to.
+        let args = Args::try_parse_from([
+            "ratect",
+            "--upgrade",
+            "--no-update-notification",
+            "--no-wrapper-cache-cleanup",
+            "build",
+        ])
+        .unwrap();
+        assert!(args.upgrade);
+        assert!(args.no_update_notification);
+        assert!(args.no_wrapper_cache_cleanup);
+    }
+
+    #[test]
+    fn defaults_batect_wrapper_flags_to_false() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert!(!args.upgrade);
+        assert!(!args.no_update_notification);
+        assert!(!args.no_wrapper_cache_cleanup);
+    }
+
+    #[tokio::test]
+    async fn upgrade_flag_short_circuits_before_touching_the_config_file() {
+        // A nonexistent config file would normally fail `run` immediately
+        // (see the "Configuration file ... not found" check) — `--upgrade`
+        // must return `Ok` before ever reaching that check, proving it's a
+        // genuine short-circuit rather than a flag that happens to be
+        // harmless most of the time.
+        let args =
+            Args::try_parse_from(["ratect", "--upgrade", "-f", "/no/such/batect.yml"]).unwrap();
+        run(args)
+            .await
+            .expect("--upgrade should return Ok without touching the config file");
     }
 
     #[test]
