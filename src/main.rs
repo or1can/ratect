@@ -123,6 +123,42 @@ struct Args {
     #[arg(long = "docker-config")]
     docker_config: Option<PathBuf>,
 
+    /// Use TLS when connecting to the Docker host. Behaves identically to
+    /// --docker-tls-verify — Ratect always fully verifies the daemon's
+    /// certificate; there is no way to skip verification (unlike Batect's
+    /// plain --docker-tls, which does).
+    #[arg(long = "docker-tls")]
+    docker_tls: bool,
+
+    /// Use TLS when connecting to the Docker host, verifying its
+    /// certificate. Defaults to the DOCKER_TLS_VERIFY environment
+    /// variable.
+    #[arg(long = "docker-tls-verify")]
+    docker_tls_verify: bool,
+
+    /// Path to a directory containing ca.pem/cert.pem/key.pem to
+    /// authenticate to the Docker host and verify it, unless overridden
+    /// individually by --docker-tls-ca-cert/-cert/-key. Defaults to the
+    /// DOCKER_CERT_PATH environment variable, then ~/.docker.
+    #[arg(long = "docker-cert-path")]
+    docker_cert_path: Option<PathBuf>,
+
+    /// Path to the TLS CA certificate file used to verify the Docker
+    /// host's own certificate. Defaults to ca.pem in --docker-cert-path's
+    /// directory.
+    #[arg(long = "docker-tls-ca-cert")]
+    docker_tls_ca_cert: Option<PathBuf>,
+
+    /// Path to the TLS certificate file used to authenticate to the Docker
+    /// host. Defaults to cert.pem in --docker-cert-path's directory.
+    #[arg(long = "docker-tls-cert")]
+    docker_tls_cert: Option<PathBuf>,
+
+    /// Path to the TLS key file used to authenticate to the Docker host.
+    /// Defaults to key.pem in --docker-cert-path's directory.
+    #[arg(long = "docker-tls-key")]
+    docker_tls_key: Option<PathBuf>,
+
     /// Force a particular style of output (does not affect task command
     /// output): fancy (default when the console supports it — a live
     /// per-container status display), simple (plain lines, no updating
@@ -322,6 +358,12 @@ async fn run() -> Result<()> {
                 host: args.docker_host,
                 context: args.docker_context,
                 config_directory: args.docker_config,
+                tls: args.docker_tls,
+                tls_verify: args.docker_tls_verify,
+                cert_path: args.docker_cert_path,
+                tls_ca_cert: args.docker_tls_ca_cert,
+                tls_cert: args.docker_tls_cert,
+                tls_key: args.docker_tls_key,
             };
             let docker = DockerClient::new(&docker_connection)?
                 .with_event_sink(Arc::clone(&event_sink))
@@ -654,6 +696,44 @@ mod tests {
         assert_eq!(args.docker_host, None);
         assert_eq!(args.docker_context, None);
         assert_eq!(args.docker_config, None);
+    }
+
+    #[test]
+    fn parses_docker_tls_flags() {
+        let args = Args::try_parse_from([
+            "ratect",
+            "--docker-tls-verify",
+            "--docker-cert-path",
+            "/tmp/certs",
+            "--docker-tls-ca-cert",
+            "/tmp/ca.pem",
+            "--docker-tls-cert",
+            "/tmp/cert.pem",
+            "--docker-tls-key",
+            "/tmp/key.pem",
+            "build",
+        ])
+        .unwrap();
+        assert!(!args.docker_tls);
+        assert!(args.docker_tls_verify);
+        assert_eq!(args.docker_cert_path, Some(PathBuf::from("/tmp/certs")));
+        assert_eq!(args.docker_tls_ca_cert, Some(PathBuf::from("/tmp/ca.pem")));
+        assert_eq!(args.docker_tls_cert, Some(PathBuf::from("/tmp/cert.pem")));
+        assert_eq!(args.docker_tls_key, Some(PathBuf::from("/tmp/key.pem")));
+
+        let args = Args::try_parse_from(["ratect", "--docker-tls", "build"]).unwrap();
+        assert!(args.docker_tls);
+    }
+
+    #[test]
+    fn defaults_docker_tls_flags_to_false_or_none() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert!(!args.docker_tls);
+        assert!(!args.docker_tls_verify);
+        assert_eq!(args.docker_cert_path, None);
+        assert_eq!(args.docker_tls_ca_cert, None);
+        assert_eq!(args.docker_tls_cert, None);
+        assert_eq!(args.docker_tls_key, None);
     }
 
     #[test]

@@ -10,7 +10,7 @@ repository = "https://github.com/or1can/ratect"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 noyalib = { version = "0.0.13", features = ["compat-serde-yaml"] }
-bollard = { version = "0.21", features = ["buildkit_providerless", "chrono"] }
+bollard = { version = "0.21", features = ["buildkit_providerless", "chrono", "ssl"] }
 anyhow = "1.0"
 futures = "0.3"
 tracing = "0.1"
@@ -28,6 +28,7 @@ sha2 = "0.10"
 toml = "0.8"
 regex = "1"
 unicode-width = "0.2.2"
+rustls = { version = "0.23", default-features = false }
 
 # Cargo unifies features for a crate that's both a normal and a dev
 # dependency, so this just adds `test-util` (needed for

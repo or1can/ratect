@@ -1309,19 +1309,36 @@ fn select_builder_version(
 }
 
 /// CLI-facing Docker daemon connection selection (`--docker-host`,
-/// `--docker-context`, `--docker-config`) — `None` for anything not
-/// explicitly given on the command line, so `DockerClient::new` falls back
-/// to the real `DOCKER_HOST`/`DOCKER_CONTEXT`/`DOCKER_CONFIG` environment
-/// variables and the Docker CLI's own active-context resolution, exactly
-/// matching Batect's own precedence
-/// (`CommandLineOptionsParser.resolveDockerContext`). `--docker-tls*`/
-/// `--docker-cert-path` aren't here yet — deferred, see `ROADMAP.md`'s
-/// 0.17.0 entry.
+/// `--docker-context`, `--docker-config`, `--docker-tls`/`-verify`,
+/// `--docker-cert-path`, `--docker-tls-ca-cert`/`-cert`/`-key`) — `None`/
+/// `false` for anything not explicitly given on the command line, so
+/// `DockerClient::new` falls back to the real
+/// `DOCKER_HOST`/`DOCKER_CONTEXT`/`DOCKER_CONFIG`/`DOCKER_CERT_PATH`/
+/// `DOCKER_TLS_VERIFY` environment variables and the Docker CLI's own
+/// active-context resolution, exactly matching Batect's own precedence
+/// (`CommandLineOptionsParser.resolveDockerContext`).
+///
+/// One deliberate divergence from Batect, documented in
+/// [Differences from Batect](../../docs/differences-from-batect.md): there's
+/// no way to skip TLS verification here. Batect's own `--docker-tls`
+/// (without `-verify`) sets Go's `tls.Config.InsecureSkipVerify`, which
+/// disables *all* server certificate verification — chain of trust,
+/// expiry, and hostname matching, not just hostname matching — while still
+/// doing the TLS handshake and any configured client-certificate auth.
+/// `tls` and `tls_verify` are both accepted here (for command-line
+/// compatibility) but behave identically: connecting always fully
+/// verifies the daemon's certificate.
 #[derive(Debug, Default, Clone)]
 pub struct DockerConnectionOptions {
     pub host: Option<String>,
     pub context: Option<String>,
     pub config_directory: Option<PathBuf>,
+    pub tls: bool,
+    pub tls_verify: bool,
+    pub cert_path: Option<PathBuf>,
+    pub tls_ca_cert: Option<PathBuf>,
+    pub tls_cert: Option<PathBuf>,
+    pub tls_key: Option<PathBuf>,
 }
 
 /// The Docker CLI's own context store identifier for a context name —
@@ -1413,6 +1430,86 @@ fn docker_config_directory(options: &DockerConnectionOptions) -> Result<PathBuf>
     Ok(crate::user::home_directory()?.join(".docker"))
 }
 
+/// `--docker-cert-path`, else `DOCKER_CERT_PATH`, else `~/.docker` — the
+/// directory `ca.pem`/`cert.pem`/`key.pem` are read from unless
+/// `--docker-tls-ca-cert`/`-cert`/`-key` individually override one.
+/// Resolved independently of `docker_config_directory` (its own separate
+/// environment variable, even though both happen to share the same
+/// hardcoded default) — matching Batect's own two independently-settable
+/// options exactly.
+fn docker_cert_directory(options: &DockerConnectionOptions) -> Result<PathBuf> {
+    if let Some(dir) = &options.cert_path {
+        return Ok(dir.clone());
+    }
+    if let Ok(dir) = std::env::var("DOCKER_CERT_PATH") {
+        return Ok(PathBuf::from(dir));
+    }
+    Ok(crate::user::home_directory()?.join(".docker"))
+}
+
+/// Whether this invocation should connect over TLS at all: `--docker-tls`
+/// and `--docker-tls-verify` both enable it (Ratect always verifies
+/// regardless of which — see `DockerConnectionOptions`'s own doc comment),
+/// same as the real `DOCKER_TLS_VERIFY` environment variable (the only one
+/// of the two flags Batect gives an environment variable default at all).
+fn tls_enabled(options: &DockerConnectionOptions, docker_tls_verify_env: Option<&str>) -> bool {
+    options.tls
+        || options.tls_verify
+        || matches!(
+            docker_tls_verify_env
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
+            Some("1") | Some("true")
+        )
+}
+
+/// Installs `rustls`'s `ring` cryptographic provider as the process-wide
+/// default, exactly once — `bollard::Docker::connect_with_ssl` panics if
+/// asked to build a TLS connection before one is installed (there's no
+/// provider bundled by default; `ratect-core`'s own `bollard` dependency
+/// enables just enough of `ssl_providerless` for that, matching bollard's
+/// own `ssl` feature). Idempotent: a later call after the first is a no-op
+/// (`install_default` only errors if something else already installed a
+/// provider, which never happens here — nothing else in `ratect-core`
+/// touches `rustls` directly).
+fn ensure_crypto_provider_installed() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
+/// The host to connect to once no context applies (step 2's own
+/// resolution, used both for the plain and TLS paths): an explicit
+/// `--docker-host`, else the real `DOCKER_HOST` environment variable, else
+/// `None` (only valid for a plain, non-TLS connection — see `connect`,
+/// which requires an explicit host for TLS). Pure (the environment value is
+/// injected) so it's unit-testable without depending on whichever real
+/// environment variables happen to be set on the machine running the
+/// tests.
+fn resolve_host(
+    options: &DockerConnectionOptions,
+    docker_host_env: Option<&str>,
+) -> Option<String> {
+    options
+        .host
+        .clone()
+        .or_else(|| docker_host_env.map(str::to_string))
+}
+
+/// TLS has no platform-default host to fall back to the way the plain path
+/// does (`Docker::connect_with_local_defaults`) — an explicit host is
+/// required. Pure (takes the already-resolved host, not the environment)
+/// purely to keep this one error message unit-testable in isolation.
+fn require_host_for_tls(host: Option<String>) -> Result<String> {
+    host.ok_or_else(|| {
+        anyhow::anyhow!(
+            "--docker-tls/--docker-tls-verify requires --docker-host (or the DOCKER_HOST \
+             environment variable) to be set."
+        )
+    })
+}
+
 /// Step 1–3 of `connect`'s own doc comment, as a pure decision: which
 /// context (if any) should be looked up in the store. A `None` return means
 /// "no context — connect via `options.host`/`DOCKER_HOST`/the platform
@@ -1442,6 +1539,31 @@ fn resolve_context_name(
     context_name.filter(|name| name != "default")
 }
 
+/// Batect's own `forbiddenOptionsWithDockerContext` set, named one at a
+/// time so the error can say exactly which flag conflicts, matching
+/// Batect's own message format (`"Cannot use both --docker-context and
+/// --docker-host."`) rather than a generic "these are mutually exclusive"
+/// dump.
+fn conflicting_option_with_context(options: &DockerConnectionOptions) -> Option<&'static str> {
+    if options.host.is_some() {
+        Some("--docker-host")
+    } else if options.tls {
+        Some("--docker-tls")
+    } else if options.tls_verify {
+        Some("--docker-tls-verify")
+    } else if options.cert_path.is_some() {
+        Some("--docker-cert-path")
+    } else if options.tls_ca_cert.is_some() {
+        Some("--docker-tls-ca-cert")
+    } else if options.tls_cert.is_some() {
+        Some("--docker-tls-cert")
+    } else if options.tls_key.is_some() {
+        Some("--docker-tls-key")
+    } else {
+        None
+    }
+}
+
 /// Resolves and connects to the Docker daemon, matching Batect's own
 /// precedence (`CommandLineOptionsParser.resolveDockerContext`/
 /// `DockerClientConfigurationFactory`) exactly:
@@ -1458,9 +1580,17 @@ fn resolve_context_name(
 ///    way, falling back to connecting via `DOCKER_HOST`/bollard's own
 ///    platform default (unix socket/named pipe) when that's unset or names
 ///    the `default` context.
+///
+/// TLS (`--docker-tls`/`-verify`) only applies once a context is ruled out
+/// — Batect rejects combining it with `--docker-context` at all (see
+/// `conflicting_option_with_context`) — and has no platform-default host to
+/// fall back to the way the plain path does, so an explicit host is
+/// required (see `require_host_for_tls`).
 fn connect(options: &DockerConnectionOptions) -> Result<Docker> {
-    if options.context.is_some() && options.host.is_some() {
-        anyhow::bail!("Cannot use both --docker-context and --docker-host.");
+    if options.context.is_some() {
+        if let Some(conflicting) = conflicting_option_with_context(options) {
+            anyhow::bail!("Cannot use both --docker-context and {conflicting}.");
+        }
     }
 
     let config_directory = docker_config_directory(options)?;
@@ -1478,15 +1608,36 @@ fn connect(options: &DockerConnectionOptions) -> Result<Docker> {
         });
     }
 
-    let host = options
-        .host
-        .clone()
-        .or_else(|| std::env::var("DOCKER_HOST").ok());
-    match host {
-        Some(host) => Docker::connect_with_host(&host)
-            .with_context(|| format!("Failed to connect to Docker host '{host}'")),
-        None => Docker::connect_with_local_defaults().context("Failed to connect to Docker"),
+    let docker_host_env = std::env::var("DOCKER_HOST").ok();
+    let host = resolve_host(options, docker_host_env.as_deref());
+
+    let docker_tls_verify_env = std::env::var("DOCKER_TLS_VERIFY").ok();
+    if !tls_enabled(options, docker_tls_verify_env.as_deref()) {
+        return match host {
+            Some(host) => Docker::connect_with_host(&host)
+                .with_context(|| format!("Failed to connect to Docker host '{host}'")),
+            None => Docker::connect_with_local_defaults().context("Failed to connect to Docker"),
+        };
     }
+
+    let host = require_host_for_tls(host)?;
+    let cert_directory = docker_cert_directory(options)?;
+    let ca = options
+        .tls_ca_cert
+        .clone()
+        .unwrap_or_else(|| cert_directory.join("ca.pem"));
+    let cert = options
+        .tls_cert
+        .clone()
+        .unwrap_or_else(|| cert_directory.join("cert.pem"));
+    let key = options
+        .tls_key
+        .clone()
+        .unwrap_or_else(|| cert_directory.join("key.pem"));
+
+    ensure_crypto_provider_installed();
+    Docker::connect_with_ssl(&host, &key, &cert, &ca, 120, bollard::API_DEFAULT_VERSION)
+        .with_context(|| format!("Failed to connect to Docker host '{host}' over TLS"))
 }
 
 impl DockerClient {
@@ -3192,6 +3343,7 @@ mod tests {
             host: None,
             context: Some("explicit".to_string()),
             config_directory: None,
+            ..Default::default()
         };
         assert_eq!(
             resolve_context_name(&options, Some("env-context"), Some("active".to_string())),
@@ -3205,6 +3357,7 @@ mod tests {
             host: Some("tcp://1.2.3.4:2375".to_string()),
             context: None,
             config_directory: None,
+            ..Default::default()
         };
         assert_eq!(
             resolve_context_name(&options, Some("env-context"), Some("active".to_string())),
@@ -3232,6 +3385,7 @@ mod tests {
             host: None,
             context: Some("default".to_string()),
             config_directory: None,
+            ..Default::default()
         };
         assert_eq!(resolve_context_name(&options, None, None), None);
     }
@@ -3242,6 +3396,7 @@ mod tests {
             host: Some("tcp://1.2.3.4:2375".to_string()),
             context: Some("some-context".to_string()),
             config_directory: None,
+            ..Default::default()
         };
         let err = connect(&options).unwrap_err();
         assert_eq!(
@@ -3263,6 +3418,7 @@ mod tests {
             host: None,
             context: Some("my-context".to_string()),
             config_directory: Some(config_directory),
+            ..Default::default()
         };
         connect(&options).expect("connecting via a valid context's stored host should succeed");
     }
@@ -3274,6 +3430,7 @@ mod tests {
             host: None,
             context: Some("no-such-context".to_string()),
             config_directory: Some(config_directory),
+            ..Default::default()
         };
         let err = connect(&options).unwrap_err();
         assert!(
@@ -3281,6 +3438,277 @@ mod tests {
                 .contains("Docker context 'no-such-context' does not exist"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn conflicting_option_with_context_names_whichever_tls_option_was_given() {
+        let base = DockerConnectionOptions {
+            context: Some("some-context".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            conflicting_option_with_context(&DockerConnectionOptions {
+                tls: true,
+                ..base.clone()
+            }),
+            Some("--docker-tls")
+        );
+        assert_eq!(
+            conflicting_option_with_context(&DockerConnectionOptions {
+                tls_verify: true,
+                ..base.clone()
+            }),
+            Some("--docker-tls-verify")
+        );
+        assert_eq!(
+            conflicting_option_with_context(&DockerConnectionOptions {
+                cert_path: Some(PathBuf::from("/tmp/certs")),
+                ..base.clone()
+            }),
+            Some("--docker-cert-path")
+        );
+        assert_eq!(
+            conflicting_option_with_context(&DockerConnectionOptions {
+                tls_ca_cert: Some(PathBuf::from("/tmp/ca.pem")),
+                ..base.clone()
+            }),
+            Some("--docker-tls-ca-cert")
+        );
+        assert_eq!(
+            conflicting_option_with_context(&DockerConnectionOptions {
+                tls_cert: Some(PathBuf::from("/tmp/cert.pem")),
+                ..base.clone()
+            }),
+            Some("--docker-tls-cert")
+        );
+        assert_eq!(
+            conflicting_option_with_context(&DockerConnectionOptions {
+                tls_key: Some(PathBuf::from("/tmp/key.pem")),
+                ..base.clone()
+            }),
+            Some("--docker-tls-key")
+        );
+        assert_eq!(conflicting_option_with_context(&base), None);
+    }
+
+    #[test]
+    fn connect_rejects_docker_tls_flags_combined_with_docker_context() {
+        for options in [
+            DockerConnectionOptions {
+                context: Some("some-context".to_string()),
+                tls: true,
+                ..Default::default()
+            },
+            DockerConnectionOptions {
+                context: Some("some-context".to_string()),
+                tls_verify: true,
+                ..Default::default()
+            },
+        ] {
+            let err = connect(&options).unwrap_err();
+            assert!(
+                err.to_string()
+                    .starts_with("Cannot use both --docker-context and --docker-tls"),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn tls_enabled_is_true_for_either_flag_or_the_real_env_var() {
+        let base = DockerConnectionOptions::default();
+        assert!(!tls_enabled(&base, None));
+        assert!(tls_enabled(
+            &DockerConnectionOptions {
+                tls: true,
+                ..base.clone()
+            },
+            None
+        ));
+        assert!(tls_enabled(
+            &DockerConnectionOptions {
+                tls_verify: true,
+                ..base.clone()
+            },
+            None
+        ));
+        assert!(tls_enabled(&base, Some("1")));
+        assert!(tls_enabled(&base, Some("true")));
+        assert!(tls_enabled(&base, Some("TRUE")));
+        assert!(!tls_enabled(&base, Some("0")));
+        assert!(!tls_enabled(&base, Some("false")));
+    }
+
+    #[test]
+    fn docker_cert_directory_prefers_the_explicit_option_over_the_env_var_and_default() {
+        let options = DockerConnectionOptions {
+            cert_path: Some(PathBuf::from("/tmp/explicit-certs")),
+            ..Default::default()
+        };
+        assert_eq!(
+            docker_cert_directory(&options).unwrap(),
+            PathBuf::from("/tmp/explicit-certs")
+        );
+    }
+
+    /// A throwaway self-signed root CA + a leaf certificate/key it signed
+    /// for `CN=localhost`, generated once for this test (`openssl req
+    /// -x509 ...` then `openssl x509 -req ... -CA ca.pem -CAkey
+    /// ca-key.pem`) — not a secret, not used anywhere real, just enough
+    /// genuine X.509 structure for `rustls` to actually parse successfully,
+    /// proving the connect-over-TLS wiring works with real certificate
+    /// material rather than only unit-testing the file-path resolution
+    /// around it.
+    const TEST_CA_PEM: &str = "-----BEGIN CERTIFICATE-----
+MIIDEzCCAfugAwIBAgIUT8UTyaqqr/+/sYw1zmKn21bpAugwDQYJKoZIhvcNAQEL
+BQAwGTEXMBUGA1UEAwwOcmF0ZWN0LXRlc3QtY2EwHhcNMjYwNzIxMDY0NjM0WhcN
+MzYwNzE4MDY0NjM0WjAZMRcwFQYDVQQDDA5yYXRlY3QtdGVzdC1jYTCCASIwDQYJ
+KoZIhvcNAQEBBQADggEPADCCAQoCggEBALtqfSeGbUj3c6s85ORTznbaEXFVV0Gy
+CeVQOwCGBHkDSXOz3XUgg/GGwSD6mnUi88/1rgbAfIdX598ComfBSB7bKu61QlXr
+DOaNiJl8Ef9KB0ORfxMr70vzjXkv5HPengDn8vaePJFKkU3Do6BNXqfPiBzCspgu
+vHkWdVFhgO+sWaH4pZAUot1Lqy5s8YfmNhhbK8uqP5xtFkqbVS4vJmlvxP2tNdKj
+aCqJDQfuQxxmDH2YFR0M5hoWN1VFFCMm0IvvPfAoKerm2smsNr1vQDZOS+WLfcEo
+SgpPh7FeMoyOeW4KygsQVifEmilyEMao9xinIwFE5l5oiRnZNthGrG0CAwEAAaNT
+MFEwHQYDVR0OBBYEFBMM7XcX6e6rxuj1rZtLGSs33Hb/MB8GA1UdIwQYMBaAFBMM
+7XcX6e6rxuj1rZtLGSs33Hb/MA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQEL
+BQADggEBAAe9gMLtnSWwCgwPAhxtPupyKbOxJGnyeJrhQMomqOohkgBgz/x4lT/Y
+l0xq9ZytP3wwoWwWD8BBS478R1VzXN6djiPl0mpshOV0L9qBvZDJZipuxKYpDzMD
+VSvFhXNzJCKI+w5XrGoyrvVB1bMMfiQIKYEK/+/+cOYMOQlx34I22f44Gbks1mSs
+sebU2RAkavTyPQ2BXGIfTvXvWtDCxtMMjRRi0/v0irRM+Yb58kdKPb5aBp9Qolbb
+PacA5Q4qmco2RbhNmDxR1i/n2JJZG3YUvEuDqfRx9KO3I9ceqfEKsIwNcCUxRu9d
+QxOQmeKH+itZ7e+OXYE0bUN5gTJoZkg=
+-----END CERTIFICATE-----
+";
+
+    const TEST_CERT_PEM: &str = "-----BEGIN CERTIFICATE-----
+MIIC/TCCAeWgAwIBAgIUQaqli6TKr1bWzqbd8O1px0IjMaIwDQYJKoZIhvcNAQEL
+BQAwGTEXMBUGA1UEAwwOcmF0ZWN0LXRlc3QtY2EwHhcNMjYwNzIxMDY0NjM0WhcN
+MzYwNzE4MDY0NjM0WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwggEiMA0GCSqGSIb3
+DQEBAQUAA4IBDwAwggEKAoIBAQCZoT1Mj91mXjMxZMM86rPo3CW0x5RBYCvB9dtq
+dFwRoAy8sD23DFML8SqzHYM7cdIAyu6kpF5EzcqWVsc4Fs5zA7ce+BO7OYNl0SWB
+UZq1Ft3Fl6YSSUESh/1WgS0mk90QlsZuMO8PRJYVJu7Fr4qmF3PdyEPwl9fVoG9B
+YzcyYiYOsfKN7+dI9GGUu7Cy8vynwf2dWnOs+ovEQmTdLDq71mUicm00Vf0M9NZH
+lUjuZ5yrNko4J+IhSOBM0vi9GPt4QhwG0B0eOdVlYC0plPVlAUzwKzHIVKwfxNau
+AUHIBUprFPWFExzSa/4FPgIx/7qnA8UqQUz2/CHaGppk22QjAgMBAAGjQjBAMB0G
+A1UdDgQWBBSfp2ZFjLS/hp/EH6TP9758NTG6pTAfBgNVHSMEGDAWgBQTDO13F+nu
+q8bo9a2bSxkrN9x2/zANBgkqhkiG9w0BAQsFAAOCAQEAW1usCCQL57j84BYJLeXg
+QS2Zo1nw1jSa2VmcmBNlzYqirKKScadZf+ZgAngaAxjfY9b3S2RGd5o4rkYRsiRs
+ZMqWOxoicGjPujcX4k02Gae571Rgjx6BphcfhgW+xLes1llTBIkIkIeqRdaijlal
+e25YrmEV+Eahc9eE7G6qBy+GvO4HlP6gUtnv/3I41hE0h7l/ojdSCLPb2LXWWukO
+GZTjaGdnRUiODDkHzXcdJmID1vXf07JoQ6pkBP/zmECln03WqPJ/onXnJGLjVho9
+oWxosQDqBSCQRIRbZ34PGjY+mPMoyLdWnzdwj1cPXmkMtU8HmhY1LawlW0/ye7GH
+UQ==
+-----END CERTIFICATE-----
+";
+
+    const TEST_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----
+MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCZoT1Mj91mXjMx
+ZMM86rPo3CW0x5RBYCvB9dtqdFwRoAy8sD23DFML8SqzHYM7cdIAyu6kpF5EzcqW
+Vsc4Fs5zA7ce+BO7OYNl0SWBUZq1Ft3Fl6YSSUESh/1WgS0mk90QlsZuMO8PRJYV
+Ju7Fr4qmF3PdyEPwl9fVoG9BYzcyYiYOsfKN7+dI9GGUu7Cy8vynwf2dWnOs+ovE
+QmTdLDq71mUicm00Vf0M9NZHlUjuZ5yrNko4J+IhSOBM0vi9GPt4QhwG0B0eOdVl
+YC0plPVlAUzwKzHIVKwfxNauAUHIBUprFPWFExzSa/4FPgIx/7qnA8UqQUz2/CHa
+Gppk22QjAgMBAAECggEAAX5Et0LKtx0BSGCfWS860m+ZWjl6YmxJ4JfAKze4UV+J
+4CeiYe4XvIz6ikUmKmS/0swmJ6mFVQvfBTkQtKXcGdgWZpGot3Amq82tnKUraMkx
+HKONtK3LmR+DQdz9kFttkaS1hwqouDBFeS0osvky0sx1jtlMd8EyEtx9WFhbh/zS
+YEpmqI17rvchL8R31yRa8PSvj4K3yXcXW+3/orK7QFsXxrsKopsvkhQ/zvdXeKTy
+L6+dsGr/Ou+UDduzJzaU23PTfVTHxwZixdnAlMALmUWHMDYyMRhX2saEfXJOAnOO
+nzcTsyfJpSLVuVukGfGRgaUw/mI7LDwD1oJh89XGiQKBgQDNqcMb1VDQuT6Hd8tN
+GrPNaEXXBxqfaLnxmL35N52567L/JT9IJ2XXiwBO1xW/YqpVBKREXiu0qTifrA3o
+90g7BGmekubACzaOOfE20pV8R0uliAxsmE3Ghq8GqLMbnz4fVeIRQ0fClwkBgJxJ
+SjiBAKJvDKbGLdWA2cROpb8yDQKBgQC/OzoC8m+SKU4a25Iam8j/TH7BopiGoSLu
+9YVmJGeKbFUty9deQnXnG/L3enwle38OVEOBN1knd70RB8A8A8/rcMICAt+subqe
+SI9XZM/pHUG5/3nV8yCjPU5fGxboXgA00c2mrObCwJ6Fe6TAtUYKJEqS+Io6PZ8q
+PCEPx0HS7wKBgAwShgBxQiAub4w2LPnmsl1BXLAlm5t140xaQfSKHjkWq9gsUI2k
+umavoyH9oCou2X7KGfZlbL1bHZbJ27ssINJODQEg8Giff+FTZ2RnchzsdnVOCiSp
+wA8CQu3qIzFg5J2kRfPrdh/nC8FJ0mK+95gi+GX6YSPK9vhsUAip1BJVAoGAByhb
+WoLihDEBmGXBiTdthYjCcdL5LIjZeuI7tQAF1BuL8KPhksigCx9zr6mo/eoqbknf
+IPYGY0DLFdkZa+WkoaZdzJ946ckl4AjNPLMsSQhsTl7um4B3J0UDKvIjoFzsWw3D
+ScrM9FsrU8m19/SRA44qMGgXHGj0DSuk/SczIocCgYAKhiT2cat4BQ19idFeSRi3
+4wbJAkE0ZUm7xwe0rNHVvAqEV5Qm09pYA+n6OWwPiq/b+m4gYpmFg67PbuGPRANl
+jyR1S/cfb1f9ezO3/qrhVPqZdpMrGKmHLiLkLt2SGoG53O06CH6yOH9tyadttrxs
+pbgnkuidZ5WU2LfAJCLZOQ==
+-----END PRIVATE KEY-----
+";
+
+    fn write_tls_materials(dir: &Path) {
+        fs::write(dir.join("ca.pem"), TEST_CA_PEM).unwrap();
+        fs::write(dir.join("cert.pem"), TEST_CERT_PEM).unwrap();
+        fs::write(dir.join("key.pem"), TEST_KEY_PEM).unwrap();
+    }
+
+    #[test]
+    fn connect_over_tls_with_valid_materials_builds_a_client_lazily() {
+        let cert_directory = unique_temp_dir();
+        write_tls_materials(&cert_directory);
+
+        let options = DockerConnectionOptions {
+            host: Some("tcp://127.0.0.1:2376".to_string()),
+            tls_verify: true,
+            cert_path: Some(cert_directory),
+            ..Default::default()
+        };
+
+        // Like `connect_with_host`, `connect_with_ssl` only parses the
+        // certificates and builds the client — no handshake happens until
+        // an actual request is made, so this doesn't need a live TLS
+        // listener.
+        connect(&options)
+            .expect("connecting over TLS with valid certificate material should succeed");
+    }
+
+    #[test]
+    fn connect_over_tls_errors_clearly_when_a_certificate_file_is_missing() {
+        let cert_directory = unique_temp_dir();
+        // No certificate files written.
+
+        let options = DockerConnectionOptions {
+            host: Some("tcp://127.0.0.1:2376".to_string()),
+            tls: true,
+            cert_path: Some(cert_directory),
+            ..Default::default()
+        };
+
+        let err = connect(&options).unwrap_err();
+        assert!(err.to_string().contains("over TLS"), "{err}");
+    }
+
+    #[test]
+    fn require_host_for_tls_errors_clearly_when_no_host_resolved() {
+        let err = require_host_for_tls(None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("--docker-tls/--docker-tls-verify requires --docker-host"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn require_host_for_tls_passes_through_a_resolved_host() {
+        assert_eq!(
+            require_host_for_tls(Some("tcp://1.2.3.4:2376".to_string())).unwrap(),
+            "tcp://1.2.3.4:2376"
+        );
+    }
+
+    #[test]
+    fn resolve_host_prefers_the_explicit_option_then_the_injected_env_value() {
+        let options = DockerConnectionOptions {
+            host: Some("tcp://explicit:2375".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_host(&options, Some("tcp://from-env:2375")),
+            Some("tcp://explicit:2375".to_string())
+        );
+
+        let options = DockerConnectionOptions::default();
+        assert_eq!(
+            resolve_host(&options, Some("tcp://from-env:2375")),
+            Some("tcp://from-env:2375".to_string())
+        );
+        assert_eq!(resolve_host(&options, None), None);
     }
 
     #[test]

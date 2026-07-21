@@ -1493,6 +1493,7 @@ dependencies = [
  "noyalib",
  "path-clean",
  "regex",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",

@@ -151,7 +151,8 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
 
 ## Key Dependencies
 
-- **`bollard`** (`features = ["buildkit_providerless", "chrono"]`, **consumed via a `[patch.crates-io]` fork** — see the root `Cargo.toml`): Asynchronous Docker API client. The fork (`or1can/bollard`, branch `ratect/session-providers-0.21`, both commits PR'd upstream) adds session-provider support to `build_image` (needed for `build_secrets`/`build_ssh` mid-build) and `ping_info` (the daemon's advertised default builder) — see `ROADMAP.md`'s 0.12.0 entry for the full fork mechanics, PR links, and the build_ssh single-agent limitation. Remove the patch once both land in a bollard release. `chrono` is required transitively once `buildkit_providerless` is on (BuildKit OAuth token expiry needs a date/time type) — bollard won't compile without it or the `time` feature.
+- **`bollard`** (`features = ["buildkit_providerless", "chrono", "ssl"]`, **consumed via a `[patch.crates-io]` fork** — see the root `Cargo.toml`): Asynchronous Docker API client. The fork (`or1can/bollard`, branch `ratect/session-providers-0.21`, both commits PR'd upstream) adds session-provider support to `build_image` (needed for `build_secrets`/`build_ssh` mid-build) and `ping_info` (the daemon's advertised default builder) — see `ROADMAP.md`'s 0.12.0 entry for the full fork mechanics, PR links, and the build_ssh single-agent limitation. Remove the patch once both land in a bollard release. `chrono` is required transitively once `buildkit_providerless` is on (BuildKit OAuth token expiry needs a date/time type) — bollard won't compile without it or the `time` feature. `ssl` (added for `--docker-tls`/`-verify`, `ratect-core/src/docker.rs`'s `connect`) turns on `rustls`'s `ring` cryptographic provider feature on top of `ssl_providerless` (already pulled in by `buildkit_providerless`) — `Docker::connect_with_ssl` panics if asked to build a TLS connection before a provider is installed, so `ensure_crypto_provider_installed` calls `rustls::crypto::ring::default_provider().install_default()` once, guarded by a `std::sync::Once`.
+- **`rustls`** (`default-features = false`, matching `bollard`'s own dependency line so no extra features get pulled in beyond what `bollard`'s `ssl` feature already requests): declared directly so `ratect-core` can call `rustls::crypto::ring::default_provider().install_default()` itself (see the `bollard` entry above) — Rust's strict-deps rule means a crate can't `use` another crate's items unless it's a direct dependency of its own, even when (as here) that crate is already fully resolved transitively.
 - **`noyalib`**: Safe, pure-Rust YAML parser (used as a modern alternative to `serde_yaml`).
 - **`tokio`**: The asynchronous runtime.
 - **`clap`**: Command-line argument parsing with derive support.
@@ -173,9 +174,9 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
 Dependencies are split across the three `Cargo.toml`s along CLI-vs-core lines: `clap`
 and `tracing-subscriber` are `ratect`-only; `serde`, `serde_json`, `noyalib`, `bollard`,
 `futures`, `async-recursion`, `async-trait`, `uuid`, `tar`, `path-clean`, `crossterm`,
-`nix`, `url`, `sha2`, `toml`, `regex`, `unicode-width`, and the local `dockerignore` crate
-are `ratect-core`-only (`dockerignore` itself depends on `regex` and `path-clean` too);
-`anyhow`, `tracing`, and `tokio` are
+`nix`, `url`, `sha2`, `toml`, `regex`, `unicode-width`, `rustls`, and the local
+`dockerignore` crate are `ratect-core`-only (`dockerignore` itself depends on `regex`
+and `path-clean` too); `anyhow`, `tracing`, and `tokio` are
 needed by both. `tokio` is a normal dependency in both crates now — `ratect-core`'s
 non-test code needs it too, for `build_context_tar`'s `tokio::task::spawn_blocking` (it
 used to be a `ratect-core` dev-dependency only, for `#[tokio::test]` in its unit tests).
