@@ -18,7 +18,7 @@ use ratect_core::config::{format_task_list, format_task_list_quiet, Config};
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::TaskEngine;
 use ratect_core::ui::{create_event_sink, select_output_style, OutputStyle};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -170,6 +170,16 @@ struct Args {
     /// <project_directory>/.batect/caches/<name>).
     #[arg(long = "cache-type", value_enum, default_value = "volume")]
     cache_type: CacheTypeArg,
+
+    /// Remove every one of this project's cache volumes/directories and
+    /// exit, without running anything. Never needs the config file itself.
+    #[arg(long = "clean")]
+    clean: bool,
+
+    /// Remove the named cache volume/directory (repeatable) and exit,
+    /// without running anything. Never needs the config file itself.
+    #[arg(long = "clean-cache")]
+    clean_cache: Vec<String>,
 
     /// Write Ratect's own internal logs to this file, in addition to
     /// stderr (still governed by RUST_LOG as usual).
@@ -386,6 +396,10 @@ async fn run(args: Args) -> Result<()> {
         return Ok(());
     }
 
+    if args.clean || !args.clean_cache.is_empty() {
+        return clean_caches(&args).await;
+    }
+
     if !args.config_file.exists() {
         anyhow::bail!("Configuration file {:?} not found.", args.config_file);
     }
@@ -497,6 +511,71 @@ async fn run(args: Args) -> Result<()> {
             tracing::warn!("No task name provided. Use --help for usage.");
         }
     }
+
+    Ok(())
+}
+
+/// `--clean`/`--clean-cache`: removes this project's own cache
+/// volumes/directories and exits, without running anything. Never needs
+/// `--config-file` to actually exist — matching Batect, whose own
+/// `CleanupCachesCommand` only needs the project directory and
+/// `--cache-type`/Docker connection flags, not the task config itself.
+///
+/// `--clean-cache <NAME>` (repeatable) restricts this to the named caches;
+/// plain `--clean` with no `--clean-cache` cleans every one of this
+/// project's own caches — matching Batect's own `CommandFactory`/
+/// `CleanupCachesCommand` exactly: the explicit `cleanCaches` list (if
+/// non-empty) always wins over `--clean`'s "everything" default, regardless
+/// of whether `--clean` was also given.
+async fn clean_caches(args: &Args) -> Result<()> {
+    let base_path = base_path_for(&args.config_file);
+    let project_directory = ratect_core::config::project_directory_path(base_path)?;
+    let only: HashSet<String> = args.clean_cache.iter().cloned().collect();
+    let cache_type: ratect_core::cache::CacheType = args.cache_type.into();
+    let (singular, plural) = match cache_type {
+        ratect_core::cache::CacheType::Volume => ("volume", "volumes"),
+        ratect_core::cache::CacheType::Directory => ("directory", "directories"),
+    };
+
+    let removed = match cache_type {
+        ratect_core::cache::CacheType::Volume => {
+            println!("Checking for cache volumes...");
+            let docker_connection = DockerConnectionOptions {
+                host: args.docker_host.clone(),
+                context: args.docker_context.clone(),
+                config_directory: args.docker_config.clone(),
+                tls: args.docker_tls,
+                tls_verify: args.docker_tls_verify,
+                cert_path: args.docker_cert_path.clone(),
+                tls_ca_cert: args.docker_tls_ca_cert.clone(),
+                tls_cert: args.docker_tls_cert.clone(),
+                tls_key: args.docker_tls_key.clone(),
+            };
+            let docker = DockerClient::new(&docker_connection)?;
+            let project_cache_key = ratect_core::cache::project_cache_key(&project_directory)?;
+            let removed =
+                ratect_core::cache::clean_volume_caches(&docker, &project_cache_key, &only).await?;
+            for name in &removed {
+                println!("Deleting volume '{name}'...");
+            }
+            removed
+        }
+        ratect_core::cache::CacheType::Directory => {
+            let cache_directory = ratect_core::cache::cache_directory(&project_directory);
+            println!(
+                "Checking for cache directories in '{}'...",
+                cache_directory.display()
+            );
+            let removed = ratect_core::cache::clean_directory_caches(&project_directory, &only)?;
+            for name in &removed {
+                println!("Deleting '{}'...", cache_directory.join(name).display());
+            }
+            removed
+        }
+    };
+
+    let noun = if removed.len() == 1 { singular } else { plural };
+    println!("Done! Deleted {} {noun}.", removed.len());
 
     Ok(())
 }
@@ -870,6 +949,64 @@ mod tests {
         for name in ["volume", "directory"] {
             assert!(error.contains(name), "error should list '{name}': {error}");
         }
+    }
+
+    #[test]
+    fn parses_clean_flag() {
+        let args = Args::try_parse_from(["ratect", "--clean"]).unwrap();
+        assert!(args.clean);
+    }
+
+    #[test]
+    fn defaults_clean_to_false() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert!(!args.clean);
+    }
+
+    #[test]
+    fn parses_repeated_clean_cache_flags() {
+        let args = Args::try_parse_from([
+            "ratect",
+            "--clean-cache",
+            "gradle-cache",
+            "--clean-cache",
+            "npm-cache",
+        ])
+        .unwrap();
+        assert_eq!(
+            args.clean_cache,
+            vec!["gradle-cache".to_string(), "npm-cache".to_string()]
+        );
+    }
+
+    #[test]
+    fn defaults_clean_cache_to_empty() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert!(args.clean_cache.is_empty());
+    }
+
+    #[tokio::test]
+    async fn clean_cache_type_directory_short_circuits_before_touching_the_config_file() {
+        // `--cache-type directory` makes no Docker connection at all, so
+        // this can run as a normal unit test — unlike a `--cache-type
+        // volume` clean, which would need a real daemon. A nonexistent
+        // config file would normally fail `run` immediately (see the
+        // "Configuration file ... not found" check); `--clean` must return
+        // `Ok` before ever reaching that check, proving it's a genuine
+        // short-circuit, the same way `--upgrade` is (see
+        // `upgrade_flag_short_circuits_before_touching_the_config_file`).
+        let args = Args::try_parse_from([
+            "ratect",
+            "--clean",
+            "--cache-type",
+            "directory",
+            "-f",
+            "/no/such/batect.yml",
+        ])
+        .unwrap();
+        run(args)
+            .await
+            .expect("--clean should return Ok without touching the config file");
     }
 
     #[test]

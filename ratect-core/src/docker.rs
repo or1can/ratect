@@ -1205,6 +1205,18 @@ pub trait ContainerRuntime {
         container_options: &ContainerOptions,
         remove_on_exit: bool,
     ) -> Result<()>;
+
+    /// Lists every Docker volume's name on the daemon — used by
+    /// `--clean`/`--clean-cache` (see `crate::cache::clean_volume_caches`)
+    /// to find this project's own `batect-cache-<key>-*` volumes among
+    /// them. No filtering here; the caller matches the prefix itself, the
+    /// same way Batect's own `CleanupCachesCommand` does.
+    async fn list_volumes(&self) -> Result<Vec<String>>;
+
+    /// Removes the named Docker volume — used by
+    /// `--clean`/`--clean-cache` once `list_volumes` has identified it as
+    /// one of this project's own cache volumes.
+    async fn remove_volume(&self, name: &str) -> Result<()>;
 }
 
 pub struct DockerClient {
@@ -2516,6 +2528,29 @@ impl ContainerRuntime for DockerClient {
         // actually finish flushing first. See `await_log_follower`/
         // `log_followers`' own doc comments.
         self.await_log_follower(container_id).await;
+
+        Ok(())
+    }
+
+    async fn list_volumes(&self) -> Result<Vec<String>> {
+        let response = self
+            .docker
+            .list_volumes(None::<bollard::query_parameters::ListVolumesOptions>)
+            .await
+            .context("Failed to list Docker volumes")?;
+        Ok(response
+            .volumes
+            .unwrap_or_default()
+            .into_iter()
+            .map(|volume| volume.name)
+            .collect())
+    }
+
+    async fn remove_volume(&self, name: &str) -> Result<()> {
+        self.docker
+            .remove_volume(name, None::<bollard::query_parameters::RemoveVolumeOptions>)
+            .await
+            .with_context(|| format!("Failed to remove volume '{}'", name))?;
 
         Ok(())
     }

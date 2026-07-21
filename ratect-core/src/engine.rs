@@ -2413,6 +2413,19 @@ mod tests {
             Ok(())
         }
 
+        // Neither is ever reached through `TaskEngine` (only `--clean`/
+        // `--clean-cache` in `main.rs` call these, directly against a real
+        // `DockerClient`) — trivial stubs only to satisfy the trait.
+        // `crate::cache`'s own tests cover the actual cleanup logic against
+        // plain `Vec<String>` fixtures instead, not this fake.
+        async fn list_volumes(&self) -> Result<Vec<String>> {
+            Ok(Vec::new())
+        }
+
+        async fn remove_volume(&self, _name: &str) -> Result<()> {
+            Ok(())
+        }
+
         async fn run_container(
             &self,
             name: &str,

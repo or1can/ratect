@@ -375,6 +375,11 @@ containers:
   aren't implemented yet — see
   [Differences from Batect](differences-from-batect.md#container-fields).
 
+`--clean` removes every one of this project's own cache volumes/directories (per
+`--cache-type`) and exits, without running anything; `--clean-cache <NAME>` (repeatable)
+restricts this to the named cache(s) instead of all of them — see
+[CLI reference](cli-reference.md).
+
 ### User mapping
 
 ```yaml

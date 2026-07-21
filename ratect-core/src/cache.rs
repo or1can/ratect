@@ -15,10 +15,12 @@
 //! Resolves `cache` volume mounts ([`crate::config::CacheVolumeMount`]) to an
 //! actual Docker bind-mount string — either a named volume that persists
 //! between separate `ratect` invocations, or a host directory under
-//! `--cache-type=directory`. Ported from Batect's own `CacheManager`/
-//! `VolumeMountResolver`/`CacheType`, with one deliberate divergence: the
-//! project cache key is a full UUID rather than Batect's 6-char `a-z0-9` id
-//! (see [`project_cache_key`]'s own doc comment for why) — everything else,
+//! `--cache-type=directory` — and implements `--clean`/`--clean-cache`
+//! ([`clean_volume_caches`]/[`clean_directory_caches`]), which remove them.
+//! Ported from Batect's own `CacheManager`/`VolumeMountResolver`/`CacheType`/
+//! `CleanupCachesCommand`, with one deliberate divergence: the project cache
+//! key is a full UUID rather than Batect's 6-char `a-z0-9` id (see
+//! [`project_cache_key`]'s own doc comment for why) — everything else,
 //! including the `.batect/caches/` location and `batect-cache-` volume
 //! prefix, is kept byte-for-byte compatible with Batect's own convention on
 //! purpose: this is `ratect-compat`'s territory (see `ROADMAP.md`'s
@@ -27,6 +29,7 @@
 
 use crate::config::CacheVolumeMount;
 use anyhow::{Context, Result};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -148,6 +151,101 @@ pub fn resolve_cache_mount(
     })
 }
 
+/// Filters `existing_volumes` (from [`crate::docker::ContainerRuntime::list_volumes`])
+/// down to this project's own cache volumes — those with the
+/// `batect-cache-<project_cache_key>-` prefix — further restricted to
+/// `only` when non-empty (the `--clean-cache <name>` allowlist; empty means
+/// "every one of this project's cache volumes", matching plain `--clean`).
+/// A pure, synchronous decision function deliberately kept separate from
+/// the I/O in [`clean_volume_caches`], so it's unit-testable against plain
+/// `Vec<String>` fixtures without needing a fake `ContainerRuntime`.
+fn matching_cache_volumes<'a>(
+    existing_volumes: &'a [String],
+    project_cache_key: &str,
+    only: &HashSet<String>,
+) -> Vec<&'a str> {
+    let prefix = cache_volume_name(project_cache_key, "");
+    existing_volumes
+        .iter()
+        .filter_map(|name| {
+            let cache_name = name.strip_prefix(&prefix)?;
+            (only.is_empty() || only.contains(cache_name)).then_some(name.as_str())
+        })
+        .collect()
+}
+
+/// Removes this project's own cache volumes (or, with `only` non-empty,
+/// just the named ones) — `--clean`/`--clean-cache` under
+/// `CacheType::Volume`. Mirrors Batect's own `CleanupCachesCommand.runForVolumes`.
+/// Returns the names actually removed.
+pub async fn clean_volume_caches(
+    runtime: &impl crate::docker::ContainerRuntime,
+    project_cache_key: &str,
+    only: &HashSet<String>,
+) -> Result<Vec<String>> {
+    let existing = runtime.list_volumes().await?;
+    let matched: Vec<String> = matching_cache_volumes(&existing, project_cache_key, only)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+
+    for name in &matched {
+        runtime.remove_volume(name).await?;
+    }
+
+    Ok(matched)
+}
+
+/// The synchronous counterpart of [`matching_cache_volumes`] for
+/// `CacheType::Directory`: this project's own cache directories are exactly
+/// [`cache_directory`]'s own subdirectories (the `key` file living
+/// alongside them is a plain file, not a directory, so it's never matched
+/// here) — restricted to `only` when non-empty, same convention as above.
+fn matching_cache_directories(cache_dir: &Path, only: &HashSet<String>) -> Result<Vec<String>> {
+    if !cache_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut matched = Vec::new();
+    for entry in fs::read_dir(cache_dir).with_context(|| format!("Failed to read {cache_dir:?}"))? {
+        let entry = entry.with_context(|| format!("Failed to read an entry in {cache_dir:?}"))?;
+        if !entry
+            .file_type()
+            .with_context(|| format!("Failed to inspect {:?}", entry.path()))?
+            .is_dir()
+        {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if only.is_empty() || only.contains(&name) {
+            matched.push(name);
+        }
+    }
+    matched.sort();
+
+    Ok(matched)
+}
+
+/// Removes this project's own cache directories (or, with `only` non-empty,
+/// just the named ones) — `--clean`/`--clean-cache` under
+/// `CacheType::Directory`. Mirrors Batect's own
+/// `CleanupCachesCommand.runForDirectories`. Returns the names actually
+/// removed.
+pub fn clean_directory_caches(
+    project_directory: &Path,
+    only: &HashSet<String>,
+) -> Result<Vec<String>> {
+    let cache_dir = cache_directory(project_directory);
+    let matched = matching_cache_directories(&cache_dir, only)?;
+
+    for name in &matched {
+        let dir = cache_dir.join(name);
+        fs::remove_dir_all(&dir).with_context(|| format!("Failed to remove {dir:?}"))?;
+    }
+
+    Ok(matched)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,6 +361,97 @@ mod tests {
             format!("{}:/root/.gradle", expected_dir.display())
         );
         assert!(expected_dir.is_dir());
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // `clean_volume_caches`'s own async glue (list, filter, remove each) is
+    // thin enough to be covered by the real end-to-end Docker test in
+    // `tests/cli.rs` instead of a dedicated fake `ContainerRuntime` here —
+    // the interesting decision logic is `matching_cache_volumes`, a plain
+    // synchronous function these tests exercise directly.
+
+    #[test]
+    fn matching_cache_volumes_matches_only_this_projects_prefix() {
+        let existing = vec![
+            "batect-cache-abc123-gradle-cache".to_string(),
+            "batect-cache-different-key-gradle-cache".to_string(),
+            "some-unrelated-volume".to_string(),
+        ];
+
+        let matched = matching_cache_volumes(&existing, "abc123", &HashSet::new());
+
+        assert_eq!(matched, vec!["batect-cache-abc123-gradle-cache"]);
+    }
+
+    #[test]
+    fn matching_cache_volumes_restricts_to_the_only_set_when_given() {
+        let existing = vec![
+            "batect-cache-abc123-gradle-cache".to_string(),
+            "batect-cache-abc123-npm-cache".to_string(),
+        ];
+        let only = HashSet::from(["npm-cache".to_string()]);
+
+        let matched = matching_cache_volumes(&existing, "abc123", &only);
+
+        assert_eq!(matched, vec!["batect-cache-abc123-npm-cache"]);
+    }
+
+    #[test]
+    fn matching_cache_volumes_is_empty_when_nothing_matches_the_prefix() {
+        let existing = vec!["some-unrelated-volume".to_string()];
+
+        let matched = matching_cache_volumes(&existing, "abc123", &HashSet::new());
+
+        assert!(matched.is_empty());
+    }
+
+    #[test]
+    fn clean_directory_caches_removes_matching_subdirectories_and_leaves_others() {
+        let dir = unique_temp_dir();
+        let caches_dir = cache_directory(&dir);
+        fs::create_dir_all(caches_dir.join("gradle-cache")).unwrap();
+        fs::create_dir_all(caches_dir.join("npm-cache")).unwrap();
+        fs::write(caches_dir.join("key"), "abc123\n").unwrap();
+
+        let removed = clean_directory_caches(&dir, &HashSet::new()).unwrap();
+
+        let mut removed = removed;
+        removed.sort();
+        assert_eq!(removed, vec!["gradle-cache", "npm-cache"]);
+        assert!(!caches_dir.join("gradle-cache").exists());
+        assert!(!caches_dir.join("npm-cache").exists());
+        // The key file is a plain file, not a directory — never matched or
+        // removed as if it were a cache.
+        assert!(caches_dir.join("key").exists());
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn clean_directory_caches_restricts_to_only_when_given() {
+        let dir = unique_temp_dir();
+        let caches_dir = cache_directory(&dir);
+        fs::create_dir_all(caches_dir.join("gradle-cache")).unwrap();
+        fs::create_dir_all(caches_dir.join("npm-cache")).unwrap();
+
+        let only = HashSet::from(["npm-cache".to_string()]);
+        let removed = clean_directory_caches(&dir, &only).unwrap();
+
+        assert_eq!(removed, vec!["npm-cache"]);
+        assert!(caches_dir.join("gradle-cache").is_dir());
+        assert!(!caches_dir.join("npm-cache").exists());
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn clean_directory_caches_does_nothing_when_the_cache_directory_does_not_exist() {
+        let dir = unique_temp_dir();
+
+        let removed = clean_directory_caches(&dir, &HashSet::new()).unwrap();
+
+        assert!(removed.is_empty());
 
         fs::remove_dir_all(&dir).unwrap();
     }
