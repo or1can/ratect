@@ -645,10 +645,10 @@ Neither bump is ever folded into a feature commit.
   own `CleanupCachesCommand` exactly, including never needing the task
   config to exist. `tmpfs` mounts remain a separate, still-unscheduled gap —
   see [Differences from Batect](docs/differences-from-batect.md#container-fields).
-- **0.19.0** — **Parity Mop-Up**: closes several smaller gaps left over from
-  earlier releases, ahead of 1.0.0:
-  - `forbid_telemetry` and `config_variables.<name>.description` — recognized
-    but inert, the same "no effect" treatment already given
+- **0.19.0** — ~~**Parity Mop-Up**: closes several smaller gaps left over from
+  earlier releases, ahead of 1.0.0~~ — done:
+  - `forbid_telemetry` and `config_variables.<name>.description` are now
+    recognized but inert, the same "no effect" treatment already given
     `--upgrade`/`--no-update-notification`/`--no-wrapper-cache-cleanup`
     (0.17.0). Both are purely informational in Batect itself (no runtime
     behavior to diverge from — Ratect has no telemetry to forbid and no help
@@ -656,23 +656,29 @@ Neither bump is ever folded into a feature commit.
     below, where silently ignoring it would mean actually doing something
     other than what the config asked for — see the note on unsupported
     fields at the top of [Differences from
-    Batect](docs/differences-from-batect.md). Without this, a real Batect
-    project using either field fails to load at all under Ratect's
+    Batect](docs/differences-from-batect.md). Previously, a real Batect
+    project using either field failed to load at all under Ratect's
     `deny_unknown_fields` parsing.
   - **Git-include cache eviction**: a 30-day automatic sweep for
     `~/.ratect/incl`, matching Batect's own `GitRepositoryCacheCleanupTask`
-    exactly — an unconditional background thread started on every
-    invocation, deleting any cached repo not used in the last 30 days. Not a
-    CLI feature — Batect has no manual clean command for this either, only
-    the automatic sweep (see [Differences from
+    exactly — an unconditional, fire-and-forget background task
+    (`GitIncludeCache::cleanup_stale`, `tokio::spawn`, not an OS thread —
+    Batect's own JVM daemon thread is the equivalent, not a literal port)
+    started on every "run a task" invocation (not `--list-tasks`), deleting
+    any cached repo not used in the last 30 days. Not a CLI feature — Batect
+    has no manual clean command for this either, only the automatic sweep
+    (see [Differences from
     Batect](docs/differences-from-batect.md#top-level-fields), corrected
     after an earlier draft of the 0.8.0 entry above overstated this gap).
-  - `log_driver`/`log_options` (`Container`) — currently zero support, not
-    partial.
+  - `log_driver`/`log_options` (`Container`) now reach a real container's
+    `HostConfig.LogConfig` (Docker's `--log-driver`/`--log-opt`), verified
+    end-to-end against a live daemon — previously zero support at all (a
+    hard config-load error), not partial.
   - `image_pull_policy`'s second use on a `build_directory` container:
-    force-pulling the build's own base image (`docker build --pull`) before
-    building, distinct from the already-supported `image`-container pull
-    decision.
+    `Always` now force-pulls the build's own base image (`docker build
+    --pull`) before building, distinct from the already-supported
+    `image`-container pull decision. `ContainerRuntime::build_image` gained
+    a `force_pull` parameter.
 - **0.20.0** — **Two-Binary Split**: the workspace actually splits as described
   in [Two Binaries](#two-binaries-ratect-and-ratect-compat), as its own
   dedicated structural change — not folded into a feature release or into
