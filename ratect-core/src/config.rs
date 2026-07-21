@@ -90,7 +90,12 @@ pub struct Container {
     /// is built on doesn't expose either — see
     /// [Differences from Batect](https://github.com/or1can/ratect/blob/main/docs/differences-from-batect.md#container-fields).
     pub build_ssh: Option<Vec<SshAgent>>,
-    pub volumes: Option<Vec<String>>,
+    /// Host bind mounts (`local`) and/or named cache volumes (`cache`) — see
+    /// [`VolumeMount`]. A `local` mount's host path is resolved in
+    /// [`Config::resolve_expressions_with`]; a `cache` mount's Docker volume
+    /// name/host directory is resolved later, once `--cache-type` and the
+    /// project's own cache key are known — see [`crate::cache`].
+    pub volumes: Option<Vec<VolumeMount>>,
     pub dependencies: Option<Vec<String>>,
     pub environment: Option<HashMap<String, String>>,
     pub run_as_current_user: Option<RunAsCurrentUser>,
@@ -311,6 +316,198 @@ impl Serialize for DeviceMapping {
                 serializer.serialize_str(&format!("{}:{}:{}", self.local, self.container, options))
             }
             None => serializer.serialize_str(&format!("{}:{}", self.local, self.container)),
+        }
+    }
+}
+
+/// One `volumes` entry. Either a `local` bind mount (a host path, resolved
+/// against the container's own base path — see
+/// [`Config::resolve_expressions_with`]) or a `cache` mount (a named volume
+/// that persists between separate `ratect` invocations, or a host directory
+/// under `--cache-type=directory` — see
+/// [`crate::cache::resolve_cache_mount`]). `tmpfs` (Batect's third kind) isn't
+/// implemented yet — see
+/// [Differences from Batect](https://github.com/or1can/ratect/blob/main/docs/differences-from-batect.md#container-fields).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VolumeMount {
+    Local(LocalVolumeMount),
+    Cache(CacheVolumeMount),
+}
+
+/// A host path bind-mounted into the container. `local` supports
+/// [expressions](#expressions) and is resolved against the declaring
+/// container's own base path — see [`Config::resolve_expressions_with`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalVolumeMount {
+    pub local: String,
+    pub container: String,
+    pub options: Option<String>,
+}
+
+/// A named cache volume — Batect's `cache` mount type. `name` (not `local`,
+/// unlike [`LocalVolumeMount`]) identifies the cache, combined with a
+/// per-project key into a Docker volume name (`CacheType::Volume`) or a
+/// directory under `.batect/caches/` (`CacheType::Directory`) — see
+/// [`crate::cache`]. Plain `String`s, not [expressions](#expressions),
+/// matching Batect's own `CacheMount` typing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheVolumeMount {
+    pub name: String,
+    pub container: String,
+    pub options: Option<String>,
+}
+
+impl VolumeMount {
+    /// Parses Batect's `"local_path:container_path[:options]"` string form —
+    /// always a `Local` mount; there's no compact string form for `cache`
+    /// (matching Batect, whose string form only ever produces a
+    /// `LocalMount`). Mirrors [`DeviceMapping::parse_string`] exactly.
+    fn parse_string(value: &str) -> Result<Self> {
+        let invalid = || {
+            anyhow::anyhow!(
+                "Volume mount definition '{value}' is invalid. It must be in the form \
+                 'local_path:container_path' or 'local_path:container_path:options'."
+            )
+        };
+        if value.is_empty() {
+            anyhow::bail!("Volume mount definition cannot be empty.");
+        }
+        let mut parts = value.splitn(4, ':');
+        let local = parts.next().ok_or_else(invalid)?;
+        let container = parts.next().ok_or_else(invalid)?;
+        let options = parts.next();
+        if parts.next().is_some() {
+            return Err(invalid());
+        }
+        if local.is_empty() || container.is_empty() {
+            return Err(invalid());
+        }
+
+        Ok(Self::Local(LocalVolumeMount {
+            local: local.to_string(),
+            container: container.to_string(),
+            options: options.map(|s| s.to_string()),
+        }))
+    }
+}
+
+impl<'de> Deserialize<'de> for VolumeMount {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct VolumeMountVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for VolumeMountVisitor {
+            type Value = VolumeMount;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(
+                    "a volume mount string ('local_path:container_path[:options]') or an object \
+                     with 'local'/'container'/'options'/'name'/'type' fields",
+                )
+            }
+
+            fn visit_str<E>(self, v: &str) -> std::result::Result<VolumeMount, E>
+            where
+                E: serde::de::Error,
+            {
+                VolumeMount::parse_string(v).map_err(serde::de::Error::custom)
+            }
+
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<VolumeMount, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut local: Option<String> = None;
+                let mut container: Option<String> = None;
+                let mut options: Option<String> = None;
+                let mut name: Option<String> = None;
+                let mut mount_type: Option<String> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "local" => local = Some(map.next_value()?),
+                        "container" => container = Some(map.next_value()?),
+                        "options" => options = Some(map.next_value()?),
+                        "name" => name = Some(map.next_value()?),
+                        "type" => mount_type = Some(map.next_value()?),
+                        other => {
+                            return Err(serde::de::Error::unknown_field(
+                                other,
+                                &["local", "container", "options", "name", "type"],
+                            ))
+                        }
+                    }
+                }
+                let container =
+                    container.ok_or_else(|| serde::de::Error::missing_field("container"))?;
+
+                match mount_type.as_deref().unwrap_or("local") {
+                    "local" => {
+                        if name.is_some() {
+                            return Err(serde::de::Error::custom(
+                                "Field 'name' is not permitted for local path mounts.",
+                            ));
+                        }
+                        let local =
+                            local.ok_or_else(|| serde::de::Error::missing_field("local"))?;
+                        Ok(VolumeMount::Local(LocalVolumeMount {
+                            local,
+                            container,
+                            options,
+                        }))
+                    }
+                    "cache" => {
+                        if local.is_some() {
+                            return Err(serde::de::Error::custom(
+                                "Field 'local' is not permitted for cache mounts.",
+                            ));
+                        }
+                        let name = name.ok_or_else(|| serde::de::Error::missing_field("name"))?;
+                        Ok(VolumeMount::Cache(CacheVolumeMount {
+                            name,
+                            container,
+                            options,
+                        }))
+                    }
+                    other => Err(serde::de::Error::custom(format!(
+                        "Unknown volume mount type '{other}'. It must be 'local' or 'cache' \
+                         ('tmpfs' isn't supported yet)."
+                    ))),
+                }
+            }
+        }
+
+        deserializer.deserialize_any(VolumeMountVisitor)
+    }
+}
+
+impl Serialize for VolumeMount {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            // Re-emits the compact string form — round-trips through the
+            // same shape `parse_string` accepts.
+            VolumeMount::Local(mount) => match &mount.options {
+                Some(options) => serializer
+                    .serialize_str(&format!("{}:{}:{}", mount.local, mount.container, options)),
+                None => serializer.serialize_str(&format!("{}:{}", mount.local, mount.container)),
+            },
+            // No compact string form exists for `cache` — always the
+            // expanded object.
+            VolumeMount::Cache(mount) => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(4))?;
+                map.serialize_entry("type", "cache")?;
+                map.serialize_entry("name", &mount.name)?;
+                map.serialize_entry("container", &mount.container)?;
+                if let Some(options) = &mount.options {
+                    map.serialize_entry("options", options)?;
+                }
+                map.end()
+            }
         }
     }
 }
@@ -1822,11 +2019,8 @@ impl Config {
         // directory containing the config file. Not user-declarable (see
         // the check above) or overridable via --config-var — the guard
         // above already stops that, since only *declared* names can be
-        // overridden. `.clean()`d for the same reason as `resolve_path`
-        // below — `base_path` is frequently "" or "." (e.g. from `-f
-        // batect.yml` or `-f ./batect.yml`), which without cleaning would
-        // leave a trailing slash or `/.` in every value derived from this.
-        let project_directory_path = std::env::current_dir()?.join(base_path).clean();
+        // overridden.
+        let project_directory_path = project_directory_path(base_path)?;
         let project_directory = project_directory_path.display().to_string();
         config_vars.insert(PROJECT_DIRECTORY_VAR.to_string(), Some(project_directory));
 
@@ -1845,13 +2039,21 @@ impl Config {
             }
             if let Some(volumes) = &mut container.volumes {
                 for volume in volumes {
-                    *volume = resolve_volume(
-                        volume,
-                        container_base_path,
-                        &host_env,
-                        &config_vars,
-                        container_boundary,
-                    )?;
+                    // `Cache` mounts have nothing to resolve here — `name`/
+                    // `container` are plain strings, not expressions,
+                    // matching Batect's own `CacheMount` typing. Their
+                    // Docker volume name/host directory is resolved later,
+                    // once `--cache-type` and the project's cache key are
+                    // known — see `crate::cache::resolve_cache_mount`.
+                    if let VolumeMount::Local(local) = volume {
+                        local.local = resolve_path(
+                            &local.local,
+                            container_base_path,
+                            &host_env,
+                            &config_vars,
+                            container_boundary,
+                        )?;
+                    }
                 }
             }
             if let Some(build_directory) = &mut container.build_directory {
@@ -2028,36 +2230,6 @@ impl Config {
     }
 }
 
-/// Interpolates expressions within a volume spec's host-path segment, then
-/// resolves the result to an absolute path (relative to `base_path`) if
-/// it's relative. Volume specs that don't split into exactly two
-/// `:`-separated parts (e.g. a three-part `host:container:ro` spec, or a
-/// Windows drive-letter path) are left completely untouched, including no
-/// interpolation — ambiguous to parse, so left for the user to write
-/// literally, matching this resolver's pre-existing behavior for that case.
-fn resolve_volume(
-    volume: &str,
-    base_path: &Path,
-    host_env: &impl Fn(&str) -> Option<String>,
-    config_vars: &HashMap<String, Option<String>>,
-    container_boundary: Option<(&GitBoundary, &Path)>,
-) -> Result<String> {
-    let parts: Vec<&str> = volume.split(':').collect();
-    if parts.len() != 2 {
-        return Ok(volume.to_string());
-    }
-
-    let resolved_host_path = resolve_path(
-        parts[0],
-        base_path,
-        host_env,
-        config_vars,
-        container_boundary,
-    )?;
-
-    Ok(format!("{}:{}", resolved_host_path, parts[1]))
-}
-
 /// Interpolates expressions within `path`, then resolves the result to an
 /// absolute path (relative to `base_path`) if it's relative — done in this
 /// order because an expression can itself resolve to an absolute path (e.g.
@@ -2092,6 +2264,22 @@ fn resolve_path(
     }
 
     Ok(resolved.display().to_string())
+}
+
+/// The project's own root directory — the absolute, lexically-cleaned
+/// directory containing the root config file (`base_path`). This is both
+/// the value the built-in `batect.project_directory` config variable
+/// resolves to, and the directory Ratect's `.batect/caches/` (cache
+/// volumes — see [`crate::cache`]) is scoped under, so it's exposed here
+/// rather than kept private to [`Config::resolve_expressions_with`].
+///
+/// `base_path` itself may be relative (e.g. derived from a `-f
+/// ./batect.yml` config path), so this always joins onto the current
+/// directory too, then lexically `.clean()`s the result — otherwise a `.`
+/// component would survive verbatim (e.g. `/project/.` instead of
+/// `/project`).
+pub fn project_directory_path(base_path: &Path) -> Result<PathBuf> {
+    Ok(std::env::current_dir()?.join(base_path).clean())
 }
 
 #[cfg(test)]
@@ -2130,7 +2318,11 @@ tasks:
         assert_eq!(container.image.as_deref(), Some("alpine:3.18"));
         assert_eq!(
             container.volumes.as_ref().unwrap(),
-            &vec!["code:/code".to_string()]
+            &vec![VolumeMount::Local(LocalVolumeMount {
+                local: "code".to_string(),
+                container: "/code".to_string(),
+                options: None,
+            })]
         );
 
         let task = config.tasks.get("test").unwrap();
@@ -3413,78 +3605,321 @@ tasks: {}
         None
     }
 
-    #[test]
-    fn resolve_volume_makes_relative_host_path_absolute() {
-        let resolved = resolve_volume(
-            "code:/code",
-            Path::new("/base"),
-            &no_host_env,
-            &HashMap::new(),
-            None,
-        )
-        .unwrap();
-        assert_eq!(resolved, "/base/code:/code");
+    /// Unwraps a `VolumeMount` expected to be `Local` — most tests only
+    /// care about the `local`/`container` fields, not the enum wrapper.
+    fn expect_local(mount: &VolumeMount) -> &LocalVolumeMount {
+        match mount {
+            VolumeMount::Local(local) => local,
+            VolumeMount::Cache(_) => panic!("expected a local volume mount, got a cache mount"),
+        }
     }
 
     #[test]
-    fn resolve_volume_leaves_absolute_host_path_unchanged() {
-        let resolved = resolve_volume(
-            "/already/absolute:/code",
-            Path::new("/base"),
-            &no_host_env,
-            &HashMap::new(),
-            None,
-        )
-        .unwrap();
-        assert_eq!(resolved, "/already/absolute:/code");
+    fn volume_mount_parses_two_part_string_as_local() {
+        let mount = VolumeMount::parse_string("code:/code").unwrap();
+        assert_eq!(
+            mount,
+            VolumeMount::Local(LocalVolumeMount {
+                local: "code".to_string(),
+                container: "/code".to_string(),
+                options: None,
+            })
+        );
     }
 
     #[test]
-    fn resolve_volume_leaves_malformed_volume_spec_unchanged() {
-        // Three colon-separated parts (e.g. a Windows drive-letter host path) don't
-        // match the `host:container` shape this resolver understands, so it's left as-is
-        // — no interpolation either, matching that "left completely unresolved" behavior.
-        let resolved = resolve_volume(
-            "C:/data:/code:ro",
-            Path::new("/base"),
-            &no_host_env,
-            &HashMap::new(),
-            None,
-        )
-        .unwrap();
-        assert_eq!(resolved, "C:/data:/code:ro");
+    fn volume_mount_parses_three_part_string_with_options_as_local() {
+        // Previously left completely unresolved (no interpolation at all —
+        // see git history), since the old string-splitting resolver
+        // couldn't tell an options suffix apart from a Windows
+        // drive-letter host path. `VolumeMount` now separates
+        // local/container/options at parse time (mirroring
+        // `DeviceMapping::parse_string`), so this is unambiguous — Ratect
+        // has no Windows support to preserve the old ambiguity for.
+        let mount = VolumeMount::parse_string("code:/code:ro").unwrap();
+        assert_eq!(
+            mount,
+            VolumeMount::Local(LocalVolumeMount {
+                local: "code".to_string(),
+                container: "/code".to_string(),
+                options: Some("ro".to_string()),
+            })
+        );
     }
 
     #[test]
-    fn resolve_volume_interpolates_relative_host_path_expression() {
-        let config_vars = HashMap::from([("subdir".to_string(), Some("code".to_string()))]);
-        let resolved = resolve_volume(
-            "<subdir:/code",
-            Path::new("/base"),
-            &no_host_env,
-            &config_vars,
-            None,
-        )
-        .unwrap();
-        assert_eq!(resolved, "/base/code:/code");
+    fn volume_mount_rejects_an_empty_string() {
+        assert!(VolumeMount::parse_string("").is_err());
     }
 
     #[test]
-    fn resolve_volume_interpolates_absolute_host_path_expression_without_prefixing_base_path() {
+    fn volume_mount_rejects_a_string_with_too_many_colon_separated_parts() {
+        let result = VolumeMount::parse_string("C:/data:/code:ro");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn volume_mount_rejects_a_string_missing_a_container_path() {
+        assert!(VolumeMount::parse_string("code").is_err());
+    }
+
+    #[test]
+    fn volume_mount_parses_cache_object_form() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - type: cache
+        name: gradle-cache
+        container: /root/.gradle
+        options: rw
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(
+            container.volumes.as_ref().unwrap(),
+            &vec![VolumeMount::Cache(CacheVolumeMount {
+                name: "gradle-cache".to_string(),
+                container: "/root/.gradle".to_string(),
+                options: Some("rw".to_string()),
+            })]
+        );
+    }
+
+    #[test]
+    fn volume_mount_cache_object_form_requires_name() {
+        let yaml = r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - type: cache
+        container: /root/.gradle
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#;
+        let result: std::result::Result<Config, _> =
+            noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn volume_mount_cache_object_form_forbids_local() {
+        let yaml = r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - type: cache
+        name: gradle-cache
+        local: /host/path
+        container: /root/.gradle
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#;
+        let result: std::result::Result<Config, _> =
+            noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn volume_mount_local_object_form_forbids_name() {
+        let yaml = r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - local: /host/path
+        name: not-allowed-here
+        container: /code
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#;
+        let result: std::result::Result<Config, _> =
+            noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_expressions_makes_relative_local_volume_host_path_absolute() {
+        let mut container = container_with_environment(HashMap::new());
+        container.volumes = Some(vec![VolumeMount::Local(LocalVolumeMount {
+            local: "code".to_string(),
+            container: "/code".to_string(),
+            options: None,
+        })]);
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([("build-env".to_string(), container)]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        config
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+                None
+            })
+            .unwrap();
+
+        let VolumeMount::Local(resolved) =
+            &config.containers["build-env"].volumes.as_ref().unwrap()[0]
+        else {
+            panic!("expected a local volume mount");
+        };
+        assert_eq!(resolved.local, "/base/code");
+    }
+
+    #[test]
+    fn resolve_expressions_leaves_absolute_local_volume_host_path_unchanged() {
+        let mut container = container_with_environment(HashMap::new());
+        container.volumes = Some(vec![VolumeMount::Local(LocalVolumeMount {
+            local: "/already/absolute".to_string(),
+            container: "/code".to_string(),
+            options: None,
+        })]);
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([("build-env".to_string(), container)]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        config
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+                None
+            })
+            .unwrap();
+
+        let VolumeMount::Local(resolved) =
+            &config.containers["build-env"].volumes.as_ref().unwrap()[0]
+        else {
+            panic!("expected a local volume mount");
+        };
+        assert_eq!(resolved.local, "/already/absolute");
+    }
+
+    #[test]
+    fn resolve_expressions_interpolates_relative_local_volume_host_path_expression() {
+        let mut container = container_with_environment(HashMap::new());
+        container.volumes = Some(vec![VolumeMount::Local(LocalVolumeMount {
+            local: "<subdir".to_string(),
+            container: "/code".to_string(),
+            options: None,
+        })]);
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([("build-env".to_string(), container)]),
+            tasks: HashMap::new(),
+            config_variables: Some(HashMap::from([(
+                "subdir".to_string(),
+                ConfigVariable {
+                    default: Some("code".to_string()),
+                },
+            )])),
+        };
+
+        config
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+                None
+            })
+            .unwrap();
+
+        let VolumeMount::Local(resolved) =
+            &config.containers["build-env"].volumes.as_ref().unwrap()[0]
+        else {
+            panic!("expected a local volume mount");
+        };
+        assert_eq!(resolved.local, "/base/code");
+    }
+
+    #[test]
+    fn resolve_expressions_interpolates_absolute_local_volume_host_path_expression_without_prefixing_base_path(
+    ) {
         // `<project_root` resolving to an absolute path must be used as-is,
         // not treated as a literal relative fragment of `base_path` the way
         // it would be if resolution happened before interpolation.
-        let config_vars =
-            HashMap::from([("project_root".to_string(), Some("/abs/root".to_string()))]);
-        let resolved = resolve_volume(
-            "<project_root:/code",
-            Path::new("/base"),
-            &no_host_env,
-            &config_vars,
-            None,
-        )
-        .unwrap();
-        assert_eq!(resolved, "/abs/root:/code");
+        let mut container = container_with_environment(HashMap::new());
+        container.volumes = Some(vec![VolumeMount::Local(LocalVolumeMount {
+            local: "<project_root".to_string(),
+            container: "/code".to_string(),
+            options: None,
+        })]);
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([("build-env".to_string(), container)]),
+            tasks: HashMap::new(),
+            config_variables: Some(HashMap::from([(
+                "project_root".to_string(),
+                ConfigVariable {
+                    default: Some("/abs/root".to_string()),
+                },
+            )])),
+        };
+
+        config
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+                None
+            })
+            .unwrap();
+
+        let VolumeMount::Local(resolved) =
+            &config.containers["build-env"].volumes.as_ref().unwrap()[0]
+        else {
+            panic!("expected a local volume mount");
+        };
+        assert_eq!(resolved.local, "/abs/root");
+    }
+
+    #[test]
+    fn resolve_expressions_does_not_touch_cache_volume_mounts() {
+        let mut container = container_with_environment(HashMap::new());
+        container.volumes = Some(vec![VolumeMount::Cache(CacheVolumeMount {
+            name: "gradle-cache".to_string(),
+            container: "/root/.gradle".to_string(),
+            options: None,
+        })]);
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([("build-env".to_string(), container)]),
+            tasks: HashMap::new(),
+            config_variables: None,
+        };
+
+        config
+            .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+                None
+            })
+            .unwrap();
+
+        assert_eq!(
+            config.containers["build-env"].volumes.as_ref().unwrap()[0],
+            VolumeMount::Cache(CacheVolumeMount {
+                name: "gradle-cache".to_string(),
+                container: "/root/.gradle".to_string(),
+                options: None,
+            })
+        );
     }
 
     #[test]
@@ -4772,11 +5207,14 @@ tasks: {}
         let mut loaded = Config::load_from_file(&config_path).await.unwrap();
         loaded.resolve_expressions(&dir, &HashMap::new()).unwrap();
 
-        let volume = &loaded.config.containers["build-env"]
-            .volumes
-            .as_ref()
-            .unwrap()[0];
-        assert_eq!(*volume, format!("{}:/code", dir.join("code").display()));
+        let volume = expect_local(
+            &loaded.config.containers["build-env"]
+                .volumes
+                .as_ref()
+                .unwrap()[0],
+        );
+        assert_eq!(volume.local, dir.join("code").display().to_string());
+        assert_eq!(volume.container, "/code");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -5076,14 +5514,17 @@ containers:
             .unwrap();
         loaded.resolve_expressions(&dir, &HashMap::new()).unwrap();
 
-        let volume = &loaded.config.containers["build-env"]
-            .volumes
-            .as_ref()
-            .unwrap()[0];
-        assert_eq!(
-            *volume,
-            format!("{}:/code", dir.join("nested").join("code").display())
+        let volume = expect_local(
+            &loaded.config.containers["build-env"]
+                .volumes
+                .as_ref()
+                .unwrap()[0],
         );
+        assert_eq!(
+            volume.local,
+            dir.join("nested").join("code").display().to_string()
+        );
+        assert_eq!(volume.container, "/code");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -5316,18 +5757,18 @@ tasks: {}
             .unwrap();
         loaded.resolve_expressions(&dir, &HashMap::new()).unwrap();
 
-        let volume = &loaded.config.containers["bundled"]
-            .volumes
-            .as_ref()
-            .unwrap()[0];
+        let volume = expect_local(
+            &loaded.config.containers["bundled"]
+                .volumes
+                .as_ref()
+                .unwrap()[0],
+        );
         let clone_dir = cache_root.join(crate::git_include::cache_key(
             "https://example.com/bundle.git",
             "v1.0.0",
         ));
-        assert_eq!(
-            *volume,
-            format!("{}:/code", clone_dir.join("code").display())
-        );
+        assert_eq!(volume.local, clone_dir.join("code").display().to_string());
+        assert_eq!(volume.container, "/code");
 
         std::fs::remove_dir_all(&dir).unwrap();
         std::fs::remove_dir_all(&cache_root).unwrap();
@@ -5516,11 +5957,14 @@ tasks: {}
             .unwrap();
         loaded.resolve_expressions(&dir, &HashMap::new()).unwrap();
 
-        let volume = &loaded.config.containers["bundled"]
-            .volumes
-            .as_ref()
-            .unwrap()[0];
-        assert_eq!(*volume, format!("{}:/output", dir.join("output").display()));
+        let volume = expect_local(
+            &loaded.config.containers["bundled"]
+                .volumes
+                .as_ref()
+                .unwrap()[0],
+        );
+        assert_eq!(volume.local, dir.join("output").display().to_string());
+        assert_eq!(volume.container, "/output");
 
         std::fs::remove_dir_all(&dir).unwrap();
         std::fs::remove_dir_all(&cache_root).unwrap();
@@ -6329,9 +6773,11 @@ config_variables:
     #[test]
     fn resolve_expressions_resolves_built_in_project_directory_var_in_volumes() {
         let mut container = container_with_environment(HashMap::new());
-        container.volumes = Some(vec![
-            "<{batect.project_directory}/scripts:/scripts".to_string()
-        ]);
+        container.volumes = Some(vec![VolumeMount::Local(LocalVolumeMount {
+            local: "<{batect.project_directory}/scripts".to_string(),
+            container: "/scripts".to_string(),
+            options: None,
+        })]);
         let mut config = Config {
             project_name: "demo".to_string(),
             containers: HashMap::from([("build-env".to_string(), container)]),
@@ -6345,10 +6791,9 @@ config_variables:
             })
             .unwrap();
 
-        assert_eq!(
-            config.containers["build-env"].volumes.as_ref().unwrap()[0],
-            "/base/scripts:/scripts"
-        );
+        let volume = expect_local(&config.containers["build-env"].volumes.as_ref().unwrap()[0]);
+        assert_eq!(volume.local, "/base/scripts");
+        assert_eq!(volume.container, "/scripts");
     }
 
     #[test]

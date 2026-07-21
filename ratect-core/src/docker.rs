@@ -970,6 +970,18 @@ fn ensure_host_volume_directories_exist(volumes: Option<&Vec<String>>) -> Result
             continue;
         };
         let path = Path::new(host_path);
+        // A non-absolute source is a Docker named volume, not a host path —
+        // a `cache` mount under `CacheType::Volume` resolves to exactly
+        // this (e.g. `"batect-cache-<key>-<name>"`). Every *local* mount's
+        // host path is already made absolute by `Config::resolve_expressions`
+        // before it ever reaches here, so this only ever skips a named
+        // volume, never a genuine (if unusual) relative local path.
+        // Without this guard, `create_dir_all` would `mkdir -p` a directory
+        // named after the volume, relative to the current working
+        // directory — not what anyone wants.
+        if !path.is_absolute() {
+            continue;
+        }
         // No `path.exists()` pre-check: `create_dir_all` is already a no-op
         // success if `path` is an existing directory, so the check bought
         // nothing but a TOCTOU race (something else removing/replacing
@@ -3947,6 +3959,35 @@ mod tests {
     #[test]
     fn ensure_host_volume_directories_exist_does_nothing_when_there_are_no_volumes() {
         ensure_host_volume_directories_exist(None).unwrap();
+    }
+
+    #[test]
+    fn ensure_host_volume_directories_exist_skips_a_named_docker_volume() {
+        // A `cache` mount under `CacheType::Volume` resolves to a bare
+        // volume name (non-absolute), not a host path — this must not be
+        // `mkdir -p`'d relative to the current directory. Deliberately
+        // doesn't mutate the process's real current directory to prove
+        // this (unsafe under `cargo test`'s default parallel execution —
+        // other tests, e.g. in config.rs, read the real current directory
+        // too); instead uses a name specific enough that no other test
+        // could plausibly create a same-named directory in the real
+        // current directory, and cleans it up regardless in case a
+        // regression here ever did create it.
+        let unlikely_relative_name =
+            "ratect-test-ensure-host-volume-directories-exist-skips-a-named-docker-volume";
+        let would_be_created_here = std::env::current_dir()
+            .unwrap()
+            .join(unlikely_relative_name);
+        assert!(!would_be_created_here.exists());
+
+        let volumes = vec![format!("{unlikely_relative_name}:/root/.gradle")];
+        ensure_host_volume_directories_exist(Some(&volumes)).unwrap();
+
+        let created = would_be_created_here.exists();
+        if created {
+            fs::remove_dir_all(&would_be_created_here).unwrap();
+        }
+        assert!(!created);
     }
 
     #[test]

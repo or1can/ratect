@@ -169,7 +169,7 @@ containers:
 | `build_args` | map of string → string | no | Build-time variables passed to `docker build` (Docker's own `--build-arg` mechanism), e.g. `VERSION: "1.2.3"`. Only meaningful alongside `build_directory`. Values support [expressions](#expressions). |
 | `dockerfile` | string | no | The Dockerfile to build, as a path relative to `build_directory`'s own root. Defaults to `Dockerfile` at `build_directory`'s root. Only meaningful alongside `build_directory`. No [expression](#expressions) support. |
 | `build_target` | string | no | The build stage to stop at (Docker's own `--target` mechanism), for a multi-stage `FROM ... AS <name>` Dockerfile. Only meaningful alongside `build_directory`. No expression support. |
-| `volumes` | list of strings | no | Bind mounts in `host_path:container_path` form. `host_path` supports [expressions](#expressions). See [Volume path resolution](#volume-path-resolution) below. |
+| `volumes` | list of strings/objects | no | Host bind mounts (`local`) and named cache volumes (`cache`) — see [Volume path resolution](#volume-path-resolution) and [Cache volumes](#cache-volumes) below. |
 | `dependencies` | list of strings | no | Names of other containers to start (recursively, if they themselves have dependencies) before this one, reachable by name over a Docker network created for the duration of the task. Each dependency must become *ready* — healthy, with all its `setup_commands` completed — before its dependents start; see [Dependency readiness](#dependency-readiness) below and [the task lifecycle](task-lifecycle.md) for the full model. |
 | `environment` | map of string → string | no | Environment variables to set in the container, e.g. `FOO: bar`. Values support [expressions](#expressions) (`$VAR`, `${VAR:-default}`, `<name`). A dependency container only ever gets its own `environment` — see [TaskRun](#taskrun) for how a task's own container's `environment` combines with `run.environment`. |
 | `run_as_current_user` | object (`enabled`, `home_directory`) | no | Runs this container as the host's own user/group instead of the image's default (see [User mapping](#user-mapping) below). |
@@ -293,10 +293,31 @@ not the same, and the difference is easy to get surprised by:
 
 ### Volume path resolution
 
-Each entry in `volumes` is split on `:`. Only entries with **exactly two** colon-separated
-parts (`host_path:container_path`) are resolved. `build_directory` is resolved the same
-way (it has no `:container_path` part to split off, obviously, but otherwise follows
-identical rules):
+Each `volumes` entry is either a `local` bind mount (a host path) or a `cache` volume
+(see [Cache volumes](#cache-volumes) below) — either the compact string form or the
+expanded object form:
+
+```yaml
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - .:/code
+      - local: ./logs
+        container: /var/log/app
+        options: ro
+      - type: cache
+        name: apk-cache
+        container: /var/cache/apk
+```
+
+A bare string (`local_path:container_path` or `local_path:container_path:options`) is
+always a `local` mount — there's no compact string form for `cache`. The expanded
+object form additionally accepts `type: cache` (with `name` instead of `local`);
+`type: local`, the default when omitted, requires `local` and forbids `name` (and vice
+versa for `type: cache`).
+
+For a `local` mount, `local` (the host path) is resolved:
 
 - The path is interpolated first (see [Expressions](#expressions)) — so a config
   variable that itself resolves to an absolute path is used as-is, not treated as a
@@ -307,10 +328,52 @@ identical rules):
   that's what an expression resolved to), it's left unchanged.
 - This all happens once, after CLI-supplied config variable overrides
   (`--config-var`/`--config-vars-file`) are known — not at config-parse time.
-- Volume entries that don't split into exactly two parts — e.g. a three-part spec like
-  `host:container:ro` (Docker's read-only mount flag), or a Windows drive-letter path
-  like `C:/data:/code` — are **left completely unresolved**, including no interpolation
-  and no path resolution. Use an absolute host path if you need one of these forms today.
+- `build_directory` is resolved the same way (it has no `:container_path` part to split
+  off, obviously, but otherwise follows identical rules).
+
+`container`/`options` are always used as literal strings — no expression support. A
+`cache` mount's `name`/`container` are also plain strings, matching Batect — no
+expression support there either.
+
+### Cache volumes
+
+A `cache` mount persists between separate `ratect` invocations — unlike `local`, its
+contents aren't tied to a specific host path in `batect.yml`. `name` identifies it,
+combined with a per-project key into either a Docker named volume (the default) or a
+host directory, selected by `--cache-type` (see [CLI reference](cli-reference.md)):
+
+```yaml
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - type: cache
+        name: apk-cache
+        container: /var/cache/apk
+        options: rw   # optional
+```
+
+- **`--cache-type=volume`** (the default): resolves to a Docker named volume,
+  `batect-cache-<project-key>-<name>` — the exact naming convention Batect itself
+  uses, deliberately, so a project already run under real Batect has its existing
+  cache volumes recognized and reused rather than starting cold.
+- **`--cache-type=directory`**: resolves to a host directory under
+  `<project_directory>/.batect/caches/<name>/`, created if it doesn't exist yet. Same
+  reasoning as above — this is where an existing Batect project already keeps its own
+  directory-type caches.
+- `<project-key>` is a value unique to this project, generated once and persisted at
+  `<project_directory>/.batect/caches/key` (created lazily — only the first time a
+  `cache` volume is actually resolved, never eagerly) — without it, two unrelated
+  projects that happen to declare a same-named cache (e.g. `gradle-cache`) would
+  collide on the exact same Docker volume, since Docker volumes live in one flat,
+  global namespace, not scoped by directory. If that file already exists (e.g. from a
+  prior real-`batect` run), its existing key is read and reused as-is rather than
+  regenerated — even though Ratect's own generated keys look different (a full UUID,
+  rather than Batect's own shorter id): nothing depends on matching that format, only
+  on reusing whatever key is already on record for this project.
+- `tmpfs` mounts (Batect's third kind — in-memory, lost when the container exits)
+  aren't implemented yet — see
+  [Differences from Batect](differences-from-batect.md#container-fields).
 
 ### User mapping
 
@@ -339,11 +402,13 @@ group instead.
 
 A few things happen automatically to make this actually work, not just set `--user`:
 
-- Any `volumes` entries whose host path doesn't exist yet are created **before** the
-  container is even created, as the current host user. Otherwise Docker's daemon
-  (running as root) would auto-create them as `root:root` on first use, defeating the
-  point for the common "mount my code directory, get build artifacts back with sane
-  ownership" case.
+- Any `local` mount's host path (or a `cache` mount's own host directory, under
+  `--cache-type=directory`) that doesn't exist yet is created **before** the container
+  is even created, as the current host user. Otherwise Docker's daemon (running as
+  root) would auto-create it as `root:root` on first use, defeating the point for the
+  common "mount my code directory, get build artifacts back with sane ownership" case.
+  Doesn't apply to a `cache` mount under the default `--cache-type=volume` — there's no
+  host path at all there, just a Docker volume name.
 - The container's own image has no `/etc/passwd`/`/etc/group` entry for an arbitrary
   host uid/gid — many programs misbehave or refuse to run at all without one (no
   `$HOME`, no username resolution). Minimal synthetic `/etc/passwd`, `/etc/shadow`,

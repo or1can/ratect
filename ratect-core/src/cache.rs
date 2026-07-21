@@ -1,0 +1,269 @@
+// Copyright 2026 Orican Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Resolves `cache` volume mounts ([`crate::config::CacheVolumeMount`]) to an
+//! actual Docker bind-mount string — either a named volume that persists
+//! between separate `ratect` invocations, or a host directory under
+//! `--cache-type=directory`. Ported from Batect's own `CacheManager`/
+//! `VolumeMountResolver`/`CacheType`, with one deliberate divergence: the
+//! project cache key is a full UUID rather than Batect's 6-char `a-z0-9` id
+//! (see [`project_cache_key`]'s own doc comment for why) — everything else,
+//! including the `.batect/caches/` location and `batect-cache-` volume
+//! prefix, is kept byte-for-byte compatible with Batect's own convention on
+//! purpose: this is `ratect-compat`'s territory (see `ROADMAP.md`'s
+//! `## Two Binaries` section), and a project migrating from real `batect`
+//! should find its existing cache volumes/directories reused, not orphaned.
+
+use crate::config::CacheVolumeMount;
+use anyhow::{Context, Result};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+/// Where a `cache` mount's contents actually live. Selected by `--cache-type`
+/// (default `Volume`), matching Batect's own `CacheType` — except Batect
+/// additionally forces `Directory` for Windows containers; Ratect has no
+/// Windows support to special-case yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CacheType {
+    #[default]
+    Volume,
+    Directory,
+}
+
+/// Bundles the per-invocation settings [`resolve_cache_mount`] needs beyond
+/// the mount itself.
+#[derive(Debug, Clone)]
+pub struct CacheOptions {
+    pub cache_type: CacheType,
+    pub project_directory: PathBuf,
+}
+
+/// The project-local directory Ratect's cache mechanism uses — `.batect/`,
+/// not `.ratect/`, deliberately: this is where an existing Batect project
+/// already keeps its own `key` file and any `directory`-type cache contents,
+/// and reusing them (rather than starting cold under a Ratect-only
+/// directory name) is the entire point of `ratect-compat`'s parity goal.
+pub fn cache_directory(project_directory: &Path) -> PathBuf {
+    project_directory.join(".batect").join("caches")
+}
+
+/// The per-project key embedded in every cache volume's name
+/// (`batect-cache-<key>-<name>`) — without it, two unrelated projects that
+/// happen to declare a same-named cache (e.g. `gradle-cache`) would collide
+/// on the exact same Docker volume, since Docker volumes live in one flat,
+/// global namespace, not scoped by project directory.
+///
+/// Reads `<project_directory>/.batect/caches/key` if it already exists —
+/// tolerating Batect's own file format exactly (skip blank lines and any
+/// line starting with `#`, take the one remaining line as the key,
+/// mirroring `CacheManager.projectCacheKey`'s own read logic), so a project
+/// already run under real Batect has its existing key discovered and
+/// reused, preserving the exact volume names Batect itself would use.
+///
+/// When no file exists yet, generates and persists a new one: a full
+/// `uuid::Uuid::new_v4()` rather than Batect's 6-char `a-z0-9` id. This
+/// doesn't affect compatibility — Batect's reader has no length/charset
+/// check, it just takes whatever's on that one line, so the value's shape
+/// is opaque to both tools; only the file's *path* and *read-compatible
+/// format* matter for interop. A full UUID is simply safer: Batect's own
+/// 6-char alphabet only has ~2.18 billion combinations, meaningfully more
+/// collision-prone across many projects on one machine than a UUID, with no
+/// upside since nothing depends on matching that format for a freshly
+/// generated key.
+pub fn project_cache_key(project_directory: &Path) -> Result<String> {
+    let key_path = cache_directory(project_directory).join("key");
+
+    if let Ok(contents) = fs::read_to_string(&key_path) {
+        if let Some(key) = contents
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty() && !line.starts_with('#'))
+        {
+            return Ok(key.to_string());
+        }
+    }
+
+    let key = uuid::Uuid::new_v4().to_string();
+    let parent = key_path
+        .parent()
+        .expect("cache_directory() always returns a path with a parent");
+    fs::create_dir_all(parent)
+        .with_context(|| format!("Failed to create cache directory {parent:?}"))?;
+    fs::write(
+        &key_path,
+        format!(
+            "# This file was autogenerated to track which Docker volumes are associated with \
+             this project.\n# Do not modify it, and do not commit it to source control.\n{key}\n"
+        ),
+    )
+    .with_context(|| format!("Failed to write cache key file {key_path:?}"))?;
+
+    Ok(key)
+}
+
+/// The Docker volume name a `cache` mount named `name` resolves to under
+/// `CacheType::Volume` — `batect-cache-<project_cache_key>-<name>`, Batect's
+/// own literal prefix (see the module's own doc comment for why it isn't
+/// `ratect-cache-`).
+pub fn cache_volume_name(project_cache_key: &str, name: &str) -> String {
+    format!("batect-cache-{project_cache_key}-{name}")
+}
+
+/// Resolves `mount` to a Docker bind-mount string (`"source:container[:options]"`,
+/// the same shape `docker.rs`'s `HostConfig.binds` already expects) —
+/// `source` is a bare Docker volume name under `CacheType::Volume` (Docker
+/// itself auto-creates a named volume on first use), or an absolute host
+/// directory under `.batect/caches/<name>/` under `CacheType::Directory`
+/// (created here if missing, matching Batect's own
+/// `Files.createDirectories`).
+pub fn resolve_cache_mount(
+    options: &CacheOptions,
+    project_cache_key: &str,
+    mount: &CacheVolumeMount,
+) -> Result<String> {
+    let source = match options.cache_type {
+        CacheType::Volume => cache_volume_name(project_cache_key, &mount.name),
+        CacheType::Directory => {
+            let dir = cache_directory(&options.project_directory).join(&mount.name);
+            fs::create_dir_all(&dir)
+                .with_context(|| format!("Failed to create cache directory {dir:?}"))?;
+            dir.display().to_string()
+        }
+    };
+
+    Ok(match &mount.options {
+        Some(mount_options) => format!("{source}:{}:{mount_options}", mount.container),
+        None => format!("{source}:{}", mount.container),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_temp_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ratect-cache-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn project_cache_key_generates_and_persists_a_key() {
+        let dir = unique_temp_dir();
+
+        let first = project_cache_key(&dir).unwrap();
+        let second = project_cache_key(&dir).unwrap();
+
+        assert_eq!(first, second);
+        assert!(cache_directory(&dir).join("key").exists());
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn project_cache_key_reads_an_existing_batect_style_key_file() {
+        let dir = unique_temp_dir();
+        let caches_dir = cache_directory(&dir);
+        fs::create_dir_all(&caches_dir).unwrap();
+        fs::write(
+            caches_dir.join("key"),
+            "# This file was autogenerated by Batect to track which Docker volumes are \
+             associated with this project.\n# Do not modify it, and do not commit it to source \
+             control.\nabc123\n",
+        )
+        .unwrap();
+
+        let key = project_cache_key(&dir).unwrap();
+
+        assert_eq!(key, "abc123");
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn cache_volume_name_uses_the_batect_cache_prefix() {
+        assert_eq!(
+            cache_volume_name("abc123", "gradle-cache"),
+            "batect-cache-abc123-gradle-cache"
+        );
+    }
+
+    #[test]
+    fn resolve_cache_mount_builds_a_volume_bind_string() {
+        let dir = unique_temp_dir();
+        let options = CacheOptions {
+            cache_type: CacheType::Volume,
+            project_directory: dir.clone(),
+        };
+        let mount = CacheVolumeMount {
+            name: "gradle-cache".to_string(),
+            container: "/root/.gradle".to_string(),
+            options: None,
+        };
+
+        let resolved = resolve_cache_mount(&options, "abc123", &mount).unwrap();
+
+        assert_eq!(resolved, "batect-cache-abc123-gradle-cache:/root/.gradle");
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resolve_cache_mount_includes_options_when_given() {
+        let dir = unique_temp_dir();
+        let options = CacheOptions {
+            cache_type: CacheType::Volume,
+            project_directory: dir.clone(),
+        };
+        let mount = CacheVolumeMount {
+            name: "gradle-cache".to_string(),
+            container: "/root/.gradle".to_string(),
+            options: Some("ro".to_string()),
+        };
+
+        let resolved = resolve_cache_mount(&options, "abc123", &mount).unwrap();
+
+        assert_eq!(
+            resolved,
+            "batect-cache-abc123-gradle-cache:/root/.gradle:ro"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resolve_cache_mount_creates_and_uses_a_host_directory_for_directory_type() {
+        let dir = unique_temp_dir();
+        let options = CacheOptions {
+            cache_type: CacheType::Directory,
+            project_directory: dir.clone(),
+        };
+        let mount = CacheVolumeMount {
+            name: "gradle-cache".to_string(),
+            container: "/root/.gradle".to_string(),
+            options: None,
+        };
+
+        let resolved = resolve_cache_mount(&options, "abc123", &mount).unwrap();
+
+        let expected_dir = cache_directory(&dir).join("gradle-cache");
+        assert_eq!(
+            resolved,
+            format!("{}:/root/.gradle", expected_dir.display())
+        );
+        assert!(expected_dir.is_dir());
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}

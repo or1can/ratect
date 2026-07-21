@@ -165,6 +165,12 @@ struct Args {
     #[arg(long = "max-parallelism", value_parser = clap::value_parser!(u32).range(1..))]
     max_parallelism: Option<u32>,
 
+    /// Storage mechanism for `cache` volume mounts: volume (a Docker named
+    /// volume) or directory (a host directory under
+    /// <project_directory>/.batect/caches/<name>).
+    #[arg(long = "cache-type", value_enum, default_value = "volume")]
+    cache_type: CacheTypeArg,
+
     /// Write Ratect's own internal logs to this file, in addition to
     /// stderr (still governed by RUST_LOG as usual).
     #[arg(long = "log-file")]
@@ -226,6 +232,23 @@ impl From<OutputStyleArg> for OutputStyle {
             OutputStyleArg::Simple => OutputStyle::Simple,
             OutputStyleArg::Quiet => OutputStyle::Quiet,
             OutputStyleArg::All => OutputStyle::All,
+        }
+    }
+}
+
+/// The CLI-side `--cache-type` value set. Mirrors [`ratect_core::cache::CacheType`]
+/// rather than deriving on it directly, same reasoning as `OutputStyleArg`.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum CacheTypeArg {
+    Volume,
+    Directory,
+}
+
+impl From<CacheTypeArg> for ratect_core::cache::CacheType {
+    fn from(arg: CacheTypeArg) -> Self {
+        match arg {
+            CacheTypeArg::Volume => ratect_core::cache::CacheType::Volume,
+            CacheTypeArg::Directory => ratect_core::cache::CacheType::Directory,
         }
     }
 }
@@ -374,6 +397,7 @@ async fn run(args: Args) -> Result<()> {
     };
     config_var_overrides.extend(args.config_var.iter().cloned());
     let base_path = base_path_for(&args.config_file);
+    let project_directory = ratect_core::config::project_directory_path(base_path)?;
     loaded.resolve_expressions(base_path, &config_var_overrides)?;
     let config = loaded.config;
 
@@ -432,7 +456,9 @@ async fn run(args: Args) -> Result<()> {
             let docker = DockerClient::new(&docker_connection)?
                 .with_event_sink(Arc::clone(&event_sink))
                 .with_enable_buildkit(args.enable_buildkit);
-            let mut engine = TaskEngine::new(config, docker).with_event_sink(event_sink);
+            let mut engine = TaskEngine::new(config, docker)
+                .with_event_sink(event_sink)
+                .with_cache_options(args.cache_type.into(), project_directory);
             if let Some(network) = args.use_network {
                 engine = engine.with_existing_network(network);
             }
@@ -819,6 +845,31 @@ mod tests {
     fn rejects_a_zero_max_parallelism() {
         let result = Args::try_parse_from(["ratect", "--max-parallelism", "0", "build"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn defaults_cache_type_to_volume() {
+        let args = Args::try_parse_from(["ratect"]).unwrap();
+        assert_eq!(args.cache_type, CacheTypeArg::Volume);
+    }
+
+    #[test]
+    fn parses_cache_type_flag() {
+        let args = Args::try_parse_from(["ratect", "--cache-type", "directory", "build"]).unwrap();
+        assert_eq!(args.cache_type, CacheTypeArg::Directory);
+
+        let args = Args::try_parse_from(["ratect", "--cache-type", "volume", "build"]).unwrap();
+        assert_eq!(args.cache_type, CacheTypeArg::Volume);
+    }
+
+    #[test]
+    fn rejects_an_unknown_cache_type_naming_the_valid_ones() {
+        let error = Args::try_parse_from(["ratect", "--cache-type", "host", "build"])
+            .unwrap_err()
+            .to_string();
+        for name in ["volume", "directory"] {
+            assert!(error.contains(name), "error should list '{name}': {error}");
+        }
     }
 
     #[test]

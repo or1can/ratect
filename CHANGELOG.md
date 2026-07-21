@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`cache` volume mounts and `--cache-type`**: `volumes` now supports Batect's `cache` mount type — a named volume that persists between separate `ratect` invocations, unlike a `local` bind mount, which is always tied to a specific host path. `--cache-type` selects where a `cache` mount's contents actually live: `volume` (the default) resolves it to a Docker named volume, `batect-cache-<project-key>-<name>` — Batect's own exact naming convention, deliberately, so a project already run under real Batect has its existing cache volumes recognized and reused rather than starting cold; `directory` resolves it to a host directory under `<project_directory>/.batect/caches/<name>/`, same reasoning. The per-project key is a value unique to this project, persisted at `<project_directory>/.batect/caches/key` (generated lazily — only the first time a `cache` mount is actually resolved) — an existing Batect-created key file is read and reused exactly as-is (tolerant of Batect's own `#`-comment-header format), so the same Docker volumes get addressed either way; only a freshly-*generated* key differs from Batect's own (a full UUID rather than its shorter 6-char id — this doesn't affect compatibility, since nothing depends on matching that format, only on reusing whatever key is already on record). New `ratect-core/src/cache.rs` module. `tmpfs` mounts (Batect's third kind) remain unimplemented — still unscheduled. `--clean`/`--clean-cache` (clearing out existing caches) are a follow-up, not yet implemented. See [config reference](docs/config-reference.md#cache-volumes) and [CLI reference](docs/cli-reference.md).
+
+### Fixed
+
+- **A `volumes` entry with an options suffix (`local_path:container_path:options`) never got expression interpolation on its host path**, silently — the previous string-splitting resolver required *exactly* two `:`-separated parts to resolve anything at all, so any three-part spec (including the common `:ro`/`:rw` suffix, not just the ambiguous Windows-drive-letter case it was actually trying to guard against) was passed through completely unresolved. Introducing a real `VolumeMount` type (parsing `local`/`container`/`options` as separate fields, the same way `devices` already does) fixes this as a side effect: the host path is always interpolated and resolved now, regardless of whether `options` is present. Ratect has no Windows support to preserve the old ambiguity for.
+
 ## [0.17.0] - 2026-07-21
 
 ### Added

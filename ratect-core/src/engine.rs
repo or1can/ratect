@@ -534,6 +534,17 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     /// [`NullEventSink`] (silent) by default, a real output-mode logger via
     /// `with_event_sink`. See `crate::ui`.
     event_sink: Arc<dyn EventSink>,
+    /// Set via `with_cache_options` (always called by `main.rs`, unset only
+    /// in tests that don't exercise `cache` volumes): `--cache-type` and the
+    /// project's own root directory, needed to resolve a `cache` volume
+    /// mount into an actual Docker bind string — see
+    /// `resolve_volumes`/`crate::cache`.
+    cache_options: Option<crate::cache::CacheOptions>,
+    /// Memoizes `crate::cache::project_cache_key` for the life of this
+    /// `TaskEngine` — computed at most once per invocation, and only if a
+    /// `cache` volume is actually resolved (never eagerly), matching
+    /// Batect's own `CacheManager.projectCacheKey`'s `by lazy` behavior.
+    cache_key: OnceCell<String>,
 }
 
 impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
@@ -557,6 +568,8 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             cleanup_after_success: true,
             cleanup_after_failure: true,
             max_parallelism: None,
+            cache_options: None,
+            cache_key: OnceCell::new(),
         }
     }
 
@@ -655,6 +668,76 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     pub fn with_max_parallelism(mut self, max: usize) -> Self {
         self.max_parallelism = Some(Arc::new(tokio::sync::Semaphore::new(max)));
         self
+    }
+
+    /// Supplies `--cache-type` and the project's own root directory, needed
+    /// to resolve any `cache` volume mount a container declares (see
+    /// `resolve_volumes`). `main.rs` always calls this — it's a builder
+    /// method rather than a `TaskEngine::new` parameter only to match this
+    /// struct's existing convention for opt-in settings, not because it's
+    /// actually optional in practice.
+    pub fn with_cache_options(
+        mut self,
+        cache_type: crate::cache::CacheType,
+        project_directory: PathBuf,
+    ) -> Self {
+        self.cache_options = Some(crate::cache::CacheOptions {
+            cache_type,
+            project_directory,
+        });
+        self
+    }
+
+    /// Resolves a container's `volumes` into the literal Docker bind
+    /// strings `docker.rs`'s `run_container`/`start_background_container`
+    /// expect. `Local` mounts are already fully resolved (host path made
+    /// absolute, interpolated) by `Config::resolve_expressions` — nothing
+    /// left to do here but reassemble the `"local:container[:options]"`
+    /// string. `Cache` mounts are resolved here instead, since that needs
+    /// `--cache-type` (`with_cache_options`) and the project's own cache
+    /// key, neither available to `config.rs`. `cache_key` is only ever
+    /// computed the first time this actually encounters a `Cache` mount —
+    /// a config with none never touches the filesystem for this at all.
+    async fn resolve_volumes(
+        &self,
+        volumes: Option<&Vec<crate::config::VolumeMount>>,
+    ) -> Result<Option<Vec<String>>> {
+        let Some(volumes) = volumes else {
+            return Ok(None);
+        };
+
+        let mut resolved = Vec::with_capacity(volumes.len());
+        for volume in volumes {
+            match volume {
+                crate::config::VolumeMount::Local(local) => {
+                    resolved.push(match &local.options {
+                        Some(options) => {
+                            format!("{}:{}:{}", local.local, local.container, options)
+                        }
+                        None => format!("{}:{}", local.local, local.container),
+                    });
+                }
+                crate::config::VolumeMount::Cache(cache) => {
+                    let cache_options = self.cache_options.as_ref().expect(
+                        "a config with a 'cache' volume mount requires with_cache_options to \
+                         have been called first",
+                    );
+                    let cache_key = self
+                        .cache_key
+                        .get_or_try_init(|| async {
+                            crate::cache::project_cache_key(&cache_options.project_directory)
+                        })
+                        .await?;
+                    resolved.push(crate::cache::resolve_cache_mount(
+                        cache_options,
+                        cache_key,
+                        cache,
+                    )?);
+                }
+            }
+        }
+
+        Ok(Some(resolved))
     }
 
     #[cfg(test)]
@@ -1315,13 +1398,16 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 container: run.container.clone(),
                 command: command.map(str::to_string),
             });
+            let volumes = self
+                .resolve_volumes(container_config.volumes.as_ref())
+                .await?;
             self.docker
                 .run_container(
                     &run.container,
                     &image,
                     command,
                     additional_args,
-                    container_config.volumes.as_ref(),
+                    volumes.as_ref(),
                     environment.as_ref(),
                     &network_name,
                     interactive,
@@ -1543,12 +1629,15 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         // doc comment for why starting counts against the
                         // cap but waiting for healthy doesn't.
                         let _permit = self.acquire_parallelism_permit().await;
+                        let volumes = self
+                            .resolve_volumes(dependency_config.volumes.as_ref())
+                            .await?;
                         self.docker
                             .start_background_container(
                                 name,
                                 &image,
                                 dependency_config.command.as_deref(),
-                                dependency_config.volumes.as_ref(),
+                                volumes.as_ref(),
                                 environment.as_ref(),
                                 network,
                                 user_mapping.as_ref(),

@@ -2586,6 +2586,132 @@ tasks:
     cleanup();
 }
 
+/// Shared by `cache_volume_type_persists_data_across_invocations` and
+/// `cache_directory_type_persists_data_across_invocations` — everything
+/// about the two is identical except `extra_args` (empty for the default
+/// `--cache-type=volume`, `["--cache-type", "directory"]` for the other).
+///
+/// Writes its own temporary config (rather than a static checked-in
+/// fixture): a `cache` volume mount creates real, run-scoped state
+/// (`.batect/caches/`) next to the config file, which a checked-in fixture
+/// under `tests/fixtures/` would leak into the tracked repo on every test
+/// run. Runs the same task twice against the same config and proves
+/// persistence the way `--cache-type` actually promises it: the *second*
+/// run's marker file already contains what the *first* run wrote — the one
+/// thing a `local` bind mount to a fresh scratch directory, or a plain
+/// container filesystem, could never demonstrate either way.
+fn cache_mount_persists_across_invocations(cache_name: &str, extra_args: &[&str]) {
+    let test_id = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let project_dir = std::env::temp_dir().join(format!("ratect-cache-test-{test_id}"));
+    std::fs::create_dir_all(&project_dir).expect("failed to create scratch project directory");
+    let config_path = project_dir.join("batect.yml");
+
+    let config = format!(
+        r#"
+project_name: ratect-cache-test
+containers:
+  app:
+    image: alpine:3.18.2
+    volumes:
+      - type: cache
+        name: {cache_name}
+        container: /cache
+tasks:
+  append-marker:
+    run:
+      container: app
+      command: sh -c "echo run >> /cache/marker && cat /cache/marker"
+"#
+    );
+    std::fs::write(&config_path, &config).expect("failed to write temp config");
+
+    // Reads the project's own cache key (written by the first run against
+    // this config) to remove the exact Docker volume this test created —
+    // `--clean`/`--clean-cache` don't exist yet to do this instead (the
+    // other half of 0.18.0). A no-op for `--cache-type=directory`, where
+    // there's no such volume to remove — `docker volume rm` on a name that
+    // was never created just fails harmlessly, and its result is discarded.
+    let cleanup = || {
+        if let Ok(key) = std::fs::read_to_string(project_dir.join(".batect/caches/key")) {
+            if let Some(key) = key
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty() && !line.starts_with('#'))
+            {
+                let _ = Command::new("docker")
+                    .args(["volume", "rm", &format!("batect-cache-{key}-{cache_name}")])
+                    .output();
+            }
+        }
+        let _ = std::fs::remove_dir_all(&project_dir);
+    };
+
+    let run = || {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(&config_path)
+            .args(extra_args)
+            .arg("append-marker")
+            .output()
+            .expect("failed to run ratect");
+        if !output.status.success() {
+            cleanup();
+            panic!(
+                "stdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        task_output(&String::from_utf8_lossy(&output.stdout))
+    };
+
+    let first_run = run();
+    assert_eq!(
+        first_run, "run",
+        "the first run's marker should have exactly one line"
+    );
+
+    let second_run = run();
+    assert_eq!(
+        second_run, "run\nrun",
+        "the second run should still see the first run's marker line, proving the cache mount \
+         persisted across invocations"
+    );
+
+    cleanup();
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves the default `--cache-type=volume`: a `cache` mount resolves to a
+/// real Docker named volume that survives between separate `ratect`
+/// invocations.
+#[test]
+#[ignore]
+fn cache_volume_type_persists_data_across_invocations() {
+    cache_mount_persists_across_invocations("test-cache-volume", &[]);
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves `--cache-type=directory`: a `cache` mount resolves to a host
+/// directory under `.batect/caches/<name>/` that survives between separate
+/// `ratect` invocations.
+#[test]
+#[ignore]
+fn cache_directory_type_persists_data_across_invocations() {
+    cache_mount_persists_across_invocations("test-cache-directory", &["--cache-type", "directory"]);
+}
+
 /// Requires a running Docker daemon. Run explicitly with `cargo test -- --ignored`.
 ///
 /// Pre-creates a real Docker network via the `docker` CLI, runs a task with
