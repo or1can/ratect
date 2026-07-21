@@ -36,10 +36,18 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     `resolve_expressions` stays available too, unchanged, for a `Config` built without
     going through `load_from_file`). `run_as_current_user.home_directory` is
     interpolated but *not* resolved against a base path — it's a container-side path,
-    validated to start with `/` instead. `PortRange`/`PortMapping` and
-    `DeviceMapping` (`devices`) have hand-written `Deserialize` impls so an entry can
+    validated to start with `/` instead. `PortRange`/`PortMapping`,
+    `DeviceMapping` (`devices`), and `VolumeMount` (`volumes` — `Local`/`Cache`
+    variants, 0.18.0) all have hand-written `Deserialize` impls so an entry can
     be either Batect's string form (`"local:container[/protocol]"` /
-    `"local:container[:options]"`) or the expanded object form. `Capability`
+    `"local:container[:options]"` — `VolumeMount`'s string form is always
+    `Local`; there's no compact string form for `Cache`) or the expanded object
+    form. A `VolumeMount::Local`'s host path is resolved here (against
+    `container_base_paths`, same as `build_directory`); a `Cache`'s `name`/
+    `container` are plain strings, not `Expression`s, matching Batect — nothing
+    to resolve here at all, since `--cache-type` and the project's own cache
+    key (needed to actually resolve one) aren't known until `engine.rs`/
+    `cache.rs`. `Capability`
     (`capabilities_to_add`/`capabilities_to_drop`) and `ImagePullPolicy` are fixed
     enums validated at parse time — `Capability`'s list is a deliberate *superset* of
     Batect's own (unmaintained) one, not a strict port, see its doc comment.
@@ -59,6 +67,31 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     `ContainerRuntime::start_background_container` (a new `command` parameter,
     reusing `docker.rs`'s existing `build_cmd`/`tokenize_command_line`) the same
     way `run_container`'s already did.
+  - **`ratect-core/src/cache.rs`** (0.18.0): Resolves a `VolumeMount::Cache`
+    (`config.rs`) into an actual Docker bind-mount string — a named volume
+    (`CacheType::Volume`, the default) or a host directory
+    (`CacheType::Directory`, `--cache-type=directory`) — and implements
+    `--clean`/`--clean-cache` (`clean_volume_caches`/`clean_directory_caches`),
+    which remove them. Ported from Batect's own `CacheManager`/
+    `VolumeMountResolver`/`CacheType`/`CleanupCachesCommand`, kept
+    byte-for-byte compatible with Batect's own `.batect/caches/` location and
+    `batect-cache-<project-key>-<name>` volume-naming convention *on purpose*
+    — this is `ratect-compat`'s territory (see `ROADMAP.md`'s two-binaries
+    section), so a project migrating from real `batect` should find its
+    existing cache volumes/directories reused, not orphaned. The one
+    deliberate divergence: a freshly generated `project_cache_key` is a full
+    `uuid::Uuid::new_v4()`, not Batect's 6-char `a-z0-9` id — an existing
+    Batect-created key file is still read and reused byte-for-byte (tolerant
+    of its `#`-comment-header format), since nothing depends on matching the
+    *generation* format, only the file's path and read-compatible layout, and
+    Batect's own alphabet is meaningfully more collision-prone across many
+    projects on one machine. The actual removal *decision* (which
+    volumes/directories match this project's prefix, restricted to
+    `--clean-cache`'s allowlist) is split into plain synchronous functions
+    (`matching_cache_volumes`/`matching_cache_directories`), deliberately kept
+    separate from the async I/O around them, so they're unit-testable against
+    plain `Vec<String>`/tempdir fixtures without needing a fake
+    `ContainerRuntime`.
   - **`ratect-core/src/expressions.rs`**: Batect's expression syntax (`$VAR`,
     `${VAR:-default}`, `<name`/`<{name}` for config variables, including the built-in
     `batect.project_directory`). Host environment and resolved config variable values
@@ -84,6 +117,14 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     `enable_init_process`) — add new container-level fields there rather than as more
     flat parameters, converting from config types to plain values in `engine.rs`
     (`docker.rs` deliberately never depends on `config` types directly).
+    `ensure_host_volume_directories_exist` (the `run_as_current_user` host-dir
+    pre-creation step) only `mkdir -p`s a bind's *absolute* source segment —
+    added when 0.18.0's `cache` mounts landed, since `CacheType::Volume`
+    resolves to a bare (non-absolute) Docker volume name, which this would
+    otherwise have tried to create as a relative directory under the current
+    working directory. `list_volumes`/`remove_volume` (0.18.0, `--clean`/
+    `--clean-cache`) are thin wrappers over bollard's own volume API — see
+    `cache.rs` for the actual removal-decision logic built on top of them.
   - **`ratect-core/src/user.rs`**: Host user lookup (`current_user`, via the `nix`
     crate — Unix-only) and the pure `/etc/passwd`/`/etc/shadow`/`/etc/group` content
     generators `docker.rs` uses — ported from Batect's
@@ -108,6 +149,16 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     no `run` (0.14.0) — everything after can assume `run` is present. `customise`
     threads through `start_dependency`'s own recursion unconditionally, so it
     reaches its target regardless of depth in the dependency graph.
+    `resolve_volumes` (0.18.0) turns a container's `VolumeMount`s into the
+    literal bind strings `docker.rs` expects — a `Local` mount's already fully
+    resolved by `config.rs`, nothing left to do but reassemble the string; a
+    `Cache` mount goes through `cache::resolve_cache_mount`, memoizing the
+    project's own cache key in a `tokio::sync::OnceCell` field (computed at
+    most once per invocation, and only if a `cache` mount is actually
+    resolved — never eagerly). `with_cache_options` (`--cache-type` + the
+    project directory) is `main.rs`'s own builder call, always made in
+    practice despite being optional here, same convention as the other opt-in
+    settings above.
   - **`ratect-core/src/ui/`**: The user-facing output layer (0.16.0's output-modes
     work) — a port of Batect's `TaskEventSink`/`EventLogger` design: `engine.rs`
     posts typed `TaskEvent` milestones and `docker.rs` posts fine-grained
@@ -159,7 +210,7 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
 - **`anyhow`**: Simplified error handling with context.
 - **`tracing` / `tracing-subscriber`**: Structured, leveled logging. The subscriber is initialized in `main.rs`, filtered via `RUST_LOG` (defaults to `info`), and writes to stderr.
 - **`async-trait`**: Used for the `ContainerRuntime` trait in `ratect-core/src/docker.rs`, so it can have async methods and be implemented by both the real `DockerClient` and test fakes.
-- **`uuid`**: Generates collision-resistant per-task Docker network names (`ratect-<uuid>`) in `ratect-core/src/engine.rs`. Deliberately not `std::process::id()` — that's frequently `1` when `ratect` itself runs inside a container (e.g. CI), which would collide across concurrent runs. Built images are tagged `<project_name>-<container_name>` instead (human-readable, matching Batect's convention) — `resolve_image` avoids the same collision hazard for these not via a random name but by running the image *ID* Docker's build reports back, not the (non-unique) tag.
+- **`uuid`**: Generates collision-resistant per-task Docker network names (`ratect-<uuid>`) in `ratect-core/src/engine.rs`. Deliberately not `std::process::id()` — that's frequently `1` when `ratect` itself runs inside a container (e.g. CI), which would collide across concurrent runs. Built images are tagged `<project_name>-<container_name>` instead (human-readable, matching Batect's convention) — `resolve_image` avoids the same collision hazard for these not via a random name but by running the image *ID* Docker's build reports back, not the (non-unique) tag. Also generates a freshly-created project cache key (0.18.0, `ratect-core/src/cache.rs`'s `project_cache_key`) — a full UUID rather than Batect's own shorter 6-char id, deliberately: nothing depends on matching Batect's generation format for a *new* key (an existing Batect-created one is read back byte-for-byte instead), and Batect's own alphabet is meaningfully more collision-prone across many projects sharing one machine.
 - **`tar`**: Builds the in-memory build-context tarball `docker.rs`'s `build_context_tar` hands to `bollard`'s `build_image`.
 - **`dockerignore`** (local workspace crate, not external): `.dockerignore` pattern matching — see the Architecture section above.
 - **`path-clean`**: Lexically normalizes (`.`/`..`/trailing-slash) resolved paths in `ratect-core/src/config.rs` (`resolve_path`, and the built-in `batect.project_directory` config variable) — `PathBuf::join` alone doesn't do this, so without it a `base_path` like `""` or `"."` (both common — see `main.rs`'s `-f` handling) would leave a stray `.` or trailing slash in every path/expression derived from it. Already a `dockerignore` dependency; reused here rather than hand-rolling the same normalization twice.

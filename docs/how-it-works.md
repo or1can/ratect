@@ -29,15 +29,20 @@ aren't known at the first:
    map. In one pass:
    - Resolves [expressions](config-reference.md#expressions) (`$VAR`, `${VAR:-default}`,
      `<name`, `<{name}`, plus the built-in `batect.project_directory`) within every
-     `environment` value (container and task `run`) and every volume's host path.
-   - **Volume path resolution**: *after* interpolating a volume's host path, if the
-     result is relative, it's resolved to an absolute path relative to *that
+     `environment` value (container and task `run`) and every `local` volume mount's
+     host path (a `cache` mount's `name`/`container` are plain strings, matching
+     Batect — nothing to interpolate; see [Cache volumes](config-reference.md#cache-volumes)).
+   - **Volume path resolution**: *after* interpolating a `local` mount's host path, if
+     the result is relative, it's resolved to an absolute path relative to *that
      container's own origin file's* directory (via `container_base_paths` — the root
      config's directory when there's no `include` involved), not the current working
      directory — done in this order (interpolate, then resolve) because an expression
      can itself resolve to an absolute path, which mustn't be treated as a relative
      fragment. `batect.project_directory` itself always resolves to the root config's
-     directory regardless of which file a container came from.
+     directory regardless of which file a container came from. A `cache` mount's
+     Docker volume name/host directory is resolved later instead (`ratect-core/src/cache.rs`,
+     via `engine.rs`'s `resolve_volumes`), once `--cache-type` and the project's own
+     cache key are known — neither available at this stage.
 
    See the [configuration reference](config-reference.md#expressions) for the full
    expression syntax, precedence, and error rules.
@@ -201,8 +206,12 @@ client, and implements `ContainerRuntime`:
   Unix-only — a plain OS signal, unlike a structured terminal-event API, which would
   consume/interpret stdin bytes instead of passing them through raw). When
   `user_mapping` is `Some` (see
-  [User mapping](config-reference.md#user-mapping)), missing host-side volume
-  directories are created first, the container's `User` is set to the mapped
+  [User mapping](config-reference.md#user-mapping)), any missing host-side
+  directory among the container's bind mounts is created first (a `local`
+  mount's host path, or a `cache` mount's own directory under
+  `--cache-type=directory` — never a bare Docker volume name, which
+  `CacheType::Volume` resolves to instead and which `ensure_host_volume_directories_exist`
+  explicitly skips), the container's `User` is set to the mapped
   `uid:gid`, and — after creation, before starting — synthetic
   `/etc/passwd`/`/etc/shadow`/`/etc/group` entries and the declared home directory are
   uploaded into it (`docker.upload_to_container`, via the `build_user_mapping_tar`/
