@@ -66,7 +66,33 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     own `CMD` regardless. Closed once noticed, threading through
     `ContainerRuntime::start_background_container` (a new `command` parameter,
     reusing `docker.rs`'s existing `build_cmd`/`tokenize_command_line`) the same
-    way `run_container`'s already did.
+    way `run_container`'s already did. `forbid_telemetry`
+    (`Config`/`ConfigFile`) and `config_variables.<name>.description`
+    (`ConfigVariable`) are recognized but inert (0.19.0), the same "no
+    effect" treatment already given `--upgrade`/`--no-update-notification`/
+    `--no-wrapper-cache-cleanup` (0.17.0, `main.rs`) — parsed and, for
+    `forbid_telemetry`, carried onto the merged `Config` (root file only,
+    same precedent as `project_name`), but never read anywhere else.
+  - **`ratect-core/src/git_include.rs`**: Git includes (`type: git` entries
+    in `include`) — `GitIncludeCache::ensure_cached`, driven by
+    `config.rs`'s own include-resolution loop, clones a `(remote, ref)` pair
+    once into `~/.ratect/incl/<sha256 key>/` and reuses it forever (0.8.0);
+    a `<key>.toml` sidecar (`CacheInfo`) records `last_used` (a Unix
+    timestamp, not `atime`/`mtime` — unreliable across platforms/CI),
+    bumped on every `ensure_cached` call regardless of whether a clone
+    actually happened. `GitIncludeCache::cleanup_stale` (0.19.0) sweeps that
+    same cache: any entry whose `last_used` is more than 30 days old gets
+    both its working copy and its `.toml` sidecar removed, matching
+    Batect's own `GitRepositoryCacheCleanupTask` exactly except that it's a
+    `tokio::spawn`ed async task, not a literal OS thread (Batect's own JVM
+    daemon thread is the equivalent to port the *behavior* of — unconditional,
+    fire-and-forget, never awaited — not literally a `std::thread::spawn`).
+    Started unconditionally from `main.rs`'s "run a task" branch (not
+    `--list-tasks`), before the Docker connectivity check, mirroring where
+    Batect's own `BackgroundTaskManager` fires it. One stale entry failing
+    to delete (unreadable/unparsable sidecar, filesystem error) is logged
+    and skipped rather than aborting the whole sweep — same per-entry
+    try/catch Batect's own cleanup task has.
   - **`ratect-core/src/cache.rs`** (0.18.0): Resolves a `VolumeMount::Cache`
     (`config.rs`) into an actual Docker bind-mount string — a named volume
     (`CacheType::Volume`, the default) or a host directory
@@ -117,6 +143,17 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     `enable_init_process`) — add new container-level fields there rather than as more
     flat parameters, converting from config types to plain values in `engine.rs`
     (`docker.rs` deliberately never depends on `config` types directly).
+    `log_driver`/`log_options` (0.19.0) followed the same pattern onto
+    bollard's `HostConfig.log_config` (`build_log_config`, pure/unit-testable,
+    same shape as `build_devices`) — `None`/absent leaves the daemon's own
+    configured default alone rather than baking in a literal `"json-file"`
+    default the way Batect's own config model does. `build_image` also
+    gained a `force_pull: bool` parameter (0.19.0, both the classic and
+    BuildKit paths' `BuildImageOptionsBuilder::pull("true")`) — Batect's
+    second, distinct use of `image_pull_policy` on a `build_directory`
+    container (`engine.rs`'s `resolve_image` computes it from
+    `container_config.image_pull_policy == Always`, since `docker.rs` still
+    doesn't depend on `config` types directly).
     `ensure_host_volume_directories_exist` (the `run_as_current_user` host-dir
     pre-creation step) only `mkdir -p`s a bind's *absolute* source segment —
     added when 0.18.0's `cache` mounts landed, since `CacheType::Volume`
