@@ -1402,6 +1402,8 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 shm_size: container_config.shm_size,
                 devices: devices.as_ref(),
                 enable_init_process: container_config.enable_init_process,
+                log_driver: container_config.log_driver.as_deref(),
+                log_options: container_config.log_options.as_ref(),
             };
             self.event_sink.post(TaskEvent::RunningTaskContainer {
                 container: run.container.clone(),
@@ -1625,6 +1627,8 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         shm_size: dependency_config.shm_size,
                         devices: devices.as_ref(),
                         enable_init_process: dependency_config.enable_init_process,
+                        log_driver: dependency_config.log_driver.as_deref(),
+                        log_options: dependency_config.log_options.as_ref(),
                     };
 
                     self.event_sink.post(TaskEvent::DependencyStarting {
@@ -1841,6 +1845,8 @@ mod tests {
         shm_size: Option<i64>,
         devices: Option<Vec<(String, String, Option<String>)>>,
         enable_init_process: Option<bool>,
+        log_driver: Option<String>,
+        log_options: Option<HashMap<String, String>>,
     }
     type CapturedContainerOptions = Arc<Mutex<HashMap<String, ContainerOptionsValue>>>;
     /// `(working_directory, environment, (uid, gid))`, keyed by the exec'd
@@ -2247,6 +2253,26 @@ mod tests {
                 .get(name)
                 .and_then(|options| options.enable_init_process)
         }
+
+        /// The `container_options.log_driver` a prior `run_container`/
+        /// `start_background_container` call for `name` was given.
+        fn log_driver_for(&self, name: &str) -> Option<String> {
+            self.container_options
+                .lock()
+                .unwrap()
+                .get(name)
+                .and_then(|options| options.log_driver.clone())
+        }
+
+        /// The `container_options.log_options` a prior `run_container`/
+        /// `start_background_container` call for `name` was given.
+        fn log_options_for(&self, name: &str) -> Option<HashMap<String, String>> {
+            self.container_options
+                .lock()
+                .unwrap()
+                .get(name)
+                .and_then(|options| options.log_options.clone())
+        }
     }
 
     #[async_trait::async_trait]
@@ -2376,6 +2402,8 @@ mod tests {
                     shm_size: container_options.shm_size,
                     devices: container_options.devices.cloned(),
                     enable_init_process: container_options.enable_init_process,
+                    log_driver: container_options.log_driver.map(str::to_string),
+                    log_options: container_options.log_options.cloned(),
                 },
             );
             self.push(format!("sidecar-start:{alias}:{network}"));
@@ -2508,6 +2536,8 @@ mod tests {
                     shm_size: container_options.shm_size,
                     devices: container_options.devices.cloned(),
                     enable_init_process: container_options.enable_init_process,
+                    log_driver: container_options.log_driver.map(str::to_string),
+                    log_options: container_options.log_options.cloned(),
                 },
             );
             self.push(format!(
@@ -2551,6 +2581,8 @@ mod tests {
             shm_size: None,
             devices: None,
             enable_init_process: None,
+            log_driver: None,
+            log_options: None,
             health_check: None,
             setup_commands: None,
         }
@@ -2604,6 +2636,8 @@ mod tests {
                 shm_size: None,
                 devices: None,
                 enable_init_process: None,
+                log_driver: None,
+                log_options: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -2698,6 +2732,8 @@ mod tests {
                 shm_size: None,
                 devices: None,
                 enable_init_process: None,
+                log_driver: None,
+                log_options: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -3204,6 +3240,8 @@ mod tests {
             shm_size: None,
             devices: None,
             enable_init_process: None,
+            log_driver: None,
+            log_options: None,
             health_check: None,
             setup_commands: None,
         }
@@ -3545,6 +3583,8 @@ mod tests {
                 shm_size: None,
                 devices: None,
                 enable_init_process: None,
+                log_driver: None,
+                log_options: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -3601,6 +3641,8 @@ mod tests {
             shm_size: None,
             devices: None,
             enable_init_process: None,
+            log_driver: None,
+            log_options: None,
             health_check: None,
             setup_commands: None,
         }
@@ -4049,6 +4091,8 @@ mod tests {
                 shm_size: None,
                 devices: None,
                 enable_init_process: None,
+                log_driver: None,
+                log_options: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -5341,6 +5385,8 @@ mod tests {
                 shm_size: None,
                 devices: None,
                 enable_init_process: None,
+                log_driver: None,
+                log_options: None,
                 health_check: None,
                 setup_commands: None,
             },
@@ -5895,6 +5941,41 @@ mod tests {
         engine.run_task("test", &[]).await.unwrap();
 
         assert_eq!(docker.enable_init_process_for("build-env"), Some(true));
+    }
+
+    #[tokio::test]
+    async fn container_log_driver_and_log_options_reach_the_container() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.log_driver = Some("json-file".to_string());
+        container_config.log_options =
+            Some(HashMap::from([("max-size".to_string(), "10m".to_string())]));
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.log_driver_for("build-env"),
+            Some("json-file".to_string())
+        );
+        assert_eq!(
+            docker.log_options_for("build-env"),
+            Some(HashMap::from([("max-size".to_string(), "10m".to_string())]))
+        );
     }
 
     #[tokio::test]
@@ -7058,6 +7139,37 @@ mod tests {
         engine.run_task("start", &[]).await.unwrap();
 
         assert_eq!(docker.enable_init_process_for("database"), Some(true));
+    }
+
+    #[tokio::test]
+    async fn dependency_container_log_driver_reaches_the_sidecar() {
+        let mut database = container("postgres:16", None);
+        database.log_driver = Some("syslog".to_string());
+        let mut containers = HashMap::new();
+        containers.insert("database".to_string(), database);
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.log_driver_for("database"),
+            Some("syslog".to_string())
+        );
     }
 
     /// Records every posted [`TaskEvent`] in order, so tests can assert on

@@ -233,6 +233,23 @@ fn build_devices(
     )
 }
 
+/// Builds Docker's `HostConfig.log_config` from `log_driver`/`log_options` —
+/// pure, unit-testable without a daemon. `None` when `log_driver` itself is
+/// `None` (Docker's own API has no meaningful `log_options`-without-a-driver
+/// shape — a `None` driver here still leaves the daemon's own configured
+/// default alone, matching this module's `HostConfig { ..Default::default()
+/// }` convention for every other unset field).
+fn build_log_config(
+    log_driver: Option<&str>,
+    log_options: Option<&HashMap<String, String>>,
+) -> Option<bollard::models::HostConfigLogConfig> {
+    let log_driver = log_driver?;
+    Some(bollard::models::HostConfigLogConfig {
+        typ: Some(log_driver.to_string()),
+        config: log_options.cloned(),
+    })
+}
+
 /// Per-container network-facing options shared by `run_container` and
 /// `start_background_container` — bundled together (rather than three more
 /// flat parameters) since both methods were already at
@@ -294,6 +311,13 @@ pub struct ContainerOptions<'a> {
     /// actual command — Docker's `--init`. `None`/`Some(false)` both
     /// behave like Docker's own unset default.
     pub enable_init_process: Option<bool>,
+    /// Docker's logging driver (`--log-driver`), e.g. `"json-file"`,
+    /// `"syslog"`, `"none"`. `None` leaves the daemon's own configured
+    /// default alone.
+    pub log_driver: Option<&'a str>,
+    /// Driver-specific options (`--log-opt`, repeatable) for `log_driver` —
+    /// meaningless without it, same as Docker's own CLI.
+    pub log_options: Option<&'a HashMap<String, String>>,
 }
 
 /// A container's `health_check` override, applied at container creation on
@@ -2325,6 +2349,10 @@ impl ContainerRuntime for DockerClient {
             shm_size: container_options.shm_size,
             devices: build_devices(container_options.devices),
             init: container_options.enable_init_process,
+            log_config: build_log_config(
+                container_options.log_driver,
+                container_options.log_options,
+            ),
             ..Default::default()
         };
 
@@ -2625,6 +2653,10 @@ impl ContainerRuntime for DockerClient {
             shm_size: container_options.shm_size,
             devices: build_devices(container_options.devices),
             init: container_options.enable_init_process,
+            log_config: build_log_config(
+                container_options.log_driver,
+                container_options.log_options,
+            ),
             ..Default::default()
         };
 
@@ -2925,6 +2957,23 @@ mod tests {
     #[test]
     fn build_devices_is_none_when_devices_is_absent() {
         assert_eq!(build_devices(None), None);
+    }
+
+    #[test]
+    fn build_log_config_carries_the_driver_and_options() {
+        let options = HashMap::from([("max-size".to_string(), "10m".to_string())]);
+
+        let log_config = build_log_config(Some("json-file"), Some(&options)).unwrap();
+
+        assert_eq!(log_config.typ.as_deref(), Some("json-file"));
+        assert_eq!(log_config.config, Some(options));
+    }
+
+    #[test]
+    fn build_log_config_is_none_when_log_driver_is_absent_even_with_options() {
+        let options = HashMap::from([("max-size".to_string(), "10m".to_string())]);
+
+        assert_eq!(build_log_config(None, Some(&options)), None);
     }
 
     #[test]

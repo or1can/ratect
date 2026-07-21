@@ -202,6 +202,19 @@ pub struct Container {
     /// Batect's own default. Container level only, matching Batect (no
     /// task-level `run` override in either).
     pub enable_init_process: Option<bool>,
+    /// Docker's logging driver (`--log-driver`), e.g. `"json-file"`,
+    /// `"syslog"`, `"none"`. `None` leaves Docker's own daemon-configured
+    /// default alone, rather than baking in a literal default here — unlike
+    /// Batect, which defaults this to `"json-file"` in its own config model
+    /// (immaterial in practice: that's also Docker's own out-of-the-box
+    /// default when nothing else is configured). Container level only,
+    /// matching Batect (no task-level `run` override in either).
+    pub log_driver: Option<String>,
+    /// Driver-specific options (Docker's `--log-opt`, repeatable) for
+    /// `log_driver` — meaningless without it, same as Docker's own CLI.
+    /// Container level only, matching Batect (no task-level `run` override
+    /// in either).
+    pub log_options: Option<HashMap<String, String>>,
 }
 
 /// One entry in a container's `devices` list — a host device path made
@@ -3452,6 +3465,51 @@ tasks:
     }
 
     #[test]
+    fn parses_log_driver_and_log_options() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    log_driver: json-file
+    log_options:
+      max-size: 10m
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.log_driver.as_deref(), Some("json-file"));
+        assert_eq!(container.log_options.as_ref().unwrap()["max-size"], "10m");
+    }
+
+    #[test]
+    fn log_driver_and_log_options_default_to_none() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(container.log_driver, None);
+        assert_eq!(container.log_options, None);
+    }
+
+    #[test]
     fn parses_image_pull_policy() {
         let config = parse(
             r#"
@@ -4111,6 +4169,8 @@ tasks:
             shm_size: None,
             devices: None,
             enable_init_process: None,
+            log_driver: None,
+            log_options: None,
         }
     }
 
@@ -4421,6 +4481,8 @@ tasks:
             shm_size: None,
             devices: None,
             enable_init_process: None,
+            log_driver: None,
+            log_options: None,
         }
     }
 
@@ -6574,6 +6636,8 @@ forbid_telemetry: true
             shm_size: None,
             devices: None,
             enable_init_process: None,
+            log_driver: None,
+            log_options: None,
         }
     }
 

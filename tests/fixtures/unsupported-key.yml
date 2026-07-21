@@ -1,11 +1,11 @@
-# Exercises rejection of unsupported config keys: `log_driver` is a real
-# Batect container field, but not one Ratect implements, so it must fail
-# config loading rather than silently being ignored.
+# Exercises rejection of unsupported config keys: `not_a_real_field` isn't a
+# Batect/Ratect container field at all, so it must fail config loading
+# rather than silently being ignored.
 project_name: ratect-unsupported-key-test
 containers:
   build-env:
     image: alpine:3.18.2
-    log_driver: json-file
+    not_a_real_field: json-file
 tasks:
   test-task:
     run:

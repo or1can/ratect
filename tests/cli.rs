@@ -328,7 +328,7 @@ fn unsupported_config_key_reports_error() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("unknown field") && stderr.contains("log_driver"),
+        stderr.contains("unknown field") && stderr.contains("not_a_real_field"),
         "stderr:\n{}",
         stderr
     );
