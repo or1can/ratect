@@ -1327,7 +1327,13 @@ fn select_builder_version(
 /// doing the TLS handshake and any configured client-certificate auth.
 /// `tls` and `tls_verify` are both accepted here (for command-line
 /// compatibility) but behave identically: connecting always fully
-/// verifies the daemon's certificate.
+/// verifies the daemon's certificate. This matches `rustls` itself (the
+/// library this is built on) rather than fighting it: `rustls` has no
+/// boolean toggle for this either — disabling verification means
+/// implementing its own `ServerCertVerifier` trait from scratch, a
+/// deliberate hurdle against careless misuse, not a config flag. See
+/// [CLI reference](../../docs/cli-reference.md#tls-with-a-private-certificate-authority)
+/// for the supported (verified) alternative.
 #[derive(Debug, Default, Clone)]
 pub struct DockerConnectionOptions {
     pub host: Option<String>,

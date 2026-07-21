@@ -87,6 +87,73 @@ console (stdout a real terminal, `TERM` set and not `dumb`, terminal size
 queryable, no `--no-color`); `simple` otherwise. `quiet` and `all` are never
 auto-selected.
 
+## TLS with a private certificate authority
+
+`--docker-tls`/`--docker-tls-verify` always fully verify the Docker daemon's
+certificate — there is no flag or environment variable that skips verification, unlike
+Batect's own bare `--docker-tls` (which sets Go's `tls.Config.InsecureSkipVerify`,
+disabling chain-of-trust, expiry, *and* hostname checks all at once, not just the
+hostname check). This isn't just inherited from a missing feature: `rustls`, the
+library Ratect's TLS support is built on, takes the same position deliberately —
+there's no boolean toggle for skipping verification in `rustls` either, only a
+`dangerous()` accessor that requires implementing the `ServerCertVerifier` trait from
+scratch to bypass it. Ratect doesn't reach for that. If you've historically reached
+for `--docker-tls` (skip-verify) because your daemon's certificate is self-signed —
+including for local development or CI — the fix isn't to skip verification, it's to
+make the certificate verifiable: run your own certificate authority, and trust *that*,
+rather than trusting nothing.
+
+The daemon side of this (configuring `dockerd` to require TLS, generating its
+server certificate) is standard Docker documentation, not Ratect-specific — see
+[Protect the Docker daemon socket](https://docs.docker.com/engine/security/protect-access/).
+What follows is the client side: a self-contained, worked example of generating a
+private root CA, signing a server certificate for the daemon with it, and pointing
+Ratect at the result.
+
+1. **Create a root CA.** This is the one certificate you'll trust from now on — keep
+   `ca-key.pem` private; it's the only thing standing between "verified" and "not".
+
+   ```bash
+   openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
+     -keyout ca-key.pem -out ca.pem -subj "/CN=my-docker-ca"
+   ```
+
+2. **Generate and sign the daemon's own certificate**, naming every hostname/IP
+   clients will actually connect through as a Subject Alternative Name (SAN) —
+   verification checks this, not the certificate's `CN`:
+
+   ```bash
+   openssl req -newkey rsa:4096 -sha256 -nodes \
+     -keyout server-key.pem -out server-req.pem -subj "/CN=docker-daemon"
+   openssl x509 -req -in server-req.pem -CA ca.pem -CAkey ca-key.pem -CAcreateserial \
+     -out server-cert.pem -days 3650 -sha256 \
+     -extfile <(printf "subjectAltName=DNS:docker-daemon.example.com,IP:203.0.113.10")
+   ```
+
+3. **Configure `dockerd`** to require TLS with this certificate (`/etc/docker/daemon.json`
+   or the equivalent `dockerd` flags — see the Docker documentation linked above),
+   using `ca.pem`/`server-cert.pem`/`server-key.pem` from steps 1–2.
+
+4. **Point Ratect at the CA** (client certificate/key are only needed if the daemon
+   itself also requires client auth — generate a second cert signed by the same CA
+   for that, following step 2's pattern):
+
+   ```bash
+   ratect --docker-host tcp://docker-daemon.example.com:2376 \
+     --docker-tls-verify \
+     --docker-tls-ca-cert ./ca.pem \
+     test
+   ```
+
+   Or set `--docker-cert-path` to a directory containing `ca.pem` (and
+   `cert.pem`/`key.pem`, if the daemon requires client auth) instead of naming each
+   file individually — see [Options](#options).
+
+If verification fails, the error names the problem (expired, wrong host, untrusted
+issuer) rather than silently connecting anyway — that's the entire point of not
+supporting skip-verify. Regenerate whichever certificate is actually at fault, rather
+than reaching for a flag Ratect doesn't have.
+
 ## Positional arguments
 
 | Argument | Description |
