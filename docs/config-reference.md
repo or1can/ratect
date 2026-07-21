@@ -41,6 +41,7 @@ config_variables:
 | `tasks` | map of name → [Task](#task) | yes | Task definitions, keyed by name. Run by name via `ratect <task-name>`. |
 | `config_variables` | map of name → [ConfigVariable](#configvariable) | no | Declares the config variables usable via `<name`/`<{name}` [expressions](#expressions). A name must be declared here before it can be referenced — see [Expressions](#expressions). |
 | `include` | list of string or [Include](#includes) | no | Splits configuration across multiple files — see [Includes](#includes) below. |
+| `forbid_telemetry` | boolean | no | Recognized but inert — Ratect collects no telemetry, so there's nothing to forbid. |
 
 ## Includes
 
@@ -790,6 +791,7 @@ config_variables:
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `default` | string | no | The value used when nothing else provides one — see [Expressions](#expressions) for the full precedence order (CLI `--config-var` > `--config-vars-file` > this `default`). Referencing a declared variable that has no `default` and no override from either CLI source is an error. |
+| `description` | string | no | Recognized but inert — Batect surfaces this in its own generated docs/help output; Ratect has no such output to show one in. |
 
 ## Expressions
 

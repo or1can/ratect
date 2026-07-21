@@ -2626,6 +2626,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         }
     }
 
@@ -2635,6 +2636,7 @@ mod tests {
             containers: HashMap::new(),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         }
     }
 
@@ -2717,6 +2719,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         }
     }
 
@@ -2789,6 +2792,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         }
     }
 
@@ -2827,6 +2831,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -2857,6 +2862,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -2888,6 +2894,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -2922,6 +2929,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3071,6 +3079,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3115,6 +3124,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3187,6 +3197,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3223,6 +3234,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3258,6 +3270,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3303,6 +3316,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3346,6 +3360,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3399,6 +3414,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3426,6 +3442,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3453,6 +3470,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3512,6 +3530,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3575,6 +3594,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3623,6 +3643,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3652,6 +3673,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3680,6 +3702,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3720,6 +3743,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3759,6 +3783,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3808,6 +3833,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3840,6 +3866,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3875,6 +3902,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3953,6 +3981,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -3981,6 +4010,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -4024,6 +4054,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -4059,6 +4090,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default().without_existing_network();
@@ -4093,6 +4125,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let sink = RecordingEventSink::default();
@@ -4131,6 +4164,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -4194,6 +4228,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         }
     }
 
@@ -4433,6 +4468,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -4472,6 +4508,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default().failing_run();
@@ -4622,6 +4659,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -4677,6 +4715,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let delay = std::time::Duration::from_millis(100);
@@ -4719,6 +4758,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default()
@@ -4763,6 +4803,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         }
     }
 
@@ -4848,6 +4889,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         }
     }
 
@@ -4953,6 +4995,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5003,6 +5046,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5046,6 +5090,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5090,6 +5135,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5155,6 +5201,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5230,6 +5277,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5263,6 +5311,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5390,6 +5439,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5428,6 +5478,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5454,6 +5505,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5484,6 +5536,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5533,6 +5586,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5564,6 +5618,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5595,6 +5650,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5629,6 +5685,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5661,6 +5718,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5686,6 +5744,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5715,6 +5774,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5747,6 +5807,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5769,6 +5830,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5792,6 +5854,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
@@ -5815,6 +5878,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
@@ -5836,6 +5900,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5874,6 +5939,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default().with_local_image("ubuntu:22.04");
@@ -5906,6 +5972,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5938,6 +6005,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5969,6 +6037,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -5998,6 +6067,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6030,6 +6100,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6066,6 +6137,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6100,6 +6172,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6133,6 +6206,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6157,6 +6231,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6193,6 +6268,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6221,6 +6297,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6254,6 +6331,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6290,6 +6368,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6335,6 +6414,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6369,6 +6449,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6392,6 +6473,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6421,6 +6503,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6453,6 +6536,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6499,6 +6583,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6540,6 +6625,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6591,6 +6677,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6622,6 +6709,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6652,6 +6740,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6687,6 +6776,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6720,6 +6810,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6753,6 +6844,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6783,6 +6875,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6810,6 +6903,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6841,6 +6935,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6875,6 +6970,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let docker = FakeContainerRuntime::default();
@@ -6925,6 +7021,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let sink = RecordingEventSink::default();
@@ -7039,6 +7136,7 @@ mod tests {
                 containers,
                 tasks,
                 config_variables: None,
+                forbid_telemetry: None,
             }
         };
 
@@ -7089,6 +7187,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let sink = RecordingEventSink::default();
@@ -7201,6 +7300,7 @@ mod tests {
             containers,
             tasks,
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let sink = InterleavedRecordingSink::default();

@@ -32,6 +32,12 @@ pub struct Config {
     pub containers: HashMap<String, Container>,
     pub tasks: HashMap<String, Task>,
     pub config_variables: Option<HashMap<String, ConfigVariable>>,
+    /// Recognized but inert — Ratect collects no telemetry, so there's
+    /// nothing to forbid. Accepted purely so a real Batect config using it
+    /// doesn't fail to load under [`Config`]'s `deny_unknown_fields`, the
+    /// same "no effect" treatment already given `--upgrade`/
+    /// `--no-update-notification`/`--no-wrapper-cache-cleanup`.
+    pub forbid_telemetry: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1414,6 +1420,11 @@ pub struct TaskRun {
 #[serde(deny_unknown_fields)]
 pub struct ConfigVariable {
     pub default: Option<String>,
+    /// Recognized but inert — Batect surfaces this in its own generated
+    /// docs/help output; Ratect has no such output to show one in, so it's
+    /// accepted purely so a real Batect config using it doesn't fail to
+    /// load under `deny_unknown_fields`.
+    pub description: Option<String>,
 }
 
 /// The `path` a `type: git` include defaults to when omitted, matching
@@ -1629,6 +1640,8 @@ struct ConfigFile {
     config_variables: Option<HashMap<String, ConfigVariable>>,
     #[serde(default)]
     include: Vec<IncludeEntry>,
+    #[serde(default)]
+    forbid_telemetry: Option<bool>,
 }
 
 /// Parses one config file (the root, or an included one) only — no include
@@ -1838,6 +1851,7 @@ impl Config {
         let project_name = loaded[0].2.project_name.clone().ok_or_else(|| {
             anyhow::anyhow!("Configuration file is missing the required 'project_name' field")
         })?;
+        let forbid_telemetry = loaded[0].2.forbid_telemetry;
 
         let mut containers = HashMap::new();
         let mut container_base_paths = HashMap::new();
@@ -1898,6 +1912,7 @@ impl Config {
                 } else {
                     Some(config_variables)
                 },
+                forbid_telemetry,
             },
             container_base_paths,
             container_git_boundaries,
@@ -3774,6 +3789,7 @@ tasks:
             containers: HashMap::from([("build-env".to_string(), container)]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         config
@@ -3803,6 +3819,7 @@ tasks:
             containers: HashMap::from([("build-env".to_string(), container)]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         config
@@ -3835,8 +3852,10 @@ tasks:
                 "subdir".to_string(),
                 ConfigVariable {
                     default: Some("code".to_string()),
+                    description: None,
                 },
             )])),
+            forbid_telemetry: None,
         };
 
         config
@@ -3873,8 +3892,10 @@ tasks:
                 "project_root".to_string(),
                 ConfigVariable {
                     default: Some("/abs/root".to_string()),
+                    description: None,
                 },
             )])),
+            forbid_telemetry: None,
         };
 
         config
@@ -3904,6 +3925,7 @@ tasks:
             containers: HashMap::from([("build-env".to_string(), container)]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         config
@@ -4100,6 +4122,7 @@ tasks:
             )]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         config
@@ -4129,6 +4152,7 @@ tasks:
             )]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         config
@@ -4158,6 +4182,7 @@ tasks:
             containers: HashMap::from([("build-env".to_string(), container)]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         config
@@ -4190,6 +4215,7 @@ tasks:
             containers: HashMap::from([("build-env".to_string(), container)]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         config
@@ -4229,6 +4255,7 @@ tasks:
             )]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         config
@@ -4254,6 +4281,7 @@ tasks:
             )]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         config
@@ -4285,6 +4313,7 @@ tasks:
             )]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let err = config
@@ -4312,6 +4341,7 @@ tasks:
             )]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let err = config
@@ -4339,6 +4369,7 @@ tasks:
             )]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let err = config
@@ -4397,6 +4428,7 @@ tasks:
             containers: HashMap::from([("build-env".to_string(), container)]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         }
     }
 
@@ -5236,7 +5268,7 @@ project_name: demo
 containers:
   build-env:
     image: alpine:3.18
-    log_driver: json-file
+    not_a_real_field: json-file
 tasks: {}
 "#,
         )
@@ -6476,6 +6508,41 @@ config_variables:
         assert_eq!(vars["no_default"].default, None);
     }
 
+    #[test]
+    fn config_variables_accept_an_inert_description_field() {
+        let config = parse(
+            r#"
+project_name: demo
+containers: {}
+tasks: {}
+config_variables:
+  env_name:
+    default: dev
+    description: "which environment to target"
+"#,
+        );
+
+        let vars = config.config_variables.unwrap();
+        assert_eq!(
+            vars["env_name"].description.as_deref(),
+            Some("which environment to target")
+        );
+    }
+
+    #[test]
+    fn forbid_telemetry_is_accepted_but_inert() {
+        let config = parse(
+            r#"
+project_name: demo
+containers: {}
+tasks: {}
+forbid_telemetry: true
+"#,
+        );
+
+        assert_eq!(config.forbid_telemetry, Some(true));
+    }
+
     fn container_with_environment(environment: HashMap<String, String>) -> Container {
         Container {
             build_args: None,
@@ -6520,6 +6587,7 @@ config_variables:
             )]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         config
@@ -6549,6 +6617,7 @@ config_variables:
             )]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         config
@@ -6575,6 +6644,7 @@ config_variables:
             )]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let result = config.resolve_expressions_with(
@@ -6595,6 +6665,7 @@ config_variables:
             "env_name".to_string(),
             ConfigVariable {
                 default: Some("dev".to_string()),
+                description: None,
             },
         );
         let mut config = Config {
@@ -6605,6 +6676,7 @@ config_variables:
             )]),
             tasks: HashMap::new(),
             config_variables: Some(config_variables),
+            forbid_telemetry: None,
         };
 
         let overrides = HashMap::from([("env_name".to_string(), "prod".to_string())]);
@@ -6627,6 +6699,7 @@ config_variables:
             "env_name".to_string(),
             ConfigVariable {
                 default: Some("dev".to_string()),
+                description: None,
             },
         );
         let mut config = Config {
@@ -6637,6 +6710,7 @@ config_variables:
             )]),
             tasks: HashMap::new(),
             config_variables: Some(config_variables),
+            forbid_telemetry: None,
         };
 
         config
@@ -6663,6 +6737,7 @@ config_variables:
             )]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let result = config.resolve_expressions_with(
@@ -6679,7 +6754,13 @@ config_variables:
         let mut environment = HashMap::new();
         environment.insert("FOO".to_string(), "<env_name".to_string());
         let mut config_variables = HashMap::new();
-        config_variables.insert("env_name".to_string(), ConfigVariable { default: None });
+        config_variables.insert(
+            "env_name".to_string(),
+            ConfigVariable {
+                default: None,
+                description: None,
+            },
+        );
         let mut config = Config {
             project_name: "demo".to_string(),
             containers: HashMap::from([(
@@ -6688,6 +6769,7 @@ config_variables:
             )]),
             tasks: HashMap::new(),
             config_variables: Some(config_variables),
+            forbid_telemetry: None,
         };
 
         let result = config.resolve_expressions_with(
@@ -6706,6 +6788,7 @@ config_variables:
             containers: HashMap::new(),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let overrides = HashMap::from([("unknown".to_string(), "value".to_string())]);
@@ -6730,6 +6813,7 @@ config_variables:
             )]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         config
@@ -6756,6 +6840,7 @@ config_variables:
             )]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         config
@@ -6783,6 +6868,7 @@ config_variables:
             containers: HashMap::from([("build-env".to_string(), container)]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         config
@@ -6812,6 +6898,7 @@ config_variables:
             )]),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         config
@@ -6832,6 +6919,7 @@ config_variables:
             "batect.project_directory".to_string(),
             ConfigVariable {
                 default: Some("/somewhere".to_string()),
+                description: None,
             },
         );
         let mut config = Config {
@@ -6839,6 +6927,7 @@ config_variables:
             containers: HashMap::new(),
             tasks: HashMap::new(),
             config_variables: Some(config_variables),
+            forbid_telemetry: None,
         };
 
         let result = config.resolve_expressions_with(
@@ -6857,6 +6946,7 @@ config_variables:
             containers: HashMap::new(),
             tasks: HashMap::new(),
             config_variables: None,
+            forbid_telemetry: None,
         };
 
         let overrides = HashMap::from([(
