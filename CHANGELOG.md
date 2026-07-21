@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-07-21
+
 ### Added
 
 - **`cache` volume mounts and `--cache-type`**: `volumes` now supports Batect's `cache` mount type — a named volume that persists between separate `ratect` invocations, unlike a `local` bind mount, which is always tied to a specific host path. `--cache-type` selects where a `cache` mount's contents actually live: `volume` (the default) resolves it to a Docker named volume, `batect-cache-<project-key>-<name>` — Batect's own exact naming convention, deliberately, so a project already run under real Batect has its existing cache volumes recognized and reused rather than starting cold; `directory` resolves it to a host directory under `<project_directory>/.batect/caches/<name>/`, same reasoning. The per-project key is a value unique to this project, persisted at `<project_directory>/.batect/caches/key` (generated lazily — only the first time a `cache` mount is actually resolved) — an existing Batect-created key file is read and reused exactly as-is (tolerant of Batect's own `#`-comment-header format), so the same Docker volumes get addressed either way; only a freshly-*generated* key differs from Batect's own (a full UUID rather than its shorter 6-char id — this doesn't affect compatibility, since nothing depends on matching that format, only on reusing whatever key is already on record). New `ratect-core/src/cache.rs` module. `tmpfs` mounts (Batect's third kind) remain unimplemented — still unscheduled. See [config reference](docs/config-reference.md#cache-volumes) and [CLI reference](docs/cli-reference.md).
