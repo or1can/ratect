@@ -967,6 +967,14 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                             .as_deref()
                             .unwrap_or("Dockerfile");
                         let buildkit = buildkit_options(container_config);
+                        // Batect's second use of `image_pull_policy`: on a
+                        // `build_directory` container, `always` force-pulls
+                        // the build's own base image before building
+                        // (`docker build --pull`), distinct from its other
+                        // use gating whether an `image` container's own
+                        // image gets pulled (`resolve_pulled_image` above).
+                        let force_pull = container_config.image_pull_policy.unwrap_or_default()
+                            == crate::config::ImagePullPolicy::Always;
                         self.event_sink.post(TaskEvent::ImageBuildStarting {
                             container: container_name.to_string(),
                         });
@@ -980,6 +988,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                                 container_config.build_target.as_deref(),
                                 buildkit.as_ref(),
                                 &tag,
+                                force_pull,
                             )
                             .await?;
                         self.event_sink.post(TaskEvent::ImageBuildCompleted {
@@ -1789,6 +1798,9 @@ mod tests {
     /// (flattened, same convention as `environment_for`).
     type CapturedBuildKitOptions =
         Arc<Mutex<HashMap<String, Option<crate::docker::BuildKitOptions>>>>;
+    /// The `force_pull` a prior `build_image` call for a given tag was
+    /// given (see `force_pull_for`).
+    type CapturedForcePull = Arc<Mutex<HashMap<String, bool>>>;
     type CapturedImages = Arc<Mutex<HashMap<String, String>>>;
     /// The `command` a prior `start_background_container` call for a given
     /// container name was given (flattened, same convention as
@@ -1856,6 +1868,9 @@ mod tests {
         // The `buildkit` a prior `build_image` call for a given tag was
         // given (see `buildkit_options_for`).
         buildkit_options: CapturedBuildKitOptions,
+        // The `force_pull` a prior `build_image` call for a given tag was
+        // given (see `force_pull_for`).
+        force_pull: CapturedForcePull,
         // The `image` a `run_container`/`start_background_container` call
         // for a given container name actually used — lets tests prove a
         // built tag (not just a pulled image) reached the run, without
@@ -1923,6 +1938,7 @@ mod tests {
                 build_args: Default::default(),
                 build_options: Default::default(),
                 buildkit_options: Default::default(),
+                force_pull: Default::default(),
                 images: Default::default(),
                 commands: Default::default(),
                 interactive: Default::default(),
@@ -2076,6 +2092,11 @@ mod tests {
                 .get(tag)
                 .cloned()
                 .flatten()
+        }
+
+        /// The `force_pull` a prior `build_image` call for `tag` was given.
+        fn force_pull_for(&self, tag: &str) -> Option<bool> {
+            self.force_pull.lock().unwrap().get(tag).copied()
         }
 
         /// The `image` a prior `run_container`/`start_background_container`
@@ -2251,6 +2272,7 @@ mod tests {
             target: Option<&str>,
             buildkit: Option<&crate::docker::BuildKitOptions>,
             tag: &str,
+            force_pull: bool,
         ) -> Result<String> {
             self.build_args
                 .lock()
@@ -2264,6 +2286,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(tag.to_string(), buildkit.cloned());
+            self.force_pull
+                .lock()
+                .unwrap()
+                .insert(tag.to_string(), force_pull);
             self.push(format!("build:{tag}:{}", build_directory.display()));
             // Real Docker returns an image ID distinct from the tag; the fake
             // has no such concept, so it just echoes the tag back — tests
@@ -3623,6 +3649,59 @@ mod tests {
             Some(tag),
             "the run should use the image that was just built, not a pulled/literal one"
         );
+    }
+
+    #[tokio::test]
+    async fn build_directory_container_does_not_force_pull_by_default() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "build-env".to_string(),
+            container_with_build_directory("./docker", None),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("build".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("build", &[]).await.unwrap();
+
+        assert_eq!(docker.force_pull_for("demo-build-env"), Some(false));
+    }
+
+    #[tokio::test]
+    async fn build_directory_container_with_always_policy_force_pulls_the_base_image() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "build-env".to_string(),
+            Container {
+                image_pull_policy: Some(crate::config::ImagePullPolicy::Always),
+                ..container_with_build_directory("./docker", None)
+            },
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("build".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("build", &[]).await.unwrap();
+
+        assert_eq!(docker.force_pull_for("demo-build-env"), Some(true));
     }
 
     #[tokio::test]

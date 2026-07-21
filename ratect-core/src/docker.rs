@@ -486,6 +486,7 @@ async fn build_image_via_buildkit(
     target: Option<&str>,
     buildkit: Option<&BuildKitOptions>,
     tag: &str,
+    force_pull: bool,
 ) -> Result<String> {
     let build_directory = build_directory.to_path_buf();
     let dockerfile_owned = dockerfile.to_string();
@@ -506,6 +507,9 @@ async fn build_image_via_buildkit(
     }
     if let Some(target) = target {
         options_builder = options_builder.target(target);
+    }
+    if force_pull {
+        options_builder = options_builder.pull("true");
     }
 
     let mut providers = bollard::grpc::build::ImageBuildSessionProviders::default();
@@ -1024,6 +1028,14 @@ pub trait ContainerRuntime {
     /// guaranteed unique (see `TaskEngine::resolve_image`), so callers must
     /// use the returned ID, not `tag`, to reliably reference the image this
     /// call just built.
+    ///
+    /// `force_pull`, when `true`, forces a fresh pull of the build's own
+    /// base image (Docker's `docker build --pull`) before building, even if
+    /// an image with that name/tag already exists locally — Batect's own
+    /// second use of `image_pull_policy: always` on a `build_directory`
+    /// container (distinct from its already-supported use gating whether an
+    /// `image` container's own image gets pulled).
+    #[allow(clippy::too_many_arguments)]
     async fn build_image(
         &self,
         build_directory: &Path,
@@ -1032,6 +1044,7 @@ pub trait ContainerRuntime {
         target: Option<&str>,
         buildkit: Option<&BuildKitOptions>,
         tag: &str,
+        force_pull: bool,
     ) -> Result<String>;
 
     /// Tags `image_id` (the ID `build_image` returned) with each of `tags`,
@@ -2107,6 +2120,7 @@ impl ContainerRuntime for DockerClient {
         target: Option<&str>,
         buildkit: Option<&BuildKitOptions>,
         tag: &str,
+        force_pull: bool,
     ) -> Result<String> {
         match self.builder_version().await? {
             bollard::query_parameters::BuilderVersion::BuilderBuildKit => {
@@ -2119,6 +2133,7 @@ impl ContainerRuntime for DockerClient {
                     target,
                     buildkit,
                     tag,
+                    force_pull,
                 )
                 .await;
             }
@@ -2156,6 +2171,9 @@ impl ContainerRuntime for DockerClient {
         }
         if let Some(target) = target {
             options_builder = options_builder.target(target);
+        }
+        if force_pull {
+            options_builder = options_builder.pull("true");
         }
         let options = options_builder.build();
 

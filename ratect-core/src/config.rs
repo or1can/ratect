@@ -45,14 +45,16 @@ pub struct Config {
 pub struct Container {
     pub image: Option<String>,
     /// Controls whether an `image` container's image is pulled fresh or
-    /// only when missing locally — Docker's own pull semantics. Only
-    /// meaningful alongside `image`; a `build_directory` container is
-    /// never pulled, so this is silently ignored for it (Ratect doesn't
-    /// implement Batect's separate use of this same field to force-pull a
-    /// build's base image — see
-    /// [Differences from Batect](https://github.com/or1can/ratect/blob/main/docs/differences-from-batect.md#container-fields)).
-    /// `None` defaults to [`ImagePullPolicy::IfNotPresent`], matching
-    /// Batect's own default.
+    /// only when missing locally — Docker's own pull semantics
+    /// ([`TaskEngine::resolve_pulled_image`](crate::engine::TaskEngine)).
+    /// On a `build_directory` container, this instead controls whether the
+    /// build's own base image is force-pulled before building (`docker
+    /// build --pull`) — `Always` forces it, `IfNotPresent` leaves Docker's
+    /// own local-cache-if-present build behavior alone — matching Batect's
+    /// second, distinct use of this same field
+    /// ([`TaskEngine::resolve_image`](crate::engine::TaskEngine)). `None`
+    /// defaults to [`ImagePullPolicy::IfNotPresent`], matching Batect's own
+    /// default, for either use.
     pub image_pull_policy: Option<ImagePullPolicy>,
     pub build_directory: Option<String>,
     pub build_args: Option<HashMap<String, String>>,
