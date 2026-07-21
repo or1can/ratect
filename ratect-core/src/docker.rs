@@ -3552,96 +3552,195 @@ mod tests {
         );
     }
 
-    /// A throwaway self-signed root CA + a leaf certificate/key it signed
-    /// for `CN=localhost`, generated once for this test (`openssl req
-    /// -x509 ...` then `openssl x509 -req ... -CA ca.pem -CAkey
-    /// ca-key.pem`) — not a secret, not used anywhere real, just enough
-    /// genuine X.509 structure for `rustls` to actually parse successfully,
-    /// proving the connect-over-TLS wiring works with real certificate
-    /// material rather than only unit-testing the file-path resolution
-    /// around it.
-    const TEST_CA_PEM: &str = "-----BEGIN CERTIFICATE-----
-MIIDEzCCAfugAwIBAgIUT8UTyaqqr/+/sYw1zmKn21bpAugwDQYJKoZIhvcNAQEL
-BQAwGTEXMBUGA1UEAwwOcmF0ZWN0LXRlc3QtY2EwHhcNMjYwNzIxMDY0NjM0WhcN
-MzYwNzE4MDY0NjM0WjAZMRcwFQYDVQQDDA5yYXRlY3QtdGVzdC1jYTCCASIwDQYJ
-KoZIhvcNAQEBBQADggEPADCCAQoCggEBALtqfSeGbUj3c6s85ORTznbaEXFVV0Gy
-CeVQOwCGBHkDSXOz3XUgg/GGwSD6mnUi88/1rgbAfIdX598ComfBSB7bKu61QlXr
-DOaNiJl8Ef9KB0ORfxMr70vzjXkv5HPengDn8vaePJFKkU3Do6BNXqfPiBzCspgu
-vHkWdVFhgO+sWaH4pZAUot1Lqy5s8YfmNhhbK8uqP5xtFkqbVS4vJmlvxP2tNdKj
-aCqJDQfuQxxmDH2YFR0M5hoWN1VFFCMm0IvvPfAoKerm2smsNr1vQDZOS+WLfcEo
-SgpPh7FeMoyOeW4KygsQVifEmilyEMao9xinIwFE5l5oiRnZNthGrG0CAwEAAaNT
-MFEwHQYDVR0OBBYEFBMM7XcX6e6rxuj1rZtLGSs33Hb/MB8GA1UdIwQYMBaAFBMM
-7XcX6e6rxuj1rZtLGSs33Hb/MA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQEL
-BQADggEBAAe9gMLtnSWwCgwPAhxtPupyKbOxJGnyeJrhQMomqOohkgBgz/x4lT/Y
-l0xq9ZytP3wwoWwWD8BBS478R1VzXN6djiPl0mpshOV0L9qBvZDJZipuxKYpDzMD
-VSvFhXNzJCKI+w5XrGoyrvVB1bMMfiQIKYEK/+/+cOYMOQlx34I22f44Gbks1mSs
-sebU2RAkavTyPQ2BXGIfTvXvWtDCxtMMjRRi0/v0irRM+Yb58kdKPb5aBp9Qolbb
-PacA5Q4qmco2RbhNmDxR1i/n2JJZG3YUvEuDqfRx9KO3I9ceqfEKsIwNcCUxRu9d
-QxOQmeKH+itZ7e+OXYE0bUN5gTJoZkg=
------END CERTIFICATE-----
-";
+    /// A throwaway self-signed root CA, and a leaf certificate/key pair it
+    /// signs for `localhost`/`127.0.0.1` — 2048-bit RSA (`rcgen`'s
+    /// default), regenerated fresh every test run via `rcgen` rather than
+    /// a fixed PEM committed to the repo. A static embedded certificate
+    /// would eventually expire on its own and fail with a stale,
+    /// disconnected-looking failure long after the fact, unrelated to
+    /// whatever change actually triggered it — generating at test time
+    /// with an explicit `not_before`/`not_after` window sidesteps that
+    /// entirely, and lets the same helper produce a deliberately
+    /// *already-expired* leaf certificate on demand (see
+    /// `connect_over_tls_rejects_an_expired_certificate`).
+    struct GeneratedTlsMaterials {
+        /// PEM text for `ca.pem` — what a real `--docker-cert-path`
+        /// directory holds, and what `connect`'s `Docker::connect_with_ssl`
+        /// call reads.
+        ca_pem: String,
+        cert_pem: String,
+        key_pem: String,
+        /// DER forms of the same leaf cert/key, for the in-process TLS
+        /// server below (`rustls::ServerConfig` wants DER, not PEM).
+        cert_der: rustls::pki_types::CertificateDer<'static>,
+        key_der: rustls::pki_types::PrivateKeyDer<'static>,
+    }
 
-    const TEST_CERT_PEM: &str = "-----BEGIN CERTIFICATE-----
-MIIC/TCCAeWgAwIBAgIUQaqli6TKr1bWzqbd8O1px0IjMaIwDQYJKoZIhvcNAQEL
-BQAwGTEXMBUGA1UEAwwOcmF0ZWN0LXRlc3QtY2EwHhcNMjYwNzIxMDY0NjM0WhcN
-MzYwNzE4MDY0NjM0WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwggEiMA0GCSqGSIb3
-DQEBAQUAA4IBDwAwggEKAoIBAQCZoT1Mj91mXjMxZMM86rPo3CW0x5RBYCvB9dtq
-dFwRoAy8sD23DFML8SqzHYM7cdIAyu6kpF5EzcqWVsc4Fs5zA7ce+BO7OYNl0SWB
-UZq1Ft3Fl6YSSUESh/1WgS0mk90QlsZuMO8PRJYVJu7Fr4qmF3PdyEPwl9fVoG9B
-YzcyYiYOsfKN7+dI9GGUu7Cy8vynwf2dWnOs+ovEQmTdLDq71mUicm00Vf0M9NZH
-lUjuZ5yrNko4J+IhSOBM0vi9GPt4QhwG0B0eOdVlYC0plPVlAUzwKzHIVKwfxNau
-AUHIBUprFPWFExzSa/4FPgIx/7qnA8UqQUz2/CHaGppk22QjAgMBAAGjQjBAMB0G
-A1UdDgQWBBSfp2ZFjLS/hp/EH6TP9758NTG6pTAfBgNVHSMEGDAWgBQTDO13F+nu
-q8bo9a2bSxkrN9x2/zANBgkqhkiG9w0BAQsFAAOCAQEAW1usCCQL57j84BYJLeXg
-QS2Zo1nw1jSa2VmcmBNlzYqirKKScadZf+ZgAngaAxjfY9b3S2RGd5o4rkYRsiRs
-ZMqWOxoicGjPujcX4k02Gae571Rgjx6BphcfhgW+xLes1llTBIkIkIeqRdaijlal
-e25YrmEV+Eahc9eE7G6qBy+GvO4HlP6gUtnv/3I41hE0h7l/ojdSCLPb2LXWWukO
-GZTjaGdnRUiODDkHzXcdJmID1vXf07JoQ6pkBP/zmECln03WqPJ/onXnJGLjVho9
-oWxosQDqBSCQRIRbZ34PGjY+mPMoyLdWnzdwj1cPXmkMtU8HmhY1LawlW0/ye7GH
-UQ==
------END CERTIFICATE-----
-";
+    fn generate_test_tls_materials(
+        not_before: time::OffsetDateTime,
+        not_after: time::OffsetDateTime,
+    ) -> GeneratedTlsMaterials {
+        let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        ca_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "ratect-test-ca");
+        let ca_key = rcgen::KeyPair::generate().unwrap();
+        let ca_cert = ca_params.self_signed(&ca_key).unwrap();
 
-    const TEST_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----
-MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCZoT1Mj91mXjMx
-ZMM86rPo3CW0x5RBYCvB9dtqdFwRoAy8sD23DFML8SqzHYM7cdIAyu6kpF5EzcqW
-Vsc4Fs5zA7ce+BO7OYNl0SWBUZq1Ft3Fl6YSSUESh/1WgS0mk90QlsZuMO8PRJYV
-Ju7Fr4qmF3PdyEPwl9fVoG9BYzcyYiYOsfKN7+dI9GGUu7Cy8vynwf2dWnOs+ovE
-QmTdLDq71mUicm00Vf0M9NZHlUjuZ5yrNko4J+IhSOBM0vi9GPt4QhwG0B0eOdVl
-YC0plPVlAUzwKzHIVKwfxNauAUHIBUprFPWFExzSa/4FPgIx/7qnA8UqQUz2/CHa
-Gppk22QjAgMBAAECggEAAX5Et0LKtx0BSGCfWS860m+ZWjl6YmxJ4JfAKze4UV+J
-4CeiYe4XvIz6ikUmKmS/0swmJ6mFVQvfBTkQtKXcGdgWZpGot3Amq82tnKUraMkx
-HKONtK3LmR+DQdz9kFttkaS1hwqouDBFeS0osvky0sx1jtlMd8EyEtx9WFhbh/zS
-YEpmqI17rvchL8R31yRa8PSvj4K3yXcXW+3/orK7QFsXxrsKopsvkhQ/zvdXeKTy
-L6+dsGr/Ou+UDduzJzaU23PTfVTHxwZixdnAlMALmUWHMDYyMRhX2saEfXJOAnOO
-nzcTsyfJpSLVuVukGfGRgaUw/mI7LDwD1oJh89XGiQKBgQDNqcMb1VDQuT6Hd8tN
-GrPNaEXXBxqfaLnxmL35N52567L/JT9IJ2XXiwBO1xW/YqpVBKREXiu0qTifrA3o
-90g7BGmekubACzaOOfE20pV8R0uliAxsmE3Ghq8GqLMbnz4fVeIRQ0fClwkBgJxJ
-SjiBAKJvDKbGLdWA2cROpb8yDQKBgQC/OzoC8m+SKU4a25Iam8j/TH7BopiGoSLu
-9YVmJGeKbFUty9deQnXnG/L3enwle38OVEOBN1knd70RB8A8A8/rcMICAt+subqe
-SI9XZM/pHUG5/3nV8yCjPU5fGxboXgA00c2mrObCwJ6Fe6TAtUYKJEqS+Io6PZ8q
-PCEPx0HS7wKBgAwShgBxQiAub4w2LPnmsl1BXLAlm5t140xaQfSKHjkWq9gsUI2k
-umavoyH9oCou2X7KGfZlbL1bHZbJ27ssINJODQEg8Giff+FTZ2RnchzsdnVOCiSp
-wA8CQu3qIzFg5J2kRfPrdh/nC8FJ0mK+95gi+GX6YSPK9vhsUAip1BJVAoGAByhb
-WoLihDEBmGXBiTdthYjCcdL5LIjZeuI7tQAF1BuL8KPhksigCx9zr6mo/eoqbknf
-IPYGY0DLFdkZa+WkoaZdzJ946ckl4AjNPLMsSQhsTl7um4B3J0UDKvIjoFzsWw3D
-ScrM9FsrU8m19/SRA44qMGgXHGj0DSuk/SczIocCgYAKhiT2cat4BQ19idFeSRi3
-4wbJAkE0ZUm7xwe0rNHVvAqEV5Qm09pYA+n6OWwPiq/b+m4gYpmFg67PbuGPRANl
-jyR1S/cfb1f9ezO3/qrhVPqZdpMrGKmHLiLkLt2SGoG53O06CH6yOH9tyadttrxs
-pbgnkuidZ5WU2LfAJCLZOQ==
------END PRIVATE KEY-----
-";
+        let mut leaf_params =
+            rcgen::CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()])
+                .unwrap();
+        leaf_params.not_before = not_before;
+        leaf_params.not_after = not_after;
+        leaf_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "localhost");
+        let leaf_key = rcgen::KeyPair::generate().unwrap();
+        let leaf_cert = leaf_params.signed_by(&leaf_key, &ca_cert, &ca_key).unwrap();
 
-    fn write_tls_materials(dir: &Path) {
-        fs::write(dir.join("ca.pem"), TEST_CA_PEM).unwrap();
-        fs::write(dir.join("cert.pem"), TEST_CERT_PEM).unwrap();
-        fs::write(dir.join("key.pem"), TEST_KEY_PEM).unwrap();
+        GeneratedTlsMaterials {
+            ca_pem: ca_cert.pem(),
+            cert_pem: leaf_cert.pem(),
+            key_pem: leaf_key.serialize_pem(),
+            cert_der: leaf_cert.der().clone(),
+            key_der: rustls::pki_types::PrivateKeyDer::Pkcs8(
+                rustls::pki_types::PrivatePkcs8KeyDer::from(leaf_key.serialize_der()),
+            ),
+        }
+    }
+
+    fn write_tls_materials(dir: &Path, materials: &GeneratedTlsMaterials) {
+        fs::write(dir.join("ca.pem"), &materials.ca_pem).unwrap();
+        fs::write(dir.join("cert.pem"), &materials.cert_pem).unwrap();
+        fs::write(dir.join("key.pem"), &materials.key_pem).unwrap();
+    }
+
+    /// Accepts exactly one TCP connection on `listener` and completes a
+    /// TLS handshake using `cert`/`key`, then responds to the first HTTP
+    /// request with a minimal 200 OK — just enough for `Docker::ping` to
+    /// succeed once the handshake itself does. No client-cert auth is
+    /// requested: this harness only exercises the *client's* verification
+    /// of the *server's* certificate (what `--docker-tls-verify` actually
+    /// controls), not Ratect's own client-certificate presentation.
+    ///
+    /// If the handshake itself fails (e.g. the client rejects an expired
+    /// certificate), `TlsAcceptor::accept` returns `Err` and this simply
+    /// returns — there's nothing to serve, and that's the expected outcome
+    /// for that test.
+    async fn serve_one_tls_connection(
+        listener: tokio::net::TcpListener,
+        cert: rustls::pki_types::CertificateDer<'static>,
+        key: rustls::pki_types::PrivateKeyDer<'static>,
+    ) {
+        let config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert], key)
+            .expect("valid cert/key pair");
+        let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config));
+
+        let (stream, _) = listener.accept().await.expect("accept");
+        if let Ok(mut tls_stream) = acceptor.accept(stream).await {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut buf = [0u8; 1024];
+            let _ = tls_stream.read(&mut buf).await;
+            let _ = tls_stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Type: text/plain\r\n\
+                      Connection: close\r\n\r\nOK",
+                )
+                .await;
+            let _ = tls_stream.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn connect_over_tls_completes_a_real_handshake_against_a_valid_certificate() {
+        let now = time::OffsetDateTime::now_utc();
+        let materials = generate_test_tls_materials(
+            now - time::Duration::days(1),
+            now + time::Duration::days(365),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(serve_one_tls_connection(
+            listener,
+            materials.cert_der.clone(),
+            materials.key_der.clone_key(),
+        ));
+
+        let cert_directory = unique_temp_dir();
+        write_tls_materials(&cert_directory, &materials);
+        let options = DockerConnectionOptions {
+            host: Some(format!("tcp://127.0.0.1:{port}")),
+            tls_verify: true,
+            cert_path: Some(cert_directory),
+            ..Default::default()
+        };
+
+        let docker = connect(&options).expect("connecting over TLS should build a client");
+        let result = docker.ping().await;
+        server.await.expect("server task should not panic");
+
+        assert!(
+            result.is_ok(),
+            "expected a successful handshake and ping against a valid certificate, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_over_tls_rejects_an_expired_certificate() {
+        let now = time::OffsetDateTime::now_utc();
+        // Already expired, entirely in the past — not "expires during the
+        // test", which would be flaky under any scheduling delay.
+        let materials = generate_test_tls_materials(
+            now - time::Duration::days(2),
+            now - time::Duration::days(1),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(serve_one_tls_connection(
+            listener,
+            materials.cert_der.clone(),
+            materials.key_der.clone_key(),
+        ));
+
+        let cert_directory = unique_temp_dir();
+        write_tls_materials(&cert_directory, &materials);
+        let options = DockerConnectionOptions {
+            host: Some(format!("tcp://127.0.0.1:{port}")),
+            tls_verify: true,
+            cert_path: Some(cert_directory),
+            ..Default::default()
+        };
+
+        let docker = connect(&options).expect("connecting over TLS should build a client");
+        let result = docker.ping().await;
+        server.await.expect("server task should not panic");
+
+        assert!(
+            result.is_err(),
+            "expected an expired certificate to be rejected, got {result:?}"
+        );
     }
 
     #[test]
-    fn connect_over_tls_with_valid_materials_builds_a_client_lazily() {
+    fn connect_over_tls_errors_clearly_when_the_ca_file_is_not_valid_pem() {
         let cert_directory = unique_temp_dir();
-        write_tls_materials(&cert_directory);
+        // Plain garbage with no `-----BEGIN CERTIFICATE-----` marker at all
+        // just yields zero parsed certificates, not an error (an empty
+        // trust store isn't a construction-time failure — only a later
+        // handshake would ever notice) — this needs to *look* like a PEM
+        // block to actually exercise the parse-failure path.
+        fs::write(
+            cert_directory.join("ca.pem"),
+            b"-----BEGIN CERTIFICATE-----\nnot valid base64!!!\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+        fs::write(cert_directory.join("cert.pem"), b"").unwrap();
+        fs::write(cert_directory.join("key.pem"), b"").unwrap();
 
         let options = DockerConnectionOptions {
             host: Some("tcp://127.0.0.1:2376".to_string()),
@@ -3650,12 +3749,8 @@ pbgnkuidZ5WU2LfAJCLZOQ==
             ..Default::default()
         };
 
-        // Like `connect_with_host`, `connect_with_ssl` only parses the
-        // certificates and builds the client — no handshake happens until
-        // an actual request is made, so this doesn't need a live TLS
-        // listener.
-        connect(&options)
-            .expect("connecting over TLS with valid certificate material should succeed");
+        let err = connect(&options).unwrap_err();
+        assert!(err.to_string().contains("over TLS"), "{err}");
     }
 
     #[test]
