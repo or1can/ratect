@@ -19,6 +19,8 @@ one.
 | --- | --- |
 | `ratect run <task> [-- ARGS...]` | Runs a task. Anything after `--` is appended to the task command's own arguments. |
 | `ratect tasks list` | Lists the tasks this project defines. |
+| `ratect caches list` | Lists this project's existing caches. |
+| `ratect caches clean [NAME...]` | Removes this project's caches, or just the named ones. |
 
 There is deliberately **no `ratect <task>` shorthand**. `ratect-compat` takes a task
 name as a bare positional argument, which works only because it has no subcommands;
@@ -29,6 +31,8 @@ interface can't answer, so `run` is always explicit.
 ratect tasks list
 ratect run build
 ratect run test -- --filter integration
+ratect caches list
+ratect caches clean gradle-cache
 ```
 
 ## Global options
@@ -38,16 +42,25 @@ and `ratect run build -f custom.yml` are the same invocation.
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `-f`, `--config-file <PATH>` | `batect.yml` | The configuration file to read. |
-| `--config-var <NAME=VALUE>` | — | Sets a [config variable](config-reference.md#configvariable). Repeatable; wins over `--config-vars-file` and the variable's own default. |
-| `--config-vars-file <PATH>` | — | A YAML file of config variable `NAME: VALUE` pairs. |
+| `-f`, `--config-file <PATH>` | `batect.yml` | The configuration file. `caches` uses it only to locate the project *directory* — it never reads the contents. |
 | `-o`, `--output <STYLE>` | auto | `fancy`, `simple`, `all` or `quiet` — see [output styles](cli-reference.md#output-styles), which behave identically here. |
 | `--no-color` | — | No color in Ratect's own output (never affects a task's own output). |
 
-## `run` options
+Narrower options attach to the commands that actually use them, rather than being
+global: a flag that's accepted and then ignored reads as a promise. So the
+config-variable options below belong to `run` and `tasks list` (the commands that read
+configuration), and the Docker connection options to `run` and `caches` (the ones that
+reach a daemon).
 
-Only `run` connects to a Docker daemon, so only `run` takes the options for reaching
-one — an accepted-but-ignored flag is worse than one that isn't offered.
+| Option | Applies to | Description |
+| --- | --- | --- |
+| `--config-var <NAME=VALUE>` | `run`, `tasks list` | Sets a [config variable](config-reference.md#configvariable). Repeatable; wins over `--config-vars-file` and the variable's own default. |
+| `--config-vars-file <PATH>` | `run`, `tasks list` | A YAML file of config variable `NAME: VALUE` pairs. |
+
+## Docker connection options
+
+Taken by `run` and by `caches` (whose default storage is Docker volumes); never by
+`tasks list`, which reaches no daemon at all.
 
 | Option | Default | Description |
 | --- | --- | --- |
@@ -57,7 +70,12 @@ one — an accepted-but-ignored flag is worse than one that isn't offered.
 | `--docker-tls`, `--docker-tls-verify` | — | Connect over TLS, always verifying the daemon's certificate — see [TLS with a private CA](cli-reference.md#tls-with-a-private-certificate-authority). |
 | `--docker-cert-path <PATH>` | `DOCKER_CERT_PATH`, then `~/.docker` | Directory holding `ca.pem`/`cert.pem`/`key.pem`. |
 | `--docker-tls-ca-cert`, `--docker-tls-cert`, `--docker-tls-key` | from `--docker-cert-path` | Individual TLS file overrides. |
-| `--enable-buildkit` | — | Force BuildKit for image builds, over the daemon's default and `DOCKER_BUILDKIT`. |
+
+## `run` options
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--enable-buildkit` | — | Force BuildKit for image builds, over the daemon's default and `DOCKER_BUILDKIT`. Only `run` builds images, so only `run` takes it. |
 | `--use-network <NAME>` | — | Reuse an existing Docker network instead of creating one for the task. |
 | `--disable-ports` | — | Never bind container ports on the host. |
 | `--no-proxy-vars` | — | Don't propagate [proxy environment variables](config-reference.md#proxy-environment-variables). |
@@ -67,6 +85,22 @@ one — an accepted-but-ignored flag is worse than one that isn't offered.
 | `--no-cleanup`, `--no-cleanup-after-success`, `--no-cleanup-after-failure` | — | Leave containers running for investigation. |
 | `--max-parallelism <N>` | unbounded | Cap concurrent image pulls/builds. |
 | `--cache-type <TYPE>` | `volume` | `volume` or `directory` — see [cache volumes](config-reference.md#cache-volumes). |
+
+## `caches` options
+
+`--cache-type <volume|directory>` (default `volume`) selects which storage to act on,
+for both `list` and `clean` — a cache in one is invisible to the other, so this has to
+match how the project runs its tasks.
+
+`caches` never reads the configuration file. A cache belongs to the project
+*directory*, so both commands work on a project whose configuration is broken or
+missing entirely — which is exactly when clearing a cache tends to be what's needed.
+
+`caches list` prints each cache under the name a `volumes` entry gives it, not the
+`batect-cache-<key>-<name>` Docker volume it's stored in; that name is what
+`caches clean` takes back. Under `-o quiet` it's one name per line and nothing else,
+for scripting. Naming a cache that doesn't exist warns on stderr rather than passing
+silently, since the likeliest cause is a typo.
 
 ## Exit codes and diagnostics
 
@@ -82,7 +116,8 @@ redirect stderr if you want one.
 | --- | --- | --- |
 | Run a task | `ratect-compat <task>` | `ratect run <task>` |
 | List tasks | `ratect-compat --list-tasks` | `ratect tasks list` |
-| Cache cleanup | `--clean`/`--clean-cache` | not yet — planned as its own verb |
+| Cache cleanup | `--clean`/`--clean-cache` | `ratect caches clean [NAME...]` |
+| Listing caches | not available | `ratect caches list` |
 | Batect-inert flags (`--upgrade`, `--no-update-notification`, `--no-wrapper-cache-cleanup`) | accepted, no effect | not offered |
 | `--log-file` | supported | not offered |
 | Configuration | `batect.yml` | `batect.yml` today; own format planned |

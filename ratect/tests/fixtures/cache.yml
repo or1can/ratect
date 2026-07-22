@@ -1,0 +1,18 @@
+# Backs the real-Docker `caches` test: the task writes into a `cache` mount,
+# which creates the Docker volume `ratect caches list`/`clean` then have to
+# find and remove. Uses the default `--cache-type volume`, since the
+# directory storage is already covered without a daemon.
+project_name: ratect-cli-cache-test
+containers:
+  build-env:
+    image: alpine:3.18.2
+    volumes:
+      - type: cache
+        name: build-cache
+        container: /cache
+tasks:
+  warm-cache:
+    description: Write something into the cache
+    run:
+      container: build-env
+      command: touch /cache/marker

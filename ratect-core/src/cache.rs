@@ -174,6 +174,36 @@ fn matching_cache_volumes<'a>(
         .collect()
 }
 
+/// This project's own existing cache volumes, by their *cache* name (what
+/// a `volumes` entry calls them) rather than the prefixed Docker volume
+/// name — for `ratect caches list`, which has no equivalent in
+/// `ratect-compat`/Batect (both only ever offered removal).
+///
+/// Knowing what's there is the prerequisite for removing one by name, so
+/// this is a deliberate addition rather than a parity gap. Sorted, so
+/// repeated invocations agree with each other; Docker's own volume listing
+/// order isn't specified.
+pub async fn list_volume_caches(
+    runtime: &impl crate::docker::ContainerRuntime,
+    project_cache_key: &str,
+) -> Result<Vec<String>> {
+    let existing = runtime.list_volumes().await?;
+    let prefix = cache_volume_name(project_cache_key, "");
+    let mut names: Vec<String> =
+        matching_cache_volumes(&existing, project_cache_key, &HashSet::new())
+            .into_iter()
+            .map(|volume| volume.strip_prefix(&prefix).unwrap_or(volume).to_string())
+            .collect();
+    names.sort();
+    Ok(names)
+}
+
+/// The `CacheType::Directory` counterpart of [`list_volume_caches`] —
+/// already sorted, by [`matching_cache_directories`].
+pub fn list_directory_caches(project_directory: &Path) -> Result<Vec<String>> {
+    matching_cache_directories(&cache_directory(project_directory), &HashSet::new())
+}
+
 /// Removes this project's own cache volumes (or, with `only` non-empty,
 /// just the named ones) — `--clean`/`--clean-cache` under
 /// `CacheType::Volume`. Mirrors Batect's own `CleanupCachesCommand.runForVolumes`.
@@ -404,6 +434,32 @@ mod tests {
         let matched = matching_cache_volumes(&existing, "abc123", &HashSet::new());
 
         assert!(matched.is_empty());
+    }
+
+    /// `ratect caches list` reports what a `volumes` entry calls a cache,
+    /// not the prefixed Docker volume name it happens to be stored under —
+    /// otherwise nothing it prints could be pasted back into `caches clean`.
+    #[test]
+    fn list_directory_caches_reports_cache_names_without_the_key_file() {
+        let dir = unique_temp_dir();
+        let caches_dir = cache_directory(&dir);
+        fs::create_dir_all(caches_dir.join("npm-cache")).unwrap();
+        fs::create_dir_all(caches_dir.join("gradle-cache")).unwrap();
+        fs::write(caches_dir.join("key"), "abc123\n").unwrap();
+
+        assert_eq!(
+            list_directory_caches(&dir).unwrap(),
+            vec!["gradle-cache", "npm-cache"]
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn list_directory_caches_is_empty_for_a_project_with_no_caches() {
+        let dir = unique_temp_dir();
+        assert!(list_directory_caches(&dir).unwrap().is_empty());
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

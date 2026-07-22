@@ -839,14 +839,28 @@ Two mechanics that only became concrete once `ratect` started its own release cy
   the Docker-connection options are `run`'s, not global (`tasks list` never
   reaches a daemon, and an accepted-but-ignored flag is worse than one that
   isn't offered) — carried in their own `#[command(flatten)]` struct so a later
-  daemon-using verb picks up the identical surface; and there's no `--log-file`,
-  Batect's own, since redirecting stderr covers it. Documented in
+  daemon-using verb picks up the identical surface, a rule since applied to the
+  config-variable options too (`run`/`tasks list` only); and there's no
+  `--log-file`, Batect's own, since redirecting stderr covers it. Documented in
   [`docs/ratect-cli.md`](docs/ratect-cli.md), which is deliberately separate
   from `ratect-compat`'s own CLI reference — two interfaces, not two spellings
-  of one. Still to do before release: cache management (`--clean`/`--clean-cache`
-  have no `ratect` equivalent yet — a `caches` verb rather than flags), and
-  deciding whether `-f batect.yml` stays the default file name for a binary
-  whose own format arrives in 0.3.0.
+  of one.
+
+  `caches list`/`caches clean [NAME...]` replaces `--clean`/`--clean-cache`, with
+  two deliberate improvements on the flags it replaces: listing exists at all
+  (neither Batect nor `ratect-compat` can say what's there, which makes removing
+  one *by name* guesswork against the config file), and a name matching nothing
+  warns instead of passing silently. `clean` with names and without are the same
+  verb separated by whether anything was named — rather than Batect's `--clean`
+  meaning "everything" while `--clean-cache` silently overrides it when both are
+  given. Both report a cache by its *config* name, never the
+  `batect-cache-<key>-<name>` volume it happens to live in. Like `--clean` it
+  never reads the config file, so it works on a project whose configuration is
+  broken or absent — which is when clearing a cache is most likely wanted. New
+  `cache::list_volume_caches`/`list_directory_caches` in `ratect-core`.
+
+  Still to decide before release: whether `-f batect.yml` stays the default file
+  name for a binary whose own format arrives in 0.3.0.
 - **0.3.0** (planned) — **A `ratect`-native config format**, replacing YAML for
   this binary only (`ratect-compat` stays YAML-only, permanently, for Batect
   compatibility). TOML is the leading candidate — more idiomatic for a Rust

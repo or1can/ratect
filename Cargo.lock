@@ -1783,6 +1783,7 @@ dependencies = [
  "clap",
  "ratect-core",
  "tokio",
+ "tracing",
  "tracing-subscriber",
 ]
 

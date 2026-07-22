@@ -46,25 +46,19 @@ struct Cli {
     command: Command,
 }
 
-/// Options every subcommand needs — loading the configuration, and deciding
-/// what Ratect's own output looks like. Deliberately *not* the Docker
-/// connection options ([`DockerArgs`]): `tasks list` never connects to a
-/// daemon, and a flag that's accepted but does nothing is worse than one
-/// that isn't offered.
+/// Options every subcommand genuinely uses: which file identifies the
+/// project (`caches` needs it for the project *directory* even though it
+/// never reads its contents), and what Ratect's own output looks like.
+///
+/// Everything narrower is attached to the subcommands that actually use it
+/// — [`DockerArgs`] to the ones that reach a daemon, [`ConfigVarArgs`] to
+/// the ones that read configuration. A flag accepted but ignored is worse
+/// than one that isn't offered: it reads as a promise.
 #[derive(ClapArgs, Debug)]
 struct GlobalArgs {
     /// Path to the configuration file.
     #[arg(short = 'f', long, default_value = "batect.yml", global = true)]
     config_file: PathBuf,
-
-    /// Set a config variable's value, as NAME=VALUE (repeatable). Takes
-    /// precedence over --config-vars-file and the variable's own default.
-    #[arg(long = "config-var", value_parser = parse_key_value, global = true)]
-    config_var: Vec<(String, String)>,
-
-    /// Path to a YAML file of config variable NAME: VALUE pairs.
-    #[arg(long = "config-vars-file", global = true)]
-    config_vars_file: Option<PathBuf>,
 
     /// Force a particular style of Ratect's own output (never affects a
     /// task command's output): fancy (a live per-container status display,
@@ -78,6 +72,20 @@ struct GlobalArgs {
     /// output. Also makes simple, not fancy, the default output style.
     #[arg(long = "no-color", global = true)]
     no_color: bool,
+}
+
+/// Values for the configuration's own `config_variables` — for the
+/// subcommands that read configuration at all.
+#[derive(ClapArgs, Debug)]
+struct ConfigVarArgs {
+    /// Set a config variable's value, as NAME=VALUE (repeatable). Takes
+    /// precedence over --config-vars-file and the variable's own default.
+    #[arg(long = "config-var", value_parser = parse_key_value)]
+    config_var: Vec<(String, String)>,
+
+    /// Path to a YAML file of config variable NAME: VALUE pairs.
+    #[arg(long = "config-vars-file")]
+    config_vars_file: Option<PathBuf>,
 }
 
 // `Run` carries every `run` option and `Tasks` carries a bare sub-verb, so
@@ -97,12 +105,61 @@ enum Command {
         #[command(subcommand)]
         command: TasksCommand,
     },
+
+    /// Inspect and remove this project's caches.
+    Caches {
+        #[command(subcommand)]
+        command: CachesCommand,
+    },
 }
 
 #[derive(Subcommand, Debug)]
 enum TasksCommand {
     /// List the tasks this project defines.
-    List,
+    List(TasksListArgs),
+}
+
+#[derive(ClapArgs, Debug)]
+struct TasksListArgs {
+    // A task's own description can interpolate a config variable, so
+    // listing them is a configuration read like any other.
+    #[command(flatten)]
+    config_vars: ConfigVarArgs,
+}
+
+#[derive(Subcommand, Debug)]
+enum CachesCommand {
+    /// List this project's existing caches.
+    List(CachesArgs),
+
+    /// Remove this project's caches, or just the named ones.
+    Clean(CleanCachesArgs),
+}
+
+/// Which caches to act on: the storage they live in, and how to reach the
+/// daemon holding them. Never reads the configuration file — a cache
+/// belongs to the *project directory*, so these work on a project whose
+/// config doesn't parse, or isn't there at all, which is exactly when
+/// clearing a cache is most likely to be what's needed.
+#[derive(ClapArgs, Debug)]
+struct CachesArgs {
+    /// Storage to look in: volume (Docker named volumes) or directory (host
+    /// directories under <project>/.batect/caches/<name>).
+    #[arg(long = "cache-type", value_enum, default_value = "volume")]
+    cache_type: CacheTypeArg,
+
+    #[command(flatten)]
+    docker: DockerArgs,
+}
+
+#[derive(ClapArgs, Debug)]
+struct CleanCachesArgs {
+    /// The caches to remove, by name. Removes every one of this project's
+    /// caches when none are named.
+    names: Vec<String>,
+
+    #[command(flatten)]
+    caches: CachesArgs,
 }
 
 #[derive(ClapArgs, Debug)]
@@ -111,7 +168,16 @@ struct RunArgs {
     task: String,
 
     #[command(flatten)]
+    config_vars: ConfigVarArgs,
+
+    #[command(flatten)]
     docker: DockerArgs,
+
+    /// Use BuildKit for image builds, regardless of the daemon's own
+    /// advertised default or DOCKER_BUILDKIT (which this takes precedence
+    /// over). Forcing the classic builder is DOCKER_BUILDKIT=0's job.
+    #[arg(long = "enable-buildkit")]
+    enable_buildkit: bool,
 
     /// Existing Docker network to use, instead of creating (and removing)
     /// one for the task.
@@ -175,10 +241,11 @@ struct RunArgs {
     args: Vec<String>,
 }
 
-/// How to reach the Docker daemon. Its own struct, flattened into the
-/// subcommands that actually connect to one, so a later verb that needs a
-/// daemon (`ratect doctor`, cache management) picks the identical surface up
-/// rather than growing a second, subtly different copy.
+/// How to reach the Docker daemon — connection only, deliberately nothing
+/// about what to *do* once connected (`--enable-buildkit` is `run`'s own,
+/// since it's about building images, not reaching a daemon). Its own struct,
+/// flattened into every subcommand that connects, so each picks up the
+/// identical surface rather than growing a second, subtly different copy.
 #[derive(ClapArgs, Debug)]
 struct DockerArgs {
     /// Docker host to use, e.g. 'unix:///var/run/docker.sock' or
@@ -228,12 +295,6 @@ struct DockerArgs {
     /// --docker-cert-path.
     #[arg(long = "docker-tls-key")]
     tls_key: Option<PathBuf>,
-
-    /// Use BuildKit for image builds, regardless of the daemon's own
-    /// advertised default or DOCKER_BUILDKIT (which this takes precedence
-    /// over). Forcing the classic builder is DOCKER_BUILDKIT=0's job.
-    #[arg(long = "enable-buildkit")]
-    enable_buildkit: bool,
 }
 
 impl From<DockerArgs> for DockerConnectionOptions {
@@ -346,30 +407,24 @@ async fn main() {
 async fn run(cli: Cli) -> Result<()> {
     let Cli { global, command } = cli;
 
-    let mut config_var_overrides: HashMap<String, String> = match &global.config_vars_file {
-        Some(path) => Config::load_config_vars_file(path)?,
-        None => HashMap::new(),
-    };
-    config_var_overrides.extend(global.config_var.iter().cloned());
-    let project = load_project(&global.config_file, &config_var_overrides).await?;
-
-    // Gathered once and shared between the task-list format decision and
+    // Gathered once and shared between the output-format decisions and
     // (inside `create_event_sink`) the logger itself, rather than each
     // querying stdout/TERM/console dimensions separately.
     let terminal = TerminalFacts::gather();
     let requested_style = global.output.map(OutputStyle::from);
+    let style = select_output_style(
+        requested_style,
+        global.no_color,
+        terminal.stdout_is_terminal,
+        terminal.term.as_deref(),
+        terminal.console_dimensions_available,
+    );
 
     match command {
         Command::Tasks {
-            command: TasksCommand::List,
+            command: TasksCommand::List(args),
         } => {
-            let style = select_output_style(
-                requested_style,
-                global.no_color,
-                terminal.stdout_is_terminal,
-                terminal.term.as_deref(),
-                terminal.console_dimensions_available,
-            );
+            let project = load(&global, &args.config_vars).await?;
             let listing = match style {
                 OutputStyle::Quiet => format_task_list_quiet(&project.config.tasks),
                 _ => format_task_list(&project.config.project_name, &project.config.tasks),
@@ -378,9 +433,26 @@ async fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Command::Run(args) => {
+            let project = load(&global, &args.config_vars).await?;
             run_task(project, args, global.no_color, requested_style, terminal).await
         }
+        // Deliberately no `load` call: see `CachesArgs`.
+        Command::Caches { command } => manage_caches(command, &global, style).await,
     }
+}
+
+/// Loads the configuration — merging `--config-vars-file` with any
+/// `--config-var`s, which override it.
+async fn load(
+    global: &GlobalArgs,
+    config_vars: &ConfigVarArgs,
+) -> Result<ratect_core::config::LoadedProject> {
+    let mut config_var_overrides: HashMap<String, String> = match &config_vars.config_vars_file {
+        Some(path) => Config::load_config_vars_file(path)?,
+        None => HashMap::new(),
+    };
+    config_var_overrides.extend(config_vars.config_var.iter().cloned());
+    load_project(&global.config_file, &config_var_overrides).await
 }
 
 async fn run_task(
@@ -401,10 +473,9 @@ async fn run_task(
         terminal.console_dimensions_available,
     )?;
 
-    let enable_buildkit = args.docker.enable_buildkit;
     let docker = DockerClient::new(&args.docker.into())?
         .with_event_sink(Arc::clone(&event_sink))
-        .with_enable_buildkit(enable_buildkit);
+        .with_enable_buildkit(args.enable_buildkit);
 
     let mut image_tags: HashMap<String, HashSet<String>> = HashMap::new();
     for (container, tag) in args.tag_image {
@@ -427,6 +498,102 @@ async fn run_task(
         .with_event_sink(event_sink)
         .with_settings(settings)?;
     engine.run_task(&args.task, &args.args).await
+}
+
+/// `ratect caches list` / `ratect caches clean [NAME...]` — this project's
+/// own caches, in whichever storage `--cache-type` names.
+///
+/// Two deliberate differences from `ratect-compat`'s `--clean`/
+/// `--clean-cache`, which this replaces:
+///
+/// - `list` exists at all. Neither Batect nor `ratect-compat` can tell you
+///   what's there, which makes removing one *by name* a guessing game
+///   against the config file.
+/// - `clean` with names and `clean` with none are the same verb, separated
+///   by whether anything was named — rather than `--clean` meaning
+///   "everything" and `--clean-cache <name>` silently overriding it when
+///   both are given, which is the shape Batect's flags forced.
+async fn manage_caches(
+    command: CachesCommand,
+    global: &GlobalArgs,
+    style: OutputStyle,
+) -> Result<()> {
+    let (args, names) = match command {
+        CachesCommand::List(args) => (args, None),
+        CachesCommand::Clean(clean) => (clean.caches, Some(clean.names)),
+    };
+    let base_path = ratect_core::config::base_path_for(&global.config_file);
+    let project_directory = ratect_core::config::project_directory_path(base_path)?;
+    let cache_type: ratect_core::cache::CacheType = args.cache_type.into();
+    let quiet = style == OutputStyle::Quiet;
+
+    let Some(names) = names else {
+        let existing = match cache_type {
+            ratect_core::cache::CacheType::Volume => {
+                let docker = DockerClient::new(&args.docker.into())?;
+                let key = ratect_core::cache::project_cache_key(&project_directory)?;
+                ratect_core::cache::list_volume_caches(&docker, &key).await?
+            }
+            ratect_core::cache::CacheType::Directory => {
+                ratect_core::cache::list_directory_caches(&project_directory)?
+            }
+        };
+        // Quiet is the machine-readable form, same contract as `tasks list`:
+        // bare names, one per line, nothing else on stdout.
+        if quiet {
+            for name in existing {
+                println!("{name}");
+            }
+        } else if existing.is_empty() {
+            println!("This project has no caches.");
+        } else {
+            println!("Caches for this project:");
+            for name in existing {
+                println!("- {name}");
+            }
+        }
+        return Ok(());
+    };
+
+    let only: HashSet<String> = names.into_iter().collect();
+    // Reported by *cache* name whichever storage was used — a volume's own
+    // Docker name carries the `batect-cache-<key>-` prefix, which is an
+    // implementation detail of where it's kept, not what the user called it.
+    let removed: Vec<String> = match cache_type {
+        ratect_core::cache::CacheType::Volume => {
+            let docker = DockerClient::new(&args.docker.into())?;
+            let key = ratect_core::cache::project_cache_key(&project_directory)?;
+            let prefix = ratect_core::cache::cache_volume_name(&key, "");
+            ratect_core::cache::clean_volume_caches(&docker, &key, &only)
+                .await?
+                .into_iter()
+                .map(|volume| {
+                    volume
+                        .strip_prefix(&prefix)
+                        .unwrap_or(volume.as_str())
+                        .to_string()
+                })
+                .collect()
+        }
+        ratect_core::cache::CacheType::Directory => {
+            ratect_core::cache::clean_directory_caches(&project_directory, &only)?
+        }
+    };
+
+    if !quiet {
+        for name in &removed {
+            println!("Removed cache '{name}'.");
+        }
+        println!("Removed {} cache(s).", removed.len());
+    }
+
+    // A name that matched nothing is worth saying out loud: the likeliest
+    // cause is a typo, and silence there reads exactly like success.
+    for name in only.iter().filter(|name| !removed.contains(name)) {
+        tracing::warn!("No cache named '{name}' exists for this project.");
+    }
+
+    Ok(())
 }
 
 /// The terminal facts every output decision is made from, read once per
@@ -497,7 +664,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Command::Tasks {
-                command: TasksCommand::List
+                command: TasksCommand::List(_)
             }
         ));
         // `--list-tasks` is `ratect-compat`'s spelling, and stays there.
@@ -530,8 +697,12 @@ mod tests {
             "two=2",
         ])
         .unwrap();
+        let config_var = match cli.command {
+            Command::Run(args) => args.config_vars.config_var,
+            other => panic!("expected a run command, got {other:?}"),
+        };
         assert_eq!(
-            cli.global.config_var,
+            config_var,
             vec![
                 ("one".to_string(), "1".to_string()),
                 ("two".to_string(), "2".to_string())
@@ -544,6 +715,78 @@ mod tests {
         assert!(
             Cli::try_parse_from(["ratect", "run", "build", "--config-var", "no-equals"]).is_err()
         );
+    }
+
+    #[test]
+    fn caches_clean_removes_everything_when_no_names_are_given() {
+        let cli = Cli::try_parse_from(["ratect", "caches", "clean"]).unwrap();
+        match cli.command {
+            Command::Caches {
+                command: CachesCommand::Clean(args),
+            } => assert!(args.names.is_empty()),
+            other => panic!("expected a caches clean command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn caches_clean_takes_the_names_to_remove_as_positional_arguments() {
+        let cli = Cli::try_parse_from(["ratect", "caches", "clean", "npm-cache", "gradle-cache"])
+            .unwrap();
+        match cli.command {
+            Command::Caches {
+                command: CachesCommand::Clean(args),
+            } => assert_eq!(args.names, vec!["npm-cache", "gradle-cache"]),
+            other => panic!("expected a caches clean command, got {other:?}"),
+        }
+    }
+
+    /// Which storage to act on has to be askable of both sub-verbs, or
+    /// `list` and `clean` would disagree about what a cache even is.
+    #[test]
+    fn cache_type_applies_to_both_caches_subcommands() {
+        for arguments in [
+            vec!["ratect", "caches", "list", "--cache-type", "directory"],
+            vec!["ratect", "caches", "clean", "--cache-type", "directory"],
+        ] {
+            let cli = Cli::try_parse_from(&arguments).unwrap();
+            let cache_type = match cli.command {
+                Command::Caches {
+                    command: CachesCommand::List(args),
+                } => args.cache_type,
+                Command::Caches {
+                    command: CachesCommand::Clean(args),
+                } => args.caches.cache_type,
+                other => panic!("expected a caches command, got {other:?}"),
+            };
+            assert_eq!(cache_type, CacheTypeArg::Directory);
+        }
+    }
+
+    /// `caches` locates a project by directory, never by reading its
+    /// configuration, so config-variable values would have nothing to act
+    /// on — and offering them would imply otherwise.
+    #[test]
+    fn config_variable_options_belong_to_the_commands_that_read_configuration() {
+        assert!(Cli::try_parse_from(["ratect", "run", "build", "--config-var", "a=1"]).is_ok());
+        assert!(Cli::try_parse_from(["ratect", "tasks", "list", "--config-var", "a=1"]).is_ok());
+        assert!(Cli::try_parse_from(["ratect", "caches", "list", "--config-var", "a=1"]).is_err());
+    }
+
+    /// Caches live in Docker volumes by default, so these do reach a
+    /// daemon — but they never build anything, so they don't take the flag
+    /// that's about building.
+    #[test]
+    fn caches_takes_the_connection_options_but_not_enable_buildkit() {
+        assert!(Cli::try_parse_from([
+            "ratect",
+            "caches",
+            "list",
+            "--docker-host",
+            "tcp://example:2376"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from(["ratect", "caches", "list", "--enable-buildkit"]).is_err());
+        assert!(Cli::try_parse_from(["ratect", "run", "build", "--enable-buildkit"]).is_ok());
     }
 
     /// `tasks list` never reaches a daemon, so it doesn't take the flags

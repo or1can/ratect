@@ -3,3 +3,9 @@
 .DS_Store
 *.iml
 .idea
+
+# Per-project cache state, generated on first use by any run that resolves a
+# `cache` volume mount — including the fixtures the test suites run against.
+# The file itself says not to commit it: the key is per-checkout, and sharing
+# one would point unrelated machines at the same Docker volumes.
+.batect/
