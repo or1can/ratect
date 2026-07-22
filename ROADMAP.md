@@ -700,6 +700,30 @@ Neither bump is ever folded into a feature commit.
   job already ran `--workspace`. Docs (`README.md`, `docs/installation.md`,
   and the CLI/config-reference/getting-started/how-it-works/task-lifecycle
   invocation examples) updated to name `ratect-compat` explicitly.
+- **0.21.0** (planned) — **Parity Mop-Up II**: closes known Batect-parity gaps
+  left open since before 0.19.0 — see [Differences from Batect](docs/differences-from-batect.md)
+  for the itemized status of each. One `feat:` commit per item, matching the
+  repo's own commit-packaging convention for a release bundling several
+  separable behaviors:
+  - **`tmpfs` volumes**: Batect's third `volumes` mount kind (in-memory,
+    ephemeral, lost on container exit) — currently entirely unsupported,
+    alongside the already-supported `local`/`cache` kinds.
+  - **The task's own container's `setup_commands`**: currently only run for
+    dependency containers, not the task's own — Batect runs them concurrently
+    with the task's command; closing this needs the engine's first concurrent
+    exec path for a single container's own readiness-then-run sequence.
+  - **Config Schema**: a JSON schema for `batect.yml`'s actual Ratect-accepted
+    shape (editor autocompletion/validation), likely generated from
+    `ratect-core/src/config.rs`'s own `Serialize`/`Deserialize` structs — see
+    the [Batect Parity](#batect-parity) headline entry for the full reasoning
+    on why this can't just be Batect's own published schema.
+  - **Explicitly excluded**: `build_ssh` full parity (multiple named agents,
+    explicit key-file paths — see [issue #1](https://github.com/or1can/ratect/issues/1))
+    stays out of scope here. It's blocked on `bollard`'s session-provider
+    surface growing beyond what the current fork exposes, and that's deferred
+    until the two open upstream PRs (#731, #732 — see
+    [Key Dependencies](AGENTS.md#key-dependencies)) land, rather than piling
+    further changes onto the fork ahead of them.
 - **1.0.0** — the [Batect Parity](#batect-parity) section above substantially checked
   off (all of the above, including 0.7.0–0.19.0, not just the items shipped through
   0.6.0), and verified against a handful of real Batect projects, not just the
@@ -711,6 +735,58 @@ Neither bump is ever folded into a feature commit.
 - **0.1.0-dev** — a placeholder crate exists (`ratect/`, added alongside
   `ratect-compat` in 0.20.0's [Two-Binary Split](#two-binaries-ratect-and-ratect-compat))
   but real feature work hasn't started yet.
+- **0.2.0** (planned) — **CLI subcommand skeleton**: `ratect run <task>` and
+  `ratect tasks list` (replacing `ratect-compat`'s flat `<task-name>` positional
+  and `--list-tasks`), settled as subcommands rather than a flat CLI so later verbs
+  (`ratect doctor`, git-include cache management — see
+  [UX & Tooling](#ux--tooling)) have somewhere to live without a breaking
+  restructure later. `run` is always explicit — no bare `ratect <task>` sugar —
+  since that ambiguity (is `doctor` a task name or the `doctor` subcommand?) only
+  gets worse as more subcommands land, and "always explicit" is a simpler rule to
+  hold once 1.0.0's interface-stability promise applies. Deliberately still wired
+  onto `ratect-core`'s existing engine and its current YAML `Config`, completely
+  unchanged — no new parser, no new schema — so this proves the subcommand surface
+  end-to-end in isolation before any config-format work lands on top of it, the
+  same "mechanics before features" sequencing 0.20.0 used for the workspace split
+  itself. Docker-connection flags and output-mode selection are reused as-is from
+  `ratect-core`/`ui::create_event_sink` — `ratect-compat` already proved that
+  surface, nothing to reinvent.
+- **0.3.0** (planned) — **A `ratect`-native config format**, replacing YAML for
+  this binary only (`ratect-compat` stays YAML-only, permanently, for Batect
+  compatibility). TOML is the leading candidate — more idiomatic for a Rust
+  tool, and translates cleanly for most of today's schema (named
+  containers/tasks map naturally onto dotted table headers; scalars, string
+  maps, and scalar lists are a 1:1 fit) — but the exact syntax is secondary to
+  the schema redesign this version is actually about, which holds regardless of
+  which concrete format is chosen:
+  - **Replacing YAML anchors/aliases/merge keys** (`&name`/`*name`/`<<:`, free
+    today via `noyalib` — see [config reference](docs/config-reference.md)) with
+    an explicit `extends: <name>` field on `Container`, resolved as its own pass
+    after `include`s are merged (so, unlike anchors — scoped to a single parsed
+    YAML document — it can reach across `include` boundaries) and reusing the
+    same ancestor-path cycle check `engine.rs` already applies to
+    `dependencies`/`prerequisites`. Field-level shallow override (a child field
+    fully replaces the parent's, no recursive merging into nested maps),
+    matching the mental model `<<:` already has today rather than inventing a
+    new one.
+  - **Standardizing `volumes`/`ports`/`devices`/`include` on one object shape per
+    entry**, dropping today's compact string shorthand (`"8080:80"`,
+    `.:/code`, a bare include path) — not strictly required by TOML itself
+    (heterogeneous arrays are legal), but keeping a list's `[[...]]`
+    array-of-tables shorthand usable requires every entry be a table, and
+    `include`'s three current shapes (bare string / `{path, type: file}` /
+    `{type: git, ...}`) are the worst fit for a mixed-type array of any format.
+  - Reuses `ratect-core`'s already-resolved `Config`/`Container`/`Task` types
+    unchanged past parsing — only the deserialization front-end and the
+    `extends`-resolution pass are new, so `engine.rs`/`docker.rs`/`ui/` need no
+    changes at all, the same way `include` resolution is already invisible past
+    `Config::load_from_file`. `toml` is already a `ratect-core` dependency
+    (`cache.rs`'s sidecar file) — no new crate needed.
+- Migration tooling — converting an existing `ratect-compat`-managed project's
+  `batect.yml` into `ratect`'s new format — remains a named goal (see
+  [Two Binaries](#two-binaries-ratect-and-ratect-compat)) but isn't scheduled to
+  a specific version yet; whether it's a `ratect` subcommand or a documented
+  manual process isn't decided.
 
 Its **1.0.0** means something different from `ratect-compat`'s: interface stability
 (the subcommand structure and config format won't break), not feature-completeness
@@ -746,7 +822,7 @@ Improving the developer experience through better tools and feedback.
 
 Exploring innovative features that go beyond the original Batect, as well as planned improvements from the Batect roadmap.
 
-- **Alternative Configuration Format (TOML)**: **Undecided, exploratory.** TOML is a more typical configuration format for Rust projects than YAML. If pursued, this would apply only to the [`ratect` binary](#two-binaries-ratect-and-ratect-compat) — `ratect-compat` stays YAML-only for Batect compatibility — and would need a migration path for projects moving from `ratect-compat`'s YAML config.
+- ~~**Alternative Configuration Format (TOML)**: Undecided, exploratory. TOML is a more typical configuration format for Rust projects than YAML. If pursued, this would apply only to the [`ratect` binary](#two-binaries-ratect-and-ratect-compat) — `ratect-compat` stays YAML-only for Batect compatibility — and would need a migration path for projects moving from `ratect-compat`'s YAML config.~~ — scoped into `ratect` [0.3.0](#ratect), including the schema redesign (an `extends` field replacing YAML anchors, one object shape per `volumes`/`ports`/`devices`/`include` entry) needed regardless of the exact format chosen. Migration tooling from `ratect-compat`'s YAML remains unscheduled — see the `### ratect` versioned list.
 - **Restrict Nested Git Includes**: **`ratect`-only** — `ratect-compat` must keep Batect's own unrestricted behavior for parity (its `ConfigurationLoader`/`IncludeResolver` have the identical gap: any file, root or reached transitively through a Git include, can declare a further `type: git` include with no restriction on remote). Currently a nested include gets the exact same trust as one the project owner declared themselves — no allowlist, and (post-0.10.0's `container_git_boundaries` fix) a rogue nested include's own containers are at least bounded to its clone directory or the project directory, but the include mechanism itself will still fetch from whatever remote a third-party bundle names. Worth an opt-in gate for `ratect` (e.g. `allow_nested_git_includes`, defaulting `false`) requiring the project owner to consciously accept that a Git-included bundle may itself redirect the process to further remotes. Relatedly worth reconsidering alongside it: whether a nested (non-root-declared) include's clone/checkout failure should keep surfacing git's raw stderr, since the specific transport error (host unreachable vs. connection refused vs. repository-not-found vs. auth-failed) lets repeated attempts fingerprint an internal network — most relevant when `ratect` runs in CI against a bundle whose nested includes a less-trusted contributor can influence, and whose CI logs are visible back to them. Deferred rather than implemented immediately: real projects (including ones outside this one) depend on nested git includes working by default today, and `ratect-compat` has to default this open regardless — squarely a `ratect`-only divergence, not a blocking gap.
 - **Wildcard Includes**: Support for including multiple files using glob patterns (e.g., `include: containers/*.yaml`).
 - **Configuration Merging/Replacement**: Ability to merge or override containers and tasks when including files.
