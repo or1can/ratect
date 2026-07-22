@@ -69,15 +69,34 @@ stale, unpatched core. The core crate itself isn't published or meaningfully ver
 on its own; it's an internal implementation detail, not something either binary's users
 interact with directly.
 
-Mechanically, each `Cargo.toml` (whichever binary is being released — `ratect-compat`'s
-or `ratect`'s — and `ratect-core`'s) sits at `X.Y.Z-dev` between releases. Cutting a release is one isolated `chore:` commit that bumps both to
-the plain `X.Y.Z` being released and moves `CHANGELOG.md`'s accumulated `Unreleased`
-entries under a new dated `## [X.Y.Z]` header. That commit is tagged `vX.Y.Z` and
-published as a GitHub Release (`prerelease: true` until a binary's own 1.0.0 — see
-below — with that `CHANGELOG.md` section as its body). The next commit — starting the
-following version's development, also isolated, also `chore:` — bumps both
-`Cargo.toml`s back to the next `X.Y.Z-dev`.
-Neither bump is ever folded into a feature commit.
+Mechanically, **every** `Cargo.toml` in the workspace sits at `X.Y.Z-dev` between
+releases — both binaries and `ratect-core`, whichever binary a given cycle is
+actually about, so a build from `main` never claims to be a released version.
+Cutting a release is one isolated `chore:` commit that bumps the crates being
+released to the plain `X.Y.Z` and moves `CHANGELOG.md`'s accumulated `Unreleased`
+entries under a new dated `## [X.Y.Z]` header. That commit is tagged and published
+as a GitHub Release (`prerelease: true` until a binary's own 1.0.0 — see below —
+with that `CHANGELOG.md` section as its body). The next commit — starting the
+following version's development, also isolated, also `chore:` — bumps them back to
+the next `X.Y.Z-dev`. Neither bump is ever folded into a feature commit.
+
+Two mechanics that only became concrete once `ratect` started its own release cycle
+(0.2.0, the first one not about `ratect-compat`):
+
+- **Tags are prefixed with the binary they release** — `ratect/v0.2.0`,
+  `ratect-compat/v0.22.0` — because the two version lines will collide otherwise:
+  `v0.2.0` is already taken, by `ratect-compat`'s own 0.2.0 back when it was the
+  only binary. Bare `vX.Y.Z` tags (`v0.1.0` through `v0.21.0`) are that history and
+  stay exactly as they are; nothing renames them. Everything from here on is
+  prefixed, `ratect-compat` included, rather than leaving one binary on a legacy
+  scheme.
+- **A cycle bumps the crates it actually changes.** A `ratect`-only cycle still
+  moves `ratect-core` (it's the same shared crate, and its number has always run
+  with the release cadence rather than standing still) and still leaves
+  `ratect-compat` on a `-dev` of its own — a patch bump if nothing but the shared
+  core moved underneath it, a minor one if it gained anything itself. Which of the
+  two it turns out to be is decided at release time; the `-dev` number in between
+  is a statement of intent, not a commitment.
 
 ### `ratect-compat`
 
@@ -789,9 +808,12 @@ Neither bump is ever folded into a feature commit.
 
 ### `ratect`
 
-- **0.1.0-dev** — a placeholder crate exists (`ratect/`, added alongside
+- **0.1.0-dev** — ~~a placeholder crate exists (`ratect/`, added alongside
   `ratect-compat` in 0.20.0's [Two-Binary Split](#two-binaries-ratect-and-ratect-compat))
-  but real feature work hasn't started yet.
+  but real feature work hasn't started yet.~~ — superseded: never released as
+  0.1.0, since there was nothing in it to release. The crate went straight to
+  `0.2.0-dev` when work on the subcommand skeleton below opened, right after
+  `ratect-compat` 0.21.0 shipped.
 - **0.2.0** (planned) — **CLI subcommand skeleton**: `ratect run <task>` and
   `ratect tasks list` (replacing `ratect-compat`'s flat `<task-name>` positional
   and `--list-tasks`), settled as subcommands rather than a flat CLI so later verbs
