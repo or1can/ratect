@@ -36,6 +36,11 @@ struct State {
     /// Guards "Cleaning up..." printing once per task even though several
     /// cleanup-worthy events may follow.
     started_cleanup: OnceFlag,
+    /// The task's own container's name, from `TaskGraphResolved` — used only
+    /// to suppress its own `ContainerBecameHealthy`/`RunningSetupCommand`/
+    /// `SetupCommandsCompleted` lines (see [`SimpleEventLogger::is_task_container`]).
+    /// Reset per task the same way `started_cleanup` is.
+    task_container: Option<String>,
 }
 
 impl SimpleEventLogger {
@@ -67,6 +72,7 @@ impl EventSink for SimpleEventLogger {
                 // docs/task-lifecycle.md), so each prints its own
                 // "Cleaning up...".
                 state.started_cleanup.reset();
+                state.task_container = None;
                 self.console.println(&format!("Running {task}..."));
             }
             TaskEvent::TaskFinished {
@@ -100,6 +106,9 @@ impl EventSink for SimpleEventLogger {
                 self.console.println(&format!("Started {container}."));
             }
             TaskEvent::ContainerBecameHealthy { container } => {
+                if self.is_task_container(&container) {
+                    return;
+                }
                 self.console
                     .println(&format!("{container} has become healthy."));
             }
@@ -109,11 +118,17 @@ impl EventSink for SimpleEventLogger {
                 index,
                 total,
             } => {
+                if self.is_task_container(&container) {
+                    return;
+                }
                 self.console.println(&format!(
                     "Running setup command {command} ({index} of {total}) in {container}..."
                 ));
             }
             TaskEvent::SetupCommandsCompleted { container } => {
+                if self.is_task_container(&container) {
+                    return;
+                }
                 self.console
                     .println(&format!("{container} has completed all setup commands."));
             }
@@ -131,22 +146,60 @@ impl EventSink for SimpleEventLogger {
                     self.console.println("Cleaning up...");
                 }
             }
+            // Recorded only so `is_task_container` can recognize the task's
+            // own container above — simple mode otherwise has no use for the
+            // graph itself (unlike fancy/interleaved, which use it for
+            // layout).
+            TaskEvent::TaskGraphResolved { containers } => {
+                self.state.lock().unwrap().task_container = containers
+                    .into_iter()
+                    .find(|c| c.is_task_container)
+                    .map(|c| c.name);
+            }
             // No live progress detail in simple mode — the whole point of
             // the mode (matching Batect: `ImagePullProgressEvent`/
-            // `ImageBuildProgressEvent` are unhandled there too). The graph
-            // and per-step cleanup events only feed fancy's live displays,
-            // and a failure's error reaches stderr through the normal error
+            // `ImageBuildProgressEvent` are unhandled there too). The
+            // per-step cleanup events only feed fancy's live displays, and a
+            // failure's error reaches stderr through the normal error
             // chain, so none of them get a line here either.
             TaskEvent::ImagePullProgress { .. }
             | TaskEvent::ImageBuildProgress { .. }
             | TaskEvent::ImageResolved { .. }
-            | TaskEvent::TaskGraphResolved { .. }
             | TaskEvent::ContainerRemoved { .. }
             | TaskEvent::RemovingNetwork
             | TaskEvent::TaskFailed { .. }
             | TaskEvent::ContainerOutput { .. }
             | TaskEvent::SetupCommandOutput { .. } => {}
         }
+    }
+}
+
+impl SimpleEventLogger {
+    /// Whether `container` is the task's own — the three readiness
+    /// milestones (`ContainerBecameHealthy`/`RunningSetupCommand`/
+    /// `SetupCommandsCompleted`) are silently dropped for it, matching
+    /// Batect's own `SimpleEventLogger` (each of its three equivalent
+    /// handlers opens with `if (container == taskContainer) return`).
+    ///
+    /// Since 0.21.0 those events fire for the task's own container too (see
+    /// `engine.rs`'s `run_task_container_readiness`), and they'd print
+    /// *while* its raw command output is streaming to this same stdout —
+    /// output that has no framing of its own (no prefix, and often no
+    /// trailing newline), so a milestone line can land glued onto the tail
+    /// of whatever the command last wrote, on the very same terminal row,
+    /// at a nondeterministic point. Simple mode's whole contract is that it
+    /// never touches the task's own output, so the milestone is what gives
+    /// way. Nothing is lost that matters: a readiness *failure* still
+    /// reaches stderr through the normal error chain, and `all` mode still
+    /// reports every one of these for every container (its output is
+    /// line-buffered and prefixed, so it has no collision to avoid — same
+    /// split Batect's own `InterleavedEventLogger` makes).
+    ///
+    /// A dependency container is unaffected: its own readiness always
+    /// completes before the task container starts, so its lines can't
+    /// collide with anything.
+    fn is_task_container(&self, container: &str) -> bool {
+        self.state.lock().unwrap().task_container.as_deref() == Some(container)
     }
 }
 
@@ -274,6 +327,68 @@ mod tests {
              \n\
              Running main...\n\
              \nCleaning up...\n"
+        );
+    }
+
+    fn info(name: &str, is_task_container: bool) -> super::super::TaskContainerInfo {
+        super::super::TaskContainerInfo {
+            name: name.to_string(),
+            image: None,
+            build_tag: None,
+            dependencies: Vec::new(),
+            is_task_container,
+        }
+    }
+
+    /// The task's own readiness milestones would otherwise land in the
+    /// middle of its own raw output — see [`SimpleEventLogger::is_task_container`].
+    #[test]
+    fn readiness_milestones_are_dropped_for_the_tasks_own_container_only() {
+        let (logger, buffer) = logger();
+        logger.post(TaskEvent::TaskGraphResolved {
+            containers: vec![info("app", true), info("db", false)],
+        });
+        for container in ["db", "app"] {
+            logger.post(TaskEvent::ContainerBecameHealthy {
+                container: container.into(),
+            });
+            logger.post(TaskEvent::RunningSetupCommand {
+                container: container.into(),
+                command: "./init.sh".into(),
+                index: 1,
+                total: 1,
+            });
+            logger.post(TaskEvent::SetupCommandsCompleted {
+                container: container.into(),
+            });
+        }
+        assert_eq!(
+            buffer.contents(),
+            "db has become healthy.\n\
+             Running setup command ./init.sh (1 of 1) in db...\n\
+             db has completed all setup commands.\n"
+        );
+    }
+
+    /// Without the per-task reset, a prerequisite's task container would go
+    /// on suppressing its own milestones through the next task, where it may
+    /// be a plain dependency instead.
+    #[test]
+    fn a_new_task_resets_which_container_is_the_tasks_own() {
+        let (logger, buffer) = logger();
+        logger.post(TaskEvent::TaskGraphResolved {
+            containers: vec![info("app", true)],
+        });
+        logger.post(TaskEvent::TaskStarting {
+            task: "main".into(),
+        });
+        logger.post(TaskEvent::ContainerBecameHealthy {
+            container: "app".into(),
+        });
+        assert_eq!(
+            buffer.contents(),
+            "Running main...\n\
+             app has become healthy.\n"
         );
     }
 

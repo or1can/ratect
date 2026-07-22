@@ -775,6 +775,123 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         }
     }
 
+    /// The task's own container's readiness gate: waits for it to report
+    /// healthy, then runs its `setup_commands` in order — the same two
+    /// gates `ensure_container_ready` applies to a dependency, ported here
+    /// almost unchanged (this doesn't share that code directly since a
+    /// dependency's version also handles `customise`/cache-key/dedup
+    /// concerns that don't apply to the one, always-present task
+    /// container). Unlike a dependency, nothing in the graph depends on
+    /// *this* container's own readiness, so the caller runs this
+    /// concurrently with `run_container`'s own attach-and-wait-for-exit
+    /// (via `tokio::join!`) rather than gating anything on it — matching
+    /// Batect, which generates the identical health-check-wait/
+    /// `setup_commands` steps for every container, task container
+    /// included, and runs them concurrently with that container's own
+    /// command (see docs/task-lifecycle.md's "Known simplifications").
+    ///
+    /// `started` resolves with the container's id once `run_container` has
+    /// actually called Docker's own `start` — dropped without ever sending
+    /// (an `Err` here) if the container never got that far, in which case
+    /// there's nothing to wait on: `run_container`'s own `Err` already
+    /// reports that failure.
+    ///
+    /// One deliberate divergence from Batect, left for simplicity: Batect
+    /// cancels the still-running main command early the moment this gate
+    /// fails (via coroutine cancellation); Ratect always lets the main
+    /// command run to completion regardless. Either way the task is
+    /// reported as failed overall — this only affects how much of the main
+    /// command's own output/runtime you see before that failure is
+    /// reported.
+    async fn run_task_container_readiness(
+        &self,
+        started: tokio::sync::oneshot::Receiver<String>,
+        name: &str,
+        container_config: &crate::config::Container,
+        environment: Option<&HashMap<String, String>>,
+        user_mapping: Option<&crate::docker::UserMapping>,
+    ) -> Result<()> {
+        let Ok(container_id) = started.await else {
+            return Ok(());
+        };
+
+        self.docker
+            .wait_for_container_healthy(&container_id)
+            .await
+            .with_context(|| format!("Container '{}' did not become healthy", name))?;
+        self.event_sink.post(TaskEvent::ContainerBecameHealthy {
+            container: name.to_string(),
+        });
+
+        let setup_command_total = container_config.setup_commands.as_ref().map_or(0, Vec::len);
+        for (setup_command_index, setup_command) in
+            container_config.setup_commands.iter().flatten().enumerate()
+        {
+            tracing::debug!(
+                container = name,
+                command = setup_command.command.as_str(),
+                "Running setup command"
+            );
+            self.event_sink.post(TaskEvent::RunningSetupCommand {
+                container: name.to_string(),
+                command: setup_command.command.clone(),
+                index: setup_command_index + 1,
+                total: setup_command_total,
+            });
+            let result = {
+                let _permit = self.acquire_parallelism_permit().await;
+                self.docker
+                    .exec_in_container(
+                        &container_id,
+                        &setup_command.command,
+                        setup_command
+                            .working_directory
+                            .as_deref()
+                            .or(container_config.working_directory.as_deref()),
+                        environment,
+                        user_mapping,
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Failed to run setup command '{}' in container '{}'",
+                            setup_command.command, name
+                        )
+                    })?
+            };
+            if self.event_sink.wants_progress_detail() {
+                for line in result.output.lines() {
+                    self.event_sink.post(TaskEvent::SetupCommandOutput {
+                        container: name.to_string(),
+                        index: setup_command_index + 1,
+                        line: line.trim_end_matches('\r').to_string(),
+                    });
+                }
+            }
+            if result.exit_code != 0 {
+                let output = if result.output.trim().is_empty() {
+                    ", and did not produce any output".to_string()
+                } else {
+                    format!(", with output:\n{}", result.output.trim())
+                };
+                anyhow::bail!(
+                    "Setup command '{}' in container '{}' exited with code {}{}",
+                    setup_command.command,
+                    name,
+                    result.exit_code,
+                    output
+                );
+            }
+        }
+        if setup_command_total > 0 {
+            self.event_sink.post(TaskEvent::SetupCommandsCompleted {
+                container: name.to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
     #[cfg(test)]
     fn with_host_env(
         mut self,
@@ -1404,11 +1521,14 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 ports: (self.publish_ports && !expanded_ports.is_empty())
                     .then_some(&expanded_ports),
             };
-            // The task's own container gets its `health_check` override
-            // applied too (Docker records and runs it), but nothing gates
-            // on its verdict — the task is the container's own command, and
-            // its `setup_commands` don't run either (see
-            // docs/differences-from-batect.md).
+            // The task's own container goes through the same readiness
+            // gate as any dependency (health-check wait, then
+            // `setup_commands`, in order) — matching Batect, which runs
+            // every container through identical per-container steps. Unlike
+            // a dependency, nothing else in the graph depends on the task
+            // container's own readiness, so this runs *concurrently* with
+            // its main command instead of gating anything — see
+            // `run_task_container_readiness`'s own doc comment.
             let health_check = health_check_options(container_config);
             let command = run
                 .command
@@ -1449,23 +1569,45 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             let volumes = self
                 .resolve_volumes(container_config.volumes.as_ref())
                 .await?;
-            self.docker
-                .run_container(
-                    &run.container,
-                    &image,
-                    command,
-                    additional_args,
-                    volumes.as_ref(),
-                    environment.as_ref(),
-                    &network_name,
-                    interactive,
-                    user_mapping.as_ref(),
-                    &network_options,
-                    health_check.as_ref(),
-                    &container_options,
-                    self.cleanup_after_success,
-                )
-                .await?;
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let (readiness_done_tx, readiness_done_rx) = tokio::sync::oneshot::channel();
+            let run_future = self.docker.run_container(
+                &run.container,
+                &image,
+                command,
+                additional_args,
+                volumes.as_ref(),
+                environment.as_ref(),
+                &network_name,
+                interactive,
+                user_mapping.as_ref(),
+                &network_options,
+                health_check.as_ref(),
+                &container_options,
+                self.cleanup_after_success,
+                Some(started_tx),
+                Some(readiness_done_rx),
+            );
+            // `run_container` itself awaits `readiness_done_rx` (sent here)
+            // before removing the container — see its own doc comment for
+            // why that ordering matters. `tokio::join!` below is what
+            // actually drives this future concurrently with `run_future`;
+            // without something polling it, `readiness_done_rx` would never
+            // resolve.
+            let readiness_future = async {
+                let result = self
+                    .run_task_container_readiness(
+                        started_rx,
+                        &run.container,
+                        container_config,
+                        environment.as_ref(),
+                        user_mapping.as_ref(),
+                    )
+                    .await;
+                let _ = readiness_done_tx.send(result);
+            };
+            let (run_result, ()) = tokio::join!(run_future, readiness_future);
+            run_result?;
 
             Ok(())
         }
@@ -1973,6 +2115,13 @@ mod tests {
         // `TaskEngine::max_parallelism`'s own doc comment for why).
         exec_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
         health_check_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
+        // Same idea again, for `run_container` itself (keyed by container
+        // name) — simulates the task's own container's main command still
+        // running for a while after it starts, so a test can prove its
+        // readiness gate (health-check wait, then `setup_commands`) actually
+        // overlaps with the still-in-flight run rather than happening
+        // strictly before or after it (see `with_run_delay`).
+        run_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
     }
 
     impl Default for FakeContainerRuntime {
@@ -2001,6 +2150,7 @@ mod tests {
                 pull_delays: Default::default(),
                 exec_delays: Default::default(),
                 health_check_delays: Default::default(),
+                run_delays: Default::default(),
             }
         }
     }
@@ -2060,6 +2210,18 @@ mod tests {
         /// concurrently (overlapping in virtual time), not sequentially.
         fn with_start_delay(self, name: &str, delay: std::time::Duration) -> Self {
             self.start_delays
+                .lock()
+                .unwrap()
+                .insert(name.to_string(), delay);
+            self
+        }
+
+        /// Makes `run_container` for the task's own container `name`
+        /// artificially `tokio::time::sleep` for `delay` before reporting
+        /// whether the (simulated) main command succeeded — see
+        /// `run_delays`' own doc comment for why.
+        fn with_run_delay(self, name: &str, delay: std::time::Duration) -> Self {
+            self.run_delays
                 .lock()
                 .unwrap()
                 .insert(name.to_string(), delay);
@@ -2546,6 +2708,8 @@ mod tests {
             health_check: Option<&crate::docker::HealthCheckOptions>,
             container_options: &crate::docker::ContainerOptions,
             remove_on_exit: bool,
+            started: Option<tokio::sync::oneshot::Sender<String>>,
+            readiness: Option<tokio::sync::oneshot::Receiver<Result<()>>>,
         ) -> Result<()> {
             self.environments
                 .lock()
@@ -2599,9 +2763,35 @@ mod tests {
                 network
             ));
             self.push(format!("remove_on_exit:{name}:{remove_on_exit}"));
+            // Sent as soon as the (simulated) container has "started" — same
+            // id convention `start_background_container` uses, so
+            // `with_unhealthy_container`/exec-based assertions work
+            // identically whether `name` is a dependency or the task's own
+            // container. Fired before `run_delays`' own sleep (if any), so a
+            // concurrent readiness task genuinely overlaps with this call
+            // still being in flight, the same way it would against a real,
+            // still-running container.
+            if let Some(started) = started {
+                let _ = started.send(format!("sidecar-id-{name}"));
+            }
+            let delay = self.run_delays.lock().unwrap().get(name).copied();
+            if let Some(delay) = delay {
+                tokio::time::sleep(delay).await;
+            }
+            // Awaited *before* the fail_run check — same "removal (here,
+            // simulated by resolving this call) waits for readiness first"
+            // ordering the real `DockerClient::run_container` now applies,
+            // so a test exercising both a failing setup command and a fast
+            // `run_container` still observes the setup-command failure
+            // rather than racing past it.
+            let readiness_result = match readiness {
+                Some(readiness) => readiness.await.unwrap_or(Ok(())),
+                None => Ok(()),
+            };
             if *self.fail_run.lock().unwrap() {
                 return Err(crate::docker::ContainerExitedNonZero { exit_code: 1 }.into());
             }
+            readiness_result?;
             Ok(())
         }
     }
@@ -4625,7 +4815,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn task_containers_own_health_check_is_applied_but_never_gates_the_run() {
+    async fn task_containers_own_health_check_reaches_docker_and_is_waited_on() {
+        // 0.21.0 closed this gap: the task's own container now goes through
+        // the same readiness gate a dependency always has (see
+        // `run_task_container_readiness`), run concurrently with its main
+        // command rather than gating anything.
         let mut containers = HashMap::new();
         let mut app = container("alpine:3.18", None);
         app.health_check = Some(crate::config::HealthCheckConfig {
@@ -4659,12 +4853,155 @@ mod tests {
                 ..Default::default()
             })
         );
-        // ...but nothing waits on its verdict — the task is the container's
-        // own command.
+        // ...and its verdict is now actually waited on.
         let events = docker.events();
         assert!(
-            !events.iter().any(|e| e.starts_with("wait-healthy:")),
-            "the task's own container must not be gated on health: {events:?}"
+            events
+                .iter()
+                .any(|e| e.starts_with("wait-healthy:sidecar-id-app")),
+            "the task's own container should now be gated on health: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unhealthy_task_container_fails_the_task() {
+        let mut containers = HashMap::new();
+        let mut app = container("alpine:3.18", None);
+        app.health_check = Some(crate::config::HealthCheckConfig {
+            command: Some("wget -q localhost".to_string()),
+            interval: None,
+            retries: None,
+            start_period: None,
+            timeout: None,
+        });
+        containers.insert("app".to_string(), app);
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let docker = FakeContainerRuntime::default().with_unhealthy_container("app");
+        let engine = TaskEngine::new(config, docker.clone());
+
+        let result = engine.run_task("start", &[]).await;
+
+        assert!(
+            result.is_err(),
+            "an unhealthy task container should fail the task even though its own command \
+             would have succeeded"
+        );
+    }
+
+    #[tokio::test]
+    async fn task_containers_own_setup_commands_run() {
+        let mut containers = HashMap::new();
+        let mut app = container("alpine:3.18", None);
+        app.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./migrate.sh".to_string(),
+            working_directory: None,
+        }]);
+        containers.insert("app".to_string(), app);
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        let events = docker.events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e == "exec:sidecar-id-app:./migrate.sh"),
+            "the task's own container's setup command should have run: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn failing_setup_command_on_the_tasks_own_container_fails_the_task() {
+        let mut containers = HashMap::new();
+        let mut app = container("alpine:3.18", None);
+        app.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./migrate.sh".to_string(),
+            working_directory: None,
+        }]);
+        containers.insert("app".to_string(), app);
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let docker = FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh");
+        let engine = TaskEngine::new(config, docker.clone());
+
+        let result = engine.run_task("start", &[]).await;
+
+        assert!(
+            result.is_err(),
+            "a failing setup command on the task's own container should fail the task even \
+             though its own command would have succeeded"
+        );
+    }
+
+    #[tokio::test]
+    async fn task_containers_own_setup_commands_run_concurrently_with_its_main_command() {
+        // Proves the concurrency itself, not just that setup commands run
+        // at all — same idiom as
+        // `independent_dependencies_start_concurrently_not_sequentially`:
+        // an equal delay on both the main run and the setup command's own
+        // exec means a *sequential* readiness-then-run (or run-then-
+        // readiness) model would take roughly their sum, while running them
+        // concurrently (matching Batect — see docs/task-lifecycle.md's
+        // "Known simplifications") takes roughly just the one delay.
+        let mut containers = HashMap::new();
+        let mut app = container("alpine:3.18", None);
+        app.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./migrate.sh".to_string(),
+            working_directory: None,
+        }]);
+        containers.insert("app".to_string(), app);
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let delay = std::time::Duration::from_millis(100);
+        let docker = FakeContainerRuntime::default()
+            .with_run_delay("app", delay)
+            .with_exec_delay("./migrate.sh", delay);
+        let engine = TaskEngine::new(config, docker.clone());
+
+        let start = tokio::time::Instant::now();
+        engine.run_task("start", &[]).await.unwrap();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < delay * 2,
+            "the task's own container's main command and its setup command should overlap, not \
+             run sequentially (elapsed: {elapsed:?})"
         );
     }
 
@@ -7451,6 +7788,14 @@ mod tests {
             TaskEvent::RunningTaskContainer {
                 container: "build-env".into(),
                 command: Some("cargo test".into()),
+            },
+            // `build-env` has no `health_check` of its own, but the task's
+            // own container now goes through the same readiness gate a
+            // dependency always has (0.21.0) — a container with no health
+            // check at all is immediately considered healthy, same as for
+            // a dependency, so this still posts unconditionally.
+            TaskEvent::ContainerBecameHealthy {
+                container: "build-env".into(),
             },
             TaskEvent::CleanupStarting,
             TaskEvent::ContainerRemoved {

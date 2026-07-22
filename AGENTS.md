@@ -139,8 +139,16 @@ Ratect is a **Cargo workspace** with four crates (the
     ([docs](docs/config-reference.md#interactive-mode)), and the user-mapping upload
     path ([docs](docs/config-reference.md#user-mapping)). Exposes a `ContainerRuntime`
     trait so the engine can be tested against a fake instead of a live daemon. Gotchas
-    worth knowing before touching it: the interactive path's `RawModeGuard` restores
-    the terminal on `Drop`, even on an error return; since Ratect has no `--output`
+    worth knowing before touching it: `run_container`'s three actual start/attach
+    paths (`run_container_interactively`/`run_container_forwarding_stdin`/
+    `start_and_stream_logs`) each call Docker's own `start` at a different point
+    relative to attaching (the TTY path attaches *before* starting, deliberately, so
+    no early output is missed) — `run_container`'s own `started` parameter (0.21.0,
+    a `oneshot::Sender<String>`) is threaded into all three so each can signal it
+    right after its own `start` call succeeds, regardless of which path actually
+    ran, letting `engine.rs`'s concurrent readiness gate begin at the right moment
+    however the container ends up attached; the interactive path's `RawModeGuard`
+    restores the terminal on `Drop`, even on an error return; since Ratect has no `--output`
     streaming mode, a failed build's full log transcript (not just Docker's one-line
     summary) is folded into the returned error instead; `command`/`entrypoint`/
     `setup_commands.command` are all tokenized into literal argv by
@@ -201,7 +209,27 @@ Ratect is a **Cargo workspace** with four crates (the
     runs `prerequisites` first, then returns early (no error) if the task itself has
     no `run` (0.14.0) — everything after can assume `run` is present. `customise`
     threads through `start_dependency`'s own recursion unconditionally, so it
-    reaches its target regardless of depth in the dependency graph.
+    reaches its target regardless of depth in the dependency graph. The task's own
+    container goes through the same readiness gate a dependency always has too
+    (0.21.0, `run_task_container_readiness`) — health-check wait, then
+    `setup_commands`, in order — but run *concurrently* with
+    `ContainerRuntime::run_container`'s own attach-and-wait-for-exit via
+    `tokio::join!` (the engine's first concurrent-exec path), rather than gating
+    anything on it, since nothing else in the graph depends on the task container's
+    own readiness. `run_container` gained two `oneshot` channel parameters for this:
+    `started` (signaled with the container's id right after Docker's own `start`
+    call, letting the readiness gate begin) and `readiness` (which `run_container`
+    itself awaits for the readiness gate's own outcome *before* removing the
+    container — without that ordering, a fast-exiting main command would routinely
+    race the still-in-flight readiness gate against the container's own removal,
+    since a dependency's own version of this never has to, having no main command of
+    its own to race against). See [task
+    lifecycle](docs/task-lifecycle.md#known-simplifications-relative-to-batect) for
+    the one race this still shares with Batect (a near-instant main command with no
+    `health_check` can still race past a `setup_commands` entry's own `docker exec`)
+    and the one deliberate divergence (the main command is never cancelled early
+    just because the readiness gate fails first, unlike Batect's own coroutine
+    cancellation).
     `resolve_volumes` (0.18.0) turns a container's `VolumeMount`s into the
     literal bind strings `docker.rs` expects — a `Local` mount's already fully
     resolved by `config.rs`, nothing left to do but reassemble the string; a
@@ -239,7 +267,18 @@ Ratect is a **Cargo workspace** with four crates (the
     line-buffers every container's output into `ContainerOutput` events (no
     TTY/stdin, `TERM=dumb` everywhere) while the other three modes stream the
     task container raw to stdout — add any future per-mode I/O behavior through
-    that method, not a new engine/docker setting. Style selection and logger
+    that method, not a new engine/docker setting. That raw-streaming half is
+    also why `simple.rs` *drops* the task container's own
+    `ContainerBecameHealthy`/`RunningSetupCommand`/`SetupCommandsCompleted`
+    lines (0.21.0, `is_task_container` — the same three `if (container ==
+    taskContainer) return` guards Batect's own `SimpleEventLogger` has): since
+    the task container's readiness gate now runs *concurrently* with its
+    command (`engine.rs`), printing them would drop a line into the middle of
+    that command's unframed output. `all` mode has no such collision (prefixed,
+    line-buffered) and reports them for every container, matching Batect's own
+    `InterleavedEventLogger`; `fancy` never sees them, since its block freezes
+    the moment the task container starts. Any *new* milestone event for the
+    task's own container needs the same decision made for it. Style selection and logger
     construction (including the explicit-`fancy`-without-an-interactive-console
     error) live in `ui::create_event_sink`, not `main.rs` — deliberately, so the
     `ratect` binary (see `ROADMAP.md`'s two-binaries section) gets this for free

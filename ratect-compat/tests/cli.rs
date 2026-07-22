@@ -32,6 +32,14 @@ fn ratect_command() -> Command {
 /// container printed use this instead of raw stdout — deliberately still
 /// exact-match on the extracted chunk, not weakened to `contains`, so they
 /// keep proving the container printed that and nothing else.
+///
+/// That exact-match still holds after 0.21.0, where the task's own
+/// container's readiness gate (health-check wait, then `setup_commands`)
+/// started running concurrently with its command: simple mode drops that
+/// container's own readiness milestones entirely rather than printing them
+/// into the middle of its output (see `SimpleEventLogger::is_task_container`),
+/// so nothing nondeterministic lands inside this window. Dependency
+/// containers' milestones are all printed before the window opens.
 fn task_output(stdout: &str) -> String {
     let lines: Vec<&str> = stdout.lines().collect();
     let start = lines
@@ -75,6 +83,10 @@ fn unsupported_key_config_path() -> PathBuf {
 
 fn unhealthy_dependency_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/unhealthy-dependency.yml")
+}
+
+fn task_container_setup_commands_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/task-container-setup-commands.yml")
 }
 
 fn no_image_config_path() -> PathBuf {
@@ -1009,6 +1021,41 @@ tasks:
     );
 
     cleanup();
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// The other half of the readiness gate (0.21.0): the task's *own*
+/// container's `setup_commands` run too, concurrently with its main command
+/// — see `tests/fixtures/task-container-setup-commands.yml` for why the
+/// marker file it checks for can only exist if the setup command really
+/// exec'd into the still-running container mid-command.
+///
+/// Doubles as the end-to-end proof that the task container's own readiness
+/// milestones stay *out* of its output in the `simple` style (see
+/// `SimpleEventLogger::is_task_container`) — `task_output`'s exact match
+/// would pick up any stray "app has become healthy."/"Running setup command
+/// ..." line landing in that window.
+#[test]
+#[ignore]
+fn task_containers_own_setup_commands_run_via_docker() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(task_container_setup_commands_config_path())
+        .arg("check")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(task_output(&stdout), "SETUP-RAN-DURING-TASK");
 }
 
 /// Requires a running Docker daemon with network access to pull

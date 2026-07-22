@@ -1,0 +1,21 @@
+# Exercises the task's *own* container's readiness gate (0.21.0) end to end:
+# its `setup_commands` run concurrently with its main command, inside the
+# same container — so the marker the setup command drops can only exist if
+# the setup command really `docker exec`ed into the still-running container
+# while its command was mid-sleep. (A dependency's setup commands run in a
+# separate container instead — see the `readiness` fixture for that half.)
+#
+# The `sleep 2` is what keeps this out of the one race documented in
+# docs/task-lifecycle.md: a near-instant main command can exit before the
+# setup command gets a chance to exec at all.
+project_name: ratect-task-setup-commands-test
+containers:
+  app:
+    image: alpine:3.18.2
+    setup_commands:
+      - command: touch /tmp/setup-ran
+tasks:
+  check:
+    run:
+      container: app
+      command: sh -c "sleep 2; test -f /tmp/setup-ran && echo SETUP-RAN-DURING-TASK"

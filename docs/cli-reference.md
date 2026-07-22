@@ -86,6 +86,12 @@ styles are Batect's own four, all implemented:
   `Cleaning up...`, and a final `<task> finished with exit code <n> in
   <duration>.` summary (the exit code green/red on a color-capable console). No
   live-updating progress detail at all — safe for CI logs and redirected output.
+  The health/setup-command milestones are shown for *dependency* containers
+  only: the task's own container's readiness runs concurrently with its command
+  (see [task lifecycle](task-lifecycle.md#known-simplifications-relative-to-batect)),
+  so printing them would drop a line into the middle of that command's own
+  output — use `all` (below) to see them. A readiness *failure* is still
+  reported, on stderr, in every style.
 - **`quiet`** — no milestone lines at all: stdout is exactly the containers' own
   output, so it's safe to pipe (error reporting stays on stderr, unchanged). Also
   switches `--list-tasks` to a machine-readable format: one task per line, sorted

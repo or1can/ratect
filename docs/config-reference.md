@@ -581,12 +581,16 @@ Ratect imposes no timeout of its own on the health wait (matching Batect) — Do
 own `interval`/`retries` bound how long a verdict can take, so a health check
 configured to retry forever waits forever.
 
-Two deliberate scope notes, both diverging only for the task's *own* container (see
-[Differences from Batect](differences-from-batect.md#container-fields)): its
-`health_check` is still applied — Docker records and runs it — but Ratect never waits
-on its verdict (the task's own exit code alone decides the outcome), and its
-`setup_commands` don't run at all (Batect runs them concurrently with the task's
-command; Ratect's engine has no concurrent exec path yet).
+The task's own container goes through this same readiness gate too (0.21.0), run
+concurrently with its main command rather than gating anything on it — matching
+Batect, which runs every container through identical per-container steps, task
+container included. A health-check or setup-command failure fails the task even if
+the main command already succeeded — but the main command itself is never cancelled
+early because of it (unlike Batect); it always runs to completion. See [known
+simplifications](task-lifecycle.md#known-simplifications-relative-to-batect) for the
+one race this still leaves (a very fast main command can finish before a setup
+command gets a chance to run) and [Differences from
+Batect](differences-from-batect.md#container-fields).
 
 ## Task
 

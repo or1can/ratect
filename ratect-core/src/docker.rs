@@ -1248,6 +1248,29 @@ pub trait ContainerRuntime {
     /// — a nonzero exit is still "success" for cleanup-gating purposes,
     /// matching Batect (only an infrastructure failure, which never reaches
     /// this far, is "failure").
+    ///
+    /// `started`, given, is signaled with the container's own id right after
+    /// Docker's own `start` call succeeds — never sent at all if the
+    /// container never gets that far (e.g. `create_container` itself
+    /// failing). Lets `engine.rs` run the task's own container's readiness
+    /// gate (health-check wait, then `setup_commands`, via
+    /// `wait_for_container_healthy`/`exec_in_container`) concurrently with
+    /// this call's own attach-and-wait-for-exit — matching Batect, which
+    /// runs every container (task container included) through the same
+    /// per-container steps, concurrently with that container's own command.
+    /// `None` for a dependency/sidecar (`start_background_container`
+    /// already returns its id immediately, with no attach/wait to run
+    /// concurrently against).
+    ///
+    /// `readiness`, given, is awaited for that same readiness gate's own
+    /// outcome *before* this call removes the container (see
+    /// `remove_on_exit`) — its `Err` then takes effect exactly like a
+    /// nonzero exit code, failing this call overall. Without this, a
+    /// fast-exiting main command would routinely race the still-in-flight
+    /// readiness gate against this container's own removal (unlike a
+    /// dependency, which stays running for the whole task and never hits
+    /// this). `None` skips the wait entirely (matches `started` being
+    /// `None` too, in practice — always given together).
     #[allow(clippy::too_many_arguments)]
     async fn run_container(
         &self,
@@ -1264,6 +1287,8 @@ pub trait ContainerRuntime {
         health_check: Option<&HealthCheckOptions>,
         container_options: &ContainerOptions,
         remove_on_exit: bool,
+        started: Option<tokio::sync::oneshot::Sender<String>>,
+        readiness: Option<tokio::sync::oneshot::Receiver<Result<()>>>,
     ) -> Result<()>;
 
     /// Lists every Docker volume's name on the daemon — used by
@@ -1937,7 +1962,15 @@ impl DockerClient {
     /// attach-then-start pattern uses, so no early output is missed — and
     /// puts the local terminal into raw mode for the duration, restored via
     /// `RawModeGuard`'s `Drop` even if this returns early on error.
-    async fn run_container_interactively(&self, container_id: &str) -> Result<i64> {
+    ///
+    /// `started`, if given, is signaled with `container_id` right after
+    /// Docker's own `start` call succeeds — see `run_container`'s own doc
+    /// comment for why.
+    async fn run_container_interactively(
+        &self,
+        container_id: &str,
+        started: Option<tokio::sync::oneshot::Sender<String>>,
+    ) -> Result<i64> {
         let attach_options = AttachContainerOptionsBuilder::default()
             .stdin(true)
             .stdout(true)
@@ -1960,6 +1993,9 @@ impl DockerClient {
             .await
             .context("Failed to start container")?;
         tracing::debug!(container_id, "started container interactively");
+        if let Some(started) = started {
+            let _ = started.send(container_id.to_string());
+        }
 
         // Syncs the container's TTY to the local terminal's size once, at
         // attach time — then `resize_listener` (Unix only) keeps it in sync
@@ -2010,9 +2046,21 @@ impl DockerClient {
     /// the fully non-interactive path and `run_container_forwarding_stdin`
     /// below — both need identical output handling, differing only in
     /// whether stdin is piped in alongside it.
-    async fn start_and_stream_logs(&self, container_name: &str, container_id: &str) -> Result<i64> {
+    ///
+    /// `started`, if given, is signaled with `container_id` right after
+    /// Docker's own `start` call succeeds — see `run_container`'s own doc
+    /// comment for why.
+    async fn start_and_stream_logs(
+        &self,
+        container_name: &str,
+        container_id: &str,
+        started: Option<tokio::sync::oneshot::Sender<String>>,
+    ) -> Result<i64> {
         self.docker.start_container(container_id, None).await?;
         tracing::debug!(container_id, "started container");
+        if let Some(started) = started {
+            let _ = started.send(container_id.to_string());
+        }
 
         if self.event_sink.container_io_streaming() == ContainerIoStreaming::Interleaved {
             stream_logs_as_interleaved_events(
@@ -2060,6 +2108,7 @@ impl DockerClient {
         &self,
         container_name: &str,
         container_id: &str,
+        started: Option<tokio::sync::oneshot::Sender<String>>,
     ) -> Result<i64> {
         let attach_options = AttachContainerOptionsBuilder::default()
             .stdin(true)
@@ -2083,7 +2132,7 @@ impl DockerClient {
         });
 
         let result = self
-            .start_and_stream_logs(container_name, container_id)
+            .start_and_stream_logs(container_name, container_id, started)
             .await;
         stdin_pump.abort();
         result
@@ -2640,6 +2689,8 @@ impl ContainerRuntime for DockerClient {
         health_check: Option<&HealthCheckOptions>,
         container_options: &ContainerOptions,
         remove_on_exit: bool,
+        started: Option<tokio::sync::oneshot::Sender<String>>,
+        readiness: Option<tokio::sync::oneshot::Receiver<Result<()>>>,
     ) -> Result<()> {
         // Independently re-enforces the same policy `engine.rs` already
         // gated `interactive` on before calling here — see
@@ -2730,12 +2781,27 @@ impl ContainerRuntime for DockerClient {
         .await?;
 
         let exit_code = if use_tty {
-            self.run_container_interactively(&container.id).await?
+            self.run_container_interactively(&container.id, started)
+                .await?
         } else if interactive {
-            self.run_container_forwarding_stdin(name, &container.id)
+            self.run_container_forwarding_stdin(name, &container.id, started)
                 .await?
         } else {
-            self.start_and_stream_logs(name, &container.id).await?
+            self.start_and_stream_logs(name, &container.id, started)
+                .await?
+        };
+
+        // Awaited *before* removal — otherwise a fast-exiting main command
+        // (a common case, unlike a dependency's usually long-running one)
+        // would frequently race the still-in-flight readiness gate's own
+        // `docker exec`/health inspect against this container's removal,
+        // turning what should be a clean "setup command failed" report into
+        // a confusing "container is not running" one instead. `None` (no
+        // readiness receiver, e.g. no caller-supplied `started` either)
+        // behaves exactly as before this existed.
+        let readiness_result = match readiness {
+            Some(readiness) => readiness.await.unwrap_or(Ok(())),
+            None => Ok(()),
         };
 
         if remove_on_exit {
@@ -2752,6 +2818,7 @@ impl ContainerRuntime for DockerClient {
         if exit_code != 0 {
             return Err(ContainerExitedNonZero { exit_code }.into());
         }
+        readiness_result?;
 
         Ok(())
     }

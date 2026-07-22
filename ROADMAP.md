@@ -14,9 +14,11 @@ The primary goal is to support the core features of Batect to ensure a seamless 
   reports healthy (its image's own Docker health check, or the `health_check`
   override) and completes its `setup_commands` — only then do its dependents start
   (0.9.0) — see [config reference](docs/config-reference.md#dependency-readiness).
-  The task's *own* container's setup commands don't run, and its health verdict
-  never gates the outcome — see
-  [Differences from Batect](docs/differences-from-batect.md#container-fields).
+  The task's *own* container goes through this same gate too, concurrently with its
+  main command rather than gating anything on it (0.21.0) — see [task
+  lifecycle](docs/task-lifecycle.md#known-simplifications-relative-to-batect) for the
+  one residual race this still shares with Batect, and [Differences from
+  Batect](docs/differences-from-batect.md#container-fields).
 - **Includes**: Local file includes — splitting one project's configuration across multiple files via the top-level `include` directive, resolved relative to each declaring file's own directory and merged into one flat `containers`/`tasks`/`config_variables` set (0.7.0) — and Git includes/bundles — importing shared tasks/containers from a separate repository, cloned once and cached forever at `~/.ratect/incl` (0.8.0), with a 30-day automatic cache eviction sweep matching Batect's own (0.19.0) — see [config reference](docs/config-reference.md#includes) and [Differences from Batect](docs/differences-from-batect.md#top-level-fields).
 - **Full Configuration Parity**: Support for all available Batect configuration options and standard YAML structures. See [Differences from Batect](docs/differences-from-batect.md#configuration-format) for the itemized current status of every field.
 - **Volume Mounts**: `volumes` supports all three of Batect's mount kinds — `local` (`local:container[:options]`), `cache` (a named volume that persists between separate `ratect` invocations — a Docker named volume by default, or a host directory under `--cache-type=directory`, plus `--clean`/`--clean-cache` to clear them out, [0.18.0](#ratect-compat)) — see [Cache volumes](docs/config-reference.md#cache-volumes) — and `tmpfs` (an in-memory, ephemeral mount, lost when the container exits, [0.21.0](#ratect-compat)) — see [Tmpfs mounts](docs/config-reference.md#tmpfs-mounts).
@@ -717,10 +719,35 @@ Neither bump is ever folded into a feature commit.
     bind-string parameter, since a tmpfs mount can't be expressed as a bind
     string at all) — resolved synchronously, unlike `local`/`cache`, since it
     needs no cache-key lookup.
-  - **The task's own container's `setup_commands`**: currently only run for
+  - ~~**The task's own container's `setup_commands`**: currently only run for
     dependency containers, not the task's own — Batect runs them concurrently
     with the task's command; closing this needs the engine's first concurrent
-    exec path for a single container's own readiness-then-run sequence.
+    exec path for a single container's own readiness-then-run sequence.~~ —
+    done: the task's own container now goes through the same readiness gate a
+    dependency always has (health-check wait, then `setup_commands`, in
+    order) — the engine's first concurrent-exec path
+    (`TaskEngine::run_task_container_readiness`, run via `tokio::join!`
+    alongside `ContainerRuntime::run_container`'s own attach-and-wait-for-
+    exit). `run_container` gained two new parameters: `started` (a
+    `oneshot::Sender` signaled with the container's id right after Docker's
+    own `start` call, letting the readiness gate begin) and `readiness` (a
+    `oneshot::Receiver` `run_container` itself awaits, for the readiness
+    gate's own outcome, *before* removing the container — without this, a
+    fast-exiting main command would routinely race the still-in-flight
+    readiness gate against the container's own removal). One race this still
+    shares with Batect (confirmed against Batect's own source — its
+    `RunStage` completion is driven purely by the container's exit event, not
+    its readiness either): a main command that exits very quickly — with no
+    `health_check` configured especially, since the readiness gate then
+    starts its `setup_commands` almost immediately — can still finish before
+    a setup command gets a chance to `docker exec` into it, surfacing
+    Docker's own "container is not running" error instead of that command's
+    real outcome; anything taking more than a few tens of milliseconds is
+    unaffected. Also unlike Batect (a deliberate simplification, not a bug):
+    the main command is never cancelled early just because the readiness
+    gate fails first — it always runs to completion, and the task is still
+    reported as failed overall either way. See [task
+    lifecycle](docs/task-lifecycle.md#known-simplifications-relative-to-batect).
   - **Config Schema**: a JSON schema for `batect.yml`'s actual Ratect-accepted
     shape (editor autocompletion/validation), likely generated from
     `ratect-core/src/config.rs`'s own `Serialize`/`Deserialize` structs — see

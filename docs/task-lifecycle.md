@@ -280,11 +280,25 @@ colliding.
 
 ## Known simplifications relative to Batect
 
-- **The task's own container skips the readiness steps.** Its `health_check` is
-  applied (Docker records and runs it) but nothing waits on the verdict, and its
-  `setup_commands` don't run at all — Batect runs every container through the same
-  per-container steps, task container included (concurrently with its command) — see
-  [differences from Batect](differences-from-batect.md#container-fields).
+- **The task's own container's readiness gate can race a fast main command.**
+  Since 0.21.0, the task's own container goes through the same readiness gate a
+  dependency always has — health-check wait, then `setup_commands`, in order — run
+  concurrently with its main command rather than gating anything on it (nothing else
+  in the graph depends on the task container's own readiness). A setup command or
+  health-check failure fails the task even if the main command already succeeded.
+  One race this doesn't close, matching Batect's own (its `RunStage` completion is
+  driven purely by the container's exit event, not its readiness): a main command
+  that exits very quickly — especially with no `health_check` configured, since the
+  readiness gate then starts its `setup_commands` almost immediately after the
+  container starts — can finish before a `setup_commands` entry gets a chance to
+  `docker exec` into it, surfacing Docker's own "container is not running" error
+  instead of that setup command's actual outcome. In practice this only bites a
+  near-instant main command; anything taking more than a few tens of milliseconds
+  gives the setup command time to run and report its real result. Also unlike
+  Batect: the main command itself is never cancelled early just because the
+  readiness gate fails first — it always runs to completion, and the task is still
+  reported as failed overall either way. See [differences from
+  Batect](differences-from-batect.md#container-fields).
 - **Prerequisite tasks stay sequential, matching Batect exactly** — `prerequisites`
   entries run one after another, each to completion, never concurrently with each
   other or with the task that named them (see "Task ordering" above). This is Batect's
