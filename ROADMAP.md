@@ -814,7 +814,7 @@ Two mechanics that only became concrete once `ratect` started its own release cy
   0.1.0, since there was nothing in it to release. The crate went straight to
   `0.2.0-dev` when work on the subcommand skeleton below opened, right after
   `ratect-compat` 0.21.0 shipped.
-- **0.2.0** (planned) — **CLI subcommand skeleton**: `ratect run <task>` and
+- **0.2.0** (in development) — **CLI subcommand skeleton**: `ratect run <task>` and
   `ratect tasks list` (replacing `ratect-compat`'s flat `<task-name>` positional
   and `--list-tasks`), settled as subcommands rather than a flat CLI so later verbs
   (`ratect doctor`, git-include cache management — see
@@ -830,6 +830,23 @@ Two mechanics that only became concrete once `ratect` started its own release cy
   itself. Docker-connection flags and output-mode selection are reused as-is from
   `ratect-core`/`ui::create_event_sink` — `ratect-compat` already proved that
   surface, nothing to reinvent.
+
+  Landed so far: both subcommands, on the shared glue lifted into `ratect-core`
+  for them (`config::load_project`, `engine::TaskEngineSettings`/`with_settings`
+  — `ratect-compat` moved onto both in the same change, so the seam is proven
+  rather than declared). Two interface decisions worth recording, since they're
+  the first places `ratect` deliberately differs rather than merely being newer:
+  the Docker-connection options are `run`'s, not global (`tasks list` never
+  reaches a daemon, and an accepted-but-ignored flag is worse than one that
+  isn't offered) — carried in their own `#[command(flatten)]` struct so a later
+  daemon-using verb picks up the identical surface; and there's no `--log-file`,
+  Batect's own, since redirecting stderr covers it. Documented in
+  [`docs/ratect-cli.md`](docs/ratect-cli.md), which is deliberately separate
+  from `ratect-compat`'s own CLI reference — two interfaces, not two spellings
+  of one. Still to do before release: cache management (`--clean`/`--clean-cache`
+  have no `ratect` equivalent yet — a `caches` verb rather than flags), and
+  deciding whether `-f batect.yml` stays the default file name for a binary
+  whose own format arrives in 0.3.0.
 - **0.3.0** (planned) — **A `ratect`-native config format**, replacing YAML for
   this binary only (`ratect-compat` stays YAML-only, permanently, for Batect
   compatibility). TOML is the leading candidate — more idiomatic for a Rust

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ratect`: the CLI subcommand skeleton** (`ratect` 0.2.0-dev): `ratect run <task> [-- ARGS...]` and `ratect tasks list`, replacing `ratect-compat`'s flat `<task-name>` positional and `--list-tasks` for this binary. Deliberately no `ratect <task>` shorthand — with more verbs coming, "is `doctor` a task or a command?" is a question the interface shouldn't have to answer. Runs on `ratect-core`'s existing engine and today's `batect.yml`, both unchanged; the `ratect`-native configuration format is 0.3.0's own scope. Docker-connection options belong to `run` rather than being global, since `tasks list` never reaches a daemon. See the new [`ratect` CLI reference](docs/ratect-cli.md).
+
+### Changed
+
+- **Shared CLI glue moved into `ratect-core`** so both binaries use one copy: `config::load_project` (existence check → includes → expressions → project directory, in the one order that's correct) returning a `LoadedProject`, and `engine::TaskEngineSettings`/`TaskEngine::with_settings` (the plain-data form of the engine's builder methods, which stay as they are for everything else). `config::base_path_for` moved from `ratect-compat`'s `main.rs` alongside them. `ratect-compat` is on both, unchanged in behavior.
+
 ## [0.21.0] - 2026-07-22
 
 ### Added

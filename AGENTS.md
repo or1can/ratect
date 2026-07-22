@@ -21,10 +21,20 @@ Ratect is a **Cargo workspace** with four crates (the
   deliberately thin, since `ratect-core` is what any other binary (namely `ratect`,
   below) shares too.
 - **`ratect`** (`ratect/src/main.rs` only): the forward-looking CLI, free to diverge
-  from Batect's interface. Currently just a placeholder (0.20.0) — proving the
-  workspace mechanics work with two binaries before any real `ratect`-only feature
-  work starts on top; see `ROADMAP.md`'s two-binary section for the intended
-  direction.
+  from Batect's interface — subcommands (`ratect run <task>`, `ratect tasks list`)
+  since 0.2.0-dev, on `ratect-core`'s existing engine and today's YAML config, both
+  unchanged (its own config format is 0.3.0's scope; see `ROADMAP.md`). Thin for the
+  same reason `ratect-compat` is: argument parsing, then `config::load_project` +
+  `TaskEngineSettings` + `ui::create_event_sink`. Two conventions to keep when adding
+  a verb — Docker-connection options live in the flattened `DockerArgs` struct and
+  attach to the subcommands that actually connect (never globally, so no verb accepts
+  a flag it ignores), and `OutputStyleArg`/`CacheTypeArg` are *this binary's own*
+  mirrors of the `ratect-core` enums, intentionally duplicated from `ratect-compat`'s
+  rather than shared: each binary's accepted value names are part of its own
+  interface, and `clap` stays out of `ratect-core`. User docs are
+  [`docs/ratect-cli.md`](docs/ratect-cli.md), separate from `ratect-compat`'s
+  [`docs/cli-reference.md`](docs/cli-reference.md) — two interfaces, not two
+  spellings of one, so a change to either only ever touches its own page.
 - **`ratect-core`** (library crate, `ratect-core/src/`): all the reusable logic, with
   no CLI-specific code. This is what any future second binary would also depend on.
   See [`docs/how-it-works.md`](docs/how-it-works.md) for the full request-to-container
@@ -381,7 +391,7 @@ own yet.
 
 - **Formatting/Linting**: `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` must pass; both are enforced in CI (`.github/workflows/ci.yml`).
 - **Dependency Audit**: `cargo audit` runs in CI against `Cargo.lock`, which is committed to the repo (binary crate convention, not gitignored). One shared lockfile covers the whole workspace.
-- **Tests**: `cargo test --workspace` runs in CI, covering unit tests per module (pattern matching in `dockerignore`, config parsing/resolution, expression interpolation, build-context tar construction, interactive-TTY eligibility, user-mapping generation, and task engine logic — dependency cycles, prerequisite dedup, sidecar/dependency resolution, dependency readiness (health-wait/setup-command ordering and failure paths), environment merging, image resolution — via a fake `ContainerRuntime`) and CLI argument/behavior tests in `ratect-compat/src/main.rs`/`ratect-compat/tests/cli.rs`. `ratect-compat/tests/cli.rs` also has end-to-end tests (`#[ignore]`d by default, run explicitly via `cargo test --workspace --test cli -- --ignored`) that exercise a real Docker daemon against the fixtures under `ratect-compat/tests/fixtures/` — one per feature (sidecars, dependency readiness, environment/config variables, image building, `.dockerignore`, interactive mode, user mapping, hostnames/ports, proxy, `--use-network`). These also run as their own `docker-integration` CI job. See the fixture files themselves for what each one proves. CI runs the non-Docker suite as `cargo test --workspace --all-targets --all-features` — the `--all-features` part is what runs `ratect-core`'s `schema` module tests (see the module list above); plain `cargo test --workspace` skips them, so run `cargo test -p ratect-core --features schema` after touching anything in `config.rs`. When a config type changes, regenerate the committed schema with `RATECT_UPDATE_SCHEMA=1 cargo test -p ratect-core --features schema schema::` and commit the result alongside — the test fails, with that same command in its message, if you don't.
+- **Tests**: `cargo test --workspace` runs in CI, covering unit tests per module (pattern matching in `dockerignore`, config parsing/resolution, expression interpolation, build-context tar construction, interactive-TTY eligibility, user-mapping generation, and task engine logic — dependency cycles, prerequisite dedup, sidecar/dependency resolution, dependency readiness (health-wait/setup-command ordering and failure paths), environment merging, image resolution — via a fake `ContainerRuntime`) and CLI argument/behavior tests in `ratect-compat/src/main.rs`/`ratect-compat/tests/cli.rs`. `ratect-compat/tests/cli.rs` also has end-to-end tests (`#[ignore]`d by default, run explicitly via `cargo test --workspace --test cli -- --ignored`) that exercise a real Docker daemon against the fixtures under `ratect-compat/tests/fixtures/` — one per feature (sidecars, dependency readiness, environment/config variables, image building, `.dockerignore`, interactive mode, user mapping, hostnames/ports, proxy, `--use-network`). These also run as their own `docker-integration` CI job (`--workspace --test cli` picks up `ratect`'s own `ratect/tests/cli.rs` too, against its own `ratect/tests/fixtures/` — deliberately not shared with `ratect-compat`'s, since the two binaries' configuration is expected to diverge from `ratect` 0.3.0 onwards). See the fixture files themselves for what each one proves. CI runs the non-Docker suite as `cargo test --workspace --all-targets --all-features` — the `--all-features` part is what runs `ratect-core`'s `schema` module tests (see the module list above); plain `cargo test --workspace` skips them, so run `cargo test -p ratect-core --features schema` after touching anything in `config.rs`. When a config type changes, regenerate the committed schema with `RATECT_UPDATE_SCHEMA=1 cargo test -p ratect-core --features schema schema::` and commit the result alongside — the test fails, with that same command in its message, if you don't.
 - **Coverage**: `cargo llvm-cov --workspace --show-missing-lines --summary-only` (requires `rustup component add llvm-tools-preview` and `cargo install cargo-llvm-cov`) reports exact uncovered lines per file — use it to find gaps, not to chase a percentage. `cargo llvm-cov --workspace --html` opens a browsable report at `target/llvm-cov/html`. CI runs this and uploads the HTML report as a `coverage-report` artifact (non-gating).
 
 ## Current Status & Roadmap

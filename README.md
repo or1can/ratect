@@ -40,7 +40,10 @@ The workspace is
 **`ratect-compat`**, a strict, flag-for-flag and field-for-field drop-in replacement
 for the (now-unmaintained) `batect` binary — where all of the parity work above
 lands — and **`ratect`**, a forward-looking CLI free to diverge from Batect's
-interface, still just a placeholder today (see the [Roadmap](ROADMAP.md)). Ratect
+interface. `ratect` now has a working subcommand surface (`ratect run <task>`,
+`ratect tasks list` — see the [`ratect` CLI reference](docs/ratect-cli.md)), still
+reading today's `batect.yml`; its own configuration format is next (see the
+[Roadmap](ROADMAP.md)). Ratect
 deliberately does not ship a binary literally named `batect` — anyone who wants
 their existing `./batect` wrapper script to keep working symlinks or renames
 `ratect-compat` themselves.
@@ -103,7 +106,8 @@ assume you've read Batect's docs.
 - [Getting Started](docs/getting-started.md)
 - [How It Works](docs/how-it-works.md)
 - [Task Lifecycle](docs/task-lifecycle.md)
-- [CLI Reference](docs/cli-reference.md)
+- [CLI Reference (`ratect-compat`)](docs/cli-reference.md)
+- [CLI Reference (`ratect`)](docs/ratect-cli.md)
 - [Configuration Reference](docs/config-reference.md)
 - [Differences from Batect](docs/differences-from-batect.md)
 - [Roadmap](ROADMAP.md)

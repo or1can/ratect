@@ -8,6 +8,10 @@ This reflects the flags Ratect actually implements today (`ratect-compat/src/mai
 not the full Batect CLI — see [differences from Batect](differences-from-batect.md) for
 what's missing.
 
+This is the **`ratect-compat`** binary, whose interface deliberately matches Batect's.
+The forward-looking `ratect` binary has its own, subcommand-based interface — see the
+[`ratect` CLI reference](ratect-cli.md).
+
 ## Options
 
 | Flag | Short | Default | Description |

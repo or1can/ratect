@@ -1,0 +1,25 @@
+# The fixture `ratect`'s own CLI tests run against — deliberately its own,
+# not one of `ratect-compat`'s: this binary's configuration is expected to
+# diverge from Batect's from 0.3.0 onwards (see ROADMAP.md), and a shared
+# fixture would quietly couple the two binaries' test suites right when they
+# need to move apart.
+project_name: ratect-cli-test
+containers:
+  build-env:
+    image: alpine:3.18.2
+tasks:
+  build:
+    description: Build the thing
+    group: Development
+    run:
+      container: build-env
+      command: echo built
+  # Arguments after `--` are appended as literal argv after this command's
+  # own tokenized form — no shell involved — so `run check -- the-argument`
+  # runs `echo checked the-argument`. (A shell wrapper would receive them as
+  # `$0` onwards, not `$1`, which is exactly the trap this spells out.)
+  check:
+    description: Check the thing
+    run:
+      container: build-env
+      command: echo checked

@@ -2,6 +2,17 @@
 name = "ratect"
 version = "0.2.0-dev"
 edition = "2021"
-description = "The forward-looking Ratect CLI, free to diverge from Batect's interface (not yet started — see ratect-compat)"
+description = "The forward-looking Ratect CLI, free to diverge from Batect's interface"
 license = "Apache-2.0"
 repository = "https://github.com/or1can/ratect"
+
+# The same CLI-side set `ratect-compat` has, for the same reasons — see
+# AGENTS.md's CLI-vs-core dependency split. `tracing-subscriber` is a binary
+# concern (each binary decides where its own diagnostics go), not something
+# `ratect-core` should own.
+[dependencies]
+clap = { version = "4.6", features = ["derive"] }
+tokio = { version = "1.52", features = ["full"] }
+anyhow = "1.0"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ratect-core = { path = "../ratect-core" }
