@@ -1,6 +1,6 @@
 [package]
 name = "ratect-compat"
-version = "0.20.0"
+version = "0.21.0-dev"
 edition = "2021"
 description = "A strict, flag-for-flag and field-for-field drop-in replacement for the (now-unmaintained) batect binary"
 license = "Apache-2.0"

@@ -1586,7 +1586,7 @@ version = "0.1.0-dev"
 
 [[package]]
 name = "ratect-compat"
-version = "0.20.0"
+version = "0.21.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -1599,7 +1599,7 @@ dependencies = [
 
 [[package]]
 name = "ratect-core"
-version = "0.20.0"
+version = "0.21.0-dev"
 dependencies = [
  "anyhow",
  "async-recursion",
