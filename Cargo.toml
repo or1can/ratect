@@ -1,5 +1,6 @@
 [workspace]
-members = ["ratect-core", "dockerignore"]
+members = ["ratect", "ratect-compat", "ratect-core", "dockerignore"]
+resolver = "2"
 
 # Carries two changes PR'd upstream (session providers on `build_image`, so one
 # BuildKit build path serves secrets/ssh *and* streams build output —
@@ -10,22 +11,3 @@ members = ["ratect-core", "dockerignore"]
 # Remove once both land in a bollard release.
 [patch.crates-io]
 bollard = { git = "https://github.com/or1can/bollard.git", branch = "ratect/session-providers-0.21" }
-
-[package]
-name = "ratect"
-version = "0.20.0-dev"
-edition = "2021"
-description = "A fast, lightweight Rust reimplementation of Batect: define development tasks in Docker containers once, run them anywhere"
-license = "Apache-2.0"
-repository = "https://github.com/or1can/ratect"
-
-[dependencies]
-clap = { version = "4.6", features = ["derive"] }
-tokio = { version = "1.52", features = ["full"] }
-anyhow = "1.0"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-ratect-core = { path = "ratect-core" }
-
-[dev-dependencies]
-portable-pty = "0.9.0"

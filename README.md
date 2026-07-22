@@ -35,14 +35,15 @@ The itemized, per-field and per-flag status — including known divergences — 
 [Differences from Batect](docs/differences-from-batect.md), and the direction and
 release history in the [Roadmap](ROADMAP.md).
 
-The destination is
+The workspace is
 [two binaries sharing one core](ROADMAP.md#two-binaries-ratect-and-ratect-compat):
 **`ratect-compat`**, a strict, flag-for-flag and field-for-field drop-in replacement
-for the (now-unmaintained) `batect` binary, and **`ratect`**, a forward-looking CLI
-free to diverge from Batect's interface. Today's single `ratect` binary is where the
-parity work lands ahead of that split. Ratect deliberately does not ship a binary
-literally named `batect` — anyone who wants their existing `./batect` wrapper script
-to keep working symlinks or renames `ratect-compat` themselves.
+for the (now-unmaintained) `batect` binary — where all of the parity work above
+lands — and **`ratect`**, a forward-looking CLI free to diverge from Batect's
+interface, still just a placeholder today (see the [Roadmap](ROADMAP.md)). Ratect
+deliberately does not ship a binary literally named `batect` — anyone who wants
+their existing `./batect` wrapper script to keep working symlinks or renames
+`ratect-compat` themselves.
 
 ## Getting Started
 
@@ -54,7 +55,7 @@ to keep working symlinks or renames `ratect-compat` themselves.
 ### Building
 
 ```bash
-cargo build
+cargo build --workspace
 ```
 
 > Note: the workspace currently carries a `[patch.crates-io]` override for
@@ -64,14 +65,17 @@ cargo build
 
 ### Running
 
+`ratect-compat` is today's actual binary (see [Status](#status)) — the workspace has
+more than one binary crate, so `-p ratect-compat` is required.
+
 To list available tasks:
 ```bash
-cargo run -- --list-tasks
+cargo run -p ratect-compat -- --list-tasks
 ```
 
 To run a specific task:
 ```bash
-cargo run -- <task-name>
+cargo run -p ratect-compat -- <task-name>
 ```
 
 ## Example `batect.yml`

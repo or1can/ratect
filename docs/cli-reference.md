@@ -1,12 +1,12 @@
 # CLI Reference
 
 ```
-ratect [OPTIONS] [TASK_NAME] [-- ADDITIONAL_ARGS...]
+ratect-compat [OPTIONS] [TASK_NAME] [-- ADDITIONAL_ARGS...]
 ```
 
-This reflects the flags Ratect actually implements today (`src/main.rs`), not the full
-Batect CLI — see [differences from Batect](differences-from-batect.md) for what's
-missing.
+This reflects the flags Ratect actually implements today (`ratect-compat/src/main.rs`),
+not the full Batect CLI — see [differences from Batect](differences-from-batect.md) for
+what's missing.
 
 ## Options
 
@@ -159,7 +159,7 @@ Ratect at the result.
    for that, following step 2's pattern):
 
    ```bash
-   ratect --docker-host tcp://docker-daemon.example.com:2376 \
+   ratect-compat --docker-host tcp://docker-daemon.example.com:2376 \
      --docker-tls-verify \
      --docker-tls-ca-cert ./ca.pem \
      test
@@ -185,22 +185,22 @@ than reaching for a flag Ratect doesn't have.
 
 ```bash
 # List tasks defined in ./batect.yml
-ratect --list-tasks
+ratect-compat --list-tasks
 
 # Run a task from ./batect.yml
-ratect test
+ratect-compat test
 
 # Use a config file in a different location
-ratect -f ./ci/batect.yml build
+ratect-compat -f ./ci/batect.yml build
 
 # Pass extra arguments through to the task's command
-ratect test -- --verbose some/specific/file.rs
+ratect-compat test -- --verbose some/specific/file.rs
 
 # Set a config variable referenced via `<name`/`<{name}` in `environment`
-ratect --config-var environment_name=staging test
+ratect-compat --config-var environment_name=staging test
 
 # Load config variable values from a file instead
-ratect --config-vars-file ./ci/config-vars.yml test
+ratect-compat --config-vars-file ./ci/config-vars.yml test
 ```
 
 ### Using ADDITIONAL_ARGS in a task command
@@ -218,7 +218,7 @@ tasks:
       command: cargo test
 ```
 
-Running `ratect test -- --nocapture` here runs `cargo test --nocapture` inside the
+Running `ratect-compat test -- --nocapture` here runs `cargo test --nocapture` inside the
 container. Args are appended as literal argv entries (never concatenated into the
 command string and re-parsed), so they're safe even if they contain characters that
 would be shell metacharacters elsewhere, like `;`, `&&`, or backticks — Ratect never

@@ -6,7 +6,7 @@ for a map of the source layout.
 
 ## 1. CLI parsing
 
-`src/main.rs` parses arguments with [`clap`](https://docs.rs/clap). See the
+`ratect-compat/src/main.rs` parses arguments with [`clap`](https://docs.rs/clap). See the
 [CLI reference](cli-reference.md) for the full flag list. This has to happen before
 config resolution (step 2 below) can finish, since `--config-var`/`--config-vars-file`
 feed into it.
@@ -299,15 +299,15 @@ without needing to name it:
 
 ```sh
 # Only ratect_core's own logs, at debug — no bollard noise at all.
-RUST_LOG=ratect_core=debug ratect -f batect.yml build
+RUST_LOG=ratect_core=debug ratect-compat -f batect.yml build
 
 # Keep the normal `info` default everywhere else, but add ratect_core's debug-level
 # output on top (e.g. build transcripts) — usually the more useful combination.
-RUST_LOG=info,ratect_core=debug ratect -f batect.yml build
+RUST_LOG=info,ratect_core=debug ratect-compat -f batect.yml build
 
 # Narrower still: just the Docker/build/container-runtime module, not task
 # orchestration (`ratect_core::engine`) as well.
-RUST_LOG=ratect_core::docker=debug ratect -f batect.yml build
+RUST_LOG=ratect_core::docker=debug ratect-compat -f batect.yml build
 ```
 
 If you do want a blanket `debug` sweep across everything (including `bollard`) but need to

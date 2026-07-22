@@ -1,0 +1,18 @@
+[package]
+name = "ratect-compat"
+version = "0.20.0-dev"
+edition = "2021"
+description = "A strict, flag-for-flag and field-for-field drop-in replacement for the (now-unmaintained) batect binary"
+license = "Apache-2.0"
+repository = "https://github.com/or1can/ratect"
+
+[dependencies]
+clap = { version = "4.6", features = ["derive"] }
+tokio = { version = "1.52", features = ["full"] }
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ratect-core = { path = "../ratect-core" }
+
+[dev-dependencies]
+portable-pty = "0.9.0"

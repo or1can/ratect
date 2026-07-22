@@ -31,7 +31,7 @@ See the [configuration reference](config-reference.md) for the full schema.
 ## 2. List available tasks
 
 ```bash
-ratect --list-tasks
+ratect-compat --list-tasks
 ```
 
 ```
@@ -42,7 +42,7 @@ Tasks in my-project:
 ## 3. Run a task
 
 ```bash
-ratect test
+ratect-compat test
 ```
 
 The first run pulls the `alpine:3.18` image (printing "Pulling alpine:3.18..." /
@@ -69,8 +69,8 @@ tasks:
       - build
 ```
 
-Running `ratect test` runs `build` first, then `test`. Within a single `ratect`
-invocation:
+Running `ratect-compat test` runs `build` first, then `test`. Within a single
+`ratect-compat` invocation:
 
 - Each task runs **at most once**, even if it's a prerequisite of more than one other
   task.
@@ -104,12 +104,12 @@ tasks:
         ENVIRONMENT_NAME: <environment_name
 ```
 
-Running `ratect test` (with `WHO` unset in your shell) prints `hello-world in dev`.
-Override the config variable from the command line instead of relying on its
+Running `ratect-compat test` (with `WHO` unset in your shell) prints `hello-world in
+dev`. Override the config variable from the command line instead of relying on its
 `default`:
 
 ```bash
-ratect --config-var environment_name=staging test
+ratect-compat --config-var environment_name=staging test
 ```
 
 See the [configuration reference](config-reference.md#expressions) for the full
@@ -128,7 +128,7 @@ Ratect separates two kinds of output:
   `RUST_LOG` environment variable, e.g.:
 
 ```bash
-RUST_LOG=debug ratect test
+RUST_LOG=debug ratect-compat test
 ```
 
 `debug` also surfaces low-level Docker API activity (container create/start/remove),

@@ -1,0 +1,7 @@
+[package]
+name = "ratect"
+version = "0.1.0-dev"
+edition = "2021"
+description = "The forward-looking Ratect CLI, free to diverge from Batect's interface (not yet started — see ratect-compat)"
+license = "Apache-2.0"
+repository = "https://github.com/or1can/ratect"

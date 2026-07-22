@@ -20,7 +20,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 fn ratect_command() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_ratect"))
+    Command::new(env!("CARGO_BIN_EXE_ratect-compat"))
 }
 
 /// Extracts the task's own container output from ratect's framed stdout.
@@ -584,7 +584,7 @@ fn fancy_output_renders_a_live_status_block_on_a_terminal_via_docker() {
         })
         .expect("failed to open pty");
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect-compat"));
     cmd.arg("-f");
     cmd.arg(sample_config_path());
     cmd.arg("shared-prereq");
@@ -2097,7 +2097,7 @@ fn interactive_session_forwards_stdin_and_stdout() {
         })
         .expect("failed to open pty");
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect-compat"));
     cmd.arg("-f");
     cmd.arg(interactive_config_path());
     cmd.arg("shell");
@@ -2203,7 +2203,7 @@ fn instantly_exiting_interactive_task_does_not_warn_about_tty_resize() {
         })
         .expect("failed to open pty");
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect-compat"));
     cmd.arg("-f");
     cmd.arg(interactive_config_path());
     cmd.arg("instant");
@@ -2285,7 +2285,7 @@ fn interactive_session_forwards_live_terminal_resizes() {
         })
         .expect("failed to open pty");
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect-compat"));
     cmd.arg("-f");
     cmd.arg(interactive_config_path());
     cmd.arg("shell");

@@ -8,15 +8,23 @@ Ratect is a Rust-based implementation of the [Batect](https://github.com/batect/
 
 ## Architecture
 
-Ratect is a **Cargo workspace** with three crates today, and a fourth planned (see the
-[two-binary roadmap item](ROADMAP.md#two-binaries-ratect-and-ratect-compat)):
+Ratect is a **Cargo workspace** with four crates (the
+[two-binary split](ROADMAP.md#two-binaries-ratect-and-ratect-compat) landed in
+0.20.0):
 
-- **`ratect`** (root package, `src/main.rs` only): the CLI binary. Handles argument
-  parsing (via `clap`) and orchestrates the high-level flow (loading config,
-  initializing the Docker client, starting the engine) by calling into `ratect-core`.
-  Nothing else lives here — this crate is deliberately thin, since it's the part that
-  will eventually be forked into two different CLIs (`ratect-compat` and `ratect`)
-  sharing the same `ratect-core`.
+- **`ratect-compat`** (`ratect-compat/src/main.rs` only): the CLI binary that
+  implements all of the [Batect Parity](ROADMAP.md#batect-parity) work — a strict,
+  flag-for-flag and field-for-field drop-in replacement for the (now-unmaintained)
+  `batect` binary. Handles argument parsing (via `clap`) and orchestrates the
+  high-level flow (loading config, initializing the Docker client, starting the
+  engine) by calling into `ratect-core`. Nothing else lives here — this crate is
+  deliberately thin, since `ratect-core` is what any other binary (namely `ratect`,
+  below) shares too.
+- **`ratect`** (`ratect/src/main.rs` only): the forward-looking CLI, free to diverge
+  from Batect's interface. Currently just a placeholder (0.20.0) — proving the
+  workspace mechanics work with two binaries before any real `ratect`-only feature
+  work starts on top; see `ROADMAP.md`'s two-binary section for the intended
+  direction.
 - **`ratect-core`** (library crate, `ratect-core/src/`): all the reusable logic, with
   no CLI-specific code. This is what any future second binary would also depend on.
   See [`docs/how-it-works.md`](docs/how-it-works.md) for the full request-to-container
@@ -220,10 +228,11 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
     that method, not a new engine/docker setting. Style selection and logger
     construction (including the explicit-`fancy`-without-an-interactive-console
     error) live in `ui::create_event_sink`, not `main.rs` — deliberately, so the
-    planned `ratect-compat` binary (see `ROADMAP.md`'s two-binaries section)
-    gets this for free instead of reimplementing the style→logger match itself;
-    `main.rs` only gathers the terminal facts once and hands them to it (and to
-    `select_output_style`, for `--list-tasks`'s own quiet-format decision).
+    `ratect` binary (see `ROADMAP.md`'s two-binaries section) gets this for free
+    once it needs it, instead of reimplementing the style→logger match itself;
+    `ratect-compat/src/main.rs` only gathers the terminal facts once and hands them
+    to it (and to `select_output_style`, for `--list-tasks`'s own quiet-format
+    decision).
 - **`dockerignore`** (library crate, `dockerignore/src/`): a from-scratch Rust port of
   Docker's own `.dockerignore` matching (`github.com/moby/patternmatcher`, which
   Docker's documentation cites as the reference implementation) — deliberately **not**
@@ -250,32 +259,35 @@ Ratect is a **Cargo workspace** with three crates today, and a fourth planned (s
 - **`uuid`**: Generates collision-resistant per-task Docker network names (`ratect-<uuid>`) in `ratect-core/src/engine.rs`. Deliberately not `std::process::id()` — that's frequently `1` when `ratect` itself runs inside a container (e.g. CI), which would collide across concurrent runs. Built images are tagged `<project_name>-<container_name>` instead (human-readable, matching Batect's convention) — `resolve_image` avoids the same collision hazard for these not via a random name but by running the image *ID* Docker's build reports back, not the (non-unique) tag. Also generates a freshly-created project cache key (0.18.0, `ratect-core/src/cache.rs`'s `project_cache_key`) — a full UUID rather than Batect's own shorter 6-char id, deliberately: nothing depends on matching Batect's generation format for a *new* key (an existing Batect-created one is read back byte-for-byte instead), and Batect's own alphabet is meaningfully more collision-prone across many projects sharing one machine.
 - **`tar`**: Builds the in-memory build-context tarball `docker.rs`'s `build_context_tar` hands to `bollard`'s `build_image`.
 - **`dockerignore`** (local workspace crate, not external): `.dockerignore` pattern matching — see the Architecture section above.
-- **`path-clean`**: Lexically normalizes (`.`/`..`/trailing-slash) resolved paths in `ratect-core/src/config.rs` (`resolve_path`, and the built-in `batect.project_directory` config variable) — `PathBuf::join` alone doesn't do this, so without it a `base_path` like `""` or `"."` (both common — see `main.rs`'s `-f` handling) would leave a stray `.` or trailing slash in every path/expression derived from it. Already a `dockerignore` dependency; reused here rather than hand-rolling the same normalization twice.
+- **`path-clean`**: Lexically normalizes (`.`/`..`/trailing-slash) resolved paths in `ratect-core/src/config.rs` (`resolve_path`, and the built-in `batect.project_directory` config variable) — `PathBuf::join` alone doesn't do this, so without it a `base_path` like `""` or `"."` (both common — see `ratect-compat/src/main.rs`'s `-f`
+handling) would leave a stray `.` or trailing slash in every path/expression derived from it. Already a `dockerignore` dependency; reused here rather than hand-rolling the same normalization twice.
 - **`crossterm`**: Raw-mode terminal enable/disable and terminal size queries for interactive mode's attach path (`ratect-core/src/docker.rs`). Deliberately not used for its structured `event`/`EventStream` API — that's for TUI-style key/mouse/resize events and would consume/interpret stdin bytes instead of passing them through raw. `std::io::IsTerminal` (stable stdlib) covers the separate "is this actually a terminal" checks; no crate needed for that part. Live terminal-resize forwarding (0.10.0) is built on `tokio::signal::unix`'s `SIGWINCH` listener instead of crossterm's `event`/`EventStream` — a plain OS signal, not a stdin-consuming abstraction, so it doesn't reintroduce the problem this entry warns off; `crossterm::terminal::size()` is still what's actually queried on each signal.
-- **`portable-pty`** (dev-dependency, `tests/cli.rs` only): creates a real (emulated) pseudo-terminal pair in-process, so an integration test can spawn `ratect` attached to something that genuinely passes `IsTerminal` checks and actually drive an interactive session — no existing test infrastructure here could otherwise exercise that path at all. Works in headless CI; no real terminal required. A reusable pattern worth reaching for again for any other feature that's only meaningfully testable from a real terminal.
-- **`nix`** (`features = ["user"]`): looks up the real host user (`Uid`/`Gid::current`, `User`/`Group::from_uid`/`from_gid`) for `run_as_current_user` (`ratect-core/src/user.rs`) — Unix-only, matching Ratect's own Unix-only testing so far. Already resolved in `Cargo.lock` transitively (via `portable-pty`'s own dependency graph in the root crate's dev-dependencies); adding it directly to `ratect-core` was a low-risk addition, not a new unknown quantity.
+- **`portable-pty`** (dev-dependency, `ratect-compat/tests/cli.rs` only): creates a real (emulated) pseudo-terminal pair in-process, so an integration test can spawn `ratect-compat` attached to something that genuinely passes `IsTerminal` checks and actually drive an interactive session — no existing test infrastructure here could otherwise exercise that path at all. Works in headless CI; no real terminal required. A reusable pattern worth reaching for again for any other feature that's only meaningfully testable from a real terminal.
+- **`nix`** (`features = ["user"]`): looks up the real host user (`Uid`/`Gid::current`, `User`/`Group::from_uid`/`from_gid`) for `run_as_current_user` (`ratect-core/src/user.rs`) — Unix-only, matching Ratect's own Unix-only testing so far. Already resolved in `Cargo.lock` transitively (via `portable-pty`'s own dependency graph in `ratect-compat`'s dev-dependencies); adding it directly to `ratect-core` was a low-risk addition, not a new unknown quantity.
 - **`url`**: parses/rewrites `localhost`/`127.0.0.1`/`::1` proxy URLs to `host.docker.internal` in `ratect-core/src/proxy.rs`. Already resolved in `Cargo.lock` transitively (via `bollard`'s own dependency graph) — same low-risk-addition reasoning as `nix` above.
 - **`unicode-width`**: real terminal display-column widths (CJK wide characters count as 2, zero-width/combining marks count as 0) for `ratect-core/src/ui/fancy.rs`'s repaint-width clipping and `ratect-core/src/ui/interleaved.rs`'s prefix-column padding — a plain `char`/byte count under-measures exactly those characters, which let a rendered line silently wrap onto more terminal rows than the fancy logger's own cursor-movement math accounts for. Zero transitive dependencies; the same crate ripgrep/bat/etc. use for this.
 - **`bytes`** (`ratect-core` dev-dependency only): constructs `bollard::container::LogOutput` values directly in `docker.rs`'s own unit tests (`drain_interleaved_log_stream`'s tests, which feed it a synthetic log stream via `futures::stream::iter` instead of needing a live daemon) — `LogOutput`'s variants wrap a `bytes::Bytes` message, which bollard itself doesn't re-export. Already resolved in `Cargo.lock` transitively (via `bollard`/`hyper`'s own dependency graph) — same low-risk-addition reasoning as `nix`/`url` above.
 - **`serde_json`**: parses the Docker CLI's own context-store JSON files for `--docker-context` (`ratect-core/src/docker.rs`'s `docker_context_host`/`active_docker_context`) — `<config_directory>/contexts/meta/<sha256(name)>/meta.json`'s `Endpoints.docker.Host`, and `<config_directory>/config.json`'s `currentContext`. `serde` itself was already a dependency (for `noyalib`'s `compat-serde-yaml`); `serde_json` is the standard, ubiquitous choice for the same derive-based approach applied to actual JSON.
 - **`rcgen`**, **`tokio-rustls`**, **`time`** (`ratect-core` dev-dependencies only): generate a throwaway self-signed CA + leaf certificate/key pair at test run time and run a real in-process TLS server against it, for `docker.rs`'s `--docker-tls`/`-verify` tests (`connect_over_tls_completes_a_real_handshake_against_a_valid_certificate`/`_rejects_an_expired_certificate`) — proving an actual `rustls` handshake succeeds against a valid certificate and fails against an expired one, through Ratect's own `connect` path, not just that a client object builds. Generating at test time (rather than a fixed PEM committed to the repo) means validity is always computed relative to "now" — a static embedded certificate would eventually expire on its own and fail with a stale, disconnected-looking failure years later, unrelated to whatever change actually triggered it; `rcgen` also makes it trivial to generate a deliberately-already-expired certificate on demand for the rejection test. All three already resolved transitively (via `bollard`'s `ssl` feature and its own `rustls` dependency) — low-risk additions, not new unknown quantities.
 
-Dependencies are split across the three `Cargo.toml`s along CLI-vs-core lines: `clap`
-and `tracing-subscriber` are `ratect`-only; `serde`, `serde_json`, `noyalib`, `bollard`,
-`futures`, `async-recursion`, `async-trait`, `uuid`, `tar`, `path-clean`, `crossterm`,
-`nix`, `url`, `sha2`, `toml`, `regex`, `unicode-width`, `rustls`, and the local
-`dockerignore` crate are `ratect-core`-only (`dockerignore` itself depends on `regex`
-and `path-clean` too); `anyhow`, `tracing`, and `tokio` are
-needed by both. `tokio` is a normal dependency in both crates now — `ratect-core`'s
-non-test code needs it too, for `build_context_tar`'s `tokio::task::spawn_blocking` (it
-used to be a `ratect-core` dev-dependency only, for `#[tokio::test]` in its unit tests).
-`portable-pty` is `ratect`'s (root crate's) first `[dev-dependencies]` entry.
+Dependencies are split across the four `Cargo.toml`s along CLI-vs-core lines: `clap`
+and `tracing-subscriber` are `ratect-compat`-only; `serde`, `serde_json`, `noyalib`,
+`bollard`, `futures`, `async-recursion`, `async-trait`, `uuid`, `tar`, `path-clean`,
+`crossterm`, `nix`, `url`, `sha2`, `toml`, `regex`, `unicode-width`, `rustls`, and the
+local `dockerignore` crate are `ratect-core`-only (`dockerignore` itself depends on
+`regex` and `path-clean` too); `anyhow`, `tracing`, and `tokio` are needed by both
+`ratect-compat` and `ratect-core`. `tokio` is a normal dependency in both crates now —
+`ratect-core`'s non-test code needs it too, for `build_context_tar`'s
+`tokio::task::spawn_blocking` (it used to be a `ratect-core` dev-dependency only, for
+`#[tokio::test]` in its unit tests). `portable-pty` is `ratect-compat`'s first
+`[dev-dependencies]` entry. The placeholder `ratect` crate has no dependencies of its
+own yet.
 
 ## Tooling & CI
 
 - **Formatting/Linting**: `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` must pass; both are enforced in CI (`.github/workflows/ci.yml`).
-- **Dependency Audit**: `cargo audit` runs in CI against `Cargo.lock`, which is committed to the repo (binary crate convention, not gitignored). One shared lockfile covers both crates.
-- **Tests**: `cargo test --workspace` runs in CI, covering unit tests per module (pattern matching in `dockerignore`, config parsing/resolution, expression interpolation, build-context tar construction, interactive-TTY eligibility, user-mapping generation, and task engine logic — dependency cycles, prerequisite dedup, sidecar/dependency resolution, dependency readiness (health-wait/setup-command ordering and failure paths), environment merging, image resolution — via a fake `ContainerRuntime`) and CLI argument/behavior tests in `src/main.rs`/`tests/cli.rs`. `tests/cli.rs` also has end-to-end tests (`#[ignore]`d by default, run explicitly via `cargo test --workspace --test cli -- --ignored`) that exercise a real Docker daemon against the fixtures under `tests/fixtures/` — one per feature (sidecars, dependency readiness, environment/config variables, image building, `.dockerignore`, interactive mode, user mapping, hostnames/ports, proxy, `--use-network`). These also run as their own `docker-integration` CI job. See the fixture files themselves for what each one proves.
+- **Dependency Audit**: `cargo audit` runs in CI against `Cargo.lock`, which is committed to the repo (binary crate convention, not gitignored). One shared lockfile covers the whole workspace.
+- **Tests**: `cargo test --workspace` runs in CI, covering unit tests per module (pattern matching in `dockerignore`, config parsing/resolution, expression interpolation, build-context tar construction, interactive-TTY eligibility, user-mapping generation, and task engine logic — dependency cycles, prerequisite dedup, sidecar/dependency resolution, dependency readiness (health-wait/setup-command ordering and failure paths), environment merging, image resolution — via a fake `ContainerRuntime`) and CLI argument/behavior tests in `ratect-compat/src/main.rs`/`ratect-compat/tests/cli.rs`. `ratect-compat/tests/cli.rs` also has end-to-end tests (`#[ignore]`d by default, run explicitly via `cargo test --workspace --test cli -- --ignored`) that exercise a real Docker daemon against the fixtures under `ratect-compat/tests/fixtures/` — one per feature (sidecars, dependency readiness, environment/config variables, image building, `.dockerignore`, interactive mode, user mapping, hostnames/ports, proxy, `--use-network`). These also run as their own `docker-integration` CI job. See the fixture files themselves for what each one proves.
 - **Coverage**: `cargo llvm-cov --workspace --show-missing-lines --summary-only` (requires `rustup component add llvm-tools-preview` and `cargo install cargo-llvm-cov`) reports exact uncovered lines per file — use it to find gaps, not to chase a percentage. `cargo llvm-cov --workspace --html` opens a browsable report at `target/llvm-cov/html`. CI runs this and uploads the HTML report as a `coverage-report` artifact (non-gating).
 
 ## Current Status & Roadmap
@@ -295,8 +307,8 @@ The `docs/` directory is user-facing documentation (installation, getting starte
 5.  **State Management**: In `ratect-core/src/engine.rs`, state (like executed tasks) is shared using `Mutex` to ensure thread safety across async tasks. Be mindful of locking logic.
 6.  **Verification**: After making changes, verify them by:
     -   Running `cargo build --workspace` to ensure compilation.
-    -   Executing `cargo run -- -f tests/fixtures/smoke.yml --list-tasks` to check config parsing.
-    -   Running a sample task (e.g., `cargo run -- -f tests/fixtures/smoke.yml test-task`) to verify the execution engine and Docker integration. (There is deliberately no `batect.yml` at the repository root — that path reads as *this project's own* dev-task config by the very convention ratect implements; the smoke fixture lives with the other fixtures instead.)
+    -   Executing `cargo run -p ratect-compat -- -f ratect-compat/tests/fixtures/smoke.yml --list-tasks` to check config parsing.
+    -   Running a sample task (e.g., `cargo run -p ratect-compat -- -f ratect-compat/tests/fixtures/smoke.yml test-task`) to verify the execution engine and Docker integration. (There is deliberately no `batect.yml` at the repository root — that path reads as *this project's own* dev-task config by the very convention ratect implements; the smoke fixture lives with the other fixtures instead.)
 7.  **Changelog Maintenance**: After completing a task that changes the project's features, dependencies, or structure, ensure that `CHANGELOG.md` is updated in the "Unreleased" section, following the "Keep a Changelog" standard.
 8.  **Version Lifecycle**: When cutting a release, it's not just a version bump — follow the full process documented in [ROADMAP.md](ROADMAP.md#versioning--releases): the `X.Y.Z-dev` → `X.Y.Z` bump commit, tagging it `vX.Y.Z`, and publishing it as a GitHub Release (body = that version's `CHANGELOG.md` section). Starting the next version's development is a separate, later commit that bumps back to the next `X.Y.Z-dev`. Neither bump is ever folded into a feature commit.
 9.  **ROADMAP.md Maintenance**: its `## Batect Parity` headline list and its versioned `### ratect-compat` list follow different edit rules. The headline list is a living summary — freely edit, merge, or delete bullets as scope changes or ships (e.g. "Sidecar Containers" and "Docker Networking" were merged into "Full Docker Networking" once shipped). The versioned list is append-only history — never delete an entry; mark completed scope with `~~strikethrough~~` plus a done-summary of what actually shipped.

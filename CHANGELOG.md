@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Two-Binary Split**: the workspace's root `Cargo.toml` is now a virtual manifest. The former root binary crate (0.1.0–0.19.0's own Batect-parity work) moved to `ratect-compat/`, unchanged in behavior — same `0.20.0-dev` version, same dependencies, same tests (`ratect-compat/tests/`). A new, empty placeholder `ratect/` crate (starting at `0.1.0-dev`) was added alongside it, for the forward-looking, non-Batect-compatible CLI described in [Two Binaries](ROADMAP.md#two-binaries-ratect-and-ratect-compat) — no functionality yet, just proving the two-binary workspace mechanics. Anyone building from source now runs `cargo build --workspace` and `cargo run -p ratect-compat -- ...`/`cargo install --path ratect-compat` for today's actual binary — see [Installation](docs/installation.md).
+
 ## [0.19.0] - 2026-07-21
 
 ### Added

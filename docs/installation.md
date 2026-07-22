@@ -12,22 +12,24 @@ release yet, so the only way to install it today is to build it from source.
 
 ## Build from source
 
-Clone the repository, then build a release binary:
+Clone the repository, then build a release binary. The workspace has two binary
+crates (see [Roadmap](../ROADMAP.md#two-binaries-ratect-and-ratect-compat)) —
+`ratect-compat` is the one that implements Batect-compatible behavior today:
 
 ```bash
 git clone <repository-url>
 cd ratect
-cargo build --release
+cargo build --release -p ratect-compat
 ```
 
-The compiled binary will be at `target/release/ratect`.
+The compiled binary will be at `target/release/ratect-compat`.
 
 ## Install the binary onto your `PATH`
 
-To make `ratect` available as a regular command:
+To make `ratect-compat` available as a regular command:
 
 ```bash
-cargo install --path .
+cargo install --path ratect-compat
 ```
 
 This installs to `~/.cargo/bin` (assumed to already be on your `PATH`, which is the
@@ -36,8 +38,8 @@ default for a standard `rustup` install).
 ## Verify the install
 
 ```bash
-ratect --version
-ratect --help
+ratect-compat --version
+ratect-compat --help
 ```
 
 ## Development builds
@@ -46,8 +48,8 @@ If you're working on Ratect itself rather than just using it, a debug build is f
 to compile and sufficient for local testing:
 
 ```bash
-cargo build
-cargo run -- --list-tasks
+cargo build --workspace
+cargo run -p ratect-compat -- --list-tasks
 ```
 
 See [`AGENTS.md`](../AGENTS.md) for the full contributor-facing tooling setup (formatting,

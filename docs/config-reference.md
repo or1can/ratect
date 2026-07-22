@@ -38,7 +38,7 @@ config_variables:
 |---|---|---|---|
 | `project_name` | string | yes | Used only for display (e.g. in `--list-tasks` output). |
 | `containers` | map of name → [Container](#container) | yes | Container definitions, keyed by name. Referenced from tasks via `run.container`. |
-| `tasks` | map of name → [Task](#task) | yes | Task definitions, keyed by name. Run by name via `ratect <task-name>`. |
+| `tasks` | map of name → [Task](#task) | yes | Task definitions, keyed by name. Run by name via `ratect-compat <task-name>`. |
 | `config_variables` | map of name → [ConfigVariable](#configvariable) | no | Declares the config variables usable via `<name`/`<{name}` [expressions](#expressions). A name must be declared here before it can be referenced — see [Expressions](#expressions). |
 | `include` | list of string or [Include](#includes) | no | Splits configuration across multiple files — see [Includes](#includes) below. |
 | `forbid_telemetry` | boolean | no | Recognized but inert — Ratect collects no telemetry, so there's nothing to forbid. |
@@ -613,7 +613,7 @@ tasks:
       - "lint:*"
 ```
 
-Running `ratect ci` here runs both `lint:go` and `lint:markdown` (in alphabetical
+Running `ratect-compat ci` here runs both `lint:go` and `lint:markdown` (in alphabetical
 order) before `ci` itself. A single `*` matches zero or more characters — `"lint:*"`
 would also match a task literally named `lint:` — and a wildcard matching multiple
 tasks always runs them in alphabetical order, regardless of the project's own
@@ -874,6 +874,6 @@ tasks:
       - list-volume-task
 ```
 
-Running `ratect test-task` runs `shared-prereq` once (even though both `prereq-task`
+Running `ratect-compat test-task` runs `shared-prereq` once (even though both `prereq-task`
 and `list-volume-task` depend on it), then `prereq-task` and `list-volume-task`, then
 `test-task` itself.

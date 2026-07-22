@@ -1,6 +1,6 @@
 # Task Lifecycle
 
-This is the detailed, step-by-step version of what `ratect <task>` actually does,
+This is the detailed, step-by-step version of what `ratect-compat <task>` actually does,
 covering dependency (sidecar) container resolution and cleanup in depth. For the
 broader architecture (config loading, CLI parsing, logging), see
 [how it works](how-it-works.md); this page is the equivalent of Batect's own
@@ -28,7 +28,7 @@ tasks:
       command: ./test.sh
 ```
 
-Running `ratect test` here runs `compile` to completion first, fully cleaning up
+Running `ratect-compat test` here runs `compile` to completion first, fully cleaning up
 after it, then runs `test`.
 
 A task doesn't strictly need a `run` of its own — a task with only `prerequisites`
@@ -43,7 +43,7 @@ tasks:
       - test
 ```
 
-Running `ratect ci` here runs `compile` then `test` to completion, same as above,
+Running `ratect-compat ci` here runs `compile` then `test` to completion, same as above,
 then stops — there's no container of `ci`'s own left to run.
 
 ## Per-task steps
@@ -270,7 +270,7 @@ tasks:
 ```
 
 Both `migrate` and `test` here depend on `database` (via `app`'s container config).
-Running `ratect test` starts a `database` instance, its own network, runs `migrate`,
+Running `ratect-compat test` starts a `database` instance, its own network, runs `migrate`,
 cleans both up — then starts a *second*, independent `database` instance and network
 for `test`. This matches Batect's own documented behavior ("each task will start its
 own instance of each container, even if multiple tasks share the same container") and

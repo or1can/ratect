@@ -67,8 +67,8 @@ stale, unpatched core. The core crate itself isn't published or meaningfully ver
 on its own; it's an internal implementation detail, not something either binary's users
 interact with directly.
 
-Mechanically, each `Cargo.toml` (`ratect`'s and `ratect-core`'s) sits at `X.Y.Z-dev`
-between releases. Cutting a release is one isolated `chore:` commit that bumps both to
+Mechanically, each `Cargo.toml` (whichever binary is being released — `ratect-compat`'s
+or `ratect`'s — and `ratect-core`'s) sits at `X.Y.Z-dev` between releases. Cutting a release is one isolated `chore:` commit that bumps both to
 the plain `X.Y.Z` being released and moves `CHANGELOG.md`'s accumulated `Unreleased`
 entries under a new dated `## [X.Y.Z]` header. That commit is tagged `vX.Y.Z` and
 published as a GitHub Release (`prerelease: true` until a binary's own 1.0.0 — see
@@ -679,7 +679,7 @@ Neither bump is ever folded into a feature commit.
     --pull`) before building, distinct from the already-supported
     `image`-container pull decision. `ContainerRuntime::build_image` gained
     a `force_pull` parameter.
-- **0.20.0** — **Two-Binary Split**: the workspace actually splits as described
+- **0.20.0** — **Two-Binary Split**: ~~the workspace actually splits as described
   in [Two Binaries](#two-binaries-ratect-and-ratect-compat), as its own
   dedicated structural change — not folded into a feature release or into
   1.0.0's own version-bump commit. The root package (still plainly named
@@ -690,7 +690,16 @@ Neither bump is ever folded into a feature commit.
   structural/naming — a placeholder, not yet `ratect`-specific functionality
   — proving the workspace mechanics (Cargo.toml layout, CI, `tests/cli.rs`'s
   `CARGO_BIN_EXE_ratect` references, `docs/installation.md`) actually work
-  with two binaries before real `ratect`-only feature work starts on top.
+  with two binaries before real `ratect`-only feature work starts on top.~~ —
+  done: root `Cargo.toml` is now a virtual workspace manifest; the former root
+  package moved to `ratect-compat/` (same behavior, same 0.20.0-dev version
+  history) and a genuinely empty placeholder `ratect/` crate (fresh
+  `0.1.0-dev`) was added alongside it. `ratect-compat/tests/cli.rs` now
+  targets `CARGO_BIN_EXE_ratect-compat` (Cargo keeps the literal binary name,
+  hyphen included, rather than underscoring it). CI needed no changes — every
+  job already ran `--workspace`. Docs (`README.md`, `docs/installation.md`,
+  and the CLI/config-reference/getting-started/how-it-works/task-lifecycle
+  invocation examples) updated to name `ratect-compat` explicitly.
 - **1.0.0** — the [Batect Parity](#batect-parity) section above substantially checked
   off (all of the above, including 0.7.0–0.19.0, not just the items shipped through
   0.6.0), and verified against a handful of real Batect projects, not just the
@@ -699,10 +708,13 @@ Neither bump is ever folded into a feature commit.
 
 ### `ratect`
 
-Hasn't started yet — see [Two Binaries](#two-binaries-ratect-and-ratect-compat). Its
-**1.0.0** means something different from `ratect-compat`'s: interface stability (the
-subcommand structure and config format won't break), not feature-completeness against
-Batect.
+- **0.1.0-dev** — a placeholder crate exists (`ratect/`, added alongside
+  `ratect-compat` in 0.20.0's [Two-Binary Split](#two-binaries-ratect-and-ratect-compat))
+  but real feature work hasn't started yet.
+
+Its **1.0.0** means something different from `ratect-compat`'s: interface stability
+(the subcommand structure and config format won't break), not feature-completeness
+against Batect.
 
 ## Rust Enhancements
 
