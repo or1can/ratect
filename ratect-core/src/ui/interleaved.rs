@@ -407,6 +407,48 @@ mod tests {
         );
     }
 
+    /// The deliberate asymmetry with `simple` mode, which drops exactly
+    /// these three for the task's own container (see
+    /// `SimpleEventLogger::is_task_container`): here every line is prefixed
+    /// and line-buffered, so a readiness milestone can't land mid-line in
+    /// the container's own output — there's nothing to protect it from, and
+    /// this is the only style that reports them at all. Matches Batect's own
+    /// `InterleavedEventLogger`, whose equivalent handlers have no
+    /// task-container guard either.
+    #[test]
+    fn readiness_milestones_are_reported_for_the_tasks_own_container_too() {
+        let (logger, buffer) = logger();
+        start_task(
+            &logger,
+            vec![
+                TaskContainerInfo {
+                    is_task_container: true,
+                    ..info("app", Some("alpine:3"), None)
+                },
+                info("db", Some("redis:7"), None),
+            ],
+        );
+        logger.post(TaskEvent::ContainerBecameHealthy {
+            container: "app".into(),
+        });
+        logger.post(TaskEvent::RunningSetupCommand {
+            container: "app".into(),
+            command: "./init.sh".into(),
+            index: 1,
+            total: 1,
+        });
+        logger.post(TaskEvent::SetupCommandsCompleted {
+            container: "app".into(),
+        });
+        assert_eq!(
+            buffer.contents(),
+            "test | Running test...\n\
+             app  | Container became healthy.\n\
+             app  | Running setup command ./init.sh (1 of 1)...\n\
+             app  | Container has completed all setup commands.\n"
+        );
+    }
+
     #[test]
     fn prefixes_are_padded_to_the_longest_name() {
         let (logger, buffer) = logger();
