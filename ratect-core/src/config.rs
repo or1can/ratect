@@ -343,16 +343,16 @@ impl Serialize for DeviceMapping {
 
 /// One `volumes` entry. Either a `local` bind mount (a host path, resolved
 /// against the container's own base path — see
-/// [`Config::resolve_expressions_with`]) or a `cache` mount (a named volume
+/// [`Config::resolve_expressions_with`]), a `cache` mount (a named volume
 /// that persists between separate `ratect` invocations, or a host directory
-/// under `--cache-type=directory` — see
-/// [`crate::cache::resolve_cache_mount`]). `tmpfs` (Batect's third kind) isn't
-/// implemented yet — see
-/// [Differences from Batect](https://github.com/or1can/ratect/blob/main/docs/differences-from-batect.md#container-fields).
+/// under `--cache-type=directory` — see [`crate::cache::resolve_cache_mount`]),
+/// or a `tmpfs` mount (an in-memory filesystem, lost when the container
+/// exits).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VolumeMount {
     Local(LocalVolumeMount),
     Cache(CacheVolumeMount),
+    Tmpfs(TmpfsVolumeMount),
 }
 
 /// A host path bind-mounted into the container. `local` supports
@@ -378,10 +378,22 @@ pub struct CacheVolumeMount {
     pub options: Option<String>,
 }
 
+/// An in-memory filesystem mount — Batect's `tmpfs` mount type. Lost when
+/// the container exits; no `local` host path or cache `name`, unlike
+/// [`LocalVolumeMount`]/[`CacheVolumeMount`]. `options` is an opaque string
+/// (e.g. `"size=100m,mode=1770"`) forwarded verbatim to Docker's own
+/// `HostConfig.Tmpfs` map — matching Batect, neither side parses or
+/// validates its contents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TmpfsVolumeMount {
+    pub container: String,
+    pub options: Option<String>,
+}
+
 impl VolumeMount {
     /// Parses Batect's `"local_path:container_path[:options]"` string form —
-    /// always a `Local` mount; there's no compact string form for `cache`
-    /// (matching Batect, whose string form only ever produces a
+    /// always a `Local` mount; there's no compact string form for `cache`/
+    /// `tmpfs` (matching Batect, whose string form only ever produces a
     /// `LocalMount`). Mirrors [`DeviceMapping::parse_string`] exactly.
     fn parse_string(value: &str) -> Result<Self> {
         let invalid = || {
@@ -491,9 +503,22 @@ impl<'de> Deserialize<'de> for VolumeMount {
                             options,
                         }))
                     }
+                    "tmpfs" => {
+                        if local.is_some() {
+                            return Err(serde::de::Error::custom(
+                                "Field 'local' is not permitted for tmpfs mounts.",
+                            ));
+                        }
+                        if name.is_some() {
+                            return Err(serde::de::Error::custom(
+                                "Field 'name' is not permitted for tmpfs mounts.",
+                            ));
+                        }
+                        Ok(VolumeMount::Tmpfs(TmpfsVolumeMount { container, options }))
+                    }
                     other => Err(serde::de::Error::custom(format!(
-                        "Unknown volume mount type '{other}'. It must be 'local' or 'cache' \
-                         ('tmpfs' isn't supported yet)."
+                        "Unknown volume mount type '{other}'. It must be 'local', 'cache', or \
+                         'tmpfs'."
                     ))),
                 }
             }
@@ -523,6 +548,18 @@ impl Serialize for VolumeMount {
                 let mut map = serializer.serialize_map(Some(4))?;
                 map.serialize_entry("type", "cache")?;
                 map.serialize_entry("name", &mount.name)?;
+                map.serialize_entry("container", &mount.container)?;
+                if let Some(options) = &mount.options {
+                    map.serialize_entry("options", options)?;
+                }
+                map.end()
+            }
+            // No compact string form exists for `tmpfs` either — always the
+            // expanded object.
+            VolumeMount::Tmpfs(mount) => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(3))?;
+                map.serialize_entry("type", "tmpfs")?;
                 map.serialize_entry("container", &mount.container)?;
                 if let Some(options) = &mount.options {
                     map.serialize_entry("options", options)?;
@@ -2074,7 +2111,10 @@ impl Config {
                     // matching Batect's own `CacheMount` typing. Their
                     // Docker volume name/host directory is resolved later,
                     // once `--cache-type` and the project's cache key are
-                    // known — see `crate::cache::resolve_cache_mount`.
+                    // known — see `crate::cache::resolve_cache_mount`. `Tmpfs`
+                    // mounts likewise have nothing to resolve — `container`/
+                    // `options` are plain strings too, matching Batect's own
+                    // `TmpfsMount` typing.
                     if let VolumeMount::Local(local) = volume {
                         local.local = resolve_path(
                             &local.local,
@@ -3686,6 +3726,7 @@ tasks: {}
         match mount {
             VolumeMount::Local(local) => local,
             VolumeMount::Cache(_) => panic!("expected a local volume mount, got a cache mount"),
+            VolumeMount::Tmpfs(_) => panic!("expected a local volume mount, got a tmpfs mount"),
         }
     }
 
@@ -3834,6 +3875,167 @@ tasks:
         let result: std::result::Result<Config, _> =
             noyalib::from_reader(Cursor::new(yaml.as_bytes()));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn volume_mount_parses_tmpfs_object_form() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - type: tmpfs
+        container: /code/tmp
+        options: ro
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(
+            container.volumes.as_ref().unwrap(),
+            &vec![VolumeMount::Tmpfs(TmpfsVolumeMount {
+                container: "/code/tmp".to_string(),
+                options: Some("ro".to_string()),
+            })]
+        );
+    }
+
+    #[test]
+    fn volume_mount_parses_tmpfs_object_form_without_options() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - type: tmpfs
+        container: /code/tmp
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        );
+
+        let container = config.containers.get("build-env").unwrap();
+        assert_eq!(
+            container.volumes.as_ref().unwrap(),
+            &vec![VolumeMount::Tmpfs(TmpfsVolumeMount {
+                container: "/code/tmp".to_string(),
+                options: None,
+            })]
+        );
+    }
+
+    #[test]
+    fn volume_mount_tmpfs_object_form_requires_container() {
+        let yaml = r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - type: tmpfs
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#;
+        let result: std::result::Result<Config, _> =
+            noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn volume_mount_tmpfs_object_form_forbids_local() {
+        let yaml = r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - type: tmpfs
+        local: /host/path
+        container: /code/tmp
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#;
+        let result: std::result::Result<Config, _> =
+            noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn volume_mount_tmpfs_object_form_forbids_name() {
+        let yaml = r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - type: tmpfs
+        name: not-allowed-here
+        container: /code/tmp
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#;
+        let result: std::result::Result<Config, _> =
+            noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn volume_mount_rejects_unknown_type() {
+        let yaml = r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - type: bogus
+        container: /code/tmp
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#;
+        let result: std::result::Result<Config, _> =
+            noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn volume_mount_tmpfs_serializes_to_object_form() {
+        let mount = VolumeMount::Tmpfs(TmpfsVolumeMount {
+            container: "/code/tmp".to_string(),
+            options: Some("ro".to_string()),
+        });
+        let json = serde_json::to_value(&mount).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "tmpfs",
+                "container": "/code/tmp",
+                "options": "ro",
+            })
+        );
     }
 
     #[test]

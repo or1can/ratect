@@ -233,6 +233,21 @@ fn build_devices(
     )
 }
 
+/// Builds Docker's `HostConfig.tmpfs` from already-expanded
+/// `(container_path, options)` pairs — pure, unit-testable without a daemon.
+/// `None` when `tmpfs` itself is `None`. A repeated `container_path` last-one-
+/// wins, same as building any other `HashMap` from a list — Docker itself
+/// would reject a container with a genuinely duplicate mount point anyway.
+fn build_tmpfs_mounts(tmpfs: Option<&Vec<(String, String)>>) -> Option<HashMap<String, String>> {
+    let tmpfs = tmpfs?;
+    Some(
+        tmpfs
+            .iter()
+            .map(|(container, options)| (container.clone(), options.clone()))
+            .collect(),
+    )
+}
+
 /// Builds Docker's `HostConfig.log_config` from `log_driver`/`log_options` —
 /// pure, unit-testable without a daemon. `None` when `log_driver` itself is
 /// `None` (Docker's own API has no meaningful `log_options`-without-a-driver
@@ -318,6 +333,14 @@ pub struct ContainerOptions<'a> {
     /// Driver-specific options (`--log-opt`, repeatable) for `log_driver` —
     /// meaningless without it, same as Docker's own CLI.
     pub log_options: Option<&'a HashMap<String, String>>,
+    /// In-memory `tmpfs` mounts — Docker's `--tmpfs`. `(container_path,
+    /// options)` pairs, `options` an opaque string (e.g.
+    /// `"size=100m,mode=1770"`) forwarded verbatim to Docker's own
+    /// `HostConfig.Tmpfs` map, matching Batect's own `VolumeMountResolver`
+    /// (which does no parsing/validation of it either) — `docker.rs`
+    /// deliberately doesn't depend on config types (same conversion boundary
+    /// as `devices` above).
+    pub tmpfs: Option<&'a Vec<(String, String)>>,
 }
 
 /// A container's `health_check` override, applied at container creation on
@@ -2353,6 +2376,7 @@ impl ContainerRuntime for DockerClient {
                 container_options.log_driver,
                 container_options.log_options,
             ),
+            tmpfs: build_tmpfs_mounts(container_options.tmpfs),
             ..Default::default()
         };
 
@@ -2657,6 +2681,7 @@ impl ContainerRuntime for DockerClient {
                 container_options.log_driver,
                 container_options.log_options,
             ),
+            tmpfs: build_tmpfs_mounts(container_options.tmpfs),
             ..Default::default()
         };
 
@@ -2957,6 +2982,27 @@ mod tests {
     #[test]
     fn build_devices_is_none_when_devices_is_absent() {
         assert_eq!(build_devices(None), None);
+    }
+
+    #[test]
+    fn build_tmpfs_mounts_maps_container_and_options() {
+        let tmpfs = vec![
+            ("/tmp/a".to_string(), "size=64m".to_string()),
+            ("/tmp/b".to_string(), String::new()),
+        ];
+
+        assert_eq!(
+            build_tmpfs_mounts(Some(&tmpfs)),
+            Some(HashMap::from([
+                ("/tmp/a".to_string(), "size=64m".to_string()),
+                ("/tmp/b".to_string(), String::new()),
+            ]))
+        );
+    }
+
+    #[test]
+    fn build_tmpfs_mounts_is_none_when_tmpfs_is_absent() {
+        assert_eq!(build_tmpfs_mounts(None), None);
     }
 
     #[test]

@@ -1,0 +1,16 @@
+# Exercises `volumes`' `tmpfs` mount kind end-to-end: `size=64m` is a
+# standard Docker tmpfs mount option, so its actual size is directly
+# observable via `df -k`, same proof shape as `shm-size.yml`.
+project_name: ratect-tmpfs-test
+containers:
+  build-env:
+    image: alpine:3.18.2
+    volumes:
+      - type: tmpfs
+        container: /code/tmp
+        options: size=64m
+tasks:
+  print-tmpfs-size:
+    run:
+      container: build-env
+      command: sh -c "df -k /code/tmp | tail -1"

@@ -19,7 +19,7 @@ The primary goal is to support the core features of Batect to ensure a seamless 
   [Differences from Batect](docs/differences-from-batect.md#container-fields).
 - **Includes**: Local file includes — splitting one project's configuration across multiple files via the top-level `include` directive, resolved relative to each declaring file's own directory and merged into one flat `containers`/`tasks`/`config_variables` set (0.7.0) — and Git includes/bundles — importing shared tasks/containers from a separate repository, cloned once and cached forever at `~/.ratect/incl` (0.8.0), with a 30-day automatic cache eviction sweep matching Batect's own (0.19.0) — see [config reference](docs/config-reference.md#includes) and [Differences from Batect](docs/differences-from-batect.md#top-level-fields).
 - **Full Configuration Parity**: Support for all available Batect configuration options and standard YAML structures. See [Differences from Batect](docs/differences-from-batect.md#configuration-format) for the itemized current status of every field.
-- **Tmpfs Volumes**: `volumes` now supports both of Batect's bind-mount-like kinds — `local` (`local:container[:options]`) and `cache` (a named volume that persists between separate `ratect` invocations — a Docker named volume by default, or a host directory under `--cache-type=directory`, plus `--clean`/`--clean-cache` to clear them out, [0.18.0](#ratect-compat)) — see [Cache volumes](docs/config-reference.md#cache-volumes). Batect's third mount kind, `tmpfs` (an in-memory, ephemeral mount, lost when the container exits), remains unimplemented and not yet scheduled to a specific version — see [Differences from Batect](docs/differences-from-batect.md#container-fields).
+- **Volume Mounts**: `volumes` supports all three of Batect's mount kinds — `local` (`local:container[:options]`), `cache` (a named volume that persists between separate `ratect` invocations — a Docker named volume by default, or a host directory under `--cache-type=directory`, plus `--clean`/`--clean-cache` to clear them out, [0.18.0](#ratect-compat)) — see [Cache volumes](docs/config-reference.md#cache-volumes) — and `tmpfs` (an in-memory, ephemeral mount, lost when the container exits, [0.21.0](#ratect-compat)) — see [Tmpfs mounts](docs/config-reference.md#tmpfs-mounts).
 - **Config Schema**: A JSON schema describing Ratect's actual accepted `batect.yml` shape, for editor autocompletion/validation — likely generated from `ratect-core/src/config.rs`'s own `Serialize`/`Deserialize` structs (e.g. via the `schemars` crate) rather than hand-maintained separately, though custom `Deserialize` impls (`PortMapping`, `DeviceMapping`, `Capability`, etc.) would need matching `JsonSchema` impls to stay accurate. Deliberately **not** Batect's own published schema (listed in [SchemaStore's catalog](https://www.schemastore.org/api/json/catalog.json) for `batect.yml`/`batect-bundle.yml`, hosted at `ide-integration.batect.dev`) — that reflects Batect's full field set, not Ratect's subset, so it would either validate fields Ratect doesn't actually support (a false pass in the editor) or reject a future Ratect-only extension as invalid (a false failure). Nice to have before 1.0.0, even if not (yet) submitted to SchemaStore itself — that's a separate, later decision.
 - **Full CLI Options Parity**: Support for all standard Batect CLI flags and options (e.g., `--config-file`, `--override-image`, cleanup control flags, etc.). See [Differences from Batect](docs/differences-from-batect.md#cli-flags) for the itemized current status of every flag.
 - **User Mapping**: A container can run as the host's own user/group (`run_as_current_user`) instead of the image's default, so files it writes to a mounted volume aren't root-owned (0.5.0) — see [User mapping](docs/config-reference.md#user-mapping). Host-side uid/gid lookup is Unix-only — see [Differences from Batect](docs/differences-from-batect.md#container-fields).
@@ -705,9 +705,18 @@ Neither bump is ever folded into a feature commit.
   for the itemized status of each. One `feat:` commit per item, matching the
   repo's own commit-packaging convention for a release bundling several
   separable behaviors:
-  - **`tmpfs` volumes**: Batect's third `volumes` mount kind (in-memory,
+  - ~~**`tmpfs` volumes**: Batect's third `volumes` mount kind (in-memory,
     ephemeral, lost on container exit) — currently entirely unsupported,
-    alongside the already-supported `local`/`cache` kinds.
+    alongside the already-supported `local`/`cache` kinds.~~ — done: a new
+    `VolumeMount::Tmpfs` variant (object form only — no compact string form,
+    matching Batect), mapped onto Docker's own `HostConfig.Tmpfs` map
+    (`container_path` → an opaque `options` string forwarded verbatim,
+    unparsed — matching Batect's own `VolumeMountResolver`, which also
+    normalizes a missing `options` to `""`). Threaded through as a new
+    `ContainerOptions.tmpfs` field (not folded into the existing `volumes`
+    bind-string parameter, since a tmpfs mount can't be expressed as a bind
+    string at all) — resolved synchronously, unlike `local`/`cache`, since it
+    needs no cache-key lookup.
   - **The task's own container's `setup_commands`**: currently only run for
     dependency containers, not the task's own — Batect runs them concurrently
     with the task's command; closing this needs the engine's first concurrent

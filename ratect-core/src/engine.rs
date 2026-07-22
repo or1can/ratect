@@ -145,6 +145,33 @@ fn device_triples(
     )
 }
 
+/// Converts a `volumes` list's `tmpfs` entries into the plain
+/// `(container, options)` pairs `docker.rs`'s `ContainerOptions` expects —
+/// same conversion boundary as `capability_names`/`device_triples` above.
+/// `Local`/`Cache` entries are skipped here — they're resolved separately, by
+/// `TaskEngine::resolve_volumes`, into Docker bind-mount strings instead. A
+/// missing `options` is normalized to `""`, matching Batect's own
+/// `VolumeMountResolver` (`TmpfsMount(it.containerPath, it.options ?: "")`).
+fn tmpfs_mounts(
+    volumes: Option<&Vec<crate::config::VolumeMount>>,
+) -> Option<Vec<(String, String)>> {
+    let mounts: Vec<(String, String)> = volumes?
+        .iter()
+        .filter_map(|volume| match volume {
+            crate::config::VolumeMount::Tmpfs(tmpfs) => Some((
+                tmpfs.container.clone(),
+                tmpfs.options.clone().unwrap_or_default(),
+            )),
+            crate::config::VolumeMount::Local(_) | crate::config::VolumeMount::Cache(_) => None,
+        })
+        .collect();
+    if mounts.is_empty() {
+        None
+    } else {
+        Some(mounts)
+    }
+}
+
 /// Converts a container's parsed `build_secrets`/`build_ssh` config into the
 /// docker-side [`crate::docker::BuildKitOptions`] — `None` when neither is
 /// set (no session providers to serve; which *builder* runs the build is
@@ -698,6 +725,9 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     /// key, neither available to `config.rs`. `cache_key` is only ever
     /// computed the first time this actually encounters a `Cache` mount —
     /// a config with none never touches the filesystem for this at all.
+    /// `Tmpfs` mounts are skipped entirely here — they can't be expressed as
+    /// a bind string at all, and need no async resolution, so they're pulled
+    /// out separately (and synchronously) by `tmpfs_mounts` instead.
     async fn resolve_volumes(
         &self,
         volumes: Option<&Vec<crate::config::VolumeMount>>,
@@ -734,10 +764,15 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         cache,
                     )?);
                 }
+                crate::config::VolumeMount::Tmpfs(_) => {}
             }
         }
 
-        Ok(Some(resolved))
+        if resolved.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(resolved))
+        }
     }
 
     #[cfg(test)]
@@ -1392,6 +1427,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             let capabilities_to_drop =
                 capability_names(container_config.capabilities_to_drop.as_ref());
             let devices = device_triples(container_config.devices.as_ref());
+            let tmpfs = tmpfs_mounts(container_config.volumes.as_ref());
             let container_options = crate::docker::ContainerOptions {
                 working_directory,
                 entrypoint,
@@ -1404,6 +1440,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 enable_init_process: container_config.enable_init_process,
                 log_driver: container_config.log_driver.as_deref(),
                 log_options: container_config.log_options.as_ref(),
+                tmpfs: tmpfs.as_ref(),
             };
             self.event_sink.post(TaskEvent::RunningTaskContainer {
                 container: run.container.clone(),
@@ -1614,6 +1651,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     let capabilities_to_drop =
                         capability_names(dependency_config.capabilities_to_drop.as_ref());
                     let devices = device_triples(dependency_config.devices.as_ref());
+                    let tmpfs = tmpfs_mounts(dependency_config.volumes.as_ref());
                     let working_directory = customisation
                         .and_then(|c| c.working_directory.as_deref())
                         .or(dependency_config.working_directory.as_deref());
@@ -1629,6 +1667,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         enable_init_process: dependency_config.enable_init_process,
                         log_driver: dependency_config.log_driver.as_deref(),
                         log_options: dependency_config.log_options.as_ref(),
+                        tmpfs: tmpfs.as_ref(),
                     };
 
                     self.event_sink.post(TaskEvent::DependencyStarting {
@@ -1847,6 +1886,7 @@ mod tests {
         enable_init_process: Option<bool>,
         log_driver: Option<String>,
         log_options: Option<HashMap<String, String>>,
+        tmpfs: Option<Vec<(String, String)>>,
     }
     type CapturedContainerOptions = Arc<Mutex<HashMap<String, ContainerOptionsValue>>>;
     /// `(working_directory, environment, (uid, gid))`, keyed by the exec'd
@@ -2273,6 +2313,16 @@ mod tests {
                 .get(name)
                 .and_then(|options| options.log_options.clone())
         }
+
+        /// The `container_options.tmpfs` a prior `run_container`/
+        /// `start_background_container` call for `name` was given.
+        fn tmpfs_for(&self, name: &str) -> Option<Vec<(String, String)>> {
+            self.container_options
+                .lock()
+                .unwrap()
+                .get(name)
+                .and_then(|options| options.tmpfs.clone())
+        }
     }
 
     #[async_trait::async_trait]
@@ -2404,6 +2454,7 @@ mod tests {
                     enable_init_process: container_options.enable_init_process,
                     log_driver: container_options.log_driver.map(str::to_string),
                     log_options: container_options.log_options.cloned(),
+                    tmpfs: container_options.tmpfs.cloned(),
                 },
             );
             self.push(format!("sidecar-start:{alias}:{network}"));
@@ -2538,6 +2589,7 @@ mod tests {
                     enable_init_process: container_options.enable_init_process,
                     log_driver: container_options.log_driver.map(str::to_string),
                     log_options: container_options.log_options.cloned(),
+                    tmpfs: container_options.tmpfs.cloned(),
                 },
             );
             self.push(format!(
@@ -5979,6 +6031,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn container_tmpfs_mounts_reach_the_container() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.volumes = Some(vec![
+            crate::config::VolumeMount::Local(crate::config::LocalVolumeMount {
+                local: "/host/code".to_string(),
+                container: "/code".to_string(),
+                options: None,
+            }),
+            crate::config::VolumeMount::Tmpfs(crate::config::TmpfsVolumeMount {
+                container: "/code/tmp".to_string(),
+                options: Some("size=64m".to_string()),
+            }),
+        ]);
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        // Only the `tmpfs` entry reaches `ContainerOptions.tmpfs` — the
+        // `local` entry is resolved separately, into the bind-mount string
+        // `run_container`'s own `volumes` parameter carries instead (not
+        // captured by `ContainerOptionsValue`, so nothing to assert here).
+        assert_eq!(
+            docker.tmpfs_for("build-env"),
+            Some(vec![("/code/tmp".to_string(), "size=64m".to_string())])
+        );
+    }
+
+    #[tokio::test]
+    async fn container_tmpfs_mount_without_options_defaults_to_an_empty_string() {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.volumes = Some(vec![crate::config::VolumeMount::Tmpfs(
+            crate::config::TmpfsVolumeMount {
+                container: "/code/tmp".to_string(),
+                options: None,
+            },
+        )]);
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container_config);
+
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("test", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.tmpfs_for("build-env"),
+            Some(vec![("/code/tmp".to_string(), String::new())])
+        );
+    }
+
+    #[tokio::test]
     async fn if_not_present_policy_pulls_when_the_image_is_missing_locally() {
         // No image_pull_policy set — IfNotPresent is the default.
         let mut containers = HashMap::new();
@@ -7110,6 +7239,42 @@ mod tests {
                 "/dev/xvdb".to_string(),
                 None
             )])
+        );
+    }
+
+    #[tokio::test]
+    async fn dependency_container_tmpfs_mounts_reach_the_sidecar() {
+        let mut database = container("postgres:16", None);
+        database.volumes = Some(vec![crate::config::VolumeMount::Tmpfs(
+            crate::config::TmpfsVolumeMount {
+                container: "/tmp/pgdata".to_string(),
+                options: None,
+            },
+        )]);
+        let mut containers = HashMap::new();
+        containers.insert("database".to_string(), database);
+        containers.insert(
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["database".to_string()])),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        assert_eq!(
+            docker.tmpfs_for("database"),
+            Some(vec![("/tmp/pgdata".to_string(), String::new())])
         );
     }
 

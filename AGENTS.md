@@ -46,16 +46,18 @@ Ratect is a **Cargo workspace** with four crates (the
     interpolated but *not* resolved against a base path — it's a container-side path,
     validated to start with `/` instead. `PortRange`/`PortMapping`,
     `DeviceMapping` (`devices`), and `VolumeMount` (`volumes` — `Local`/`Cache`
-    variants, 0.18.0) all have hand-written `Deserialize` impls so an entry can
-    be either Batect's string form (`"local:container[/protocol]"` /
+    variants, 0.18.0, plus `Tmpfs`, 0.21.0) all have hand-written `Deserialize`
+    impls so an entry can be either Batect's string form (`"local:container[/protocol]"` /
     `"local:container[:options]"` — `VolumeMount`'s string form is always
-    `Local`; there's no compact string form for `Cache`) or the expanded object
-    form. A `VolumeMount::Local`'s host path is resolved here (against
+    `Local`; there's no compact string form for `Cache`/`Tmpfs`) or the expanded
+    object form. A `VolumeMount::Local`'s host path is resolved here (against
     `container_base_paths`, same as `build_directory`); a `Cache`'s `name`/
     `container` are plain strings, not `Expression`s, matching Batect — nothing
     to resolve here at all, since `--cache-type` and the project's own cache
     key (needed to actually resolve one) aren't known until `engine.rs`/
-    `cache.rs`. `Capability`
+    `cache.rs`. A `Tmpfs`'s `container`/`options` are likewise plain strings —
+    nothing to resolve here either, matching Batect's own `TmpfsMount` typing.
+    `Capability`
     (`capabilities_to_add`/`capabilities_to_drop`) and `ImagePullPolicy` are fixed
     enums validated at parse time — `Capability`'s list is a deliberate *superset* of
     Batect's own (unmaintained) one, not a strict port, see its doc comment.
@@ -155,7 +157,13 @@ Ratect is a **Cargo workspace** with four crates (the
     bollard's `HostConfig.log_config` (`build_log_config`, pure/unit-testable,
     same shape as `build_devices`) — `None`/absent leaves the daemon's own
     configured default alone rather than baking in a literal `"json-file"`
-    default the way Batect's own config model does. `build_image` also
+    default the way Batect's own config model does. `tmpfs` (0.21.0)
+    followed the same pattern again, onto bollard's `HostConfig.Tmpfs`
+    (`build_tmpfs_mounts`, pure/unit-testable, same shape as `build_devices`/
+    `build_log_config`) — unlike `devices`/`log_options`, its `(container_path,
+    options)` pairs come from the same `volumes` config field `resolve_volumes`
+    already handles, just pulled out separately (`engine.rs`'s `tmpfs_mounts`)
+    since a tmpfs mount can't be expressed as a bind string. `build_image` also
     gained a `force_pull: bool` parameter (0.19.0, both the classic and
     BuildKit paths' `BuildImageOptionsBuilder::pull("true")`) — Batect's
     second, distinct use of `image_pull_policy` on a `build_directory`
@@ -203,7 +211,13 @@ Ratect is a **Cargo workspace** with four crates (the
     resolved — never eagerly). `with_cache_options` (`--cache-type` + the
     project directory) is `main.rs`'s own builder call, always made in
     practice despite being optional here, same convention as the other opt-in
-    settings above.
+    settings above. `Tmpfs` mounts are deliberately *not* resolved by
+    `resolve_volumes` at all (0.21.0) — a tmpfs mount can't be expressed as a
+    bind string, and needs no async cache-key lookup either, so a separate,
+    synchronous `tmpfs_mounts` helper (alongside `capability_names`/
+    `device_triples`) pulls them out into a new `ContainerOptions.tmpfs` field
+    instead, mapped onto Docker's own `HostConfig.Tmpfs` map by `docker.rs`'s
+    `build_tmpfs_mounts`.
   - **`ratect-core/src/ui/`**: The user-facing output layer (0.16.0's output-modes
     work) — a port of Batect's `TaskEventSink`/`EventLogger` design: `engine.rs`
     posts typed `TaskEvent` milestones and `docker.rs` posts fine-grained

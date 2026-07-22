@@ -170,7 +170,7 @@ containers:
 | `build_args` | map of string → string | no | Build-time variables passed to `docker build` (Docker's own `--build-arg` mechanism), e.g. `VERSION: "1.2.3"`. Only meaningful alongside `build_directory`. Values support [expressions](#expressions). |
 | `dockerfile` | string | no | The Dockerfile to build, as a path relative to `build_directory`'s own root. Defaults to `Dockerfile` at `build_directory`'s root. Only meaningful alongside `build_directory`. No [expression](#expressions) support. |
 | `build_target` | string | no | The build stage to stop at (Docker's own `--target` mechanism), for a multi-stage `FROM ... AS <name>` Dockerfile. Only meaningful alongside `build_directory`. No expression support. |
-| `volumes` | list of strings/objects | no | Host bind mounts (`local`) and named cache volumes (`cache`) — see [Volume path resolution](#volume-path-resolution) and [Cache volumes](#cache-volumes) below. |
+| `volumes` | list of strings/objects | no | Host bind mounts (`local`), named cache volumes (`cache`), and in-memory tmpfs mounts (`tmpfs`) — see [Volume path resolution](#volume-path-resolution), [Cache volumes](#cache-volumes), and [Tmpfs mounts](#tmpfs-mounts) below. |
 | `dependencies` | list of strings | no | Names of other containers to start (recursively, if they themselves have dependencies) before this one, reachable by name over a Docker network created for the duration of the task. Each dependency must become *ready* — healthy, with all its `setup_commands` completed — before its dependents start; see [Dependency readiness](#dependency-readiness) below and [the task lifecycle](task-lifecycle.md) for the full model. |
 | `environment` | map of string → string | no | Environment variables to set in the container, e.g. `FOO: bar`. Values support [expressions](#expressions) (`$VAR`, `${VAR:-default}`, `<name`). A dependency container only ever gets its own `environment` — see [TaskRun](#taskrun) for how a task's own container's `environment` combines with `run.environment`. |
 | `run_as_current_user` | object (`enabled`, `home_directory`) | no | Runs this container as the host's own user/group instead of the image's default (see [User mapping](#user-mapping) below). |
@@ -296,9 +296,10 @@ not the same, and the difference is easy to get surprised by:
 
 ### Volume path resolution
 
-Each `volumes` entry is either a `local` bind mount (a host path) or a `cache` volume
-(see [Cache volumes](#cache-volumes) below) — either the compact string form or the
-expanded object form:
+Each `volumes` entry is a `local` bind mount (a host path), a `cache` volume (see
+[Cache volumes](#cache-volumes) below), or a `tmpfs` mount (see
+[Tmpfs mounts](#tmpfs-mounts) below) — either the compact string form or the expanded
+object form:
 
 ```yaml
 containers:
@@ -312,13 +313,15 @@ containers:
       - type: cache
         name: apk-cache
         container: /var/cache/apk
+      - type: tmpfs
+        container: /code/tmp
 ```
 
 A bare string (`local_path:container_path` or `local_path:container_path:options`) is
-always a `local` mount — there's no compact string form for `cache`. The expanded
-object form additionally accepts `type: cache` (with `name` instead of `local`);
-`type: local`, the default when omitted, requires `local` and forbids `name` (and vice
-versa for `type: cache`).
+always a `local` mount — there's no compact string form for `cache`/`tmpfs`. The
+expanded object form additionally accepts `type: cache` (with `name` instead of
+`local`) or `type: tmpfs` (with neither `local` nor `name`); `type: local`, the default
+when omitted, requires `local` and forbids `name`.
 
 For a `local` mount, `local` (the host path) is resolved:
 
@@ -374,14 +377,31 @@ containers:
   regenerated — even though Ratect's own generated keys look different (a full UUID,
   rather than Batect's own shorter id): nothing depends on matching that format, only
   on reusing whatever key is already on record for this project.
-- `tmpfs` mounts (Batect's third kind — in-memory, lost when the container exits)
-  aren't implemented yet — see
-  [Differences from Batect](differences-from-batect.md#container-fields).
-
 `--clean` removes every one of this project's own cache volumes/directories (per
 `--cache-type`) and exits, without running anything; `--clean-cache <NAME>` (repeatable)
 restricts this to the named cache(s) instead of all of them — see
 [CLI reference](cli-reference.md).
+
+### Tmpfs mounts
+
+A `tmpfs` mount is an in-memory filesystem — its contents are lost when the container
+exits. Unlike `local`/`cache`, it has no host path or name — only the expanded object
+form is accepted:
+
+```yaml
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - type: tmpfs
+        container: /code/tmp
+        options: size=64m   # optional
+```
+
+`options` is a standard
+[Docker tmpfs mount options](https://docs.docker.com/storage/tmpfs/#specify-tmpfs-options)
+string (e.g. `size=64m`, `mode=1770`) forwarded verbatim to Docker — Ratect does no
+parsing or validation of its contents, matching Batect.
 
 ### User mapping
 

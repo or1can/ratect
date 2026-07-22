@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`tmpfs` volume mounts** (`Container.volumes`): Batect's third `volumes` mount kind — an in-memory filesystem, lost when the container exits — alongside the already-supported `local`/`cache` kinds. Expanded object form only (`type: tmpfs`), no compact string form, matching Batect. Maps onto Docker's own `HostConfig.Tmpfs` map; `options` is an opaque string (e.g. `size=64m,mode=1770`) forwarded verbatim, unparsed, matching Batect's own `VolumeMountResolver`. New `config::VolumeMount::Tmpfs`/`TmpfsVolumeMount`, `ContainerOptions::tmpfs` (`docker.rs`). See [config reference](docs/config-reference.md#tmpfs-mounts) and [Differences from Batect](docs/differences-from-batect.md#container-fields).
+
 ## [0.20.0] - 2026-07-22
 
 ### Changed

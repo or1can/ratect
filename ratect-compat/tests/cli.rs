@@ -113,6 +113,10 @@ fn devices_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/devices.yml")
 }
 
+fn tmpfs_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tmpfs.yml")
+}
+
 fn enable_init_process_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/enable-init-process.yml")
 }
@@ -1434,6 +1438,39 @@ fn shm_size_reaches_the_real_container() {
         .unwrap_or_else(|e| panic!("failed to parse df output '{stdout}': {e}"));
 
     assert_eq!(blocks, 128 * 1024, "df output:\n{stdout}");
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves a `tmpfs` volume mount reaches the real container: `size=64m` must
+/// make the mount's actual `df` size exactly 65536 1K-blocks (64 * 1024),
+/// same proof shape as `shm_size_reaches_the_real_container`.
+#[test]
+#[ignore]
+fn tmpfs_mount_reaches_the_real_container() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(tmpfs_config_path())
+        .arg("print-tmpfs-size")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = task_output(&String::from_utf8_lossy(&output.stdout));
+    let blocks: u64 = stdout
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or_else(|| panic!("unexpected df output: {stdout}"))
+        .parse()
+        .unwrap_or_else(|e| panic!("failed to parse df output '{stdout}': {e}"));
+
+    assert_eq!(blocks, 64 * 1024, "df output:\n{stdout}");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
