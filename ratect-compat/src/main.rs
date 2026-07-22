@@ -14,9 +14,11 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use ratect_core::config::{format_task_list, format_task_list_quiet, Config};
+use ratect_core::config::{
+    format_task_list, format_task_list_quiet, load_project, Config, LoadedProject,
+};
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
-use ratect_core::engine::TaskEngine;
+use ratect_core::engine::{TaskEngine, TaskEngineSettings};
 use ratect_core::git_include::GitIncludeCache;
 use ratect_core::ui::{create_event_sink, select_output_style, OutputStyle};
 use std::collections::{HashMap, HashSet};
@@ -281,21 +283,6 @@ fn parse_container_value_pair(s: &str) -> std::result::Result<(String, String), 
     }
 }
 
-/// The directory `config_file`'s relative expressions/paths (`build_directory`,
-/// volume host paths, `batect.project_directory`) are resolved against.
-///
-/// `Path::parent()` returns `Some("")` for a bare filename with no directory
-/// prefix (e.g. the default `batect.yml`) rather than `None` — that's not a
-/// "no parent" case in the `unwrap_or` sense, so the common bare `-f
-/// batect.yml` invocation resolves to `""`, not `"."`. Both are handled the
-/// same way downstream (`Config::resolve_expressions` joins onto the current
-/// directory and lexically cleans the result), but it's worth being explicit
-/// here since it's easy to assume `parent()` returning `None` is the only
-/// case that needs a fallback.
-fn base_path_for(config_file: &Path) -> &Path {
-    config_file.parent().unwrap_or(Path::new("."))
-}
-
 /// `log_file`, when given (`--log-file`), tees the same log output into
 /// that file *in addition to* stderr — matching Batect's own `--log-file`
 /// content, though not its silent-by-default behavior (Ratect always logs
@@ -401,20 +388,15 @@ async fn run(args: Args) -> Result<()> {
         return clean_caches(&args).await;
     }
 
-    if !args.config_file.exists() {
-        anyhow::bail!("Configuration file {:?} not found.", args.config_file);
-    }
-    let mut loaded = Config::load_from_file(&args.config_file).await?;
-
     let mut config_var_overrides: HashMap<String, String> = match &args.config_vars_file {
         Some(path) => Config::load_config_vars_file(path)?,
         None => HashMap::new(),
     };
     config_var_overrides.extend(args.config_var.iter().cloned());
-    let base_path = base_path_for(&args.config_file);
-    let project_directory = ratect_core::config::project_directory_path(base_path)?;
-    loaded.resolve_expressions(base_path, &config_var_overrides)?;
-    let config = loaded.config;
+    let LoadedProject {
+        config,
+        project_directory,
+    } = load_project(&args.config_file, &config_var_overrides).await?;
 
     // Gathered once, here, and reused for both the `--list-tasks` quiet-
     // format decision below and (inside `create_event_sink`) the real
@@ -485,41 +467,25 @@ async fn run(args: Args) -> Result<()> {
             let docker = DockerClient::new(&docker_connection)?
                 .with_event_sink(Arc::clone(&event_sink))
                 .with_enable_buildkit(args.enable_buildkit);
-            let mut engine = TaskEngine::new(config, docker)
+            let mut image_tags: HashMap<String, HashSet<String>> = HashMap::new();
+            for (container, tag) in args.tag_image {
+                image_tags.entry(container).or_default().insert(tag);
+            }
+            let settings = TaskEngineSettings {
+                existing_network: args.use_network,
+                publish_ports: !args.disable_ports,
+                propagate_proxy_environment_variables: !args.no_proxy_vars,
+                run_prerequisites: !args.skip_prerequisites,
+                image_overrides: args.override_image.into_iter().collect(),
+                image_tags,
+                cleanup_after_success: !(args.no_cleanup || args.no_cleanup_after_success),
+                cleanup_after_failure: !(args.no_cleanup || args.no_cleanup_after_failure),
+                max_parallelism: args.max_parallelism.map(|max| max as usize),
+                cache: Some((args.cache_type.into(), project_directory)),
+            };
+            let engine = TaskEngine::new(config, docker)
                 .with_event_sink(event_sink)
-                .with_cache_options(args.cache_type.into(), project_directory);
-            if let Some(network) = args.use_network {
-                engine = engine.with_existing_network(network);
-            }
-            if args.disable_ports {
-                engine = engine.without_port_publishing();
-            }
-            if args.no_proxy_vars {
-                engine = engine.without_proxy_environment_variables();
-            }
-            if args.skip_prerequisites {
-                engine = engine.without_prerequisites();
-            }
-            if !args.override_image.is_empty() {
-                engine = engine.with_image_overrides(args.override_image.into_iter().collect())?;
-            }
-            if !args.tag_image.is_empty() {
-                let mut image_tags: HashMap<String, std::collections::HashSet<String>> =
-                    HashMap::new();
-                for (container, tag) in args.tag_image {
-                    image_tags.entry(container).or_default().insert(tag);
-                }
-                engine = engine.with_image_tags(image_tags);
-            }
-            if args.no_cleanup || args.no_cleanup_after_failure {
-                engine = engine.without_cleanup_after_failure();
-            }
-            if args.no_cleanup || args.no_cleanup_after_success {
-                engine = engine.without_cleanup_after_success();
-            }
-            if let Some(max_parallelism) = args.max_parallelism {
-                engine = engine.with_max_parallelism(max_parallelism as usize);
-            }
+                .with_settings(settings)?;
             engine.run_task(&task_name, &args.additional_args).await?;
         }
         None => {
@@ -543,7 +509,7 @@ async fn run(args: Args) -> Result<()> {
 /// non-empty) always wins over `--clean`'s "everything" default, regardless
 /// of whether `--clean` was also given.
 async fn clean_caches(args: &Args) -> Result<()> {
-    let base_path = base_path_for(&args.config_file);
+    let base_path = ratect_core::config::base_path_for(&args.config_file);
     let project_directory = ratect_core::config::project_directory_path(base_path)?;
     let only: HashSet<String> = args.clean_cache.iter().cloned().collect();
     let cache_type: ratect_core::cache::CacheType = args.cache_type.into();
@@ -622,36 +588,6 @@ mod tests {
         let args = Args::try_parse_from(["ratect", "-f", "custom.yml", "build"]).unwrap();
         assert_eq!(args.config_file, PathBuf::from("custom.yml"));
         assert_eq!(args.task_name.as_deref(), Some("build"));
-    }
-
-    #[test]
-    fn base_path_for_a_bare_config_file_name_is_empty_not_dot() {
-        // The default `-f batect.yml` case: `Path::parent()` on a bare
-        // filename returns `Some("")`, not `None`, so the `.` fallback in
-        // `base_path_for` never actually applies here — worth locking in
-        // explicitly since it's easy to assume otherwise.
-        assert_eq!(base_path_for(Path::new("batect.yml")), Path::new(""));
-    }
-
-    #[test]
-    fn base_path_for_a_dot_relative_config_file_is_dot() {
-        assert_eq!(base_path_for(Path::new("./batect.yml")), Path::new("."));
-    }
-
-    #[test]
-    fn base_path_for_a_config_file_in_a_subdirectory_is_that_subdirectory() {
-        assert_eq!(
-            base_path_for(Path::new("project/batect.yml")),
-            Path::new("project")
-        );
-    }
-
-    #[test]
-    fn base_path_for_an_absolute_config_file_is_its_directory() {
-        assert_eq!(
-            base_path_for(Path::new("/abs/project/batect.yml")),
-            Path::new("/abs/project")
-        );
     }
 
     #[test]

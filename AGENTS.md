@@ -42,7 +42,15 @@ Ratect is a **Cargo workspace** with four crates (the
     included file's relative paths resolve against *its own* directory while
     `batect.project_directory` still always resolves to the root's (`Config`'s own
     `resolve_expressions` stays available too, unchanged, for a `Config` built without
-    going through `load_from_file`). `run_as_current_user.home_directory` is
+    going through `load_from_file`). `load_project` (0.2.0-dev) wraps that whole
+    sequence — existence check, `load_from_file`, `base_path_for`,
+    `project_directory_path`, `resolve_expressions` — into the one call a binary
+    actually wants, returning a `LoadedProject`; it exists so `ratect` and
+    `ratect-compat` can't get the ordering (includes before expressions) or the
+    missing-file error wording out of step with each other. Merging
+    `--config-vars-file` with individually-supplied variables stays the caller's
+    job — only the caller knows what its own flags are called.
+    `run_as_current_user.home_directory` is
     interpolated but *not* resolved against a base path — it's a container-side path,
     validated to start with `/` instead. `PortRange`/`PortMapping`,
     `DeviceMapping` (`devices`), and `VolumeMount` (`volumes` — `Local`/`Cache`
@@ -204,7 +212,13 @@ Ratect is a **Cargo workspace** with four crates (the
     `ContainerRuntime`. Worth knowing: opt-in settings (`existing_network`,
     `publish_ports`, etc.) are builder methods rather than `TaskEngine::new`
     parameters, so each new one lands without a mass-edit of the ~30 existing call
-    sites; and only the task actually named on the command line (never a
+    sites — with `TaskEngineSettings`/`with_settings` (0.2.0-dev) as the
+    plain-data form of that same set, which is what the *binaries* use (both
+    expose the same ~10 knobs behind differently-named flags, so neither
+    duplicates the builder chain; a new setting needs adding in both places or a
+    binary can't reach it, and this module's own tests keep using the builders,
+    where naming one setting reads better than a mostly-default struct); and only
+    the task actually named on the command line (never a
     prerequisite) is ever eligible for interactive-TTY mode. `run_task_internal`
     runs `prerequisites` first, then returns early (no error) if the task itself has
     no `run` (0.14.0) — everything after can assume `run` is present. `customise`

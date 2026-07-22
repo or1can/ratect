@@ -2433,6 +2433,63 @@ pub fn project_directory_path(base_path: &Path) -> Result<PathBuf> {
     Ok(std::env::current_dir()?.join(base_path).clean())
 }
 
+/// The directory a config file's own relative paths (`volumes`,
+/// `build_directory`) resolve against — its containing directory.
+///
+/// [`Path::parent`] returns `Some("")` for a bare filename with no directory
+/// prefix (the common `-f batect.yml` case) rather than `None`, so that
+/// isn't a "no parent" case in the `unwrap_or` sense and resolves to `""`,
+/// not `"."`. Both are handled identically downstream
+/// ([`Config::resolve_expressions`] joins onto the current directory and
+/// lexically cleans the result), but it's worth being explicit, since it's
+/// easy to assume `parent()` returning `None` is the only case needing a
+/// fallback.
+pub fn base_path_for(config_file: &Path) -> &Path {
+    config_file.parent().unwrap_or(Path::new("."))
+}
+
+/// A configuration file loaded, merged and fully resolved — what a binary
+/// actually needs before it can build a [`TaskEngine`](crate::engine::TaskEngine).
+#[derive(Debug)]
+pub struct LoadedProject {
+    pub config: Config,
+    /// The project's own root directory — see [`project_directory_path`].
+    /// Needed separately from `config` for cache resolution
+    /// ([`crate::engine::TaskEngine::with_cache_options`]).
+    pub project_directory: PathBuf,
+}
+
+/// Loads `config_file`, resolves its `include`s, and resolves every
+/// expression in the result — the whole config-to-usable-`Config` sequence
+/// both binaries need, in one call, so neither has to know the order the
+/// steps go in (includes before expressions; the config-vars file before
+/// `--config-var`, which overrides it).
+///
+/// `config_var_overrides` is the merged result of a `--config-vars-file`
+/// (load it with [`Config::load_config_vars_file`]) and any individually
+/// supplied variables, the latter winning — merging them is the caller's
+/// job, since only the caller knows what its own flags are called.
+///
+/// A missing file is an error here rather than an empty config: every
+/// caller so far wants to fail fast, and doing it in one place means the
+/// message is identical whichever binary is running.
+pub async fn load_project(
+    config_file: &Path,
+    config_var_overrides: &HashMap<String, String>,
+) -> Result<LoadedProject> {
+    if !config_file.exists() {
+        anyhow::bail!("Configuration file {:?} not found.", config_file);
+    }
+    let mut loaded = Config::load_from_file(config_file).await?;
+    let base_path = base_path_for(config_file);
+    let project_directory = project_directory_path(base_path)?;
+    loaded.resolve_expressions(base_path, config_var_overrides)?;
+    Ok(LoadedProject {
+        config: loaded.config,
+        project_directory,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2441,6 +2498,39 @@ mod tests {
 
     fn parse(yaml: &str) -> Config {
         noyalib::from_reader(Cursor::new(yaml.as_bytes())).expect("valid yaml")
+    }
+
+    /// Moved here from `ratect-compat`'s own `main.rs` when `base_path_for`
+    /// became shared (`ratect` needs the identical rule) — the behavior is
+    /// the same, only its home changed.
+    #[test]
+    fn base_path_for_a_bare_config_file_name_is_empty_not_dot() {
+        // The default `-f batect.yml` case: `Path::parent()` on a bare
+        // filename returns `Some("")`, not `None`, so the `.` fallback in
+        // `base_path_for` never actually applies here — worth locking in
+        // explicitly since it's easy to assume otherwise.
+        assert_eq!(base_path_for(Path::new("batect.yml")), Path::new(""));
+    }
+
+    #[test]
+    fn base_path_for_a_dot_relative_config_file_is_dot() {
+        assert_eq!(base_path_for(Path::new("./batect.yml")), Path::new("."));
+    }
+
+    #[test]
+    fn base_path_for_a_config_file_in_a_subdirectory_is_that_subdirectory() {
+        assert_eq!(
+            base_path_for(Path::new("project/batect.yml")),
+            Path::new("project")
+        );
+    }
+
+    #[test]
+    fn base_path_for_an_absolute_config_file_is_its_directory() {
+        assert_eq!(
+            base_path_for(Path::new("/abs/project/batect.yml")),
+            Path::new("/abs/project")
+        );
     }
 
     #[test]
@@ -5602,6 +5692,74 @@ tasks: {}
     async fn load_from_file_missing_file_errors() {
         let result = Config::load_from_file(Path::new("/nonexistent/batect.yml")).await;
         assert!(result.is_err());
+    }
+
+    /// `load_project` is the whole load-resolve sequence both binaries use,
+    /// so this proves the steps happen *and* happen in the right order: the
+    /// volume path below is only correct if includes were merged before
+    /// expressions were resolved, and the override only wins if it's
+    /// applied at resolution rather than being ignored.
+    #[tokio::test]
+    async fn load_project_resolves_includes_expressions_and_the_project_directory() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("containers.yml"),
+            r#"
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - code:/code
+    environment:
+      GREETING: <greeting
+"#,
+        )
+        .unwrap();
+        let config_path = dir.join("batect.yml");
+        std::fs::write(
+            &config_path,
+            r#"
+project_name: demo
+include:
+  - containers.yml
+config_variables:
+  greeting:
+    default: from-the-default
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+        )
+        .unwrap();
+
+        let overrides = HashMap::from([("greeting".to_string(), "from-the-override".to_string())]);
+        let project = load_project(&config_path, &overrides).await.unwrap();
+
+        assert_eq!(project.project_directory, dir.clean());
+        let container = &project.config.containers["build-env"];
+        assert_eq!(
+            container.environment.as_ref().unwrap()["GREETING"],
+            "from-the-override"
+        );
+        assert_eq!(
+            expect_local(&container.volumes.as_ref().unwrap()[0]).local,
+            dir.join("code").display().to_string()
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn load_project_fails_fast_when_the_config_file_is_missing() {
+        let error = load_project(Path::new("/nonexistent/batect.yml"), &HashMap::new())
+            .await
+            .expect_err("a missing config file should be an error, not an empty config");
+        assert!(
+            error.to_string().contains("not found"),
+            "the error should say the file is missing: {error}"
+        );
     }
 
     #[tokio::test]

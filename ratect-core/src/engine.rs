@@ -574,6 +574,63 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     cache_key: OnceCell<String>,
 }
 
+/// Every opt-in [`TaskEngine`] setting as plain data, for
+/// [`TaskEngine::with_settings`] — the shape a binary's own CLI flags map
+/// onto, so `ratect` and `ratect-compat` can offer the same knobs under
+/// whatever names each one's interface calls for without either duplicating
+/// the builder chain.
+///
+/// [`Default`] is Ratect's own default behavior with no flags given at all
+/// (publish ports, propagate proxy variables, run prerequisites, clean up
+/// either way, unbounded parallelism) — so a binary only has to set what
+/// its user actually asked to change.
+#[derive(Debug, Clone)]
+pub struct TaskEngineSettings {
+    /// `--use-network`: reuse this existing network for every task instead
+    /// of creating one per task.
+    pub existing_network: Option<String>,
+    /// `false` for `--disable-ports`.
+    pub publish_ports: bool,
+    /// `false` for `--no-proxy-vars`.
+    pub propagate_proxy_environment_variables: bool,
+    /// `false` for `--skip-prerequisites`.
+    pub run_prerequisites: bool,
+    /// `--override-image <container>=<image>`. Validated against the config
+    /// by [`TaskEngine::with_settings`], which is why that returns a
+    /// `Result`.
+    pub image_overrides: HashMap<String, String>,
+    /// `--tag-image <container>=<tag>`, collected per container.
+    pub image_tags: HashMap<String, HashSet<String>>,
+    /// `false` for `--no-cleanup-after-success` (or `--no-cleanup`).
+    pub cleanup_after_success: bool,
+    /// `false` for `--no-cleanup-after-failure` (or `--no-cleanup`).
+    pub cleanup_after_failure: bool,
+    /// `--max-parallelism <N>`; `None` is unbounded.
+    pub max_parallelism: Option<usize>,
+    /// `--cache-type` plus the project's own root directory
+    /// ([`crate::config::LoadedProject::project_directory`]). `None` only
+    /// makes sense for a caller whose config has no `cache` volume mounts —
+    /// in practice every binary supplies it.
+    pub cache: Option<(crate::cache::CacheType, PathBuf)>,
+}
+
+impl Default for TaskEngineSettings {
+    fn default() -> Self {
+        Self {
+            existing_network: None,
+            publish_ports: true,
+            propagate_proxy_environment_variables: true,
+            run_prerequisites: true,
+            image_overrides: HashMap::new(),
+            image_tags: HashMap::new(),
+            cleanup_after_success: true,
+            cleanup_after_failure: true,
+            max_parallelism: None,
+            cache: None,
+        }
+    }
+}
+
 impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     pub fn new(config: Config, docker: D) -> Self {
         Self {
@@ -713,6 +770,62 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             project_directory,
         });
         self
+    }
+
+    /// Applies a whole [`TaskEngineSettings`] at once — every builder method
+    /// above, driven by plain data instead of a chain of `if flag { engine =
+    /// engine.without_x() }` at a call site.
+    ///
+    /// This exists for the binaries, which all have the same ~10 knobs
+    /// behind differently-named flags; the builders stay the interface for
+    /// everything else (notably this module's own tests, where naming the
+    /// one setting under test reads better than a mostly-default struct).
+    /// Anything added here needs adding to [`TaskEngineSettings`] too, or a
+    /// binary has no way to reach it.
+    pub fn with_settings(mut self, settings: TaskEngineSettings) -> Result<Self> {
+        let TaskEngineSettings {
+            existing_network,
+            publish_ports,
+            propagate_proxy_environment_variables,
+            run_prerequisites,
+            image_overrides,
+            image_tags,
+            cleanup_after_success,
+            cleanup_after_failure,
+            max_parallelism,
+            cache,
+        } = settings;
+        if let Some(network) = existing_network {
+            self = self.with_existing_network(network);
+        }
+        if !publish_ports {
+            self = self.without_port_publishing();
+        }
+        if !propagate_proxy_environment_variables {
+            self = self.without_proxy_environment_variables();
+        }
+        if !run_prerequisites {
+            self = self.without_prerequisites();
+        }
+        if !image_overrides.is_empty() {
+            self = self.with_image_overrides(image_overrides)?;
+        }
+        if !image_tags.is_empty() {
+            self = self.with_image_tags(image_tags);
+        }
+        if !cleanup_after_success {
+            self = self.without_cleanup_after_success();
+        }
+        if !cleanup_after_failure {
+            self = self.without_cleanup_after_failure();
+        }
+        if let Some(max) = max_parallelism {
+            self = self.with_max_parallelism(max);
+        }
+        if let Some((cache_type, project_directory)) = cache {
+            self = self.with_cache_options(cache_type, project_directory);
+        }
+        Ok(self)
     }
 
     /// Resolves a container's `volumes` into the literal Docker bind
@@ -6644,6 +6757,127 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
+            "Cannot override image for container 'no-such-container' because there is no \
+             container named 'no-such-container' defined."
+        );
+    }
+
+    /// `with_settings` is how both binaries configure an engine, so a
+    /// setting it silently drops would take every flag driving it with it —
+    /// each one is checked against the field the equivalent builder sets.
+    #[test]
+    fn with_settings_applies_every_setting() {
+        let mut containers = HashMap::new();
+        containers.insert("build-env".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("test".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let settings = TaskEngineSettings {
+            existing_network: Some("existing".to_string()),
+            publish_ports: false,
+            propagate_proxy_environment_variables: false,
+            run_prerequisites: false,
+            image_overrides: HashMap::from([("build-env".to_string(), "ubuntu:22.04".to_string())]),
+            image_tags: HashMap::from([(
+                "build-env".to_string(),
+                HashSet::from(["extra".to_string()]),
+            )]),
+            cleanup_after_success: false,
+            cleanup_after_failure: false,
+            max_parallelism: Some(3),
+            cache: Some((
+                crate::cache::CacheType::Directory,
+                PathBuf::from("/projects/demo"),
+            )),
+        };
+        let engine = TaskEngine::new(config, FakeContainerRuntime::default())
+            .with_settings(settings)
+            .expect("settings naming a real container should apply");
+
+        assert_eq!(engine.existing_network.as_deref(), Some("existing"));
+        assert!(!engine.publish_ports);
+        assert!(!engine.propagate_proxy_environment_variables);
+        assert!(engine.skip_prerequisites);
+        assert_eq!(
+            engine.image_overrides.get("build-env").map(String::as_str),
+            Some("ubuntu:22.04")
+        );
+        assert!(engine.image_tags["build-env"].contains("extra"));
+        assert!(!engine.cleanup_after_success);
+        assert!(!engine.cleanup_after_failure);
+        assert_eq!(
+            engine
+                .max_parallelism
+                .as_ref()
+                .map(|semaphore| semaphore.available_permits()),
+            Some(3)
+        );
+        let cache = engine.cache_options.expect("cache options should be set");
+        assert_eq!(cache.cache_type, crate::cache::CacheType::Directory);
+        assert_eq!(cache.project_directory, PathBuf::from("/projects/demo"));
+    }
+
+    /// The default is "no flags given at all", so an engine built from it
+    /// has to behave exactly like one built with no builder calls — every
+    /// binary's no-flags path depends on that.
+    #[test]
+    fn default_settings_leave_an_engine_in_its_no_flags_state() {
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::new(),
+            tasks: HashMap::new(),
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+        let engine = TaskEngine::new(config, FakeContainerRuntime::default())
+            .with_settings(TaskEngineSettings::default())
+            .expect("the default settings never fail to apply");
+
+        assert!(engine.existing_network.is_none());
+        assert!(engine.publish_ports);
+        assert!(engine.propagate_proxy_environment_variables);
+        assert!(!engine.skip_prerequisites);
+        assert!(engine.image_overrides.is_empty());
+        assert!(engine.image_tags.is_empty());
+        assert!(engine.cleanup_after_success);
+        assert!(engine.cleanup_after_failure);
+        assert!(engine.max_parallelism.is_none());
+        assert!(engine.cache_options.is_none());
+    }
+
+    /// The one setting that can fail — `with_settings` returns a `Result`
+    /// solely because of it, and the error has to survive the indirection.
+    #[test]
+    fn with_settings_still_rejects_an_unknown_image_override() {
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::new(),
+            tasks: HashMap::new(),
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+        let settings = TaskEngineSettings {
+            image_overrides: HashMap::from([(
+                "no-such-container".to_string(),
+                "ubuntu:22.04".to_string(),
+            )]),
+            ..TaskEngineSettings::default()
+        };
+        let error = match TaskEngine::new(config, FakeContainerRuntime::default())
+            .with_settings(settings)
+        {
+            Ok(_) => panic!("an override naming an unknown container should be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.to_string(),
             "Cannot override image for container 'no-such-container' because there is no \
              container named 'no-such-container' defined."
         );
