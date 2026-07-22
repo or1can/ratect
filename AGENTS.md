@@ -286,6 +286,30 @@ Ratect is a **Cargo workspace** with four crates (the
     `ratect-compat/src/main.rs` only gathers the terminal facts once and hands them
     to it (and to `select_output_style`, for `--list-tasks`'s own quiet-format
     decision).
+  - **`ratect-core/src/schema.rs`** (0.21.0, behind the non-default `schema`
+    feature): generates the JSON schema for `batect.yml` from `config.rs`'s own
+    types, committed at `schema/batect-config.schema.json` — see [config
+    reference](docs/config-reference.md#editor-autocompletion-and-validation) for
+    the user-facing half. Things to know before touching it: the schema is
+    generated from `ConfigFile` (`pub(crate)` for exactly this reason), not
+    `Config` — one *file*'s shape, `include` and all, is what an editor has open,
+    not the merged result; it's emitted as draft-07 rather than schemars' own
+    default 2020-12, because `yaml-language-server` (what VS Code and JetBrains
+    run) only implements draft-07 fully — under 2020-12 it drops keywords sitting
+    beside a `$ref`, which is every description on a `$ref`'d field; every type
+    with a hand-written `Deserialize` impl needs a hand-written `JsonSchema` impl
+    to match, and they live here rather than in `config.rs` (`PortMapping`,
+    `PortRange`, `DeviceMapping`, `VolumeMount`, `BuildSecret`, `IncludeEntry` —
+    add one here whenever a new string-or-object config type lands, or the derive
+    won't compile); and field documentation is the config types' own doc comments,
+    run through `summarize` (first paragraph, reflowed, rustdoc link syntax
+    stripped) rather than a second `schemars(description = ...)` copy per field,
+    which would be free to drift. So a new config field needs a doc comment whose
+    *first paragraph* stands alone as user-facing documentation — everything after
+    it is for contributors and never reaches the schema. The `schema` feature also
+    pulls in `jsonschema` (an optional normal dependency, not a dev-dependency —
+    Cargo won't let those be optional) purely for this module's own tests, which
+    validate every fixture in the repository against the generated schema.
 - **`dockerignore`** (library crate, `dockerignore/src/`): a from-scratch Rust port of
   Docker's own `.dockerignore` matching (`github.com/moby/patternmatcher`, which
   Docker's documentation cites as the reference implementation) — deliberately **not**
@@ -323,10 +347,13 @@ handling) would leave a stray `.` or trailing slash in every path/expression der
 - **`serde_json`**: parses the Docker CLI's own context-store JSON files for `--docker-context` (`ratect-core/src/docker.rs`'s `docker_context_host`/`active_docker_context`) — `<config_directory>/contexts/meta/<sha256(name)>/meta.json`'s `Endpoints.docker.Host`, and `<config_directory>/config.json`'s `currentContext`. `serde` itself was already a dependency (for `noyalib`'s `compat-serde-yaml`); `serde_json` is the standard, ubiquitous choice for the same derive-based approach applied to actual JSON.
 - **`rcgen`**, **`tokio-rustls`**, **`time`** (`ratect-core` dev-dependencies only): generate a throwaway self-signed CA + leaf certificate/key pair at test run time and run a real in-process TLS server against it, for `docker.rs`'s `--docker-tls`/`-verify` tests (`connect_over_tls_completes_a_real_handshake_against_a_valid_certificate`/`_rejects_an_expired_certificate`) — proving an actual `rustls` handshake succeeds against a valid certificate and fails against an expired one, through Ratect's own `connect` path, not just that a client object builds. Generating at test time (rather than a fixed PEM committed to the repo) means validity is always computed relative to "now" — a static embedded certificate would eventually expire on its own and fail with a stale, disconnected-looking failure years later, unrelated to whatever change actually triggered it; `rcgen` also makes it trivial to generate a deliberately-already-expired certificate on demand for the rejection test. All three already resolved transitively (via `bollard`'s `ssl` feature and its own `rustls` dependency) — low-risk additions, not new unknown quantities.
 
+- **`schemars`**, **`jsonschema`** (`ratect-core`, both optional — enabled only by its non-default `schema` feature): generate the committed JSON schema for `batect.yml` (`ratect-core/src/schema.rs`) and, in that module's own tests, validate the repository's fixtures against it. Optional so neither shipped binary carries the derived `JsonSchema` impls or a JSON-schema validator; `jsonschema` is declared as an optional *normal* dependency despite being test-only because Cargo doesn't allow optional `[dev-dependencies]`, and `default-features = false` keeps `reqwest` and a TLS stack out of the tree (nothing here ever resolves a remote `$ref`). Ratect's first optional dependencies — every other entry above is unconditional.
+
 Dependencies are split across the four `Cargo.toml`s along CLI-vs-core lines: `clap`
 and `tracing-subscriber` are `ratect-compat`-only; `serde`, `serde_json`, `noyalib`,
 `bollard`, `futures`, `async-recursion`, `async-trait`, `uuid`, `tar`, `path-clean`,
-`crossterm`, `nix`, `url`, `sha2`, `toml`, `regex`, `unicode-width`, `rustls`, and the
+`crossterm`, `nix`, `url`, `sha2`, `toml`, `regex`, `unicode-width`, `rustls`,
+`schemars`/`jsonschema` (optional, `schema` feature), and the
 local `dockerignore` crate are `ratect-core`-only (`dockerignore` itself depends on
 `regex` and `path-clean` too); `anyhow`, `tracing`, and `tokio` are needed by both
 `ratect-compat` and `ratect-core`. `tokio` is a normal dependency in both crates now —
@@ -340,7 +367,7 @@ own yet.
 
 - **Formatting/Linting**: `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` must pass; both are enforced in CI (`.github/workflows/ci.yml`).
 - **Dependency Audit**: `cargo audit` runs in CI against `Cargo.lock`, which is committed to the repo (binary crate convention, not gitignored). One shared lockfile covers the whole workspace.
-- **Tests**: `cargo test --workspace` runs in CI, covering unit tests per module (pattern matching in `dockerignore`, config parsing/resolution, expression interpolation, build-context tar construction, interactive-TTY eligibility, user-mapping generation, and task engine logic — dependency cycles, prerequisite dedup, sidecar/dependency resolution, dependency readiness (health-wait/setup-command ordering and failure paths), environment merging, image resolution — via a fake `ContainerRuntime`) and CLI argument/behavior tests in `ratect-compat/src/main.rs`/`ratect-compat/tests/cli.rs`. `ratect-compat/tests/cli.rs` also has end-to-end tests (`#[ignore]`d by default, run explicitly via `cargo test --workspace --test cli -- --ignored`) that exercise a real Docker daemon against the fixtures under `ratect-compat/tests/fixtures/` — one per feature (sidecars, dependency readiness, environment/config variables, image building, `.dockerignore`, interactive mode, user mapping, hostnames/ports, proxy, `--use-network`). These also run as their own `docker-integration` CI job. See the fixture files themselves for what each one proves.
+- **Tests**: `cargo test --workspace` runs in CI, covering unit tests per module (pattern matching in `dockerignore`, config parsing/resolution, expression interpolation, build-context tar construction, interactive-TTY eligibility, user-mapping generation, and task engine logic — dependency cycles, prerequisite dedup, sidecar/dependency resolution, dependency readiness (health-wait/setup-command ordering and failure paths), environment merging, image resolution — via a fake `ContainerRuntime`) and CLI argument/behavior tests in `ratect-compat/src/main.rs`/`ratect-compat/tests/cli.rs`. `ratect-compat/tests/cli.rs` also has end-to-end tests (`#[ignore]`d by default, run explicitly via `cargo test --workspace --test cli -- --ignored`) that exercise a real Docker daemon against the fixtures under `ratect-compat/tests/fixtures/` — one per feature (sidecars, dependency readiness, environment/config variables, image building, `.dockerignore`, interactive mode, user mapping, hostnames/ports, proxy, `--use-network`). These also run as their own `docker-integration` CI job. See the fixture files themselves for what each one proves. CI runs the non-Docker suite as `cargo test --workspace --all-targets --all-features` — the `--all-features` part is what runs `ratect-core`'s `schema` module tests (see the module list above); plain `cargo test --workspace` skips them, so run `cargo test -p ratect-core --features schema` after touching anything in `config.rs`. When a config type changes, regenerate the committed schema with `RATECT_UPDATE_SCHEMA=1 cargo test -p ratect-core --features schema schema::` and commit the result alongside — the test fails, with that same command in its message, if you don't.
 - **Coverage**: `cargo llvm-cov --workspace --show-missing-lines --summary-only` (requires `rustup component add llvm-tools-preview` and `cargo install cargo-llvm-cov`) reports exact uncovered lines per file — use it to find gaps, not to chase a percentage. `cargo llvm-cov --workspace --html` opens a browsable report at `target/llvm-cov/html`. CI runs this and uploads the HTML report as a `coverage-report` artifact (non-gating).
 
 ## Current Status & Roadmap

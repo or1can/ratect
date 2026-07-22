@@ -861,6 +861,39 @@ declared under `config_variables`. Declaring a `config_variables` entry named
 `batect.project_directory`, or supplying one via `--config-var`/`--config-vars-file`,
 is a hard error — it isn't overridable.
 
+## Editor autocompletion and validation
+
+Ratect ships a JSON schema describing exactly what this reference documents:
+[`schema/batect-config.schema.json`](../schema/batect-config.schema.json). Pointing
+an editor at it gives autocompletion for field names, hover documentation, and a
+warning on a misspelled or unsupported field as you type — including the fields
+Batect supports and Ratect doesn't, which is the whole reason this is a schema of
+Ratect's own rather than [Batect's published one](https://www.schemastore.org/api/json/catalog.json)
+(that one describes Batect's full field set, so an editor using it would quietly
+accept configuration Ratect then rejects at run time).
+
+The simplest way to use it is a comment at the top of your config file, which the
+[YAML extension for VS Code](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml)
+and JetBrains IDEs both honor:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/or1can/ratect/main/schema/batect-config.schema.json
+project_name: my-project
+```
+
+A local path works the same way (`$schema=./schema/batect-config.schema.json`), and
+is worth preferring if you pin a Ratect version — the URL above tracks `main`, so it
+describes the development version, which may accept fields your installed Ratect
+doesn't yet.
+
+The schema describes a single *file*, `include` and all — not the merged result of
+following those includes — so it applies equally to a root `batect.yml` and to any
+file it includes. It's generated from Ratect's own configuration types, so it can't
+drift from what Ratect accepts; the checks it can't express are the cross-field ones
+(a task needing `run` or `prerequisites`, port ranges on both sides of a mapping
+covering the same number of ports, `customise` naming a container that's actually in
+the task's graph). Those are still reported by Ratect itself, when you run a task.
+
 ## Full example
 
 This mirrors the sample config used in the test suite (`batect.yml` in the repo root):

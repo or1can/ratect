@@ -1,0 +1,952 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "BuildSecret": {
+      "description": "A secret exposed to a build via BuildKit's secret mounts. Exactly one of 'environment' or 'path' is required.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "environment": {
+              "description": "The name of a host environment variable to read the secret's value from.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "environment"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "description": "The path to a file on the host containing the secret's value. Supports expressions.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Capability": {
+      "description": "A Linux capability name, validated at config-parse time — an unknown name is rejected with a clear error rather than silently reaching Docker's API to fail there (or, worse, being silently ignored). `serde`'s `SCREAMING_SNAKE_CASE` rename matches every variant to its Docker capability name unchanged (e.g. `DacOverride` -> `\"DAC_OVERRIDE\"`); `Capability::as_str` provides the same string back out for building Docker's own `--cap-add`/`--cap-drop` values.",
+      "enum": [
+        "AUDIT_CONTROL",
+        "AUDIT_READ",
+        "AUDIT_WRITE",
+        "BLOCK_SUSPEND",
+        "BPF",
+        "CHECKPOINT_RESTORE",
+        "CHOWN",
+        "DAC_OVERRIDE",
+        "DAC_READ_SEARCH",
+        "FOWNER",
+        "FSETID",
+        "IPC_LOCK",
+        "IPC_OWNER",
+        "KILL",
+        "LEASE",
+        "LINUX_IMMUTABLE",
+        "MAC_ADMIN",
+        "MAC_OVERRIDE",
+        "MKNOD",
+        "NET_ADMIN",
+        "NET_BIND_SERVICE",
+        "NET_BROADCAST",
+        "NET_RAW",
+        "PERFMON",
+        "SETGID",
+        "SETFCAP",
+        "SETPCAP",
+        "SETUID",
+        "SYS_ADMIN",
+        "SYS_BOOT",
+        "SYS_CHROOT",
+        "SYS_MODULE",
+        "SYS_NICE",
+        "SYS_PACCT",
+        "SYS_PTRACE",
+        "SYS_RAWIO",
+        "SYS_RESOURCE",
+        "SYS_TIME",
+        "SYS_TTY_CONFIG",
+        "SYSLOG",
+        "WAKE_ALARM",
+        "ALL"
+      ],
+      "type": "string"
+    },
+    "ConfigVariable": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "description": "The value to use when `--config-var` doesn't supply one. Without a default, a task referring to this variable fails unless it's set.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "Recognized but inert — Batect surfaces this in its own generated docs/help output; Ratect has no such output to show one in, so it's accepted purely so a real Batect config using it doesn't fail to load under `deny_unknown_fields`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Container": {
+      "additionalProperties": false,
+      "properties": {
+        "additional_hostnames": {
+          "description": "Extra network aliases this container is reachable by, beyond its own name. Plain strings, no expression support — matching Batect, which types this as `Set<String>`, not `Set<Expression>`.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "additional_hosts": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Extra `/etc/hosts` entries (hostname -> IP), Docker's own `--add-host` mechanism. Plain strings, no expression support — same reasoning as `additional_hostnames`.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "build_args": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Build arguments (Docker's own `--build-arg`) for a `build_directory` build, matched to the Dockerfile's own `ARG` instructions. Values support expressions. Ignored for an `image` container.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "build_directory": {
+          "description": "The directory containing the `Dockerfile` to build an image from, resolved relative to the directory of the file declaring it. Supports expressions. Exactly one of `image` or `build_directory` is required.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "build_secrets": {
+          "additionalProperties": {
+            "$ref": "#/definitions/BuildSecret"
+          },
+          "description": "Exposes secrets to a `build_directory` build via BuildKit's secret-mount mechanism (a Dockerfile's `RUN --mount=type=secret,id=<key>`), without persisting them into the built image's layers — keyed by the `id` such a `RUN` instruction references. A `BuildSecret::Path`'s value supports expressions and is resolved the same way as `build_directory`; a `BuildSecret::Environment`'s value is a literal host environment variable *name*, not itself an expression — matching Batect's own typing for both. Only meaningful alongside `build_directory`, same as `dockerfile`/`build_target`/`build_args`.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "build_ssh": {
+          "description": "Forwards an SSH agent from the host into a `build_directory` build, for a Dockerfile's `RUN --mount=type=ssh` instructions — Batect's `build_ssh` field. **Ratect only supports forwarding the host's running ssh-agent (via its `SSH_AUTH_SOCK`) under the implicit `default` agent id** — at most one entry, and if given, its `id` (if set) must be `\"default\"` and its `paths` must be empty (checked in `Config::resolve_expressions_with`). Batect additionally supports multiple named agents and forwarding explicit private key files instead of a running agent; the underlying Docker client this is built on doesn't expose either — see [Differences from Batect](https://github.com/or1can/ratect/blob/main/docs/differences-from-batect.md#container-fields).",
+          "items": {
+            "$ref": "#/definitions/SshAgent"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "build_target": {
+          "description": "The build stage to stop at, for a multi-stage `FROM ... AS <name>` Dockerfile — Docker's own `--target` build option, and Batect's `build_target` field. A plain string, not an expression — same reasoning as `dockerfile`. Only meaningful alongside `build_directory`; silently ignored for an `image` container, same as `dockerfile`/`build_args`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "capabilities_to_add": {
+          "description": "Linux capabilities to add beyond Docker's own default set — Docker's `--cap-add`. Container level only, matching Batect (no task-level `run` override in either). No expression support — matching Batect's own `Set<Capability>` typing.",
+          "items": {
+            "$ref": "#/definitions/Capability"
+          },
+          "type": [
+            "array",
+            "null"
+          ],
+          "uniqueItems": true
+        },
+        "capabilities_to_drop": {
+          "description": "Linux capabilities to drop from Docker's own default set — Docker's `--cap-drop`. Same typing/scope as `capabilities_to_add`.",
+          "items": {
+            "$ref": "#/definitions/Capability"
+          },
+          "type": [
+            "array",
+            "null"
+          ],
+          "uniqueItems": true
+        },
+        "command": {
+          "description": "The command to run inside the container, in place of the image's own default `CMD`. Tokenized into literal argv the same way `entrypoint` is (`docker.rs`'s `tokenize_command_line`) — not an expression, and not run via a shell, matching Batect's own `Command`-typed `command` field exactly. Applies as-is to a dependency/sidecar container; for a task's own container, overridden by the task-level `run.command`, when set — see `TaskRun::command`. Symmetric with `entrypoint` below, and added alongside it in spirit — this field was missed when `entrypoint` and the rest of 0.13.0's container runtime options landed, since `run.command` already covered the task's own container and the gap (no way to set a dependency's own command at all) wasn't noticed until later.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dependencies": {
+          "description": "Other containers that must be started and ready before this one starts — see also a task's own `dependencies`, which apply to one task only.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "devices": {
+          "description": "Host devices to make available inside the container — Docker's `--device`. Plain strings/objects, no expression support — matching Batect's own `String` (not `Expression`) typing for `DeviceMount.localPath`. Container level only, matching Batect (no task-level `run` override in either).",
+          "items": {
+            "$ref": "#/definitions/DeviceMount"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "dockerfile": {
+          "description": "The Dockerfile to build, as a path relative to `build_directory`'s own root — Batect's `dockerfile` field. Defaults to `\"Dockerfile\"` at `build_directory`'s root when omitted, matching Batect and Docker's own default. A plain string, not an expression — matching Batect's own `String` (not `Expression`) typing for this field, unlike `build_directory` itself. Only meaningful alongside `build_directory`; like `build_args`, silently ignored for an `image` container (see `TaskEngine::resolve_image`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enable_init_process": {
+          "description": "Runs an init process (Docker's own tini-based one, e.g. reaping zombie processes and forwarding signals) as PID 1 inside the container, ahead of the actual command — Docker's `--init`. `None`/absent behaves like `false`, matching both Docker's and Batect's own default. Container level only, matching Batect (no task-level `run` override in either).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "entrypoint": {
+          "description": "Overrides the image's own `ENTRYPOINT`. Tokenized into literal argv the same way `command` is (`docker.rs`'s `tokenize_command_line`) — not an expression, and not run via a shell, matching Batect's own `Command`-typed `entrypoint` field exactly. Overridden by the task-level `run.entrypoint`, when set — see `TaskRun::entrypoint`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "environment": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment variables to set inside the container. Values support expressions.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "health_check": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/HealthCheckConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Overrides the health check configuration baked into the image — see `HealthCheckConfig`. Applied at container creation; a dependency container with a health check (from here or from its image) must report healthy before its dependents start."
+        },
+        "image": {
+          "description": "The image to run, in Docker's own `name:tag` form. Exactly one of `image` or `build_directory` is required.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "image_pull_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ImagePullPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Controls whether an `image` container's image is pulled fresh or only when missing locally — Docker's own pull semantics (`TaskEngine::resolve_pulled_image`). On a `build_directory` container, this instead controls whether the build's own base image is force-pulled before building (`docker build --pull`) — `Always` forces it, `IfNotPresent` leaves Docker's own local-cache-if-present build behavior alone — matching Batect's second, distinct use of this same field (`TaskEngine::resolve_image`). `None` defaults to `ImagePullPolicy::IfNotPresent`, matching Batect's own default, for either use."
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Docker labels (`key: value`) applied to the container. Container level only — no task-level `run` override, matching Batect (its `TaskRunConfiguration` has no equivalent field). Plain strings, no expression support — matching Batect's own `Map<String, String>` typing.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "log_driver": {
+          "description": "Docker's logging driver (`--log-driver`), e.g. `\"json-file\"`, `\"syslog\"`, `\"none\"`. `None` leaves Docker's own daemon-configured default alone, rather than baking in a literal default here — unlike Batect, which defaults this to `\"json-file\"` in its own config model (immaterial in practice: that's also Docker's own out-of-the-box default when nothing else is configured). Container level only, matching Batect (no task-level `run` override in either).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "log_options": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Driver-specific options (Docker's `--log-opt`, repeatable) for `log_driver` — meaningless without it, same as Docker's own CLI. Container level only, matching Batect (no task-level `run` override in either).",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "ports": {
+          "description": "Publishes container ports to the host. Accepts both of Batect's forms — a `\"local:container/protocol\"` string (with port ranges, `\"from-to:from-to/protocol\"`) and the expanded object form (`{local, container, protocol}`) — see `PortMapping`. Validated (matching ranges, positive ports) at config-parse time, unlike `volumes`, which is never format-checked.",
+          "items": {
+            "$ref": "#/definitions/PortMapping"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "privileged": {
+          "description": "Runs the container with extended (nearly all host) privileges — Docker's `--privileged`. `None`/absent behaves like `false`, matching Batect's own default. Container level only, matching Batect (no task-level `run` override in either).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "run_as_current_user": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RunAsCurrentUser"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Runs the container as the host's own user rather than the image's default, so files it writes to a mounted volume aren't root-owned."
+        },
+        "setup_commands": {
+          "description": "Commands run inside the container (via `docker exec`) after it becomes healthy but before its dependents start — see `SetupCommand`. Plain strings, no expression support — matching Batect, which doesn't type these as expressions either.",
+          "items": {
+            "$ref": "#/definitions/SetupCommand"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "shm_size": {
+          "default": null,
+          "description": "The size of `/dev/shm`, in bytes — Docker's `--shm-size`. Accepts Batect's own size-string format (`\"128\"`, `\"128b\"`, `\"128k\"`, `\"128m\"`, `\"128g\"` — a bare number means bytes; see `parse_byte_size`) or a plain YAML integer (also bytes), already converted to bytes here rather than deferred like `dockerfile`/ `build_target`'s plain strings, since Docker's own API wants a byte count, not a string. `None` inherits Docker's own default (64 MiB). Container level only, matching Batect (no task-level `run` override in either).",
+          "oneOf": [
+            {
+              "description": "A size, as a number optionally suffixed with a unit: b (bytes, the default), k, m or g — for example \"128m\".",
+              "examples": [
+                "128m",
+                "1g",
+                "512k"
+              ],
+              "pattern": "^[0-9]+[bkmgBKMG]?$",
+              "type": "string"
+            },
+            {
+              "description": "A size in bytes.",
+              "minimum": 0,
+              "type": "integer"
+            }
+          ]
+        },
+        "volumes": {
+          "description": "Host bind mounts (`local`) and/or named cache volumes (`cache`) — see `VolumeMount`. A `local` mount's host path is resolved in `Config::resolve_expressions_with`; a `cache` mount's Docker volume name/host directory is resolved later, once `--cache-type` and the project's own cache key are known — see `crate::cache`.",
+          "items": {
+            "$ref": "#/definitions/VolumeMount"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "working_directory": {
+          "description": "Overrides the image's own `WORKDIR`. A plain string, not an expression — matching Batect's own `String` (not `Expression`) typing for this field. Overridden by the task-level `run.working_directory`, when set — see `TaskRun::working_directory`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DeviceMount": {
+      "oneOf": [
+        {
+          "description": "A device mount, as \"local_path:container_path\" or \"local_path:container_path:options\", where options is Docker's cgroup permissions string.",
+          "examples": [
+            "/dev/kvm:/dev/kvm",
+            "/dev/sda:/dev/xvda:rwm"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "container": {
+              "description": "The path the device is available at inside the container.",
+              "type": "string"
+            },
+            "local": {
+              "description": "The path to the device on the host.",
+              "type": "string"
+            },
+            "options": {
+              "description": "Docker's cgroup permissions string (for example \"rwm\"). Docker's own default applies when omitted.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "local",
+            "container"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HealthCheckConfig": {
+      "additionalProperties": false,
+      "description": "Overrides the [health check configuration](https://docs.docker.com/engine/reference/builder/#healthcheck) specified in the container's image. Every field is optional — an omitted field inherits the image's own value, matching Batect (and Docker's `0` = inherit convention). Durations use Batect's Go-style string format: `\"2s\"`, `\"1m30s\"`, `\"500ms\"`, `\"0\"`.",
+      "properties": {
+        "command": {
+          "description": "Run via the system's default shell inside the container (Docker's `CMD-SHELL` form, same as a Dockerfile `HEALTHCHECK CMD` string) — exit code 0 means healthy. Not a Batect expression (no interpolation), matching Batect's own `String` typing.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "interval": {
+          "default": null,
+          "description": "The interval between runs of the health check.",
+          "examples": [
+            "2s",
+            "1m30s",
+            "500ms",
+            "0"
+          ],
+          "pattern": "^\\+?(0|([0-9]*\\.?[0-9]+(ns|us|µs|μs|ms|s|m|h))+)$",
+          "type": "string"
+        },
+        "retries": {
+          "description": "The number of times to perform the health check before considering the container unhealthy.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "start_period": {
+          "default": null,
+          "description": "The time to wait before failing health checks count against the retry count.",
+          "examples": [
+            "2s",
+            "1m30s",
+            "500ms",
+            "0"
+          ],
+          "pattern": "^\\+?(0|([0-9]*\\.?[0-9]+(ns|us|µs|μs|ms|s|m|h))+)$",
+          "type": "string"
+        },
+        "timeout": {
+          "default": null,
+          "description": "The time to wait before timing out a single health check invocation.",
+          "examples": [
+            "2s",
+            "1m30s",
+            "500ms",
+            "0"
+          ],
+          "pattern": "^\\+?(0|([0-9]*\\.?[0-9]+(ns|us|µs|μs|ms|s|m|h))+)$",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ImagePullPolicy": {
+      "description": "Controls whether `TaskEngine::resolve_image` pulls an `image` container's image fresh or reuses whatever's already present locally — matching Batect's own `ImagePullPolicy` exactly, including its wire values (`serde`'s default enum serialization already matches Rust's own PascalCase variant names, so no `rename_all` is needed here, unlike `Capability`).",
+      "oneOf": [
+        {
+          "const": "IfNotPresent",
+          "description": "Pull only if the image doesn't already exist locally — Batect's own default.",
+          "type": "string"
+        },
+        {
+          "const": "Always",
+          "description": "Always pull, even if the image already exists locally — Ratect's entire pre-0.13.0 behavior for every `image` container.",
+          "type": "string"
+        }
+      ]
+    },
+    "Include": {
+      "oneOf": [
+        {
+          "description": "The path to another configuration file to merge into this one, relative to this file's own directory.",
+          "examples": [
+            "tasks/build.yml"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "description": "The path to the file, relative to this file's own directory.",
+              "type": "string"
+            },
+            "type": {
+              "const": "file",
+              "description": "A local configuration file. The default when 'type' is omitted."
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "description": "The file to include from within the repository. Defaults to batect-bundle.yml.",
+              "type": "string"
+            },
+            "ref": {
+              "description": "The tag, branch or commit to check out.",
+              "type": "string"
+            },
+            "repo": {
+              "description": "The repository to clone.",
+              "type": "string"
+            },
+            "type": {
+              "const": "git",
+              "description": "A bundle from a Git repository, cloned once and cached under ~/.ratect/incl."
+            }
+          },
+          "required": [
+            "type",
+            "repo",
+            "ref"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PortMapping": {
+      "oneOf": [
+        {
+          "description": "A port mapping, as \"local:container\", with optional ranges and protocol: \"local:container\", \"from-to:from-to\", \"local:container/protocol\". The protocol defaults to tcp.",
+          "examples": [
+            "8080:80",
+            "1000-1010:2000-2010",
+            "8080:80/tcp"
+          ],
+          "pattern": "^[0-9]+(-[0-9]+)?:[0-9]+(-[0-9]+)?(/[a-zA-Z]+)?$",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "container": {
+              "$ref": "#/definitions/PortRange"
+            },
+            "local": {
+              "$ref": "#/definitions/PortRange"
+            },
+            "protocol": {
+              "description": "The protocol to map. Defaults to tcp.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "local",
+            "container"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PortRange": {
+      "oneOf": [
+        {
+          "description": "A single port.",
+          "maximum": 65535,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "description": "A single port (\"8080\") or an inclusive range of consecutive ports (\"1000-1010\", given in ascending order).",
+          "pattern": "^[0-9]+(-[0-9]+)?$",
+          "type": "string"
+        }
+      ]
+    },
+    "RunAsCurrentUser": {
+      "additionalProperties": false,
+      "description": "Runs this container as the host's own user/group instead of whatever the image defaults to (see `Config::resolve_expressions_with`'s validation and `TaskEngine::resolve_user_mapping`). `home_directory` is required when `enabled` is `true` (and rejected otherwise) — Ratect never guesses one, matching Batect.",
+      "properties": {
+        "enabled": {
+          "description": "Whether to run as the host's own user. Required — there's no default.",
+          "type": "boolean"
+        },
+        "home_directory": {
+          "description": "The home directory to create inside the container for that user. Must be an absolute path; it's a path inside the container, so it's never resolved against anything on the host.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "type": "object"
+    },
+    "SetupCommand": {
+      "additionalProperties": false,
+      "description": "One entry in a container's `setup_commands` list: a command run inside the started container after it becomes healthy but before its dependents start. Runs with the container's own environment and user/group. Tokenized into literal argv the same way `command`/`entrypoint` are (see `tokenize_command_line` in `docker.rs`) — no shell involved, matching Batect's own `SetupCommand.command` exactly (typed `Command`, the same type as `Container.command`/`entrypoint`, and passed to Docker's exec API as already-parsed argv — confirmed by reading `RunContainerSetupCommandsStepRunner.runSetupCommand`, not assumed from Batect's docs). A command relying on shell operators (`&&`, `$VAR` expansion, etc.) needs an explicit `sh -c '...'` wrapper, same as `command`/`entrypoint`.",
+      "properties": {
+        "command": {
+          "description": "The command to run, tokenized into arguments rather than run through a shell — wrap it in `sh -c '...'` to use shell operators.",
+          "type": "string"
+        },
+        "working_directory": {
+          "description": "Falls back to the container's own `working_directory` (`Container::working_directory`) when omitted, and then to the image's own default when neither is set — matching Batect.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    "SshAgent": {
+      "additionalProperties": false,
+      "description": "One entry in a container's `build_ssh` list — see `Container::build_ssh` for why Ratect only supports a single `default`-id, agent-forwarding (no explicit `paths`) entry, checked in `Config::resolve_expressions_with` rather than here (so the error can name the offending container).",
+      "properties": {
+        "id": {
+          "description": "The agent id a Dockerfile's `RUN --mount=type=ssh,id=<id>` refers to. Ratect only supports the implicit `default` agent, so this must be `default` if given at all.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "paths": {
+          "default": [],
+          "description": "Private key files to forward instead of a running agent. Not supported by Ratect — must be empty.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Task": {
+      "additionalProperties": false,
+      "properties": {
+        "customise": {
+          "additionalProperties": {
+            "$ref": "#/definitions/TaskContainerCustomisation"
+          },
+          "description": "Per-task overrides for a *non-main* container used somewhere in this task's own container graph (a task-level or container-level dependency, at any depth) — keyed by container name. Can't target `run.container` itself (set the equivalent property on `run` instead) or a container outside this task's graph — both validated in `Config::resolve_expressions_with_boundaries`, matching Batect's own `Task`/`ContainerDependencyGraph` checks. Applied in `TaskEngine::start_dependency`.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "dependencies": {
+          "description": "Sidecar containers scoped to this task specifically — distinct from `Container::dependencies`, which every task using that container picks up. Unioned with the task's own container's `dependencies` when resolving what to start alongside it — see `TaskEngine::run_task_internal`. Requires `run` (validated in `Config::resolve_expressions_with_boundaries`, matching Batect) and can't name `run.container` itself.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "Free-text shown next to the task's name in `--list-tasks` output — see `format_task_list`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "group": {
+          "description": "Groups this task under a heading in `--list-tasks` output, together with every other task sharing the same `group` — see `format_task_list`. Purely a display grouping; has no effect on execution order or prerequisites.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prerequisites": {
+          "description": "Other tasks to run to completion, in order, before this one. At least one of `run` or `prerequisites` is required.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "run": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TaskRun"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent for a task that only exists to chain `prerequisites` together — validated in `Config::resolve_expressions_with_boundaries` to require at least one of `run`/`prerequisites`, matching Batect. A `run`-less task's prerequisites still execute; there's just no container of the task's own to run afterwards — see `TaskEngine::run_task_internal`."
+        }
+      },
+      "type": "object"
+    },
+    "TaskContainerCustomisation": {
+      "additionalProperties": false,
+      "description": "One entry in a task's `customise` map — see `Task::customise`.",
+      "properties": {
+        "environment": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Merged with the container's own `environment` (see `Container::environment`): the container's values apply first, and this overrides them on a key collision — same precedence as `TaskRun::environment` over the main container's.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "ports": {
+          "description": "*Added* to the container's own `ports`, not an override — same union semantics as `TaskRun::ports`.",
+          "items": {
+            "$ref": "#/definitions/PortMapping"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "working_directory": {
+          "description": "Overrides the container's own `working_directory` — same semantics as `TaskRun::working_directory`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "TaskRun": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "description": "Overrides the container's own `command` for this task's run specifically — see `Container::command`. If neither this nor the container's own `command` is set, the image's own default `CMD` runs instead.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "container": {
+          "description": "The container to run the task in, by name.",
+          "type": "string"
+        },
+        "entrypoint": {
+          "description": "Overrides the container's own `entrypoint` for this task's run specifically — see `Container::entrypoint`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "environment": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment variables for this task's run specifically, merged over the container's own `environment` — see `Container::environment`.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "ports": {
+          "description": "Additional port mappings for this task's run specifically — *added* to the container's own `ports` (a union, not an override: matching Batect, which combines these as a `Set`, so there's no concept of one replacing an entry from the other by container port). See `Container::ports`.",
+          "items": {
+            "$ref": "#/definitions/PortMapping"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "working_directory": {
+          "description": "Overrides the container's own `working_directory` for this task's run specifically — see `Container::working_directory`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "container"
+      ],
+      "type": "object"
+    },
+    "VolumeMount": {
+      "oneOf": [
+        {
+          "description": "A host path bind-mounted into the container, as \"local_path:container_path\" or \"local_path:container_path:options\". Only local mounts have this compact form — cache and tmpfs mounts must use the object form.",
+          "examples": [
+            ".:/code",
+            "./data:/data:ro"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "container": {
+              "description": "The path inside the container.",
+              "type": "string"
+            },
+            "local": {
+              "description": "The path on the host, resolved relative to the directory of the file declaring it. Supports expressions.",
+              "type": "string"
+            },
+            "options": {
+              "description": "Docker mount options (for example \"ro\").",
+              "type": "string"
+            },
+            "type": {
+              "const": "local",
+              "description": "A host path bind-mounted into the container. The default when 'type' is omitted."
+            }
+          },
+          "required": [
+            "local",
+            "container"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "container": {
+              "description": "The path inside the container.",
+              "type": "string"
+            },
+            "name": {
+              "description": "The cache's name, unique within this project.",
+              "type": "string"
+            },
+            "options": {
+              "description": "Docker mount options (for example \"ro\").",
+              "type": "string"
+            },
+            "type": {
+              "const": "cache",
+              "description": "A cache that persists between ratect invocations — a Docker volume by default, or a directory under .batect/caches with --cache-type=directory."
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "container"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "container": {
+              "description": "The path inside the container.",
+              "type": "string"
+            },
+            "options": {
+              "description": "tmpfs options, forwarded to Docker verbatim (for example \"size=64m,mode=1770\").",
+              "type": "string"
+            },
+            "type": {
+              "const": "tmpfs",
+              "description": "An in-memory filesystem, lost when the container exits."
+            }
+          },
+          "required": [
+            "type",
+            "container"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "description": "A Ratect (batect-compatible) task configuration file. Describes the subset of Batect's own configuration format that Ratect actually accepts — see https://github.com/or1can/ratect/blob/main/docs/differences-from-batect.md",
+  "properties": {
+    "config_variables": {
+      "additionalProperties": {
+        "$ref": "#/definitions/ConfigVariable"
+      },
+      "description": "Variables tasks and containers can refer to as `<name` or `<{name}`, overridable per-invocation with `--config-var`.",
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "containers": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Container"
+      },
+      "default": {},
+      "description": "The containers tasks can run in, keyed by name.",
+      "type": "object"
+    },
+    "forbid_telemetry": {
+      "default": null,
+      "description": "Recognized but has no effect: Ratect collects no telemetry, so there's nothing to forbid. Accepted so a config written for Batect still loads.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "include": {
+      "description": "Other configuration files to merge into this one — local files (relative to this file's own directory) or Git bundles.",
+      "items": {
+        "$ref": "#/definitions/Include"
+      },
+      "type": "array"
+    },
+    "project_name": {
+      "description": "The project's name, used to name the images this project builds and (with `--cache-type=volume`) its cache volumes. Taken from the root config file only; ignored in an included file. Defaults to the project directory's own name.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tasks": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Task"
+      },
+      "default": {},
+      "description": "The tasks this project defines, keyed by the name used to run them.",
+      "type": "object"
+    }
+  },
+  "title": "Ratect configuration",
+  "type": "object"
+}

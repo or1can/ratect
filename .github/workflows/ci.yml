@@ -39,7 +39,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-targets
-      - run: cargo test --workspace --all-targets
+      # `--all-features` turns on ratect-core's `schema` feature, whose tests
+      # are what keep the committed schema/batect-config.schema.json in step
+      # with the config types it's generated from.
+      - run: cargo test --workspace --all-targets --all-features
 
   docker-integration:
     name: Docker Integration Test

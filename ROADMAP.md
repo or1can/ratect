@@ -22,7 +22,7 @@ The primary goal is to support the core features of Batect to ensure a seamless 
 - **Includes**: Local file includes — splitting one project's configuration across multiple files via the top-level `include` directive, resolved relative to each declaring file's own directory and merged into one flat `containers`/`tasks`/`config_variables` set (0.7.0) — and Git includes/bundles — importing shared tasks/containers from a separate repository, cloned once and cached forever at `~/.ratect/incl` (0.8.0), with a 30-day automatic cache eviction sweep matching Batect's own (0.19.0) — see [config reference](docs/config-reference.md#includes) and [Differences from Batect](docs/differences-from-batect.md#top-level-fields).
 - **Full Configuration Parity**: Support for all available Batect configuration options and standard YAML structures. See [Differences from Batect](docs/differences-from-batect.md#configuration-format) for the itemized current status of every field.
 - **Volume Mounts**: `volumes` supports all three of Batect's mount kinds — `local` (`local:container[:options]`), `cache` (a named volume that persists between separate `ratect` invocations — a Docker named volume by default, or a host directory under `--cache-type=directory`, plus `--clean`/`--clean-cache` to clear them out, [0.18.0](#ratect-compat)) — see [Cache volumes](docs/config-reference.md#cache-volumes) — and `tmpfs` (an in-memory, ephemeral mount, lost when the container exits, [0.21.0](#ratect-compat)) — see [Tmpfs mounts](docs/config-reference.md#tmpfs-mounts).
-- **Config Schema**: A JSON schema describing Ratect's actual accepted `batect.yml` shape, for editor autocompletion/validation — likely generated from `ratect-core/src/config.rs`'s own `Serialize`/`Deserialize` structs (e.g. via the `schemars` crate) rather than hand-maintained separately, though custom `Deserialize` impls (`PortMapping`, `DeviceMapping`, `Capability`, etc.) would need matching `JsonSchema` impls to stay accurate. Deliberately **not** Batect's own published schema (listed in [SchemaStore's catalog](https://www.schemastore.org/api/json/catalog.json) for `batect.yml`/`batect-bundle.yml`, hosted at `ide-integration.batect.dev`) — that reflects Batect's full field set, not Ratect's subset, so it would either validate fields Ratect doesn't actually support (a false pass in the editor) or reject a future Ratect-only extension as invalid (a false failure). Nice to have before 1.0.0, even if not (yet) submitted to SchemaStore itself — that's a separate, later decision.
+- **Config Schema**: A JSON schema describing Ratect's actual accepted `batect.yml` shape, for editor autocompletion/validation — generated from `ratect-core/src/config.rs`'s own types via `schemars` rather than hand-maintained separately, and committed at [`schema/batect-config.schema.json`](schema/batect-config.schema.json) ([0.21.0](#ratect-compat)) — see [Editor autocompletion and validation](docs/config-reference.md#editor-autocompletion-and-validation). Deliberately **not** Batect's own published schema (listed in [SchemaStore's catalog](https://www.schemastore.org/api/json/catalog.json) for `batect.yml`/`batect-bundle.yml`, hosted at `ide-integration.batect.dev`) — that reflects Batect's full field set, not Ratect's subset, so it would either validate fields Ratect doesn't actually support (a false pass in the editor) or reject a future Ratect-only extension as invalid (a false failure). Not submitted to SchemaStore itself — that's a separate, later decision.
 - **Full CLI Options Parity**: Support for all standard Batect CLI flags and options (e.g., `--config-file`, `--override-image`, cleanup control flags, etc.). See [Differences from Batect](docs/differences-from-batect.md#cli-flags) for the itemized current status of every flag.
 - **User Mapping**: A container can run as the host's own user/group (`run_as_current_user`) instead of the image's default, so files it writes to a mounted volume aren't root-owned (0.5.0) — see [User mapping](docs/config-reference.md#user-mapping). Host-side uid/gid lookup is Unix-only — see [Differences from Batect](docs/differences-from-batect.md#container-fields).
 - **Proxy Support**: `http_proxy`/`https_proxy`/`ftp_proxy`/`no_proxy` are detected from the host environment and propagated into containers and image builds automatically, `--no-proxy-vars` to disable (0.6.0) — see [Proxy environment variables](docs/config-reference.md#proxy-environment-variables). `localhost` rewriting only works on macOS/Windows, and there's no Docker-version-gated hostname fallback chain — see [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
@@ -748,11 +748,32 @@ Neither bump is ever folded into a feature commit.
     gate fails first — it always runs to completion, and the task is still
     reported as failed overall either way. See [task
     lifecycle](docs/task-lifecycle.md#known-simplifications-relative-to-batect).
-  - **Config Schema**: a JSON schema for `batect.yml`'s actual Ratect-accepted
+  - ~~**Config Schema**: a JSON schema for `batect.yml`'s actual Ratect-accepted
     shape (editor autocompletion/validation), likely generated from
     `ratect-core/src/config.rs`'s own `Serialize`/`Deserialize` structs — see
     the [Batect Parity](#batect-parity) headline entry for the full reasoning
-    on why this can't just be Batect's own published schema.
+    on why this can't just be Batect's own published schema.~~ — done:
+    generated from those types via `schemars` (`ratect-core/src/schema.rs`)
+    and committed at [`schema/batect-config.schema.json`](schema/batect-config.schema.json),
+    described in [config reference](docs/config-reference.md#editor-autocompletion-and-validation).
+    Generation lives behind a non-default `schema` feature, so neither
+    shipped binary carries the derived `JsonSchema` impls; CI's
+    `--all-features` test run is what keeps the committed file honest.
+    Draft-07 rather than schemars' own default (2020-12), because
+    `yaml-language-server` — what VS Code and JetBrains actually run — only
+    implements draft-07 fully; under 2020-12 a `$ref` with sibling keywords
+    silently drops the siblings, which is every description on a `$ref`'d
+    field. The string-or-object types (`ports`, `devices`, `volumes`,
+    `build_secrets`, `include`, and `PortRange` itself) have hand-written
+    `JsonSchema` impls, since their hand-written `Deserialize` impls are
+    exactly the ones a derive can't see through. Field documentation comes
+    from the config types' own doc comments (first paragraph, reflowed,
+    rustdoc link syntax stripped) rather than a second hand-maintained copy
+    per field. Tests: the committed file is regenerated and compared, and
+    every fixture in the repository that parses as config is validated
+    against the schema — the direction that matters, since a schema that's
+    too strict puts a red squiggle under working configuration. Not
+    submitted to SchemaStore; that stays a separate, later decision.
   - **Explicitly excluded**: `build_ssh` full parity (multiple named agents,
     explicit key-file paths — see [issue #1](https://github.com/or1can/ratect/issues/1))
     stays out of scope here. It's blocked on `bollard`'s session-provider

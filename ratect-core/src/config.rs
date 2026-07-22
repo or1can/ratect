@@ -40,9 +40,12 @@ pub struct Config {
     pub forbid_telemetry: Option<bool>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Container {
+    /// The image to run, in Docker's own `name:tag` form. Exactly one of
+    /// `image` or `build_directory` is required.
     pub image: Option<String>,
     /// Controls whether an `image` container's image is pulled fresh or
     /// only when missing locally — Docker's own pull semantics
@@ -56,7 +59,15 @@ pub struct Container {
     /// defaults to [`ImagePullPolicy::IfNotPresent`], matching Batect's own
     /// default, for either use.
     pub image_pull_policy: Option<ImagePullPolicy>,
+    /// The directory containing the `Dockerfile` to build an image from,
+    /// resolved relative to the directory of the file declaring it.
+    /// Supports expressions. Exactly one of `image` or `build_directory` is
+    /// required.
     pub build_directory: Option<String>,
+    /// Build arguments (Docker's own `--build-arg`) for a
+    /// `build_directory` build, matched to the Dockerfile's own `ARG`
+    /// instructions. Values support expressions. Ignored for an `image`
+    /// container.
     pub build_args: Option<HashMap<String, String>>,
     /// The Dockerfile to build, as a path relative to `build_directory`'s
     /// own root — Batect's `dockerfile` field. Defaults to `"Dockerfile"`
@@ -104,8 +115,15 @@ pub struct Container {
     /// name/host directory is resolved later, once `--cache-type` and the
     /// project's own cache key are known — see [`crate::cache`].
     pub volumes: Option<Vec<VolumeMount>>,
+    /// Other containers that must be started and ready before this one
+    /// starts — see also a task's own `dependencies`, which apply to one
+    /// task only.
     pub dependencies: Option<Vec<String>>,
+    /// Environment variables to set inside the container. Values support
+    /// expressions.
     pub environment: Option<HashMap<String, String>>,
+    /// Runs the container as the host's own user rather than the image's
+    /// default, so files it writes to a mounted volume aren't root-owned.
     pub run_as_current_user: Option<RunAsCurrentUser>,
     /// Extra network aliases this container is reachable by, beyond its own
     /// name. Plain strings, no [expression](#expressions) support — matching
@@ -187,6 +205,10 @@ pub struct Container {
     /// count, not a string. `None` inherits Docker's own default (64 MiB).
     /// Container level only, matching Batect (no task-level `run` override
     /// in either).
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::schema::byte_size_schema")
+    )]
     #[serde(default, deserialize_with = "deserialize_shm_size")]
     pub shm_size: Option<i64>,
     /// Host devices to make available inside the container — Docker's
@@ -650,6 +672,7 @@ where
 /// Batect's own `ImagePullPolicy` exactly, including its wire values
 /// (`serde`'s default enum serialization already matches Rust's own PascalCase
 /// variant names, so no `rename_all` is needed here, unlike [`Capability`]).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ImagePullPolicy {
     /// Pull only if the image doesn't already exist locally — Batect's own
@@ -676,6 +699,7 @@ pub enum ImagePullPolicy {
 /// [moby#41563](https://github.com/moby/moby/pull/41563)), so this list adds
 /// all three rather than inheriting that gap. A superset, not a divergence —
 /// every config Batect accepts here still parses identically.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Capability {
@@ -865,10 +889,16 @@ impl Serialize for BuildSecret {
 /// (no explicit `paths`) entry, checked in
 /// [`Config::resolve_expressions_with`] rather than here (so the error can
 /// name the offending container).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SshAgent {
+    /// The agent id a Dockerfile's `RUN --mount=type=ssh,id=<id>` refers
+    /// to. Ratect only supports the implicit `default` agent, so this must
+    /// be `default` if given at all.
     pub id: Option<String>,
+    /// Private key files to forward instead of a running agent. Not
+    /// supported by Ratect — must be empty.
     #[serde(default)]
     pub paths: Vec<String>,
 }
@@ -878,6 +908,7 @@ pub struct SshAgent {
 /// field inherits the image's own value, matching Batect (and Docker's `0` =
 /// inherit convention). Durations use Batect's Go-style string format:
 /// `"2s"`, `"1m30s"`, `"500ms"`, `"0"`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HealthCheckConfig {
@@ -887,6 +918,10 @@ pub struct HealthCheckConfig {
     /// interpolation), matching Batect's own `String` typing.
     pub command: Option<String>,
     /// The interval between runs of the health check.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::schema::duration_schema")
+    )]
     #[serde(default, with = "duration_string")]
     pub interval: Option<std::time::Duration>,
     /// The number of times to perform the health check before considering
@@ -894,9 +929,17 @@ pub struct HealthCheckConfig {
     pub retries: Option<u32>,
     /// The time to wait before failing health checks count against the
     /// retry count.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::schema::duration_schema")
+    )]
     #[serde(default, with = "duration_string")]
     pub start_period: Option<std::time::Duration>,
     /// The time to wait before timing out a single health check invocation.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::schema::duration_schema")
+    )]
     #[serde(default, with = "duration_string")]
     pub timeout: Option<std::time::Duration>,
 }
@@ -913,9 +956,12 @@ pub struct HealthCheckConfig {
 /// Batect's docs). A command relying on shell operators (`&&`, `$VAR`
 /// expansion, etc.) needs an explicit `sh -c '...'` wrapper, same as
 /// `command`/`entrypoint`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SetupCommand {
+    /// The command to run, tokenized into arguments rather than run through
+    /// a shell — wrap it in `sh -c '...'` to use shell operators.
     pub command: String,
     /// Falls back to the container's own `working_directory`
     /// ([`Container::working_directory`]) when omitted, and then to the
@@ -1022,10 +1068,16 @@ mod duration_string {
 /// and `TaskEngine::resolve_user_mapping`). `home_directory` is required
 /// when `enabled` is `true` (and rejected otherwise) — Ratect never guesses
 /// one, matching Batect.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunAsCurrentUser {
+    /// Whether to run as the host's own user. Required — there's no
+    /// default.
     pub enabled: bool,
+    /// The home directory to create inside the container for that user.
+    /// Must be an absolute path; it's a path inside the container, so it's
+    /// never resolved against anything on the host.
     pub home_directory: Option<String>,
 }
 
@@ -1271,6 +1323,7 @@ impl Serialize for PortMapping {
     }
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Task {
@@ -1281,6 +1334,8 @@ pub struct Task {
     /// container of the task's own to run afterwards — see
     /// `TaskEngine::run_task_internal`.
     pub run: Option<TaskRun>,
+    /// Other tasks to run to completion, in order, before this one. At
+    /// least one of `run` or `prerequisites` is required.
     pub prerequisites: Option<Vec<String>>,
     /// Sidecar containers scoped to this task specifically — distinct from
     /// [`Container::dependencies`], which every task using that container
@@ -1310,6 +1365,7 @@ pub struct Task {
 }
 
 /// One entry in a task's `customise` map — see [`Task::customise`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskContainerCustomisation {
@@ -1444,15 +1500,19 @@ fn format_task_line(name: &str, description: Option<&str>) -> String {
     }
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskRun {
+    /// The container to run the task in, by name.
     pub container: String,
     /// Overrides the container's own `command` for this task's run
     /// specifically — see [`Container::command`]. If neither this nor the
     /// container's own `command` is set, the image's own default `CMD`
     /// runs instead.
     pub command: Option<String>,
+    /// Environment variables for this task's run specifically, merged over
+    /// the container's own `environment` — see `Container::environment`.
     pub environment: Option<HashMap<String, String>>,
     /// Additional port mappings for this task's run specifically —
     /// *added* to the container's own `ports` (a union, not an override:
@@ -1468,9 +1528,12 @@ pub struct TaskRun {
     pub entrypoint: Option<String>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigVariable {
+    /// The value to use when `--config-var` doesn't supply one. Without a
+    /// default, a task referring to this variable fails unless it's set.
     pub default: Option<String>,
     /// Recognized but inert — Batect surfaces this in its own generated
     /// docs/help output; Ratect has no such output to show one in, so it's
@@ -1490,7 +1553,7 @@ const DEFAULT_GIT_INCLUDE_PATH: &str = "batect-bundle.yml";
 /// to `batect-bundle.yml`). Any other `type` is rejected with a clear "not
 /// supported yet" error rather than a generic parse failure.
 #[derive(Debug, Clone)]
-enum IncludeEntry {
+pub(crate) enum IncludeEntry {
     File {
         path: String,
     },
@@ -1681,17 +1744,35 @@ impl GitBoundary {
 /// rather than making `Config`'s own fields `Option`/defaulted so `Config`
 /// itself — consumed throughout `engine.rs` and this module's own tests via
 /// plain struct literals — never has to change shape for this feature.
+///
+/// `pub(crate)` purely so [`crate::schema`] can generate the JSON schema
+/// from it: this — not [`Config`] — is the shape an editor has open, since
+/// `include` only exists per-file and every other field is pre-merge.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ConfigFile {
+pub(crate) struct ConfigFile {
+    /// The project's name, used to name the images this project builds and
+    /// (with `--cache-type=volume`) its cache volumes. Taken from the root
+    /// config file only; ignored in an included file. Defaults to the
+    /// project directory's own name.
     project_name: Option<String>,
+    /// The containers tasks can run in, keyed by name.
     #[serde(default)]
     containers: HashMap<String, Container>,
+    /// The tasks this project defines, keyed by the name used to run them.
     #[serde(default)]
     tasks: HashMap<String, Task>,
+    /// Variables tasks and containers can refer to as `<name` or
+    /// `<{name}`, overridable per-invocation with `--config-var`.
     config_variables: Option<HashMap<String, ConfigVariable>>,
+    /// Other configuration files to merge into this one — local files
+    /// (relative to this file's own directory) or Git bundles.
     #[serde(default)]
     include: Vec<IncludeEntry>,
+    /// Recognized but has no effect: Ratect collects no telemetry, so
+    /// there's nothing to forbid. Accepted so a config written for Batect
+    /// still loads.
     #[serde(default)]
     forbid_telemetry: Option<bool>,
 }

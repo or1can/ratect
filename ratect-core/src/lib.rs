@@ -19,5 +19,7 @@ pub mod engine;
 pub mod expressions;
 pub mod git_include;
 pub mod proxy;
+#[cfg(feature = "schema")]
+pub mod schema;
 pub mod ui;
 pub mod user;

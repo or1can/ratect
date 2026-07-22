@@ -29,6 +29,25 @@ toml = "1.1"
 regex = "1"
 unicode-width = "0.2.2"
 rustls = { version = "0.23", default-features = false }
+# Both only ever built under the `schema` feature (below) — see
+# src/schema.rs. `jsonschema` is used by that module's own tests only (it
+# validates every fixture in the repository against the generated schema),
+# but has to be declared here rather than in `[dev-dependencies]`, which
+# Cargo doesn't allow to be optional — and making it unconditional would put
+# a JSON-schema validator, and its transitive tree, in every `cargo test`
+# run that has no use for it. `default-features = false` drops `reqwest` and
+# a TLS stack: nothing here ever resolves a remote `$ref`.
+schemars = { version = "1.2", optional = true }
+jsonschema = { version = "0.48", optional = true, default-features = false }
+
+[features]
+# Generates the JSON schema for `batect.yml` (`src/schema.rs`) — a tooling
+# concern, not a runtime one, so it's off by default and neither shipped
+# binary carries the derived `JsonSchema` impls. CI turns it on via
+# `--all-features`, which is what keeps the committed schema honest: the
+# derive fails to compile if a new config field's type has no schema, and
+# `schema::tests` fails if the committed file has drifted.
+schema = ["dep:schemars", "dep:jsonschema"]
 
 # Cargo unifies features for a crate that's both a normal and a dev
 # dependency, so this just adds `test-util` (needed for
