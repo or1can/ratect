@@ -3707,6 +3707,7 @@ mod tests {
             .push(rcgen::DnType::CommonName, "ratect-test-ca");
         let ca_key = rcgen::KeyPair::generate().unwrap();
         let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+        let issuer = rcgen::Issuer::from_params(&ca_params, ca_key);
 
         let mut leaf_params =
             rcgen::CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()])
@@ -3717,7 +3718,7 @@ mod tests {
             .distinguished_name
             .push(rcgen::DnType::CommonName, "localhost");
         let leaf_key = rcgen::KeyPair::generate().unwrap();
-        let leaf_cert = leaf_params.signed_by(&leaf_key, &ca_cert, &ca_key).unwrap();
+        let leaf_cert = leaf_params.signed_by(&leaf_key, &issuer).unwrap();
 
         GeneratedTlsMaterials {
             ca_pem: ca_cert.pem(),
