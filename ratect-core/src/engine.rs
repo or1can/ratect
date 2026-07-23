@@ -567,6 +567,13 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     /// mount into an actual Docker bind string — see
     /// `resolve_volumes`/`crate::cache`.
     cache_options: Option<crate::cache::CacheOptions>,
+    /// The creating binary's own version, stamped onto every resource this
+    /// engine creates (`crate::labels::VERSION`). `None` in tests, which
+    /// have no binary version to report — the label is then omitted rather
+    /// than invented. Set via `TaskEngineSettings::ratect_version`, since
+    /// `ratect-core`'s own version isn't what a user sees from
+    /// `--version` (see `ROADMAP.md`'s versioning section).
+    ratect_version: Option<String>,
     /// Memoizes `crate::cache::project_cache_key` for the life of this
     /// `TaskEngine` — computed at most once per invocation, and only if a
     /// `cache` volume is actually resolved (never eagerly), matching
@@ -612,6 +619,12 @@ pub struct TaskEngineSettings {
     /// makes sense for a caller whose config has no `cache` volume mounts —
     /// in practice every binary supplies it.
     pub cache: Option<(crate::cache::CacheType, PathBuf)>,
+    /// The calling binary's own version (`env!("CARGO_PKG_VERSION")`),
+    /// recorded on every resource created — see [`crate::labels::VERSION`].
+    /// The binary passes its own rather than `ratect-core` reading its
+    /// own, since the core's version isn't what a user sees from
+    /// `--version`.
+    pub ratect_version: Option<String>,
 }
 
 impl Default for TaskEngineSettings {
@@ -627,6 +640,7 @@ impl Default for TaskEngineSettings {
             cleanup_after_failure: true,
             max_parallelism: None,
             cache: None,
+            ratect_version: None,
         }
     }
 }
@@ -653,6 +667,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             cleanup_after_failure: true,
             max_parallelism: None,
             cache_options: None,
+            ratect_version: None,
             cache_key: OnceCell::new(),
         }
     }
@@ -794,7 +809,9 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             cleanup_after_failure,
             max_parallelism,
             cache,
+            ratect_version,
         } = settings;
+        self.ratect_version = ratect_version;
         if let Some(network) = existing_network {
             self = self.with_existing_network(network);
         }
@@ -1517,6 +1534,18 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             &run.container,
             task.dependencies.as_deref(),
         );
+        // Identifies every resource this one task execution creates (see
+        // `crate::labels`). The id is generated here rather than alongside
+        // the network below, so it exists even under `--use-network`, where
+        // no network is created at all — the containers still need to agree
+        // on which run they belong to.
+        let run_id = Uuid::new_v4().to_string();
+        let run_labels = crate::labels::RunLabels::new(
+            &self.config.project_name,
+            task_name,
+            &run_id,
+            self.ratect_version.as_deref(),
+        );
 
         let result: Result<()> = async {
             // Always created, even with no dependencies, so the task's own
@@ -1536,8 +1565,12 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     name.clone()
                 }
                 None => {
-                    let name = format!("ratect-{}", Uuid::new_v4());
-                    self.docker.create_network(&name).await?;
+                    // Named after this run's own id, so the network's name
+                    // and its `run` label always agree.
+                    let name = format!("ratect-{run_id}");
+                    self.docker
+                        .create_network(&name, &run_labels.for_network())
+                        .await?;
                     name
                 }
             };
@@ -1593,6 +1626,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     &running_sidecars,
                     &no_proxy_entries,
                     task.customise.as_ref(),
+                    &run_labels,
                 )
             }))
             .await?;
@@ -1661,10 +1695,15 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 capability_names(container_config.capabilities_to_drop.as_ref());
             let devices = device_triples(container_config.devices.as_ref());
             let tmpfs = tmpfs_mounts(container_config.volumes.as_ref());
+            let labels = run_labels.for_container(
+                &run.container,
+                crate::labels::ContainerRole::Task,
+                container_config.labels.as_ref(),
+            );
             let container_options = crate::docker::ContainerOptions {
                 working_directory,
                 entrypoint,
-                labels: container_config.labels.as_ref(),
+                labels: Some(&labels),
                 capabilities_to_add: capabilities_to_add.as_ref(),
                 capabilities_to_drop: capabilities_to_drop.as_ref(),
                 privileged: container_config.privileged,
@@ -1838,6 +1877,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         running: &Mutex<HashMap<String, String>>,
         no_proxy_entries: &std::collections::BTreeSet<String>,
         customisations: Option<&HashMap<String, TaskContainerCustomisation>>,
+        run_labels: &crate::labels::RunLabels,
     ) -> Result<String> {
         let cell = get_or_create_cell(cells, name);
         let result = cell
@@ -1854,6 +1894,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                             running,
                             no_proxy_entries,
                             customisations,
+                            run_labels,
                         )
                     }))
                     .await?;
@@ -1910,10 +1951,15 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     let working_directory = customisation
                         .and_then(|c| c.working_directory.as_deref())
                         .or(dependency_config.working_directory.as_deref());
+                    let labels = run_labels.for_container(
+                        name,
+                        crate::labels::ContainerRole::Dependency,
+                        dependency_config.labels.as_ref(),
+                    );
                     let container_options = crate::docker::ContainerOptions {
                         working_directory,
                         entrypoint: dependency_config.entrypoint.as_deref(),
-                        labels: dependency_config.labels.as_ref(),
+                        labels: Some(&labels),
                         capabilities_to_add: capabilities_to_add.as_ref(),
                         capabilities_to_drop: capabilities_to_drop.as_ref(),
                         privileged: dependency_config.privileged,
@@ -2191,6 +2237,9 @@ mod tests {
         // What `network_exists` reports — defaults to `true` so tests that
         // don't care about `--use-network` aren't affected.
         network_exists_result: Arc<Mutex<bool>>,
+        // The labels a prior `create_network` call was given (see
+        // `network_labels`).
+        network_labels: Arc<Mutex<Option<HashMap<String, String>>>>,
         // The `network_options` a prior `run_container`/`start_background_container`
         // call for a given container name was given (see `network_options_for`).
         network_options: CapturedNetworkOptions,
@@ -2252,6 +2301,7 @@ mod tests {
                 interactive: Default::default(),
                 user_mapping: Default::default(),
                 network_exists_result: Arc::new(Mutex::new(true)),
+                network_labels: Default::default(),
                 network_options: Default::default(),
                 health_checks: Default::default(),
                 container_options: Default::default(),
@@ -2498,6 +2548,11 @@ mod tests {
 
         /// The `container_options.labels` a prior `run_container`/
         /// `start_background_container` call for `name` was given.
+        /// The labels a prior `create_network` call was given.
+        fn network_labels(&self) -> Option<HashMap<String, String>> {
+            self.network_labels.lock().unwrap().clone()
+        }
+
         fn labels_for(&self, name: &str) -> Option<HashMap<String, String>> {
             self.container_options
                 .lock()
@@ -2655,8 +2710,9 @@ mod tests {
             Ok(())
         }
 
-        async fn create_network(&self, name: &str) -> Result<()> {
+        async fn create_network(&self, name: &str, labels: &HashMap<String, String>) -> Result<()> {
             self.push(format!("network-create:{name}"));
+            *self.network_labels.lock().unwrap() = Some(labels.clone());
             Ok(())
         }
 
@@ -6285,12 +6341,111 @@ mod tests {
 
         engine.run_task("test", &[]).await.unwrap();
 
+        // Ratect's own ownership labels are added alongside, never
+        // instead of, the container's configured ones — see
+        // `crate::labels`.
+        let labels = docker
+            .labels_for("build-env")
+            .expect("labels should be set");
+        assert_eq!(labels["com.example.owner"], "platform-team");
+        assert_eq!(labels[crate::labels::CONTAINER], "build-env");
+    }
+
+    /// The whole point of the labels: everything one task execution
+    /// created can be found again, and recognized as belonging to that run
+    /// rather than any other. See `crate::labels` and `ROADMAP.md`'s
+    /// orphaned-resource entry.
+    #[tokio::test]
+    async fn every_resource_a_run_creates_is_labelled_with_that_run() {
+        let mut containers = HashMap::new();
+        containers.insert("database".to_string(), container("postgres:16", None));
+        let mut app = container("alpine:3.18", None);
+        app.dependencies = Some(vec!["database".to_string()]);
+        containers.insert("app".to_string(), app);
+        let mut tasks = HashMap::new();
+        tasks.insert("check".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone())
+            .with_settings(TaskEngineSettings {
+                ratect_version: Some("1.2.3".to_string()),
+                ..TaskEngineSettings::default()
+            })
+            .unwrap();
+        engine.run_task("check", &[]).await.unwrap();
+
+        let task_container = docker
+            .labels_for("app")
+            .expect("the task container is labelled");
+        let dependency = docker
+            .labels_for("database")
+            .expect("a dependency is labelled");
+        let network = docker.network_labels().expect("the network is labelled");
+
+        // Same project, task, run and version across all three.
+        for labels in [&task_container, &dependency, &network] {
+            assert_eq!(labels[crate::labels::PROJECT], "demo");
+            assert_eq!(labels[crate::labels::TASK], "check");
+            assert_eq!(labels[crate::labels::VERSION], "1.2.3");
+        }
         assert_eq!(
-            docker.labels_for("build-env"),
-            Some(HashMap::from([(
-                "com.example.owner".to_string(),
-                "platform-team".to_string()
-            )]))
+            task_container[crate::labels::RUN],
+            network[crate::labels::RUN],
+            "the task container and the network should agree on the run"
+        );
+        assert_eq!(
+            dependency[crate::labels::RUN],
+            network[crate::labels::RUN],
+            "a dependency and the network should agree on the run"
+        );
+
+        // ...and each container says which one it is, and what it was for.
+        assert_eq!(task_container[crate::labels::CONTAINER], "app");
+        assert_eq!(task_container[crate::labels::ROLE], "task");
+        assert_eq!(dependency[crate::labels::CONTAINER], "database");
+        assert_eq!(dependency[crate::labels::ROLE], "dependency");
+    }
+
+    /// `--use-network` creates no network, so the run id can't come from
+    /// one — the containers still have to agree on which run they're from.
+    #[tokio::test]
+    async fn containers_share_a_run_id_even_with_an_existing_network() {
+        let mut containers = HashMap::new();
+        containers.insert("database".to_string(), container("postgres:16", None));
+        let mut app = container("alpine:3.18", None);
+        app.dependencies = Some(vec!["database".to_string()]);
+        containers.insert("app".to_string(), app);
+        let mut tasks = HashMap::new();
+        tasks.insert("check".to_string(), task("app", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone())
+            .with_existing_network("someone-elses-network".to_string());
+        engine.run_task("check", &[]).await.unwrap();
+
+        assert!(
+            docker.network_labels().is_none(),
+            "no network should have been created"
+        );
+        let task_container = docker.labels_for("app").unwrap();
+        let dependency = docker.labels_for("database").unwrap();
+        assert_eq!(
+            task_container[crate::labels::RUN],
+            dependency[crate::labels::RUN]
         );
     }
 
@@ -6796,6 +6951,7 @@ mod tests {
                 crate::cache::CacheType::Directory,
                 PathBuf::from("/projects/demo"),
             )),
+            ratect_version: Some("1.2.3".to_string()),
         };
         let engine = TaskEngine::new(config, FakeContainerRuntime::default())
             .with_settings(settings)
@@ -6819,6 +6975,7 @@ mod tests {
                 .map(|semaphore| semaphore.available_permits()),
             Some(3)
         );
+        assert_eq!(engine.ratect_version.as_deref(), Some("1.2.3"));
         let cache = engine.cache_options.expect("cache options should be set");
         assert_eq!(cache.cache_type, crate::cache::CacheType::Directory);
         assert_eq!(cache.project_directory, PathBuf::from("/projects/demo"));
@@ -6850,6 +7007,7 @@ mod tests {
         assert!(engine.cleanup_after_failure);
         assert!(engine.max_parallelism.is_none());
         assert!(engine.cache_options.is_none());
+        assert!(engine.ratect_version.is_none());
     }
 
     /// The one setting that can fail — `with_settings` returns a `Result`
@@ -7678,13 +7836,9 @@ mod tests {
 
         engine.run_task("start", &[]).await.unwrap();
 
-        assert_eq!(
-            docker.labels_for("database"),
-            Some(HashMap::from([(
-                "com.example.role".to_string(),
-                "database".to_string()
-            )]))
-        );
+        let labels = docker.labels_for("database").expect("labels should be set");
+        assert_eq!(labels["com.example.role"], "database");
+        assert_eq!(labels[crate::labels::CONTAINER], "database");
     }
 
     #[tokio::test]

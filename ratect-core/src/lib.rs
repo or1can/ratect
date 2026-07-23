@@ -18,6 +18,7 @@ pub mod docker;
 pub mod engine;
 pub mod expressions;
 pub mod git_include;
+pub mod labels;
 pub mod proxy;
 #[cfg(feature = "schema")]
 pub mod schema;

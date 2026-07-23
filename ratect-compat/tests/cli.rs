@@ -868,6 +868,117 @@ fn sidecars_are_reachable_by_name_via_docker() {
 /// Requires a running Docker daemon with network access to pull `redis:7-alpine`
 /// and `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
 ///
+/// Ratect's ownership labels (`ratect_core::labels`) have to reach real
+/// Docker objects, which a fake runtime can't show: the unit tests prove the
+/// right map was passed, this proves Docker stored it. Uses
+/// `--no-cleanup-after-success` so the containers and network still exist to
+/// be inspected — which is also the case the labels exist to serve, since
+/// that flag is one of the ways leftovers are created deliberately.
+#[test]
+#[ignore]
+fn ownership_labels_reach_real_containers_and_networks_via_docker() {
+    fn docker_ids(kind: &str, filter: &str) -> Vec<String> {
+        // Containers need `-a`: the task's own has already exited by now
+        // (its command ran to completion), and a bare `ls` lists only
+        // running ones — which would quietly miss exactly the container
+        // whose `role` label this is checking. `network ls` has no such
+        // flag, and needs none.
+        let mut arguments = vec![kind, "ls", "-q", "--filter", filter];
+        if kind == "container" {
+            arguments.insert(2, "-a");
+        }
+        let output = Command::new("docker")
+            .args(&arguments)
+            .output()
+            .expect("failed to run docker ls");
+        assert!(output.status.success(), "docker {kind} ls failed");
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn label_of(kind: &str, id: &str, label: &str) -> String {
+        let output = Command::new("docker")
+            .args([
+                kind,
+                "inspect",
+                id,
+                "--format",
+                &format!("{{{{index .Config.Labels \"{label}\"}}}}"),
+            ])
+            .output()
+            .expect("failed to run docker inspect");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    let project = "ratect-sidecar-test";
+    let project_filter = format!("label=eu.orican.ratect.project={project}");
+
+    let output = ratect_command()
+        .arg("-f")
+        .arg(sidecar_config_path())
+        .arg("--no-cleanup-after-success")
+        .arg("ping-sidecars")
+        .output()
+        .expect("failed to run ratect");
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let containers = docker_ids("container", &project_filter);
+    let networks = docker_ids("network", &project_filter);
+
+    // Everything gets torn down before any assertion can fail, so a
+    // failure here doesn't leave the daemon full of this test's containers.
+    let cleanup = || {
+        for id in &containers {
+            let _ = Command::new("docker").args(["rm", "-fv", id]).output();
+        }
+        for id in &networks {
+            let _ = Command::new("docker").args(["network", "rm", id]).output();
+        }
+    };
+
+    let roles: Vec<String> = containers
+        .iter()
+        .map(|id| label_of("container", id, "eu.orican.ratect.role"))
+        .collect();
+    let runs: Vec<String> = containers
+        .iter()
+        .map(|id| label_of("container", id, "eu.orican.ratect.run"))
+        .collect();
+    let task = containers
+        .first()
+        .map(|id| label_of("container", id, "eu.orican.ratect.task"))
+        .unwrap_or_default();
+    cleanup();
+
+    // `app` plus three redis dependencies (database, cache, metrics).
+    assert_eq!(containers.len(), 4, "expected four labelled containers");
+    assert_eq!(networks.len(), 1, "expected one labelled network");
+    assert_eq!(task, "ping-sidecars");
+    assert_eq!(
+        roles.iter().filter(|role| *role == "task").count(),
+        1,
+        "exactly one container is the task's own: {roles:?}"
+    );
+    assert_eq!(
+        roles.iter().filter(|role| *role == "dependency").count(),
+        3,
+        "the other three are dependencies: {roles:?}"
+    );
+    assert!(
+        runs.windows(2).all(|pair| pair[0] == pair[1]) && !runs[0].is_empty(),
+        "every container should carry the same non-empty run id: {runs:?}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull `redis:7-alpine`
+/// and `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
 /// Cleanup has to take a container's *anonymous* volumes with it. `redis`
 /// declares `VOLUME /data`, so each of this fixture's three redis
 /// dependencies creates one per run; without `v: true` on removal (Docker's

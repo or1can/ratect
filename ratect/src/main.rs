@@ -492,6 +492,9 @@ async fn run_task(
         cleanup_after_failure: !(args.no_cleanup || args.no_cleanup_after_failure),
         max_parallelism: args.max_parallelism.map(|max| max as usize),
         cache: Some((args.cache_type.into(), project.project_directory)),
+        // Stamped onto every resource this run creates, so it can be
+        // identified later — see `ratect_core::labels`.
+        ratect_version: Some(env!("CARGO_PKG_VERSION").to_string()),
     };
 
     let engine = TaskEngine::new(project.config, docker)

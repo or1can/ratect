@@ -1126,7 +1126,10 @@ pub trait ContainerRuntime {
     /// into the build request itself.
     async fn tag_image(&self, image_id: &str, tags: &[String]) -> Result<()>;
 
-    async fn create_network(&self, name: &str) -> Result<()>;
+    /// Creates a task-scoped network. `labels` are Ratect's own ownership
+    /// labels (see [`crate::labels`]) — a network has no user-configurable
+    /// labels of its own, so this is the whole set.
+    async fn create_network(&self, name: &str, labels: &HashMap<String, String>) -> Result<()>;
 
     async fn remove_network(&self, name: &str) -> Result<()>;
 
@@ -2379,10 +2382,11 @@ impl ContainerRuntime for DockerClient {
         Ok(())
     }
 
-    async fn create_network(&self, name: &str) -> Result<()> {
+    async fn create_network(&self, name: &str, labels: &HashMap<String, String>) -> Result<()> {
         self.docker
             .create_network(NetworkCreateRequest {
                 name: name.to_string(),
+                labels: Some(labels.clone()),
                 ..Default::default()
             })
             .await

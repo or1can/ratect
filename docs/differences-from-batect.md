@@ -158,6 +158,14 @@ Batect's full flag list, from its [CLI reference](https://github.com/batect/bate
 Batect behavior not implemented in task execution, beyond what's covered by the field
 tables above:
 
+- **Ownership labels**: every container and network Ratect creates carries
+  `eu.orican.ratect.*` labels recording the project, task, run, and (for a
+  container) which configured container it is and whether it was the task's own or
+  a dependency. Batect labels nothing of its own, so this is an **additive
+  divergence** — it changes no behavior, and a container's own configured `labels`
+  are passed through untouched alongside. Visible in `docker inspect` output, and
+  usable as a `docker ps --filter label=...` filter. Groundwork for finding
+  leftovers from an interrupted or `--no-cleanup` run.
 - **Anonymous volume cleanup**: matches Batect — a container is removed with Docker's
   `v`/`force` options set, so any anonymous volume it created (from a `VOLUME`
   instruction in its image) goes with it. This was a divergence until 0.21.1: Ratect
