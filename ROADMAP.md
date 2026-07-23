@@ -952,7 +952,8 @@ Improving the developer experience through better tools and feedback.
   project or a task.
 
   So the work is, in order:
-  1. **Label every resource Ratect creates**, in the shape Docker Compose's own
+  1. ~~**Label every resource Ratect creates**~~ — done ([0.21.1](#ratect-compat)
+     /[0.2.0](#ratect)), in the shape Docker Compose's own
      `com.docker.compose.*` labels have — runtime *ownership*, which is a
      different thing from OCI image annotations (see below):
 
@@ -986,6 +987,17 @@ Improving the developer experience through better tools and feedback.
      irreversible regardless: the only reader that matters is Ratect
      itself, so a later version can match a legacy namespace alongside a new one
      for a release or two and still find older orphans.
+
+     As shipped (`ratect-core/src/labels.rs`): `RunLabels` is built once per
+     task execution in `run_task_internal` and threaded down through
+     `ensure_container_ready`, so a task's containers and its network agree on
+     one run id. That id is generated there rather than taken from the network's
+     own name, deliberately — `--use-network` creates no network to take it
+     from, and the containers still have to agree. The version comes from the
+     *binary* (`TaskEngineSettings::ratect_version`), not `ratect-core`, whose
+     version isn't what `--version` reports; since the two binaries are on
+     independent version lines, it also identifies which one created the
+     resource.
   2. **`ContainerRuntime` gains `list_containers`/`list_networks`** with label
      filtering (Docker supports `label=key=value` filters natively), alongside
      today's `list_volumes`.
