@@ -715,11 +715,15 @@ async fn manage_resources(
     };
     let quiet = style == OutputStyle::Quiet;
 
-    let mut filters: Vec<(&str, &str)> = Vec::new();
     // Scoped to this project unless asked otherwise — the project name
     // comes from the configuration, which is the one thing `resources`
     // needs it for, so `--all-projects` also covers the case where the
     // config can't be read at all.
+    //
+    // `--all-projects` still filters on *having* the project label, never
+    // on nothing: an unfiltered listing is every container on the machine,
+    // which for `clean` would mean stopping and removing other tools' work.
+    // "Every project" means every project Ratect created.
     let project = if args.all_projects {
         None
     } else {
@@ -730,9 +734,7 @@ async fn manage_resources(
                 .project_name,
         )
     };
-    if let Some(project) = &project {
-        filters.push((ratect_core::labels::PROJECT, project));
-    }
+    let filters = [(ratect_core::labels::PROJECT, project.as_deref())];
 
     let docker = DockerClient::new(&args.docker.into())?;
     let mut found = docker.list_containers(&filters).await?;
@@ -744,6 +746,12 @@ async fn manage_resources(
         .unwrap_or_default();
     let leftovers: Vec<Leftover> = found
         .into_iter()
+        // Belt and braces over the daemon-side filter above. Everything
+        // here is a removal candidate, and the cost of a wrong one is
+        // someone else's container: nothing without Ratect's own project
+        // label is ever a leftover of ours, however the listing was
+        // filtered.
+        .filter(|resource| resource.labels.contains_key(ratect_core::labels::PROJECT))
         .map(|resource| Leftover::new(resource, now))
         .filter(|leftover| match args.older_than {
             Some(older_than) => leftover.age_seconds >= older_than.as_secs() as i64,

@@ -131,7 +131,7 @@ words Docker assigns.
 
 | Option | Applies to | Description |
 | --- | --- | --- |
-| `--all-projects` | `list`, `clean` | Every project's leftovers, not just this one's. Also the way to use `resources` from outside a project directory, since the project scope is read from the configuration. |
+| `--all-projects` | `list`, `clean` | Every *Ratect* project's leftovers, not just this one's — never anything Ratect didn't create. Also the way to use `resources` from outside a project directory, since the project scope is read from the configuration. |
 | `--older-than <AGE>` | `list`, `clean` | Only leftovers older than `AGE` — `90s`, `30m`, `2h`, `7d`. |
 
 **`--older-than` matters for `clean`.** A task running *right now* carries exactly the
@@ -147,6 +147,10 @@ reported and the rest still go.
 
 Like `caches`, `resources` reads the configuration only for the project's name —
 never for what to remove, which comes from the labels alone.
+
+Nothing without Ratect's own labels is ever listed or removed, `--all-projects`
+included: containers started by other tools, and Docker's built-in `bridge`/`host`/
+`none` networks, are invisible to both commands.
 
 ## Exit codes and diagnostics
 

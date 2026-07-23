@@ -358,6 +358,85 @@ fn a_run_stamps_this_binarys_own_version_onto_what_it_creates() {
 /// Requires a running Docker daemon with network access to pull
 /// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
 ///
+/// `--all-projects` means every project *Ratect* created, not every
+/// container on the machine. It first meant the latter: the option cleared
+/// the label filter entirely, and an unfiltered listing is everything the
+/// daemon has — on the machine this was found on, 105 unrelated containers
+/// and Docker's own `bridge`/`host`/`none` networks, all of which
+/// `resources clean --all-projects` would have tried to stop and remove.
+///
+/// So this runs a container Ratect knows nothing about and proves it is
+/// neither listed nor removed. The cost of getting this wrong is someone
+/// else's work, which is why it's pinned rather than left to the filter
+/// being obviously right.
+#[test]
+#[ignore]
+fn all_projects_never_reaches_containers_ratect_did_not_create() {
+    let name = "ratect-bystander-test";
+    let _ = Command::new("docker").args(["rm", "-f", name]).output();
+    let started = Command::new("docker")
+        .args(["run", "-d", "--name", name, "alpine:3.18.2", "sleep", "120"])
+        .output()
+        .expect("failed to start the bystander container");
+    assert!(
+        started.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+
+    let listed = ratect_command()
+        .arg("-f")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/resources.yml"))
+        .args(["resources", "list", "--all-projects", "-o", "quiet"])
+        .output()
+        .expect("failed to run ratect");
+    let ids = String::from_utf8_lossy(&listed.stdout).to_string();
+
+    let cleaned = ratect_command()
+        .arg("-f")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/resources.yml"))
+        .args(["resources", "clean", "--all-projects"])
+        .output()
+        .expect("failed to run ratect");
+
+    let survived = Command::new("docker")
+        .args([
+            "container",
+            "ls",
+            "-a",
+            "--filter",
+            &format!("name={name}"),
+            "--format",
+            "{{.Names}}",
+        ])
+        .output()
+        .expect("failed to check the bystander container");
+    let survived = String::from_utf8_lossy(&survived.stdout).trim().to_string();
+    let _ = Command::new("docker").args(["rm", "-f", name]).output();
+
+    assert!(cleaned.status.success());
+    // Docker's own networks carry no labels, so a key-existence filter
+    // excludes them; an unfiltered listing would have included all three.
+    for builtin in ["bridge", "host", "none"] {
+        let exists = Command::new("docker")
+            .args(["network", "inspect", builtin, "--format", "{{.Name}}"])
+            .output()
+            .expect("failed to inspect a built-in network");
+        assert!(exists.status.success(), "{builtin} should still exist");
+    }
+    assert_eq!(
+        survived, name,
+        "a container Ratect never created must survive `clean --all-projects`"
+    );
+    assert!(
+        !ids.contains(name),
+        "it should not have been listed either:\n{ids}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
 /// The whole point of the labels, end to end: strand a run's resources with
 /// `--no-cleanup-after-success` — one of the real ways leftovers happen —
 /// then find them again and remove them, without the configuration having

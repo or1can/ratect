@@ -236,19 +236,25 @@ fn build_devices(
 /// Builds Docker's `HostConfig.tmpfs` from already-expanded
 /// `(container_path, options)` pairs — pure, unit-testable without a daemon.
 /// `None` when `tmpfs` itself is `None`. A repeated `container_path` last-one-
-/// Docker's own `label=key=value` filter form, for
-/// [`ContainerRuntime::list_containers`]/[`list_networks`](ContainerRuntime::list_networks).
-/// Repeating the key ANDs the values, which is what Docker's API does with
-/// a list under one filter name — so an empty slice means "no filter", i.e.
-/// everything.
-fn label_filters(labels: &[(&str, &str)]) -> HashMap<String, Vec<String>> {
+/// Docker's own label filter form, for
+/// [`ContainerRuntime::list_containers`]/[`list_networks`](ContainerRuntime::list_networks):
+/// `key=value` for an exact match, or a bare `key` for "has this label at
+/// all". Docker ANDs the values under one filter name, so several entries
+/// mean all of them must match.
+///
+/// An empty slice means no filter — every resource on the daemon. See the
+/// trait methods' own warnings about that.
+fn label_filters(labels: &[(&str, Option<&str>)]) -> HashMap<String, Vec<String>> {
     let mut filters = HashMap::new();
     if !labels.is_empty() {
         filters.insert(
             "label".to_string(),
             labels
                 .iter()
-                .map(|(key, value)| format!("{key}={value}"))
+                .map(|(key, value)| match value {
+                    Some(value) => format!("{key}={value}"),
+                    None => key.to_string(),
+                })
                 .collect(),
         );
     }
@@ -1365,20 +1371,37 @@ pub trait ContainerRuntime {
     /// same way Batect's own `CleanupCachesCommand` does.
     async fn list_volumes(&self) -> Result<Vec<String>>;
 
-    /// Containers carrying every one of `labels` (a `key=value` AND, the
-    /// same semantics as `docker ps --filter label=...` repeated), whether
-    /// running or not — a leftover has usually exited, so listing only
-    /// running ones would miss most of what's being looked for.
+    /// Containers carrying every one of `labels`, whether running or not —
+    /// a leftover has usually exited, so listing only running ones would
+    /// miss most of what's being looked for.
+    ///
+    /// Each entry is a key and an optional value: `Some` matches that exact
+    /// value, `None` matches merely *having* the key, which is Docker's own
+    /// `label=key` filter form. The `None` form is what "every project"
+    /// means — every project *Ratect* created, not every container on the
+    /// machine.
+    ///
+    /// An empty slice therefore means no filter at all, i.e. everything on
+    /// the daemon. That is almost never what a caller wants; anything that
+    /// might remove what it finds should pass at least a key-existence
+    /// filter.
     ///
     /// Filtering happens daemon-side rather than by listing everything and
     /// matching here: on a machine with thousands of containers that's the
     /// difference between one cheap query and a large response, and Docker
     /// implements exactly this filter natively.
-    async fn list_containers(&self, labels: &[(&str, &str)]) -> Result<Vec<LabelledResource>>;
+    async fn list_containers(
+        &self,
+        labels: &[(&str, Option<&str>)],
+    ) -> Result<Vec<LabelledResource>>;
 
     /// Networks carrying every one of `labels` — the counterpart of
-    /// [`list_containers`](Self::list_containers).
-    async fn list_networks(&self, labels: &[(&str, &str)]) -> Result<Vec<LabelledResource>>;
+    /// [`list_containers`](Self::list_containers), with the same warning
+    /// about an empty slice. Docker's own built-in `bridge`/`host`/`none`
+    /// networks carry no labels at all, so any key-existence filter
+    /// excludes them; an unfiltered call does not.
+    async fn list_networks(&self, labels: &[(&str, Option<&str>)])
+        -> Result<Vec<LabelledResource>>;
 
     /// Removes the named Docker volume — used by
     /// `--clean`/`--clean-cache` once `list_volumes` has identified it as
@@ -2734,7 +2757,10 @@ impl ContainerRuntime for DockerClient {
         Ok(())
     }
 
-    async fn list_containers(&self, labels: &[(&str, &str)]) -> Result<Vec<LabelledResource>> {
+    async fn list_containers(
+        &self,
+        labels: &[(&str, Option<&str>)],
+    ) -> Result<Vec<LabelledResource>> {
         let options = bollard::query_parameters::ListContainersOptions {
             // Leftovers have usually exited; without this they'd be
             // invisible, which is most of the point.
@@ -2764,7 +2790,10 @@ impl ContainerRuntime for DockerClient {
             .collect())
     }
 
-    async fn list_networks(&self, labels: &[(&str, &str)]) -> Result<Vec<LabelledResource>> {
+    async fn list_networks(
+        &self,
+        labels: &[(&str, Option<&str>)],
+    ) -> Result<Vec<LabelledResource>> {
         let options = bollard::query_parameters::ListNetworksOptions {
             filters: Some(label_filters(labels)),
         };
@@ -3193,7 +3222,10 @@ mod tests {
     /// run's.
     #[test]
     fn label_filters_and_every_pair_under_one_filter_name() {
-        let filters = label_filters(&[("eu.orican.ratect.project", "demo"), ("x.y", "z")]);
+        let filters = label_filters(&[
+            ("eu.orican.ratect.project", Some("demo")),
+            ("x.y", Some("z")),
+        ]);
         assert_eq!(
             filters,
             HashMap::from([(
@@ -3206,8 +3238,22 @@ mod tests {
         );
     }
 
+    /// A key with no value is Docker's "has this label" filter — the form
+    /// that makes "every project" mean every project *Ratect* created,
+    /// rather than every container on the machine.
+    #[test]
+    fn a_label_with_no_value_filters_on_the_key_alone() {
+        assert_eq!(
+            label_filters(&[("eu.orican.ratect.project", None)]),
+            HashMap::from([(
+                "label".to_string(),
+                vec!["eu.orican.ratect.project".to_string()]
+            )])
+        );
+    }
+
     /// No filter at all, rather than an empty `label` entry Docker would
-    /// have to interpret.
+    /// have to interpret. Callers are warned off this on the trait methods.
     #[test]
     fn no_labels_means_no_filter() {
         assert!(label_filters(&[]).is_empty());

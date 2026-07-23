@@ -2863,14 +2863,14 @@ mod tests {
         // empty here rather than growing capture state no engine test uses.
         async fn list_containers(
             &self,
-            _labels: &[(&str, &str)],
+            _labels: &[(&str, Option<&str>)],
         ) -> Result<Vec<crate::docker::LabelledResource>> {
             Ok(Vec::new())
         }
 
         async fn list_networks(
             &self,
-            _labels: &[(&str, &str)],
+            _labels: &[(&str, Option<&str>)],
         ) -> Result<Vec<crate::docker::LabelledResource>> {
             Ok(Vec::new())
         }
