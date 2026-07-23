@@ -204,6 +204,14 @@ Ratect is a **Cargo workspace** with four crates (the
     working directory. `list_volumes`/`remove_volume` (0.18.0, `--clean`/
     `--clean-cache`) are thin wrappers over bollard's own volume API — see
     `cache.rs` for the actual removal-decision logic built on top of them.
+    `list_containers`/`list_networks` (0.2.0-dev) are the equivalent pair for
+    finding what a previous run left behind, both returning the same
+    `LabelledResource` (a container and a network want reporting identically,
+    so the reporting code isn't written twice) and both filtering *daemon-side*
+    via `label_filters` — Docker ANDs the values under one `label` filter name,
+    which is what makes "this project *and* this run" mean both rather than
+    either. `list_containers` passes `all: true` deliberately: a leftover has
+    usually exited, and Docker's default lists only running containers.
   - **`ratect-core/src/user.rs`**: Host user lookup (`current_user`, via the `nix`
     crate — Unix-only) and the pure `/etc/passwd`/`/etc/shadow`/`/etc/group` content
     generators `docker.rs` uses — ported from Batect's

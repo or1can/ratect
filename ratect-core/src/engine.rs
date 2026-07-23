@@ -2858,6 +2858,23 @@ mod tests {
             Ok(Vec::new())
         }
 
+        // The engine never lists containers or networks — that's the
+        // `resources` verb's business, driven from a binary — so these stay
+        // empty here rather than growing capture state no engine test uses.
+        async fn list_containers(
+            &self,
+            _labels: &[(&str, &str)],
+        ) -> Result<Vec<crate::docker::LabelledResource>> {
+            Ok(Vec::new())
+        }
+
+        async fn list_networks(
+            &self,
+            _labels: &[(&str, &str)],
+        ) -> Result<Vec<crate::docker::LabelledResource>> {
+            Ok(Vec::new())
+        }
+
         async fn remove_volume(&self, _name: &str) -> Result<()> {
             Ok(())
         }

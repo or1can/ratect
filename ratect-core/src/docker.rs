@@ -236,6 +236,25 @@ fn build_devices(
 /// Builds Docker's `HostConfig.tmpfs` from already-expanded
 /// `(container_path, options)` pairs — pure, unit-testable without a daemon.
 /// `None` when `tmpfs` itself is `None`. A repeated `container_path` last-one-
+/// Docker's own `label=key=value` filter form, for
+/// [`ContainerRuntime::list_containers`]/[`list_networks`](ContainerRuntime::list_networks).
+/// Repeating the key ANDs the values, which is what Docker's API does with
+/// a list under one filter name — so an empty slice means "no filter", i.e.
+/// everything.
+fn label_filters(labels: &[(&str, &str)]) -> HashMap<String, Vec<String>> {
+    let mut filters = HashMap::new();
+    if !labels.is_empty() {
+        filters.insert(
+            "label".to_string(),
+            labels
+                .iter()
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect(),
+        );
+    }
+    filters
+}
+
 /// How Ratect removes every container it created — `v: true` above all,
 /// matching Batect's own `removeContainer(..., force = true,
 /// removeVolumes = true)`.
@@ -287,6 +306,27 @@ fn build_log_config(
         typ: Some(log_driver.to_string()),
         config: log_options.cloned(),
     })
+}
+
+/// One Docker resource Ratect created, as found again by its own labels —
+/// see [`crate::labels`]. Deliberately the same shape for a container and a
+/// network: what the caller wants to say about either is the same ("this,
+/// from that task, that long ago"), and keeping one type means the
+/// reporting code isn't written twice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LabelledResource {
+    pub id: String,
+    /// Docker's own name — random words for a container (which is why the
+    /// `container` label exists), `ratect-<run id>` for a network.
+    pub name: String,
+    pub labels: HashMap<String, String>,
+    /// When Docker created it, in seconds since the Unix epoch. Docker
+    /// records this itself for both kinds, so nothing needs a label for it.
+    /// `None` only if the daemon didn't report it.
+    pub created: Option<i64>,
+    /// A container's state (`running`, `exited`, ...) as Docker reports it;
+    /// always `None` for a network, which doesn't have one.
+    pub state: Option<String>,
 }
 
 /// Per-container network-facing options shared by `run_container` and
@@ -1324,6 +1364,21 @@ pub trait ContainerRuntime {
     /// them. No filtering here; the caller matches the prefix itself, the
     /// same way Batect's own `CleanupCachesCommand` does.
     async fn list_volumes(&self) -> Result<Vec<String>>;
+
+    /// Containers carrying every one of `labels` (a `key=value` AND, the
+    /// same semantics as `docker ps --filter label=...` repeated), whether
+    /// running or not — a leftover has usually exited, so listing only
+    /// running ones would miss most of what's being looked for.
+    ///
+    /// Filtering happens daemon-side rather than by listing everything and
+    /// matching here: on a machine with thousands of containers that's the
+    /// difference between one cheap query and a large response, and Docker
+    /// implements exactly this filter natively.
+    async fn list_containers(&self, labels: &[(&str, &str)]) -> Result<Vec<LabelledResource>>;
+
+    /// Networks carrying every one of `labels` — the counterpart of
+    /// [`list_containers`](Self::list_containers).
+    async fn list_networks(&self, labels: &[(&str, &str)]) -> Result<Vec<LabelledResource>>;
 
     /// Removes the named Docker volume — used by
     /// `--clean`/`--clean-cache` once `list_volumes` has identified it as
@@ -2679,6 +2734,57 @@ impl ContainerRuntime for DockerClient {
         Ok(())
     }
 
+    async fn list_containers(&self, labels: &[(&str, &str)]) -> Result<Vec<LabelledResource>> {
+        let options = bollard::query_parameters::ListContainersOptions {
+            // Leftovers have usually exited; without this they'd be
+            // invisible, which is most of the point.
+            all: true,
+            filters: Some(label_filters(labels)),
+            ..Default::default()
+        };
+        let containers = self
+            .docker
+            .list_containers(Some(options))
+            .await
+            .context("Failed to list Docker containers")?;
+        Ok(containers
+            .into_iter()
+            .map(|container| LabelledResource {
+                id: container.id.unwrap_or_default(),
+                name: container
+                    .names
+                    .and_then(|names| names.into_iter().next())
+                    // Docker reports container names with a leading slash.
+                    .map(|name| name.trim_start_matches('/').to_string())
+                    .unwrap_or_default(),
+                labels: container.labels.unwrap_or_default(),
+                created: container.created,
+                state: container.state.map(|state| state.to_string()),
+            })
+            .collect())
+    }
+
+    async fn list_networks(&self, labels: &[(&str, &str)]) -> Result<Vec<LabelledResource>> {
+        let options = bollard::query_parameters::ListNetworksOptions {
+            filters: Some(label_filters(labels)),
+        };
+        let networks = self
+            .docker
+            .list_networks(Some(options))
+            .await
+            .context("Failed to list Docker networks")?;
+        Ok(networks
+            .into_iter()
+            .map(|network| LabelledResource {
+                id: network.id.unwrap_or_default(),
+                name: network.name.unwrap_or_default(),
+                labels: network.labels.unwrap_or_default(),
+                created: network.created.map(|created| created.timestamp()),
+                state: None,
+            })
+            .collect())
+    }
+
     async fn list_volumes(&self) -> Result<Vec<String>> {
         let response = self
             .docker
@@ -3079,6 +3185,32 @@ mod tests {
     #[test]
     fn build_devices_is_none_when_devices_is_absent() {
         assert_eq!(build_devices(None), None);
+    }
+
+    /// Docker ANDs the values under one filter name, which is what makes
+    /// `project=x` plus `run=y` mean "both" rather than "either" — the
+    /// difference between finding one run's resources and finding every
+    /// run's.
+    #[test]
+    fn label_filters_and_every_pair_under_one_filter_name() {
+        let filters = label_filters(&[("eu.orican.ratect.project", "demo"), ("x.y", "z")]);
+        assert_eq!(
+            filters,
+            HashMap::from([(
+                "label".to_string(),
+                vec![
+                    "eu.orican.ratect.project=demo".to_string(),
+                    "x.y=z".to_string()
+                ]
+            )])
+        );
+    }
+
+    /// No filter at all, rather than an empty `label` entry Docker would
+    /// have to interpret.
+    #[test]
+    fn no_labels_means_no_filter() {
+        assert!(label_filters(&[]).is_empty());
     }
 
     #[test]
