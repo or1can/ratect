@@ -1,0 +1,21 @@
+# Its own project name, deliberately: the labels test finds what a run
+# created by filtering on `eu.orican.ratect.project`, and the Docker tests
+# run concurrently — sharing `sidecar.yml`'s project name (as this test first
+# did) meant intermittently finding the containers of whichever other test
+# was using that fixture at the same moment.
+#
+# One dependency is enough to prove the `role` label distinguishes the task's
+# own container from the rest; `sidecar.yml` covers deeper graphs.
+project_name: ratect-labels-test
+containers:
+  database:
+    image: redis:7-alpine
+  app:
+    image: alpine:3.18.2
+    dependencies:
+      - database
+tasks:
+  check:
+    run:
+      container: app
+      command: echo checked

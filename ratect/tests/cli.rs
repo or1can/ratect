@@ -107,9 +107,18 @@ fn an_unknown_subcommand_is_rejected_with_the_usage_message() {
 fn project_with_directory_caches(names: &[&str]) -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Timestamped as well as pid-and-counter keyed, matching
+    // `ratect-core`'s own `unique_temp_dir`: a test that fails part-way
+    // leaves its directory behind, and process ids do get reused, so
+    // without this a later run could inherit an earlier one's caches and
+    // see state it never created.
     let directory = std::env::temp_dir().join(format!(
-        "ratect-caches-test-{}-{}",
+        "ratect-caches-test-{}-{}-{}",
         std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
         count
     ));
     for name in names {
@@ -267,6 +276,83 @@ fn run_executes_a_task_via_docker() {
         "the task's own command output should reach stdout:\n{}",
         String::from_utf8_lossy(&output.stdout)
     );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// The ownership labels themselves are `ratect-core`'s, proven end to end in
+/// `ratect-compat`'s suite against a graph with dependencies — there's no
+/// value in running the same core behavior twice. What's genuinely per-binary
+/// is the *version*: each `main.rs` passes its own `CARGO_PKG_VERSION` into
+/// `TaskEngineSettings`, because `ratect-core`'s own version isn't what a
+/// user sees from `--version`. Nothing else would fail if `ratect`'s line
+/// were deleted, or made to read the core's version instead — hence this.
+///
+/// Being in `ratect`'s own crate, the test knows exactly which version to
+/// expect, rather than only that *some* version is present.
+#[test]
+#[ignore]
+fn a_run_stamps_this_binarys_own_version_onto_what_it_creates() {
+    // `tests/fixtures/labels.yml` has a project name of its own: these
+    // tests run concurrently, and `tasks.yml`'s project is also used by
+    // `run_executes_a_task_via_docker`, whose container this would
+    // otherwise find alongside its own.
+    let filter = "label=eu.orican.ratect.project=ratect-cli-labels-test";
+
+    let output = ratect_command()
+        .arg("-f")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/labels.yml"))
+        .args(["run", "build", "--no-cleanup-after-success"])
+        .output()
+        .expect("failed to run ratect");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // `-a`: the task's own container has already exited by now, and a bare
+    // `ls` lists only running ones.
+    let listed = Command::new("docker")
+        .args(["container", "ls", "-aq", "--filter", filter])
+        .output()
+        .expect("failed to run docker container ls");
+    let ids: Vec<String> = String::from_utf8_lossy(&listed.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect();
+
+    let versions: Vec<String> = ids
+        .iter()
+        .map(|id| {
+            let inspected = Command::new("docker")
+                .args([
+                    "container",
+                    "inspect",
+                    id,
+                    "--format",
+                    "{{index .Config.Labels \"eu.orican.ratect.version\"}}",
+                ])
+                .output()
+                .expect("failed to run docker container inspect");
+            String::from_utf8_lossy(&inspected.stdout)
+                .trim()
+                .to_string()
+        })
+        .collect();
+
+    // Torn down before asserting, so a failure doesn't strand containers.
+    for id in &ids {
+        let _ = Command::new("docker").args(["rm", "-fv", id]).output();
+    }
+    let _ = Command::new("docker")
+        .args(["network", "prune", "-f", "--filter", filter])
+        .output();
+
+    assert_eq!(ids.len(), 1, "expected the task's own container");
+    assert_eq!(versions, vec![env!("CARGO_PKG_VERSION").to_string()]);
 }
 
 /// Requires a running Docker daemon with network access to pull

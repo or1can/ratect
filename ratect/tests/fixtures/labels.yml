@@ -1,0 +1,13 @@
+# Its own project name, deliberately: the labels test finds what a run
+# created by filtering on `eu.orican.ratect.project`, and the Docker tests
+# run concurrently — sharing a project name with any other fixture would mean
+# finding that test's containers too, intermittently.
+project_name: ratect-cli-labels-test
+containers:
+  build-env:
+    image: alpine:3.18.2
+tasks:
+  build:
+    run:
+      container: build-env
+      command: echo built

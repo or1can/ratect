@@ -874,6 +874,10 @@ fn sidecars_are_reachable_by_name_via_docker() {
 /// `--no-cleanup-after-success` so the containers and network still exist to
 /// be inspected — which is also the case the labels exist to serve, since
 /// that flag is one of the ways leftovers are created deliberately.
+///
+/// Runs against a fixture with a project name of its own: these tests run
+/// concurrently, and filtering by project label would otherwise match
+/// whatever another test using the same fixture had running at that moment.
 #[test]
 #[ignore]
 fn ownership_labels_reach_real_containers_and_networks_via_docker() {
@@ -912,14 +916,15 @@ fn ownership_labels_reach_real_containers_and_networks_via_docker() {
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 
-    let project = "ratect-sidecar-test";
-    let project_filter = format!("label=eu.orican.ratect.project={project}");
+    // `tests/fixtures/labels.yml` has a project name of its own so this
+    // filter can't match a concurrently-running test's containers.
+    let project_filter = "label=eu.orican.ratect.project=ratect-labels-test";
 
     let output = ratect_command()
         .arg("-f")
-        .arg(sidecar_config_path())
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/labels.yml"))
         .arg("--no-cleanup-after-success")
-        .arg("ping-sidecars")
+        .arg("check")
         .output()
         .expect("failed to run ratect");
     assert!(
@@ -928,8 +933,8 @@ fn ownership_labels_reach_real_containers_and_networks_via_docker() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let containers = docker_ids("container", &project_filter);
-    let networks = docker_ids("network", &project_filter);
+    let containers = docker_ids("container", project_filter);
+    let networks = docker_ids("network", project_filter);
 
     // Everything gets torn down before any assertion can fail, so a
     // failure here doesn't leave the daemon full of this test's containers.
@@ -956,10 +961,10 @@ fn ownership_labels_reach_real_containers_and_networks_via_docker() {
         .unwrap_or_default();
     cleanup();
 
-    // `app` plus three redis dependencies (database, cache, metrics).
-    assert_eq!(containers.len(), 4, "expected four labelled containers");
+    // `app` plus its one dependency.
+    assert_eq!(containers.len(), 2, "expected two labelled containers");
     assert_eq!(networks.len(), 1, "expected one labelled network");
-    assert_eq!(task, "ping-sidecars");
+    assert_eq!(task, "check");
     assert_eq!(
         roles.iter().filter(|role| *role == "task").count(),
         1,
@@ -967,8 +972,8 @@ fn ownership_labels_reach_real_containers_and_networks_via_docker() {
     );
     assert_eq!(
         roles.iter().filter(|role| *role == "dependency").count(),
-        3,
-        "the other three are dependencies: {roles:?}"
+        1,
+        "the other is a dependency: {roles:?}"
     );
     assert!(
         runs.windows(2).all(|pair| pair[0] == pair[1]) && !runs[0].is_empty(),
