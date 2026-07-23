@@ -158,6 +158,11 @@ Batect's full flag list, from its [CLI reference](https://github.com/batect/bate
 Batect behavior not implemented in task execution, beyond what's covered by the field
 tables above:
 
+- **Anonymous volume cleanup**: matches Batect — a container is removed with Docker's
+  `v`/`force` options set, so any anonymous volume it created (from a `VOLUME`
+  instruction in its image) goes with it. This was a divergence until 0.21.1: Ratect
+  removed containers with Docker's defaults, leaking one dangling volume per such
+  container per run.
 - **Interactive mode**: supported for the invoked task's own container (never a
   prerequisite's, a dependency's, or a sidecar's) — see
   [Interactive mode](config-reference.md#interactive-mode). A real Docker TTY (raw mode,

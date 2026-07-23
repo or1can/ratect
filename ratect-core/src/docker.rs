@@ -236,6 +236,30 @@ fn build_devices(
 /// Builds Docker's `HostConfig.tmpfs` from already-expanded
 /// `(container_path, options)` pairs — pure, unit-testable without a daemon.
 /// `None` when `tmpfs` itself is `None`. A repeated `container_path` last-one-
+/// How Ratect removes every container it created — `v: true` above all,
+/// matching Batect's own `removeContainer(..., force = true,
+/// removeVolumes = true)`.
+///
+/// Without `v`, Docker's default, every *anonymous* volume a container
+/// created is left behind: any image with a `VOLUME` instruction (which
+/// is most database and cache images — `redis`, `postgres`, `mysql` all
+/// declare one) produces one per container, per run, forever. They're
+/// the worst kind of leftover, too: Docker names them with a random
+/// hash and they carry no labels of ours — Docker creates them
+/// implicitly, so there's no point at which Ratect could mark them —
+/// which makes them the one resource the planned `resources` verb could
+/// never identify. Not creating them is the only fix available.
+///
+/// `force` matches Batect for the same reason it does: the container is
+/// stopped first, but a container that has already exited on its own
+/// (or is still stopping) shouldn't turn cleanup into an error.
+fn remove_container_options() -> bollard::query_parameters::RemoveContainerOptions {
+    bollard::query_parameters::RemoveContainerOptionsBuilder::new()
+        .v(true)
+        .force(true)
+        .build()
+}
+
 /// wins, same as building any other `HashMap` from a list — Docker itself
 /// would reject a container with a genuinely duplicate mount point anyway.
 fn build_tmpfs_mounts(tmpfs: Option<&Vec<(String, String)>>) -> Option<HashMap<String, String>> {
@@ -2636,7 +2660,7 @@ impl ContainerRuntime for DockerClient {
             .await
             .with_context(|| format!("Failed to stop container '{}'", container_id))?;
         self.docker
-            .remove_container(container_id, None)
+            .remove_container(container_id, Some(remove_container_options()))
             .await
             .with_context(|| format!("Failed to remove container '{}'", container_id))?;
         tracing::debug!(container_id, "stopped and removed container");
@@ -2805,7 +2829,9 @@ impl ContainerRuntime for DockerClient {
         };
 
         if remove_on_exit {
-            self.docker.remove_container(&container.id, None).await?;
+            self.docker
+                .remove_container(&container.id, Some(remove_container_options()))
+                .await?;
             tracing::debug!(container_id = %container.id, exit_code, "removed container");
         } else {
             tracing::info!(

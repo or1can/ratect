@@ -989,6 +989,23 @@ Improving the developer experience through better tools and feedback.
   auto-create them — a separate change, only worth making if it buys something
   else.)
 
+  **Anonymous volumes** were the one genuinely invisible leftover, and are fixed
+  at source rather than by this verb: containers are now removed with Docker's
+  `v` option ([0.21.1](#ratect-compat)), so a `VOLUME`-declaring image no longer leaves a dangling
+  volume per container per run. That had to be a fix rather than a feature —
+  Docker names anonymous volumes with a random hash and they can carry no labels
+  (Docker creates them implicitly, so Ratect never sees a point at which to mark
+  one), which makes them the one resource `resources list` could never have
+  identified. The complete inventory this verb covers, then: **containers** and
+  **networks** (labelled, above); **cache volumes** and **cache directories**
+  (`caches`, already shipped); **built images**, which are tagged
+  `<project>-<container>` and are a deliberate cache rather than a leftover —
+  worth *reporting* eventually, never worth deleting by default; **anonymous
+  volumes**, no longer created; **tmpfs mounts** and **exec instances**, which
+  die with their container; and the **Git include cache** under `~/.ratect/incl`,
+  which is host filesystem rather than Docker and has its own sweep plus the
+  management command below.
+
   **Not OCI annotations, deliberately.** `org.opencontainers.image.*` is a fixed
   vocabulary describing an *image's provenance* — `source`, `revision`,
   `created`, `licenses`, `title` — and none of it means "the task that started
