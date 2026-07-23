@@ -1861,6 +1861,22 @@ fn connect(options: &DockerConnectionOptions) -> Result<Docker> {
 }
 
 impl DockerClient {
+    /// The daemon's own version string, and — the actual point — proof
+    /// that it can be reached at all. `DockerClient::new` only builds a
+    /// client; nothing talks to the daemon until the first real call, so
+    /// this is how `ratect doctor` distinguishes "unreachable" from
+    /// "reachable, and here's what it is" without running a task.
+    pub async fn server_version(&self) -> Result<String> {
+        let version = self
+            .docker
+            .version()
+            .await
+            .context("Failed to reach the Docker daemon")?;
+        Ok(version
+            .version
+            .unwrap_or_else(|| "unknown version".to_string()))
+    }
+
     pub fn new(connection: &DockerConnectionOptions) -> Result<Self> {
         let docker = connect(connection)?;
         Ok(Self {

@@ -32,7 +32,7 @@ use ratect_core::engine::{TaskEngine, TaskEngineSettings};
 use ratect_core::ui::{create_event_sink, select_output_style, OutputStyle};
 use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
@@ -122,6 +122,19 @@ enum Command {
         #[command(subcommand)]
         command: ResourcesCommand,
     },
+
+    /// Check this project and this machine for problems, without running
+    /// anything.
+    Doctor(DoctorArgs),
+}
+
+#[derive(ClapArgs, Debug)]
+struct DoctorArgs {
+    #[command(flatten)]
+    config_vars: ConfigVarArgs,
+
+    #[command(flatten)]
+    docker: DockerArgs,
 }
 
 #[derive(Subcommand, Debug)]
@@ -509,6 +522,7 @@ async fn run(cli: Cli) -> Result<()> {
         // Deliberately no `load` call: see `CachesArgs`.
         Command::Caches { command } => manage_caches(command, &global, style).await,
         Command::Resources { command } => manage_resources(command, &global, style).await,
+        Command::Doctor(args) => diagnose(args, &global, style).await,
     }
 }
 
@@ -926,6 +940,246 @@ async fn remove_leftovers(
         println!("Removed {removed} of {}.", leftovers.len());
     }
     Ok(())
+}
+
+/// One thing `doctor` looked at.
+#[derive(Debug, PartialEq, Eq)]
+enum Finding {
+    /// Checked, nothing wrong.
+    Fine(String),
+    /// Works, but is likely to bite — a reproducibility hazard, or a
+    /// readiness gate that isn't really gating anything.
+    Warning(String),
+    /// Will fail a run, or already has.
+    Problem(String),
+}
+
+impl Finding {
+    fn render(&self) -> String {
+        match self {
+            Finding::Fine(message) => format!("  ok      {message}"),
+            Finding::Warning(message) => format!("  warning {message}"),
+            Finding::Problem(message) => format!("  problem {message}"),
+        }
+    }
+}
+
+/// `ratect doctor` — what's wrong with this project, or this machine,
+/// without running a task to find out.
+///
+/// Exits non-zero if anything is a [`Finding::Problem`], so it's usable as
+/// a CI step; warnings never affect the exit code, since a warning is a
+/// judgement about likely trouble rather than a fact about breakage.
+///
+/// Deliberately does the environment checks even when the configuration
+/// itself won't load: "your config is broken *and* your Docker daemon
+/// isn't running" is more useful than being told one and having to fix it
+/// to discover the other.
+async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> Result<()> {
+    let mut findings = Vec::new();
+
+    // Docker first: nothing else about a task can work without it, so it's
+    // the most likely single answer to "why did that fail?".
+    let docker = DockerClient::new(&args.docker.into());
+    let docker = match docker {
+        Ok(docker) => match docker.server_version().await {
+            Ok(version) => {
+                findings.push(Finding::Fine(format!(
+                    "Docker daemon reachable ({version})"
+                )));
+                Some(docker)
+            }
+            Err(error) => {
+                findings.push(Finding::Problem(format!(
+                    "Docker daemon not reachable: {error:#}"
+                )));
+                None
+            }
+        },
+        Err(error) => {
+            findings.push(Finding::Problem(format!(
+                "Docker connection options are unusable: {error:#}"
+            )));
+            None
+        }
+    };
+
+    match load(global, &args.config_vars).await {
+        Ok(project) => {
+            findings.push(Finding::Fine(format!(
+                "{} loads ({} container(s), {} task(s))",
+                global.config_file.display(),
+                project.config.containers.len(),
+                project.config.tasks.len()
+            )));
+            findings.extend(config_findings(&project.config));
+
+            // Leftovers are worth reporting unasked — the whole reason
+            // `resources` exists is that nobody thinks to look.
+            if let Some(docker) = &docker {
+                let filters = [(
+                    ratect_core::labels::PROJECT,
+                    Some(project.config.project_name.as_str()),
+                )];
+                let mut left = docker.list_containers(&filters).await.unwrap_or_default();
+                left.extend(docker.list_networks(&filters).await.unwrap_or_default());
+                if left.is_empty() {
+                    findings.push(Finding::Fine("no leftovers from previous runs".to_string()));
+                } else {
+                    findings.push(Finding::Warning(format!(
+                        "{} resource(s) left over from previous runs — see `ratect resources list`",
+                        left.len()
+                    )));
+                }
+            }
+        }
+        Err(error) => findings.push(Finding::Problem(format!(
+            "{} does not load: {error:#}",
+            global.config_file.display()
+        ))),
+    }
+
+    let problems = findings
+        .iter()
+        .filter(|finding| matches!(finding, Finding::Problem(_)))
+        .count();
+    let warnings = findings
+        .iter()
+        .filter(|finding| matches!(finding, Finding::Warning(_)))
+        .count();
+
+    if style == OutputStyle::Quiet {
+        // Quiet is "only what needs acting on", the same contract it has
+        // everywhere else.
+        for finding in findings
+            .iter()
+            .filter(|finding| !matches!(finding, Finding::Fine(_)))
+        {
+            println!("{}", finding.render().trim_start());
+        }
+    } else {
+        println!("Checking {}...", global.config_file.display());
+        for finding in &findings {
+            println!("{}", finding.render());
+        }
+        println!();
+        println!(
+            "{} check(s): {problems} problem(s), {warnings} warning(s).",
+            findings.len()
+        );
+    }
+
+    if problems > 0 {
+        anyhow::bail!("{problems} problem(s) found.");
+    }
+    Ok(())
+}
+
+/// The checks that need only the configuration — pure, so they're testable
+/// without a daemon or a project on disk.
+fn config_findings(config: &ratect_core::config::Config) -> Vec<Finding> {
+    let mut findings = Vec::new();
+
+    // A floating tag defeats the entire point of pinning a task's
+    // environment: the same config gives a different image next week.
+    let mut floating: Vec<&str> = config
+        .containers
+        .iter()
+        .filter(|(_, container)| container.image.as_deref().is_some_and(floating_image_tag))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    floating.sort_unstable();
+    for name in floating {
+        findings.push(Finding::Warning(format!(
+            "container '{name}' uses a floating image tag — pin it, or the same \
+             configuration will run a different image later"
+        )));
+    }
+
+    // A dependency with no health check counts as ready the moment it
+    // starts, which is where "connection refused" on the first run comes
+    // from. Ratect can't see whether the *image* defines one, so this is
+    // phrased as something to check rather than something wrong.
+    let mut unguarded: Vec<&str> = dependency_names(config)
+        .into_iter()
+        .filter(|name| {
+            config
+                .containers
+                .get(*name)
+                .is_some_and(|container| container.health_check.is_none())
+        })
+        .collect();
+    unguarded.sort_unstable();
+    for name in unguarded {
+        findings.push(Finding::Warning(format!(
+            "dependency '{name}' has no health_check — unless its image defines one, \
+             it counts as ready the moment it starts"
+        )));
+    }
+
+    // Already resolved to an absolute path by `load_project`, so this is
+    // the path Ratect will actually hand to Docker.
+    let mut missing: Vec<String> = Vec::new();
+    for (name, container) in &config.containers {
+        let Some(directory) = &container.build_directory else {
+            continue;
+        };
+        let directory = Path::new(directory);
+        if !directory.is_dir() {
+            missing.push(format!(
+                "container '{name}' has build_directory '{}', which doesn't exist",
+                directory.display()
+            ));
+            continue;
+        }
+        let dockerfile = directory.join(container.dockerfile.as_deref().unwrap_or("Dockerfile"));
+        if !dockerfile.is_file() {
+            missing.push(format!(
+                "container '{name}' has no '{}' in its build_directory",
+                dockerfile.display()
+            ));
+        }
+    }
+    missing.sort();
+    findings.extend(missing.into_iter().map(Finding::Problem));
+
+    findings
+}
+
+/// `image` with no tag at all, or an explicitly floating one. Docker treats
+/// a missing tag as `latest`, so both are the same hazard.
+fn floating_image_tag(image: &str) -> bool {
+    // A colon before the last slash is a registry port, not a tag —
+    // `registry:5000/app` is untagged.
+    let tag = match image.rsplit_once('/') {
+        Some((_, last)) => last.rsplit_once(':').map(|(_, tag)| tag),
+        None => image.rsplit_once(':').map(|(_, tag)| tag),
+    };
+    match tag {
+        None => true,
+        Some(tag) => tag == "latest",
+    }
+}
+
+/// Every container named as a dependency, by another container or by a
+/// task — the ones whose readiness actually gates something.
+fn dependency_names(config: &ratect_core::config::Config) -> Vec<&str> {
+    let mut names: Vec<&str> = config
+        .containers
+        .values()
+        .filter_map(|container| container.dependencies.as_ref())
+        .chain(
+            config
+                .tasks
+                .values()
+                .filter_map(|task| task.dependencies.as_ref()),
+        )
+        .flatten()
+        .map(String::as_str)
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
 }
 
 /// The terminal facts every output decision is made from, read once per
@@ -1395,6 +1649,185 @@ mod tests {
         assert_eq!(leftover.run, "unknown");
         // Falls back to Docker's own name when there's no container label.
         assert_eq!(leftover.describe(), "container some_name (running)");
+    }
+
+    #[test]
+    fn doctor_is_its_own_verb_and_reaches_a_daemon() {
+        assert!(matches!(
+            Cli::try_parse_from(["ratect", "doctor"]).unwrap().command,
+            Command::Doctor(_)
+        ));
+        // It checks the daemon, so it takes the options for reaching one.
+        assert!(
+            Cli::try_parse_from(["ratect", "doctor", "--docker-host", "tcp://example:2376"])
+                .is_ok()
+        );
+    }
+
+    /// Docker treats a missing tag as `latest`, so both are the same
+    /// reproducibility hazard — and a registry port is a colon that isn't
+    /// a tag, which is the case that makes this worth a function.
+    #[test]
+    fn a_floating_image_tag_is_latest_or_no_tag_at_all() {
+        assert!(floating_image_tag("alpine"));
+        assert!(floating_image_tag("alpine:latest"));
+        assert!(floating_image_tag("registry.example.com/team/app"));
+        assert!(floating_image_tag("registry.example.com:5000/team/app"));
+
+        assert!(!floating_image_tag("alpine:3.18.2"));
+        assert!(!floating_image_tag(
+            "registry.example.com:5000/team/app:1.2.3"
+        ));
+        assert!(!floating_image_tag(
+            "alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ));
+    }
+
+    /// Builds a `Config` the way a real invocation does — through
+    /// `load_project` on an actual file — rather than by parsing YAML
+    /// here, which would need `noyalib` as a dependency of this binary and
+    /// duplicate knowledge that belongs to `ratect-core`. It also means
+    /// `build_directory` paths are resolved exactly as they will be at run
+    /// time, which one of these checks depends on.
+    async fn config_with(yaml: &str) -> ratect_core::config::Config {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "ratect-doctor-test-{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            count
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("batect.yml");
+        std::fs::write(&path, yaml).unwrap();
+
+        let project = load_project(&path, &HashMap::new())
+            .await
+            .expect("fixture config should load");
+        std::fs::remove_dir_all(&directory).unwrap();
+        project.config
+    }
+
+    #[tokio::test]
+    async fn doctor_warns_about_floating_tags_and_unguarded_dependencies() {
+        let config = config_with(
+            r#"
+project_name: demo
+containers:
+  database:
+    image: postgres
+  cache:
+    image: redis:7-alpine
+  app:
+    image: alpine:3.18.2
+    dependencies:
+      - database
+      - cache
+tasks:
+  test:
+    run:
+      container: app
+      command: echo hi
+"#,
+        )
+        .await;
+
+        let findings = config_findings(&config);
+        let messages: Vec<String> = findings
+            .iter()
+            .map(|finding| finding.render().trim().to_string())
+            .collect();
+
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("'database'") && m.contains("floating image tag")),
+            "an untagged image is a floating tag: {messages:?}"
+        );
+        assert!(
+            !messages
+                .iter()
+                .any(|m| m.contains("'cache'") && m.contains("floating")),
+            "a pinned tag shouldn't be warned about: {messages:?}"
+        );
+        // Both dependencies lack a health check; the task's own container
+        // isn't a dependency and so isn't gating anything.
+        assert!(messages
+            .iter()
+            .any(|m| m.contains("'cache'") && m.contains("health_check")));
+        assert!(messages
+            .iter()
+            .any(|m| m.contains("'database'") && m.contains("health_check")));
+        assert!(
+            !messages
+                .iter()
+                .any(|m| m.contains("'app'") && m.contains("health_check")),
+            "the task's own container gates nothing: {messages:?}"
+        );
+        assert!(
+            findings.iter().all(|f| !matches!(f, Finding::Problem(_))),
+            "none of this stops a run: {messages:?}"
+        );
+    }
+
+    /// A build directory that isn't there fails the run, so it's a problem
+    /// rather than a warning — and `doctor` exits non-zero on those, which
+    /// is what makes it usable as a CI step.
+    #[tokio::test]
+    async fn a_missing_build_directory_is_a_problem() {
+        let config = config_with(
+            r#"
+project_name: demo
+containers:
+  app:
+    build_directory: /nonexistent/build/context
+tasks:
+  test:
+    run:
+      container: app
+      command: echo hi
+"#,
+        )
+        .await;
+
+        let findings = config_findings(&config);
+        assert!(
+            findings.iter().any(|finding| matches!(
+                finding,
+                Finding::Problem(message) if message.contains("build_directory") && message.contains("doesn't exist")
+            )),
+            "{findings:?}"
+        );
+    }
+
+    /// A container named only by a *task*'s `dependencies` gates that task
+    /// just as much as a container-level one.
+    #[tokio::test]
+    async fn a_task_level_dependency_counts_as_a_dependency() {
+        let config = config_with(
+            r#"
+project_name: demo
+containers:
+  queue:
+    image: redis:7-alpine
+  app:
+    image: alpine:3.18.2
+tasks:
+  test:
+    run:
+      container: app
+      command: echo hi
+    dependencies:
+      - queue
+"#,
+        )
+        .await;
+
+        assert_eq!(dependency_names(&config), vec!["queue"]);
     }
 
     /// `caches` locates a project by directory, never by reading its

@@ -101,6 +101,65 @@ fn an_unknown_subcommand_is_rejected_with_the_usage_message() {
     );
 }
 
+/// `doctor` is meant to be usable as a CI step, which means its exit code
+/// has to mean something: non-zero when it found something that will fail a
+/// run, zero when it only found things worth knowing.
+#[test]
+fn doctor_exits_non_zero_only_for_problems() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(fixture_path())
+        .arg("doctor")
+        .output()
+        .expect("failed to run ratect");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Matched on a finding *line*, not the word: the summary line always
+    // says "N problem(s)", so a substring search takes the wrong branch
+    // even when N is zero.
+    let found_a_problem = stdout
+        .lines()
+        .any(|line| line.trim_start().starts_with("problem "));
+
+    // This fixture pins its image and has no dependencies, so the only
+    // thing that can fail here is the Docker check — which may legitimately
+    // fail on a machine with no daemon, and that's a problem by design.
+    if found_a_problem {
+        assert!(
+            !output.status.success(),
+            "a reported problem must fail the command:\n{stdout}"
+        );
+    } else {
+        assert!(
+            output.status.success(),
+            "no problems means success:\n{stdout}"
+        );
+    }
+}
+
+#[test]
+fn doctor_reports_a_config_that_does_not_load_as_a_problem() {
+    let output = ratect_command()
+        .args(["-f", "/nonexistent/batect.yml", "doctor"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("problem ")
+                && line.contains("does not load")),
+        "the missing config should be reported as a problem:\n{stdout}"
+    );
+    // The daemon check still ran: being told both at once is the point.
+    assert!(
+        stdout.contains("Docker daemon"),
+        "the environment checks shouldn't be skipped because the config is broken:\n{stdout}"
+    );
+}
+
 /// A scratch project directory containing `.batect/caches/<name>` for each
 /// name given — the on-disk shape `--cache-type directory` acts on, which
 /// makes the whole `caches` verb testable without a Docker daemon.

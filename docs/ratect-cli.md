@@ -23,6 +23,7 @@ one.
 | `ratect caches clean [NAME...]` | Removes this project's caches, or just the named ones. |
 | `ratect resources list` | Lists containers and networks left over from previous runs. |
 | `ratect resources clean` | Removes them. |
+| `ratect doctor` | Checks this project and this machine for problems, without running anything. |
 
 There is deliberately **no `ratect <task>` shorthand**. `ratect-compat` takes a task
 name as a bare positional argument, which works only because it has no subcommands;
@@ -37,6 +38,7 @@ ratect caches list
 ratect caches clean gradle-cache
 ratect resources list
 ratect resources clean --older-than 1d
+ratect doctor
 ```
 
 ## Global options
@@ -157,6 +159,38 @@ Nothing without Ratect's own labels is ever listed or removed, `--all-projects`
 included: containers started by other tools, and Docker's built-in `bridge`/`host`/
 `none` networks, are invisible to both commands.
 
+## `doctor`
+
+Answers "why did that fail?", or "will it?", without running a task:
+
+```
+$ ratect doctor
+Checking batect.yml...
+  ok      Docker daemon reachable (29.4.0)
+  ok      batect.yml loads (3 container(s), 1 task(s))
+  warning container 'database' uses a floating image tag — pin it, or the same configuration will run a different image later
+  warning dependency 'cache' has no health_check — unless its image defines one, it counts as ready the moment it starts
+  problem container 'app' has build_directory '/project/missing-dir', which doesn't exist
+  warning 4 resource(s) left over from previous runs — see `ratect resources list`
+
+6 check(s): 1 problem(s), 3 warning(s).
+```
+
+A **problem** will fail a run — an unreachable daemon, a configuration that doesn't
+load, a missing `build_directory` or Dockerfile. A **warning** works but is likely to
+bite: a floating image tag (`latest`, or no tag at all) means the same configuration
+runs a different image next week, and a dependency with no `health_check` counts as
+ready the moment it starts unless its image defines one, which is where "connection
+refused" on the first run comes from.
+
+`doctor` **exits non-zero if it found any problem**, and zero for warnings alone, so
+it works as a CI step. Under `-o quiet` it prints only warnings and problems.
+
+The environment checks run even when the configuration itself won't load —
+"your config is broken *and* your daemon isn't running" is more useful than fixing
+one to discover the other. It also reports leftovers unprompted, since the whole
+reason [`resources`](#resources-options) exists is that nobody thinks to look.
+
 ## Exit codes and diagnostics
 
 Identical to `ratect-compat`: a task's own container exit code becomes `ratect`'s exit
@@ -174,6 +208,7 @@ redirect stderr if you want one.
 | Cache cleanup | `--clean`/`--clean-cache` | `ratect caches clean [NAME...]` |
 | Listing caches | not available | `ratect caches list` |
 | Finding leftovers from a previous run | not available | `ratect resources list`/`clean` |
+| Checking a project without running it | not available | `ratect doctor` |
 | Batect-inert flags (`--upgrade`, `--no-update-notification`, `--no-wrapper-cache-cleanup`) | accepted, no effect | not offered |
 | `--log-file` | supported | not offered |
 | Configuration | `batect.yml` | `batect.yml` today; own format planned |
