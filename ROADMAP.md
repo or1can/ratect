@@ -1102,7 +1102,8 @@ Improving the developer experience through better tools and feedback.
   differs from those two.
 - **Improved Progress UI**: Output-mode selection with terminal-capability auto-detection and a live per-container progress display shipped as `ratect-compat` [0.16.0](#ratect-compat) (they were Batect parity work); what remains here is going *beyond* Batect — e.g. build context upload progress, richer pull progress (per-layer byte counts), and any `ratect`-binary-specific presentation ideas.
 - **Watch Mode**: Automatically re-running tasks when source files change.
-- **Git-include cache management**: a manual command to list/evict entries from
+- **Git-include cache management** (`ratect includes list`/`clean`/`refresh`,
+  scoped but not built): a manual command to list/evict entries from
   `~/.ratect/incl` on demand, beyond 0.19.0's automatic 30-day sweep — e.g. force
   a re-clone of one repo without waiting on the sweep, or free disk space
   immediately. **`ratect`-only**, same reasoning as "Restrict Nested Git
@@ -1117,6 +1118,43 @@ Improving the developer experience through better tools and feedback.
 Exploring innovative features that go beyond the original Batect, as well as planned improvements from the Batect roadmap.
 
 - ~~**Alternative Configuration Format (TOML)**: Undecided, exploratory. TOML is a more typical configuration format for Rust projects than YAML. If pursued, this would apply only to the [`ratect` binary](#two-binaries-ratect-and-ratect-compat) — `ratect-compat` stays YAML-only for Batect compatibility — and would need a migration path for projects moving from `ratect-compat`'s YAML config.~~ — scoped into `ratect` [0.3.0](#ratect), including the schema redesign (an `extends` field replacing YAML anchors, one object shape per `volumes`/`ports`/`devices`/`include` entry) needed regardless of the exact format chosen. Migration tooling from `ratect-compat`'s YAML remains unscheduled — see the `### ratect` versioned list.
+
+  **Scope, settled before building:**
+
+  - **`refresh` is the valuable one, not `list`.** `ensure_cached`'s
+    `clone_if_missing` returns early when the working copy exists, so a
+    `(remote, ref)` pair is cloned once and then frozen — permanently. If `ref`
+    is a branch, a project silently keeps using whatever that branch pointed at
+    the first time, and the 30-day sweep never rescues it, because the sweep
+    removes entries that go *unused* and an actively-used include never goes
+    stale. Today's only remedy is deleting a hashed directory by hand. Batect is
+    identical here (`cloneRepoIfMissing` checks `Files.exists` and nothing else),
+    so this is an enhancement rather than a parity gap — consistent with this
+    whole bullet being `ratect`-only.
+  - **It's a *global* cache, unlike `caches`/`resources`.** `~/.ratect/incl` is
+    shared by every project on the machine, so there's no project scoping to
+    offer and no `--all-projects` to add: `clean` here necessarily affects other
+    projects' includes. That cuts both ways — wider reach than anything else
+    Ratect removes, but everything in it is re-cloneable, so the worst case is a
+    network fetch rather than lost work. No confirmation prompt for that reason,
+    unlike the one deferred for `resources clean`.
+  - **The lock is a requirement, not a nicety.** `ensure_cached` takes a
+    per-entry lock file around cloning; `clean`/`refresh` have to take the same
+    one, or they can delete a directory another `ratect` process is cloning into
+    or reading. This is the fiddly part of the work, and the reason the removal
+    logic belongs in `git_include.rs` beside the lock rather than in the binary.
+  - **Shape**, mirroring `caches`: `includes list` (remote, ref, path, last used,
+    size on disk), `includes clean [--older-than <age>]`, `includes refresh
+    [<remote>...]`. Named `includes` after the `include:` config field — what a
+    user actually types — rather than Batect's "bundles" or the `incl` directory
+    name. Core owns listing/removal/refresh (like `cache.rs` does for caches);
+    the binary owns presentation.
+
+  **Still to decide:** whether `clean` with no arguments removes everything (as
+  `caches clean` does) or only stale entries, given "everything" here is
+  machine-wide; whether `refresh` takes a remote filter or always does the lot;
+  and whether `list` walks each entry for a size, which is the main thing that
+  would make it useful for "why is my disk full" rather than merely informative.
 - **Restrict Nested Git Includes**: **`ratect`-only** — `ratect-compat` must keep Batect's own unrestricted behavior for parity (its `ConfigurationLoader`/`IncludeResolver` have the identical gap: any file, root or reached transitively through a Git include, can declare a further `type: git` include with no restriction on remote). Currently a nested include gets the exact same trust as one the project owner declared themselves — no allowlist, and (post-0.10.0's `container_git_boundaries` fix) a rogue nested include's own containers are at least bounded to its clone directory or the project directory, but the include mechanism itself will still fetch from whatever remote a third-party bundle names. Worth an opt-in gate for `ratect` (e.g. `allow_nested_git_includes`, defaulting `false`) requiring the project owner to consciously accept that a Git-included bundle may itself redirect the process to further remotes. Relatedly worth reconsidering alongside it: whether a nested (non-root-declared) include's clone/checkout failure should keep surfacing git's raw stderr, since the specific transport error (host unreachable vs. connection refused vs. repository-not-found vs. auth-failed) lets repeated attempts fingerprint an internal network — most relevant when `ratect` runs in CI against a bundle whose nested includes a less-trusted contributor can influence, and whose CI logs are visible back to them. Deferred rather than implemented immediately: real projects (including ones outside this one) depend on nested git includes working by default today, and `ratect-compat` has to default this open regardless — squarely a `ratect`-only divergence, not a blocking gap.
 - **Wildcard Includes**: Support for including multiple files using glob patterns (e.g., `include: containers/*.yaml`).
 - **Configuration Merging/Replacement**: Ability to merge or override containers and tasks when including files.
