@@ -915,7 +915,113 @@ Leveraging Rust's strengths to provide a superior experience compared to the ori
 
 Improving the developer experience through better tools and feedback.
 
-- **`ratect doctor`**: A built-in linter and diagnostic tool to validate configuration and environment setup. This will include checks for `latest` image tags, missing health checks on dependencies, and host-container permission issues.
+- **`ratect doctor`**: A built-in linter and diagnostic tool to validate configuration and environment setup. This will include checks for `latest` image tags, missing health checks on dependencies, and host-container permission issues. Should also report anything the orphaned-resource work below finds, since "you have leftovers from a previous run" is exactly the kind of thing you want told without having to ask.
+- **Orphaned-resource discovery** (`ratect resources list`/`clean`, working title):
+  what's still on this machine from a previous run — after a crash, a `docker
+  kill`, a `--no-cleanup`/`--no-cleanup-after-failure` run, or Ratect itself
+  failing to tear down. Today answering "what should I remove?" means reading
+  `docker ps -a` and guessing, which is precisely the complaint.
+
+  **The blocker is that nothing is marked on the way in**, so this is mostly
+  groundwork, not a verb. Containers are created via `create_container(None,
+  config)` — no name, and `labels` carries only what the *user* configured — so a
+  leftover container is identifiable at best by inference (it's attached to a
+  `ratect-<uuid>` network), and under `--use-network` not even that. Batect is no
+  better: `DockerContainerCreationSpecFactory` applies `container.labels` and
+  nothing of its own, and Batect has no cleanup command at all, which is why this
+  has never been answerable. Networks are the one thing that's greppable today,
+  purely by their `ratect-` name prefix — and even they can't be attributed to a
+  project or a task.
+
+  So the work is, in order:
+  1. **Label every resource Ratect creates**, in the shape Docker Compose's own
+     `com.docker.compose.*` labels have — runtime *ownership*, which is a
+     different thing from OCI image annotations (see below):
+
+     | Label | On | Value |
+     | --- | --- | --- |
+     | `eu.orican.ratect.project` | containers, networks | `project_name` |
+     | `eu.orican.ratect.task` | containers, networks | the task being run |
+     | `eu.orican.ratect.run` | containers, networks | the per-run id — the `Uuid` that already names the per-task network, reused rather than minting a second |
+     | `eu.orican.ratect.container` | containers | the *config* container name (`build-env`), since Docker's own name is random |
+     | `eu.orican.ratect.role` | containers | `task` or `dependency` — derivable from the config, but the point is to work without it |
+     | `eu.orican.ratect.version` | containers, networks | the Ratect version that created it, for when the label set itself changes |
+
+     Creation time needs no label: Docker records its own, for both objects.
+     These are *additive* to the user's own `labels` — but on an exact key
+     collision Ratect's win, because they're load-bearing for cleanup and a
+     config that (accidentally or otherwise) set `eu.orican.ratect.run` would
+     otherwise make its own resources unfindable. Namespace:
+     **`eu.orican.ratect.*`** — reverse-DNS of a
+     domain the project already owns, rather than a new `ratect.dev`-style one.
+     Reverse-DNS here is purely a collision-avoidance convention (nothing ever
+     resolves it), so a new domain would buy nothing functional while adding a
+     renewal obligation that a namespace in every `docker inspect` output would
+     then depend on. The one thing that would have justified one — a durable
+     public URL for the committed [JSON schema](schema/batect-config.schema.json),
+     the way Batect used `ide-integration.batect.dev` — doesn't need it either:
+     roughly 35–40% of SchemaStore's own catalog entries are
+     `raw.githubusercontent.com` URLs. A docs site, if Ratect ever gets one, is
+     planned for `ratect.orican.eu` — whose own reverse-DNS is exactly this
+     namespace, so that doesn't reopen the question either, and a schema URL
+     could move there later without touching a single label. Sticky rather than
+     irreversible regardless: the only reader that matters is Ratect
+     itself, so a later version can match a legacy namespace alongside a new one
+     for a release or two and still find older orphans.
+  2. **`ContainerRuntime` gains `list_containers`/`list_networks`** with label
+     filtering (Docker supports `label=key=value` filters natively), alongside
+     today's `list_volumes`.
+  3. **The verb itself**, shaped like `caches`: `resources list` shows what's
+     there — grouped by run, with task name and age, so "these four containers
+     and a network are from `integration-test`, three days ago" is readable at a
+     glance — and `resources clean` removes it. Scoped to the current project by
+     default, with `--all-projects` for the machine-wide sweep, which is the case
+     the complaint is really about.
+
+  One thing labels can't resolve: a *concurrently running* task's containers are
+  labelled identically to an orphan, because they are the same thing until the
+  run ends. `list` reporting age, and `clean` taking `--older-than`, is the
+  honest mitigation; claiming to detect liveness would not be.
+
+  Cache volumes stay outside this: they're deliberate, not leftovers, and
+  `caches` already finds them by name prefix. (They also *can't* carry labels
+  today without creating them explicitly rather than letting a bind mount
+  auto-create them — a separate change, only worth making if it buys something
+  else.)
+
+  **Not OCI annotations, deliberately.** `org.opencontainers.image.*` is a fixed
+  vocabulary describing an *image's provenance* — `source`, `revision`,
+  `created`, `licenses`, `title` — and none of it means "the task that started
+  this container" or "the run it belonged to". There's no OCI key for runtime
+  ownership because OCI doesn't model runtime objects at all; Docker networks
+  aren't OCI objects in the first place, so half of what needs labelling here
+  couldn't carry them regardless. Bending `image.title` to hold a task name
+  would be a misuse of a spec'd key, and the collision risk that reverse-DNS
+  namespacing exists to prevent is precisely what it would create. Docker
+  Compose reached the same conclusion with `com.docker.compose.project`/
+  `.service`, as did Podman with `io.podman.*` — vendor-namespaced ownership
+  labels, alongside OCI annotations rather than instead of them.
+
+  The complementary half is real, though, and stays a separate idea: OCI
+  annotations belong on the images a `build_directory` container *builds*, as
+  the project's own provenance (`source`, `revision`, `created`). Ratect
+  shouldn't invent those — only the project knows its own repository and commit,
+  and guessing by shelling out to `git` in the build context would be wrong as
+  often as right. Today that's a Dockerfile `LABEL`, which already works and
+  needs nothing from Ratect. A config field for build-time image labels (as
+  distinct from `Container.labels`, which applies to the *container*) would be
+  the way to make it ergonomic — `ratect`-only, since Batect has no such field,
+  and worth doing only if someone actually wants it.
+
+  **Both binaries label**, decided: the labelling lives in the shared core, and
+  the difficulty this solves is `ratect-compat` users' difficulty today, since
+  that's the binary anyone actually runs. It's a parity divergence — Batect
+  writes no labels of its own — but a strictly additive one that changes no
+  behavior and can't break a task that starts using `ratect-compat`, in the same
+  family as the `Capability` superset and the UUID cache key. Needs documenting
+  in [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps)
+  as visible-in-`docker inspect` rather than internal, which is the one way it
+  differs from those two.
 - **Improved Progress UI**: Output-mode selection with terminal-capability auto-detection and a live per-container progress display shipped as `ratect-compat` [0.16.0](#ratect-compat) (they were Batect parity work); what remains here is going *beyond* Batect — e.g. build context upload progress, richer pull progress (per-layer byte counts), and any `ratect`-binary-specific presentation ideas.
 - **Watch Mode**: Automatically re-running tasks when source files change.
 - **Git-include cache management**: a manual command to list/evict entries from
