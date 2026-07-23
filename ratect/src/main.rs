@@ -130,6 +130,9 @@ enum ResourcesCommand {
     List(ResourcesArgs),
 
     /// Remove containers and networks left over from previous runs.
+    ///
+    /// `resources list` with the same options is the dry run: it selects
+    /// exactly what this removes.
     Clean(ResourcesArgs),
 }
 
@@ -704,6 +707,11 @@ async fn manage_caches(
 /// sweep avoids tearing down an in-flight run. Claiming to detect liveness
 /// would be a lie — the daemon can't say whether some other `ratect`
 /// process still cares about a container.
+///
+/// There's deliberately no `--dry-run`: `list` and `clean` take the same
+/// [`ResourcesArgs`] and select through this same function, so `list` with
+/// the same options *is* the dry run. A flag would be a second spelling of
+/// an existing command, and a second thing to keep in step with it.
 async fn manage_resources(
     command: ResourcesCommand,
     global: &GlobalArgs,

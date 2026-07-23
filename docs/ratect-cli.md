@@ -134,6 +134,11 @@ words Docker assigns.
 | `--all-projects` | `list`, `clean` | Every *Ratect* project's leftovers, not just this one's — never anything Ratect didn't create. Also the way to use `resources` from outside a project directory, since the project scope is read from the configuration. |
 | `--older-than <AGE>` | `list`, `clean` | Only leftovers older than `AGE` — `90s`, `30m`, `2h`, `7d`. |
 
+**`resources list` is `clean`'s dry run.** Both take the same options and select
+identically, so whatever `list` shows you is exactly what `clean` with those same
+options will remove — there's no separate `--dry-run` because there's nothing for it
+to do differently.
+
 **`--older-than` matters for `clean`.** A task running *right now* carries exactly the
 same labels as a leftover, because until it finishes it is one. Ratect can't tell the
 difference — the daemon can't say whether some other `ratect` process still cares
