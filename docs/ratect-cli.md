@@ -24,6 +24,9 @@ one.
 | `ratect resources list` | Lists containers and networks left over from previous runs. |
 | `ratect resources clean` | Removes them. |
 | `ratect doctor` | Checks this project and this machine for problems, without running anything. |
+| `ratect includes list` | Lists the cached Git includes shared by every project on this machine. |
+| `ratect includes clean [--all]` | Removes cached Git includes. |
+| `ratect includes refresh` | Re-clones them, picking up a `ref` that has moved. |
 
 There is deliberately **no `ratect <task>` shorthand**. `ratect-compat` takes a task
 name as a bare positional argument, which works only because it has no subcommands;
@@ -39,6 +42,8 @@ ratect caches clean gradle-cache
 ratect resources list
 ratect resources clean --older-than 1d
 ratect doctor
+ratect includes list
+ratect includes refresh
 ```
 
 ## Global options
@@ -191,6 +196,41 @@ The environment checks run even when the configuration itself won't load —
 one to discover the other. It also reports leftovers unprompted, since the whole
 reason [`resources`](#resources-options) exists is that nobody thinks to look.
 
+## `includes` options
+
+The Git include cache under `~/.ratect/incl` — where a `type: git`
+[include](config-reference.md#git-includes) is cloned and kept.
+
+```
+$ ratect includes list
+1 cached Git include(s), 16.4 MiB on disk:
+
+  https://github.com/example/shared-tasks.git at v2.1.0
+    16.4 MiB, last used 3 days ago
+```
+
+Unlike [`caches`](#caches-options) and [`resources`](#resources-options), this cache is
+**global** — one directory shared by every project on this machine, keyed by
+`(repo, ref)`. So there's no project scoping, and `clean` reaches other projects'
+includes as well as your own. That matters less than it sounds: everything here is
+re-cloneable, so the worst case is a fetch.
+
+| Command | Description |
+| --- | --- |
+| `includes clean` | Removes includes nothing has used for 30 days — the same threshold the [automatic sweep](config-reference.md#git-includes) applies, done on demand. |
+| `includes clean --older-than <AGE>` | A different threshold (`30m`, `2h`, `7d`). |
+| `includes clean --all` | Everything, regardless of age. |
+| `includes refresh` | Discards every cached clone and fetches it again. |
+
+**`refresh` is how you pick up a moved `ref`.** A `(repo, ref)` pair is cloned once and
+then never re-fetched, so if `ref` is a branch — or a tag someone re-pushed — your
+project keeps using whatever it pointed at the first time, indefinitely. The automatic
+sweep doesn't help, because it removes entries that go *unused*, and an include you're
+actively using never becomes stale. Pinning `ref` to something immutable remains the
+better answer; `refresh` is for when it isn't.
+
+Under `-o quiet`, `list` prints `repo<TAB>ref` per line and nothing else.
+
 ## Exit codes and diagnostics
 
 Identical to `ratect-compat`: a task's own container exit code becomes `ratect`'s exit
@@ -209,6 +249,7 @@ redirect stderr if you want one.
 | Listing caches | not available | `ratect caches list` |
 | Finding leftovers from a previous run | not available | `ratect resources list`/`clean` |
 | Checking a project without running it | not available | `ratect doctor` |
+| Managing the Git include cache | not available (only the automatic sweep) | `ratect includes list`/`clean`/`refresh` |
 | Batect-inert flags (`--upgrade`, `--no-update-notification`, `--no-wrapper-cache-cleanup`) | accepted, no effect | not offered |
 | `--log-file` | supported | not offered |
 | Configuration | `batect.yml` | `batect.yml` today; own format planned |

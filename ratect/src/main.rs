@@ -126,6 +126,39 @@ enum Command {
     /// Check this project and this machine for problems, without running
     /// anything.
     Doctor(DoctorArgs),
+
+    /// Inspect and manage the cache of Git includes shared by every project
+    /// on this machine.
+    Includes {
+        #[command(subcommand)]
+        command: IncludesCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum IncludesCommand {
+    /// List what's in the Git include cache.
+    List,
+
+    /// Remove cached Git includes.
+    Clean(CleanIncludesArgs),
+
+    /// Re-clone every cached Git include, picking up any `ref` that has
+    /// moved since it was first fetched.
+    Refresh,
+}
+
+#[derive(ClapArgs, Debug)]
+struct CleanIncludesArgs {
+    /// Remove every cached include, not just the ones nothing has used
+    /// recently. Nothing is lost that a re-clone can't restore.
+    #[arg(long = "all", conflicts_with = "older_than")]
+    all: bool,
+
+    /// Remove includes unused for longer than this ("30m", "2h", "7d").
+    /// Defaults to the same 30 days the automatic sweep uses.
+    #[arg(long = "older-than", value_parser = parse_age)]
+    older_than: Option<std::time::Duration>,
 }
 
 #[derive(ClapArgs, Debug)]
@@ -523,6 +556,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Caches { command } => manage_caches(command, &global, style).await,
         Command::Resources { command } => manage_resources(command, &global, style).await,
         Command::Doctor(args) => diagnose(args, &global, style).await,
+        Command::Includes { command } => manage_includes(command, style).await,
     }
 }
 
@@ -1182,6 +1216,119 @@ fn dependency_names(config: &ratect_core::config::Config) -> Vec<&str> {
     names
 }
 
+/// `ratect includes list`/`clean`/`refresh` — the Git include cache under
+/// `~/.ratect/incl` (see [`ratect_core::git_include`]).
+///
+/// Unlike `caches` and `resources`, this cache is **global**: one directory
+/// shared by every project on this machine, keyed by `(remote, ref)`. So
+/// there's no project scoping to offer, and `clean` here necessarily
+/// reaches other projects' includes. That's a wider blast radius than
+/// anything else Ratect removes, and simultaneously a much smaller one:
+/// everything in here is re-cloneable, so the worst case of removing too
+/// much is a network fetch, which is why there's no confirmation.
+///
+/// `refresh` is the one that isn't merely convenience. A cached
+/// `(remote, ref)` pair is otherwise frozen for good — `ensure_cached`
+/// clones only when the working copy is missing, and the 30-day sweep never
+/// catches an actively-used entry — so a `ref` that moves (a branch, or a
+/// re-pushed tag) is invisible to a project forever.
+async fn manage_includes(command: IncludesCommand, style: OutputStyle) -> Result<()> {
+    let cache = ratect_core::git_include::GitIncludeCache::new();
+    let quiet = style == OutputStyle::Quiet;
+
+    match command {
+        IncludesCommand::List => {
+            let entries = cache.list().await?;
+            if entries.is_empty() {
+                if !quiet {
+                    println!("No Git includes are cached.");
+                }
+                return Ok(());
+            }
+            if quiet {
+                // Machine-readable, same contract as the other `list`
+                // verbs: the identifying pair, tab-separated.
+                for entry in entries {
+                    println!("{}\t{}", entry.remote, entry.git_ref);
+                }
+                return Ok(());
+            }
+            let total: u64 = entries.iter().map(|entry| entry.size_bytes).sum();
+            println!(
+                "{} cached Git include(s), {} on disk:",
+                entries.len(),
+                format_size(total)
+            );
+            for entry in entries {
+                println!("\n  {} at {}", entry.remote, entry.git_ref);
+                println!(
+                    "    {}, last used {} ago",
+                    format_size(entry.size_bytes),
+                    format_age(age_of(entry.last_used))
+                );
+            }
+        }
+        IncludesCommand::Clean(args) => {
+            // `--all` is really "no minimum age"; the default matches the
+            // automatic sweep, so a bare `clean` does on demand exactly
+            // what Ratect would eventually have done on its own.
+            let minimum_age = if args.all {
+                None
+            } else {
+                Some(args.older_than.unwrap_or(DEFAULT_INCLUDE_STALE_AFTER))
+            };
+            let removed = cache.clean(minimum_age).await?;
+            if !quiet {
+                for entry in &removed {
+                    println!("Removed {} at {}.", entry.remote, entry.git_ref);
+                }
+                println!("Removed {} cached Git include(s).", removed.len());
+            }
+        }
+        IncludesCommand::Refresh => {
+            let refreshed = cache.refresh().await?;
+            if !quiet {
+                for entry in &refreshed {
+                    println!("Re-cloned {} at {}.", entry.remote, entry.git_ref);
+                }
+                println!("Re-cloned {} cached Git include(s).", refreshed.len());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// The default `includes clean` threshold — the same 30 days the automatic
+/// sweep uses, so a manual clean does on demand what would have happened
+/// anyway.
+const DEFAULT_INCLUDE_STALE_AFTER: std::time::Duration =
+    std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
+/// Seconds between `last_used` (Unix seconds, from the entry's sidecar) and
+/// now.
+fn age_of(last_used: u64) -> i64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or(0);
+    now.saturating_sub(last_used) as i64
+}
+
+/// Bytes, rounded to the largest unit that leaves a number worth reading —
+/// nobody sizing up a cache wants "5883494 bytes".
+fn format_size(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * KIB;
+    const GIB: u64 = 1024 * MIB;
+    match bytes {
+        b if b >= GIB => format!("{:.1} GiB", b as f64 / GIB as f64),
+        b if b >= MIB => format!("{:.1} MiB", b as f64 / MIB as f64),
+        b if b >= KIB => format!("{:.1} KiB", b as f64 / KIB as f64),
+        b => format!("{b} B"),
+    }
+}
+
 /// The terminal facts every output decision is made from, read once per
 /// invocation — `select_output_style` and `create_event_sink` both want
 /// them, and querying twice risks answering differently.
@@ -1828,6 +1975,80 @@ tasks:
         .await;
 
         assert_eq!(dependency_names(&config), vec!["queue"]);
+    }
+
+    #[test]
+    fn includes_has_list_clean_and_refresh() {
+        for (arguments, matches) in [
+            (
+                vec!["ratect", "includes", "list"],
+                matches!(
+                    Cli::try_parse_from(["ratect", "includes", "list"])
+                        .unwrap()
+                        .command,
+                    Command::Includes {
+                        command: IncludesCommand::List
+                    }
+                ),
+            ),
+            (
+                vec!["ratect", "includes", "refresh"],
+                matches!(
+                    Cli::try_parse_from(["ratect", "includes", "refresh"])
+                        .unwrap()
+                        .command,
+                    Command::Includes {
+                        command: IncludesCommand::Refresh
+                    }
+                ),
+            ),
+        ] {
+            assert!(matches, "{arguments:?} should parse to its own sub-verb");
+        }
+    }
+
+    /// The two ways of saying "more than the default" are mutually
+    /// exclusive: accepting both would leave it ambiguous which won, in a
+    /// command that deletes things.
+    #[test]
+    fn cleaning_includes_takes_all_or_an_age_but_not_both() {
+        assert!(Cli::try_parse_from(["ratect", "includes", "clean", "--all"]).is_ok());
+        assert!(Cli::try_parse_from(["ratect", "includes", "clean", "--older-than", "7d"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "ratect",
+            "includes",
+            "clean",
+            "--all",
+            "--older-than",
+            "7d"
+        ])
+        .is_err());
+    }
+
+    /// The include cache is machine-wide, so none of the project-scoped
+    /// options mean anything here — and one that's accepted and ignored
+    /// reads as a promise.
+    #[test]
+    fn includes_takes_no_project_or_docker_options() {
+        assert!(Cli::try_parse_from([
+            "ratect",
+            "includes",
+            "list",
+            "--docker-host",
+            "tcp://example:2376"
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from(["ratect", "includes", "list", "--all-projects"]).is_err());
+    }
+
+    #[test]
+    fn a_size_reads_in_the_largest_useful_unit() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(999), "999 B");
+        assert_eq!(format_size(1024), "1.0 KiB");
+        assert_eq!(format_size(1024 * 1024), "1.0 MiB");
+        assert_eq!(format_size(5 * 1024 * 1024 + 512 * 1024), "5.5 MiB");
+        assert_eq!(format_size(3 * 1024 * 1024 * 1024), "3.0 GiB");
     }
 
     /// `caches` locates a project by directory, never by reading its

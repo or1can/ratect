@@ -169,6 +169,63 @@ struct CacheInfoRepo {
     git_ref: String,
 }
 
+/// One entry in the Git include cache — what `ratect includes list`
+/// reports, and what `clean`/`refresh` return as having acted on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedInclude {
+    /// The hashed directory name under `~/.ratect/incl`. Not meaningful to
+    /// a user, but it's what identifies the entry on disk.
+    pub key: String,
+    pub remote: String,
+    pub git_ref: String,
+    /// Seconds since the Unix epoch, from the entry's own sidecar — bumped
+    /// on every use, so this is "when a task last needed it", not when it
+    /// was cloned.
+    pub last_used: u64,
+    /// The working copy's own directory.
+    pub path: PathBuf,
+    /// Bytes on disk. Only populated by [`GitIncludeCache::list`], which is
+    /// the only caller that needs it; zero elsewhere rather than paying for
+    /// a directory walk nothing reads.
+    pub size_bytes: u64,
+}
+
+/// Removes an entry's working copy and sidecar, tolerating either being
+/// absent already. `false` if something is left behind, logged.
+async fn remove_entry_files(working_copy: &Path, info_path: &Path) -> bool {
+    if working_copy.exists() {
+        if let Err(e) = tokio::fs::remove_dir_all(working_copy).await {
+            tracing::warn!("Failed to remove Git include cache clone {working_copy:?}: {e}");
+            return false;
+        }
+    }
+    if let Err(e) = tokio::fs::remove_file(info_path).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!("Failed to remove Git include cache info file {info_path:?}: {e}");
+            return false;
+        }
+    }
+    true
+}
+
+/// Bytes on disk under `path`, following no symlinks and giving up quietly
+/// on anything unreadable — a size is worth reporting approximately rather
+/// than not at all. Synchronous: [`GitIncludeCache::list`] runs it on a
+/// blocking thread, one per entry.
+fn directory_size(path: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| match entry.file_type() {
+            Ok(kind) if kind.is_dir() => directory_size(&entry.path()),
+            Ok(kind) if kind.is_file() => entry.metadata().map(|m| m.len()).unwrap_or(0),
+            _ => 0,
+        })
+        .sum()
+}
+
 /// The clock `GitIncludeCache` reads `last_used` from — boxed so the real
 /// `SystemTime::now`-backed closure and a fixed test closure share one
 /// field type, same idiom as `engine.rs`'s `HostEnv`.
@@ -417,16 +474,113 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// unreadable/unparsable, or a filesystem error) is logged and skipped
     /// rather than aborting the whole sweep, same as Batect's own per-entry
     /// try/catch.
-    pub async fn cleanup_stale(&self) -> Result<()> {
+    /// Every entry currently in the cache — what `ratect includes list`
+    /// reports.
+    ///
+    /// `size_bytes` is measured by walking each working copy, concurrently
+    /// across entries: a bundle-sized clone (a few megabytes, ~1,000 files)
+    /// walks in about 10ms, so the whole cache costs roughly the slowest
+    /// one rather than their sum. Entries are sorted by `last_used`,
+    /// oldest first — the order someone clearing space wants to read.
+    ///
+    /// An unreadable or unparsable sidecar is logged and skipped rather
+    /// than failing the listing, the same per-entry tolerance
+    /// [`cleanup_stale`](Self::cleanup_stale) has: one corrupt file
+    /// shouldn't make the whole cache unreportable.
+    pub async fn list(&self) -> Result<Vec<CachedInclude>> {
         let root = self.root.resolve()?;
-        let mut entries = match tokio::fs::read_dir(&root).await {
+        let mut entries = self.read_entries(&root).await?;
+        entries.sort_by_key(|entry| entry.last_used);
+
+        let sizes = futures::future::join_all(entries.iter().map(|entry| {
+            let path = entry.path.clone();
+            tokio::task::spawn_blocking(move || directory_size(&path))
+        }))
+        .await;
+        for (entry, size) in entries.iter_mut().zip(sizes) {
+            entry.size_bytes = size.unwrap_or(0);
+        }
+
+        Ok(entries)
+    }
+
+    /// Removes cached entries, returning the ones actually removed.
+    ///
+    /// `minimum_age` of `None` removes everything (`ratect includes clean
+    /// --all`); `Some` removes only entries unused for at least that long,
+    /// which is what both the automatic sweep and a bare `includes clean`
+    /// do. Nothing here is unrecoverable — the worst case of removing too
+    /// much is a re-clone — which is why this has no confirmation of any
+    /// kind, unlike removing containers.
+    pub async fn clean(&self, minimum_age: Option<Duration>) -> Result<Vec<CachedInclude>> {
+        let root = self.root.resolve()?;
+        let now = (self.clock)();
+        let entries = self.read_entries(&root).await?;
+
+        let mut removed = Vec::new();
+        for entry in entries {
+            let old_enough = match minimum_age {
+                Some(age) => now.saturating_sub(entry.last_used) > age.as_secs(),
+                None => true,
+            };
+            if !old_enough {
+                continue;
+            }
+            if self.remove_entry(&root, &entry.key).await {
+                removed.push(entry);
+            }
+        }
+
+        Ok(removed)
+    }
+
+    /// Discards every cached working copy and clones it again from the
+    /// `(remote, ref)` its own sidecar records — `ratect includes refresh`.
+    ///
+    /// This is the only way to pick up a moved `ref`. A cached pair is
+    /// otherwise frozen for good, since
+    /// [`ensure_cached`](Self::ensure_cached) only clones when the working
+    /// copy is missing, and the staleness sweep never helps because an
+    /// include in active use never goes unused long enough to be swept.
+    ///
+    /// A clone that fails leaves that entry removed rather than restoring
+    /// it: the next `ensure_cached` will clone it again, and pretending a
+    /// failed refresh succeeded would be worse than an entry that has to be
+    /// re-fetched.
+    pub async fn refresh(&self) -> Result<Vec<CachedInclude>> {
+        let root = self.root.resolve()?;
+        let entries = self.read_entries(&root).await?;
+
+        let mut refreshed = Vec::new();
+        for entry in entries {
+            if !self.remove_entry(&root, &entry.key).await {
+                continue;
+            }
+            match self.ensure_cached(&entry.remote, &entry.git_ref).await {
+                Ok(_) => refreshed.push(entry),
+                Err(e) => tracing::warn!(
+                    "Failed to re-clone {} at {}: {e:#}",
+                    entry.remote,
+                    entry.git_ref
+                ),
+            }
+        }
+
+        Ok(refreshed)
+    }
+
+    /// Every sidecar in `root`, parsed. Shared by
+    /// [`list`](Self::list)/[`clean`](Self::clean)/[`refresh`](Self::refresh)
+    /// and the staleness sweep, so they can't disagree about what an entry
+    /// is or which files make one up.
+    async fn read_entries(&self, root: &Path) -> Result<Vec<CachedInclude>> {
+        let mut entries = match tokio::fs::read_dir(root).await {
             Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(e).with_context(|| format!("Failed to list {root:?}")),
         };
 
-        let now = (self.clock)();
-        let mut stale_keys = Vec::new();
+        let mut found = Vec::new();
         while let Some(entry) = entries
             .next_entry()
             .await
@@ -451,30 +605,54 @@ impl<G: GitClient> GitIncludeCache<G> {
                     continue;
                 }
             };
+            let Some(key) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
 
-            if now.saturating_sub(info.last_used) > STALE_AFTER.as_secs() {
-                if let Some(key) = path.file_stem().and_then(|stem| stem.to_str()) {
-                    stale_keys.push(key.to_string());
-                }
+            found.push(CachedInclude {
+                key: key.to_string(),
+                remote: info.repo.remote,
+                git_ref: info.repo.git_ref,
+                last_used: info.last_used,
+                path: root.join(key),
+                size_bytes: 0,
+            });
+        }
+
+        Ok(found)
+    }
+
+    /// Removes one entry's working copy and sidecar, under the same
+    /// per-entry lock `ensure_cached` takes — without it, this can delete a
+    /// directory another `ratect` process is cloning into or reading from.
+    /// `false` if anything went wrong, already logged; a single unremovable
+    /// entry shouldn't abandon the rest.
+    async fn remove_entry(&self, root: &Path, key: &str) -> bool {
+        let working_copy = root.join(key);
+        let info_path = root.join(format!("{key}.toml"));
+        let lock_path = root.join(format!("{key}.lock"));
+
+        if let Err(e) = self.acquire_lock(&lock_path).await {
+            tracing::warn!("Failed to lock Git include cache entry {key}: {e:#}");
+            return false;
+        }
+        let removed = remove_entry_files(&working_copy, &info_path).await;
+        self.release_lock(&lock_path).await;
+        removed
+    }
+
+    pub async fn cleanup_stale(&self) -> Result<()> {
+        let root = self.root.resolve()?;
+        let now = (self.clock)();
+        let mut stale_keys = Vec::new();
+        for entry in self.read_entries(&root).await? {
+            if now.saturating_sub(entry.last_used) > STALE_AFTER.as_secs() {
+                stale_keys.push(entry.key);
             }
         }
 
         for key in stale_keys {
-            let working_copy = root.join(&key);
-            let info_path = root.join(format!("{key}.toml"));
-            if working_copy.exists() {
-                if let Err(e) = tokio::fs::remove_dir_all(&working_copy).await {
-                    tracing::warn!(
-                        "Failed to remove stale Git include cache clone {working_copy:?}: {e}"
-                    );
-                    continue;
-                }
-            }
-            if let Err(e) = tokio::fs::remove_file(&info_path).await {
-                tracing::warn!(
-                    "Failed to remove stale Git include cache info file {info_path:?}: {e}"
-                );
-            }
+            self.remove_entry(&root, &key).await;
         }
 
         Ok(())
@@ -942,6 +1120,167 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Timed out"));
+
+        tokio::fs::remove_dir_all(&root).await.ok();
+    }
+
+    /// Two entries with different last-used times, so ordering and the
+    /// per-entry fields can both be checked at once.
+    async fn cache_with_two_entries(root: &std::path::Path) -> GitIncludeCache<FakeGitClient> {
+        let git = FakeGitClient::new()
+            .with_files(
+                "https://example.com/old.git",
+                "v1.0.0",
+                HashMap::from([("bundle.yml".to_string(), "tasks: {}".to_string())]),
+            )
+            .with_files(
+                "https://example.com/new.git",
+                "v2.0.0",
+                HashMap::from([("bundle.yml".to_string(), "tasks: {}".to_string())]),
+            );
+
+        // Cached at different times, so `last_used` differs.
+        let old = GitIncludeCache::for_test(root.to_path_buf(), git.clone(), 1_000);
+        old.ensure_cached("https://example.com/old.git", "v1.0.0")
+            .await
+            .unwrap();
+        let new = GitIncludeCache::for_test(root.to_path_buf(), git.clone(), 5_000);
+        new.ensure_cached("https://example.com/new.git", "v2.0.0")
+            .await
+            .unwrap();
+
+        GitIncludeCache::for_test(root.to_path_buf(), git, 5_000)
+    }
+
+    #[tokio::test]
+    async fn list_reports_each_entry_oldest_first_with_its_size() {
+        let root = unique_temp_dir();
+        let cache = cache_with_two_entries(&root).await;
+
+        let listed = cache.list().await.unwrap();
+
+        assert_eq!(listed.len(), 2);
+        // Oldest first: the order someone clearing space reads down.
+        assert_eq!(listed[0].remote, "https://example.com/old.git");
+        assert_eq!(listed[0].git_ref, "v1.0.0");
+        assert_eq!(listed[0].last_used, 1_000);
+        assert_eq!(listed[1].remote, "https://example.com/new.git");
+        assert_eq!(listed[1].last_used, 5_000);
+        // The fake writes a real file into each clone, so a size of zero
+        // would mean the walk never happened.
+        assert!(
+            listed.iter().all(|entry| entry.size_bytes > 0),
+            "every entry should be sized: {listed:?}"
+        );
+
+        tokio::fs::remove_dir_all(&root).await.ok();
+    }
+
+    #[tokio::test]
+    async fn list_is_empty_when_nothing_has_ever_been_cached() {
+        let root = unique_temp_dir();
+        let cache = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), 1_000);
+        assert!(cache.list().await.unwrap().is_empty());
+        tokio::fs::remove_dir_all(&root).await.ok();
+    }
+
+    /// `clean` with an age is the same rule the automatic sweep applies —
+    /// which is what a bare `ratect includes clean` uses.
+    #[tokio::test]
+    async fn clean_with_a_minimum_age_removes_only_entries_older_than_it() {
+        let root = unique_temp_dir();
+        let cache = cache_with_two_entries(&root).await;
+
+        // At t=5000, the older entry is 4000s unused and the newer 0s.
+        let removed = cache.clean(Some(Duration::from_secs(3_000))).await.unwrap();
+
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].remote, "https://example.com/old.git");
+        let left = cache.list().await.unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].remote, "https://example.com/new.git");
+
+        tokio::fs::remove_dir_all(&root).await.ok();
+    }
+
+    /// `--all`: no age, everything goes. Safe in a way removing containers
+    /// isn't — the worst case is a re-clone.
+    #[tokio::test]
+    async fn clean_without_a_minimum_age_removes_everything() {
+        let root = unique_temp_dir();
+        let cache = cache_with_two_entries(&root).await;
+
+        let removed = cache.clean(None).await.unwrap();
+
+        assert_eq!(removed.len(), 2);
+        assert!(cache.list().await.unwrap().is_empty());
+        // Both the working copy and its sidecar, or the next run would find
+        // a sidecar with no clone.
+        let mut left = tokio::fs::read_dir(&root).await.unwrap();
+        while let Some(entry) = left.next_entry().await.unwrap() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            assert!(
+                name.ends_with(".lock"),
+                "only lock files should remain, found {name}"
+            );
+        }
+
+        tokio::fs::remove_dir_all(&root).await.ok();
+    }
+
+    /// The reason the verb exists: a moved `ref` is otherwise invisible
+    /// forever, since `ensure_cached` only clones when the working copy is
+    /// missing and an in-use entry never goes stale enough to be swept.
+    #[tokio::test]
+    async fn refresh_re_clones_and_so_picks_up_a_moved_ref() {
+        let root = unique_temp_dir();
+        let remote = "https://example.com/moving.git";
+
+        let before = FakeGitClient::new().with_files(
+            remote,
+            "main",
+            HashMap::from([("bundle.yml".to_string(), "old contents".to_string())]),
+        );
+        let cache = GitIncludeCache::for_test(root.clone(), before, 1_000);
+        let working_copy = cache.ensure_cached(remote, "main").await.unwrap();
+        assert_eq!(
+            tokio::fs::read_to_string(working_copy.join("bundle.yml"))
+                .await
+                .unwrap(),
+            "old contents"
+        );
+
+        // The branch moves. `ensure_cached` alone would never notice.
+        let after = FakeGitClient::new().with_files(
+            remote,
+            "main",
+            HashMap::from([("bundle.yml".to_string(), "new contents".to_string())]),
+        );
+        let cache = GitIncludeCache::for_test(root.clone(), after, 2_000);
+        assert_eq!(
+            tokio::fs::read_to_string(
+                cache
+                    .ensure_cached(remote, "main")
+                    .await
+                    .unwrap()
+                    .join("bundle.yml")
+            )
+            .await
+            .unwrap(),
+            "old contents",
+            "ensure_cached must not re-fetch — that's the behaviour refresh exists for"
+        );
+
+        let refreshed = cache.refresh().await.unwrap();
+
+        assert_eq!(refreshed.len(), 1);
+        assert_eq!(refreshed[0].remote, remote);
+        assert_eq!(
+            tokio::fs::read_to_string(working_copy.join("bundle.yml"))
+                .await
+                .unwrap(),
+            "new contents"
+        );
 
         tokio::fs::remove_dir_all(&root).await.ok();
     }

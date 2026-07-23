@@ -1102,8 +1102,8 @@ Improving the developer experience through better tools and feedback.
   differs from those two.
 - **Improved Progress UI**: Output-mode selection with terminal-capability auto-detection and a live per-container progress display shipped as `ratect-compat` [0.16.0](#ratect-compat) (they were Batect parity work); what remains here is going *beyond* Batect — e.g. build context upload progress, richer pull progress (per-layer byte counts), and any `ratect`-binary-specific presentation ideas.
 - **Watch Mode**: Automatically re-running tasks when source files change.
-- **Git-include cache management** (`ratect includes list`/`clean`/`refresh`,
-  scoped but not built): a manual command to list/evict entries from
+- **Git-include cache management** — ~~shipped ([0.2.0](#ratect)) as
+  `ratect includes list`/`clean`/`refresh`:~~ a manual command to list/evict entries from
   `~/.ratect/incl` on demand, beyond 0.19.0's automatic 30-day sweep — e.g. force
   a re-clone of one repo without waiting on the sweep, or free disk space
   immediately. **`ratect`-only**, same reasoning as "Restrict Nested Git
@@ -1150,11 +1150,24 @@ Exploring innovative features that go beyond the original Batect, as well as pla
     name. Core owns listing/removal/refresh (like `cache.rs` does for caches);
     the binary owns presentation.
 
-  **Still to decide:** whether `clean` with no arguments removes everything (as
-  `caches clean` does) or only stale entries, given "everything" here is
-  machine-wide; whether `refresh` takes a remote filter or always does the lot;
-  and whether `list` walks each entry for a size, which is the main thing that
-  would make it useful for "why is my disk full" rather than merely informative.
+  **As built** (the decisions below all held; the one thing that changed on
+  contact was that `refresh` needed no remote filter to be useful, so it still
+  has none):
+
+  - **`clean` with no arguments removes only *stale* entries** — the same 30-day
+    threshold the automatic sweep uses — with `--all` for everything and
+    `--older-than <age>` for a different threshold. Docker's own `prune` versus
+    `prune -a` precedent, and the right default given "everything" here is
+    machine-wide rather than this project's. `--all` is really `--older-than 0`,
+    kept as its own flag because it's what someone reaches for.
+  - **`refresh` does the lot**, with no remote filter to start with. Simpler, and
+    the cache is small enough that re-cloning all of it is not the imposition it
+    would be for, say, images.
+  - **`list` always shows each entry's size**, no flag. Measured rather than
+    assumed: a realistic bundle-sized clone (5.7 MB, ~1,000 files) walks in about
+    10 ms, and sizing each entry concurrently keeps a whole cache at roughly the
+    cost of one. That's what makes `list` an answer to "why is my disk full"
+    rather than merely informative.
 - **Restrict Nested Git Includes**: **`ratect`-only** — `ratect-compat` must keep Batect's own unrestricted behavior for parity (its `ConfigurationLoader`/`IncludeResolver` have the identical gap: any file, root or reached transitively through a Git include, can declare a further `type: git` include with no restriction on remote). Currently a nested include gets the exact same trust as one the project owner declared themselves — no allowlist, and (post-0.10.0's `container_git_boundaries` fix) a rogue nested include's own containers are at least bounded to its clone directory or the project directory, but the include mechanism itself will still fetch from whatever remote a third-party bundle names. Worth an opt-in gate for `ratect` (e.g. `allow_nested_git_includes`, defaulting `false`) requiring the project owner to consciously accept that a Git-included bundle may itself redirect the process to further remotes. Relatedly worth reconsidering alongside it: whether a nested (non-root-declared) include's clone/checkout failure should keep surfacing git's raw stderr, since the specific transport error (host unreachable vs. connection refused vs. repository-not-found vs. auth-failed) lets repeated attempts fingerprint an internal network — most relevant when `ratect` runs in CI against a bundle whose nested includes a less-trusted contributor can influence, and whose CI logs are visible back to them. Deferred rather than implemented immediately: real projects (including ones outside this one) depend on nested git includes working by default today, and `ratect-compat` has to default this open regardless — squarely a `ratect`-only divergence, not a blocking gap.
 - **Wildcard Includes**: Support for including multiple files using glob patterns (e.g., `include: containers/*.yaml`).
 - **Configuration Merging/Replacement**: Ability to merge or override containers and tasks when including files.
