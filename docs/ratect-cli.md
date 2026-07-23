@@ -21,6 +21,8 @@ one.
 | `ratect tasks list` | Lists the tasks this project defines. |
 | `ratect caches list` | Lists this project's existing caches. |
 | `ratect caches clean [NAME...]` | Removes this project's caches, or just the named ones. |
+| `ratect resources list` | Lists containers and networks left over from previous runs. |
+| `ratect resources clean` | Removes them. |
 
 There is deliberately **no `ratect <task>` shorthand**. `ratect-compat` takes a task
 name as a bare positional argument, which works only because it has no subcommands;
@@ -33,6 +35,8 @@ ratect run build
 ratect run test -- --filter integration
 ratect caches list
 ratect caches clean gradle-cache
+ratect resources list
+ratect resources clean --older-than 1d
 ```
 
 ## Global options
@@ -102,6 +106,48 @@ missing entirely — which is exactly when clearing a cache tends to be what's n
 for scripting. Naming a cache that doesn't exist warns on stderr rather than passing
 silently, since the likeliest cause is a typo.
 
+## `resources` options
+
+Containers and networks outlive a run when something goes wrong — a crash, a
+`docker kill`, a `--no-cleanup` run, or a cleanup that failed. `resources` finds
+them by the labels Ratect stamps on everything it creates, so they're identifiable
+however long ago they were made:
+
+```
+$ ratect resources list
+2 left over from 1 previous run:
+
+  integration-test (3 days ago, run a01df375-8365-4689-85e4-11b33dee70b8):
+    - container database (running)
+    - network ratect-a01df375-8365-4689-85e4-11b33dee70b8
+
+Remove them with: ratect resources clean
+```
+
+Grouped by run, because that's the unit a leftover belongs to: one interrupted task
+leaves a network and every container it started, and they only make sense together.
+A container is named as your configuration names it (`database`), not by the random
+words Docker assigns.
+
+| Option | Applies to | Description |
+| --- | --- | --- |
+| `--all-projects` | `list`, `clean` | Every project's leftovers, not just this one's. Also the way to use `resources` from outside a project directory, since the project scope is read from the configuration. |
+| `--older-than <AGE>` | `list`, `clean` | Only leftovers older than `AGE` — `90s`, `30m`, `2h`, `7d`. |
+
+**`--older-than` matters for `clean`.** A task running *right now* carries exactly the
+same labels as a leftover, because until it finishes it is one. Ratect can't tell the
+difference — the daemon can't say whether some other `ratect` process still cares
+about a container — so a bare `resources clean` on a shared machine can tear down an
+in-flight run. `--older-than 1h` is the safe form when anything else might be running.
+
+Under `-o quiet`, `list` prints resource ids one per line and nothing else, ready to
+pipe into `docker rm`. Removal takes containers before networks, since a network
+still holding an endpoint can't be removed; a resource that fails to remove is
+reported and the rest still go.
+
+Like `caches`, `resources` reads the configuration only for the project's name —
+never for what to remove, which comes from the labels alone.
+
 ## Exit codes and diagnostics
 
 Identical to `ratect-compat`: a task's own container exit code becomes `ratect`'s exit
@@ -118,6 +164,7 @@ redirect stderr if you want one.
 | List tasks | `ratect-compat --list-tasks` | `ratect tasks list` |
 | Cache cleanup | `--clean`/`--clean-cache` | `ratect caches clean [NAME...]` |
 | Listing caches | not available | `ratect caches list` |
+| Finding leftovers from a previous run | not available | `ratect resources list`/`clean` |
 | Batect-inert flags (`--upgrade`, `--no-update-notification`, `--no-wrapper-cache-cleanup`) | accepted, no effect | not offered |
 | `--log-file` | supported | not offered |
 | Configuration | `batect.yml` | `batect.yml` today; own format planned |

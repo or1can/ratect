@@ -1,0 +1,15 @@
+# Its own project name, deliberately — the third fixture to need one.
+#
+# The resources test doesn't just *read* by project label, it runs
+# `resources clean`, which removes everything carrying it. Sharing a project
+# with any other test means sweeping that test's containers out from under
+# it, which is exactly how this fixture came to exist.
+project_name: ratect-cli-resources-test
+containers:
+  build-env:
+    image: alpine:3.18.2
+tasks:
+  build:
+    run:
+      container: build-env
+      command: echo built

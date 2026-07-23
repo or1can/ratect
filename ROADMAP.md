@@ -998,20 +998,32 @@ Improving the developer experience through better tools and feedback.
      version isn't what `--version` reports; since the two binaries are on
      independent version lines, it also identifies which one created the
      resource.
-  2. **`ContainerRuntime` gains `list_containers`/`list_networks`** with label
-     filtering (Docker supports `label=key=value` filters natively), alongside
-     today's `list_volumes`.
-  3. **The verb itself**, shaped like `caches`: `resources list` shows what's
-     there — grouped by run, with task name and age, so "these four containers
-     and a network are from `integration-test`, three days ago" is readable at a
-     glance — and `resources clean` removes it. Scoped to the current project by
-     default, with `--all-projects` for the machine-wide sweep, which is the case
-     the complaint is really about.
+  2. ~~**`ContainerRuntime` gains `list_containers`/`list_networks`**~~ — done
+     ([0.2.0](#ratect)), with label filtering (Docker supports `label=key=value`
+     filters natively), alongside today's `list_volumes`. Both return one
+     `LabelledResource`, since what's worth saying about a leftover container and
+     a leftover network is the same; `list_containers` passes `all: true`,
+     because a leftover has usually exited and Docker's default hides those.
+  3. ~~**The verb itself**~~ — done ([0.2.0](#ratect)), shaped like `caches`:
+     `resources list` shows what's there — grouped by run, with task name and
+     age, so "these four containers and a network are from `integration-test`,
+     three days ago" is readable at a glance — and `resources clean` removes it.
+     Scoped to the current project by default, with `--all-projects` for the
+     machine-wide sweep, which is the case the complaint is really about. Also
+     `--older-than`, which turned out to matter more than expected — see below.
+     Removal takes containers before networks (a network still holding an
+     endpoint can't be removed) and a single failure is reported rather than
+     abandoning the rest.
 
   One thing labels can't resolve: a *concurrently running* task's containers are
   labelled identically to an orphan, because they are the same thing until the
   run ends. `list` reporting age, and `clean` taking `--older-than`, is the
-  honest mitigation; claiming to detect liveness would not be.
+  honest mitigation; claiming to detect liveness would not be — the daemon can't
+  say whether some other `ratect` process still cares about a container. This is
+  documented prominently for `clean`, since a bare sweep on a shared machine can
+  take an in-flight run with it. If that turns out to bite in practice, the next
+  step would be a heartbeat (a running invocation touching its own resources
+  periodically) rather than any attempt to infer liveness after the fact.
 
   Cache volumes stay outside this: they're deliberate, not leftovers, and
   `caches` already finds them by name prefix. (They also *can't* carry labels

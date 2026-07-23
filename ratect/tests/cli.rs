@@ -358,6 +358,85 @@ fn a_run_stamps_this_binarys_own_version_onto_what_it_creates() {
 /// Requires a running Docker daemon with network access to pull
 /// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
 ///
+/// The whole point of the labels, end to end: strand a run's resources with
+/// `--no-cleanup-after-success` — one of the real ways leftovers happen —
+/// then find them again and remove them, without the configuration having
+/// anything to say about which ones they are.
+///
+/// Uses a fixture project of its own (`resources.yml`) for a stronger
+/// reason than the other tests do: this one runs `resources clean`, which
+/// removes everything carrying that project label — sharing a project with
+/// another test would sweep away *its* containers mid-assertion, which is
+/// how this fixture came to exist.
+#[test]
+#[ignore]
+fn resources_finds_and_removes_what_a_previous_run_left_behind() {
+    let config = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/resources.yml");
+    let ratect = |arguments: &[&str]| {
+        let mut command = ratect_command();
+        command.arg("-f").arg(&config);
+        command.args(arguments);
+        command.output().expect("failed to run ratect")
+    };
+
+    // A clean slate: an earlier failed run of this test would otherwise
+    // make the counts below meaningless.
+    ratect(&["resources", "clean"]);
+
+    let run = ratect(&["run", "build", "--no-cleanup-after-success"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let listed = ratect(&["resources", "list"]);
+    let listing = String::from_utf8_lossy(&listed.stdout);
+    assert!(
+        listing.contains("container build-env"),
+        "the container should be named as the config names it:\n{listing}"
+    );
+    assert!(
+        listing.contains("network ratect-"),
+        "its network should be listed too:\n{listing}"
+    );
+    assert!(
+        listing.contains("build ("),
+        "the task that created them should be named:\n{listing}"
+    );
+
+    // Quiet is ids only, ready to pipe — two of them, container and network.
+    let quiet = ratect(&["resources", "list", "-o", "quiet"]);
+    let ids = String::from_utf8_lossy(&quiet.stdout);
+    assert_eq!(ids.lines().count(), 2, "expected two ids:\n{ids}");
+
+    // Nothing is minutes old yet, so an age filter excludes it all — this
+    // is what stops a sweep taking an in-flight run with it.
+    let too_new = ratect(&["resources", "list", "--older-than", "1h"]);
+    assert!(
+        String::from_utf8_lossy(&too_new.stdout).contains("Nothing left over that old."),
+        "an hour-old filter should exclude a run from seconds ago"
+    );
+
+    let cleaned = ratect(&["resources", "clean"]);
+    assert!(
+        cleaned.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&cleaned.stderr)
+    );
+
+    let after = ratect(&["resources", "list"]);
+    assert!(
+        String::from_utf8_lossy(&after.stdout).contains("Nothing left over."),
+        "everything should be gone:\n{}",
+        String::from_utf8_lossy(&after.stdout)
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
 /// The default `--cache-type volume` path end to end, which is the half no
 /// daemon-free test can reach: run a task that writes into a `cache` mount,
 /// then find that volume by its cache name and remove it. Also proves the

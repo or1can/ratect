@@ -27,7 +27,7 @@
 use anyhow::Result;
 use clap::{Args as ClapArgs, Parser, Subcommand};
 use ratect_core::config::{format_task_list, format_task_list_quiet, load_project, Config};
-use ratect_core::docker::{DockerClient, DockerConnectionOptions};
+use ratect_core::docker::{ContainerRuntime, DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
 use ratect_core::ui::{create_event_sink, select_output_style, OutputStyle};
 use std::collections::{HashMap, HashSet};
@@ -76,7 +76,11 @@ struct GlobalArgs {
 
 /// Values for the configuration's own `config_variables` — for the
 /// subcommands that read configuration at all.
-#[derive(ClapArgs, Debug)]
+///
+/// `Default` is "none supplied", which is what `resources` uses: it reads
+/// the configuration only for the project's name, and a project name that
+/// depended on a config variable would be a strange thing to have.
+#[derive(ClapArgs, Debug, Default)]
 struct ConfigVarArgs {
     /// Set a config variable's value, as NAME=VALUE (repeatable). Takes
     /// precedence over --config-vars-file and the variable's own default.
@@ -111,6 +115,46 @@ enum Command {
         #[command(subcommand)]
         command: CachesCommand,
     },
+
+    /// Inspect and remove containers and networks left over from previous
+    /// runs.
+    Resources {
+        #[command(subcommand)]
+        command: ResourcesCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ResourcesCommand {
+    /// List containers and networks left over from previous runs.
+    List(ResourcesArgs),
+
+    /// Remove containers and networks left over from previous runs.
+    Clean(ResourcesArgs),
+}
+
+/// Which leftovers to act on.
+///
+/// Like `caches`, never reads the configuration file — a leftover belongs
+/// to whatever created it, not to whatever the config says now, and the
+/// times you most want this are when a run went wrong.
+#[derive(ClapArgs, Debug)]
+struct ResourcesArgs {
+    /// Include every project's leftovers, not just this one's. The
+    /// machine-wide sweep, for when a project directory isn't where you're
+    /// looking from.
+    #[arg(long = "all-projects")]
+    all_projects: bool,
+
+    /// Only leftovers older than this, as a duration ("30m", "2h", "7d").
+    /// A task running right now looks exactly like a leftover — it *is*
+    /// one, until it finishes — so this is how a sweep avoids tearing down
+    /// a colleague's (or your own) in-flight run.
+    #[arg(long = "older-than", value_parser = parse_age)]
+    older_than: Option<std::time::Duration>,
+
+    #[command(flatten)]
+    docker: DockerArgs,
 }
 
 #[derive(Subcommand, Debug)]
@@ -356,6 +400,29 @@ impl From<CacheTypeArg> for ratect_core::cache::CacheType {
 
 /// Parses a `NAME=VALUE` pair — `--config-var`, `--override-image` and
 /// `--tag-image` all take one.
+/// `--older-than`, as a plain `<number><unit>` (`90s`, `30m`, `2h`, `7d`).
+///
+/// Deliberately not [`ratect_core::config::parse_duration`], Batect's
+/// Go-style format: that one exists to match Batect's `health_check`
+/// durations exactly, and has no day unit — which is the one anybody
+/// actually reaches for when clearing up after last week.
+fn parse_age(value: &str) -> std::result::Result<std::time::Duration, String> {
+    let invalid = || format!("expected a duration like 30m, 2h or 7d, got '{value}'");
+    let split = value
+        .find(|c: char| !c.is_ascii_digit())
+        .ok_or_else(invalid)?;
+    let (number, unit) = value.split_at(split);
+    let number: u64 = number.parse().map_err(|_| invalid())?;
+    let seconds = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 60 * 60,
+        "d" => 24 * 60 * 60,
+        _ => return Err(invalid()),
+    };
+    Ok(std::time::Duration::from_secs(number * seconds))
+}
+
 fn parse_key_value(value: &str) -> std::result::Result<(String, String), String> {
     match value.split_once('=') {
         Some((name, value)) => Ok((name.to_string(), value.to_string())),
@@ -438,6 +505,7 @@ async fn run(cli: Cli) -> Result<()> {
         }
         // Deliberately no `load` call: see `CachesArgs`.
         Command::Caches { command } => manage_caches(command, &global, style).await,
+        Command::Resources { command } => manage_resources(command, &global, style).await,
     }
 }
 
@@ -620,6 +688,230 @@ async fn manage_caches(
     Ok(())
 }
 
+/// `ratect resources list` / `ratect resources clean` — the containers and
+/// networks previous runs left behind, found by the labels Ratect stamps on
+/// everything it creates (see [`ratect_core::labels`]).
+///
+/// Leftovers happen after a crash, a `docker kill`, a run that used
+/// `--no-cleanup`, or a cleanup that itself failed. Before the labels
+/// existed, answering "what should I remove?" meant reading `docker ps -a`
+/// and guessing, because nothing Ratect created was identifiable
+/// afterwards.
+///
+/// The one thing labels can't settle: a task running *right now* carries
+/// exactly the same labels as a leftover, because until it finishes it is
+/// one. `list` reports ages so that's visible, and `--older-than` is how a
+/// sweep avoids tearing down an in-flight run. Claiming to detect liveness
+/// would be a lie — the daemon can't say whether some other `ratect`
+/// process still cares about a container.
+async fn manage_resources(
+    command: ResourcesCommand,
+    global: &GlobalArgs,
+    style: OutputStyle,
+) -> Result<()> {
+    let (args, removing) = match command {
+        ResourcesCommand::List(args) => (args, false),
+        ResourcesCommand::Clean(args) => (args, true),
+    };
+    let quiet = style == OutputStyle::Quiet;
+
+    let mut filters: Vec<(&str, &str)> = Vec::new();
+    // Scoped to this project unless asked otherwise — the project name
+    // comes from the configuration, which is the one thing `resources`
+    // needs it for, so `--all-projects` also covers the case where the
+    // config can't be read at all.
+    let project = if args.all_projects {
+        None
+    } else {
+        Some(
+            load(global, &ConfigVarArgs::default())
+                .await?
+                .config
+                .project_name,
+        )
+    };
+    if let Some(project) = &project {
+        filters.push((ratect_core::labels::PROJECT, project));
+    }
+
+    let docker = DockerClient::new(&args.docker.into())?;
+    let mut found = docker.list_containers(&filters).await?;
+    found.extend(docker.list_networks(&filters).await?);
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs() as i64)
+        .unwrap_or_default();
+    let leftovers: Vec<Leftover> = found
+        .into_iter()
+        .map(|resource| Leftover::new(resource, now))
+        .filter(|leftover| match args.older_than {
+            Some(older_than) => leftover.age_seconds >= older_than.as_secs() as i64,
+            None => true,
+        })
+        .collect();
+
+    if leftovers.is_empty() {
+        if !quiet {
+            println!(
+                "{}",
+                match args.older_than {
+                    Some(_) => "Nothing left over that old.",
+                    None => "Nothing left over.",
+                }
+            );
+        }
+        return Ok(());
+    }
+
+    if removing {
+        remove_leftovers(&docker, &leftovers, quiet).await
+    } else {
+        report_leftovers(&leftovers, quiet);
+        Ok(())
+    }
+}
+
+/// One leftover, with the labels already pulled out of the map — the
+/// reporting below reads them several times each, and a resource missing
+/// one (not Ratect's, or from a version that didn't set it) should read as
+/// unknown rather than panic.
+struct Leftover {
+    resource: ratect_core::docker::LabelledResource,
+    task: String,
+    run: String,
+    age_seconds: i64,
+    is_network: bool,
+}
+
+impl Leftover {
+    fn new(resource: ratect_core::docker::LabelledResource, now: i64) -> Self {
+        let label = |key: &str| {
+            resource
+                .labels
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string())
+        };
+        Self {
+            task: label(ratect_core::labels::TASK),
+            run: label(ratect_core::labels::RUN),
+            age_seconds: resource.created.map(|created| now - created).unwrap_or(0),
+            // Only a container has a state; see `LabelledResource`.
+            is_network: resource.state.is_none(),
+            resource,
+        }
+    }
+
+    /// What this is, in the terms the configuration uses — a container's
+    /// own Docker name is random words, which is no use for recognizing it.
+    fn describe(&self) -> String {
+        if self.is_network {
+            return format!("network {}", self.resource.name);
+        }
+        let container = self
+            .resource
+            .labels
+            .get(ratect_core::labels::CONTAINER)
+            .cloned()
+            .unwrap_or_else(|| self.resource.name.clone());
+        match self.resource.state.as_deref() {
+            Some(state) => format!("container {container} ({state})"),
+            None => format!("container {container}"),
+        }
+    }
+}
+
+/// Rounded to one unit — "3 days" is what makes a leftover recognizable as
+/// old, and no decision here is improved by knowing it was 3 days and 4
+/// hours.
+fn format_age(seconds: i64) -> String {
+    const MINUTE: i64 = 60;
+    const HOUR: i64 = 60 * MINUTE;
+    const DAY: i64 = 24 * HOUR;
+    let (count, unit) = match seconds {
+        s if s >= DAY => (s / DAY, "day"),
+        s if s >= HOUR => (s / HOUR, "hour"),
+        s if s >= MINUTE => (s / MINUTE, "minute"),
+        s => (s.max(0), "second"),
+    };
+    format!("{count} {unit}{}", if count == 1 { "" } else { "s" })
+}
+
+/// Grouped by run, because that's the unit a leftover actually belongs to:
+/// one interrupted task leaves a network and every container it started,
+/// and they're only meaningful together.
+fn report_leftovers(leftovers: &[Leftover], quiet: bool) {
+    if quiet {
+        // Machine-readable, same contract as `tasks list`/`caches list`:
+        // one id per line and nothing else, ready to pipe into `docker rm`.
+        for leftover in leftovers {
+            println!("{}", leftover.resource.id);
+        }
+        return;
+    }
+
+    let mut runs: Vec<&str> = leftovers.iter().map(|l| l.run.as_str()).collect();
+    runs.sort_unstable();
+    runs.dedup();
+
+    println!(
+        "{} left over from {} previous run{}:",
+        leftovers.len(),
+        runs.len(),
+        if runs.len() == 1 { "" } else { "s" }
+    );
+    for run in runs {
+        let group: Vec<&Leftover> = leftovers.iter().filter(|l| l.run == run).collect();
+        let task = &group[0].task;
+        let age = format_age(group.iter().map(|l| l.age_seconds).max().unwrap_or(0));
+        println!("\n  {task} ({age} ago, run {run}):");
+        for leftover in group {
+            println!("    - {}", leftover.describe());
+        }
+    }
+    println!("\nRemove them with: ratect resources clean");
+}
+
+async fn remove_leftovers(
+    docker: &DockerClient,
+    leftovers: &[Leftover],
+    quiet: bool,
+) -> Result<()> {
+    // Containers first: a network still holding an endpoint can't be
+    // removed, so the reverse order fails on every task that had one.
+    let (networks, containers): (Vec<&Leftover>, Vec<&Leftover>) =
+        leftovers.iter().partition(|leftover| leftover.is_network);
+
+    let mut removed = 0;
+    for leftover in containers.iter().chain(networks.iter()) {
+        let result = if leftover.is_network {
+            docker.remove_network(&leftover.resource.id).await
+        } else {
+            docker
+                .stop_and_remove_container(&leftover.resource.id)
+                .await
+        };
+        match result {
+            Ok(()) => {
+                removed += 1;
+                if !quiet {
+                    println!("Removed {}.", leftover.describe());
+                }
+            }
+            // One failure doesn't abandon the rest: a resource someone else
+            // removed in the meantime, or one still in use, shouldn't leave
+            // the remaining leftovers behind too.
+            Err(error) => tracing::warn!("Failed to remove {}: {error:#}", leftover.describe()),
+        }
+    }
+
+    if !quiet {
+        println!("Removed {removed} of {}.", leftovers.len());
+    }
+    Ok(())
+}
+
 /// The terminal facts every output decision is made from, read once per
 /// invocation — `select_output_style` and `create_event_sink` both want
 /// them, and querying twice risks answering differently.
@@ -643,6 +935,7 @@ impl TerminalFacts {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+    use std::time::Duration;
 
     #[test]
     fn the_cli_definition_is_internally_valid() {
@@ -952,6 +1245,140 @@ mod tests {
             changed_from_default(&settings_from(&["--no-cleanup"])),
             vec!["cleanup_after_success", "cleanup_after_failure"]
         );
+    }
+
+    #[test]
+    fn resources_has_a_list_and_a_clean_verb() {
+        assert!(matches!(
+            Cli::try_parse_from(["ratect", "resources", "list"])
+                .unwrap()
+                .command,
+            Command::Resources {
+                command: ResourcesCommand::List(_)
+            }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["ratect", "resources", "clean"])
+                .unwrap()
+                .command,
+            Command::Resources {
+                command: ResourcesCommand::Clean(_)
+            }
+        ));
+    }
+
+    /// Both scoping options apply to both verbs — listing everything and
+    /// then only being able to clean this project's would be a trap.
+    #[test]
+    fn scope_options_apply_to_both_resources_verbs() {
+        for verb in ["list", "clean"] {
+            let cli = Cli::try_parse_from([
+                "ratect",
+                "resources",
+                verb,
+                "--all-projects",
+                "--older-than",
+                "2h",
+            ])
+            .unwrap();
+            let args = match cli.command {
+                Command::Resources {
+                    command: ResourcesCommand::List(args) | ResourcesCommand::Clean(args),
+                } => args,
+                other => panic!("expected a resources command, got {other:?}"),
+            };
+            assert!(args.all_projects);
+            assert_eq!(args.older_than, Some(Duration::from_secs(2 * 60 * 60)));
+        }
+    }
+
+    #[test]
+    fn an_age_accepts_seconds_minutes_hours_and_days() {
+        assert_eq!(parse_age("90s"), Ok(Duration::from_secs(90)));
+        assert_eq!(parse_age("30m"), Ok(Duration::from_secs(1_800)));
+        assert_eq!(parse_age("2h"), Ok(Duration::from_secs(7_200)));
+        // The unit anyone reaches for when clearing up after last week,
+        // and the reason this isn't Batect's own duration format.
+        assert_eq!(parse_age("7d"), Ok(Duration::from_secs(604_800)));
+    }
+
+    #[test]
+    fn an_age_without_a_valid_unit_is_rejected() {
+        for value in ["30", "30x", "d", "", "-1h", "1.5h"] {
+            assert!(parse_age(value).is_err(), "{value} should be rejected");
+        }
+    }
+
+    /// Rounded to one unit: "3 days" is what makes a leftover recognizable
+    /// as old, and singular/plural is the kind of thing that reads as
+    /// sloppy in the one place someone is already annoyed.
+    #[test]
+    fn an_age_reads_as_a_single_rounded_unit() {
+        assert_eq!(format_age(1), "1 second");
+        assert_eq!(format_age(59), "59 seconds");
+        assert_eq!(format_age(60), "1 minute");
+        assert_eq!(format_age(60 * 90), "1 hour");
+        assert_eq!(format_age(60 * 60 * 25), "1 day");
+        assert_eq!(format_age(60 * 60 * 24 * 3), "3 days");
+        // A clock skew between the daemon and here shouldn't print
+        // something absurd.
+        assert_eq!(format_age(-5), "0 seconds");
+    }
+
+    fn resource(
+        id: &str,
+        name: &str,
+        labels: &[(&str, &str)],
+        state: Option<&str>,
+    ) -> ratect_core::docker::LabelledResource {
+        ratect_core::docker::LabelledResource {
+            id: id.to_string(),
+            name: name.to_string(),
+            labels: labels
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+            created: Some(1_000),
+            state: state.map(str::to_string),
+        }
+    }
+
+    /// A container is described by its *configured* name, not Docker's
+    /// randomly generated one, which is the whole reason the label exists.
+    #[test]
+    fn a_leftover_is_described_in_the_terms_the_config_uses() {
+        let container = Leftover::new(
+            resource(
+                "abc",
+                "nostalgic_hopper",
+                &[
+                    (ratect_core::labels::CONTAINER, "database"),
+                    (ratect_core::labels::TASK, "check"),
+                ],
+                Some("exited"),
+            ),
+            2_000,
+        );
+        assert_eq!(container.describe(), "container database (exited)");
+        assert_eq!(container.task, "check");
+        assert_eq!(container.age_seconds, 1_000);
+        assert!(!container.is_network);
+
+        let network = Leftover::new(resource("def", "ratect-xyz", &[], None), 2_000);
+        assert_eq!(network.describe(), "network ratect-xyz");
+        assert!(network.is_network);
+    }
+
+    /// A resource from a Ratect old enough not to have set every label
+    /// should still be listable — reporting is exactly when you don't want
+    /// a panic.
+    #[test]
+    fn a_leftover_missing_labels_reads_as_unknown_rather_than_failing() {
+        let leftover = Leftover::new(resource("abc", "some_name", &[], Some("running")), 2_000);
+        assert_eq!(leftover.task, "unknown");
+        assert_eq!(leftover.run, "unknown");
+        // Falls back to Docker's own name when there's no container label.
+        assert_eq!(leftover.describe(), "container some_name (running)");
     }
 
     /// `caches` locates a project by directory, never by reading its
