@@ -224,6 +224,43 @@ struct Args {
     additional_args: Vec<String>,
 }
 
+impl Args {
+    /// Maps the engine-affecting flags onto the engine's settings.
+    ///
+    /// Split out from [`run`] so it can be tested without a Docker daemon.
+    /// A *missing* field is a compile error — this literal is exhaustive,
+    /// with no `..Default::default()` — so the tests exist for what the
+    /// compiler can't see: a field wired to the wrong flag, a dropped or
+    /// inverted negation (`publish_ports: args.disable_ports` type checks
+    /// perfectly and reverses the flag), and a flag declared but never read
+    /// here. Keep the literal exhaustive for that reason. `ratect` has the
+    /// same function for the same reasons.
+    fn engine_settings(&self, project_directory: PathBuf) -> TaskEngineSettings {
+        let mut image_tags: HashMap<String, HashSet<String>> = HashMap::new();
+        for (container, tag) in &self.tag_image {
+            image_tags
+                .entry(container.clone())
+                .or_default()
+                .insert(tag.clone());
+        }
+        TaskEngineSettings {
+            existing_network: self.use_network.clone(),
+            publish_ports: !self.disable_ports,
+            propagate_proxy_environment_variables: !self.no_proxy_vars,
+            run_prerequisites: !self.skip_prerequisites,
+            image_overrides: self.override_image.iter().cloned().collect(),
+            image_tags,
+            cleanup_after_success: !(self.no_cleanup || self.no_cleanup_after_success),
+            cleanup_after_failure: !(self.no_cleanup || self.no_cleanup_after_failure),
+            max_parallelism: self.max_parallelism.map(|max| max as usize),
+            cache: Some((self.cache_type.into(), project_directory)),
+            // Stamped onto every resource this run creates, so it can be
+            // identified later — see `ratect_core::labels`.
+            ratect_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        }
+    }
+}
+
 /// The CLI-side `--output` value set — clap's `ValueEnum` derive gives the
 /// lowercase names (`fancy`/`simple`/`quiet`/`all`) and the standard
 /// invalid-value error listing them, matching Batect's own enum-converted
@@ -423,7 +460,7 @@ async fn run(args: Args) -> Result<()> {
         return Ok(());
     }
 
-    match args.task_name {
+    match args.task_name.as_deref() {
         Some(task_name) => {
             // Unconditional, fire-and-forget — matching Batect's own
             // `GitRepositoryCacheCleanupTask`, an unconditional daemon
@@ -453,6 +490,8 @@ async fn run(args: Args) -> Result<()> {
                 term.as_deref(),
                 console_dimensions_available,
             )?;
+            // Built before the connection options consume `args` below.
+            let settings = args.engine_settings(project_directory);
             let docker_connection = DockerConnectionOptions {
                 host: args.docker_host,
                 context: args.docker_context,
@@ -467,29 +506,10 @@ async fn run(args: Args) -> Result<()> {
             let docker = DockerClient::new(&docker_connection)?
                 .with_event_sink(Arc::clone(&event_sink))
                 .with_enable_buildkit(args.enable_buildkit);
-            let mut image_tags: HashMap<String, HashSet<String>> = HashMap::new();
-            for (container, tag) in args.tag_image {
-                image_tags.entry(container).or_default().insert(tag);
-            }
-            let settings = TaskEngineSettings {
-                existing_network: args.use_network,
-                publish_ports: !args.disable_ports,
-                propagate_proxy_environment_variables: !args.no_proxy_vars,
-                run_prerequisites: !args.skip_prerequisites,
-                image_overrides: args.override_image.into_iter().collect(),
-                image_tags,
-                cleanup_after_success: !(args.no_cleanup || args.no_cleanup_after_success),
-                cleanup_after_failure: !(args.no_cleanup || args.no_cleanup_after_failure),
-                max_parallelism: args.max_parallelism.map(|max| max as usize),
-                cache: Some((args.cache_type.into(), project_directory)),
-                // Stamped onto every resource this run creates, so it can be
-                // identified later — see `ratect_core::labels`.
-                ratect_version: Some(env!("CARGO_PKG_VERSION").to_string()),
-            };
             let engine = TaskEngine::new(config, docker)
                 .with_event_sink(event_sink)
                 .with_settings(settings)?;
-            engine.run_task(&task_name, &args.additional_args).await?;
+            engine.run_task(task_name, &args.additional_args).await?;
         }
         None => {
             tracing::warn!("No task name provided. Use --help for usage.");
@@ -575,6 +595,214 @@ mod tests {
         assert!(!args.list_tasks);
         assert_eq!(args.task_name, None);
         assert!(args.additional_args.is_empty());
+    }
+
+    fn args(arguments: &[&str]) -> Args {
+        Args::try_parse_from(arguments).expect("should parse")
+    }
+
+    const BINARY: &str = "ratect-compat";
+    /// `ratect-compat` takes the task name as a trailing positional, after
+    /// its flags.
+    const TASK_ARGUMENTS: &[&str] = &["build"];
+
+    fn settings_from(arguments: &[&str]) -> TaskEngineSettings {
+        args(arguments).engine_settings(PathBuf::from("/p"))
+    }
+
+    /// One flag (with any value it needs) against the single setting it is
+    /// supposed to move. `--no-cleanup` is deliberately absent: it moves
+    /// two, and has its own test.
+    const FLAG_TO_SETTING: &[(&[&str], &str)] = &[
+        (&["--use-network", "existing-network"], "existing_network"),
+        (&["--disable-ports"], "publish_ports"),
+        (
+            &["--no-proxy-vars"],
+            "propagate_proxy_environment_variables",
+        ),
+        (&["--skip-prerequisites"], "run_prerequisites"),
+        (&["--override-image", "db=postgres:16"], "image_overrides"),
+        (&["--tag-image", "app=extra"], "image_tags"),
+        (&["--no-cleanup-after-success"], "cleanup_after_success"),
+        (&["--no-cleanup-after-failure"], "cleanup_after_failure"),
+        (&["--max-parallelism", "3"], "max_parallelism"),
+    ];
+
+    /// Which settings differ from the engine's own defaults — the basis of
+    /// the per-flag test below. `cache`/`ratect_version` are excluded: both
+    /// are always supplied, so they always differ.
+    fn changed_from_default(settings: &TaskEngineSettings) -> Vec<&'static str> {
+        let defaults = TaskEngineSettings::default();
+        let mut changed = Vec::new();
+        if settings.existing_network != defaults.existing_network {
+            changed.push("existing_network");
+        }
+        if settings.publish_ports != defaults.publish_ports {
+            changed.push("publish_ports");
+        }
+        if settings.propagate_proxy_environment_variables
+            != defaults.propagate_proxy_environment_variables
+        {
+            changed.push("propagate_proxy_environment_variables");
+        }
+        if settings.run_prerequisites != defaults.run_prerequisites {
+            changed.push("run_prerequisites");
+        }
+        if settings.image_overrides != defaults.image_overrides {
+            changed.push("image_overrides");
+        }
+        if settings.image_tags != defaults.image_tags {
+            changed.push("image_tags");
+        }
+        if settings.cleanup_after_success != defaults.cleanup_after_success {
+            changed.push("cleanup_after_success");
+        }
+        if settings.cleanup_after_failure != defaults.cleanup_after_failure {
+            changed.push("cleanup_after_failure");
+        }
+        if settings.max_parallelism != defaults.max_parallelism {
+            changed.push("max_parallelism");
+        }
+        changed
+    }
+
+    /// Each flag on its own must move its own setting and nothing else.
+    ///
+    /// This is the test that catches *cross-wiring*, which the all-flags-at-
+    /// once test above cannot: with `--disable-ports` and `--no-proxy-vars`
+    /// both set, a field reading the wrong one of the two looks identical
+    /// to a field reading the right one. Setting one flag at a time and
+    /// asserting the exact set of changed fields is what tells them apart.
+    #[test]
+    fn each_flag_changes_only_its_own_setting() {
+        for (flag, expected) in FLAG_TO_SETTING {
+            let mut arguments = vec![BINARY];
+            arguments.extend_from_slice(flag);
+            arguments.extend_from_slice(TASK_ARGUMENTS);
+            let settings = settings_from(&arguments);
+            assert_eq!(
+                changed_from_default(&settings),
+                vec![*expected],
+                "{flag:?} should change exactly `{expected}`"
+            );
+        }
+    }
+
+    /// With nothing asked for, the engine must behave exactly as it would
+    /// with no settings applied — an inverted boolean would silently change
+    /// the default behavior of every run.
+    #[test]
+    fn no_flags_maps_to_the_engines_own_defaults() {
+        let settings = args(&["ratect-compat", "build"]).engine_settings(PathBuf::from("/p"));
+        let defaults = TaskEngineSettings::default();
+
+        assert_eq!(settings.existing_network, defaults.existing_network);
+        assert_eq!(settings.publish_ports, defaults.publish_ports);
+        assert_eq!(
+            settings.propagate_proxy_environment_variables,
+            defaults.propagate_proxy_environment_variables
+        );
+        assert_eq!(settings.run_prerequisites, defaults.run_prerequisites);
+        assert_eq!(settings.image_overrides, defaults.image_overrides);
+        assert_eq!(settings.image_tags, defaults.image_tags);
+        assert_eq!(
+            settings.cleanup_after_success,
+            defaults.cleanup_after_success
+        );
+        assert_eq!(
+            settings.cleanup_after_failure,
+            defaults.cleanup_after_failure
+        );
+        assert_eq!(settings.max_parallelism, defaults.max_parallelism);
+        assert_eq!(
+            settings.cache,
+            Some((ratect_core::cache::CacheType::Volume, PathBuf::from("/p")))
+        );
+        assert_eq!(
+            settings.ratect_version.as_deref(),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+    }
+
+    /// The regression guard for the whole flag surface: every field is set
+    /// to something the default would never produce, so a field wired to
+    /// the wrong flag, or a negation dropped, fails here. (A field missing
+    /// from the literal is a compile error instead — see
+    /// [`Args::engine_settings`].) It also catches a flag that's declared
+    /// but never actually read, which nothing else would.
+    #[test]
+    fn every_flag_reaches_its_own_engine_setting() {
+        let settings = args(&[
+            "ratect-compat",
+            "--use-network",
+            "existing-network",
+            "--disable-ports",
+            "--no-proxy-vars",
+            "--skip-prerequisites",
+            "--override-image",
+            "db=postgres:16",
+            "--tag-image",
+            "app=extra",
+            "--tag-image",
+            "app=second",
+            "--no-cleanup",
+            "--max-parallelism",
+            "3",
+            "--cache-type",
+            "directory",
+            "build",
+        ])
+        .engine_settings(PathBuf::from("/projects/demo"));
+
+        assert_eq!(
+            settings.existing_network.as_deref(),
+            Some("existing-network")
+        );
+        assert!(!settings.publish_ports);
+        assert!(!settings.propagate_proxy_environment_variables);
+        assert!(!settings.run_prerequisites);
+        assert_eq!(
+            settings.image_overrides,
+            HashMap::from([("db".to_string(), "postgres:16".to_string())])
+        );
+        assert_eq!(
+            settings.image_tags,
+            HashMap::from([(
+                "app".to_string(),
+                HashSet::from(["extra".to_string(), "second".to_string()])
+            )]),
+            "a container named more than once collects every tag"
+        );
+        assert!(!settings.cleanup_after_success);
+        assert!(!settings.cleanup_after_failure);
+        assert_eq!(settings.max_parallelism, Some(3));
+        assert_eq!(
+            settings.cache,
+            Some((
+                ratect_core::cache::CacheType::Directory,
+                PathBuf::from("/projects/demo")
+            ))
+        );
+        assert_eq!(
+            settings.ratect_version.as_deref(),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+    }
+
+    /// `--no-cleanup` is both halves together; each also stands alone, and
+    /// confusing them would leave containers behind (or not) in exactly the
+    /// case the user asked about.
+    #[test]
+    fn each_no_cleanup_flag_affects_only_its_own_half() {
+        let success = args(&["ratect-compat", "--no-cleanup-after-success", "build"])
+            .engine_settings(PathBuf::from("/p"));
+        assert!(!success.cleanup_after_success);
+        assert!(success.cleanup_after_failure);
+
+        let failure = args(&["ratect-compat", "--no-cleanup-after-failure", "build"])
+            .engine_settings(PathBuf::from("/p"));
+        assert!(failure.cleanup_after_success);
+        assert!(!failure.cleanup_after_failure);
     }
 
     #[test]

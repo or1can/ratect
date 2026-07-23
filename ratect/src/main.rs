@@ -473,34 +473,55 @@ async fn run_task(
         terminal.console_dimensions_available,
     )?;
 
+    // Built before the connection options are consumed below.
+    let settings = args.engine_settings(project.project_directory);
     let docker = DockerClient::new(&args.docker.into())?
         .with_event_sink(Arc::clone(&event_sink))
         .with_enable_buildkit(args.enable_buildkit);
-
-    let mut image_tags: HashMap<String, HashSet<String>> = HashMap::new();
-    for (container, tag) in args.tag_image {
-        image_tags.entry(container).or_default().insert(tag);
-    }
-    let settings = TaskEngineSettings {
-        existing_network: args.use_network,
-        publish_ports: !args.disable_ports,
-        propagate_proxy_environment_variables: !args.no_proxy_vars,
-        run_prerequisites: !args.skip_prerequisites,
-        image_overrides: args.override_image.into_iter().collect(),
-        image_tags,
-        cleanup_after_success: !(args.no_cleanup || args.no_cleanup_after_success),
-        cleanup_after_failure: !(args.no_cleanup || args.no_cleanup_after_failure),
-        max_parallelism: args.max_parallelism.map(|max| max as usize),
-        cache: Some((args.cache_type.into(), project.project_directory)),
-        // Stamped onto every resource this run creates, so it can be
-        // identified later — see `ratect_core::labels`.
-        ratect_version: Some(env!("CARGO_PKG_VERSION").to_string()),
-    };
 
     let engine = TaskEngine::new(project.config, docker)
         .with_event_sink(event_sink)
         .with_settings(settings)?;
     engine.run_task(&args.task, &args.args).await
+}
+
+impl RunArgs {
+    /// Maps `run`'s own flags onto the engine's settings.
+    ///
+    /// Split out from [`run_task`] so it can be tested without a Docker
+    /// daemon. A *missing* field is a compile error — this literal is
+    /// exhaustive, with no `..Default::default()` — so what the tests are
+    /// actually for is the mistakes the compiler can't see: a field wired
+    /// to the wrong flag, a dropped or inverted negation (`publish_ports:
+    /// self.disable_ports` type checks perfectly and reverses the flag),
+    /// and a flag that's declared but never read here at all. Keep the
+    /// literal exhaustive for that reason: adding `..Default::default()`
+    /// would trade the compiler's check for a silent default.
+    /// `ratect-compat` has the same function for the same reasons.
+    fn engine_settings(&self, project_directory: PathBuf) -> TaskEngineSettings {
+        let mut image_tags: HashMap<String, HashSet<String>> = HashMap::new();
+        for (container, tag) in &self.tag_image {
+            image_tags
+                .entry(container.clone())
+                .or_default()
+                .insert(tag.clone());
+        }
+        TaskEngineSettings {
+            existing_network: self.use_network.clone(),
+            publish_ports: !self.disable_ports,
+            propagate_proxy_environment_variables: !self.no_proxy_vars,
+            run_prerequisites: !self.skip_prerequisites,
+            image_overrides: self.override_image.iter().cloned().collect(),
+            image_tags,
+            cleanup_after_success: !(self.no_cleanup || self.no_cleanup_after_success),
+            cleanup_after_failure: !(self.no_cleanup || self.no_cleanup_after_failure),
+            max_parallelism: self.max_parallelism.map(|max| max as usize),
+            cache: Some((self.cache_type.into(), project_directory)),
+            // Stamped onto every resource this run creates, so it can be
+            // identified later — see `ratect_core::labels`.
+            ratect_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        }
+    }
 }
 
 /// `ratect caches list` / `ratect caches clean [NAME...]` — this project's
@@ -763,6 +784,174 @@ mod tests {
             };
             assert_eq!(cache_type, CacheTypeArg::Directory);
         }
+    }
+
+    fn run_args(arguments: &[&str]) -> RunArgs {
+        match Cli::try_parse_from(arguments)
+            .expect("should parse")
+            .command
+        {
+            Command::Run(args) => args,
+            other => panic!("expected a run command, got {other:?}"),
+        }
+    }
+
+    fn settings_from(flags: &[&str]) -> TaskEngineSettings {
+        let mut arguments = vec!["ratect", "run", "build"];
+        arguments.extend_from_slice(flags);
+        run_args(&arguments).engine_settings(PathBuf::from("/p"))
+    }
+
+    /// One flag (with any value it needs) against the single setting it is
+    /// supposed to move. `--no-cleanup` is deliberately absent: it moves
+    /// two, and has its own test.
+    const FLAG_TO_SETTING: &[(&[&str], &str)] = &[
+        (&["--use-network", "existing-network"], "existing_network"),
+        (&["--disable-ports"], "publish_ports"),
+        (
+            &["--no-proxy-vars"],
+            "propagate_proxy_environment_variables",
+        ),
+        (&["--skip-prerequisites"], "run_prerequisites"),
+        (&["--override-image", "db=postgres:16"], "image_overrides"),
+        (&["--tag-image", "app=extra"], "image_tags"),
+        (&["--no-cleanup-after-success"], "cleanup_after_success"),
+        (&["--no-cleanup-after-failure"], "cleanup_after_failure"),
+        (&["--max-parallelism", "3"], "max_parallelism"),
+    ];
+
+    /// Which settings differ from the engine's own defaults — the basis of
+    /// the per-flag test below. `cache`/`ratect_version` are excluded: both
+    /// are always supplied, so they always differ.
+    fn changed_from_default(settings: &TaskEngineSettings) -> Vec<&'static str> {
+        let defaults = TaskEngineSettings::default();
+        let mut changed = Vec::new();
+        if settings.existing_network != defaults.existing_network {
+            changed.push("existing_network");
+        }
+        if settings.publish_ports != defaults.publish_ports {
+            changed.push("publish_ports");
+        }
+        if settings.propagate_proxy_environment_variables
+            != defaults.propagate_proxy_environment_variables
+        {
+            changed.push("propagate_proxy_environment_variables");
+        }
+        if settings.run_prerequisites != defaults.run_prerequisites {
+            changed.push("run_prerequisites");
+        }
+        if settings.image_overrides != defaults.image_overrides {
+            changed.push("image_overrides");
+        }
+        if settings.image_tags != defaults.image_tags {
+            changed.push("image_tags");
+        }
+        if settings.cleanup_after_success != defaults.cleanup_after_success {
+            changed.push("cleanup_after_success");
+        }
+        if settings.cleanup_after_failure != defaults.cleanup_after_failure {
+            changed.push("cleanup_after_failure");
+        }
+        if settings.max_parallelism != defaults.max_parallelism {
+            changed.push("max_parallelism");
+        }
+        changed
+    }
+
+    /// Each flag on its own must move its own setting and nothing else.
+    ///
+    /// This is the test that catches *cross-wiring*: with several flags set
+    /// at once, a field reading the wrong one of two same-shaped flags
+    /// looks identical to one reading the right flag. Setting a single flag
+    /// and asserting the exact set of changed fields is what tells them
+    /// apart — an all-at-once test can't.
+    #[test]
+    fn each_flag_changes_only_its_own_setting() {
+        for (flag, expected) in FLAG_TO_SETTING {
+            assert_eq!(
+                changed_from_default(&settings_from(flag)),
+                vec![*expected],
+                "{flag:?} should change exactly `{expected}`"
+            );
+        }
+    }
+
+    /// With nothing asked for, the engine must be left exactly as it would
+    /// be with no settings applied at all — an inverted boolean here would
+    /// silently change the default behavior of every run.
+    #[test]
+    fn no_flags_maps_to_the_engines_own_defaults() {
+        let settings = settings_from(&[]);
+        assert!(
+            changed_from_default(&settings).is_empty(),
+            "no flag should mean no setting moved: {:?}",
+            changed_from_default(&settings)
+        );
+        // The two this binary always supplies, unlike the rest.
+        assert_eq!(
+            settings.cache,
+            Some((ratect_core::cache::CacheType::Volume, PathBuf::from("/p")))
+        );
+        assert_eq!(
+            settings.ratect_version.as_deref(),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+    }
+
+    /// Values, not just which field moved — the per-flag test above proves
+    /// a flag reaches the right setting, this proves what it puts there.
+    #[test]
+    fn a_flags_value_reaches_its_setting_intact() {
+        let settings = settings_from(&[
+            "--use-network",
+            "existing-network",
+            "--override-image",
+            "db=postgres:16",
+            "--tag-image",
+            "app=extra",
+            "--tag-image",
+            "app=second",
+            "--max-parallelism",
+            "3",
+            "--cache-type",
+            "directory",
+        ]);
+
+        assert_eq!(
+            settings.existing_network.as_deref(),
+            Some("existing-network")
+        );
+        assert_eq!(
+            settings.image_overrides,
+            HashMap::from([("db".to_string(), "postgres:16".to_string())])
+        );
+        assert_eq!(
+            settings.image_tags,
+            HashMap::from([(
+                "app".to_string(),
+                HashSet::from(["extra".to_string(), "second".to_string()])
+            )]),
+            "a container named more than once collects every tag"
+        );
+        assert_eq!(settings.max_parallelism, Some(3));
+        assert_eq!(
+            settings.cache,
+            Some((
+                ratect_core::cache::CacheType::Directory,
+                PathBuf::from("/p")
+            ))
+        );
+    }
+
+    /// `--no-cleanup` is the pair of them together; each half also stands
+    /// alone, and confusing the two would leave containers behind (or not)
+    /// in exactly the case the user asked about.
+    #[test]
+    fn no_cleanup_is_both_halves_and_each_half_stands_alone() {
+        assert_eq!(
+            changed_from_default(&settings_from(&["--no-cleanup"])),
+            vec!["cleanup_after_success", "cleanup_after_failure"]
+        );
     }
 
     /// `caches` locates a project by directory, never by reading its
