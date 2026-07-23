@@ -1025,6 +1025,25 @@ Improving the developer experience through better tools and feedback.
   step would be a heartbeat (a running invocation touching its own resources
   periodically) rather than any attempt to infer liveness after the fact.
 
+  Two safety measures considered and **deliberately not built**, recorded so
+  they aren't re-litigated from scratch:
+
+  - **A `--dry-run` for `clean`.** Unnecessary: `list` and `clean` take the same
+    options and select through the same code, so `list` already shows exactly
+    what `clean` would remove. A flag would be a second spelling of an existing
+    command and a second thing to keep in step with it. Both are a snapshot
+    either way — a run can start, or a resource age into `--older-than` scope,
+    between the two — and a `--dry-run` followed by the real command has the
+    identical window.
+  - **A confirmation prompt on `clean --all-projects`.** The one thing a dry run
+    can't help with: typing the dangerous command by accident, which only a
+    prompt catches, since a dry run helps only if you remembered to use it.
+    Deferred rather than rejected — it would be the first interactive prompt in
+    either binary (Batect has none, so there's no precedent to follow), it needs
+    a `--yes` escape for CI, and the two-layer guard on what `--all-projects`
+    can even reach ([0.2.0](#ratect)) already removes the catastrophic version
+    of the mistake. Worth revisiting on the first report of a near-miss.
+
   Cache volumes stay outside this: they're deliberate, not leftovers, and
   `caches` already finds them by name prefix. (They also *can't* carry labels
   today without creating them explicitly rather than letting a bind mount
