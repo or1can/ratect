@@ -99,11 +99,13 @@ rather than reloaded, so it's safe for two files to both include a common third 
 A `(repo, ref)` pair is cloned **once and cached forever** at
 `~/.ratect/incl/<hash>`, keyed by a hash of the pair — it is never re-fetched, even if
 the remote's `ref` later moves (e.g. a branch, or a tag someone re-pushed). This is why
-`ref` must be pinned to something immutable: Ratect has no update/refresh mechanism yet
-(see [Differences from Batect](differences-from-batect.md#top-level-fields) for the
-known gaps — no cache eviction sweep, no manual cache-clear command). If you need to
-pick up a change made to a bundle, choose a new `ref` (e.g. bump the tag) or delete the
-corresponding directory under `~/.ratect/incl` by hand.
+`ref` must be pinned to something immutable: Ratect has no update/refresh mechanism yet,
+matching Batect, whose own cache clones only when the working copy is missing too. Note
+that the 30-day eviction sweep doesn't help here — it removes entries that go *unused*,
+and an include you're actively using never becomes stale, so it stays frozen at whatever
+its `ref` pointed to when first cloned. If you need to pick up a change made to a
+bundle, choose a new `ref` (e.g. bump the tag) or delete the corresponding directory
+under `~/.ratect/incl` by hand.
 
 The included file's own relative paths (a volume's host path, `build_directory`, a
 `build_secrets` entry's `path`, and any further `include` entries it declares) resolve
