@@ -5,15 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Ratect ships [two binaries on independent version lines](ROADMAP.md#versioning--releases),
+`ratect-compat` and `ratect`, sharing one core — so most changes here reach both, and
+one changelog is the honest shape for that. Two conventions follow from it:
+
+- **An entry with no binary named applies to both.** One that doesn't says so:
+  `(ratect only)`, `(ratect-compat only)`.
+- **A release heading names every version in that release**, since a shared-core
+  change is released for both binaries at once, each bumping its own number —
+  e.g. `## [ratect-compat 0.21.1 · ratect 0.2.0]`. A binary released on its own
+  names only itself.
+
+Headings before the two-binary split (0.21.0 and earlier) are `ratect-compat`'s own
+history, from when it was the only binary.
+
 ## [Unreleased]
 
 ### Added
 
-- **`ratect`: the CLI subcommand skeleton** (`ratect` 0.2.0-dev): `ratect run <task> [-- ARGS...]`, `ratect tasks list`, and `ratect caches list`/`ratect caches clean [NAME...]`, replacing `ratect-compat`'s flat `<task-name>` positional and `--list-tasks` for this binary. Deliberately no `ratect <task>` shorthand — with more verbs coming, "is `doctor` a task or a command?" is a question the interface shouldn't have to answer. Runs on `ratect-core`'s existing engine and today's `batect.yml`, both unchanged; the `ratect`-native configuration format is 0.3.0's own scope. Options attach to the commands that actually use them rather than being global — Docker connection options to `run` and `caches`, config-variable options to `run` and `tasks list` — since a flag accepted and then ignored reads as a promise. `caches` replaces `ratect-compat`'s `--clean`/`--clean-cache` with two differences: `caches list` exists at all (neither Batect nor `ratect-compat` can tell you what's there, which makes removing one by name guesswork), and naming a cache that doesn't exist warns rather than passing silently. Like `--clean`, it never reads the configuration file — a cache belongs to the project directory, so it works on a project whose config is broken or absent. New `cache::list_volume_caches`/`list_directory_caches` in `ratect-core`. See the new [`ratect` CLI reference](docs/ratect-cli.md).
+- **The CLI subcommand skeleton** (`ratect` only): `ratect run <task> [-- ARGS...]`, `ratect tasks list`, and `ratect caches list`/`ratect caches clean [NAME...]`, replacing `ratect-compat`'s flat `<task-name>` positional and `--list-tasks` for this binary. Deliberately no `ratect <task>` shorthand — with more verbs coming, "is `doctor` a task or a command?" is a question the interface shouldn't have to answer. Runs on `ratect-core`'s existing engine and today's `batect.yml`, both unchanged; the `ratect`-native configuration format is 0.3.0's own scope. Options attach to the commands that actually use them rather than being global — Docker connection options to `run` and `caches`, config-variable options to `run` and `tasks list` — since a flag accepted and then ignored reads as a promise. `caches` replaces `ratect-compat`'s `--clean`/`--clean-cache` with two differences: `caches list` exists at all (neither Batect nor `ratect-compat` can tell you what's there, which makes removing one by name guesswork), and naming a cache that doesn't exist warns rather than passing silently. Like `--clean`, it never reads the configuration file — a cache belongs to the project directory, so it works on a project whose config is broken or absent. New `cache::list_volume_caches`/`list_directory_caches` in `ratect-core`. See the new [`ratect` CLI reference](docs/ratect-cli.md).
 
 ### Fixed
 
-- **Anonymous volumes were leaked on every run** (both binaries): containers were removed with Docker's default options, which leave behind any *anonymous* volume the container created. Every image declaring a `VOLUME` instruction — `redis`, `postgres`, `mysql` and most other database/cache images do — produced one dangling volume per container, per run, permanently. A single run of a task with three `redis` dependencies left three behind. Containers are now removed with `v: true` (and `force: true`), matching Batect's own `removeContainer(..., force = true, removeVolumes = true)`. These leftovers are unidentifiable after the fact — Docker names them with a random hash, and they can carry no labels, since Docker creates them implicitly — so not creating them is the only remedy available. New real-Docker regression test measuring the dangling-volume delta across a run.
+- **Anonymous volumes were leaked on every run**: containers were removed with Docker's default options, which leave behind any *anonymous* volume the container created. Every image declaring a `VOLUME` instruction — `redis`, `postgres`, `mysql` and most other database/cache images do — produced one dangling volume per container, per run, permanently. A single run of a task with three `redis` dependencies left three behind. Containers are now removed with `v: true` (and `force: true`), matching Batect's own `removeContainer(..., force = true, removeVolumes = true)`. These leftovers are unidentifiable after the fact — Docker names them with a random hash, and they can carry no labels, since Docker creates them implicitly — so not creating them is the only remedy available. New real-Docker regression test measuring the dangling-volume delta across a run.
 
 ### Changed
 

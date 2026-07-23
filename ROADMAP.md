@@ -74,22 +74,40 @@ releases — both binaries and `ratect-core`, whichever binary a given cycle is
 actually about, so a build from `main` never claims to be a released version.
 Cutting a release is one isolated `chore:` commit that bumps the crates being
 released to the plain `X.Y.Z` and moves `CHANGELOG.md`'s accumulated `Unreleased`
-entries under a new dated `## [X.Y.Z]` header. That commit is tagged and published
-as a GitHub Release (`prerelease: true` until a binary's own 1.0.0 — see below —
-with that `CHANGELOG.md` section as its body). The next commit — starting the
-following version's development, also isolated, also `chore:` — bumps them back to
-the next `X.Y.Z-dev`. Neither bump is ever folded into a feature commit.
+entries under a new dated heading naming every version in that release — e.g.
+`## [ratect-compat 0.21.1 · ratect 0.2.0]`, or just the one binary when it's
+released on its own. That commit is tagged and published as a GitHub Release
+(`prerelease: true` until a binary's own 1.0.0 — see below — with that
+`CHANGELOG.md` section as its body; a joint release uses that same section for
+both, which is correct, because it *is* the same set of changes). The next
+commit — starting the following version's development, also isolated, also
+`chore:` — bumps them back to the next `X.Y.Z-dev`. Neither bump is ever folded
+into a feature commit.
 
-Two mechanics that only became concrete once `ratect` started its own release cycle
-(0.2.0, the first one not about `ratect-compat`):
+Three mechanics that only became concrete once `ratect` started its own release
+cycle (0.2.0, the first one not about `ratect-compat`):
 
 - **Tags are prefixed with the binary they release** — `ratect/v0.2.0`,
-  `ratect-compat/v0.22.0` — because the two version lines will collide otherwise:
+  `ratect-compat/v0.21.1` — because the two version lines will collide otherwise:
   `v0.2.0` is already taken, by `ratect-compat`'s own 0.2.0 back when it was the
   only binary. Bare `vX.Y.Z` tags (`v0.1.0` through `v0.21.0`) are that history and
   stay exactly as they are; nothing renames them. Everything from here on is
   prefixed, `ratect-compat` included, rather than leaving one binary on a legacy
   scheme.
+- **One shared `CHANGELOG.md`, not one per binary.** Most substantive work is in
+  `ratect-core` and so reaches both binaries — the anonymous-volume fix
+  ([0.21.1](#ratect-compat)) is the pattern, not the exception — so two files
+  would be largely the same prose under different headings, drifting apart on
+  every core change. (That's the opposite of the CLI reference docs, which *are*
+  split per binary: those overlap by almost nothing, since they document
+  different flags. Split where the content differs, share where it doesn't —
+  which is also why `config-reference.md` and `task-lifecycle.md` are shared.)
+  An entry with no binary named applies to both; one that doesn't says
+  `(ratect only)`/`(ratect-compat only)`, so the annotation cost falls on the
+  rarer case. Revisit only if `ratect` diverges far enough that shared-core
+  changes stop being the bulk of the work — 0.3.0's own config format is a step
+  that way — since cutting one file in two later is easy, and merging two back
+  into one isn't.
 - **A cycle bumps the crates it actually changes.** A `ratect`-only cycle still
   moves `ratect-core` (it's the same shared crate, and its number has always run
   with the release cadence rather than standing still) and still leaves
