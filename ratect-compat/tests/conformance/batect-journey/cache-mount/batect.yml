@@ -1,0 +1,15 @@
+project_name: cache-mount
+
+containers:
+  build-env:
+    build_directory: build-env
+    volumes:
+      - type: cache
+        name: batect-cache-mount-journey-test-cache
+        container: /cache
+
+tasks:
+  the-task:
+    run:
+      container: build-env
+      command: /test.sh

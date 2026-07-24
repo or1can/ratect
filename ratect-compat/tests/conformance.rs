@@ -645,3 +645,137 @@ fn task_using_log_driver() {
         ]),
     );
 }
+
+/// The combined stdout+stderr of a run, for the two bespoke cases below that
+/// don't fit [`run_case`]'s single-run table shape.
+fn combined_output(output: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+/// Removes every Docker volume for `cache-mount`'s named cache, whatever the
+/// project key that produced it (the full name is
+/// `batect-cache-<key>-<config name>`). Key-independent on purpose: it must
+/// clear a volume a crashed earlier run left behind just as well as the one
+/// this test creates, so the first run below reliably starts empty.
+fn remove_cache_mount_volumes() {
+    let listed = Command::new("docker")
+        .args(["volume", "ls", "-q"])
+        .output()
+        .expect("failed to list docker volumes");
+    for name in String::from_utf8_lossy(&listed.stdout).lines() {
+        if name.ends_with("batect-cache-mount-journey-test-cache") {
+            let _ = Command::new("docker")
+                .args(["volume", "rm", "-f", name])
+                .output();
+        }
+    }
+}
+
+/// `cache-mount`: a `type: cache` volume mounted at `/cache`, whose contents
+/// persist across runs. Batect's own journey test runs the task twice and
+/// asserts the cache is empty the first time and populated the second. This
+/// is the volume-cache variant (`--cache-type=volume`, the default); the
+/// directory variant writes into the project tree and is left for later.
+///
+/// A bespoke test rather than a [`ConformanceCase`]: it runs the task twice
+/// with different expected output per run, and resets the shared cache
+/// volume around itself.
+#[test]
+#[ignore]
+fn cache_mount_persists_across_runs() {
+    remove_cache_mount_volumes();
+
+    let run = || {
+        ratect_command()
+            .current_dir(project_dir("cache-mount"))
+            .args(["-f", "batect.yml", "--cache-type=volume", "the-task"])
+            .output()
+            .expect("failed to run ratect-compat")
+    };
+
+    let first = run();
+    let first_output = combined_output(&first);
+    let second = run();
+    let second_output = combined_output(&second);
+
+    // Reset before asserting, so a failure doesn't strand the volume.
+    remove_cache_mount_volumes();
+
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "first run should succeed — output:\n{first_output}"
+    );
+    assert!(
+        first_output.contains("File created in task does not exist, creating it"),
+        "first run should see an empty cache — output:\n{first_output}"
+    );
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "second run should succeed — output:\n{second_output}"
+    );
+    assert!(
+        second_output.contains("File created in task exists"),
+        "second run should reuse the cache the first populated — output:\n{second_output}"
+    );
+}
+
+/// `simple-task-using-dockerfile` under `--tag-image`: Batect's
+/// `TagImageJourneyTest` builds the image and additionally tags it under a
+/// name of the caller's choosing, then checks that tag exists. Proves
+/// `--tag-image` applies the extra tag to the built image, on top of the
+/// task still running with its own exit code and output.
+///
+/// A bespoke test rather than a [`ConformanceCase`]: it inspects Docker for
+/// the applied tag and cleans it up afterwards.
+#[test]
+#[ignore]
+fn simple_task_using_dockerfile_tag_image() {
+    let tag = "ratect-conformance-tag-image-test:latest";
+    let remove_tag = || {
+        let _ = Command::new("docker")
+            .args(["image", "rm", "-f", tag])
+            .output();
+    };
+    remove_tag();
+
+    let output = ratect_command()
+        .current_dir(project_dir("simple-task-using-dockerfile"))
+        .args([
+            "-f",
+            "batect.yml",
+            "--tag-image",
+            &format!("build-env={tag}"),
+            "the-task",
+        ])
+        .output()
+        .expect("failed to run ratect-compat");
+    let combined = combined_output(&output);
+
+    let tagged = Command::new("docker")
+        .args(["image", "inspect", tag])
+        .output()
+        .expect("failed to run docker image inspect");
+
+    // Cleaned up before asserting, so a failure doesn't strand the tag.
+    remove_tag();
+
+    assert_eq!(
+        output.status.code(),
+        Some(123),
+        "the task's own exit code should still propagate — output:\n{combined}"
+    );
+    assert!(
+        combined.contains("This is some output from the task"),
+        "the task should still run — output:\n{combined}"
+    );
+    assert!(
+        tagged.status.success(),
+        "the built image should have been tagged {tag}"
+    );
+}

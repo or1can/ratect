@@ -851,11 +851,17 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     keep immediately — three parity bugs fixed off the back of it: the missing
     `batect.local.yml` default for `--config-vars-file`, non-string scalar
     `environment` values being rejected, and (from the 0.22.0 features)
-    daemon-global Docker integration tests that flaked under parallel CI. Still
-    to port: caches (needs a two-run harness), `run_as_current_user` (needs its
-    output mount adapted from Batect's own build tree), and `--tag-image`; git
-    includes and the Windows-container project stay out of this local-corpus
-    scope.
+    daemon-global Docker integration tests that flaked under parallel CI. Then
+    two bespoke cases (their shapes don't fit the single-run table): the
+    `cache-mount` volume cache, run twice to prove it persists, and
+    `--tag-image`, which additionally checks the built image carries the extra
+    tag — 25 conformance tests in all. The only local projects left unported are
+    the three `run_as_current_user` variants, deferred because their `/output`
+    mount points into Batect's own build tree and can't be vendored verbatim
+    (the feature is already covered by `ratect-core` unit tests and a
+    `ratect-compat` fixture); the `cache-mount` *directory* variant, which
+    writes into the project tree; git includes; and the Windows-container
+    project.
   - **Assert behaviour, not Batect's transcript.** Batect's own assertions often
     check its exact output wording, which `ratect-compat` deliberately diverges
     from ([`docs/differences-from-batect.md`](docs/differences-from-batect.md)).
