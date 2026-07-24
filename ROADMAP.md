@@ -839,17 +839,23 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     mitigation for "depending on a deprecated resource", not the risk: they never
     change, which is exactly what a conformance corpus wants. The spike landed a
     working harness + the first project (`simple-task-using-image`); 0.23.0 grew
-    the harness (extra CLI args, host env vars, combined-output assertions) and
-    ported the first batch of ~11 projects — prerequisites, mounts, Dockerfile
-    builds, custom Dockerfile names, config variables, host environment, setup
-    commands (on both a dependency and the task container), a health-checked
-    dependency, and `--list-tasks`. That batch immediately earned its keep: it
-    surfaced the missing `batect.local.yml` default for `--config-vars-file`
-    (now fixed). Still to port: caches (needs a two-run harness), proxy
-    variables (build-time propagation), `run_as_current_user` (needs its output
-    mount adapted from Batect's own build tree), image/parallelism/customise
-    flags, and `--override-image`/`--tag-image`; git includes and the
-    Windows-container project stay out of this local-corpus scope.
+    the harness (extra CLI args, host env vars, combined stdout+stderr
+    assertions, non-`batect.yml` file names, non-zero/any-of/absent output
+    assertions) and ported 22 of the local projects — prerequisites, mounts,
+    Dockerfile builds (default and custom name), config variables, host
+    environment, setup commands (dependency and task container), health-checked
+    dependencies (healthy, slow-to-healthy, and never-healthy), `--list-tasks`,
+    additional arguments, `additional_hosts`, `--override-image`,
+    `--max-parallelism`, `customise` (`--output=all`), the `gelf` log driver,
+    a non-standard config file name, and proxy variables. The corpus earned its
+    keep immediately — three parity bugs fixed off the back of it: the missing
+    `batect.local.yml` default for `--config-vars-file`, non-string scalar
+    `environment` values being rejected, and (from the 0.22.0 features)
+    daemon-global Docker integration tests that flaked under parallel CI. Still
+    to port: caches (needs a two-run harness), `run_as_current_user` (needs its
+    output mount adapted from Batect's own build tree), and `--tag-image`; git
+    includes and the Windows-container project stay out of this local-corpus
+    scope.
   - **Assert behaviour, not Batect's transcript.** Batect's own assertions often
     check its exact output wording, which `ratect-compat` deliberately diverges
     from ([`docs/differences-from-batect.md`](docs/differences-from-batect.md)).

@@ -33,6 +33,18 @@ fn ratect_command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ratect-compat"))
 }
 
+/// What exit status the run must produce. Batect propagates the task
+/// container's own exit code, and so do we — but a few scenarios (a
+/// dependency that never becomes healthy) only pin that the run *failed*,
+/// not the exact code, because the failure originates in Ratect rather than
+/// a task command with a code of its own.
+enum ExpectedExit {
+    /// Exactly this code, as Batect's own `exitCode shouldBe N`.
+    Code(i32),
+    /// Any non-zero exit, as Batect's own `exitCode shouldNotBe 0`.
+    NonZero,
+}
+
 /// One vendored Batect project, and the behaviour running it should
 /// produce — the parts that are observable regardless of Batect's exact UI
 /// wording (which `ratect-compat` deliberately diverges from). This is what
@@ -40,17 +52,21 @@ fn ratect_command() -> Command {
 /// not how Batect framed it.
 ///
 /// Build one with [`ConformanceCase::new`] and layer on the less common
-/// bits (`env`/`unset_env`) with the chainable setters, so a plain case
-/// stays a single readable line.
+/// bits with the chainable setters, so a plain case stays a single readable
+/// line.
 struct ConformanceCase<'a> {
     /// Directory name under `tests/conformance/batect-journey/`. The
     /// process runs with this directory as its working directory and loads
-    /// `batect.yml` from it, exactly as Batect's own harness runs each
-    /// project in place — so a relative `volumes:` path or the
-    /// `batect.project_directory` expression resolves the same way it does
-    /// for Batect.
+    /// [`config_file`](Self::config_file) from it, exactly as Batect's own
+    /// harness runs each project in place — so a relative `volumes:` path or
+    /// the `batect.project_directory` expression resolves the same way it
+    /// does for Batect.
     project: &'a str,
-    /// The command-line arguments after `-f batect.yml` — the flags and
+    /// The configuration file to load with `-f`, relative to the project
+    /// directory. Almost always `batect.yml`; a couple of projects use a
+    /// non-standard name to prove `-f` honours it.
+    config_file: &'a str,
+    /// The command-line arguments after `-f <config_file>` — the flags and
     /// task name Batect's own journey test passes (e.g. `["the-task"]`,
     /// `["--list-tasks"]`, or `["--config-var", "X=Y", "the-task"]`).
     args: &'a [&'a str],
@@ -63,18 +79,27 @@ struct ConformanceCase<'a> {
     /// deliberately relies on a variable being unset (e.g. an `${X:-default}`
     /// fallback).
     unset_env: &'a [&'a str],
-    /// The exit code `ratect-compat` must return. Batect propagates the
-    /// task container's own exit code, and so do we (`docker run`'s
-    /// convention).
-    expected_exit_code: i32,
-    /// Substrings the run's combined stdout+stderr must contain — matched
-    /// against both because Batect's own assertions check its combined
-    /// `output`, and a container writes to whichever stream it likes.
-    /// Deliberately not an exact-transcript match: the milestone/framing
-    /// lines around the output differ from Batect's, so only the
-    /// container's own output (and, for `--list-tasks`, the task listing)
-    /// is pinned.
+    /// The exit status `ratect-compat` must return.
+    expected_exit: ExpectedExit,
+    /// Substrings the run's combined stdout+stderr must *all* contain —
+    /// matched against both because Batect's own assertions check its
+    /// combined `output`, and a container writes to whichever stream it
+    /// likes. Deliberately not an exact-transcript match: the
+    /// milestone/framing lines around the output differ from Batect's, so
+    /// only the container's own output (and, for `--list-tasks`, the task
+    /// listing) is pinned.
     expected_output_contains: &'a [&'a str],
+    /// Substrings *at least one* of which must appear — Batect's own
+    /// `shouldContainAnyOf`, used where the observable output legitimately
+    /// varies (e.g. a log driver that may or may not let Docker read the
+    /// container's output back, depending on the daemon version). Empty
+    /// means "no any-of constraint".
+    expected_output_any_of: &'a [&'a str],
+    /// Substrings that must *not* appear — Batect's own `shouldNotContain`,
+    /// used to prove something did *not* happen (e.g. a task whose
+    /// dependency never became healthy must never have run its command).
+    /// Empty means "no absence constraint".
+    expected_output_absent: &'a [&'a str],
     /// Set when `ratect-compat`'s behaviour diverges from Batect's own
     /// journey assertion *on purpose* — a documented simplification, not a
     /// bug. Recording it here makes the difference an asserted fact and
@@ -84,8 +109,9 @@ struct ConformanceCase<'a> {
 }
 
 impl<'a> ConformanceCase<'a> {
-    /// A case with no host-environment fiddling and no divergence — the
-    /// shape most journey projects take.
+    /// A case that pins an exact exit code and a set of required output
+    /// substrings — the shape most journey projects take. Layer on the rest
+    /// with the setters below.
     fn new(
         project: &'a str,
         args: &'a [&'a str],
@@ -94,13 +120,21 @@ impl<'a> ConformanceCase<'a> {
     ) -> Self {
         Self {
             project,
+            config_file: "batect.yml",
             args,
             env: &[],
             unset_env: &[],
-            expected_exit_code,
+            expected_exit: ExpectedExit::Code(expected_exit_code),
             expected_output_contains,
+            expected_output_any_of: &[],
+            expected_output_absent: &[],
             divergence: None,
         }
+    }
+
+    fn config_file(mut self, config_file: &'a str) -> Self {
+        self.config_file = config_file;
+        self
     }
 
     fn env(mut self, env: &'a [(&'a str, &'a str)]) -> Self {
@@ -110,6 +144,23 @@ impl<'a> ConformanceCase<'a> {
 
     fn unset_env(mut self, unset_env: &'a [&'a str]) -> Self {
         self.unset_env = unset_env;
+        self
+    }
+
+    /// Require only that the run failed, not a specific code — Batect's
+    /// `exitCode shouldNotBe 0`.
+    fn nonzero_exit(mut self) -> Self {
+        self.expected_exit = ExpectedExit::NonZero;
+        self
+    }
+
+    fn any_of(mut self, expected_output_any_of: &'a [&'a str]) -> Self {
+        self.expected_output_any_of = expected_output_any_of;
+        self
+    }
+
+    fn absent(mut self, expected_output_absent: &'a [&'a str]) -> Self {
+        self.expected_output_absent = expected_output_absent;
         self
     }
 }
@@ -126,7 +177,7 @@ fn run_case(case: &ConformanceCase) {
     command
         .current_dir(project_dir(case.project))
         .arg("-f")
-        .arg("batect.yml")
+        .arg(case.config_file)
         .args(case.args);
     for (name, value) in case.env {
         command.env(name, value);
@@ -154,16 +205,40 @@ fn run_case(case: &ConformanceCase) {
         )
     };
 
-    assert_eq!(
-        output.status.code(),
-        Some(case.expected_exit_code),
-        "exit code should match Batect's — {}",
-        context()
-    );
+    match case.expected_exit {
+        ExpectedExit::Code(code) => assert_eq!(
+            output.status.code(),
+            Some(code),
+            "exit code should match Batect's — {}",
+            context()
+        ),
+        ExpectedExit::NonZero => assert!(
+            output.status.code().is_none_or(|code| code != 0),
+            "run should have failed (non-zero exit), like Batect's — {}",
+            context()
+        ),
+    }
     for expected in case.expected_output_contains {
         assert!(
             combined.contains(expected),
             "output should contain {expected:?} — {}",
+            context()
+        );
+    }
+    if !case.expected_output_any_of.is_empty() {
+        assert!(
+            case.expected_output_any_of
+                .iter()
+                .any(|expected| combined.contains(expected)),
+            "output should contain at least one of {:?} — {}",
+            case.expected_output_any_of,
+            context()
+        );
+    }
+    for absent in case.expected_output_absent {
+        assert!(
+            !combined.contains(absent),
+            "output should not contain {absent:?} — {}",
             context()
         );
     }
@@ -367,4 +442,193 @@ fn many_tasks_list() {
             "- task-3: do the third thing",
         ],
     ));
+}
+
+/// `additional-arguments`: extra arguments after `--` are appended to the
+/// task container's command, so `echo "…config file…"` also prints the
+/// argument. Proves the trailing-argument passthrough.
+#[test]
+#[ignore]
+fn additional_arguments() {
+    run_case(&ConformanceCase::new(
+        "additional-arguments",
+        &[
+            "the-task",
+            "--",
+            "This is some output from the additional arguments.",
+        ],
+        0,
+        &["This is the output from the config file. This is some output from the additional arguments."],
+    ));
+}
+
+/// `additional-hosts`: an `additional_hosts` entry adds a name to the
+/// container's `/etc/hosts`, which `getent hosts` then resolves. Proves the
+/// extra host entry reaches the container.
+#[test]
+#[ignore]
+fn additional_hosts() {
+    run_case(&ConformanceCase::new(
+        "additional-hosts",
+        &["the-task"],
+        0,
+        // Batect prints the getent line `1.2.3.4  additionalhost.batect.dev
+        // …`; the exact column spacing is getent's, so pin the two fields
+        // rather than the whitespace between them.
+        &["1.2.3.4", "additionalhost.batect.dev"],
+    ));
+}
+
+/// `image-override`: the container's configured image is deliberately
+/// `this-image-does-not-exist`, and `--override-image` points it at a real
+/// one. Proves the override replaces the configured image end to end.
+#[test]
+#[ignore]
+fn image_override() {
+    run_case(&ConformanceCase::new(
+        "image-override",
+        &["--override-image", "build-env=alpine:3.18.3", "the-task"],
+        123,
+        &["This is some output from the task"],
+    ));
+}
+
+/// `container-with-multiple-dependencies`: the task depends on two HTTP
+/// servers and curls both, with `--max-parallelism=1` forcing them up one
+/// at a time. Proves multiple dependencies and the parallelism cap.
+#[test]
+#[ignore]
+fn container_with_multiple_dependencies() {
+    run_case(&ConformanceCase::new(
+        "container-with-multiple-dependencies",
+        &["--max-parallelism=1", "the-task"],
+        0,
+        &[
+            "Status code for first request: 200",
+            "Status code for second request: 200",
+        ],
+    ));
+}
+
+/// `task-with-customisation`: the task's `customise` block overrides a
+/// dependency's `working_directory` and environment. Run with `--output=all`
+/// so the dependency's own output is captured. Proves the per-task
+/// customisation reaches the dependency (working directory and both a new
+/// and an overridden environment variable), while a variable set only on
+/// the container and not customised is left untouched.
+#[test]
+#[ignore]
+fn task_with_customisation() {
+    run_case(&ConformanceCase::new(
+        "task-with-customisation",
+        &["--output=all", "the-task"],
+        0,
+        // The container's own lines; `--output=all` prefixes them with
+        // `dependency | `, which the substring match tolerates.
+        &[
+            "Working directory is /customised",
+            "Value of CONTAINER_VAR is set on container",
+            "Value of OVERRIDDEN_VAR is overridden value from task",
+            "Value of NEW_VAR is new value from task",
+        ],
+    ));
+}
+
+/// `task-with-slow-healthy-dependency`: a dependency whose health check
+/// only passes after ~11s (its check interval times out once first). Proves
+/// Ratect waits through a slow-to-become-healthy dependency rather than
+/// giving up, then runs the task.
+#[test]
+#[ignore]
+fn task_with_slow_healthy_dependency() {
+    run_case(&ConformanceCase::new(
+        "task-with-slow-healthy-dependency",
+        &["the-task"],
+        0,
+        &["Started!"],
+    ));
+}
+
+/// `proxy-variables`: proxy environment variables set on the host are
+/// propagated both to the image build and to the running container, with
+/// the container name appended to `no_proxy` at runtime. Proves proxy
+/// propagation on both paths.
+#[test]
+#[ignore]
+fn proxy_variables() {
+    run_case(
+        &ConformanceCase::new("proxy-variables", &["the-task"], 0, &[
+            "http_proxy: some-http-proxy",
+            "https_proxy: some-https-proxy",
+            "ftp_proxy: some-ftp-proxy",
+            // Batect appends the container name to no_proxy at runtime.
+            "no_proxy: bypass-proxy,build-env",
+        ])
+        .env(&[
+            ("http_proxy", "some-http-proxy"),
+            ("https_proxy", "some-https-proxy"),
+            ("ftp_proxy", "some-ftp-proxy"),
+            ("no_proxy", "bypass-proxy"),
+        ]),
+    );
+}
+
+/// `non-standard-name` (listing): the configuration lives in
+/// `another-name.yml`, loaded with `-f`. Proves `--list-tasks` honours a
+/// non-default file name.
+#[test]
+#[ignore]
+fn non_standard_name_list() {
+    run_case(
+        &ConformanceCase::new("non-standard-name", &["--list-tasks"], 0, &[
+            "- task-1", "- task-2", "- task-3",
+        ])
+        .config_file("another-name.yml"),
+    );
+}
+
+/// `non-standard-name` (run): the same non-default file name, running one
+/// of its tasks. Proves task execution honours `-f another-name.yml`.
+#[test]
+#[ignore]
+fn non_standard_name_run() {
+    run_case(
+        &ConformanceCase::new("non-standard-name", &["task-1"], 123, &[
+            "This is some output from task 1",
+        ])
+        .config_file("another-name.yml"),
+    );
+}
+
+/// `task-with-unhealthy-dependency`: a dependency whose health check always
+/// fails, so it never becomes healthy and the task's own command must never
+/// run. Proves the run fails, surfaces the failing health check's own
+/// output, and does *not* execute the task command.
+#[test]
+#[ignore]
+fn task_with_unhealthy_dependency() {
+    run_case(
+        &ConformanceCase::new("task-with-unhealthy-dependency", &["--no-color", "the-task"], 0, &[
+            "This is some normal output",
+            "This is some error output",
+        ])
+        .nonzero_exit()
+        .absent(&["This task should never be executed!"]),
+    );
+}
+
+/// `task-using-log-driver`: the container uses the `gelf` log driver. Batect
+/// pins `shouldContainAnyOf` because whether Docker can read the container's
+/// output back through a non-`json-file` driver is daemon-version dependent
+/// — so either the task's own line appears, or Docker's "does not support
+/// reading" message does. Either way the task's exit code propagates.
+#[test]
+#[ignore]
+fn task_using_log_driver() {
+    run_case(
+        &ConformanceCase::new("task-using-log-driver", &["the-task"], 123, &[]).any_of(&[
+            "This is some output from the task",
+            "configured logging driver does not support reading",
+        ]),
+    );
 }
