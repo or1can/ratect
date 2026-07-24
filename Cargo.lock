@@ -1777,7 +1777,7 @@ checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
 name = "ratect"
-version = "0.2.0-dev"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1789,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "ratect-compat"
-version = "0.21.1-dev"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1802,7 +1802,7 @@ dependencies = [
 
 [[package]]
 name = "ratect-core"
-version = "0.22.0-dev"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "async-recursion",
