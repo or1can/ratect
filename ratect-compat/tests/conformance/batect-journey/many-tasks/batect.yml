@@ -1,0 +1,24 @@
+project_name: many-tasks-test
+
+containers:
+  build-env:
+    image: alpine:3.18.3
+
+tasks:
+  task-1:
+    description: do the first thing
+    run:
+      container: build-env
+      command: sh -c "echo 'This is some output from task 1' && exit 123"
+
+  task-2:
+    description: do the second thing
+    run:
+      container: build-env
+      command: sh -c "echo 'This is some output from task 2' && exit 123"
+
+  task-3:
+    description: do the third thing
+    run:
+      container: build-env
+      command: sh -c "echo 'This is some output from task 3' && exit 123"

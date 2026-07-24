@@ -838,7 +838,18 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     `dockerignore` precedent) — and vendoring *frozen, archived* fixtures is the
     mitigation for "depending on a deprecated resource", not the risk: they never
     change, which is exactly what a conformance corpus wants. The spike landed a
-    working harness + the first project (`simple-task-using-image`).
+    working harness + the first project (`simple-task-using-image`); 0.23.0 grew
+    the harness (extra CLI args, host env vars, combined-output assertions) and
+    ported the first batch of ~11 projects — prerequisites, mounts, Dockerfile
+    builds, custom Dockerfile names, config variables, host environment, setup
+    commands (on both a dependency and the task container), a health-checked
+    dependency, and `--list-tasks`. That batch immediately earned its keep: it
+    surfaced the missing `batect.local.yml` default for `--config-vars-file`
+    (now fixed). Still to port: caches (needs a two-run harness), proxy
+    variables (build-time propagation), `run_as_current_user` (needs its output
+    mount adapted from Batect's own build tree), image/parallelism/customise
+    flags, and `--override-image`/`--tag-image`; git includes and the
+    Windows-container project stay out of this local-corpus scope.
   - **Assert behaviour, not Batect's transcript.** Batect's own assertions often
     check its exact output wording, which `ratect-compat` deliberately diverges
     from ([`docs/differences-from-batect.md`](docs/differences-from-batect.md)).
