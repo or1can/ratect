@@ -877,8 +877,13 @@ cycle (0.2.0, the first one not about `ratect-compat`):
   broken or absent — which is when clearing a cache is most likely wanted. New
   `cache::list_volume_caches`/`list_directory_caches` in `ratect-core`.
 
-  Still to decide before release: whether `-f batect.yml` stays the default file
-  name for a binary whose own format arrives in 0.3.0.
+  Two questions deliberately deferred to 0.3.0, when the config work forces
+  answers rather than guesses: whether `-f batect.yml` stays the default file name
+  once `ratect` has its own format, and (below) whether a `config` verb is how a
+  project moves between formats. Neither is worth deciding while `ratect` still
+  reads today's YAML unchanged — a default file name that has to move again in one
+  release, or a `config convert` with only one format to convert, would both be
+  churn.
 - **0.3.0** (planned) — **A `ratect`-native config format**, replacing YAML for
   this binary only (`ratect-compat` stays YAML-only, permanently, for Batect
   compatibility). TOML is the leading candidate — more idiomatic for a Rust
@@ -912,9 +917,16 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     (`cache.rs`'s sidecar file) — no new crate needed.
 - Migration tooling — converting an existing `ratect-compat`-managed project's
   `batect.yml` into `ratect`'s new format — remains a named goal (see
-  [Two Binaries](#two-binaries-ratect-and-ratect-compat)) but isn't scheduled to
-  a specific version yet; whether it's a `ratect` subcommand or a documented
-  manual process isn't decided.
+  [Two Binaries](#two-binaries-ratect-and-ratect-compat)), landing with or just
+  after 0.3.0, since there's nothing to convert until the second format exists.
+  The likely shape is a **`ratect config` verb** — `config convert` to migrate a
+  `batect.yml`, probably `config validate` (`doctor`'s config half as its own
+  CI-friendly command) alongside it — sitting next to `run`/`tasks`/`caches`/
+  `resources`/`doctor`/`includes` as its own noun, the same subcommand structure
+  0.2.0 established. Deliberately not built in 0.2.0: a `config convert` with only
+  one format to convert between is a no-op that invites "convert to what?", and
+  the verb's shape is better decided against the real target format than ahead of
+  it.
 
 Its **1.0.0** means something different from `ratect-compat`'s: interface stability
 (the subcommand structure and config format won't break), not feature-completeness
