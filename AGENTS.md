@@ -197,11 +197,19 @@ Ratect is a **Cargo workspace** with four crates (the
     `container_config.image_pull_policy == Always`, since `docker.rs` still
     doesn't depend on `config` types directly).
     `ensure_host_volume_directories_exist` (the `run_as_current_user` host-dir
-    pre-creation step) only `mkdir -p`s a bind's *absolute* source segment —
-    added when 0.18.0's `cache` mounts landed, since `CacheType::Volume`
-    resolves to a bare (non-absolute) Docker volume name, which this would
-    otherwise have tried to create as a relative directory under the current
-    working directory. `list_volumes`/`remove_volume` (0.18.0, `--clean`/
+    pre-creation step) only `mkdir -p`s a bind's source when it's *absolute*
+    (a bare non-absolute source is a `CacheType::Volume` name, 0.18.0, not a
+    host path), *doesn't already exist* (an existing directory Docker reuses,
+    or a single file/socket the config bind-mounts like `~/.gitconfig` or an
+    SSH agent socket — `mkdir` over a non-directory both fails and is wrong),
+    and *isn't a special Docker Desktop path* (`/run/host-services`/
+    `/run/guest-services`, which Docker injects into its own VM and don't
+    exist on a macOS host — the SSH agent socket lives at
+    `/run/host-services/ssh-auth.sock`). The latter two guards are a
+    straight port of Batect's `!Files.exists && !isSpecialDockerDesktopPath`;
+    0.10.0's `52e8d59` dropped the exists-check as "TOCTOU-prone" and the
+    special-path one was never ported, which together broke mounting the SSH
+    agent under `run_as_current_user` — don't re-simplify them away. `list_volumes`/`remove_volume` (0.18.0, `--clean`/
     `--clean-cache`) are thin wrappers over bollard's own volume API — see
     `cache.rs` for the actual removal-decision logic built on top of them.
     `list_containers`/`list_networks` (0.2.0-dev) are the equivalent pair for

@@ -2835,6 +2835,41 @@ tasks:
     cleanup();
 }
 
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Mounting Docker Desktop's SSH-agent socket under `run_as_current_user`
+/// — see `tests/fixtures/ssh-agent-socket.yml` for what makes the mount
+/// path special and why the pre-creation step must skip it. A static
+/// fixture, not an inline temp config: the config has no per-run temp path
+/// and running it writes no state next to itself, so it's exactly the
+/// checked-in-fixture case (unlike the user-mapping and cache tests, which
+/// go inline for those reasons).
+#[test]
+#[ignore]
+fn ssh_agent_socket_mounts_under_run_as_current_user() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ssh-agent-socket.yml"))
+        .arg("check")
+        .output()
+        .expect("failed to run ratect");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("Failed to create host directory"),
+        "the special Docker Desktop path must be skipped, not created:\n{stderr}"
+    );
+    assert!(
+        output.status.success(),
+        "the task should run with the socket mounted:\nstderr:\n{stderr}"
+    );
+    assert_eq!(
+        task_output(&String::from_utf8_lossy(&output.stdout)),
+        "mounted-ok"
+    );
+}
+
 /// Shared by `cache_volume_type_persists_and_clean_cache_removes_it` and
 /// `cache_directory_type_persists_and_clean_cache_removes_it` — everything
 /// about the two is identical except `extra_args` (empty for the default

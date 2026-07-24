@@ -1,0 +1,34 @@
+# Exercises forwarding the host's SSH agent into a container under
+# `run_as_current_user` — the canonical way to give a containerised build
+# access to your SSH keys without copying them in.
+#
+# The point of interest is the mount source: `/run/host-services/ssh-auth.sock`
+# is a path Docker Desktop injects into its own Linux VM, so it does *not*
+# exist on a macOS host. With `run_as_current_user` on, Ratect pre-creates
+# missing bind sources (so they aren't left root-owned) — and this one must
+# be *skipped*, not `mkdir -p`'d, or that pre-creation fails with "Failed to
+# create host directory" before the container ever starts. See
+# `docker.rs`'s `ensure_host_volume_directories_exist` and its port of
+# Batect's `isSpecialDockerDesktopPath`.
+#
+# Runs on plain Docker too (Linux CI): the source doesn't exist there
+# either, so the only thing this proves on that platform is that Ratect
+# doesn't choke on the special path before the container starts. On a real
+# Docker Desktop host the socket is genuinely mounted and usable.
+project_name: ratect-ssh-agent-socket-test
+containers:
+  app:
+    image: alpine:3.18.2
+    run_as_current_user:
+      enabled: true
+      home_directory: /home/container-user
+    environment:
+      SSH_AUTH_SOCK: "/run/host-services/ssh-auth.sock"
+    volumes:
+      - local: "/run/host-services/ssh-auth.sock"
+        container: "/run/host-services/ssh-auth.sock"
+tasks:
+  check:
+    run:
+      container: app
+      command: echo mounted-ok

@@ -1103,14 +1103,30 @@ fn ensure_host_volume_directories_exist(volumes: Option<&Vec<String>>) -> Result
         if !path.is_absolute() {
             continue;
         }
-        // No `path.exists()` pre-check: `create_dir_all` is already a no-op
-        // success if `path` is an existing directory, so the check bought
-        // nothing but a TOCTOU race (something else removing/replacing
-        // `path` between the check and the create). It also used to mean a
-        // pre-existing *non-directory* at `path` was silently left alone
-        // here, deferring to a more confusing failure later when Docker
-        // tries to bind-mount it — now `create_dir_all` reports that
-        // directly.
+        // Docker Desktop injects a few paths into its own Linux VM that
+        // don't exist on the host at all — most notably the SSH agent
+        // socket at `/run/host-services/ssh-auth.sock`. `mkdir -p` on one
+        // fails (there's no `/run` on a macOS host to create under), so
+        // skip them and let Docker provide them. Component-wise prefix
+        // match, so `/run/host-services-something` isn't caught. Ported
+        // from Batect's own `isSpecialDockerDesktopPath`.
+        if path.starts_with("/run/host-services") || path.starts_with("/run/guest-services") {
+            continue;
+        }
+        // Only a *missing* source is pre-created. The whole reason to do so
+        // is that Docker otherwise creates a missing bind source as a
+        // root-owned directory the mapped user can't write to; an existing
+        // source has no such problem and must be left exactly as it is —
+        // whether it's a directory Docker will reuse, or a single file or
+        // socket the config means to bind-mount (`~/.gitconfig`, an SSH
+        // agent socket). `create_dir_all` over an existing non-directory
+        // fails, which is exactly how a valid file/socket mount used to
+        // break. Matches Batect's own `!Files.exists(path)` guard. The
+        // theoretical TOCTOU race this reintroduces (something replacing
+        // `path` between check and create) is the lesser problem by far.
+        if path.exists() {
+            continue;
+        }
         fs::create_dir_all(path)
             .with_context(|| format!("Failed to create host directory {:?}", path))?;
     }
@@ -4430,19 +4446,38 @@ mod tests {
         assert!(!created);
     }
 
+    /// Mounting a single existing *file* — `~/.gitconfig`, a known-hosts
+    /// file, an SSH agent socket — is a legitimate pattern, and Batect
+    /// supports it (`!Files.exists`): the file is left exactly as it is,
+    /// for Docker to bind-mount, not `mkdir`ed over.
     #[test]
-    fn ensure_host_volume_directories_exist_errors_clearly_when_a_file_blocks_the_path() {
+    fn ensure_host_volume_directories_exist_leaves_an_existing_file_alone() {
         let dir = unique_temp_dir();
         fs::create_dir_all(&dir).unwrap();
-        let host_path = dir.join("blocked");
-        fs::write(&host_path, "not a directory").unwrap();
-        let volumes = vec![format!("{}:/code", host_path.display())];
+        let host_path = dir.join("gitconfig");
+        fs::write(&host_path, "[user]\n  name = someone\n").unwrap();
+        let volumes = vec![format!("{}:/root/.gitconfig", host_path.display())];
 
-        let result = ensure_host_volume_directories_exist(Some(&volumes));
+        ensure_host_volume_directories_exist(Some(&volumes)).unwrap();
 
-        assert!(result.is_err());
         assert!(host_path.is_file(), "the file must be left untouched");
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Docker Desktop's own injected paths (the SSH agent socket lives at
+    /// `/run/host-services/ssh-auth.sock`) don't exist on a macOS host, so
+    /// `mkdir -p` on one fails — mounting the SSH agent with
+    /// `run_as_current_user` on hit exactly this. They must be skipped, not
+    /// created. See Batect's `isSpecialDockerDesktopPath`.
+    #[test]
+    fn ensure_host_volume_directories_exist_skips_special_docker_desktop_paths() {
+        let volumes = vec![
+            "/run/host-services/ssh-auth.sock:/run/host-services/ssh-auth.sock".to_string(),
+            "/run/guest-services/something:/something".to_string(),
+        ];
+
+        // The bug was this returning an error; that it's `Ok` is the fix.
+        ensure_host_volume_directories_exist(Some(&volumes)).unwrap();
     }
 }
