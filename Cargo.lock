@@ -288,7 +288,7 @@ dependencies = [
 [[package]]
 name = "bollard"
 version = "0.21.0"
-source = "git+https://github.com/or1can/bollard.git?branch=ratect%2Fsession-providers-0.21#862208b0acf0a1d3c1c8ad9515551f0ede7b158f"
+source = "git+https://github.com/or1can/bollard.git?branch=ratect%2Fsession-providers-0.21#ecfa7898506289380d2758347482de0ff14787af"
 dependencies = [
  "async-stream",
  "base64",
