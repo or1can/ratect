@@ -1192,11 +1192,12 @@ fn config_findings(config: &ratect_core::config::Config) -> Vec<Finding> {
 /// the unmaintained JVM binary, so during a migration you can believe
 /// you've switched over while `./batect` quietly still runs the old tool.
 ///
-/// Only flags a script that *still runs Batect* — a file that's been
-/// repointed at Ratect (symlinked to `ratect-compat`, or replaced with a
-/// wrapper that calls `ratect`) is one of the two intended migration
-/// outcomes and is left alone. That distinction is why this matches the
-/// script's *content*, not just its name.
+/// Only flags a script that *still runs Batect* — matched by content, not
+/// name, so a `batect` file that no longer does (deleted and replaced, or a
+/// hand-written shim that execs `ratect-compat`) is correctly left alone.
+/// The recommended migration is to delete the wrapper and run Ratect from
+/// the PATH, since Ratect is an ordinary installed binary rather than a
+/// downloaded-on-demand wrapper the way Batect was — see docs/ratect-cli.md.
 fn wrapper_script_findings(project_directory: &Path) -> Vec<Finding> {
     ["batect", "batect.cmd"]
         .iter()
@@ -1208,8 +1209,8 @@ fn wrapper_script_findings(project_directory: &Path) -> Vec<Finding> {
             let content = std::fs::read(&path).ok()?;
             is_batect_wrapper(&String::from_utf8_lossy(&content)).then(|| {
                 Finding::Warning(format!(
-                    "'{name}' is a Batect wrapper script that still runs Batect, not Ratect — \
-                     repoint it at ratect, or remove it and run ratect from your PATH"
+                    "'{name}' is a Batect wrapper script and still runs Batect, not Ratect — \
+                     delete it and run ratect (or ratect-compat) from your PATH"
                 ))
             })
         })
@@ -1980,11 +1981,11 @@ tasks:
             "@echo off\nrem This file is part of Batect.\nrem Do not modify...\n"
         ));
 
-        // The two intended migration outcomes: a wrapper that now calls
-        // ratect, and a symlink to ratect-compat (read as binary). Neither
-        // carries the marker, so neither is flagged — flagging them would
-        // be flagging the desired end state.
-        assert!(!is_batect_wrapper("#!/bin/sh\nexec ratect \"$@\"\n"));
+        // Anything that no longer runs Batect must not be flagged, however
+        // it got that way: a hand-written shim that execs ratect-compat, or
+        // a symlink to the ratect-compat binary (read as binary bytes).
+        // Flagging one would mean flagging a finished migration.
+        assert!(!is_batect_wrapper("#!/bin/sh\nexec ratect-compat \"$@\"\n"));
         assert!(!is_batect_wrapper("\u{7f}ELF\u{2}\u{1}\u{1}\u{0}"));
         assert!(!is_batect_wrapper(""));
     }

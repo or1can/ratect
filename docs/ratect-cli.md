@@ -191,9 +191,20 @@ refused" on the first run comes from.
 If you're **migrating from Batect**, `doctor` also flags a leftover `batect`/`batect.cmd`
 wrapper script. Those aren't harmless: `./batect` still downloads and runs the
 unmaintained JVM binary, so you can think you've switched to Ratect while `./batect`
-quietly runs the old tool. Either repoint the wrapper at `ratect` (symlink it, or
-replace it with a script that calls `ratect`) or delete it and run `ratect` from your
-`PATH`. A wrapper that already points at Ratect isn't flagged.
+quietly runs the old tool.
+
+**Delete the wrapper and run `ratect` (or `ratect-compat`, for strict Batect
+compatibility) from your `PATH`.** Batect's committed wrapper *was* its installer — it
+fetched the right JVM version on demand — whereas Ratect is an ordinary binary you
+install once, so there's nothing for a committed wrapper to do. (Don't repoint the
+wrapper at Ratect by symlinking it: a committed symlink is machine-specific and doesn't
+work for `batect.cmd` on Windows, and it still needs the binary on the `PATH` anyway.)
+
+The one exception is a codebase with `./batect` hardcoded across CI jobs, Makefiles and
+docs that you can't change all at once: there, replacing the wrapper with a one-line
+transitional shim — `exec ratect-compat "$@"` — keeps those call sites working while you
+migrate them (it still needs `ratect-compat` on the `PATH`). A wrapper that no longer
+runs Batect isn't flagged.
 
 `doctor` **exits non-zero if it found any problem**, and zero for warnings alone, so
 it works as a CI step. Under `-o quiet` it prints only warnings and problems.
