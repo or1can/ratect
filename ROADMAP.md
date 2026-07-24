@@ -818,11 +818,17 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     until the two open upstream PRs (#731, #732 — see
     [Key Dependencies](AGENTS.md#key-dependencies)) land, rather than piling
     further changes onto the fork ahead of them.
-- **Next (planned) — Batect conformance**: the concrete run-up to 1.0.0 below,
-  making "verified against real Batect projects" an executable fact rather than an
-  aspiration. Our own tests encode *our* reading of Batect (careful, but
-  confirmation-bias-prone: we test the paths we thought of). This closes that gap
-  by running `ratect-compat` against Batect's *own* acceptance corpus:
+- **0.23.0 → 1.0.0 (planned) — Batect conformance**: not one release but the *phase*
+  between here and 1.0.0, shipped across the next few minors — porting ~30 journey
+  projects surfaces parity bugs to fix, so each release turns more of the corpus
+  green, and 1.0.0 is earned once it all is (this is what "verified against real
+  Batect projects" in the 1.0.0 gate below actually means, made executable). Starts
+  at 0.23.0 on the assumption the current cycle cuts as 0.22.0 — `ratect-compat`
+  gained a feature this cycle (ownership labels), so it's a minor, not the
+  `0.21.1-dev` placeholder the `Cargo.toml`s still carry. Our own tests encode *our*
+  reading of Batect (careful, but confirmation-bias-prone: we test the paths we
+  thought of); this closes that gap by running `ratect-compat` against Batect's
+  *own* acceptance corpus:
   - **Vendor Batect's journey-test projects** (`app/src/journeyTest/resources/` —
     ~30 complete projects covering dependencies, caches, includes,
     `run_as_current_user`, health checks, customisation, log drivers, …) verbatim
