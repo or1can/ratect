@@ -242,7 +242,8 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Environment variables to set inside the container. Values support expressions.",
+          "default": null,
+          "description": "Environment variables to set inside the container. Values support expressions, and a non-string scalar (`1`, `true`) is coerced to its string form, matching Batect.",
           "type": [
             "object",
             "null"
@@ -728,6 +729,7 @@
           "additionalProperties": {
             "type": "string"
           },
+          "default": null,
           "description": "Merged with the container's own `environment` (see `Container::environment`): the container's values apply first, and this overrides them on a key collision — same precedence as `TaskRun::environment` over the main container's.",
           "type": [
             "object",
@@ -779,6 +781,7 @@
           "additionalProperties": {
             "type": "string"
           },
+          "default": null,
           "description": "Environment variables for this task's run specifically, merged over the container's own `environment` — see `Container::environment`.",
           "type": [
             "object",

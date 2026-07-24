@@ -120,7 +120,9 @@ pub struct Container {
     /// task only.
     pub dependencies: Option<Vec<String>>,
     /// Environment variables to set inside the container. Values support
-    /// expressions.
+    /// expressions, and a non-string scalar (`1`, `true`) is coerced to its
+    /// string form, matching Batect.
+    #[serde(default, deserialize_with = "deserialize_scalar_string_map")]
     pub environment: Option<HashMap<String, String>>,
     /// Runs the container as the host's own user rather than the image's
     /// default, so files it writes to a mounted volume aren't root-owned.
@@ -665,6 +667,79 @@ where
     }
 
     deserializer.deserialize_any(ShmSizeVisitor)
+}
+
+/// `serde` `deserialize_with` for the `environment` maps — accepts a YAML
+/// scalar of any type as a value and coerces it to its string form, the way
+/// Batect does, so `MY_VAR: 1` or `DEBUG: true` is read as `"1"`/`"true"`
+/// rather than rejected with a type-mismatch error. Only the *values* are
+/// coerced (keys are already strings), and only when the field is present;
+/// `#[serde(default)]` handles the absent case.
+fn deserialize_scalar_string_map<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<HashMap<String, String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    /// A single YAML scalar read as its string form, whatever its type.
+    struct ScalarString(String);
+
+    impl<'de> serde::Deserialize<'de> for ScalarString {
+        fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            struct ScalarStringVisitor;
+
+            impl<'de> serde::de::Visitor<'de> for ScalarStringVisitor {
+                type Value = ScalarString;
+
+                fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.write_str("a string, number, or boolean")
+                }
+
+                fn visit_str<E>(self, v: &str) -> std::result::Result<ScalarString, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(ScalarString(v.to_owned()))
+                }
+
+                fn visit_i64<E>(self, v: i64) -> std::result::Result<ScalarString, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(ScalarString(v.to_string()))
+                }
+
+                fn visit_u64<E>(self, v: u64) -> std::result::Result<ScalarString, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(ScalarString(v.to_string()))
+                }
+
+                fn visit_f64<E>(self, v: f64) -> std::result::Result<ScalarString, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(ScalarString(v.to_string()))
+                }
+
+                fn visit_bool<E>(self, v: bool) -> std::result::Result<ScalarString, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Ok(ScalarString(v.to_string()))
+                }
+            }
+
+            deserializer.deserialize_any(ScalarStringVisitor)
+        }
+    }
+
+    let map: Option<HashMap<String, ScalarString>> = Option::deserialize(deserializer)?;
+    Ok(map.map(|entries| entries.into_iter().map(|(key, value)| (key, value.0)).collect()))
 }
 
 /// Controls whether `TaskEngine::resolve_image` pulls an `image` container's
@@ -1373,6 +1448,7 @@ pub struct TaskContainerCustomisation {
     /// [`Container::environment`]): the container's values apply first, and
     /// this overrides them on a key collision — same precedence as
     /// [`TaskRun::environment`] over the main container's.
+    #[serde(default, deserialize_with = "deserialize_scalar_string_map")]
     pub environment: Option<HashMap<String, String>>,
     /// *Added* to the container's own `ports`, not an override — same
     /// union semantics as [`TaskRun::ports`].
@@ -1513,6 +1589,7 @@ pub struct TaskRun {
     pub command: Option<String>,
     /// Environment variables for this task's run specifically, merged over
     /// the container's own `environment` — see `Container::environment`.
+    #[serde(default, deserialize_with = "deserialize_scalar_string_map")]
     pub environment: Option<HashMap<String, String>>,
     /// Additional port mappings for this task's run specifically —
     /// *added* to the container's own `ports` (a union, not an override:
@@ -2515,6 +2592,37 @@ mod tests {
     #[test]
     fn base_path_for_a_dot_relative_config_file_is_dot() {
         assert_eq!(base_path_for(Path::new("./batect.yml")), Path::new("."));
+    }
+
+    #[test]
+    fn environment_values_accept_non_string_scalars() {
+        // Batect coerces a YAML scalar to its string form; Ratect matches,
+        // so `PORT: 8080` / `DEBUG: true` load rather than failing to parse
+        // with a type mismatch. Surfaced by the task-with-unhealthy-dependency
+        // conformance project (`NGINX_ENTRYPOINT_QUIET_LOGS: 1`).
+        let config = parse(
+            "project_name: p\n\
+             containers:\n  \
+               build-env:\n    \
+                 image: alpine\n    \
+                 environment:\n      \
+                   PORT: 8080\n      \
+                   RATIO: 1.5\n      \
+                   DEBUG: true\n      \
+                   NAME: already-a-string\n\
+             tasks:\n  \
+               the-task:\n    \
+                 run:\n      \
+                   container: build-env\n",
+        );
+        let env = config.containers["build-env"]
+            .environment
+            .as_ref()
+            .expect("environment should be present");
+        assert_eq!(env["PORT"], "8080");
+        assert_eq!(env["RATIO"], "1.5");
+        assert_eq!(env["DEBUG"], "true");
+        assert_eq!(env["NAME"], "already-a-string");
     }
 
     #[test]

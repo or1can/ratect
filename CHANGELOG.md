@@ -23,6 +23,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- **Non-string scalar `environment` values are now accepted**: a YAML scalar such as `PORT: 8080` or `DEBUG: true` in a container's or task's `environment` is coerced to its string form (`"8080"`, `"true"`), matching Batect. Previously it failed config loading with `type mismatch: expected string, found non-string scalar`, so a valid Batect config using an integer or boolean environment value wouldn't load. Applies to `Container.environment`, `run.environment`, and `customise.<container>.environment`. Surfaced by porting Batect's own `task-with-unhealthy-dependency` journey-test project (`NGINX_ENTRYPOINT_QUIET_LOGS: 1`).
 - **`--config-vars-file` now defaults to `batect.local.yml`** (`ratect-compat` only): when the flag is not given, a `batect.local.yml` in the current directory is loaded automatically if it exists — an absent file just means no overrides from a file, not an error. This matches Batect's own default (`FileDefaultValueProvider("batect.local.yml")`); previously the file was ignored unless named explicitly with `--config-vars-file`, so a config variable that Batect would have taken from `batect.local.yml` failed with "has no value". Surfaced by porting Batect's own `config-vars` journey-test project into the conformance corpus.
 
 ## [ratect-compat 0.22.0 · ratect 0.2.0] - 2026-07-24
