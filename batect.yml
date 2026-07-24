@@ -1,0 +1,70 @@
+# Ratect's own dev-task configuration — we build Ratect with Ratect.
+#
+# Run these with the compat binary you just built:
+#
+#     cargo run -p ratect-compat -- fmt
+#     cargo run -p ratect-compat -- build
+#
+# (or with an installed `ratect-compat` on your PATH, once you have one).
+#
+# This is dogfooding, and a deliberate one: it's a complete, real project
+# that `ratect-compat` runs end to end — the best kind of conformance
+# evidence — and it exercises `cache` volume mounts in earnest (the Cargo
+# registry and build outputs persist between runs, so only the first build
+# is cold). Batect itself never did this for its own build (it's a Gradle
+# project); a native tool building itself in a container is something worth
+# showing.
+#
+# The Docker-requiring integration tests stay `#[ignore]`d, so `test` here
+# runs the unit suite only — no Docker-in-Docker needed.
+project_name: ratect
+
+containers:
+  rust-build-env:
+    # Built from dev-env/Dockerfile, which adds the rustfmt/clippy
+    # components the base `rust` image omits — so this dogfoods image
+    # building too, not just task running.
+    build_directory: dev-env
+    working_directory: /code
+    volumes:
+      - local: .
+        container: /code
+      # Persist Cargo's downloaded crates and the build output between runs,
+      # each in its own named cache volume. `target` is a cache rather than
+      # part of the source bind so a container build never lands
+      # root-owned artefacts in the host's own `target/`.
+      - type: cache
+        name: cargo-registry
+        container: /usr/local/cargo/registry
+      - type: cache
+        name: cargo-target
+        container: /code/target
+
+tasks:
+  build:
+    description: Build the whole workspace
+    group: Development
+    run:
+      container: rust-build-env
+      command: cargo build --workspace
+
+  test:
+    description: Run the unit test suite (the Docker integration tests are excluded)
+    group: Development
+    run:
+      container: rust-build-env
+      command: cargo test --workspace
+
+  lint:
+    description: Run clippy with warnings denied
+    group: Checks
+    run:
+      container: rust-build-env
+      command: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  fmt:
+    description: Check formatting
+    group: Checks
+    run:
+      container: rust-build-env
+      command: cargo fmt --all -- --check
