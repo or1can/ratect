@@ -1,6 +1,6 @@
 [package]
 name = "ratect"
-version = "0.2.0"
+version = "0.3.0-dev"
 edition = "2021"
 description = "The forward-looking Ratect CLI, free to diverge from Batect's interface"
 license = "Apache-2.0"
