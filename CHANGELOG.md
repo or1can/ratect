@@ -21,6 +21,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--config-vars-file` now defaults to `batect.local.yml`** (`ratect-compat` only): when the flag is not given, a `batect.local.yml` in the current directory is loaded automatically if it exists — an absent file just means no overrides from a file, not an error. This matches Batect's own default (`FileDefaultValueProvider("batect.local.yml")`); previously the file was ignored unless named explicitly with `--config-vars-file`, so a config variable that Batect would have taken from `batect.local.yml` failed with "has no value". Surfaced by porting Batect's own `config-vars` journey-test project into the conformance corpus.
+
 ## [ratect-compat 0.22.0 · ratect 0.2.0] - 2026-07-24
 
 ### Added

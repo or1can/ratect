@@ -19,7 +19,7 @@ The forward-looking `ratect` binary has its own, subcommand-based interface — 
 | `--config-file <PATH>` | `-f` | `batect.yml` | Path to the configuration file to load. |
 | `--list-tasks` | `-T` | — | List all tasks defined in the config file, then exit. Doesn't run anything. |
 | `--config-var <NAME=VALUE>` | — | — | Sets a [config variable](config-reference.md#configvariable)'s value; repeatable. Takes precedence over `--config-vars-file` and the variable's `default`. |
-| `--config-vars-file <PATH>` | — | — | A flat YAML file of config variable `name: value` pairs, in the same format as `batect.yml` itself. Lower precedence than `--config-var`. |
+| `--config-vars-file <PATH>` | `batect.local.yml` if it exists | — | A flat YAML file of config variable `name: value` pairs, in the same format as `batect.yml` itself. Lower precedence than `--config-var`. When not given, defaults to `batect.local.yml` in the current directory *if that file exists* (an absent default file just means no overrides from a file, not an error) — matching Batect. |
 | `--use-network <NAME>` | — | — | Reuses an existing Docker network for every task in this invocation instead of creating (and removing) a fresh one per task. Errors clearly if the named network doesn't exist. See [task lifecycle](task-lifecycle.md). |
 | `--disable-ports` | — | — | Disables publishing of any container's `ports` to the host, regardless of what's configured. |
 | `--no-proxy-vars` | — | — | Don't propagate proxy-related environment variables (`http_proxy`, `https_proxy`, `ftp_proxy`, `no_proxy`) to image builds or containers. See [Proxy environment variables](config-reference.md#proxy-environment-variables). |

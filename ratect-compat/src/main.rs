@@ -412,6 +412,20 @@ async fn main() {
     std::process::exit(exit_code.into());
 }
 
+/// Resolves which config-variables file to load. An explicit
+/// `--config-vars-file` always wins; otherwise Batect's default of
+/// `batect.local.yml` applies, but *only when that file exists* — an absent
+/// default file is simply "no overrides", not an error. This mirrors
+/// Batect's `FileDefaultValueProvider("batect.local.yml")`, which resolves
+/// the default against the current directory (`dir` here), not against the
+/// `-f` config file's own directory.
+fn resolve_config_vars_file(explicit: Option<PathBuf>, dir: &Path) -> Option<PathBuf> {
+    explicit.or_else(|| {
+        let default = dir.join("batect.local.yml");
+        default.is_file().then_some(default)
+    })
+}
+
 async fn run(args: Args) -> Result<()> {
     if args.upgrade {
         eprintln!(
@@ -425,7 +439,9 @@ async fn run(args: Args) -> Result<()> {
         return clean_caches(&args).await;
     }
 
-    let mut config_var_overrides: HashMap<String, String> = match &args.config_vars_file {
+    let config_vars_file =
+        resolve_config_vars_file(args.config_vars_file.clone(), &std::env::current_dir()?);
+    let mut config_var_overrides: HashMap<String, String> = match &config_vars_file {
         Some(path) => Config::load_config_vars_file(path)?,
         None => HashMap::new(),
     };
@@ -1289,5 +1305,49 @@ mod tests {
         let args = Args::try_parse_from(["ratect", "-o", "fancy", "--no-color", "build"]).unwrap();
         assert_eq!(args.output, Some(OutputStyleArg::Fancy));
         assert!(args.no_color);
+    }
+
+    /// Unique empty directory under the system temp dir — the project's own
+    /// convention (see `ratect-core`'s cache tests) rather than a
+    /// `tempfile` dev-dependency just for this.
+    fn unique_temp_dir() -> PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "ratect-compat-cvf-test-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn explicit_config_vars_file_wins_over_the_default() {
+        let dir = unique_temp_dir();
+        std::fs::write(dir.join("batect.local.yml"), "IGNORED: true").unwrap();
+        let explicit = PathBuf::from("chosen.yml");
+        assert_eq!(
+            resolve_config_vars_file(Some(explicit.clone()), &dir),
+            Some(explicit),
+            "an explicit --config-vars-file must win even when batect.local.yml exists",
+        );
+    }
+
+    #[test]
+    fn config_vars_file_defaults_to_batect_local_yml_when_present() {
+        // Batect's default: batect.local.yml in the current directory, used
+        // only when it exists.
+        let dir = unique_temp_dir();
+        let default = dir.join("batect.local.yml");
+        std::fs::write(&default, "FROM_FILE: value").unwrap();
+        assert_eq!(resolve_config_vars_file(None, &dir), Some(default));
+    }
+
+    #[test]
+    fn config_vars_file_default_is_absent_when_batect_local_yml_is_missing() {
+        // An absent default file is "no overrides", not an error.
+        let dir = unique_temp_dir();
+        assert_eq!(resolve_config_vars_file(None, &dir), None);
     }
 }
