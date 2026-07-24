@@ -557,13 +557,18 @@ fn task_with_slow_healthy_dependency() {
 #[ignore]
 fn proxy_variables() {
     run_case(
-        &ConformanceCase::new("proxy-variables", &["the-task"], 0, &[
-            "http_proxy: some-http-proxy",
-            "https_proxy: some-https-proxy",
-            "ftp_proxy: some-ftp-proxy",
-            // Batect appends the container name to no_proxy at runtime.
-            "no_proxy: bypass-proxy,build-env",
-        ])
+        &ConformanceCase::new(
+            "proxy-variables",
+            &["the-task"],
+            0,
+            &[
+                "http_proxy: some-http-proxy",
+                "https_proxy: some-https-proxy",
+                "ftp_proxy: some-ftp-proxy",
+                // Batect appends the container name to no_proxy at runtime.
+                "no_proxy: bypass-proxy,build-env",
+            ],
+        )
         .env(&[
             ("http_proxy", "some-http-proxy"),
             ("https_proxy", "some-https-proxy"),
@@ -580,9 +585,12 @@ fn proxy_variables() {
 #[ignore]
 fn non_standard_name_list() {
     run_case(
-        &ConformanceCase::new("non-standard-name", &["--list-tasks"], 0, &[
-            "- task-1", "- task-2", "- task-3",
-        ])
+        &ConformanceCase::new(
+            "non-standard-name",
+            &["--list-tasks"],
+            0,
+            &["- task-1", "- task-2", "- task-3"],
+        )
         .config_file("another-name.yml"),
     );
 }
@@ -593,9 +601,12 @@ fn non_standard_name_list() {
 #[ignore]
 fn non_standard_name_run() {
     run_case(
-        &ConformanceCase::new("non-standard-name", &["task-1"], 123, &[
-            "This is some output from task 1",
-        ])
+        &ConformanceCase::new(
+            "non-standard-name",
+            &["task-1"],
+            123,
+            &["This is some output from task 1"],
+        )
         .config_file("another-name.yml"),
     );
 }
@@ -608,10 +619,12 @@ fn non_standard_name_run() {
 #[ignore]
 fn task_with_unhealthy_dependency() {
     run_case(
-        &ConformanceCase::new("task-with-unhealthy-dependency", &["--no-color", "the-task"], 0, &[
-            "This is some normal output",
-            "This is some error output",
-        ])
+        &ConformanceCase::new(
+            "task-with-unhealthy-dependency",
+            &["--no-color", "the-task"],
+            0,
+            &["This is some normal output", "This is some error output"],
+        )
         .nonzero_exit()
         .absent(&["This task should never be executed!"]),
     );

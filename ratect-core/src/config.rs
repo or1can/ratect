@@ -739,7 +739,12 @@ where
     }
 
     let map: Option<HashMap<String, ScalarString>> = Option::deserialize(deserializer)?;
-    Ok(map.map(|entries| entries.into_iter().map(|(key, value)| (key, value.0)).collect()))
+    Ok(map.map(|entries| {
+        entries
+            .into_iter()
+            .map(|(key, value)| (key, value.0))
+            .collect()
+    }))
 }
 
 /// Controls whether `TaskEngine::resolve_image` pulls an `image` container's
