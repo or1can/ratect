@@ -58,6 +58,32 @@ jobs:
       # binary so it runs with exclusive Docker access (see that file).
       - run: cargo test --workspace --test cli --test conformance --test volume_cleanup -- --ignored
 
+  dev-env:
+    name: Dev-env Rust builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Single source of truth: the Rust version the dogfood build actually
+      # runs on lives in dev-env/Dockerfile. Read it here (constrained to a
+      # version-like string) rather than duplicating the literal, so the two
+      # can't drift. The other jobs deliberately use `stable` (newest); this
+      # one pins that exact version so a dependency raising its MSRV above it
+      # fails CI instead of silently breaking `ratect-compat -- build`.
+      - name: Read the pinned Rust version from dev-env/Dockerfile
+        id: rust
+        run: |
+          version="$(grep -oE 'rust:[0-9]+(\.[0-9]+)*' dev-env/Dockerfile | head -1 | cut -d: -f2)"
+          echo "version=${version:?could not read a version from dev-env/Dockerfile}" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+      # The same commands the dogfood batect.yml `build`/`test` tasks run in
+      # the rust:<pinned> container — the Docker-requiring tests stay excluded
+      # there, so no daemon is needed here either.
+      - run: cargo build --workspace
+      - run: cargo test --workspace
+
   coverage:
     name: Coverage Report
     runs-on: ubuntu-latest
