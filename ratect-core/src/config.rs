@@ -2575,7 +2575,7 @@ pub async fn load_project(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git_include::{FakeGitClient, GitIncludeCache};
+    use crate::git_include::{FakeGitClient, GitIncludeCache, SystemGitClient};
     use std::io::Cursor;
 
     fn parse(yaml: &str) -> Config {
@@ -6366,6 +6366,85 @@ tasks:
         assert!(loaded.config.tasks.contains_key("bundled-task"));
 
         std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    /// Runs a sequence of `git` subcommands in `repo`, isolated from the
+    /// developer's own global/system git config (which might set a signing
+    /// key, hooks, or a template) and with a fixed identity, so the result is
+    /// deterministic wherever it runs.
+    fn run_git(repo: &Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "Ratect Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Ratect Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+            .output()
+            .expect("failed to run git — is it installed and on PATH?");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// The counterpart to the `FakeGitClient` tests above, run against the
+    /// *real* [`SystemGitClient`]: a `type: git` include of an actual local
+    /// git repository, checked out at a real tag. The fake client just writes
+    /// pre-registered files, so it never exercises the one thing that can
+    /// only go wrong in production — the real `git clone`/`checkout`/ref
+    /// resolution and the default `batect-bundle.yml` path applied to a real
+    /// clone tree. Deliberately hermetic: a locally-built repo stands in for
+    /// a published bundle (no network — see ROADMAP's conformance section for
+    /// why a live remote is out) and a fixed temp cache root keeps it out of
+    /// `~/.ratect`.
+    #[tokio::test]
+    async fn a_git_include_clones_a_real_local_repository_with_the_system_client() {
+        let bundle = unique_temp_dir();
+        std::fs::write(
+            bundle.join("batect-bundle.yml"),
+            r#"
+containers:
+  bundled:
+    image: alpine:3.18
+tasks:
+  bundled-task:
+    run:
+      container: bundled
+"#,
+        )
+        .unwrap();
+        run_git(&bundle, &["init", "--quiet"]);
+        run_git(&bundle, &["add", "-A"]);
+        run_git(&bundle, &["commit", "--quiet", "-m", "the bundle"]);
+        run_git(&bundle, &["tag", "v1"]);
+
+        let project = unique_temp_dir();
+        std::fs::write(
+            project.join("batect.yml"),
+            // No `path:`, so the include must default to batect-bundle.yml —
+            // resolved against the real clone tree, not a fake one.
+            format!(
+                "project_name: demo\ninclude:\n  - type: git\n    repo: {}\n    ref: v1\n",
+                bundle.display()
+            ),
+        )
+        .unwrap();
+
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+        let loaded = Config::load_from_file_with_git_cache(&project.join("batect.yml"), &git_cache)
+            .await
+            .unwrap();
+        assert!(loaded.config.containers.contains_key("bundled"));
+        assert!(loaded.config.tasks.contains_key("bundled-task"));
+
+        std::fs::remove_dir_all(&bundle).unwrap();
+        std::fs::remove_dir_all(&project).unwrap();
         std::fs::remove_dir_all(&cache_root).unwrap();
     }
 

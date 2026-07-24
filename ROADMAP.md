@@ -869,9 +869,19 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     behaviour diverges *on purpose* (a documented simplification), it's recorded
     as an explicit `divergence` expectation — which turns the differences doc from
     prose into an executable report, arguably the most valuable by-product.
-  - **A focused slice of real bundles** (git includes against a couple of real
-    published Batect bundles) — the strongest real-world exercise of the includes
-    feature specifically.
+  - **Git includes exercised against the real `git` client** — the fake-client
+    unit tests never run `git` itself, so the actual clone/ref-checkout/default-
+    `batect-bundle.yml`-path resolution was the one part left uncovered. A test
+    now drives the real `SystemGitClient` against a locally-built git repo
+    standing in for a published bundle, checked out at a real tag, with a fixed
+    temp cache root. Deliberately *not* cloning a live remote (the original
+    "focused slice of real published bundles" idea): the only published bundles
+    are in the archived Batect org, so a per-CI-run clone would make the build
+    hostage to a third-party repo staying reachable — the exact fragility the
+    vendored corpus exists to avoid — while adding no coverage of Ratect's own
+    code beyond what a local repo already gives (the HTTPS transport is git's
+    concern, not Ratect's). If the real-remote signal is ever wanted, it belongs
+    in a separate non-blocking scheduled job, not the PR gate.
   - **Dogfood**: Ratect builds Ratect. The repository-root `batect.yml` runs the
     project's own `build`/`test`/`lint`/`fmt` in a pinned Rust container, with the
     Cargo registry and build output as `cache` volumes and the toolchain image
