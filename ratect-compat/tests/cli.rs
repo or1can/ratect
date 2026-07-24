@@ -984,55 +984,6 @@ fn ownership_labels_reach_real_containers_and_networks_via_docker() {
 /// Requires a running Docker daemon with network access to pull `redis:7-alpine`
 /// and `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
 ///
-/// Cleanup has to take a container's *anonymous* volumes with it. `redis`
-/// declares `VOLUME /data`, so each of this fixture's three redis
-/// dependencies creates one per run; without `v: true` on removal (Docker's
-/// own default, and Ratect's behavior before this test existed) every run
-/// left three behind, permanently. They're unfixable after the fact — Docker
-/// names them with a random hash and they carry no labels, since Docker
-/// creates them implicitly — so not creating them is the only remedy there
-/// is, and this is what proves it holds.
-///
-/// Deliberately measures the *delta* rather than an absolute count: a
-/// developer machine (or a CI runner between jobs) has dangling volumes from
-/// everything else it's ever run, and none of that is this test's business.
-#[test]
-#[ignore]
-fn cleanup_takes_anonymous_volumes_with_it_via_docker() {
-    fn dangling_volume_count() -> usize {
-        let output = Command::new("docker")
-            .args(["volume", "ls", "-qf", "dangling=true"])
-            .output()
-            .expect("failed to run docker volume ls");
-        assert!(output.status.success(), "docker volume ls failed");
-        String::from_utf8_lossy(&output.stdout).lines().count()
-    }
-
-    let before = dangling_volume_count();
-
-    let output = ratect_command()
-        .arg("-f")
-        .arg(sidecar_config_path())
-        .arg("ping-sidecars")
-        .output()
-        .expect("failed to run ratect");
-    assert!(
-        output.status.success(),
-        "stderr:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    assert_eq!(
-        dangling_volume_count(),
-        before,
-        "the run should have left no anonymous volumes behind (three redis \
-         dependencies, each declaring VOLUME /data)"
-    );
-}
-
-/// Requires a running Docker daemon with network access to pull `redis:7-alpine`
-/// and `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
-///
 /// Proves a task-level `dependencies` entry (`queue`, not in `app`'s own
 /// container-level `dependencies`) is actually started and reachable by
 /// name — distinct from the container-level `dependencies` sidecars proven

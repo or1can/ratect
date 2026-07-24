@@ -53,8 +53,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # `--test cli` for both binaries' end-to-end suites, plus
       # `--test conformance` for the vendored Batect journey projects
-      # (ratect-compat/tests/conformance/) — the drop-in-replacement proof.
-      - run: cargo test --workspace --test cli --test conformance -- --ignored
+      # (ratect-compat/tests/conformance/) — the drop-in-replacement proof —
+      # and `--test volume_cleanup`, one daemon-global test kept in its own
+      # binary so it runs with exclusive Docker access (see that file).
+      - run: cargo test --workspace --test cli --test conformance --test volume_cleanup -- --ignored
 
   coverage:
     name: Coverage Report
