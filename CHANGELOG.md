@@ -37,6 +37,8 @@ history, from when it was the only binary.
 
 ### Changed
 
+- **Ratect now builds Ratect** — a repository-root `batect.yml` runs the project's own `build`/`test`/`lint`/`fmt` in a pinned Rust container (`dev-env/Dockerfile`), with the Cargo registry and build output as `cache` volumes. Dogfooding: one real project that exercises task running, image building, and caching at once. See [ROADMAP.md](ROADMAP.md#ratect-compat)'s Batect-conformance plan.
+- **A Batect conformance suite** (`ratect-compat/tests/conformance/`): runs `ratect-compat` against test projects vendored verbatim from Batect's own journey-test suite (Apache-2.0, attributed in `NOTICE`), asserting the same observable behaviour Batect's acceptance tests do — the strongest evidence that `ratect-compat` is a drop-in replacement. Groundwork this release (the harness and the first project); the full port is the next release's theme, the run-up to `ratect-compat` 1.0.0.
 - **Shared CLI glue moved into `ratect-core`** so both binaries use one copy: `config::load_project` (existence check → includes → expressions → project directory, in the one order that's correct) returning a `LoadedProject`, and `engine::TaskEngineSettings`/`TaskEngine::with_settings` (the plain-data form of the engine's builder methods, which stay as they are for everything else). `config::base_path_for` moved from `ratect-compat`'s `main.rs` alongside them. `ratect-compat` is on both, unchanged in behavior.
 
 ## [0.21.0] - 2026-07-22

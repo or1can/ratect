@@ -818,11 +818,54 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     until the two open upstream PRs (#731, #732 — see
     [Key Dependencies](AGENTS.md#key-dependencies)) land, rather than piling
     further changes onto the fork ahead of them.
+- **Next (planned) — Batect conformance**: the concrete run-up to 1.0.0 below,
+  making "verified against real Batect projects" an executable fact rather than an
+  aspiration. Our own tests encode *our* reading of Batect (careful, but
+  confirmation-bias-prone: we test the paths we thought of). This closes that gap
+  by running `ratect-compat` against Batect's *own* acceptance corpus:
+  - **Vendor Batect's journey-test projects** (`app/src/journeyTest/resources/` —
+    ~30 complete projects covering dependencies, caches, includes,
+    `run_as_current_user`, health checks, customisation, log drivers, …) verbatim
+    under `ratect-compat/tests/conformance/batect-journey/`, and assert the same
+    *observable* behaviour Batect's own journey tests do. Batect is Apache-2.0
+    (as is Ratect), so this is vendored with attribution (`NOTICE`, the
+    `dockerignore` precedent) — and vendoring *frozen, archived* fixtures is the
+    mitigation for "depending on a deprecated resource", not the risk: they never
+    change, which is exactly what a conformance corpus wants. The spike landed a
+    working harness + the first project (`simple-task-using-image`).
+  - **Assert behaviour, not Batect's transcript.** Batect's own assertions often
+    check its exact output wording, which `ratect-compat` deliberately diverges
+    from ([`docs/differences-from-batect.md`](docs/differences-from-batect.md)).
+    The harness pins exit codes and the task command's own output instead. Where
+    behaviour diverges *on purpose* (a documented simplification), it's recorded
+    as an explicit `divergence` expectation — which turns the differences doc from
+    prose into an executable report, arguably the most valuable by-product.
+  - **A focused slice of real bundles** (git includes against a couple of real
+    published Batect bundles) — the strongest real-world exercise of the includes
+    feature specifically.
+  - **Dogfood**: Ratect builds Ratect. The repository-root `batect.yml` runs the
+    project's own `build`/`test`/`lint`/`fmt` in a pinned Rust container, with the
+    Cargo registry and build output as `cache` volumes and the toolchain image
+    built via `build_directory` — so one real project exercises task running,
+    image building, and caching at once. (Landed now, ahead of the rest.) Batect
+    never did this for its own Gradle build; a native tool building itself is
+    worth showing.
+  - **Explicitly *not* the strategy: waiting for user reports.** For a drop-in
+    replacement the failure mode is silent abandonment ("it didn't work, I went
+    back to compose, I filed nothing"), so reactive feedback can't earn pre-1.0
+    confidence. It's a cheap *supplement* (a clear issue path, a user-facing "does
+    feature X work?" matrix), not the proof.
+  - Deliverable framing: **the value is the bugs this finds**, not green
+    checkmarks — the scenarios are Batect's, so they exercise cases our own tests
+    didn't. Skipped deliberately: Batect's Kotlin *unit* tests (internal
+    implementation, JVM-bound) and its *completion* tests (shell completion, a
+    feature `ratect-compat` doesn't ship).
 - **1.0.0** — the [Batect Parity](#batect-parity) section above substantially checked
   off (all of the above, including 0.7.0–0.19.0, not just the items shipped through
-  0.6.0), and verified against a handful of real Batect projects, not just the
-  itemized field/flag tables passing in isolation. Not tagged early for appearances —
-  earned once `ratect-compat` can honestly replace `batect` on real projects.
+  0.6.0), and verified against real Batect projects — the conformance corpus above
+  green, not just the itemized field/flag tables passing in isolation. Not tagged
+  early for appearances — earned once `ratect-compat` can honestly replace `batect`
+  on real projects.
 
 ### `ratect`
 
