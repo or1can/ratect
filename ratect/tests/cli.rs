@@ -19,9 +19,31 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard};
 
 fn ratect_command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ratect"))
+}
+
+/// Serializes the real-Docker tests below. They share one Docker daemon, and
+/// [`all_projects_never_reaches_containers_ratect_did_not_create`] runs a
+/// machine-wide `resources clean --all-projects` sweep that, by design,
+/// removes *every* Ratect-created container and network regardless of
+/// project — so it must never overlap another test here, which would lose
+/// its containers mid-assertion (a real, timing-dependent CI flake, rare on
+/// a fast machine but reliable on a slow runner). A process-wide lock is
+/// enough on its own: Cargo runs test binaries one at a time, so only the
+/// within-binary parallelism needs taming — no need for a special
+/// `--test-threads=1` invocation that a contributor running these locally
+/// would have to remember. The lock is recovered from poisoning so one
+/// failing test reports its own assertion rather than cascading a
+/// `PoisonError` onto every test after it.
+static DOCKER_SERIAL: Mutex<()> = Mutex::new(());
+
+fn serial_docker() -> MutexGuard<'static, ()> {
+    DOCKER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn fixture_path() -> PathBuf {
@@ -317,6 +339,7 @@ fn cleaning_a_cache_that_does_not_exist_says_so() {
 #[test]
 #[ignore]
 fn run_executes_a_task_via_docker() {
+    let _guard = serial_docker();
     let output = ratect_command()
         .arg("-f")
         .arg(fixture_path())
@@ -353,10 +376,11 @@ fn run_executes_a_task_via_docker() {
 #[test]
 #[ignore]
 fn a_run_stamps_this_binarys_own_version_onto_what_it_creates() {
-    // `tests/fixtures/labels.yml` has a project name of its own: these
-    // tests run concurrently, and `tasks.yml`'s project is also used by
-    // `run_executes_a_task_via_docker`, whose container this would
-    // otherwise find alongside its own.
+    let _guard = serial_docker();
+    // `tests/fixtures/labels.yml` has a project name of its own: even with
+    // the tests here serialized (see `serial_docker`), a distinct project
+    // keeps this one from finding a leftover carried by `tasks.yml`'s
+    // project, which `run_executes_a_task_via_docker` also uses.
     let filter = "label=eu.orican.ratect.project=ratect-cli-labels-test";
 
     let output = ratect_command()
@@ -431,6 +455,7 @@ fn a_run_stamps_this_binarys_own_version_onto_what_it_creates() {
 #[test]
 #[ignore]
 fn all_projects_never_reaches_containers_ratect_did_not_create() {
+    let _guard = serial_docker();
     let name = "ratect-bystander-test";
     let _ = Command::new("docker").args(["rm", "-f", name]).output();
     let started = Command::new("docker")
@@ -509,6 +534,7 @@ fn all_projects_never_reaches_containers_ratect_did_not_create() {
 #[test]
 #[ignore]
 fn resources_finds_and_removes_what_a_previous_run_left_behind() {
+    let _guard = serial_docker();
     let config = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/resources.yml");
     let ratect = |arguments: &[&str]| {
         let mut command = ratect_command();
@@ -584,6 +610,7 @@ fn resources_finds_and_removes_what_a_previous_run_left_behind() {
 #[test]
 #[ignore]
 fn caches_list_and_clean_manage_real_docker_volumes() {
+    let _guard = serial_docker();
     let config = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cache.yml");
     let ratect = |arguments: &[&str]| {
         let mut command = ratect_command();
@@ -631,6 +658,7 @@ fn caches_list_and_clean_manage_real_docker_volumes() {
 #[test]
 #[ignore]
 fn run_forwards_arguments_after_a_double_dash_to_the_task_command() {
+    let _guard = serial_docker();
     let output = ratect_command()
         .arg("-f")
         .arg(fixture_path())
