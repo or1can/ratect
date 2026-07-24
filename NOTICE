@@ -24,3 +24,9 @@ License, Version 2.0, and its own NOTICE file reads:
     For more information, please see https://www.bis.doc.gov
 
     See also https://www.apache.org/dev/crypto.html and/or seek legal counsel.
+
+The test projects under `ratect-compat/tests/conformance/batect-journey/` are copied
+verbatim from Batect's own journey-test suite
+(`app/src/journeyTest/resources/` in github.com/batect/batect), and are used to
+demonstrate that `ratect-compat` reproduces Batect's own observable behaviour. Batect
+is licensed under the Apache License, Version 2.0. Copyright 2017-2022 Charles Korn.

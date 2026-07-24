@@ -51,7 +51,10 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --test cli -- --ignored
+      # `--test cli` for both binaries' end-to-end suites, plus
+      # `--test conformance` for the vendored Batect journey projects
+      # (ratect-compat/tests/conformance/) — the drop-in-replacement proof.
+      - run: cargo test --workspace --test cli --test conformance -- --ignored
 
   coverage:
     name: Coverage Report
