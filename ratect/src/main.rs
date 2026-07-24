@@ -1038,6 +1038,13 @@ async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> 
         }
     };
 
+    // Independent of whether the config loads — a project mid-migration may
+    // have a broken batect.yml and a leftover wrapper at once, and the
+    // wrapper lives beside the config file regardless.
+    findings.extend(wrapper_script_findings(ratect_core::config::base_path_for(
+        &global.config_file,
+    )));
+
     match load(global, &args.config_vars).await {
         Ok(project) => {
             findings.push(Finding::Fine(format!(
@@ -1178,6 +1185,45 @@ fn config_findings(config: &ratect_core::config::Config) -> Vec<Finding> {
     findings.extend(missing.into_iter().map(Finding::Problem));
 
     findings
+}
+
+/// Batect's own wrapper scripts (`batect`/`batect.cmd`) left in a project
+/// that's moved to Ratect. Not inert: `./batect` still downloads and runs
+/// the unmaintained JVM binary, so during a migration you can believe
+/// you've switched over while `./batect` quietly still runs the old tool.
+///
+/// Only flags a script that *still runs Batect* — a file that's been
+/// repointed at Ratect (symlinked to `ratect-compat`, or replaced with a
+/// wrapper that calls `ratect`) is one of the two intended migration
+/// outcomes and is left alone. That distinction is why this matches the
+/// script's *content*, not just its name.
+fn wrapper_script_findings(project_directory: &Path) -> Vec<Finding> {
+    ["batect", "batect.cmd"]
+        .iter()
+        .filter_map(|name| {
+            let path = project_directory.join(name);
+            // Small scripts (~200 lines); the marker is on line 2, so a
+            // partial read would do, but reading the whole thing is
+            // simpler and the file is tiny.
+            let content = std::fs::read(&path).ok()?;
+            is_batect_wrapper(&String::from_utf8_lossy(&content)).then(|| {
+                Finding::Warning(format!(
+                    "'{name}' is a Batect wrapper script that still runs Batect, not Ratect — \
+                     repoint it at ratect, or remove it and run ratect from your PATH"
+                ))
+            })
+        })
+        .collect()
+}
+
+/// Whether `content` is one of Batect's own wrapper scripts, by the notice
+/// line its authors put near the top of both the Unix and Windows forms —
+/// a deliberate, stable marker (`# This file is part of Batect.` /
+/// `rem This file is part of Batect.`). Matched as a substring so the
+/// comment character doesn't matter. A script repointed at Ratect won't
+/// carry it, which is the whole point.
+fn is_batect_wrapper(content: &str) -> bool {
+    content.contains("This file is part of Batect.")
 }
 
 /// `image` with no tag at all, or an explicitly floating one. Docker treats
@@ -1919,6 +1965,74 @@ tasks:
             findings.iter().all(|f| !matches!(f, Finding::Problem(_))),
             "none of this stops a run: {messages:?}"
         );
+    }
+
+    /// The marker Batect's authors put near the top of both wrapper forms
+    /// — the thing that tells a still-runs-Batect script from one already
+    /// repointed at Ratect.
+    #[test]
+    fn a_batect_wrapper_is_recognized_by_its_own_notice_line() {
+        // The real Unix and Windows headers, trimmed to the marker line.
+        assert!(is_batect_wrapper(
+            "#!/usr/bin/env bash\n# This file is part of Batect.\n# Do not modify...\n"
+        ));
+        assert!(is_batect_wrapper(
+            "@echo off\nrem This file is part of Batect.\nrem Do not modify...\n"
+        ));
+
+        // The two intended migration outcomes: a wrapper that now calls
+        // ratect, and a symlink to ratect-compat (read as binary). Neither
+        // carries the marker, so neither is flagged — flagging them would
+        // be flagging the desired end state.
+        assert!(!is_batect_wrapper("#!/bin/sh\nexec ratect \"$@\"\n"));
+        assert!(!is_batect_wrapper("\u{7f}ELF\u{2}\u{1}\u{1}\u{0}"));
+        assert!(!is_batect_wrapper(""));
+    }
+
+    /// The filesystem half: a leftover wrapper in the project directory is
+    /// a warning (it still works, and that's the trap), never a problem.
+    #[test]
+    fn a_leftover_wrapper_in_the_project_directory_is_warned_about() {
+        let directory = std::env::temp_dir().join(format!(
+            "ratect-wrapper-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("batect"),
+            "#!/usr/bin/env bash\n# This file is part of Batect.\n",
+        )
+        .unwrap();
+        // A same-named file that isn't the wrapper mustn't be flagged.
+        std::fs::write(directory.join("batect.cmd"), "echo not really batect\n").unwrap();
+
+        let findings = wrapper_script_findings(&directory);
+        std::fs::remove_dir_all(&directory).unwrap();
+
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(matches!(
+            &findings[0],
+            Finding::Warning(message) if message.contains("'batect'") && message.contains("still runs Batect")
+        ));
+    }
+
+    #[test]
+    fn a_project_with_no_wrapper_scripts_is_not_warned() {
+        let directory = std::env::temp_dir().join(format!(
+            "ratect-nowrapper-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        assert!(wrapper_script_findings(&directory).is_empty());
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 
     /// A build directory that isn't there fails the run, so it's a problem

@@ -188,6 +188,13 @@ runs a different image next week, and a dependency with no `health_check` counts
 ready the moment it starts unless its image defines one, which is where "connection
 refused" on the first run comes from.
 
+If you're **migrating from Batect**, `doctor` also flags a leftover `batect`/`batect.cmd`
+wrapper script. Those aren't harmless: `./batect` still downloads and runs the
+unmaintained JVM binary, so you can think you've switched to Ratect while `./batect`
+quietly runs the old tool. Either repoint the wrapper at `ratect` (symlink it, or
+replace it with a script that calls `ratect`) or delete it and run `ratect` from your
+`PATH`. A wrapper that already points at Ratect isn't flagged.
+
 `doctor` **exits non-zero if it found any problem**, and zero for warnings alone, so
 it works as a CI step. Under `-o quiet` it prints only warnings and problems.
 
