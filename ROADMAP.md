@@ -428,14 +428,16 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     transcript-in-error behavior for `build_secrets`/`build_ssh` builds, replacing
     both the gRPC-driver path's `spawn_blocking` non-`Send` workaround (the new
     path's future is `Send`) and its post-build `inspect_image` ID lookup.
-  - The one missing piece in bollard 0.21.0 — `build_image`'s internal session only
+  - The one missing piece — `build_image`'s internal session only
     registers auth/file-send providers, with no way for a caller to supply the
-    secrets/ssh session services — plus `ping_info` (the `/_ping` response's
-    `Builder-Version` header, which plain `ping()` discards) are carried by a fork
-    (`or1can/bollard`, branch `ratect/session-providers-0.21`) consumed through
-    `[patch.crates-io]` and commit-pinned via `Cargo.lock`, with both changes PR'd
-    upstream ([bollard#731](https://github.com/fussybeaver/bollard/pull/731),
-    [bollard#732](https://github.com/fussybeaver/bollard/pull/732)) (a third, separable upstream contribution remains open: named
+    secrets/ssh session services — is carried by a fork (`or1can/bollard`, branch
+    `feat/build-image-session-providers`, based on bollard 0.22) consumed through
+    `[patch.crates-io]` and commit-pinned via `Cargo.lock`, PR'd upstream as
+    [bollard#731](https://github.com/fussybeaver/bollard/pull/731). Its companion
+    `ping_info` (the `/_ping` response's `Builder-Version` header, which plain
+    `ping()` discards) has since landed upstream
+    ([bollard#732](https://github.com/fussybeaver/bollard/pull/732), in bollard 0.22).
+    (A third, separable upstream contribution remains open: named
     agents/explicit key files for full `build_ssh` parity, which needs an
     in-process ssh keyring agent). Deliberately *not* a build-library switch: no
     other Rust BuildKit client supports the Docker daemon's own `/session`+`/grpc`
