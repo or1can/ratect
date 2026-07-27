@@ -29,33 +29,18 @@ The primary goal is to support the core features of Batect to ensure a seamless 
 
 ## Two Binaries: `ratect` and `ratect-compat`
 
-Rather than one binary evolving through phases and eventually deprecating Batect
-compatibility, the plan is a Cargo workspace with a shared core library
-(config parsing, task engine, `ContainerRuntime`/Docker integration) and two thin
-binary crates built on top of it:
+A Cargo workspace with a shared core library (config parsing, task engine,
+`ContainerRuntime`/Docker integration) and two thin binary crates on top:
+**`ratect-compat`**, a strict flag-for-flag/field-for-field drop-in for Batect's
+CLI and `batect.yml` (where all [Batect Parity](#batect-parity) work lands), and
+**`ratect`**, the forward-looking CLI free to diverge (subcommands, a native
+config format, modern-Rust-CLI conventions). No binary is literally named
+`batect`. Because both share the core, an eventual migration path from a
+`ratect-compat`-managed project to a `ratect`-managed one is a goal in its own
+right, not a side effect.
 
-- **`ratect-compat`**: A strict, literal, flag-for-flag and field-for-field match for
-  Batect's CLI and `batect.yml` format. This is where all of the [Batect Parity](#batect-parity)
-  work lands, scoped precisely by the itemized tables in
-  [Differences from Batect](docs/differences-from-batect.md). Its only job is being a
-  boring, reliable drop-in replacement for the (now-unmaintained) `batect` binary — it
-  is not the place for new ideas.
-
-  Ratect deliberately does **not** ship a binary literally named `batect` (that would be
-  confusing, and edges toward a trademark/naming concern). Anyone who wants their
-  existing `./batect` wrapper script or `PATH` entry to keep working symlinks or renames
-  `ratect-compat` to `batect` themselves.
-
-- **`ratect`**: The forward-looking CLI, free to diverge from Batect's interface —
-  subcommands (`ratect tasks list`, `ratect run <task>`), better shell completions, and
-  other modern-Rust-CLI conventions — without being constrained by parity concerns. This
-  is also the binary that would adopt any future alternative configuration format (see
-  [Future Vision](#future-vision)); `ratect-compat` stays YAML-only, permanently, since
-  that's what Batect compatibility requires.
-
-Because both binaries share the same core, an eventual migration/upgrade path from a
-`ratect-compat`-managed project (Batect-format config) to a `ratect`-managed one is a
-roadmap goal in its own right, not just a side effect of the split.
+Full rationale, alternatives, and consequences:
+[decisions/0001](decisions/0001-two-binaries.md).
 
 ## Versioning & Releases
 
@@ -968,63 +953,22 @@ cycle (0.2.0, the first one not about `ratect-compat`):
   reads today's YAML unchanged — a default file name that has to move again in one
   release, or a `config convert` with only one format to convert, would both be
   churn.
-- **0.3.0** (planned) — **A `ratect`-native config format**, replacing YAML for
-  this binary only (`ratect-compat` stays YAML-only, permanently, for Batect
-  compatibility). TOML is the leading candidate — more idiomatic for a Rust
-  tool, and translates cleanly for most of today's schema (named
-  containers/tasks map naturally onto dotted table headers; scalars, string
-  maps, and scalar lists are a 1:1 fit) — but the exact syntax is secondary to
-  the schema redesign this version is actually about, which holds regardless of
-  which concrete format is chosen:
-  - **Replacing YAML anchors/aliases/merge keys** (`&name`/`*name`/`<<:`, free
-    today via `noyalib` — see [config reference](docs/config-reference.md)) with
-    an explicit `extends: <name>` field on `Container`, resolved as its own pass
-    after `include`s are merged (so, unlike anchors — scoped to a single parsed
-    YAML document — it can reach across `include` boundaries) and reusing the
-    same ancestor-path cycle check `engine.rs` already applies to
-    `dependencies`/`prerequisites`. Field-level shallow override (a child field
-    fully replaces the parent's, no recursive merging into nested maps),
-    matching the mental model `<<:` already has today rather than inventing a
-    new one.
-  - **Standardizing `volumes`/`ports`/`devices`/`include` on one object shape per
-    entry**, dropping today's compact string shorthand (`"8080:80"`,
-    `.:/code`, a bare include path) — not strictly required by TOML itself
-    (heterogeneous arrays are legal), but keeping a list's `[[...]]`
-    array-of-tables shorthand usable requires every entry be a table, and
-    `include`'s three current shapes (bare string / `{path, type: file}` /
-    `{type: git, ...}`) are the worst fit for a mixed-type array of any format.
-  - **An auto-discovered local config-variables/overrides file**, designed here
-    rather than retrofitted onto the `batect.yml` transitional phase.
-    `ratect-compat` defaults `--config-vars-file` to `batect.local.yml` when
-    present (0.23.0) because Batect does and drop-in compatibility *requires* it;
-    `ratect` has no such external contract, and the whole point of this binary is
-    to shed Batect's interface, so hard-coding a `batect.`-named default into it
-    would be exactly backwards. There's also no coherent name to give it until
-    now — a local override sitting beside a `batect.yml` could only sensibly be
-    `batect.local.yml` — so the native-format cut is the first moment the primary
-    file has its own name and the local file can share it coherently
-    (`<nativename>.local.<ext>`, a native `[local]`-style section, or whatever
-    the format makes natural). The behaviour (a gitignored local overrides file,
-    loaded without a flag) is worth having; the name and shape are 0.3.0's to
-    decide.
-  - Reuses `ratect-core`'s already-resolved `Config`/`Container`/`Task` types
-    unchanged past parsing — only the deserialization front-end and the
-    `extends`-resolution pass are new, so `engine.rs`/`docker.rs`/`ui/` need no
-    changes at all, the same way `include` resolution is already invisible past
-    `Config::load_from_file`. `toml` is already a `ratect-core` dependency
-    (`cache.rs`'s sidecar file) — no new crate needed.
-- Migration tooling — converting an existing `ratect-compat`-managed project's
-  `batect.yml` into `ratect`'s new format — remains a named goal (see
-  [Two Binaries](#two-binaries-ratect-and-ratect-compat)), landing with or just
-  after 0.3.0, since there's nothing to convert until the second format exists.
-  The likely shape is a **`ratect config` verb** — `config convert` to migrate a
-  `batect.yml`, probably `config validate` (`doctor`'s config half as its own
-  CI-friendly command) alongside it — sitting next to `run`/`tasks`/`caches`/
-  `resources`/`doctor`/`includes` as its own noun, the same subcommand structure
-  0.2.0 established. Deliberately not built in 0.2.0: a `config convert` with only
-  one format to convert between is a no-op that invites "convert to what?", and
-  the verb's shape is better decided against the real target format than ahead of
-  it.
+- **0.3.0** (planned) — **A `ratect`-native config format** (TOML, native default
+  `ratect.toml`), replacing YAML for this binary only (`ratect-compat` stays
+  YAML-only, permanently, for Batect compatibility). The schema redesign it's
+  really about: an **`extends`** field replacing YAML anchors (shallow
+  `child.or(parent)`, resolved after path resolution, single-parent,
+  cycle-checked); **one object shape per** `volumes`/`ports`/`devices`/`include`
+  entry (lenient parser, strict schema); a config-vars-only **`ratect.local.toml`**
+  local overrides file; and **mixed TOML/YAML includes** (extension-driven,
+  `ratect-bundle.toml` before `batect-bundle.yml`, native-only so `ratect-compat`
+  stays byte-compatible). Reuses `ratect-core`'s resolved
+  `Config`/`Container`/`Task` unchanged past parsing — only the TOML front-end and
+  the `extends` pass are new. Migration is a one-directional **`ratect config
+  convert`/`validate`** verb (correctness-by-inlining, best-effort lift to
+  `extends`, self-verified against the resolved `Config`), landing with or just
+  after 0.3.0. Full design, alternatives, and consequences:
+  [decisions/0003](decisions/0003-ratect-native-config-format.md).
 
 Its **1.0.0** means something different from `ratect-compat`'s: interface stability
 (the subcommand structure and config format won't break), not feature-completeness
@@ -1076,38 +1020,12 @@ Improving the developer experience through better tools and feedback.
      | `eu.orican.ratect.role` | containers | `task` or `dependency` — derivable from the config, but the point is to work without it |
      | `eu.orican.ratect.version` | containers, networks | the Ratect version that created it, for when the label set itself changes |
 
-     Creation time needs no label: Docker records its own, for both objects.
-     These are *additive* to the user's own `labels` — but on an exact key
-     collision Ratect's win, because they're load-bearing for cleanup and a
-     config that (accidentally or otherwise) set `eu.orican.ratect.run` would
-     otherwise make its own resources unfindable. Namespace:
-     **`eu.orican.ratect.*`** — reverse-DNS of a
-     domain the project already owns, rather than a new `ratect.dev`-style one.
-     Reverse-DNS here is purely a collision-avoidance convention (nothing ever
-     resolves it), so a new domain would buy nothing functional while adding a
-     renewal obligation that a namespace in every `docker inspect` output would
-     then depend on. The one thing that would have justified one — a durable
-     public URL for the committed [JSON schema](schema/batect-config.schema.json),
-     the way Batect used `ide-integration.batect.dev` — doesn't need it either:
-     roughly 35–40% of SchemaStore's own catalog entries are
-     `raw.githubusercontent.com` URLs. A docs site, if Ratect ever gets one, is
-     planned for `ratect.orican.eu` — whose own reverse-DNS is exactly this
-     namespace, so that doesn't reopen the question either, and a schema URL
-     could move there later without touching a single label. Sticky rather than
-     irreversible regardless: the only reader that matters is Ratect
-     itself, so a later version can match a legacy namespace alongside a new one
-     for a release or two and still find older orphans.
-
-     As shipped (`ratect-core/src/labels.rs`): `RunLabels` is built once per
-     task execution in `run_task_internal` and threaded down through
-     `ensure_container_ready`, so a task's containers and its network agree on
-     one run id. That id is generated there rather than taken from the network's
-     own name, deliberately — `--use-network` creates no network to take it
-     from, and the containers still have to agree. The version comes from the
-     *binary* (`TaskEngineSettings::ratect_version`), not `ratect-core`, whose
-     version isn't what `--version` reports; since the two binaries are on
-     independent version lines, it also identifies which one created the
-     resource.
+     These are *additive* to the user's own `labels`, but Ratect's win on an
+     exact key collision (they're load-bearing for cleanup). The namespace choice
+     (`eu.orican.ratect.*` over a new `ratect.dev` domain; not OCI annotations),
+     the `version`-from-the-binary and per-run-id decisions, and the shipped
+     `ratect-core/src/labels.rs` mechanics are recorded in full at
+     [decisions/0002](decisions/0002-runtime-ownership-labels.md).
   2. ~~**`ContainerRuntime` gains `list_containers`/`list_networks`**~~ — done
      ([0.2.0](#ratect)), with label filtering (Docker supports `label=key=value`
      filters natively), alongside today's `list_volumes`. Both return one
@@ -1227,7 +1145,7 @@ Improving the developer experience through better tools and feedback.
 
 Exploring innovative features that go beyond the original Batect, as well as planned improvements from the Batect roadmap.
 
-- ~~**Alternative Configuration Format (TOML)**: Undecided, exploratory. TOML is a more typical configuration format for Rust projects than YAML. If pursued, this would apply only to the [`ratect` binary](#two-binaries-ratect-and-ratect-compat) — `ratect-compat` stays YAML-only for Batect compatibility — and would need a migration path for projects moving from `ratect-compat`'s YAML config.~~ — scoped into `ratect` [0.3.0](#ratect), including the schema redesign (an `extends` field replacing YAML anchors, one object shape per `volumes`/`ports`/`devices`/`include` entry) needed regardless of the exact format chosen. Migration tooling from `ratect-compat`'s YAML remains unscheduled — see the `### ratect` versioned list.
+- ~~**Alternative Configuration Format (TOML)**: Undecided, exploratory. TOML is a more typical configuration format for Rust projects than YAML. If pursued, this would apply only to the [`ratect` binary](#two-binaries-ratect-and-ratect-compat) — `ratect-compat` stays YAML-only for Batect compatibility — and would need a migration path for projects moving from `ratect-compat`'s YAML config.~~ — scoped into `ratect` [0.3.0](#ratect): the format is **TOML** (native default `ratect.toml`), with the schema redesign (an `extends` field replacing YAML anchors, one object shape per `volumes`/`ports`/`devices`/`include` entry) and mixed TOML/YAML includes. Migration tooling is the `ratect config convert`/`validate` verb, landing with or just after 0.3.0 — full, settled design at [decisions/0003](decisions/0003-ratect-native-config-format.md).
 
   **Scope, settled before building:**
 
