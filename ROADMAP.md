@@ -991,6 +991,20 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     array-of-tables shorthand usable requires every entry be a table, and
     `include`'s three current shapes (bare string / `{path, type: file}` /
     `{type: git, ...}`) are the worst fit for a mixed-type array of any format.
+  - **An auto-discovered local config-variables/overrides file**, designed here
+    rather than retrofitted onto the `batect.yml` transitional phase.
+    `ratect-compat` defaults `--config-vars-file` to `batect.local.yml` when
+    present (0.23.0) because Batect does and drop-in compatibility *requires* it;
+    `ratect` has no such external contract, and the whole point of this binary is
+    to shed Batect's interface, so hard-coding a `batect.`-named default into it
+    would be exactly backwards. There's also no coherent name to give it until
+    now — a local override sitting beside a `batect.yml` could only sensibly be
+    `batect.local.yml` — so the native-format cut is the first moment the primary
+    file has its own name and the local file can share it coherently
+    (`<nativename>.local.<ext>`, a native `[local]`-style section, or whatever
+    the format makes natural). The behaviour (a gitignored local overrides file,
+    loaded without a flag) is worth having; the name and shape are 0.3.0's to
+    decide.
   - Reuses `ratect-core`'s already-resolved `Config`/`Container`/`Task` types
     unchanged past parsing — only the deserialization front-end and the
     `extends`-resolution pass are new, so `engine.rs`/`docker.rs`/`ui/` need no
