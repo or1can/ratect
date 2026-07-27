@@ -21,6 +21,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+## [ratect-compat 0.23.0] - 2026-07-27
+
+This release opens the **Batect-conformance phase** (the run-up to `ratect-compat` 1.0.0). `ratect-compat` is now exercised end-to-end against 25 of Batect's own journey-test projects — vendored verbatim and run against a real Docker daemon — and its Git-include path is covered against the real `git` client. The point of the corpus is the bugs it finds: both fixes below are parity bugs it surfaced. See [ROADMAP.md](ROADMAP.md) for the phase.
+
 ### Fixed
 
 - **Non-string scalar `environment` values are now accepted**: a YAML scalar such as `PORT: 8080` or `DEBUG: true` in a container's or task's `environment` is coerced to its string form (`"8080"`, `"true"`), matching Batect. Previously it failed config loading with `type mismatch: expected string, found non-string scalar`, so a valid Batect config using an integer or boolean environment value wouldn't load. Applies to `Container.environment`, `run.environment`, and `customise.<container>.environment`. Surfaced by porting Batect's own `task-with-unhealthy-dependency` journey-test project (`NGINX_ENTRYPOINT_QUIET_LOGS: 1`).
