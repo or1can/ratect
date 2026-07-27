@@ -2984,6 +2984,7 @@ mod tests {
 
     fn container(image: &str, dependencies: Option<Vec<String>>) -> Container {
         Container {
+            extends: None,
             build_args: None,
             image: Some(image.to_string()),
             image_pull_policy: None,
@@ -3039,6 +3040,7 @@ mod tests {
         containers.insert(
             "build-env".to_string(),
             Container {
+                extends: None,
                 build_args: None,
                 image: Some("alpine:3.18".to_string()),
                 image_pull_policy: None,
@@ -3135,6 +3137,7 @@ mod tests {
         containers.insert(
             "build-env".to_string(),
             Container {
+                extends: None,
                 build_args: None,
                 image: Some("alpine:3.18".to_string()),
                 image_pull_policy: None,
@@ -3640,6 +3643,7 @@ mod tests {
         home_directory: &str,
     ) -> Container {
         Container {
+            extends: None,
             build_args: None,
             image: Some(image.to_string()),
             image_pull_policy: None,
@@ -3983,6 +3987,7 @@ mod tests {
         containers.insert(
             "app".to_string(),
             Container {
+                extends: None,
                 build_args: None,
                 image: Some("alpine:3.18".to_string()),
                 image_pull_policy: None,
@@ -4044,6 +4049,7 @@ mod tests {
         build_args: Option<HashMap<String, String>>,
     ) -> Container {
         Container {
+            extends: None,
             image: None,
             image_pull_policy: None,
             build_directory: Some(build_directory.to_string()),
@@ -4494,6 +4500,7 @@ mod tests {
         containers.insert(
             "build-env".to_string(),
             Container {
+                extends: None,
                 build_args: None,
                 image: None,
                 image_pull_policy: None,
@@ -5935,6 +5942,7 @@ mod tests {
         containers.insert(
             "database".to_string(),
             Container {
+                extends: None,
                 build_args: None,
                 image: None,
                 image_pull_policy: None,

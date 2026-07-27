@@ -41,9 +41,22 @@ pub struct Config {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Container {
+    /// Inherit every field from another container by name, then override only
+    /// the fields set here — `ratect`'s native replacement for YAML anchors.
+    ///
+    /// Shallow and per-field: a field set here replaces the inherited one
+    /// outright (nested maps are not merged into), and a field left unset is
+    /// taken from the named container. Single-parent, and may chain (`a`
+    /// extends `b` extends `c`). Resolved after path/expression resolution, so
+    /// an inherited relative path stays anchored to the *parent's* own file.
+    /// `ratect`-native only — not accepted in a `batect.yml`, and skipped from
+    /// the committed schema, which is `batect.yml`'s. See
+    /// [decisions/0003](../../decisions/0003-ratect-native-config-format.md).
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub extends: Option<String>,
     /// The image to run, in Docker's own `name:tag` form. Exactly one of
     /// `image` or `build_directory` is required.
     pub image: Option<String>,
@@ -970,7 +983,7 @@ impl Serialize for BuildSecret {
 /// [`Config::resolve_expressions_with`] rather than here (so the error can
 /// name the offending container).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SshAgent {
     /// The agent id a Dockerfile's `RUN --mount=type=ssh,id=<id>` refers
@@ -989,7 +1002,7 @@ pub struct SshAgent {
 /// inherit convention). Durations use Batect's Go-style string format:
 /// `"2s"`, `"1m30s"`, `"500ms"`, `"0"`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HealthCheckConfig {
     /// Run via the system's default shell inside the container (Docker's
@@ -1037,7 +1050,7 @@ pub struct HealthCheckConfig {
 /// expansion, etc.) needs an explicit `sh -c '...'` wrapper, same as
 /// `command`/`entrypoint`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SetupCommand {
     /// The command to run, tokenized into arguments rather than run through
@@ -1149,7 +1162,7 @@ mod duration_string {
 /// when `enabled` is `true` (and rejected otherwise) — Ratect never guesses
 /// one, matching Batect.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunAsCurrentUser {
     /// Whether to run as the host's own user. Required — there's no
@@ -2672,13 +2685,177 @@ async fn load_project_impl(
         ConfigFormat::Compat => Config::load_from_file(config_file).await?,
         ConfigFormat::Native => Config::load_from_file_native(config_file).await?,
     };
+    if format == ConfigFormat::Compat {
+        reject_extends_in_compat(&loaded.config)?;
+    }
     let base_path = base_path_for(config_file);
     let project_directory = project_directory_path(base_path)?;
     loaded.resolve_expressions(base_path, config_var_overrides)?;
+    let mut config = loaded.config;
+    // Resolved *after* expression/path resolution, so an inherited relative
+    // path is already absolute and stays anchored to its parent's own file —
+    // see [`Container::extends`] and decisions/0003.
+    if format == ConfigFormat::Native {
+        resolve_extends(&mut config.containers)?;
+    }
     Ok(LoadedProject {
-        config: loaded.config,
+        config,
         project_directory,
     })
+}
+
+/// `extends` is a `ratect`-native field; a `batect.yml` that uses it is
+/// rejected rather than silently ignored, keeping `ratect-compat` a faithful
+/// Batect replacement (Batect has no such field).
+fn reject_extends_in_compat(config: &Config) -> Result<()> {
+    let mut offenders: Vec<&str> = config
+        .containers
+        .iter()
+        .filter(|(_, container)| container.extends.is_some())
+        .map(|(name, _)| name.as_str())
+        .collect();
+    offenders.sort_unstable();
+    if let Some(name) = offenders.first() {
+        anyhow::bail!(
+            "The container '{name}' uses 'extends', which is a ratect-native field \
+             not supported in Batect-compatible configuration."
+        );
+    }
+    Ok(())
+}
+
+/// Resolves every container's `extends` — `ratect`'s native inheritance,
+/// replacing YAML anchors. Shallow, per field (`child.or(parent)`, exactly
+/// Cargo's profile `inherits`): a field the child sets wins, an unset one is
+/// taken from the (already-resolved) parent, with no recursion into nested
+/// maps. Single-parent, transitive, and cycle-checked. Runs on already
+/// path/expression-resolved containers, so an inherited relative path points
+/// where it did on the parent. See decisions/0003.
+fn resolve_extends(containers: &mut HashMap<String, Container>) -> Result<()> {
+    let mut resolved: HashMap<String, Container> = HashMap::new();
+    let names: Vec<String> = containers.keys().cloned().collect();
+    for name in names {
+        resolve_container_extends(&name, containers, &mut resolved, &mut Vec::new())?;
+    }
+    *containers = resolved;
+    Ok(())
+}
+
+/// Resolves one container's inheritance chain into `resolved`, memoized so a
+/// shared ancestor is merged once. `ancestors` is the current resolution
+/// path, for detecting cycles (including a container extending itself).
+fn resolve_container_extends(
+    name: &str,
+    source: &HashMap<String, Container>,
+    resolved: &mut HashMap<String, Container>,
+    ancestors: &mut Vec<String>,
+) -> Result<()> {
+    if resolved.contains_key(name) {
+        return Ok(());
+    }
+    if ancestors.iter().any(|ancestor| ancestor == name) {
+        ancestors.push(name.to_string());
+        anyhow::bail!(
+            "The container '{}' has a cyclic 'extends': {}",
+            name,
+            ancestors.join(" -> ")
+        );
+    }
+
+    let mut merged = source
+        .get(name)
+        .expect("resolve_container_extends called with a known container name")
+        .clone();
+
+    if let Some(parent) = merged.extends.clone() {
+        if !source.contains_key(&parent) {
+            anyhow::bail!("The container '{name}' extends '{parent}', which is not defined.");
+        }
+        ancestors.push(name.to_string());
+        resolve_container_extends(&parent, source, resolved, ancestors)?;
+        ancestors.pop();
+        let parent = resolved
+            .get(&parent)
+            .expect("parent resolved by the recursive call above")
+            .clone();
+        inherit_container_fields(&mut merged, parent);
+    }
+
+    // Consumed: the resolved container carries no `extends` of its own.
+    merged.extends = None;
+    resolved.insert(name.to_string(), merged);
+    Ok(())
+}
+
+/// Fills every field the `child` left unset from `parent` — the shallow,
+/// per-field half of [`resolve_extends`]. `parent` is owned (a resolved clone)
+/// so each field moves in without a further clone; `extends` itself is never
+/// inherited (it's structural, already consumed). Exhaustive by design: a new
+/// `Container` field that isn't listed here silently wouldn't inherit, so the
+/// missing-field compile error is the check that keeps this in step with the
+/// struct.
+fn inherit_container_fields(child: &mut Container, parent: Container) {
+    let Container {
+        extends: _,
+        image,
+        image_pull_policy,
+        build_directory,
+        build_args,
+        dockerfile,
+        build_target,
+        build_secrets,
+        build_ssh,
+        volumes,
+        dependencies,
+        environment,
+        run_as_current_user,
+        additional_hostnames,
+        additional_hosts,
+        ports,
+        health_check,
+        setup_commands,
+        working_directory,
+        command,
+        entrypoint,
+        labels,
+        capabilities_to_add,
+        capabilities_to_drop,
+        privileged,
+        shm_size,
+        devices,
+        enable_init_process,
+        log_driver,
+        log_options,
+    } = parent;
+    child.image = child.image.take().or(image);
+    child.image_pull_policy = child.image_pull_policy.take().or(image_pull_policy);
+    child.build_directory = child.build_directory.take().or(build_directory);
+    child.build_args = child.build_args.take().or(build_args);
+    child.dockerfile = child.dockerfile.take().or(dockerfile);
+    child.build_target = child.build_target.take().or(build_target);
+    child.build_secrets = child.build_secrets.take().or(build_secrets);
+    child.build_ssh = child.build_ssh.take().or(build_ssh);
+    child.volumes = child.volumes.take().or(volumes);
+    child.dependencies = child.dependencies.take().or(dependencies);
+    child.environment = child.environment.take().or(environment);
+    child.run_as_current_user = child.run_as_current_user.take().or(run_as_current_user);
+    child.additional_hostnames = child.additional_hostnames.take().or(additional_hostnames);
+    child.additional_hosts = child.additional_hosts.take().or(additional_hosts);
+    child.ports = child.ports.take().or(ports);
+    child.health_check = child.health_check.take().or(health_check);
+    child.setup_commands = child.setup_commands.take().or(setup_commands);
+    child.working_directory = child.working_directory.take().or(working_directory);
+    child.command = child.command.take().or(command);
+    child.entrypoint = child.entrypoint.take().or(entrypoint);
+    child.labels = child.labels.take().or(labels);
+    child.capabilities_to_add = child.capabilities_to_add.take().or(capabilities_to_add);
+    child.capabilities_to_drop = child.capabilities_to_drop.take().or(capabilities_to_drop);
+    child.privileged = child.privileged.take().or(privileged);
+    child.shm_size = child.shm_size.take().or(shm_size);
+    child.devices = child.devices.take().or(devices);
+    child.enable_init_process = child.enable_init_process.take().or(enable_init_process);
+    child.log_driver = child.log_driver.take().or(log_driver);
+    child.log_options = child.log_options.take().or(log_options);
 }
 
 #[cfg(test)]
@@ -4737,6 +4914,7 @@ tasks:
         build_args: HashMap<String, String>,
     ) -> Container {
         Container {
+            extends: None,
             image: None,
             image_pull_policy: None,
             build_directory: Some(build_directory.to_string()),
@@ -5046,6 +5224,7 @@ tasks:
         home_directory: Option<&str>,
     ) -> Container {
         Container {
+            extends: None,
             image: Some("alpine:3.18".to_string()),
             image_pull_policy: None,
             build_directory: None,
@@ -6037,6 +6216,200 @@ run = { container = "build-env", command = "cargo test" }
     async fn load_from_file_missing_file_errors() {
         let result = Config::load_from_file(Path::new("/nonexistent/batect.yml")).await;
         assert!(result.is_err());
+    }
+
+    /// A helper: run the native load-and-resolve path on a single TOML string
+    /// written to a temp `ratect.toml`, returning the resolved project.
+    async fn load_native_toml(body: &str) -> Result<LoadedProject> {
+        let dir = unique_temp_dir();
+        let path = dir.join("ratect.toml");
+        std::fs::write(&path, body).unwrap();
+        let result = load_project_native(&path, &HashMap::new()).await;
+        std::fs::remove_dir_all(&dir).ok();
+        result
+    }
+
+    /// The heart of `extends`: a child inherits every field it doesn't set,
+    /// and a field it *does* set replaces the parent's outright (shallow —
+    /// here `environment` is fully the child's, not merged).
+    #[tokio::test]
+    async fn extends_inherits_unset_fields_and_child_overrides_win() {
+        let project = load_native_toml(
+            r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+working_directory = "/base"
+environment = { TZ = "UTC", CI = "true" }
+
+[containers.app]
+extends = "base"
+working_directory = "/app"
+environment = { TZ = "Europe/London" }
+
+[tasks.t]
+run = { container = "app" }
+"#,
+        )
+        .await
+        .unwrap();
+
+        let app = &project.config.containers["app"];
+        // Inherited (child left unset).
+        assert_eq!(app.image.as_deref(), Some("alpine:3.18"));
+        // Overridden (child set its own).
+        assert_eq!(app.working_directory.as_deref(), Some("/app"));
+        // Shallow: the child's environment replaces the parent's entirely, so
+        // the parent's CI entry is gone, not merged in.
+        let env = app.environment.as_ref().unwrap();
+        assert_eq!(env.get("TZ").map(String::as_str), Some("Europe/London"));
+        assert!(!env.contains_key("CI"));
+        // The `extends` field is consumed — the resolved container has none.
+        assert!(app.extends.is_none());
+    }
+
+    /// `extends` chains transitively: `a` -> `b` -> `c`, each level filling
+    /// what the one below left unset.
+    #[tokio::test]
+    async fn extends_chains_transitively() {
+        let project = load_native_toml(
+            r#"
+project_name = "demo"
+
+[containers.c]
+image = "alpine:3.18"
+working_directory = "/c"
+
+[containers.b]
+extends = "c"
+working_directory = "/b"
+command = "b-cmd"
+
+[containers.a]
+extends = "b"
+command = "a-cmd"
+
+[tasks.t]
+run = { container = "a" }
+"#,
+        )
+        .await
+        .unwrap();
+
+        let a = &project.config.containers["a"];
+        assert_eq!(a.image.as_deref(), Some("alpine:3.18")); // from c
+        assert_eq!(a.working_directory.as_deref(), Some("/b")); // from b
+        assert_eq!(a.command.as_deref(), Some("a-cmd")); // a's own
+    }
+
+    /// Resolve-then-extend: an inherited relative path was resolved against
+    /// the *parent's* file before inheritance, so the child gets the parent's
+    /// absolute path, not one re-anchored to the child's own location. Here
+    /// both containers share the root file, so the point is simply that the
+    /// inherited `build_directory` is absolute and correct.
+    #[tokio::test]
+    async fn extends_inherits_an_already_resolved_path() {
+        let dir = unique_temp_dir();
+        std::fs::create_dir_all(dir.join("ctx")).unwrap();
+        let path = dir.join("ratect.toml");
+        std::fs::write(
+            &path,
+            r#"
+project_name = "demo"
+
+[containers.base]
+build_directory = "ctx"
+
+[containers.app]
+extends = "base"
+
+[tasks.t]
+run = { container = "app" }
+"#,
+        )
+        .unwrap();
+        let project = load_project_native(&path, &HashMap::new()).await.unwrap();
+        assert_eq!(
+            project.config.containers["app"].build_directory,
+            Some(dir.join("ctx").display().to_string())
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn extends_a_missing_container_errors() {
+        let err = load_native_toml(
+            r#"
+project_name = "demo"
+[containers.app]
+extends = "nope"
+image = "alpine"
+[tasks.t]
+run = { container = "app" }
+"#,
+        )
+        .await
+        .unwrap_err();
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("extends 'nope', which is not defined"),
+            "got: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn extends_a_cycle_errors() {
+        let err = load_native_toml(
+            r#"
+project_name = "demo"
+[containers.a]
+extends = "b"
+[containers.b]
+extends = "a"
+[tasks.t]
+run = { container = "a" }
+"#,
+        )
+        .await
+        .unwrap_err();
+        let message = format!("{err:#}");
+        assert!(message.contains("cyclic 'extends'"), "got: {message}");
+    }
+
+    #[tokio::test]
+    async fn a_container_extending_itself_is_a_cycle() {
+        let err = load_native_toml(
+            r#"
+project_name = "demo"
+[containers.a]
+extends = "a"
+[tasks.t]
+run = { container = "a" }
+"#,
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("cyclic 'extends'"));
+    }
+
+    /// `extends` is native-only: a `batect.yml` using it is rejected (not
+    /// silently ignored), keeping `ratect-compat` a faithful Batect match.
+    #[tokio::test]
+    async fn extends_is_rejected_in_compat_mode() {
+        let dir = unique_temp_dir();
+        let path = dir.join("batect.yml");
+        std::fs::write(
+            &path,
+            "project_name: demo\ncontainers:\n  app:\n    extends: base\n    image: alpine\ntasks: {}\n",
+        )
+        .unwrap();
+        let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(
+            format!("{err:#}").contains("uses 'extends'"),
+            "expected a compat rejection"
+        );
     }
 
     /// `load_project` is the whole load-resolve sequence both binaries use,
@@ -7474,6 +7847,7 @@ forbid_telemetry: true
 
     fn container_with_environment(environment: HashMap<String, String>) -> Container {
         Container {
+            extends: None,
             build_args: None,
             image: Some("alpine:3.18".to_string()),
             image_pull_policy: None,
