@@ -1859,12 +1859,72 @@ pub(crate) struct ConfigFile {
     forbid_telemetry: Option<bool>,
 }
 
+/// Which config file format(s) a load accepts, and how a file's extension
+/// maps to a parser. Selected by the *binary*, not the file: `ratect-compat`
+/// is a byte-compatible Batect replacement, so it only ever reads YAML;
+/// `ratect` reads its native TOML and accepts YAML includes, choosing the
+/// parser per file by extension. Not `pub` — a binary picks a policy by
+/// calling the matching entry point ([`load_project`] vs.
+/// [`load_project_native`]), never by naming this. See
+/// [decisions/0003](../../decisions/0003-ratect-native-config-format.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConfigFormat {
+    /// YAML only, whatever the extension — exactly Batect's behavior, so a
+    /// `.toml` passed to `ratect-compat` fails as invalid YAML just as it
+    /// would under Batect, rather than being newly accepted.
+    Compat,
+    /// TOML native (`.toml`) with YAML includes (`.yml`/`.yaml`) accepted;
+    /// any other extension is rejected rather than guessed at.
+    Native,
+}
+
+/// The parser a file's extension selects under [`ConfigFormat::Native`].
+enum FileFormat {
+    Toml,
+    Yaml,
+}
+
+/// Classifies a file by extension for [`ConfigFormat::Native`]. Deliberately
+/// strict — an unrecognized extension errors rather than being content-sniffed,
+/// since TOML and YAML are too easy to confuse for a simple document.
+fn config_file_format(path: &Path) -> Result<FileFormat> {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) if ext.eq_ignore_ascii_case("toml") => Ok(FileFormat::Toml),
+        Some(ext) if ext.eq_ignore_ascii_case("yml") || ext.eq_ignore_ascii_case("yaml") => {
+            Ok(FileFormat::Yaml)
+        }
+        _ => anyhow::bail!(
+            "Unrecognized config file extension for {:?}; expected .toml, .yml, or .yaml",
+            path
+        ),
+    }
+}
+
 /// Parses one config file (the root, or an included one) only — no include
-/// resolution, path resolution, or expression interpolation.
-fn parse_config_file(path: &Path) -> Result<ConfigFile> {
+/// resolution, path resolution, or expression interpolation. The `format`
+/// decides which parser handles it: `Compat` is always YAML; `Native` picks
+/// TOML or YAML by extension. Both feed the same [`ConfigFile`], so nothing
+/// downstream depends on which format a file was written in.
+fn parse_config_file(path: &Path, format: ConfigFormat) -> Result<ConfigFile> {
+    match format {
+        ConfigFormat::Compat => parse_yaml_config_file(path),
+        ConfigFormat::Native => match config_file_format(path)? {
+            FileFormat::Toml => parse_toml_config_file(path),
+            FileFormat::Yaml => parse_yaml_config_file(path),
+        },
+    }
+}
+
+fn parse_yaml_config_file(path: &Path) -> Result<ConfigFile> {
     let file =
         File::open(path).with_context(|| format!("Failed to open config file {:?}", path))?;
     noyalib::from_reader(file).with_context(|| format!("Failed to parse config file {:?}", path))
+}
+
+fn parse_toml_config_file(path: &Path) -> Result<ConfigFile> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to open config file {:?}", path))?;
+    toml::from_str(&text).with_context(|| format!("Failed to parse config file {:?}", path))
 }
 
 /// Resolves `path` to an absolute, lexically-cleaned path, anchored at the
@@ -1929,9 +1989,20 @@ impl Config {
     /// using the production Git include cache (`~/.ratect/incl`, the real
     /// `git` binary) — see that method for the full behavior. Split out so
     /// tests can inject a fake cache instead.
+    ///
+    /// Loads in Batect-compatible mode (YAML only) — `ratect-compat`'s policy.
+    /// The `ratect` binary uses [`load_from_file_native`](Self::load_from_file_native).
     pub async fn load_from_file(path: &Path) -> Result<LoadedConfig> {
         let git_cache = crate::git_include::GitIncludeCache::new();
         Self::load_from_file_with_git_cache(path, &git_cache).await
+    }
+
+    /// Like [`load_from_file`](Self::load_from_file), but in `ratect`'s native
+    /// mode: a TOML root file, with TOML/YAML includes chosen by extension —
+    /// see [`ConfigFormat::Native`].
+    pub async fn load_from_file_native(path: &Path) -> Result<LoadedConfig> {
+        let git_cache = crate::git_include::GitIncludeCache::new();
+        Self::load_from_file_native_with_git_cache(path, &git_cache).await
     }
 
     /// Parses the config file and resolves `include`s — but no path
@@ -1979,8 +2050,25 @@ impl Config {
         path: &Path,
         git_cache: &crate::git_include::GitIncludeCache<G>,
     ) -> Result<LoadedConfig> {
+        Self::load_from_file_impl(path, git_cache, ConfigFormat::Compat).await
+    }
+
+    /// Native-mode counterpart of
+    /// [`load_from_file_with_git_cache`](Self::load_from_file_with_git_cache).
+    pub async fn load_from_file_native_with_git_cache<G: crate::git_include::GitClient>(
+        path: &Path,
+        git_cache: &crate::git_include::GitIncludeCache<G>,
+    ) -> Result<LoadedConfig> {
+        Self::load_from_file_impl(path, git_cache, ConfigFormat::Native).await
+    }
+
+    async fn load_from_file_impl<G: crate::git_include::GitClient>(
+        path: &Path,
+        git_cache: &crate::git_include::GitIncludeCache<G>,
+        format: ConfigFormat,
+    ) -> Result<LoadedConfig> {
         let root_path = absolute_path(path)?;
-        let root_file = parse_config_file(path)?;
+        let root_file = parse_config_file(path, format)?;
         let root_dir = root_path.parent().unwrap_or(Path::new("")).to_path_buf();
 
         let mut seen: HashSet<PathBuf> = HashSet::new();
@@ -2044,7 +2132,7 @@ impl Config {
                 continue;
             }
 
-            let file = parse_config_file(&resolved)?;
+            let file = parse_config_file(&resolved, format)?;
             if file.project_name.is_some() {
                 anyhow::bail!(
                     "Included file '{}' declares 'project_name', but only the root \
@@ -2559,10 +2647,31 @@ pub async fn load_project(
     config_file: &Path,
     config_var_overrides: &HashMap<String, String>,
 ) -> Result<LoadedProject> {
+    load_project_impl(config_file, config_var_overrides, ConfigFormat::Compat).await
+}
+
+/// Native-mode counterpart of [`load_project`] — `ratect`'s entry point. A
+/// TOML root file, TOML/YAML includes by extension (see
+/// [`ConfigFormat::Native`]).
+pub async fn load_project_native(
+    config_file: &Path,
+    config_var_overrides: &HashMap<String, String>,
+) -> Result<LoadedProject> {
+    load_project_impl(config_file, config_var_overrides, ConfigFormat::Native).await
+}
+
+async fn load_project_impl(
+    config_file: &Path,
+    config_var_overrides: &HashMap<String, String>,
+    format: ConfigFormat,
+) -> Result<LoadedProject> {
     if !config_file.exists() {
         anyhow::bail!("Configuration file {:?} not found.", config_file);
     }
-    let mut loaded = Config::load_from_file(config_file).await?;
+    let mut loaded = match format {
+        ConfigFormat::Compat => Config::load_from_file(config_file).await?,
+        ConfigFormat::Native => Config::load_from_file_native(config_file).await?,
+    };
     let base_path = base_path_for(config_file);
     let project_directory = project_directory_path(base_path)?;
     loaded.resolve_expressions(base_path, config_var_overrides)?;
@@ -5798,6 +5907,129 @@ tasks: {}
         assert_eq!(volume.local, dir.join("code").display().to_string());
         assert_eq!(volume.container, "/code");
 
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The native TOML front-end must produce the *same* resolved `Config` as
+    /// the YAML it replaces — the whole promise of the format being a
+    /// re-spelling, not a redesign, of what `ratect-core` consumes. The same
+    /// project is written in both formats (inline tables for the object-shape
+    /// fields), loaded through each path, and compared after resolution.
+    #[tokio::test]
+    async fn native_toml_loads_identically_to_the_yaml_twin() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    volumes:
+      - code:/code
+tasks:
+  test:
+    run:
+      container: build-env
+      command: cargo test
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("ratect.toml"),
+            r#"
+project_name = "demo"
+
+[containers.build-env]
+image = "alpine:3.18"
+volumes = [{ local = "code", container = "/code" }]
+
+[tasks.test]
+run = { container = "build-env", command = "cargo test" }
+"#,
+        )
+        .unwrap();
+
+        let mut yaml = Config::load_from_file(&dir.join("batect.yml"))
+            .await
+            .unwrap();
+        yaml.resolve_expressions(&dir, &HashMap::new()).unwrap();
+        let mut toml = Config::load_from_file_native(&dir.join("ratect.toml"))
+            .await
+            .unwrap();
+        toml.resolve_expressions(&dir, &HashMap::new()).unwrap();
+
+        assert_eq!(yaml.config.project_name, toml.config.project_name);
+        assert_eq!(
+            yaml.config.containers["build-env"].image,
+            toml.config.containers["build-env"].image
+        );
+        let yaml_volume = expect_local(
+            &yaml.config.containers["build-env"]
+                .volumes
+                .as_ref()
+                .unwrap()[0],
+        );
+        let toml_volume = expect_local(
+            &toml.config.containers["build-env"]
+                .volumes
+                .as_ref()
+                .unwrap()[0],
+        );
+        assert_eq!(yaml_volume.local, toml_volume.local);
+        assert_eq!(toml_volume.local, dir.join("code").display().to_string());
+        assert_eq!(toml_volume.container, "/code");
+        assert!(toml.config.tasks.contains_key("test"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Under native mode the parser follows the *extension*, so a YAML root
+    /// (or include) still loads — that's what lets a project migrate its root
+    /// to TOML while a `.yml` include stays as-is.
+    #[tokio::test]
+    async fn native_mode_still_parses_a_yaml_file_by_extension() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            "project_name: demo\ncontainers: {}\ntasks: {}\n",
+        )
+        .unwrap();
+        let loaded = Config::load_from_file_native(&dir.join("batect.yml"))
+            .await
+            .unwrap();
+        assert_eq!(loaded.config.project_name, "demo");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// An unrecognized extension is rejected rather than guessed at — TOML and
+    /// YAML are too easy to confuse for a simple document to sniff safely.
+    #[tokio::test]
+    async fn native_mode_rejects_an_unrecognized_config_extension() {
+        let dir = unique_temp_dir();
+        std::fs::write(dir.join("config.txt"), "project_name = \"demo\"\n").unwrap();
+        let result = Config::load_from_file_native(&dir.join("config.txt")).await;
+        let message = format!("{:#}", result.unwrap_err());
+        assert!(
+            message.contains("Unrecognized config file extension"),
+            "got: {message}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `ratect-compat` must not newly accept TOML: a `.toml` handed to the
+    /// compat path is parsed as YAML (exactly Batect's behavior) and fails,
+    /// rather than being silently understood as TOML.
+    #[tokio::test]
+    async fn compat_mode_does_not_accept_toml() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.toml"),
+            "project_name = \"demo\"\n[containers.build-env]\nimage = \"alpine\"\n",
+        )
+        .unwrap();
+        let result = Config::load_from_file(&dir.join("batect.toml")).await;
+        assert!(result.is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
