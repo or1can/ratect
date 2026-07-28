@@ -1,0 +1,20 @@
+# A native `ratect.toml` fixture — the format `ratect` reads by default from
+# 0.3.0 (see decisions/0003). Deliberately exercises `extends`: `build-env`
+# carries no image of its own, inheriting it from `base`, so a task that runs
+# `build-env` only works if `extends` resolved to a runnable container.
+project_name = "ratect-native-test"
+
+[containers.base]
+image = "alpine:3.18.2"
+
+[containers.build-env]
+extends = "base"
+
+[tasks.build]
+description = "Build the thing"
+group = "Development"
+run = { container = "build-env", command = "echo built" }
+
+[tasks.check]
+description = "Check the thing"
+run = { container = "build-env", command = "echo checked" }

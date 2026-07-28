@@ -50,6 +50,36 @@ fn fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tasks.yml")
 }
 
+/// The native-format twin of [`fixture_path`] — a `ratect.toml` using
+/// `extends`, for proving the native config path end to end.
+fn native_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native.toml")
+}
+
+/// The native format parses and its tasks list — no Docker needed. That the
+/// list is complete also proves `extends` resolved (`build-env` inherits its
+/// image from `base`), since a container that failed to resolve wouldn't stop
+/// the tasks listing, but a parse failure would stop everything.
+#[test]
+fn tasks_list_reads_a_native_toml_config() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(native_fixture_path())
+        .args(["tasks", "list", "-o", "quiet"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "build\tBuild the thing\ncheck\tCheck the thing\n"
+    );
+}
+
 #[test]
 fn tasks_list_prints_every_task_with_its_description_and_group() {
     let output = ratect_command()
@@ -356,6 +386,34 @@ fn run_executes_a_task_via_docker() {
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("built"),
         "the task's own command output should reach stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// The native config path, end to end against a real daemon: `ratect` runs a
+/// task from a `ratect.toml` whose container gets its image via `extends`.
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn run_executes_a_task_from_a_native_toml_config_via_docker() {
+    let _guard = serial_docker();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(native_fixture_path())
+        .args(["run", "build"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("built"),
+        "the task run via extends-resolved container should reach stdout:\n{}",
         String::from_utf8_lossy(&output.stdout)
     );
 }

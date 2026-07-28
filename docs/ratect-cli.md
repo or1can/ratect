@@ -6,12 +6,50 @@ from Batect's interface. For the Batect-compatible binary, see the
 separately because they are deliberately different interfaces, not two spellings of
 one.
 
-> **Status.** `ratect` is at 0.2.0: the subcommand surface, running on the same
-> engine and the same `batect.yml` configuration `ratect-compat` reads. Its own
-> configuration format is planned next and will not be YAML — see the
-> [Roadmap](../ROADMAP.md#ratect). Everything about the *configuration* in
-> [Configuration Reference](config-reference.md) applies as written today; only the
-> command line differs from `ratect-compat`.
+> **Status.** From 0.3.0 `ratect` reads its own **native TOML configuration**
+> (`ratect.toml` by default) rather than sharing `ratect-compat`'s `batect.yml` —
+> see the [Roadmap](../ROADMAP.md#ratect) and
+> [decisions/0003](../decisions/0003-ratect-native-config-format.md). The schema is
+> the same one [Configuration Reference](config-reference.md) documents, re-spelled
+> in TOML, with one native addition so far — [`extends`](#the-native-config-format).
+> A `batect.yml` is still readable by naming it with `-f`, so a project can migrate
+> incrementally; `ratect config convert` (to translate one automatically) is
+> planned. The native format is `ratect`'s alone — `ratect-compat` stays
+> `batect.yml`-only, permanently.
+
+## The native config format
+
+`ratect.toml` is [`batect.yml`](config-reference.md)'s schema in TOML: named
+containers and tasks become tables, and list entries (`volumes`, `ports`,
+`devices`) become inline tables or `[[...]]` blocks. A small example:
+
+```toml
+project_name = "my-app"
+
+[containers.base]
+image = "rust:1.90"
+volumes = [{ local = ".", container = "/code" }]
+
+[containers.build-env]
+extends = "base"
+working_directory = "/code"
+
+[tasks.build]
+run = { container = "build-env", command = "cargo build" }
+```
+
+**`extends`** replaces YAML anchors/aliases/merge keys: a container names one
+parent and inherits every field it doesn't set itself. The merge is shallow and
+per-field — a field you set replaces the inherited one outright (nested maps are
+not merged into), and a field you leave out is taken from the parent, exactly like
+Cargo's profile `inherits`. It is single-parent, may chain (`a` extends `b`
+extends `c`), and rejects a cycle. A container used only as a base needs no
+`image` of its own, since only containers a task actually runs are required to
+have one.
+
+**Includes** may mix formats: each `include` entry is parsed by its file
+extension (`.toml` native, `.yml`/`.yaml` as Batect-format YAML), so a native
+project can still include an existing `batect.yml` fragment or bundle unchanged.
 
 ## Commands
 
@@ -53,7 +91,7 @@ and `ratect run build -f custom.yml` are the same invocation.
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `-f`, `--config-file <PATH>` | `batect.yml` | The configuration file. `caches` uses it only to locate the project *directory* — it never reads the contents. |
+| `-f`, `--config-file <PATH>` | `ratect.toml` | The configuration file. Parsed by extension — `.toml` as the native format, `.yml`/`.yaml` as Batect-format YAML — so `-f batect.yml` keeps reading a Batect config while migrating. `caches` uses it only to locate the project *directory* — it never reads the contents. |
 | `-o`, `--output <STYLE>` | auto | `fancy`, `simple`, `all` or `quiet` — see [output styles](cli-reference.md#output-styles), which behave identically here. |
 | `--no-color` | — | No color in Ratect's own output (never affects a task's own output). |
 
@@ -170,9 +208,9 @@ Answers "why did that fail?", or "will it?", without running a task:
 
 ```
 $ ratect doctor
-Checking batect.yml...
+Checking ratect.toml...
   ok      Docker daemon reachable (29.4.0)
-  ok      batect.yml loads (3 container(s), 1 task(s))
+  ok      ratect.toml loads (3 container(s), 1 task(s))
   warning container 'database' uses a floating image tag — pin it, or the same configuration will run a different image later
   warning dependency 'cache' has no health_check — unless its image defines one, it counts as ready the moment it starts
   problem container 'app' has build_directory '/project/missing-dir', which doesn't exist
@@ -270,4 +308,4 @@ redirect stderr if you want one.
 | Managing the Git include cache | not available (only the automatic sweep) | `ratect includes list`/`clean`/`refresh` |
 | Batect-inert flags (`--upgrade`, `--no-update-notification`, `--no-wrapper-cache-cleanup`) | accepted, no effect | not offered |
 | `--log-file` | supported | not offered |
-| Configuration | `batect.yml` | `batect.yml` today; own format planned |
+| Configuration | `batect.yml` | native `ratect.toml` (with `extends`); `batect.yml` still readable via `-f` |

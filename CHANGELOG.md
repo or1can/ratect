@@ -21,6 +21,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Added
+
+- **A native `ratect.toml` configuration format** (`ratect` only): `ratect` now reads its own TOML configuration by default (`-f` defaults to `ratect.toml`) rather than sharing `ratect-compat`'s `batect.yml`. It's the same schema [Configuration Reference](docs/config-reference.md) documents, re-spelled in TOML — named containers/tasks become tables, and list entries (`volumes`/`ports`/`devices`) become inline tables or `[[...]]` blocks. Each file's format is chosen by extension, so a `.yml`/`.yaml` include is still parsed as Batect-format YAML and a `batect.yml` remains readable by naming it with `-f` — a project can migrate incrementally, and `ratect config convert` (to translate one automatically) is planned. `ratect-compat` is entirely unaffected: it stays `batect.yml`-only, exactly matching Batect, and a `batect.yml` gains nothing. The first native-only feature is **`extends`**, a container field replacing YAML anchors/aliases/merge keys: a container names one parent and inherits every field it doesn't set itself — shallow and per-field (a set field replaces, an unset one inherits, like Cargo's profile `inherits`), single-parent, chainable, cycle-checked, and resolved after path resolution so an inherited relative path stays anchored to its parent's own file. A container used only as a base needs no `image` of its own. `extends` in a `batect.yml` is rejected rather than silently ignored. See [decisions/0003](decisions/0003-ratect-native-config-format.md) and the [`ratect` CLI reference](docs/ratect-cli.md#the-native-config-format).
+
 ## [ratect-compat 0.23.0] - 2026-07-27
 
 This release opens the **Batect-conformance phase** (the run-up to `ratect-compat` 1.0.0). `ratect-compat` is now exercised end-to-end against 25 of Batect's own journey-test projects — vendored verbatim and run against a real Docker daemon — and its Git-include path is covered against the real `git` client. The point of the corpus is the bugs it finds: both fixes below are parity bugs it surfaced. See [ROADMAP.md](ROADMAP.md) for the phase.

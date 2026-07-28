@@ -16,17 +16,18 @@
 //! `ratect tasks list`) rather than `ratect-compat`'s flat, Batect-shaped
 //! surface, and free to diverge from Batect entirely.
 //!
-//! 0.2.0 is deliberately the subcommand surface *only*: it runs on
-//! `ratect-core`'s existing engine and today's YAML configuration, both
-//! completely unchanged (the `ratect`-native config format is 0.3.0's own
-//! scope — see ROADMAP.md). Nothing here parses configuration or talks to
-//! Docker itself; it maps arguments onto `ratect_core::config::load_project`,
-//! `TaskEngineSettings` and `ui::create_event_sink`, all of which
+//! From 0.3.0 this binary reads its own native config format (`ratect.toml`
+//! by default) via `ratect_core::config::load_project_native` — TOML, with
+//! `extends` and TOML/YAML includes chosen by extension (see
+//! `decisions/0003`). A `batect.yml` is still readable by naming it with
+//! `-f`, for migration. Nothing here parses configuration or talks to Docker
+//! itself; it maps arguments onto that loader, `TaskEngineSettings` and
+//! `ui::create_event_sink`, the engine and UI unchanged from what
 //! `ratect-compat` already proved.
 
 use anyhow::Result;
 use clap::{Args as ClapArgs, Parser, Subcommand};
-use ratect_core::config::{format_task_list, format_task_list_quiet, load_project, Config};
+use ratect_core::config::{format_task_list, format_task_list_quiet, load_project_native, Config};
 use ratect_core::docker::{ContainerRuntime, DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
 use ratect_core::ui::{create_event_sink, select_output_style, OutputStyle};
@@ -56,8 +57,10 @@ struct Cli {
 /// than one that isn't offered: it reads as a promise.
 #[derive(ClapArgs, Debug)]
 struct GlobalArgs {
-    /// Path to the configuration file.
-    #[arg(short = 'f', long, default_value = "batect.yml", global = true)]
+    /// Path to the configuration file. Defaults to `ratect.toml`, this
+    /// binary's own native format; point it at a `batect.yml` to keep reading
+    /// the Batect-format config while migrating (see `ratect config convert`).
+    #[arg(short = 'f', long, default_value = "ratect.toml", global = true)]
     config_file: PathBuf,
 
     /// Force a particular style of Ratect's own output (never affects a
@@ -571,7 +574,7 @@ async fn load(
         None => HashMap::new(),
     };
     config_var_overrides.extend(config_vars.config_var.iter().cloned());
-    load_project(&global.config_file, &config_var_overrides).await
+    load_project_native(&global.config_file, &config_var_overrides).await
 }
 
 async fn run_task(
@@ -1899,7 +1902,7 @@ mod tests {
         let path = directory.join("batect.yml");
         std::fs::write(&path, yaml).unwrap();
 
-        let project = load_project(&path, &HashMap::new())
+        let project = load_project_native(&path, &HashMap::new())
             .await
             .expect("fixture config should load");
         std::fs::remove_dir_all(&directory).unwrap();
