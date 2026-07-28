@@ -90,7 +90,9 @@ struct ConfigVarArgs {
     #[arg(long = "config-var", value_parser = parse_key_value)]
     config_var: Vec<(String, String)>,
 
-    /// Path to a YAML file of config variable NAME: VALUE pairs.
+    /// Path to a file of config variable values (a flat NAME = VALUE map),
+    /// parsed as TOML or YAML by its extension. Defaults to an auto-discovered
+    /// `ratect.local.toml` beside the config file, when present.
     #[arg(long = "config-vars-file")]
     config_vars_file: Option<PathBuf>,
 }
@@ -569,13 +571,28 @@ async fn load(
     global: &GlobalArgs,
     config_vars: &ConfigVarArgs,
 ) -> Result<ratect_core::config::LoadedProject> {
-    let mut config_var_overrides: HashMap<String, String> = match &config_vars.config_vars_file {
-        Some(path) => Config::load_config_vars_file(path)?,
+    // The config-vars file is either the one `--config-vars-file` names, or —
+    // when it doesn't — an auto-discovered `ratect.local.toml` beside the
+    // config file, loaded only if it exists (an absent one just means no file
+    // overrides, not an error). This binary's native equivalent of
+    // `ratect-compat`'s `batect.local.yml` default; see decisions/0003.
+    let vars_file = config_vars.config_vars_file.clone().or_else(|| {
+        let default =
+            ratect_core::config::base_path_for(&global.config_file).join(LOCAL_CONFIG_VARS_FILE);
+        default.exists().then_some(default)
+    });
+    let mut config_var_overrides: HashMap<String, String> = match &vars_file {
+        Some(path) => Config::load_config_vars_file_native(path)?,
         None => HashMap::new(),
     };
     config_var_overrides.extend(config_vars.config_var.iter().cloned());
     load_project_native(&global.config_file, &config_var_overrides).await
 }
+
+/// The auto-discovered local config-variable overrides file — gitignored,
+/// per-developer, config-variable values only. Native-named (`ratect-compat`
+/// uses `batect.local.yml`); see decisions/0003.
+const LOCAL_CONFIG_VARS_FILE: &str = "ratect.local.toml";
 
 async fn run_task(
     project: ratect_core::config::LoadedProject,

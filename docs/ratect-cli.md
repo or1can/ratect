@@ -55,6 +55,19 @@ first and falls back to `batect-bundle.yml`, so an unmigrated bundle keeps
 working and a bundle author can ship both files to support `ratect` and Batect
 at once.
 
+### Local overrides
+
+A **`ratect.local.toml`** beside your config file is loaded automatically when
+present — no `--config-vars-file` needed — supplying [config
+variable](config-reference.md#configvariable) values for the current developer
+or machine. It holds values only (a flat `name = "value"` map), not
+configuration; anything you want to vary locally should be a config variable
+the tracked config interpolates (`image = "app:<{tag}>"`), keeping what varies
+declared and visible rather than hidden in an untracked file. Gitignore it.
+Precedence, lowest to highest: a variable's own `default`, then the config-vars
+file (this, or whatever `--config-vars-file` names instead), then
+`--config-var` on the command line.
+
 ## Commands
 
 | Command | What it does |
@@ -108,7 +121,7 @@ reach a daemon).
 | Option | Applies to | Description |
 | --- | --- | --- |
 | `--config-var <NAME=VALUE>` | `run`, `tasks list` | Sets a [config variable](config-reference.md#configvariable). Repeatable; wins over `--config-vars-file` and the variable's own default. |
-| `--config-vars-file <PATH>` | `run`, `tasks list` | A YAML file of config variable `NAME: VALUE` pairs. |
+| `--config-vars-file <PATH>` | `run`, `tasks list` | A file of config variable values (a flat `NAME = VALUE` map), parsed as TOML or YAML by extension. Defaults to an auto-discovered [`ratect.local.toml`](#local-overrides) beside the config file, when present. |
 
 ## Docker connection options
 

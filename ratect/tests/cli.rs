@@ -56,6 +56,76 @@ fn native_fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native.toml")
 }
 
+/// A unique, empty temp directory to stand up a small project in.
+fn unique_project_dir() -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let directory = std::env::temp_dir().join(format!(
+        "ratect-project-test-{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        count
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    directory
+}
+
+/// A `ratect.local.toml` beside the config file is auto-discovered as
+/// config-variable values — no `--config-vars-file` needed, this binary's
+/// native equivalent of `ratect-compat`'s `batect.local.yml` default. Proven
+/// with a required config variable (no default) that only the local file
+/// supplies: `tasks list` resolves the config, so it fails without the file
+/// and succeeds once it's there.
+#[test]
+fn ratect_local_toml_is_auto_discovered_for_config_variables() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        r#"
+project_name = "demo"
+
+[containers.app]
+image = "alpine:3.18"
+environment = { GREETING = "<greeting" }
+
+[config_variables.greeting]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .unwrap();
+
+    let without = ratect_command()
+        .arg("-f")
+        .arg(dir.join("ratect.toml"))
+        .args(["tasks", "list"])
+        .output()
+        .expect("failed to run ratect");
+    assert!(
+        !without.status.success(),
+        "a required config variable with no local file should fail to resolve"
+    );
+
+    std::fs::write(dir.join("ratect.local.toml"), "greeting = \"hello\"\n").unwrap();
+    let with = ratect_command()
+        .arg("-f")
+        .arg(dir.join("ratect.toml"))
+        .args(["tasks", "list"])
+        .output()
+        .expect("failed to run ratect");
+    assert!(
+        with.status.success(),
+        "ratect.local.toml should be discovered automatically:\n{}",
+        String::from_utf8_lossy(&with.stderr)
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// The native format parses and its tasks list — no Docker needed. That the
 /// list is complete also proves `extends` resolved (`build-env` inherits its
 /// image from `base`), since a container that failed to resolve wouldn't stop

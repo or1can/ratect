@@ -2297,6 +2297,23 @@ impl Config {
             .with_context(|| format!("Failed to parse config vars file {:?}", path))
     }
 
+    /// Like [`load_config_vars_file`](Self::load_config_vars_file), but for
+    /// `ratect`'s native mode: the file's format follows its extension, so
+    /// `ratect.local.toml` is parsed as TOML while an explicitly-named
+    /// `batect.local.yml` (or any `.yml`/`.yaml`) is still YAML. Either way a
+    /// flat `name = "value"` / `name: value` map of config-variable values.
+    pub fn load_config_vars_file_native(path: &Path) -> Result<HashMap<String, String>> {
+        match config_file_format(path)? {
+            FileFormat::Yaml => Self::load_config_vars_file(path),
+            FileFormat::Toml => {
+                let text = std::fs::read_to_string(path)
+                    .with_context(|| format!("Failed to open config vars file {:?}", path))?;
+                toml::from_str(&text)
+                    .with_context(|| format!("Failed to parse config vars file {:?}", path))
+            }
+        }
+    }
+
     /// Resolves every expression-bearing value in the config — `environment`
     /// entries (on containers and task `run`s) and volume host paths —
     /// through Batect's expression syntax: `$VAR`/`${VAR}`/`${VAR:-default}`
@@ -7912,6 +7929,28 @@ region: eu
     fn load_config_vars_file_missing_file_errors() {
         let result = Config::load_config_vars_file(Path::new("/nonexistent/vars.yml"));
         assert!(result.is_err());
+    }
+
+    /// The native config-vars loader picks its parser by extension, so a
+    /// `.toml` file (the `ratect.local.toml` default) and a `.yml` file (an
+    /// explicitly-named override, or a migrating `batect.local.yml`) both
+    /// produce the same flat map.
+    #[test]
+    fn load_config_vars_file_native_parses_toml_and_yaml_by_extension() {
+        let dir = unique_temp_dir();
+
+        let toml_path = dir.join("ratect.local.toml");
+        std::fs::write(&toml_path, "env_name = \"staging\"\nregion = \"eu\"\n").unwrap();
+        let from_toml = Config::load_config_vars_file_native(&toml_path).unwrap();
+        assert_eq!(from_toml.get("env_name"), Some(&"staging".to_string()));
+        assert_eq!(from_toml.get("region"), Some(&"eu".to_string()));
+
+        let yaml_path = dir.join("overrides.yml");
+        std::fs::write(&yaml_path, "env_name: staging\nregion: eu\n").unwrap();
+        let from_yaml = Config::load_config_vars_file_native(&yaml_path).unwrap();
+        assert_eq!(from_toml, from_yaml);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
