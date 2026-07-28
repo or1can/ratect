@@ -2726,6 +2726,33 @@ pub struct LoadedProject {
 /// A missing file is an error here rather than an empty config: every
 /// caller so far wants to fail fast, and doing it in one place means the
 /// message is identical whichever binary is running.
+/// Serializes a merged, *unresolved* [`Config`] to native `ratect.toml` text —
+/// the rendering half of `ratect config convert`. Goes through [`toml::Value`]
+/// rather than serializing the struct directly, so scalar fields are emitted
+/// before table fields (raw struct serialization would produce a value after a
+/// `[table]` header — invalid TOML — because `Container` interleaves the two).
+///
+/// Proves the result **round-trips**: it parses the generated TOML straight
+/// back into a `Config` and checks the two are identical, so a lossy
+/// conversion — most plausibly in the hand-written `volumes`/`ports`/`devices`
+/// (de)serializers — can't be written out silently. This works precisely
+/// because both formats target the same `Config`: everything that survives to
+/// that model is preserved, and the things that don't (comments, key order)
+/// are exactly what a converted file is expected to lose.
+pub fn to_native_toml(config: &Config) -> Result<String> {
+    let value = toml::Value::try_from(config).context("serializing the configuration")?;
+    let text = toml::to_string_pretty(&value).context("rendering TOML")?;
+
+    let reparsed: Config = toml::from_str(&text).context("re-parsing the generated TOML")?;
+    let reparsed_value =
+        toml::Value::try_from(&reparsed).context("re-serializing the generated TOML")?;
+    anyhow::ensure!(
+        reparsed_value == value,
+        "the conversion did not round-trip losslessly — this is a bug; please report it"
+    );
+    Ok(text)
+}
+
 pub async fn load_project(
     config_file: &Path,
     config_var_overrides: &HashMap<String, String>,
@@ -6286,6 +6313,42 @@ run = { container = "build-env", command = "cargo test" }
     async fn load_from_file_missing_file_errors() {
         let result = Config::load_from_file(Path::new("/nonexistent/batect.yml")).await;
         assert!(result.is_err());
+    }
+
+    /// `to_native_toml` renders a config (here one with the interleaved scalar
+    /// and table fields that trip naive TOML serialization, plus the custom
+    /// `volumes`/`ports` (de)serializers) and its own round-trip check passes,
+    /// so the result parses straight back to an equivalent `Config`.
+    #[test]
+    fn to_native_toml_renders_and_round_trips() {
+        let config = parse(
+            r#"
+project_name: demo
+containers:
+  app:
+    image: alpine:3.18
+    environment:
+      TZ: UTC
+    volumes:
+      - .:/code
+    ports:
+      - "8080:80"
+tasks:
+  build:
+    run:
+      container: app
+      command: echo hi
+"#,
+        );
+        let text = to_native_toml(&config).unwrap();
+        let reparsed: Config = toml::from_str(&text).unwrap();
+        assert_eq!(reparsed.project_name, "demo");
+        assert!(reparsed.containers.contains_key("app"));
+        assert!(reparsed.tasks.contains_key("build"));
+        assert_eq!(
+            reparsed.containers["app"].image.as_deref(),
+            Some("alpine:3.18")
+        );
     }
 
     /// A helper: run the native load-and-resolve path on a single TOML string

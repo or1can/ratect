@@ -175,6 +175,81 @@ run = { container = "app" }
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// `config convert` turns a `batect.yml` (anchors and all) into a
+/// `ratect.toml` that actually loads and runs — proven by listing tasks from
+/// the *converted* file. Also covers the no-clobber guard and `--force`.
+#[test]
+fn config_convert_produces_a_loadable_ratect_toml() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        r#"
+project_name: demo
+containers:
+  base: &base
+    image: alpine:3.18
+  app:
+    <<: *base
+tasks:
+  build:
+    description: Build it
+    run:
+      container: app
+      command: echo hi
+"#,
+    )
+    .unwrap();
+
+    let convert = ratect_command()
+        .arg("-f")
+        .arg(dir.join("batect.yml"))
+        .args(["config", "convert"])
+        .output()
+        .expect("failed to run ratect");
+    assert!(
+        convert.status.success(),
+        "convert failed:\n{}",
+        String::from_utf8_lossy(&convert.stderr)
+    );
+    assert!(dir.join("ratect.toml").is_file());
+
+    // The generated file loads and lists the task (image reached `app` via the
+    // inlined anchor, or the task couldn't have resolved).
+    let list = ratect_command()
+        .arg("-f")
+        .arg(dir.join("ratect.toml"))
+        .args(["tasks", "list", "-o", "quiet"])
+        .output()
+        .expect("failed to run ratect");
+    assert!(
+        list.status.success(),
+        "the converted file should load:\n{}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&list.stdout), "build\tBuild it\n");
+
+    // No-clobber: converting again refuses to overwrite unless forced.
+    let again = ratect_command()
+        .arg("-f")
+        .arg(dir.join("batect.yml"))
+        .args(["config", "convert"])
+        .output()
+        .expect("failed to run ratect");
+    assert!(
+        !again.status.success(),
+        "should refuse to overwrite ratect.toml"
+    );
+    let forced = ratect_command()
+        .arg("-f")
+        .arg(dir.join("batect.yml"))
+        .args(["config", "convert", "--force"])
+        .output()
+        .expect("failed to run ratect");
+    assert!(forced.status.success(), "--force should overwrite");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// The native format parses and its tasks list — no Docker needed. That the
 /// list is complete also proves `extends` resolved (`build-env` inherits its
 /// image from `base`), since a container that failed to resolve wouldn't stop

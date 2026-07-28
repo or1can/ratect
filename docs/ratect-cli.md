@@ -83,6 +83,7 @@ file (this, or whatever `--config-vars-file` names instead), then
 | `ratect includes clean [--all]` | Removes cached Git includes. |
 | `ratect includes refresh` | Re-clones them, picking up a `ref` that has moved. |
 | `ratect config validate` | Checks the configuration loads and is problem-free, without a daemon — a CI-friendly gate. |
+| `ratect config convert` | Converts a `batect.yml` (point `-f` at it) into a native `ratect.toml`. |
 
 There is deliberately **no `ratect <task>` shorthand**. `ratect-compat` takes a task
 name as a bare positional argument, which works only because it has no subcommands;
@@ -279,6 +280,25 @@ config, resolves it, and runs the same config-only checks (missing
 gate to run in CI when all you want to know is "is the config valid?", without a
 daemon. It takes the same `--config-var`/`--config-vars-file` options as `run`, since
 resolving the config can need them.
+
+`ratect config convert` migrates a Batect-format `batect.yml` to a native
+`ratect.toml` — point `-f` at the `batect.yml`:
+
+```bash
+ratect -f batect.yml config convert          # writes ratect.toml beside it
+ratect -f batect.yml config convert --stdout  # prints instead, to review or pipe
+```
+
+It's **one-directional** (`ratect-compat` stays YAML; the reverse would be lossy) and
+writes `ratect.toml` only if one doesn't already exist — pass `--force` to overwrite,
+or `--stdout` to print. The conversion **preserves behaviour, not formatting**: YAML
+anchors/aliases/merge keys are expanded inline, `include`d files (Git bundles too) are
+flattened into the one result, and comments are dropped — so the output carries a
+header and is a *starting point to review*, not a blind drop-in. Before writing, the
+conversion is checked to round-trip losslessly back to the same configuration, so
+whatever it produces is guaranteed to behave identically to the original. (This first
+version emits the compact `"8080:80"` / `.:/code` string forms for `ports`/`volumes`
+rather than the object form; both are valid, and reformatting is a review step.)
 
 ## `includes` options
 
