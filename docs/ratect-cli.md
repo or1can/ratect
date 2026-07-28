@@ -9,13 +9,14 @@ one.
 > **Status.** From 0.3.0 `ratect` reads its own **native TOML configuration**
 > (`ratect.toml` by default) rather than sharing `ratect-compat`'s `batect.yml` —
 > see the [Roadmap](../ROADMAP.md#ratect) and
-> [decisions/0003](../decisions/0003-ratect-native-config-format.md). The schema is
-> the same one [Configuration Reference](config-reference.md) documents, re-spelled
-> in TOML, with one native addition so far — [`extends`](#the-native-config-format).
-> A `batect.yml` is still readable by naming it with `-f`, so a project can migrate
-> incrementally; `ratect config convert` (to translate one automatically) is
-> planned. The native format is `ratect`'s alone — `ratect-compat` stays
-> `batect.yml`-only, permanently.
+> [decisions/0003](../decisions/0003-ratect-native-config-format.md). Its full
+> schema is the [`ratect.toml` reference](ratect-config-reference.md); it's the
+> same schema [Configuration Reference](config-reference.md) documents for
+> `batect.yml`, re-spelled in TOML, with `extends` in place of YAML anchors. A
+> `batect.yml` is still readable by naming it with `-f`, so a project can migrate
+> incrementally — [`ratect config convert`](#config) translates one automatically.
+> The native format is `ratect`'s alone — `ratect-compat` stays `batect.yml`-only,
+> permanently.
 
 ## The native config format
 
@@ -38,35 +39,22 @@ working_directory = "/code"
 run = { container = "build-env", command = "cargo build" }
 ```
 
-**`extends`** replaces YAML anchors/aliases/merge keys: a container names one
-parent and inherits every field it doesn't set itself. The merge is shallow and
-per-field — a field you set replaces the inherited one outright (nested maps are
-not merged into), and a field you leave out is taken from the parent, exactly like
-Cargo's profile `inherits`. It is single-parent, may chain (`a` extends `b`
-extends `c`), and rejects a cycle. A container used only as a base needs no
-`image` of its own, since only containers a task actually runs are required to
-have one.
-
-**Includes** may mix formats: each `include` entry is parsed by its file
-extension (`.toml` native, `.yml`/`.yaml` as Batect-format YAML), so a native
-project can still include an existing `batect.yml` fragment or bundle unchanged.
-A `type: git` include with no explicit `path` looks for `ratect-bundle.toml`
-first and falls back to `batect-bundle.yml`, so an unmigrated bundle keeps
-working and a bundle author can ship both files to support `ratect` and Batect
-at once.
+The native additions over `batect.yml` are **`extends`** — a container inherits
+one named parent's fields (shallow, per-field, single-parent), replacing YAML
+anchors — and **mixed includes**: each `include` is parsed by its extension
+(`.toml` native, `.yml`/`.yaml` as YAML), and a pathless `type: git` bundle
+prefers `ratect-bundle.toml` over `batect-bundle.yml`. The full schema — the TOML
+spelling of every field, the `extends` rules, object shapes, includes, and local
+overrides — is the [`ratect.toml` reference](ratect-config-reference.md).
 
 ### Local overrides
 
 A **`ratect.local.toml`** beside your config file is loaded automatically when
 present — no `--config-vars-file` needed — supplying [config
-variable](config-reference.md#configvariable) values for the current developer
-or machine. It holds values only (a flat `name = "value"` map), not
-configuration; anything you want to vary locally should be a config variable
-the tracked config interpolates (`image = "app:<{tag}>"`), keeping what varies
-declared and visible rather than hidden in an untracked file. Gitignore it.
-Precedence, lowest to highest: a variable's own `default`, then the config-vars
-file (this, or whatever `--config-vars-file` names instead), then
-`--config-var` on the command line.
+variable](config-reference.md#configvariable) *values* (a flat `name = "value"`
+map) for the current developer or machine. Gitignore it. See
+[the reference](ratect-config-reference.md#local-overrides) for precedence and
+the reasoning.
 
 ## Commands
 

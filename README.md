@@ -108,7 +108,8 @@ assume you've read Batect's docs.
 - [Task Lifecycle](docs/task-lifecycle.md)
 - [CLI Reference (`ratect-compat`)](docs/cli-reference.md)
 - [CLI Reference (`ratect`)](docs/ratect-cli.md)
-- [Configuration Reference](docs/config-reference.md)
+- [Configuration Reference (`batect.yml`)](docs/config-reference.md)
+- [Configuration Reference (`ratect.toml`)](docs/ratect-config-reference.md)
 - [Differences from Batect](docs/differences-from-batect.md)
 - [Roadmap](ROADMAP.md)
 
