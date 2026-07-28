@@ -50,6 +50,10 @@ have one.
 **Includes** may mix formats: each `include` entry is parsed by its file
 extension (`.toml` native, `.yml`/`.yaml` as Batect-format YAML), so a native
 project can still include an existing `batect.yml` fragment or bundle unchanged.
+A `type: git` include with no explicit `path` looks for `ratect-bundle.toml`
+first and falls back to `batect-bundle.yml`, so an unmigrated bundle keeps
+working and a bundle author can ship both files to support `ratect` and Batect
+at once.
 
 ## Commands
 

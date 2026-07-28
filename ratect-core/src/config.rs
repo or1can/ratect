@@ -1637,16 +1637,27 @@ pub struct ConfigVariable {
     pub description: Option<String>,
 }
 
-/// The `path` a `type: git` include defaults to when omitted, matching
-/// Batect's own default.
-const DEFAULT_GIT_INCLUDE_PATH: &str = "batect-bundle.yml";
+/// The bundle file names a pathless `type: git` include looks for, in order.
+/// `Compat` is Batect's single default; `Native` prefers its own TOML bundle
+/// but falls back to the Batect one — so an unmigrated bundle still works from
+/// a native project, and a bundle author can ship both files and support both
+/// tools at once (native takes the TOML, Batect/`ratect-compat` the YAML). See
+/// [decisions/0003](../../decisions/0003-ratect-native-config-format.md).
+fn git_bundle_candidates(format: ConfigFormat) -> &'static [&'static str] {
+    match format {
+        ConfigFormat::Compat => &["batect-bundle.yml"],
+        ConfigFormat::Native => &["ratect-bundle.toml", "batect-bundle.yml"],
+    }
+}
 
 /// One entry in a config file's top-level `include` list — either a local
 /// file (a bare string path, or the expanded `{type: file, path: ...}`
 /// object form, mirroring [`PortMapping`]'s string-or-object handling
-/// above), or a Git bundle (`{type: git, repo, ref, path}` — `path` defaults
-/// to `batect-bundle.yml`). Any other `type` is rejected with a clear "not
-/// supported yet" error rather than a generic parse failure.
+/// above), or a Git bundle (`{type: git, repo, ref, path}`). A Git entry's
+/// `path` is optional: when omitted, the bundle file is discovered by
+/// [`git_bundle_candidates`] (format-dependent), so the default isn't baked in
+/// here — the load doesn't yet know whether it's running in native or compat
+/// mode.
 #[derive(Debug, Clone)]
 pub(crate) enum IncludeEntry {
     File {
@@ -1655,7 +1666,7 @@ pub(crate) enum IncludeEntry {
     Git {
         repo: String,
         git_ref: String,
-        path: String,
+        path: Option<String>,
     },
 }
 
@@ -1713,7 +1724,8 @@ impl<'de> Deserialize<'de> for IncludeEntry {
                         let repo = repo.ok_or_else(|| serde::de::Error::missing_field("repo"))?;
                         let git_ref =
                             git_ref.ok_or_else(|| serde::de::Error::missing_field("ref"))?;
-                        let path = path.unwrap_or_else(|| DEFAULT_GIT_INCLUDE_PATH.to_string());
+                        // Left as `None` when omitted: the default bundle name
+                        // depends on the load's format, unknown here.
                         Ok(IncludeEntry::Git {
                             repo,
                             git_ref,
@@ -1951,6 +1963,48 @@ fn absolute_path(path: &Path) -> Result<PathBuf> {
     Ok(std::env::current_dir()?.join(path).clean())
 }
 
+/// Resolves an include entry to its actual file. A single candidate — a local
+/// file, or a Git bundle with an explicit `path` — keeps the precise
+/// exists/not-a-file messages the loop has always given. Multiple candidates —
+/// a pathless Git bundle probing [`git_bundle_candidates`] — are tried in
+/// order, and the first that exists wins, since a bundle may ship only one of
+/// them. Each candidate's *lexical* containment within a Git boundary is
+/// checked before it's touched; the caller re-checks the chosen one
+/// canonically.
+fn resolve_include_target(
+    base_dir: &Path,
+    candidates: &[String],
+    boundary: Option<&GitBoundary>,
+) -> Result<PathBuf> {
+    if let [only] = candidates {
+        let resolved = absolute_path(&base_dir.join(only))?;
+        if let Some(boundary) = boundary {
+            boundary.check_contains(&resolved)?;
+        }
+        if !resolved.is_file() {
+            if resolved.exists() {
+                anyhow::bail!("Included file '{}' is not a file.", resolved.display());
+            }
+            anyhow::bail!("Included file '{}' does not exist.", resolved.display());
+        }
+        return Ok(resolved);
+    }
+
+    for candidate in candidates {
+        let resolved = absolute_path(&base_dir.join(candidate))?;
+        if let Some(boundary) = boundary {
+            boundary.check_contains(&resolved)?;
+        }
+        if resolved.is_file() {
+            return Ok(resolved);
+        }
+    }
+    anyhow::bail!(
+        "No bundle file found in the Git include (looked for {}).",
+        candidates.join(", ")
+    );
+}
+
 /// The result of [`Config::load_from_file`]: the merged, but not yet
 /// expression-resolved, [`Config`], plus enough information for
 /// [`resolve_expressions`](Self::resolve_expressions) to resolve each
@@ -2100,8 +2154,8 @@ impl Config {
             vec![(root_path, root_dir, root_file, None)];
 
         while let Some((containing_dir, boundary, include)) = queue.pop_front() {
-            let (base_dir, include_path, boundary) = match &include {
-                IncludeEntry::File { path } => (containing_dir, path.clone(), boundary),
+            let (base_dir, candidates, boundary) = match &include {
+                IncludeEntry::File { path } => (containing_dir, vec![path.clone()], boundary),
                 IncludeEntry::Git {
                     repo,
                     git_ref,
@@ -2123,21 +2177,20 @@ impl Config {
                         remote: repo.clone(),
                         git_ref: git_ref.clone(),
                     };
-                    (repo_dir, path.clone(), Some(boundary))
+                    // An explicit `path` is the single candidate; a pathless
+                    // bundle probes the format's default names in order.
+                    let candidates = match path {
+                        Some(path) => vec![path.clone()],
+                        None => git_bundle_candidates(format)
+                            .iter()
+                            .map(|name| name.to_string())
+                            .collect(),
+                    };
+                    (repo_dir, candidates, Some(boundary))
                 }
             };
-            let resolved = absolute_path(&base_dir.join(&include_path))?;
+            let resolved = resolve_include_target(&base_dir, &candidates, boundary.as_ref())?;
 
-            if let Some(boundary) = &boundary {
-                boundary.check_contains(&resolved)?;
-            }
-
-            if !resolved.is_file() {
-                if resolved.exists() {
-                    anyhow::bail!("Included file '{}' is not a file.", resolved.display());
-                }
-                anyhow::bail!("Included file '{}' does not exist.", resolved.display());
-            }
             if let Some(boundary) = &boundary {
                 boundary.check_contains_canonical(&resolved)?;
             }
@@ -7047,6 +7100,128 @@ tasks:
             .unwrap();
         assert!(loaded.config.containers.contains_key("bundled"));
         assert!(loaded.config.tasks.contains_key("bundled-task"));
+
+        std::fs::remove_dir_all(&bundle).unwrap();
+        std::fs::remove_dir_all(&project).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    /// Builds a git repo containing whichever bundle files `bundles` names
+    /// (path -> contents), commits them at tag `v1`, and returns its directory.
+    fn git_bundle_repo(bundles: &[(&str, &str)]) -> std::path::PathBuf {
+        let repo = unique_temp_dir();
+        for (name, contents) in bundles {
+            std::fs::write(repo.join(name), contents).unwrap();
+        }
+        run_git(&repo, &["init", "--quiet"]);
+        run_git(&repo, &["add", "-A"]);
+        run_git(&repo, &["commit", "--quiet", "-m", "bundles"]);
+        run_git(&repo, &["tag", "v1"]);
+        repo
+    }
+
+    /// A native project with a pathless `type: git` include prefers the repo's
+    /// `ratect-bundle.toml` over its `batect-bundle.yml` when both are present —
+    /// so a bundle author can ship both and native takes the TOML.
+    #[tokio::test]
+    async fn a_native_pathless_git_include_prefers_ratect_bundle_toml() {
+        let bundle = git_bundle_repo(&[
+            (
+                "ratect-bundle.toml",
+                "[containers.from_toml]\nimage = \"alpine:3.18\"\n",
+            ),
+            (
+                "batect-bundle.yml",
+                "containers:\n  from_yaml:\n    image: alpine:3.18\n",
+            ),
+        ]);
+        let project = unique_temp_dir();
+        std::fs::write(
+            project.join("ratect.toml"),
+            format!(
+                "project_name = \"demo\"\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\n",
+                bundle.display()
+            ),
+        )
+        .unwrap();
+
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+        let loaded =
+            Config::load_from_file_native_with_git_cache(&project.join("ratect.toml"), &git_cache)
+                .await
+                .unwrap();
+        assert!(loaded.config.containers.contains_key("from_toml"));
+        assert!(!loaded.config.containers.contains_key("from_yaml"));
+
+        std::fs::remove_dir_all(&bundle).unwrap();
+        std::fs::remove_dir_all(&project).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    /// When only `batect-bundle.yml` is present, a native pathless include
+    /// falls back to it — an unmigrated Batect bundle stays usable from a
+    /// native project.
+    #[tokio::test]
+    async fn a_native_pathless_git_include_falls_back_to_batect_bundle_yml() {
+        let bundle = git_bundle_repo(&[(
+            "batect-bundle.yml",
+            "containers:\n  from_yaml:\n    image: alpine:3.18\n",
+        )]);
+        let project = unique_temp_dir();
+        std::fs::write(
+            project.join("ratect.toml"),
+            format!(
+                "project_name = \"demo\"\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\n",
+                bundle.display()
+            ),
+        )
+        .unwrap();
+
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+        let loaded =
+            Config::load_from_file_native_with_git_cache(&project.join("ratect.toml"), &git_cache)
+                .await
+                .unwrap();
+        assert!(loaded.config.containers.contains_key("from_yaml"));
+
+        std::fs::remove_dir_all(&bundle).unwrap();
+        std::fs::remove_dir_all(&project).unwrap();
+        std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    /// The compat path never looks for `ratect-bundle.toml` — Batect knows
+    /// nothing of it — so with both present it still takes `batect-bundle.yml`.
+    #[tokio::test]
+    async fn a_compat_pathless_git_include_ignores_a_ratect_bundle_toml() {
+        let bundle = git_bundle_repo(&[
+            (
+                "ratect-bundle.toml",
+                "[containers.from_toml]\nimage = \"alpine:3.18\"\n",
+            ),
+            (
+                "batect-bundle.yml",
+                "containers:\n  from_yaml:\n    image: alpine:3.18\n",
+            ),
+        ]);
+        let project = unique_temp_dir();
+        std::fs::write(
+            project.join("batect.yml"),
+            format!(
+                "project_name: demo\ninclude:\n  - type: git\n    repo: {}\n    ref: v1\n",
+                bundle.display()
+            ),
+        )
+        .unwrap();
+
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+        let loaded = Config::load_from_file_with_git_cache(&project.join("batect.yml"), &git_cache)
+            .await
+            .unwrap();
+        assert!(loaded.config.containers.contains_key("from_yaml"));
+        assert!(!loaded.config.containers.contains_key("from_toml"));
 
         std::fs::remove_dir_all(&bundle).unwrap();
         std::fs::remove_dir_all(&project).unwrap();
