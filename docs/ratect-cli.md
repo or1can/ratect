@@ -82,6 +82,7 @@ file (this, or whatever `--config-vars-file` names instead), then
 | `ratect includes list` | Lists the cached Git includes shared by every project on this machine. |
 | `ratect includes clean [--all]` | Removes cached Git includes. |
 | `ratect includes refresh` | Re-clones them, picking up a `ref` that has moved. |
+| `ratect config validate` | Checks the configuration loads and is problem-free, without a daemon — a CI-friendly gate. |
 
 There is deliberately **no `ratect <task>` shorthand**. `ratect-compat` takes a task
 name as a bare positional argument, which works only because it has no subcommands;
@@ -268,6 +269,16 @@ The environment checks run even when the configuration itself won't load —
 "your config is broken *and* your daemon isn't running" is more useful than fixing
 one to discover the other. It also reports leftovers unprompted, since the whole
 reason [`resources`](#resources-options) exists is that nobody thinks to look.
+
+## `config`
+
+`ratect config validate` is `doctor`'s configuration half on its own — it loads the
+config, resolves it, and runs the same config-only checks (missing
+`build_directory`/Dockerfile, floating image tags, dependencies with no
+`health_check`), exiting non-zero on a problem. It never touches Docker, so it's the
+gate to run in CI when all you want to know is "is the config valid?", without a
+daemon. It takes the same `--config-var`/`--config-vars-file` options as `run`, since
+resolving the config can need them.
 
 ## `includes` options
 

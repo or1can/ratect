@@ -138,6 +138,25 @@ enum Command {
         #[command(subcommand)]
         command: IncludesCommand,
     },
+
+    /// Work with this project's configuration file.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ConfigCommand {
+    /// Check the configuration loads and is free of problems, without a
+    /// daemon — `doctor`'s config-only half, for use as a CI step.
+    Validate(ConfigValidateArgs),
+}
+
+#[derive(ClapArgs, Debug)]
+struct ConfigValidateArgs {
+    #[command(flatten)]
+    config_vars: ConfigVarArgs,
 }
 
 #[derive(Subcommand, Debug)]
@@ -562,6 +581,9 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Resources { command } => manage_resources(command, &global, style).await,
         Command::Doctor(args) => diagnose(args, &global, style).await,
         Command::Includes { command } => manage_includes(command, style).await,
+        Command::Config { command } => match command {
+            ConfigCommand::Validate(args) => validate_config(args, &global, style).await,
+        },
     }
 }
 
@@ -1100,6 +1122,14 @@ async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> 
         ))),
     }
 
+    report_findings(&global.config_file, &findings, style)
+}
+
+/// Renders a set of [`Finding`]s and turns them into an exit status — shared
+/// by `doctor` and `config validate`, so the two agree on formatting and on
+/// "a problem fails, a warning doesn't". Quiet prints only what needs acting
+/// on; otherwise a `Checking <file>...` header, every finding, and a summary.
+fn report_findings(config_file: &Path, findings: &[Finding], style: OutputStyle) -> Result<()> {
     let problems = findings
         .iter()
         .filter(|finding| matches!(finding, Finding::Problem(_)))
@@ -1119,8 +1149,8 @@ async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> 
             println!("{}", finding.render().trim_start());
         }
     } else {
-        println!("Checking {}...", global.config_file.display());
-        for finding in &findings {
+        println!("Checking {}...", config_file.display());
+        for finding in findings {
             println!("{}", finding.render());
         }
         println!();
@@ -1134,6 +1164,35 @@ async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> 
         anyhow::bail!("{problems} problem(s) found.");
     }
     Ok(())
+}
+
+/// `ratect config validate` — `doctor`'s configuration half, without touching
+/// Docker: does the config load, and is it free of the same problems `doctor`
+/// checks (missing `build_directory`/Dockerfile, floating tags, unguarded
+/// dependencies)? Exits non-zero on a problem, so it drops into CI as the
+/// config-only gate that doesn't need a daemon.
+async fn validate_config(
+    args: ConfigValidateArgs,
+    global: &GlobalArgs,
+    style: OutputStyle,
+) -> Result<()> {
+    let mut findings = Vec::new();
+    match load(global, &args.config_vars).await {
+        Ok(project) => {
+            findings.push(Finding::Fine(format!(
+                "{} loads ({} container(s), {} task(s))",
+                global.config_file.display(),
+                project.config.containers.len(),
+                project.config.tasks.len()
+            )));
+            findings.extend(config_findings(&project.config));
+        }
+        Err(error) => findings.push(Finding::Problem(format!(
+            "{} does not load: {error:#}",
+            global.config_file.display()
+        ))),
+    }
+    report_findings(&global.config_file, &findings, style)
 }
 
 /// The checks that need only the configuration — pure, so they're testable
@@ -1457,6 +1516,17 @@ mod tests {
             }
             other => panic!("expected a run command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn config_validate_is_a_subcommand_of_config() {
+        let cli = Cli::try_parse_from(["ratect", "config", "validate"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Config {
+                command: ConfigCommand::Validate(_)
+            }
+        ));
     }
 
     #[test]

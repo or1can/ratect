@@ -126,6 +126,55 @@ run = { container = "app" }
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// `config validate` is `doctor`'s config-only half: it passes a good config
+/// (exit 0, no daemon touched) and fails one with a problem (exit non-zero),
+/// which is what makes it usable as a CI gate.
+#[test]
+fn config_validate_passes_a_good_config_and_fails_a_broken_one() {
+    let good = ratect_command()
+        .arg("-f")
+        .arg(native_fixture_path())
+        .args(["config", "validate"])
+        .output()
+        .expect("failed to run ratect");
+    assert!(
+        good.status.success(),
+        "the native fixture should validate:\n{}",
+        String::from_utf8_lossy(&good.stderr)
+    );
+
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        r#"
+project_name = "demo"
+
+[containers.app]
+build_directory = "does-not-exist"
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .unwrap();
+    let bad = ratect_command()
+        .arg("-f")
+        .arg(dir.join("ratect.toml"))
+        .args(["config", "validate"])
+        .output()
+        .expect("failed to run ratect");
+    assert!(
+        !bad.status.success(),
+        "a missing build_directory is a problem and should fail validation"
+    );
+    assert!(
+        String::from_utf8_lossy(&bad.stdout).contains("does-not-exist"),
+        "the problem should name the missing directory:\n{}",
+        String::from_utf8_lossy(&bad.stdout)
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// The native format parses and its tasks list — no Docker needed. That the
 /// list is complete also proves `extends` resolved (`build-env` inherits its
 /// image from `base`), since a container that failed to resolve wouldn't stop
