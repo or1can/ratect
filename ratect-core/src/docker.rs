@@ -4128,6 +4128,22 @@ mod tests {
         }
     }
 
+    /// The two `connect_over_tls_*` tests both drive bollard's
+    /// `connect_with_ssl`, which loads the OS trust store
+    /// (`rustls-native-certs`) on top of our throwaway test CA. On macOS that
+    /// native-cert load intermittently fails ("Could not load native certs")
+    /// when two threads hit the Security framework at once — so these two, the
+    /// only tests that open a TLS connection, take a shared lock instead of
+    /// running concurrently. Recovered from poisoning so a failing test
+    /// reports its own assertion rather than cascading a `PoisonError`.
+    static TLS_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serial_tls() -> std::sync::MutexGuard<'static, ()> {
+        TLS_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[tokio::test]
     async fn connect_over_tls_completes_a_real_handshake_against_a_valid_certificate() {
         let now = time::OffsetDateTime::now_utc();
@@ -4153,7 +4169,13 @@ mod tests {
             ..Default::default()
         };
 
-        let docker = connect(&options).expect("connecting over TLS should build a client");
+        // The lock spans only `connect` — the synchronous native-cert load is
+        // the racy part, and scoping it here keeps it off the `.await`s below
+        // (which `clippy::await_holding_lock` would flag).
+        let docker = {
+            let _guard = serial_tls();
+            connect(&options).expect("connecting over TLS should build a client")
+        };
         let result = docker.ping().await;
         server.await.expect("server task should not panic");
 
@@ -4190,7 +4212,10 @@ mod tests {
             ..Default::default()
         };
 
-        let docker = connect(&options).expect("connecting over TLS should build a client");
+        let docker = {
+            let _guard = serial_tls();
+            connect(&options).expect("connecting over TLS should build a client")
+        };
         let result = docker.ping().await;
         server.await.expect("server task should not panic");
 
