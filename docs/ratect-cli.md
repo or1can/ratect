@@ -90,6 +90,12 @@ group headings there, so the order alone carries them.
 | `ratect config convert` | Converts a `batect.yml` (point `-f` at it) into a native `ratect.toml`. |
 | `ratect doctor` | Checks this project and this machine for problems, without running anything. |
 
+### Shell integration
+
+| Command | What it does |
+| --- | --- |
+| `ratect completions <shell>` | Prints a shell completion script (`bash`, `zsh`, `fish`, `powershell`, `elvish`) to stdout — see [Shell completion](#shell-completion). |
+
 There is deliberately **no `ratect <task>` shorthand**. `ratect-compat` takes a task
 name as a bare positional argument, which works only because it has no subcommands;
 as `ratect` grows verbs, "is `doctor` a task or a command?" becomes a question the
@@ -99,14 +105,18 @@ interface can't answer, so `run` is always explicit.
 ratect run build
 ratect run test -- --filter integration
 ratect tasks list
+
 ratect caches list
 ratect caches clean gradle-cache
 ratect includes list
 ratect includes refresh
 ratect resources list
 ratect resources clean --older-than 1d
+
 ratect config validate
 ratect doctor
+
+ratect completions zsh
 ```
 
 ## Global options
@@ -340,6 +350,29 @@ The environment checks run even when the configuration itself won't load —
 "your config is broken *and* your daemon isn't running" is more useful than fixing
 one to discover the other. It also reports leftovers unprompted, since the whole
 reason [`resources`](#resources-options) exists is that nobody thinks to look.
+
+## Shell completion
+
+`ratect completions <shell>` prints a completion script to stdout for `bash`,
+`zsh`, `fish`, `powershell` or `elvish`. Install it the way your shell expects:
+
+```bash
+# bash — into your completions directory
+ratect completions bash > ~/.local/share/bash-completion/completions/ratect
+
+# zsh — onto your $fpath (then restart the shell)
+ratect completions zsh > ~/.zfunc/_ratect
+
+# fish
+ratect completions fish > ~/.config/fish/completions/ratect.fish
+```
+
+It completes command and flag names, their fixed values (`-o fancy|simple|…`,
+`--cache-type volume|directory`), and file-path arguments. It does **not** yet
+complete task, cache or container names: those vary per project, and a static
+script is generated without one in hand. Completing them needs *dynamic*
+completion (the shell calling back into `ratect` to read the config), which is a
+planned follow-up.
 
 ## Exit codes and diagnostics
 

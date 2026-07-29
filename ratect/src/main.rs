@@ -26,7 +26,7 @@
 //! `ratect-compat` already proved.
 
 use anyhow::{Context, Result};
-use clap::{Args as ClapArgs, Parser, Subcommand};
+use clap::{Args as ClapArgs, CommandFactory, Parser, Subcommand};
 use ratect_core::config::{format_task_list, format_task_list_quiet, load_project_native, Config};
 use ratect_core::docker::{ContainerRuntime, DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
@@ -60,7 +60,13 @@ struct GlobalArgs {
     /// Path to the configuration file. Defaults to `ratect.toml`, this
     /// binary's own native format; point it at a `batect.yml` to keep reading
     /// the Batect-format config while migrating (see `ratect config convert`).
-    #[arg(short = 'f', long, default_value = DEFAULT_CONFIG_FILE, global = true)]
+    #[arg(
+        short = 'f',
+        long,
+        default_value = DEFAULT_CONFIG_FILE,
+        global = true,
+        value_hint = clap::ValueHint::FilePath,
+    )]
     config_file: PathBuf,
 
     /// Force a particular style of Ratect's own output (never affects a
@@ -107,10 +113,11 @@ struct ConfigVarArgs {
 #[derive(Subcommand, Debug)]
 // Variants are ordered as they appear in `--help` and the docs: the
 // task-running verbs first, then the resource-management nouns, then
-// configuration and diagnostics — grouped by purpose rather than
-// alphabetically, so the flagship `run` stays first. `clap` can't render group
-// *headings* for subcommands (only for args), so the docs
-// ([`docs/ratect-cli.md`]) carry the labels; here the order alone conveys it.
+// configuration and diagnostics, and finally the shell-integration utility
+// (`completions`) — grouped by purpose rather than alphabetically, so the
+// flagship `run` stays first. `clap` can't render group *headings* for
+// subcommands (only for args), so the docs ([`docs/ratect-cli.md`]) carry the
+// labels; here the order alone conveys it.
 enum Command {
     /// Run a task.
     Run(RunArgs),
@@ -150,6 +157,17 @@ enum Command {
     /// Check this project and this machine for problems, without running
     /// anything.
     Doctor(DoctorArgs),
+
+    /// Print a shell completion script to standard output. Reaches no daemon
+    /// and reads no configuration.
+    Completions(CompletionsArgs),
+}
+
+#[derive(ClapArgs, Debug)]
+struct CompletionsArgs {
+    /// The shell to generate a completion script for.
+    #[arg(value_enum)]
+    shell: clap_complete::Shell,
 }
 
 #[derive(Subcommand, Debug)]
@@ -613,7 +631,24 @@ async fn run(cli: Cli) -> Result<()> {
             ConfigCommand::Convert(args) => convert_config(args, &global, style).await,
         },
         Command::Doctor(args) => diagnose(args, &global, style).await,
+        Command::Completions(args) => generate_completions(args),
     }
+}
+
+/// `ratect completions <shell>` — writes a completion script for `shell` to
+/// stdout, for the user to source into their shell (see docs/ratect-cli.md for
+/// the per-shell install line). Static: it completes subcommands, flags, and
+/// their `ValueEnum`/file-path values, but not task or cache names — those vary
+/// per project, and a static script is generated without one in hand (that's
+/// the dynamic completion a later change could add).
+///
+/// Reads no configuration and reaches no daemon: `Cli::command()` is the same
+/// parser definition `main` already built, just rendered as a script.
+fn generate_completions(args: CompletionsArgs) -> Result<()> {
+    let mut command = Cli::command();
+    let name = command.get_name().to_string();
+    clap_complete::generate(args.shell, &mut command, name, &mut std::io::stdout());
+    Ok(())
 }
 
 /// Loads the configuration — merging `--config-vars-file` with any
@@ -1658,6 +1693,13 @@ mod tests {
             }
             other => panic!("expected a run command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn completions_takes_a_shell_and_rejects_an_unknown_one() {
+        let cli = Cli::try_parse_from(["ratect", "completions", "zsh"]).unwrap();
+        assert!(matches!(cli.command, Command::Completions(_)));
+        assert!(Cli::try_parse_from(["ratect", "completions", "klingon"]).is_err());
     }
 
     #[test]
