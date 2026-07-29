@@ -60,7 +60,7 @@ struct GlobalArgs {
     /// Path to the configuration file. Defaults to `ratect.toml`, this
     /// binary's own native format; point it at a `batect.yml` to keep reading
     /// the Batect-format config while migrating (see `ratect config convert`).
-    #[arg(short = 'f', long, default_value = "ratect.toml", global = true)]
+    #[arg(short = 'f', long, default_value = DEFAULT_CONFIG_FILE, global = true)]
     config_file: PathBuf,
 
     /// Force a particular style of Ratect's own output (never affects a
@@ -637,6 +637,13 @@ async fn load(
 /// per-developer, config-variable values only. Native-named (`ratect-compat`
 /// uses `batect.local.yml`); see decisions/0003.
 const LOCAL_CONFIG_VARS_FILE: &str = "ratect.local.toml";
+
+/// This binary's native config file, and `-f`'s default.
+const DEFAULT_CONFIG_FILE: &str = "ratect.toml";
+
+/// The Batect-format file `config convert` reads by default (its *source*),
+/// since `-f`'s default is the `ratect.toml` it *writes*.
+const BATECT_CONFIG_FILE: &str = "batect.yml";
 
 async fn run_task(
     project: ratect_core::config::LoadedProject,
@@ -1234,7 +1241,15 @@ async fn convert_config(
     global: &GlobalArgs,
     style: OutputStyle,
 ) -> Result<()> {
-    let source = &global.config_file;
+    // `config convert` reads a `batect.yml` and writes a `ratect.toml`. The
+    // global `-f` defaults to `ratect.toml` — the *output* — which is the wrong
+    // source here, so when `-f` wasn't given, default the source to
+    // `batect.yml` (the thing being converted) instead.
+    let source = if global.config_file == Path::new(DEFAULT_CONFIG_FILE) {
+        Path::new(BATECT_CONFIG_FILE)
+    } else {
+        global.config_file.as_path()
+    };
     let loaded = Config::load_from_file(source)
         .await
         .with_context(|| format!("Failed to load {} for conversion", source.display()))?;
@@ -1253,15 +1268,8 @@ async fn convert_config(
         return Ok(());
     }
 
-    let output = ratect_core::config::base_path_for(source).join("ratect.toml");
-    if output.exists() && !args.force {
-        anyhow::bail!(
-            "{} already exists — pass --force to overwrite it, or --stdout to print instead.",
-            output.display()
-        );
-    }
-    std::fs::write(&output, document)
-        .with_context(|| format!("Failed to write {}", output.display()))?;
+    let output = ratect_core::config::base_path_for(source).join(DEFAULT_CONFIG_FILE);
+    write_generated_config(&output, &document, args.force)?;
 
     if style != OutputStyle::Quiet {
         println!("Converted {} to {}.", source.display(), output.display());
@@ -1270,6 +1278,55 @@ async fn convert_config(
             source.display()
         );
     }
+    Ok(())
+}
+
+/// Writes a converted `ratect.toml` without ever truncating an existing file
+/// in place — the output is exactly the file the user is told to hand-edit
+/// afterwards, so a half-written or clobbered result would lose real work.
+///
+/// Without `--force`, the OS itself enforces no-clobber (`create_new`), which
+/// also closes the check-then-write race a separate `exists()` test would
+/// leave open. With `--force`, the new content is written to a temp sibling
+/// and atomically `rename`d over the target, so an interrupted write (full
+/// disk, signal) leaves the previous file intact rather than truncated.
+fn write_generated_config(output: &Path, document: &str, force: bool) -> Result<()> {
+    use std::io::Write;
+
+    if !force {
+        return match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output)
+        {
+            Ok(mut file) => file
+                .write_all(document.as_bytes())
+                .with_context(|| format!("Failed to write {}", output.display())),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => anyhow::bail!(
+                "{} already exists — pass --force to overwrite it, or --stdout to print instead.",
+                output.display()
+            ),
+            Err(error) => {
+                Err(error).with_context(|| format!("Failed to write {}", output.display()))
+            }
+        };
+    }
+
+    let directory = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = output
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(DEFAULT_CONFIG_FILE);
+    // `process::id` keeps concurrent converts from sharing a temp path; the
+    // rename is what actually makes the replacement atomic.
+    let temp = directory.join(format!(".{file_name}.{}.tmp", std::process::id()));
+    std::fs::write(&temp, document)
+        .with_context(|| format!("Failed to write {}", temp.display()))?;
+    std::fs::rename(&temp, output)
+        .with_context(|| format!("Failed to replace {}", output.display()))?;
     Ok(())
 }
 

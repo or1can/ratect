@@ -250,6 +250,33 @@ tasks:
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// With no `-f`, `config convert` reads `batect.yml` (the source), not the
+/// `ratect.toml` that `-f` otherwise defaults to (the output) — otherwise the
+/// command would try to convert its own output format.
+#[test]
+fn config_convert_without_an_explicit_file_reads_batect_yml() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\ntasks:\n  t:\n    run:\n      container: app\n",
+    )
+    .unwrap();
+
+    let convert = ratect_command()
+        .current_dir(&dir)
+        .args(["config", "convert"])
+        .output()
+        .expect("failed to run ratect");
+    assert!(
+        convert.status.success(),
+        "convert with no -f should find batect.yml:\n{}",
+        String::from_utf8_lossy(&convert.stderr)
+    );
+    assert!(dir.join("ratect.toml").is_file());
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// The native format parses and its tasks list — no Docker needed. That the
 /// list is complete also proves `extends` resolved (`build-env` inherits its
 /// image from `base`), since a container that failed to resolve wouldn't stop
