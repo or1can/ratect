@@ -384,11 +384,14 @@ your config defines. That last one is *dynamic*: the installed script re-invokes
 `ratect` at completion time to read the config, always without cloning, pulling,
 or touching Docker, so a `<TAB>` is instant and safe.
 
-> **Prototype.** Task-name completion is an early prototype, built on clap's
-> `unstable-dynamic` API. Two known limitations: it reads the default config
-> file (`ratect.toml`, or `batect.yml` if that's what's present) rather than
-> honouring an explicit `-f`, and it sees only the root file's own tasks, not
-> those pulled in by an `include`.
+Task completion honours an explicit `-f`, and follows the config's `include`s —
+local files, and Git includes that are *already* cached. It never clones or
+pulls, so tasks from a Git include that hasn't been fetched yet won't appear
+until the first real run caches it.
+
+> **Built on an unstable API.** Task-name completion uses clap's
+> `unstable-dynamic` engine, so it may occasionally need a fix as that API
+> settles. The static parts (commands, flags, values, paths) don't depend on it.
 
 ## Exit codes and diagnostics
 

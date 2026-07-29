@@ -274,6 +274,20 @@ pub(crate) fn cache_key(remote: &str, git_ref: &str) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// The working copy for `(remote, git_ref)` if it's *already* cached under
+/// `~/.ratect/incl` — without cloning, locking, or any network. For offline
+/// consumers (shell completion, [`crate::config::task_names_for_completion`])
+/// that must never block a `<TAB>` on a fetch: an uncached include simply
+/// contributes nothing. `None` if it isn't cached or the home directory can't
+/// be resolved.
+pub(crate) fn cached_working_copy(remote: &str, git_ref: &str) -> Option<PathBuf> {
+    let working_copy = CacheRoot::Home
+        .resolve()
+        .ok()?
+        .join(cache_key(remote, git_ref));
+    working_copy.is_dir().then_some(working_copy)
+}
+
 /// Clones-once-and-reuses-forever cache for Git includes, rooted at
 /// `~/.ratect/incl` in production (`GitIncludeCache::new`) — see
 /// ROADMAP.md's 0.8.0 entry. A repo/ref already present on disk (by cache

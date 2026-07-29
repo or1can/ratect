@@ -2753,25 +2753,74 @@ pub fn to_native_toml(config: &Config) -> Result<String> {
     Ok(text)
 }
 
-/// The task names defined in `config_file`'s own top level, for shell
-/// completion — which must be instant and side-effect-free, so this is
-/// deliberately *not* a real load: it parses the one file (TOML or YAML, by
-/// extension) and returns its task names, sorted. No `include` resolution (so
-/// never a Git clone), no expression resolution, no Docker. Any error — a
-/// missing file, a parse failure mid-edit — yields no completions rather than a
-/// message, which is the only sane behaviour on `<TAB>`.
-///
-/// A prototype limitation worth naming: tasks defined purely in an `include`
-/// aren't seen, because following includes is exactly the part that can touch
-/// the network. A completion-safe offline include walk (local files, and Git
-/// repos *already* cached, never cloning) is the natural next step.
+/// The task names `config_file` defines, following its `include`s — for shell
+/// completion, which must be instant and side-effect-free, so this is
+/// deliberately *not* a real load. It parses each file (TOML or YAML by
+/// extension) and collects task names, but resolves no expressions, reaches no
+/// Docker, and — the load-bearing part — **never touches the network**: local
+/// includes are followed, and a `type: git` include only if its repository is
+/// *already* cached (see [`crate::git_include::cached_working_copy`]), never
+/// cloning. Any unreadable or half-written file contributes nothing rather than
+/// producing an error, which is the only sane behaviour on `<TAB>`.
 pub fn task_names_for_completion(config_file: &Path) -> Vec<String> {
-    let Ok(file) = parse_config_file(config_file, ConfigFormat::Native) else {
-        return Vec::new();
+    let mut names = std::collections::BTreeSet::new();
+    let mut visited = HashSet::new();
+    collect_completion_task_names(config_file, &mut names, &mut visited);
+    names.into_iter().collect()
+}
+
+/// Recursive worker for [`task_names_for_completion`]. `visited` (cleaned
+/// absolute paths) dedups shared includes and stops a cycle; every fallible
+/// step is a silent early return, never an error.
+fn collect_completion_task_names(
+    config_file: &Path,
+    names: &mut std::collections::BTreeSet<String>,
+    visited: &mut HashSet<PathBuf>,
+) {
+    let Ok(absolute) = absolute_path(config_file) else {
+        return;
     };
-    let mut names: Vec<String> = file.tasks.into_keys().collect();
-    names.sort_unstable();
-    names
+    if !visited.insert(absolute.clone()) {
+        return;
+    }
+    let Ok(file) = parse_config_file(&absolute, ConfigFormat::Native) else {
+        return;
+    };
+    names.extend(file.tasks.into_keys());
+
+    let base_dir = absolute.parent().unwrap_or(Path::new(""));
+    for include in file.include {
+        let bundle = match include {
+            IncludeEntry::File { path } => base_dir.join(path),
+            IncludeEntry::Git {
+                repo,
+                git_ref,
+                path,
+            } => {
+                // Completion never clones — only an already-cached repo counts.
+                let Some(repo_dir) = crate::git_include::cached_working_copy(&repo, &git_ref)
+                else {
+                    continue;
+                };
+                let candidates: Vec<String> = match path {
+                    Some(path) => vec![path],
+                    None => git_bundle_candidates(ConfigFormat::Native)
+                        .iter()
+                        .map(|name| name.to_string())
+                        .collect(),
+                };
+                match candidates
+                    .iter()
+                    .map(|candidate| repo_dir.join(candidate))
+                    .find(|candidate| candidate.is_file())
+                {
+                    Some(bundle) => bundle,
+                    None => continue,
+                }
+            }
+        };
+        collect_completion_task_names(&bundle, names, visited);
+    }
 }
 
 pub async fn load_project(
@@ -6399,6 +6448,34 @@ run = { container = "build-env", command = "cargo test" }
         std::fs::write(dir.join("broken.toml"), "this = is [not valid").unwrap();
         assert!(task_names_for_completion(&dir.join("broken.toml")).is_empty());
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Completion follows local includes, and an include cycle (here the root
+    /// includes itself, and a fragment includes the root back) terminates
+    /// instead of looping — the `visited` set does both jobs.
+    #[test]
+    fn task_names_for_completion_follows_local_includes_without_looping() {
+        let dir = unique_temp_dir();
+        std::fs::create_dir_all(dir.join("ci")).unwrap();
+        std::fs::write(
+            dir.join("ratect.toml"),
+            "project_name = \"demo\"\n\
+             include = [{ path = \"ci/more.toml\" }, { path = \"ratect.toml\" }]\n\
+             [tasks.build]\nrun = { container = \"a\" }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("ci/more.toml"),
+            "include = [{ path = \"../ratect.toml\" }]\n\
+             [tasks.deploy]\nrun = { container = \"a\" }\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            task_names_for_completion(&dir.join("ratect.toml")),
+            vec!["build".to_string(), "deploy".to_string()]
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -672,29 +672,50 @@ fn generate_completions(args: CompletionsArgs) -> Result<()> {
 }
 
 /// Completes a `run <task>` argument with the project's task names — the
-/// prototype's dynamic completion, invoked by the shell at `<TAB>` time via the
-/// engine wired up in `main`. Reads `ratect.toml` (or `batect.yml` if that's
-/// what's present) in the current directory through the side-effect-free
-/// [`ratect_core::config::task_names_for_completion`], so completion never
-/// clones, pulls, or blocks.
-///
-/// Two prototype limitations, both worth naming: it assumes the default config
-/// file (the completer is handed only the word being completed, not the rest of
-/// the command line, so it can't honour an explicit `-f`), and it sees only the
-/// root file's tasks (not those from an `include`).
+/// dynamic completion invoked by the shell at `<TAB>` time via the engine wired
+/// up in `main`. Reads the config through the side-effect-free
+/// [`ratect_core::config::task_names_for_completion`] (which follows local and
+/// already-cached includes but never clones, pulls, or reaches Docker), so a
+/// `<TAB>` is instant and safe.
 fn complete_task_names(current: &std::ffi::OsStr) -> Vec<clap_complete::CompletionCandidate> {
-    let native = PathBuf::from(DEFAULT_CONFIG_FILE);
-    let config_file = if native.exists() {
-        native
-    } else {
-        PathBuf::from(BATECT_CONFIG_FILE)
-    };
+    let config_file = completion_config_file();
     let prefix = current.to_string_lossy();
     ratect_core::config::task_names_for_completion(&config_file)
         .into_iter()
         .filter(|name| name.starts_with(prefix.as_ref()))
         .map(clap_complete::CompletionCandidate::new)
         .collect()
+}
+
+/// The config file an in-progress completion should read: the value of an
+/// explicit `-f`/`--config-file` on the line being completed, else the default
+/// (`ratect.toml`, or `batect.yml` if that's what's present).
+///
+/// During a completion request the shell re-invokes us as `… ratect -- <the
+/// words being completed>`, so those words are our own process args after `--`
+/// — the only place a completer can see them, since clap hands its callback
+/// just the word under the cursor, not the rest of the command line.
+fn completion_config_file() -> PathBuf {
+    let mut words = std::env::args_os()
+        .skip_while(|arg| arg.to_string_lossy() != "--")
+        .skip(1);
+    while let Some(arg) = words.next() {
+        let text = arg.to_string_lossy();
+        if let Some(value) = text.strip_prefix("--config-file=") {
+            return PathBuf::from(value);
+        }
+        if text == "-f" || text == "--config-file" {
+            if let Some(value) = words.next() {
+                return PathBuf::from(value);
+            }
+        }
+    }
+    let native = PathBuf::from(DEFAULT_CONFIG_FILE);
+    if native.exists() {
+        native
+    } else {
+        PathBuf::from(BATECT_CONFIG_FILE)
+    }
 }
 
 /// Loads the configuration — merging `--config-vars-file` with any
