@@ -1,3 +1,4 @@
+#:schema https://raw.githubusercontent.com/or1can/ratect/main/schema/ratect-config.schema.json
 # Ratect's own dev-task configuration, in the native `ratect.toml` format —
 # the `ratect` counterpart to `batect.yml`, which drives the same tasks through
 # `ratect-compat`. We build Ratect with Ratect, and now with both binaries:

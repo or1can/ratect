@@ -217,13 +217,29 @@ DATABASE_URL = "postgres://db/test"
 
 ## Editor support
 
-Autocompletion and validation for `ratect.toml` (via a TOML-aware editor
-extension such as taplo / "Even Better TOML") is **not yet available** — the
-committed [JSON schema](../schema/batect-config.schema.json) currently describes
-`batect.yml` (see [config-reference.md](config-reference.md#editor-autocompletion-and-validation)).
-A native schema is planned. In the meantime, [`ratect config validate`](ratect-cli.md#config)
-checks a `ratect.toml` for problems without a Docker daemon, so it works as a CI
-gate.
+Ratect ships a JSON schema for the native format,
+[`schema/ratect-config.schema.json`](../schema/ratect-config.schema.json)
+(generated from the config types, so it can't drift). Pointing a TOML-aware
+editor extension at it — [taplo](https://taplo.tamasfe.dev) / "Even Better TOML"
+for VS Code, or JetBrains' TOML support — gives field-name autocompletion, hover
+documentation, and a red squiggle under a misspelled or unsupported field. It's
+the native counterpart of the [`batect.yml`
+schema](config-reference.md#editor-autocompletion-and-validation): the same
+schema, adjusted to the native shape (object-only list entries, plus `extends`).
+
+The simplest way to use it is a schema directive on the first line of your
+config, which taplo honors:
+
+```toml
+#:schema https://raw.githubusercontent.com/or1can/ratect/main/schema/ratect-config.schema.json
+project_name = "my-project"
+```
+
+Structural validation only catches what the schema can express; for the rules it
+can't (a task needing `run` or `prerequisites`, an `extends` cycle, a container
+with neither `image` nor `build_directory`), [`ratect config
+validate`](ratect-cli.md#config) checks a `ratect.toml` without a Docker daemon,
+so it also works as a CI gate.
 
 ## Differences from `batect.yml`, at a glance
 

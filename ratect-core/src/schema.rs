@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The JSON schema for `batect.yml`, for editor autocompletion/validation —
-//! generated from [`crate::config`]'s own types (via `schemars`) rather than
-//! hand-maintained, so it can't drift from what Ratect actually accepts.
+//! The JSON schemas for `batect.yml` ([`config_file_schema`]) and its native
+//! counterpart `ratect.toml` ([`native_config_file_schema`]), for editor
+//! autocompletion/validation — both generated from [`crate::config`]'s own
+//! types (via `schemars`) rather than hand-maintained, so they can't drift
+//! from what Ratect actually accepts. The native one is the compat schema
+//! transformed for the native format's shape (object-only, plus `extends`);
+//! everything below applies to both.
 //!
 //! Deliberately **not** Batect's own published schema (SchemaStore's catalog
 //! entry for `batect.yml`, hosted at `ide-integration.batect.dev`): that one
@@ -36,10 +40,12 @@
 //!   siblings — which is exactly how every description on a `$ref`'d field
 //!   would go missing.
 //!
-//! The schema this generates is committed at
-//! [`schema/batect-config.schema.json`](../../schema/batect-config.schema.json);
-//! [`tests::committed_schema_is_up_to_date`] fails if the two disagree, and
-//! prints how to regenerate.
+//! Both generated schemas are committed — at
+//! [`schema/batect-config.schema.json`](../../schema/batect-config.schema.json)
+//! and [`schema/ratect-config.schema.json`](../../schema/ratect-config.schema.json)
+//! — since those files are what editors actually consume;
+//! [`tests::committed_schema_is_up_to_date`] and its native counterpart fail if
+//! either drifts, and print the one command that regenerates both.
 
 use crate::config::{BuildSecret, DeviceMapping, PortMapping, PortRange, VolumeMount};
 use schemars::generate::SchemaSettings;
@@ -67,6 +73,102 @@ pub fn config_file_schema() -> serde_json::Value {
         .into(),
     );
     json
+}
+
+/// The generated schema for the native `ratect.toml` format — the same base as
+/// [`config_file_schema`] (both describe one *file*'s shape, generated from
+/// [`ConfigFile`](crate::config::ConfigFile)), transformed into the native
+/// format's stricter shape: the compact string shorthands for
+/// `volumes`/`ports`/`devices`/`include` are dropped (native is object-only),
+/// and the native-only `extends` field is added. See
+/// [decisions/0003](../../decisions/0003-ratect-native-config-format.md) and
+/// the [`ratect.toml` reference](../../docs/ratect-config-reference.md).
+///
+/// JSON Schema validates TOML as readily as YAML — a TOML-aware editor
+/// extension (taplo / "Even Better TOML") consumes exactly this. Committed at
+/// [`schema/ratect-config.schema.json`](../../schema/ratect-config.schema.json).
+pub fn native_config_file_schema() -> serde_json::Value {
+    let schema = SchemaSettings::draft07()
+        .into_generator()
+        .into_root_schema_for::<crate::config::ConfigFile>();
+    let mut json = serde_json::to_value(&schema).expect("a generated schema is always valid JSON");
+    summarize_descriptions(&mut json);
+    make_native(&mut json);
+    let object = json
+        .as_object_mut()
+        .expect("a root schema is always an object");
+    object.insert("title".to_string(), "Ratect native configuration".into());
+    object.insert(
+        "description".to_string(),
+        concat!(
+            "A ratect.toml native task configuration file — the format the `ratect` binary ",
+            "reads by default. See ",
+            "https://github.com/or1can/ratect/blob/main/docs/ratect-config-reference.md",
+        )
+        .into(),
+    );
+    json
+}
+
+/// Transforms the base (compat-shaped) schema into the native format's: the
+/// list entries become object-only, and a container gains the native-only
+/// `extends` field. Everything else — field names, types, descriptions, the
+/// `deny_unknown_fields` strictness — is identical, because both formats parse
+/// into the same [`Config`](crate::config::Config).
+fn make_native(json: &mut serde_json::Value) {
+    let Some(definitions) = json
+        .get_mut("definitions")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+
+    // Drop the compact string form from each string-or-object field: a native
+    // `ratect.toml` spells these out as objects (inline tables or `[[...]]`).
+    // `PortRange` is deliberately left alone — its string form is a port
+    // *range* ("6000-6010"), which native still uses.
+    for name in ["PortMapping", "DeviceMount", "VolumeMount", "Include"] {
+        if let Some(definition) = definitions.get_mut(name) {
+            drop_string_shorthand(definition);
+        }
+    }
+
+    // Add the native-only `extends` field to a container — skipped from the
+    // compat schema (`Container::extends`'s `schemars(skip)`, since
+    // `ratect-compat` rejects it), but valid and worth completing here.
+    if let Some(properties) = definitions
+        .get_mut("Container")
+        .and_then(|container| container.get_mut("properties"))
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        properties.insert(
+            "extends".to_string(),
+            serde_json::json!({
+                "type": "string",
+                "description": "Inherit every field from another container by name, then \
+                                override only the fields set here — ratect's native replacement \
+                                for YAML anchors. Shallow and per-field: a field set here \
+                                replaces the inherited one; a field left unset is taken from the \
+                                named container.",
+            }),
+        );
+    }
+}
+
+/// Removes the `type: string` shorthand from a definition's `oneOf` of accepted
+/// forms, leaving the object form(s). If a single form remains, the `oneOf`
+/// wrapper is unwrapped so the definition *is* that object.
+fn drop_string_shorthand(definition: &mut serde_json::Value) {
+    let Some(forms) = definition
+        .get_mut("oneOf")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    forms.retain(|form| form.get("type") != Some(&serde_json::Value::from("string")));
+    if forms.len() == 1 {
+        *definition = forms.remove(0);
+    }
 }
 
 /// Rewrites every `description` in the generated schema from the Rust doc
@@ -498,6 +600,9 @@ mod tests {
     /// The path of the committed schema, relative to the repository root.
     const COMMITTED: &str = "schema/batect-config.schema.json";
 
+    /// Its native counterpart — see [`native_config_file_schema`].
+    const NATIVE_COMMITTED: &str = "schema/ratect-config.schema.json";
+
     #[test]
     fn a_description_keeps_its_first_paragraph_only_reflowed() {
         assert_eq!(
@@ -648,6 +753,98 @@ mod tests {
         );
     }
 
+    /// The native `ratect.toml` schema differs from the `batect.yml` one in
+    /// exactly two ways, and this pins both: it adds `extends` (which the
+    /// compat schema must *not* have, since `ratect-compat` rejects it), and
+    /// it drops the compact string shorthands (native is object-only).
+    #[test]
+    fn the_native_schema_adds_extends_and_drops_the_string_shorthands() {
+        let native = native_config_file_schema();
+        let compat = config_file_schema();
+
+        assert!(
+            native["definitions"]["Container"]["properties"]["extends"].is_object(),
+            "extends should be a native Container field"
+        );
+        assert!(
+            compat["definitions"]["Container"]["properties"]["extends"].is_null(),
+            "extends must not appear in the batect.yml schema — ratect-compat rejects it"
+        );
+
+        // VolumeMount/Include keep a oneOf of *object* forms only; the string
+        // shorthand is gone.
+        for (definition, object_forms) in [("VolumeMount", 3), ("Include", 2)] {
+            let forms = native["definitions"][definition]["oneOf"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{definition} should still be a oneOf of object forms"));
+            assert_eq!(
+                forms.len(),
+                object_forms,
+                "{definition} keeps only its object forms"
+            );
+            for form in forms {
+                assert_eq!(
+                    form["type"],
+                    serde_json::json!("object"),
+                    "every native {definition} form is an object"
+                );
+            }
+        }
+        // PortMapping/DeviceMount had a single object form, so the oneOf is
+        // unwrapped to just that object.
+        for definition in ["PortMapping", "DeviceMount"] {
+            assert_eq!(
+                native["definitions"][definition]["type"],
+                serde_json::json!("object"),
+                "{definition} should collapse to its object form"
+            );
+            assert!(
+                native["definitions"][definition].get("oneOf").is_none(),
+                "{definition} should no longer be a oneOf"
+            );
+        }
+    }
+
+    /// The native counterpart of
+    /// [`every_config_ratect_accepts_validates_against_the_schema`], for TOML:
+    /// the repository's real native configs — the root `ratect.toml` dev
+    /// config (object-form volumes and caches) and the `native.toml` fixture
+    /// (which uses `extends`) — must not be flagged by the native schema.
+    #[test]
+    fn every_native_config_validates_against_the_native_schema() {
+        let validator = jsonschema::draft7::new(&native_config_file_schema())
+            .expect("the generated native schema should itself be a valid draft-07 schema");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("ratect-core always has a parent directory");
+        for relative in ["ratect.toml", "ratect/tests/fixtures/native.toml"] {
+            let path = root.join(relative);
+            let text = std::fs::read_to_string(&path).expect("failed to read a native config");
+            let document: serde_json::Value =
+                toml::from_str(&text).expect("a native config is valid TOML");
+            if let Err(error) = validator.validate(&document) {
+                panic!(
+                    "{} is valid native configuration but the schema rejects it: {error}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    fn native_committed_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("ratect-core always has a parent directory")
+            .join(NATIVE_COMMITTED)
+    }
+
+    fn native_rendered() -> String {
+        let mut json = serde_json::to_string_pretty(&native_config_file_schema())
+            .expect("a generated schema is always serializable");
+        json.push('\n');
+        json
+    }
+
     /// Regenerate with `RATECT_UPDATE_SCHEMA=1 cargo test -p ratect-core
     /// --features schema schema::` — the committed file is what editors
     /// actually consume, so it has to be checked in, and this is what keeps
@@ -671,6 +868,30 @@ mod tests {
             committed, rendered,
             "{COMMITTED} is out of date — regenerate it with RATECT_UPDATE_SCHEMA=1 cargo test \
              -p ratect-core --features schema schema::"
+        );
+    }
+
+    /// The native schema's own up-to-date check — same `RATECT_UPDATE_SCHEMA=1`
+    /// regenerates both committed files at once.
+    #[test]
+    fn committed_native_schema_is_up_to_date() {
+        let path = native_committed_path();
+        let rendered = native_rendered();
+        if std::env::var_os("RATECT_UPDATE_SCHEMA").is_some() {
+            std::fs::create_dir_all(path.parent().unwrap()).expect("failed to create schema dir");
+            std::fs::write(&path, &rendered).expect("failed to write schema");
+            return;
+        }
+        let committed = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!(
+                "failed to read {NATIVE_COMMITTED} ({error}) — regenerate it with \
+                    RATECT_UPDATE_SCHEMA=1 cargo test -p ratect-core --features schema schema::"
+            )
+        });
+        assert_eq!(
+            committed, rendered,
+            "{NATIVE_COMMITTED} is out of date — regenerate it with RATECT_UPDATE_SCHEMA=1 cargo \
+             test -p ratect-core --features schema schema::"
         );
     }
 }
