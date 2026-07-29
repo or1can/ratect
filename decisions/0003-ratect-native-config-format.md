@@ -116,10 +116,13 @@ A **`ratect config` verb**, landing with or just after 0.3.0, alongside
   flattened.
 - It preserves **behaviour, not formatting** — comments are lost (noyalib
   discards them), ordering may change — so the output carries a provenance header
-  and is a reviewable starting point. But it **self-verifies**: both formats
-  resolve to the same `Config`, so it loads each and asserts the resolved models
-  are equal (everything not surviving to the resolved model is exactly what's
-  conceded).
+  and is a reviewable starting point. But it **self-verifies**: because the TOML
+  is generated from the loaded source `Config`, re-parsing that TOML back to a
+  `Config` and asserting the two are identical proves the generated file loads to
+  exactly the config it came from — done in-memory on the unresolved `Config`
+  (round-tripped through `toml::Value` for a formatting-independent comparison),
+  no second resolve needed. Everything not surviving that round trip (comments,
+  key order) is exactly what's conceded.
 - Writes `ratect.toml` **no-clobber** (`--force`/`--stdout` to override) and is
   **advisory-only** about the rest (suggests removing `batect.yml`, gitignoring
   `ratect.local.toml`, deleting the Batect wrapper `doctor` already flags — never
