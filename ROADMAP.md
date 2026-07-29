@@ -1141,12 +1141,6 @@ Improving the developer experience through better tools and feedback.
   Binaries](#two-binaries-ratect-and-ratect-compat) principle is that
   `ratect-compat` isn't the place for new ideas.
 
-## Future Vision
-
-Exploring innovative features that go beyond the original Batect, as well as planned improvements from the Batect roadmap.
-
-- ~~**Alternative Configuration Format (TOML)**: Undecided, exploratory. TOML is a more typical configuration format for Rust projects than YAML. If pursued, this would apply only to the [`ratect` binary](#two-binaries-ratect-and-ratect-compat) — `ratect-compat` stays YAML-only for Batect compatibility — and would need a migration path for projects moving from `ratect-compat`'s YAML config.~~ — scoped into `ratect` [0.3.0](#ratect): the format is **TOML** (native default `ratect.toml`), with the schema redesign (an `extends` field replacing YAML anchors, one object shape per `volumes`/`ports`/`devices`/`include` entry) and mixed TOML/YAML includes. Migration tooling is the `ratect config convert`/`validate` verb, landing with or just after 0.3.0 — full, settled design at [decisions/0003](decisions/0003-ratect-native-config-format.md).
-
   **Scope, settled before building:**
 
   - **`refresh` is the valuable one, not `list`.** `ensure_cached`'s
@@ -1196,6 +1190,13 @@ Exploring innovative features that go beyond the original Batect, as well as pla
     10 ms, and sizing each entry concurrently keeps a whole cache at roughly the
     cost of one. That's what makes `list` an answer to "why is my disk full"
     rather than merely informative.
+
+## Future Vision
+
+Exploring innovative features that go beyond the original Batect, as well as planned improvements from the Batect roadmap.
+
+- ~~**Alternative Configuration Format (TOML)**: Undecided, exploratory. TOML is a more typical configuration format for Rust projects than YAML. If pursued, this would apply only to the [`ratect` binary](#two-binaries-ratect-and-ratect-compat) — `ratect-compat` stays YAML-only for Batect compatibility — and would need a migration path for projects moving from `ratect-compat`'s YAML config.~~ — scoped into `ratect` [0.3.0](#ratect): the format is **TOML** (native default `ratect.toml`), with the schema redesign (an `extends` field replacing YAML anchors, one object shape per `volumes`/`ports`/`devices`/`include` entry) and mixed TOML/YAML includes. Migration tooling is the `ratect config convert`/`validate` verb, landing with or just after 0.3.0 — full, settled design at [decisions/0003](decisions/0003-ratect-native-config-format.md).
+
 - **Restrict Nested Git Includes**: **`ratect`-only** — `ratect-compat` must keep Batect's own unrestricted behavior for parity (its `ConfigurationLoader`/`IncludeResolver` have the identical gap: any file, root or reached transitively through a Git include, can declare a further `type: git` include with no restriction on remote). Currently a nested include gets the exact same trust as one the project owner declared themselves — no allowlist, and (post-0.10.0's `container_git_boundaries` fix) a rogue nested include's own containers are at least bounded to its clone directory or the project directory, but the include mechanism itself will still fetch from whatever remote a third-party bundle names. Worth an opt-in gate for `ratect` (e.g. `allow_nested_git_includes`, defaulting `false`) requiring the project owner to consciously accept that a Git-included bundle may itself redirect the process to further remotes. Relatedly worth reconsidering alongside it: whether a nested (non-root-declared) include's clone/checkout failure should keep surfacing git's raw stderr, since the specific transport error (host unreachable vs. connection refused vs. repository-not-found vs. auth-failed) lets repeated attempts fingerprint an internal network — most relevant when `ratect` runs in CI against a bundle whose nested includes a less-trusted contributor can influence, and whose CI logs are visible back to them. Deferred rather than implemented immediately: real projects (including ones outside this one) depend on nested git includes working by default today, and `ratect-compat` has to default this open regardless — squarely a `ratect`-only divergence, not a blocking gap.
 - **Wildcard Includes**: Support for including multiple files using glob patterns (e.g., `include: containers/*.yaml`).
 - **Configuration Merging/Replacement**: Ability to merge or override containers and tasks when including files.
