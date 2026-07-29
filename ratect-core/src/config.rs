@@ -6470,6 +6470,55 @@ run = { container = "app" }
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The reason `extends` resolves *after* path resolution: a `base` in an
+    /// included file in a *different directory* has its relative
+    /// `build_directory` anchored to *its own* file's directory, and a child
+    /// in the root that inherits it must keep that anchoring — not re-resolve
+    /// it against the child's own directory. This is the cross-boundary case
+    /// the ordering exists to protect (`extends_inherits_an_already_resolved_path`
+    /// only covers the same-directory case); a regression to extend-then-resolve
+    /// would silently re-anchor the path here.
+    #[tokio::test]
+    async fn extends_across_an_include_boundary_keeps_the_parents_path_anchoring() {
+        let dir = unique_temp_dir();
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(
+            dir.join("sub/base.toml"),
+            "[containers.base]\nbuild_directory = \"ctx\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("ratect.toml"),
+            r#"
+project_name = "demo"
+include = [{ path = "sub/base.toml" }]
+
+[containers.app]
+extends = "base"
+
+[tasks.t]
+run = { container = "app" }
+"#,
+        )
+        .unwrap();
+
+        let project = load_project_native(&dir.join("ratect.toml"), &HashMap::new())
+            .await
+            .unwrap();
+        let build_directory = project.config.containers["app"]
+            .build_directory
+            .clone()
+            .unwrap();
+        // Anchored to the parent's own directory (`sub/`), not the child's root.
+        assert_eq!(
+            build_directory,
+            dir.join("sub").join("ctx").display().to_string()
+        );
+        assert_ne!(build_directory, dir.join("ctx").display().to_string());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[tokio::test]
     async fn extends_a_missing_container_errors() {
         let err = load_native_toml(
