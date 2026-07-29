@@ -327,6 +327,7 @@ struct CleanCachesArgs {
 #[derive(ClapArgs, Debug)]
 struct RunArgs {
     /// The name of the task to run.
+    #[arg(add = clap_complete::engine::ArgValueCompleter::new(complete_task_names))]
     task: String,
 
     #[command(flatten)]
@@ -561,6 +562,14 @@ fn init_tracing() {
 
 #[tokio::main]
 async fn main() {
+    // Dynamic shell completion (prototype, `unstable-dynamic`). At `<TAB>` the
+    // shell — driven by the script `ratect completions <shell>` installs — sets
+    // `COMPLETE=<shell>` and re-invokes `ratect`; this handles that request and
+    // exits *before* any normal work, so completion never parses a real
+    // command, reaches a daemon, or does anything with a side effect. On a
+    // normal invocation it's a cheap no-op and returns.
+    clap_complete::CompleteEnv::with_factory(Cli::command).complete();
+
     let cli = Cli::parse();
     init_tracing();
 
@@ -635,20 +644,57 @@ async fn run(cli: Cli) -> Result<()> {
     }
 }
 
-/// `ratect completions <shell>` — writes a completion script for `shell` to
-/// stdout, for the user to source into their shell (see docs/ratect-cli.md for
-/// the per-shell install line). Static: it completes subcommands, flags, and
-/// their `ValueEnum`/file-path values, but not task or cache names — those vary
-/// per project, and a static script is generated without one in hand (that's
-/// the dynamic completion a later change could add).
+/// `ratect completions <shell>` — writes a completion registration script for
+/// `shell` to stdout, for the user to source into their shell (see
+/// docs/ratect-cli.md for the per-shell install line).
 ///
-/// Reads no configuration and reaches no daemon: `Cli::command()` is the same
-/// parser definition `main` already built, just rendered as a script.
+/// This emits the **dynamic** registration script: at `<TAB>` the shell calls
+/// back into `ratect` (handled by the `CompleteEnv` hook in `main`), which is
+/// what lets it complete task names from the config, not just the static
+/// command/flag surface. Generating the script itself reads nothing and reaches
+/// nothing — it's a fixed bit of shell glue; the config is only read later, on
+/// an actual completion request, and always side-effect-free.
 fn generate_completions(args: CompletionsArgs) -> Result<()> {
-    let mut command = Cli::command();
-    let name = command.get_name().to_string();
-    clap_complete::generate(args.shell, &mut command, name, &mut std::io::stdout());
-    Ok(())
+    let shell = args.shell.to_string();
+    let shells = clap_complete::env::Shells::builtins();
+    let completer = shells
+        .completer(&shell)
+        .ok_or_else(|| anyhow::anyhow!("no completion support for shell '{shell}'"))?;
+    completer
+        .write_registration(
+            "COMPLETE",
+            "ratect",
+            "ratect",
+            "ratect",
+            &mut std::io::stdout(),
+        )
+        .context("writing the completion registration script")
+}
+
+/// Completes a `run <task>` argument with the project's task names — the
+/// prototype's dynamic completion, invoked by the shell at `<TAB>` time via the
+/// engine wired up in `main`. Reads `ratect.toml` (or `batect.yml` if that's
+/// what's present) in the current directory through the side-effect-free
+/// [`ratect_core::config::task_names_for_completion`], so completion never
+/// clones, pulls, or blocks.
+///
+/// Two prototype limitations, both worth naming: it assumes the default config
+/// file (the completer is handed only the word being completed, not the rest of
+/// the command line, so it can't honour an explicit `-f`), and it sees only the
+/// root file's tasks (not those from an `include`).
+fn complete_task_names(current: &std::ffi::OsStr) -> Vec<clap_complete::CompletionCandidate> {
+    let native = PathBuf::from(DEFAULT_CONFIG_FILE);
+    let config_file = if native.exists() {
+        native
+    } else {
+        PathBuf::from(BATECT_CONFIG_FILE)
+    };
+    let prefix = current.to_string_lossy();
+    ratect_core::config::task_names_for_completion(&config_file)
+        .into_iter()
+        .filter(|name| name.starts_with(prefix.as_ref()))
+        .map(clap_complete::CompletionCandidate::new)
+        .collect()
 }
 
 /// Loads the configuration — merging `--config-vars-file` with any

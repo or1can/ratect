@@ -2753,6 +2753,27 @@ pub fn to_native_toml(config: &Config) -> Result<String> {
     Ok(text)
 }
 
+/// The task names defined in `config_file`'s own top level, for shell
+/// completion — which must be instant and side-effect-free, so this is
+/// deliberately *not* a real load: it parses the one file (TOML or YAML, by
+/// extension) and returns its task names, sorted. No `include` resolution (so
+/// never a Git clone), no expression resolution, no Docker. Any error — a
+/// missing file, a parse failure mid-edit — yields no completions rather than a
+/// message, which is the only sane behaviour on `<TAB>`.
+///
+/// A prototype limitation worth naming: tasks defined purely in an `include`
+/// aren't seen, because following includes is exactly the part that can touch
+/// the network. A completion-safe offline include walk (local files, and Git
+/// repos *already* cached, never cloning) is the natural next step.
+pub fn task_names_for_completion(config_file: &Path) -> Vec<String> {
+    let Ok(file) = parse_config_file(config_file, ConfigFormat::Native) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = file.tasks.into_keys().collect();
+    names.sort_unstable();
+    names
+}
+
 pub async fn load_project(
     config_file: &Path,
     config_var_overrides: &HashMap<String, String>,
@@ -6342,6 +6363,43 @@ run = { container = "build-env", command = "cargo test" }
     async fn load_from_file_missing_file_errors() {
         let result = Config::load_from_file(Path::new("/nonexistent/batect.yml")).await;
         assert!(result.is_err());
+    }
+
+    /// The offline names primitive shell completion uses: sorted task names
+    /// from one file (TOML or YAML by extension), and — crucially — an empty
+    /// list rather than an error on a missing or broken file, so a `<TAB>` on a
+    /// half-written config stays silent.
+    #[test]
+    fn task_names_for_completion_reads_names_offline() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("ratect.toml"),
+            "project_name = \"demo\"\n[tasks.check]\nrun = { container = \"a\" }\n\
+             [tasks.build]\nrun = { container = \"a\" }\n",
+        )
+        .unwrap();
+        assert_eq!(
+            task_names_for_completion(&dir.join("ratect.toml")),
+            vec!["build".to_string(), "check".to_string()]
+        );
+
+        // A YAML file works too — parsed by extension.
+        std::fs::write(
+            dir.join("batect.yml"),
+            "project_name: demo\ntasks:\n  ci:\n    prerequisites: [build]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            task_names_for_completion(&dir.join("batect.yml")),
+            vec!["ci".to_string()]
+        );
+
+        // Missing and broken files yield no completions, never an error.
+        assert!(task_names_for_completion(&dir.join("nope.toml")).is_empty());
+        std::fs::write(dir.join("broken.toml"), "this = is [not valid").unwrap();
+        assert!(task_names_for_completion(&dir.join("broken.toml")).is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// `to_native_toml` renders a config (here one with the interleaved scalar

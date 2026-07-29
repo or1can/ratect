@@ -126,10 +126,11 @@ run = { container = "app" }
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// `completions <shell>` prints a usable script and reaches nothing — no
-/// config, no daemon. A trivial project isn't even needed.
+/// `completions <shell>` prints a dynamic registration script and reaches
+/// nothing to do it — no config, no daemon. (The script *installs* the callback
+/// that reads the config later, at `<TAB>` time.)
 #[test]
-fn completions_generates_a_shell_script() {
+fn completions_generates_a_registration_script() {
     let output = ratect_command()
         .args(["completions", "bash"])
         .output()
@@ -141,8 +142,8 @@ fn completions_generates_a_shell_script() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("_ratect") && stdout.contains("completions"),
-        "expected a bash completion script mentioning ratect's own commands:\n{stdout}"
+        stdout.contains("_clap_complete_ratect") && stdout.contains("COMPLETE="),
+        "expected a dynamic bash completion registration script:\n{stdout}"
     );
 }
 

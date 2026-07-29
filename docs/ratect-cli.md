@@ -353,26 +353,33 @@ reason [`resources`](#resources-options) exists is that nobody thinks to look.
 
 ## Shell completion
 
-`ratect completions <shell>` prints a completion script to stdout for `bash`,
-`zsh`, `fish`, `powershell` or `elvish`. Install it the way your shell expects:
+`ratect completions <shell>` prints a completion registration script to stdout
+for `bash`, `zsh`, `fish`, `powershell` or `elvish`. Source it from your shell's
+startup file:
 
 ```bash
-# bash — into your completions directory
-ratect completions bash > ~/.local/share/bash-completion/completions/ratect
+# bash — in ~/.bashrc
+source <(ratect completions bash)
 
-# zsh — onto your $fpath (then restart the shell)
-ratect completions zsh > ~/.zfunc/_ratect
+# zsh — in ~/.zshrc
+source <(ratect completions zsh)
 
-# fish
-ratect completions fish > ~/.config/fish/completions/ratect.fish
+# fish — in ~/.config/fish/config.fish
+ratect completions fish | source
 ```
 
 It completes command and flag names, their fixed values (`-o fancy|simple|…`,
-`--cache-type volume|directory`), and file-path arguments. It does **not** yet
-complete task, cache or container names: those vary per project, and a static
-script is generated without one in hand. Completing them needs *dynamic*
-completion (the shell calling back into `ratect` to read the config), which is a
-planned follow-up.
+`--cache-type volume|directory`), file-path arguments, and — the part that earns
+its keep on a task runner — **task names**: `ratect run <TAB>` lists the tasks
+your config defines. That last one is *dynamic*: the installed script re-invokes
+`ratect` at completion time to read the config, always without cloning, pulling,
+or touching Docker, so a `<TAB>` is instant and safe.
+
+> **Prototype.** Task-name completion is an early prototype, built on clap's
+> `unstable-dynamic` API. Two known limitations: it reads the default config
+> file (`ratect.toml`, or `batect.yml` if that's what's present) rather than
+> honouring an explicit `-f`, and it sees only the root file's own tasks, not
+> those pulled in by an `include`.
 
 ## Exit codes and diagnostics
 

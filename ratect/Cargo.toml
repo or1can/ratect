@@ -12,10 +12,12 @@ repository = "https://github.com/or1can/ratect"
 # `ratect-core` should own.
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
-# Shell completion script generation for the `completions` subcommand — a
-# `ratect`-only concern (the completion surface is this binary's own), so it
-# lives here, not in `ratect-core`.
-clap_complete = "4.6"
+# Shell completion — a `ratect`-only concern (the completion surface is this
+# binary's own), so it lives here, not in `ratect-core`. `unstable-dynamic`
+# adds the callback-at-completion-time engine that completes task names from
+# the config; it's an explicitly unstable clap API (prototype — see the
+# `completions`/`complete_task_names` code and CHANGELOG).
+clap_complete = { version = "4.6", features = ["unstable-dynamic"] }
 tokio = { version = "1.52", features = ["full"] }
 anyhow = "1.0"
 tracing = "0.1"
