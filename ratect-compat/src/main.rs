@@ -42,62 +42,68 @@ struct Args {
     /// Set a config variable's value, as NAME=VALUE (repeatable). Takes
     /// precedence over --config-vars-file and the variable's `default` in
     /// `config_variables`.
-    #[arg(long = "config-var", value_parser = parse_config_var)]
+    #[arg(long = "config-var", value_parser = parse_config_var, help_heading = "Configuration variables")]
     config_var: Vec<(String, String)>,
 
     /// Path to a YAML file of config variable NAME: VALUE pairs
-    #[arg(long = "config-vars-file")]
+    #[arg(long = "config-vars-file", help_heading = "Configuration variables")]
     config_vars_file: Option<PathBuf>,
 
     /// Existing Docker network to use for all tasks. If not set, a new
     /// network is created (and removed) for each task.
-    #[arg(long = "use-network")]
+    #[arg(long = "use-network", help_heading = "Task execution")]
     use_network: Option<String>,
 
     /// Disable binding of ports on the host, regardless of any `ports`
     /// configured on a container.
-    #[arg(long = "disable-ports")]
+    #[arg(long = "disable-ports", help_heading = "Task execution")]
     disable_ports: bool,
 
     /// Don't propagate proxy-related environment variables such as
     /// http_proxy and no_proxy to image builds or containers.
-    #[arg(long = "no-proxy-vars")]
+    #[arg(long = "no-proxy-vars", help_heading = "Task execution")]
     no_proxy_vars: bool,
 
     /// Don't run prerequisites for the named task.
-    #[arg(long = "skip-prerequisites")]
+    #[arg(long = "skip-prerequisites", help_heading = "Task execution")]
     skip_prerequisites: bool,
 
     /// Override the image used by a container, as CONTAINER=IMAGE
     /// (repeatable). The container's own `image`/`build_directory` and
     /// `image_pull_policy` are ignored entirely — the override is always
     /// pulled under the default IfNotPresent policy.
-    #[arg(long = "override-image", value_parser = parse_container_value_pair)]
+    #[arg(long = "override-image", value_parser = parse_container_value_pair, help_heading = "Task execution")]
     override_image: Vec<(String, String)>,
 
     /// Tag the image built by a container, as CONTAINER=TAG (repeatable;
     /// a container may be given more than once to apply multiple tags).
     /// Only valid for a container that actually builds an image — errors
     /// if it ends up using a pulled image, or if it never runs at all.
-    #[arg(long = "tag-image", value_parser = parse_container_value_pair)]
+    #[arg(long = "tag-image", value_parser = parse_container_value_pair, help_heading = "Task execution")]
     tag_image: Vec<(String, String)>,
 
     /// If an infrastructure error occurs before the task's own container can
     /// start, leave all containers created for that task running so the
     /// issue can be investigated. Equivalent to providing both
     /// --no-cleanup-after-failure and --no-cleanup-after-success.
-    #[arg(long = "no-cleanup")]
+    #[arg(long = "no-cleanup", help_heading = "Cleanup after a run")]
     no_cleanup: bool,
 
     /// If an infrastructure error occurs before the task's own container can
     /// start, leave all containers created for that task running so the
     /// issue can be investigated.
-    #[arg(long = "no-cleanup-after-failure")]
+    #[arg(
+        long = "no-cleanup-after-failure",
+        help_heading = "Cleanup after a run"
+    )]
     no_cleanup_after_failure: bool,
 
     /// If the task's own container runs to completion (regardless of its
     /// exit code), leave all containers created for that task running.
-    #[arg(long = "no-cleanup-after-success")]
+    #[arg(
+        long = "no-cleanup-after-success",
+        help_heading = "Cleanup after a run"
+    )]
     no_cleanup_after_success: bool,
 
     /// Use BuildKit for image builds, regardless of the daemon's own
@@ -105,89 +111,89 @@ struct Args {
     /// (which this flag takes precedence over). There's no
     /// --disable-buildkit counterpart — forcing the classic builder is
     /// only done via DOCKER_BUILDKIT=0.
-    #[arg(long = "enable-buildkit")]
+    #[arg(long = "enable-buildkit", help_heading = "Task execution")]
     enable_buildkit: bool,
 
     /// Docker host to use, e.g. 'unix:///var/run/docker.sock' or
     /// 'tcp://1.2.3.4:5678'. Defaults to the DOCKER_HOST environment
     /// variable, then Docker's own local default. Cannot be used together
     /// with --docker-context.
-    #[arg(long = "docker-host")]
+    #[arg(long = "docker-host", help_heading = "Docker connection")]
     docker_host: Option<String>,
 
     /// Docker CLI context to use. Defaults to the DOCKER_CONTEXT
     /// environment variable, then the Docker CLI's own active context.
     /// Cannot be used together with --docker-host.
-    #[arg(long = "docker-context")]
+    #[arg(long = "docker-context", help_heading = "Docker connection")]
     docker_context: Option<String>,
 
     /// Path to the directory containing Docker CLI configuration files
     /// (context store, config.json). Defaults to the DOCKER_CONFIG
     /// environment variable, then ~/.docker.
-    #[arg(long = "docker-config")]
+    #[arg(long = "docker-config", help_heading = "Docker connection")]
     docker_config: Option<PathBuf>,
 
     /// Use TLS when connecting to the Docker host. Behaves identically to
     /// --docker-tls-verify — Ratect always fully verifies the daemon's
     /// certificate; there is no way to skip verification (unlike Batect's
     /// plain --docker-tls, which does).
-    #[arg(long = "docker-tls")]
+    #[arg(long = "docker-tls", help_heading = "Docker connection")]
     docker_tls: bool,
 
     /// Use TLS when connecting to the Docker host, verifying its
     /// certificate. Defaults to the DOCKER_TLS_VERIFY environment
     /// variable.
-    #[arg(long = "docker-tls-verify")]
+    #[arg(long = "docker-tls-verify", help_heading = "Docker connection")]
     docker_tls_verify: bool,
 
     /// Path to a directory containing ca.pem/cert.pem/key.pem to
     /// authenticate to the Docker host and verify it, unless overridden
     /// individually by --docker-tls-ca-cert/-cert/-key. Defaults to the
     /// DOCKER_CERT_PATH environment variable, then ~/.docker.
-    #[arg(long = "docker-cert-path")]
+    #[arg(long = "docker-cert-path", help_heading = "Docker connection")]
     docker_cert_path: Option<PathBuf>,
 
     /// Path to the TLS CA certificate file used to verify the Docker
     /// host's own certificate. Defaults to ca.pem in --docker-cert-path's
     /// directory.
-    #[arg(long = "docker-tls-ca-cert")]
+    #[arg(long = "docker-tls-ca-cert", help_heading = "Docker connection")]
     docker_tls_ca_cert: Option<PathBuf>,
 
     /// Path to the TLS certificate file used to authenticate to the Docker
     /// host. Defaults to cert.pem in --docker-cert-path's directory.
-    #[arg(long = "docker-tls-cert")]
+    #[arg(long = "docker-tls-cert", help_heading = "Docker connection")]
     docker_tls_cert: Option<PathBuf>,
 
     /// Path to the TLS key file used to authenticate to the Docker host.
     /// Defaults to key.pem in --docker-cert-path's directory.
-    #[arg(long = "docker-tls-key")]
+    #[arg(long = "docker-tls-key", help_heading = "Docker connection")]
     docker_tls_key: Option<PathBuf>,
 
     /// Maximum number of image pulls/builds to run in parallel when
     /// running a task. Unset means unbounded.
-    #[arg(long = "max-parallelism", value_parser = clap::value_parser!(u32).range(1..))]
+    #[arg(long = "max-parallelism", value_parser = clap::value_parser!(u32).range(1..), help_heading = "Task execution")]
     max_parallelism: Option<u32>,
 
     /// Storage mechanism for `cache` volume mounts: volume (a Docker named
     /// volume) or directory (a host directory under
     /// <project_directory>/.batect/caches/<name>).
-    #[arg(long = "cache-type", value_enum, default_value = "volume")]
+    #[arg(
+        long = "cache-type",
+        value_enum,
+        default_value = "volume",
+        help_heading = "Task execution"
+    )]
     cache_type: CacheTypeArg,
 
     /// Remove every one of this project's cache volumes/directories and
     /// exit, without running anything. Never needs the config file itself.
-    #[arg(long = "clean")]
+    #[arg(long = "clean", help_heading = "Cache management")]
     clean: bool,
 
     /// Remove the named cache volume/directory (repeatable) and exit,
     /// without running anything. Never needs the config file itself.
-    #[arg(long = "clean-cache")]
+    #[arg(long = "clean-cache", help_heading = "Cache management")]
     clean_cache: Vec<String>,
-
-    /// Write Ratect's own internal logs to this file, in addition to
-    /// stderr (still governed by RUST_LOG as usual).
-    #[arg(long = "log-file")]
-    log_file: Option<PathBuf>,
 
     /// No effect. Ratect is a single native binary, not a self-updating
     /// wrapper script like Batect — recognized only so an existing Batect
@@ -208,13 +214,18 @@ struct Args {
     /// per-container status display), simple (plain lines, no updating
     /// text), all (interleaved output from all containers), or quiet (only
     /// error messages, and a machine-readable --list-tasks format).
-    #[arg(short = 'o', long = "output", value_enum)]
+    #[arg(short = 'o', long = "output", value_enum, help_heading = "Output")]
     output: Option<OutputStyleArg>,
 
     /// Disable colored output from Ratect. Does not affect task command
     /// output. Also makes simple (not fancy) the default output style.
-    #[arg(long = "no-color")]
+    #[arg(long = "no-color", help_heading = "Output")]
     no_color: bool,
+
+    /// Write Ratect's own internal logs to this file, in addition to
+    /// stderr (still governed by RUST_LOG as usual).
+    #[arg(long = "log-file", help_heading = "Output")]
+    log_file: Option<PathBuf>,
 
     /// Name of the task to run
     task_name: Option<String>,
