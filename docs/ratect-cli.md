@@ -361,12 +361,21 @@ startup file:
 # bash — in ~/.bashrc
 source <(ratect completions bash)
 
-# zsh — in ~/.zshrc
+# zsh — in ~/.zshrc, *after* compinit has run (see the note below)
 source <(ratect completions zsh)
 
 # fish — in ~/.config/fish/config.fish
 ratect completions fish | source
 ```
+
+> **zsh needs its completion system initialized first.** The zsh script ends
+> with a `compdef` call, and `compdef` only exists once `compinit` has run — so
+> the `source` line must come *after* `autoload -U compinit && compinit` in your
+> `~/.zshrc` (frameworks like oh-my-zsh already run `compinit` for you; just
+> keep the `source` line after they load). Sourcing it in a bare shell that
+> hasn't run `compinit` fails with `command not found: compdef`; run
+> `autoload -U compinit && compinit` first to try it interactively. bash and
+> fish need no such initialization.
 
 It completes command and flag names, their fixed values (`-o fancy|simple|…`,
 `--cache-type volume|directory`), file-path arguments, and — the part that earns
