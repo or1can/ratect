@@ -105,6 +105,12 @@ struct ConfigVarArgs {
 // doesn't.
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand, Debug)]
+// Variants are ordered as they appear in `--help` and the docs: the
+// task-running verbs first, then the resource-management nouns, then
+// configuration and diagnostics — grouped by purpose rather than
+// alphabetically, so the flagship `run` stays first. `clap` can't render group
+// *headings* for subcommands (only for args), so the docs
+// ([`docs/ratect-cli.md`]) carry the labels; here the order alone conveys it.
 enum Command {
     /// Run a task.
     Run(RunArgs),
@@ -121,17 +127,6 @@ enum Command {
         command: CachesCommand,
     },
 
-    /// Inspect and remove containers and networks left over from previous
-    /// runs.
-    Resources {
-        #[command(subcommand)]
-        command: ResourcesCommand,
-    },
-
-    /// Check this project and this machine for problems, without running
-    /// anything.
-    Doctor(DoctorArgs),
-
     /// Inspect and manage the cache of Git includes shared by every project
     /// on this machine.
     Includes {
@@ -139,11 +134,22 @@ enum Command {
         command: IncludesCommand,
     },
 
+    /// Inspect and remove containers and networks left over from previous
+    /// runs.
+    Resources {
+        #[command(subcommand)]
+        command: ResourcesCommand,
+    },
+
     /// Work with this project's configuration file.
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+
+    /// Check this project and this machine for problems, without running
+    /// anything.
+    Doctor(DoctorArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -581,7 +587,12 @@ async fn run(cli: Cli) -> Result<()> {
         terminal.console_dimensions_available,
     );
 
+    // Arms follow the `Command` enum's own order (see there).
     match command {
+        Command::Run(args) => {
+            let project = load(&global, &args.config_vars).await?;
+            run_task(project, args, global.no_color, requested_style, terminal).await
+        }
         Command::Tasks {
             command: TasksCommand::List(args),
         } => {
@@ -593,19 +604,15 @@ async fn run(cli: Cli) -> Result<()> {
             println!("{listing}");
             Ok(())
         }
-        Command::Run(args) => {
-            let project = load(&global, &args.config_vars).await?;
-            run_task(project, args, global.no_color, requested_style, terminal).await
-        }
         // Deliberately no `load` call: see `CachesArgs`.
         Command::Caches { command } => manage_caches(command, &global, style).await,
-        Command::Resources { command } => manage_resources(command, &global, style).await,
-        Command::Doctor(args) => diagnose(args, &global, style).await,
         Command::Includes { command } => manage_includes(command, style).await,
+        Command::Resources { command } => manage_resources(command, &global, style).await,
         Command::Config { command } => match command {
             ConfigCommand::Validate(args) => validate_config(args, &global, style).await,
             ConfigCommand::Convert(args) => convert_config(args, &global, style).await,
         },
+        Command::Doctor(args) => diagnose(args, &global, style).await,
     }
 }
 

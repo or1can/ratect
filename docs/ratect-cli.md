@@ -58,20 +58,37 @@ the reasoning.
 
 ## Commands
 
+Grouped by purpose. Within a command, the sub-verbs follow their natural
+workflow order (`list` before `clean`/`refresh`) rather than alphabetically.
+`ratect --help` lists the commands in this same order — `clap` can't render the
+group headings there, so the order alone carries them.
+
+### Running tasks
+
 | Command | What it does |
 | --- | --- |
 | `ratect run <task> [-- ARGS...]` | Runs a task. Anything after `--` is appended to the task command's own arguments. |
 | `ratect tasks list` | Lists the tasks this project defines. |
+
+### Managing resources
+
+| Command | What it does |
+| --- | --- |
 | `ratect caches list` | Lists this project's existing caches. |
 | `ratect caches clean [NAME...]` | Removes this project's caches, or just the named ones. |
-| `ratect resources list` | Lists containers and networks left over from previous runs. |
-| `ratect resources clean` | Removes them. |
-| `ratect doctor` | Checks this project and this machine for problems, without running anything. |
 | `ratect includes list` | Lists the cached Git includes shared by every project on this machine. |
 | `ratect includes clean [--all]` | Removes cached Git includes. |
 | `ratect includes refresh` | Re-clones them, picking up a `ref` that has moved. |
+| `ratect resources list` | Lists containers and networks left over from previous runs. |
+| `ratect resources clean` | Removes them. |
+
+### Configuration & diagnostics
+
+| Command | What it does |
+| --- | --- |
 | `ratect config validate` | Checks the configuration loads and is problem-free, without a daemon — a CI-friendly gate. |
 | `ratect config convert` | Converts a `batect.yml` (point `-f` at it) into a native `ratect.toml`. |
+| `ratect doctor` | Checks this project and this machine for problems, without running anything. |
 
 There is deliberately **no `ratect <task>` shorthand**. `ratect-compat` takes a task
 name as a bare positional argument, which works only because it has no subcommands;
@@ -79,16 +96,17 @@ as `ratect` grows verbs, "is `doctor` a task or a command?" becomes a question t
 interface can't answer, so `run` is always explicit.
 
 ```bash
-ratect tasks list
 ratect run build
 ratect run test -- --filter integration
+ratect tasks list
 ratect caches list
 ratect caches clean gradle-cache
-ratect resources list
-ratect resources clean --older-than 1d
-ratect doctor
 ratect includes list
 ratect includes refresh
+ratect resources list
+ratect resources clean --older-than 1d
+ratect config validate
+ratect doctor
 ```
 
 ## Global options
@@ -158,6 +176,41 @@ missing entirely — which is exactly when clearing a cache tends to be what's n
 for scripting. Naming a cache that doesn't exist warns on stderr rather than passing
 silently, since the likeliest cause is a typo.
 
+## `includes` options
+
+The Git include cache under `~/.ratect/incl` — where a `type: git`
+[include](config-reference.md#git-includes) is cloned and kept.
+
+```
+$ ratect includes list
+1 cached Git include(s), 16.4 MiB on disk:
+
+  https://github.com/example/shared-tasks.git at v2.1.0
+    16.4 MiB, last used 3 days ago
+```
+
+Unlike [`caches`](#caches-options) and [`resources`](#resources-options), this cache is
+**global** — one directory shared by every project on this machine, keyed by
+`(repo, ref)`. So there's no project scoping, and `clean` reaches other projects'
+includes as well as your own. That matters less than it sounds: everything here is
+re-cloneable, so the worst case is a fetch.
+
+| Command | Description |
+| --- | --- |
+| `includes clean` | Removes includes nothing has used for 30 days — the same threshold the [automatic sweep](config-reference.md#git-includes) applies, done on demand. |
+| `includes clean --older-than <AGE>` | A different threshold (`30m`, `2h`, `7d`). |
+| `includes clean --all` | Everything, regardless of age. |
+| `includes refresh` | Discards every cached clone and fetches it again. |
+
+**`refresh` is how you pick up a moved `ref`.** A `(repo, ref)` pair is cloned once and
+then never re-fetched, so if `ref` is a branch — or a tag someone re-pushed — your
+project keeps using whatever it pointed at the first time, indefinitely. The automatic
+sweep doesn't help, because it removes entries that go *unused*, and an include you're
+actively using never becomes stale. Pinning `ref` to something immutable remains the
+better answer; `refresh` is for when it isn't.
+
+Under `-o quiet`, `list` prints `repo<TAB>ref` per line and nothing else.
+
 ## `resources` options
 
 Containers and networks outlive a run when something goes wrong — a crash, a
@@ -209,6 +262,35 @@ Nothing without Ratect's own labels is ever listed or removed, `--all-projects`
 included: containers started by other tools, and Docker's built-in `bridge`/`host`/
 `none` networks, are invisible to both commands.
 
+## `config`
+
+`ratect config validate` is `doctor`'s configuration half on its own — it loads the
+config, resolves it, and runs the same config-only checks (missing
+`build_directory`/Dockerfile, floating image tags, dependencies with no
+`health_check`), exiting non-zero on a problem. It never touches Docker, so it's the
+gate to run in CI when all you want to know is "is the config valid?", without a
+daemon. It takes the same `--config-var`/`--config-vars-file` options as `run`, since
+resolving the config can need them.
+
+`ratect config convert` migrates a Batect-format `batect.yml` to a native
+`ratect.toml` — point `-f` at the `batect.yml`:
+
+```bash
+ratect -f batect.yml config convert          # writes ratect.toml beside it
+ratect -f batect.yml config convert --stdout  # prints instead, to review or pipe
+```
+
+It's **one-directional** (`ratect-compat` stays YAML; the reverse would be lossy) and
+writes `ratect.toml` only if one doesn't already exist — pass `--force` to overwrite,
+or `--stdout` to print. The conversion **preserves behaviour, not formatting**: YAML
+anchors/aliases/merge keys are expanded inline, `include`d files (Git bundles too) are
+flattened into the one result, and comments are dropped — so the output carries a
+header and is a *starting point to review*, not a blind drop-in. Before writing, the
+conversion is checked to round-trip losslessly back to the same configuration, so
+whatever it produces is guaranteed to behave identically to the original. (This first
+version emits the compact `"8080:80"` / `.:/code` string forms for `ports`/`volumes`
+rather than the object form; both are valid, and reformatting is a review step.)
+
 ## `doctor`
 
 Answers "why did that fail?", or "will it?", without running a task:
@@ -258,70 +340,6 @@ The environment checks run even when the configuration itself won't load —
 "your config is broken *and* your daemon isn't running" is more useful than fixing
 one to discover the other. It also reports leftovers unprompted, since the whole
 reason [`resources`](#resources-options) exists is that nobody thinks to look.
-
-## `config`
-
-`ratect config validate` is `doctor`'s configuration half on its own — it loads the
-config, resolves it, and runs the same config-only checks (missing
-`build_directory`/Dockerfile, floating image tags, dependencies with no
-`health_check`), exiting non-zero on a problem. It never touches Docker, so it's the
-gate to run in CI when all you want to know is "is the config valid?", without a
-daemon. It takes the same `--config-var`/`--config-vars-file` options as `run`, since
-resolving the config can need them.
-
-`ratect config convert` migrates a Batect-format `batect.yml` to a native
-`ratect.toml` — point `-f` at the `batect.yml`:
-
-```bash
-ratect -f batect.yml config convert          # writes ratect.toml beside it
-ratect -f batect.yml config convert --stdout  # prints instead, to review or pipe
-```
-
-It's **one-directional** (`ratect-compat` stays YAML; the reverse would be lossy) and
-writes `ratect.toml` only if one doesn't already exist — pass `--force` to overwrite,
-or `--stdout` to print. The conversion **preserves behaviour, not formatting**: YAML
-anchors/aliases/merge keys are expanded inline, `include`d files (Git bundles too) are
-flattened into the one result, and comments are dropped — so the output carries a
-header and is a *starting point to review*, not a blind drop-in. Before writing, the
-conversion is checked to round-trip losslessly back to the same configuration, so
-whatever it produces is guaranteed to behave identically to the original. (This first
-version emits the compact `"8080:80"` / `.:/code` string forms for `ports`/`volumes`
-rather than the object form; both are valid, and reformatting is a review step.)
-
-## `includes` options
-
-The Git include cache under `~/.ratect/incl` — where a `type: git`
-[include](config-reference.md#git-includes) is cloned and kept.
-
-```
-$ ratect includes list
-1 cached Git include(s), 16.4 MiB on disk:
-
-  https://github.com/example/shared-tasks.git at v2.1.0
-    16.4 MiB, last used 3 days ago
-```
-
-Unlike [`caches`](#caches-options) and [`resources`](#resources-options), this cache is
-**global** — one directory shared by every project on this machine, keyed by
-`(repo, ref)`. So there's no project scoping, and `clean` reaches other projects'
-includes as well as your own. That matters less than it sounds: everything here is
-re-cloneable, so the worst case is a fetch.
-
-| Command | Description |
-| --- | --- |
-| `includes clean` | Removes includes nothing has used for 30 days — the same threshold the [automatic sweep](config-reference.md#git-includes) applies, done on demand. |
-| `includes clean --older-than <AGE>` | A different threshold (`30m`, `2h`, `7d`). |
-| `includes clean --all` | Everything, regardless of age. |
-| `includes refresh` | Discards every cached clone and fetches it again. |
-
-**`refresh` is how you pick up a moved `ref`.** A `(repo, ref)` pair is cloned once and
-then never re-fetched, so if `ref` is a branch — or a tag someone re-pushed — your
-project keeps using whatever it pointed at the first time, indefinitely. The automatic
-sweep doesn't help, because it removes entries that go *unused*, and an include you're
-actively using never becomes stale. Pinning `ref` to something immutable remains the
-better answer; `refresh` is for when it isn't.
-
-Under `-o quiet`, `list` prints `repo<TAB>ref` per line and nothing else.
 
 ## Exit codes and diagnostics
 
