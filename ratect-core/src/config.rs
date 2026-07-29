@@ -6260,6 +6260,35 @@ run = { container = "build-env", command = "cargo test" }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The repository ships its own dev-task config in *both* formats —
+    /// `batect.yml` (run via `ratect-compat`) and `ratect.toml` (run via
+    /// `ratect`) — so the project dogfoods both binaries. The two must describe
+    /// the same project; comparing their resolved `Config`s (as JSON, so field
+    /// order doesn't matter) fails loudly if an edit to one isn't mirrored in
+    /// the other.
+    #[tokio::test]
+    async fn the_two_root_dev_configs_agree() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let batect = root.join("batect.yml");
+        let ratect = root.join("ratect.toml");
+
+        let mut from_yaml = Config::load_from_file(&batect).await.unwrap();
+        from_yaml
+            .resolve_expressions(base_path_for(&batect), &HashMap::new())
+            .unwrap();
+
+        let mut from_toml = Config::load_from_file_native(&ratect).await.unwrap();
+        from_toml
+            .resolve_expressions(base_path_for(&ratect), &HashMap::new())
+            .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(&from_yaml.config).unwrap(),
+            serde_json::to_value(&from_toml.config).unwrap(),
+            "batect.yml and ratect.toml describe different projects — keep them in sync"
+        );
+    }
+
     /// Under native mode the parser follows the *extension*, so a YAML root
     /// (or include) still loads — that's what lets a project migrate its root
     /// to TOML while a `.yml` include stays as-is.

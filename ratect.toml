@@ -1,0 +1,51 @@
+# Ratect's own dev-task configuration, in the native `ratect.toml` format —
+# the `ratect` counterpart to `batect.yml`, which drives the same tasks through
+# `ratect-compat`. We build Ratect with Ratect, and now with both binaries:
+#
+#     cargo run -p ratect -- run fmt
+#     cargo run -p ratect -- run build
+#
+# (or with an installed `ratect` on your PATH). This dogfoods the native format
+# and the `ratect` CLI on a complete, real project, the same way `batect.yml`
+# dogfoods `ratect-compat` — and it's a worked example of the format.
+#
+# Keep this in sync with `batect.yml`: the two describe the same project in the
+# two formats, and `ratect-core`'s `the_two_root_dev_configs_agree` test fails
+# if they drift.
+project_name = "ratect"
+
+[containers.rust-build-env]
+# Built from dev-env/Dockerfile, which adds the rustfmt/clippy components the
+# base `rust` image omits — so this dogfoods image building too, not just task
+# running.
+build_directory = "dev-env"
+working_directory = "/code"
+volumes = [
+    { local = ".", container = "/code" },
+    # Persist Cargo's downloaded crates and the build output between runs, each
+    # in its own named cache volume. `target` is a cache rather than part of the
+    # source bind so a container build never lands root-owned artefacts in the
+    # host's own `target/`.
+    { type = "cache", name = "cargo-registry", container = "/usr/local/cargo/registry" },
+    { type = "cache", name = "cargo-target", container = "/code/target" },
+]
+
+[tasks.build]
+description = "Build the whole workspace"
+group = "Development"
+run = { container = "rust-build-env", command = "cargo build --workspace" }
+
+[tasks.test]
+description = "Run the unit test suite (the Docker integration tests are excluded)"
+group = "Development"
+run = { container = "rust-build-env", command = "cargo test --workspace" }
+
+[tasks.lint]
+description = "Run clippy with warnings denied"
+group = "Checks"
+run = { container = "rust-build-env", command = "cargo clippy --workspace --all-targets --all-features -- -D warnings" }
+
+[tasks.fmt]
+description = "Check formatting"
+group = "Checks"
+run = { container = "rust-build-env", command = "cargo fmt --all -- --check" }

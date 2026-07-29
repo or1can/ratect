@@ -7,6 +7,10 @@
 #
 # (or with an installed `ratect-compat` on your PATH, once you have one).
 #
+# A `ratect.toml` alongside this file drives the same tasks through the native
+# `ratect` binary (`cargo run -p ratect -- run build`). Keep the two in sync —
+# `ratect-core`'s `the_two_root_dev_configs_agree` test fails if they drift.
+#
 # This is dogfooding, and a deliberate one: it's a complete, real project
 # that `ratect-compat` runs end to end — the best kind of conformance
 # evidence — and it exercises `cache` volume mounts in earnest (the Cargo
