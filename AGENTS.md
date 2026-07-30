@@ -4,7 +4,7 @@ This file provides context, instructions, and guidelines for AI agents working o
 
 ## Project Overview
 
-Ratect is a Rust-based implementation of the [Batect](https://github.com/batect/batect) task execution engine. Its goal is to provide a fast, lightweight CLI for running development tasks in Docker containers, defined via a `batect.yml` file.
+Ratect is a Rust-based implementation of the [Batect](https://github.com/batect/batect) task execution engine. Its goal is to provide a fast, lightweight CLI for running development tasks in Docker containers, defined in configuration: `batect.yml` for the Batect-compatible `ratect-compat` binary, and a native `ratect.toml` for `ratect` (since its 0.3.0).
 
 ## Architecture
 
@@ -22,26 +22,70 @@ Ratect is a **Cargo workspace** with four crates (the
   below) shares too.
 - **`ratect`** (`ratect/src/main.rs` only): the forward-looking CLI, free to diverge
   from Batect's interface — subcommands (`ratect run <task>`, `ratect tasks list`)
-  since 0.2.0-dev, on `ratect-core`'s existing engine and today's YAML config, both
-  unchanged (its own config format is 0.3.0's scope; see `ROADMAP.md`). Thin for the
-  same reason `ratect-compat` is: argument parsing, then `config::load_project` +
-  `TaskEngineSettings` + `ui::create_event_sink`. Two conventions to keep when adding
+  since 0.2.0, and since 0.3.0 its **own `ratect.toml` config format** (`-f`
+  defaults to it; `config::load_project_native`, not `load_project`) — see
+  [decisions/0003](decisions/0003-ratect-native-config-format.md). Thin for the
+  same reason `ratect-compat` is: argument parsing, then `config::load_project_native`
+  + `TaskEngineSettings` + `ui::create_event_sink`. Conventions to keep when adding
   a verb — Docker-connection options live in the flattened `DockerArgs` struct and
   attach to the subcommands that actually connect (never globally, so no verb accepts
-  a flag it ignores), and `OutputStyleArg`/`CacheTypeArg` are *this binary's own*
+  a flag it ignores); `OutputStyleArg`/`CacheTypeArg` are *this binary's own*
   mirrors of the `ratect-core` enums, intentionally duplicated from `ratect-compat`'s
-  rather than shared: each binary's accepted value names are part of its own
-  interface, and `clap` stays out of `ratect-core`. User docs are
-  [`docs/ratect-cli.md`](docs/ratect-cli.md), separate from `ratect-compat`'s
-  [`docs/cli-reference.md`](docs/cli-reference.md) — two interfaces, not two
-  spellings of one, so a change to either only ever touches its own page.
+  rather than shared (each binary's accepted value names are part of its own
+  interface, and `clap` stays out of `ratect-core`); and the `Command` enum's
+  variant order *is* the `--help` order, grouped by purpose (run/tasks ·
+  caches/includes/resources · config/doctor · completions) — `clap` can't render
+  group headings for subcommands, so only the docs carry the labels and the order
+  alone conveys them here. Beyond `run`/`tasks`: `caches`, `includes`, `resources`,
+  `doctor`, `config` (`validate`, and `convert` for migrating a `batect.yml` —
+  which defaults its *source* to `batect.yml` rather than `-f`'s `ratect.toml`
+  default, since that's what it writes, and writes no-clobber via `create_new`
+  plus a temp-file rename so an interrupted `--force` can't truncate a
+  hand-edited file), and `completions` (see the `clap_complete` dependency note).
+  User docs are [`docs/ratect-cli.md`](docs/ratect-cli.md) plus the format's own
+  [`docs/ratect-config-reference.md`](docs/ratect-config-reference.md), both
+  separate from `ratect-compat`'s [`docs/cli-reference.md`](docs/cli-reference.md)
+  and [`docs/config-reference.md`](docs/config-reference.md) — two interfaces and
+  two formats, not two spellings of one, so a change to either only ever touches
+  its own page.
 - **`ratect-core`** (library crate, `ratect-core/src/`): all the reusable logic, with
   no CLI-specific code. This is what any future second binary would also depend on.
   See [`docs/how-it-works.md`](docs/how-it-works.md) for the full request-to-container
   pipeline; the notes below are per-module gotchas, not a full walkthrough.
-  - **`ratect-core/src/config.rs`**: Data models for the configuration (`batect.yml`),
-    parsed via `noyalib`. `Config::load_from_file` parses the root file and resolves
-    `include` (local file includes only so far — see
+  - **`ratect-core/src/config.rs`**: Data models for the configuration — **two text
+    formats, one model**. Every entry point comes in a pair: `load_project`/
+    `load_from_file` (Batect-compatible, YAML via `noyalib`) and their `_native`
+    siblings (`ratect`'s `ratect.toml`, TOML via `toml`, with `.yml`/`.yaml`
+    includes still parsed as YAML *by extension*). A binary picks a format by
+    *which function it calls*, so the private `ConfigFormat` policy enum never
+    leaks into the public API; `parse_config_file` is the single dispatch point,
+    and both parsers feed the same `ConfigFile`, so nothing downstream knows which
+    format a file came from. Three things ride on that policy — the native-only
+    `extends` pass, the `ratect-bundle.toml`-before-`batect-bundle.yml` probe for a
+    pathless git include, and the object-only *documented* schema (the parser
+    itself stays string-tolerant, which is what lets one set of hand-written
+    `Deserialize` impls serve both formats). **`extends`** (native only; a
+    `batect.yml` using it is *rejected*, not ignored) is a final pass *after*
+    expression/path resolution — mechanically `child.or(parent)` over the
+    already-`Option` fields, so a set field replaces and an unset one inherits,
+    single-parent, transitive, cycle-checked. `inherit_container_fields`
+    destructures the parent exhaustively on purpose: a new `Container` field that
+    forgets to inherit is a compile error, not a silent gap. Ordering is
+    load-bearing — resolve *then* extend, so an inherited relative path stays
+    anchored to the *parent's* own file rather than re-anchoring to the child's.
+    See [decisions/0003](decisions/0003-ratect-native-config-format.md).
+    Two Batect behaviours worth knowing, both found by running real-world bundles
+    and both applying to *either* format's YAML: a top-level key starting with `.`
+    is an **extension** (it exists only to hold a YAML anchor and is stripped
+    before the schema sees it — which is why YAML is deserialized in two steps,
+    text → `noyalib::Value` → `ConfigFile`, since anchors must resolve *before*
+    the key is dropped), and a **leading `~`** in a host path expands to the home
+    directory (component-wise, matching Batect's `PathResolver.resolveHomeDir`, so
+    `~user/…` stays literal). `task_names_for_completion` is a deliberate
+    *non*-load for shell completion: names only, follows local and
+    already-cached-git includes, never clones or errors.
+    `Config::load_from_file` parses the root file and resolves
+    `include` (local files and Git bundles — see
     [config reference](docs/config-reference.md#includes)), merging every loaded
     file's `containers`/`tasks`/`config_variables` into one `Config`, returned inside a
     `LoadedConfig` alongside a `container_base_paths` map (each container name → its
@@ -120,7 +164,11 @@ Ratect is a **Cargo workspace** with four crates (the
     Batect's own `BackgroundTaskManager` fires it. One stale entry failing
     to delete (unreadable/unparsable sidecar, filesystem error) is logged
     and skipped rather than aborting the whole sweep — same per-entry
-    try/catch Batect's own cleanup task has.
+    try/catch Batect's own cleanup task has. `cached_working_copy` (0.3.0) is
+    the read-only counterpart to `ensure_cached`: it computes the same
+    `~/.ratect/incl` path and returns it only if the clone already exists —
+    never cloning, locking, or touching the network — for offline callers
+    (`config::task_names_for_completion`) that must not stall a shell `<TAB>`.
   - **`ratect-core/src/cache.rs`** (0.18.0): Resolves a `VolumeMount::Cache`
     (`config.rs`) into an actual Docker bind-mount string — a named volume
     (`CacheType::Volume`, the default) or a host directory
@@ -343,10 +391,22 @@ Ratect is a **Cargo workspace** with four crates (the
     what a user sees from `--version`. Not OCI annotations, deliberately — see
     the module's own doc comment.
   - **`ratect-core/src/schema.rs`** (0.21.0, behind the non-default `schema`
-    feature): generates the JSON schema for `batect.yml` from `config.rs`'s own
-    types, committed at `schema/batect-config.schema.json` — see [config
-    reference](docs/config-reference.md#editor-autocompletion-and-validation) for
-    the user-facing half. Things to know before touching it: the schema is
+    feature): generates **two** JSON schemas from `config.rs`'s own types —
+    `batect.yml`'s (`config_file_schema`, committed at
+    `schema/batect-config.schema.json`) and, since 0.3.0, `ratect.toml`'s
+    (`native_config_file_schema`, at `schema/ratect-config.schema.json`) — see
+    [config reference](docs/config-reference.md#editor-autocompletion-and-validation)
+    and the [`ratect.toml` reference](docs/ratect-config-reference.md#editor-support)
+    for the user-facing halves. The native one is the same generated base put
+    through `make_native`, which applies *exactly* the two differences that define
+    the format: it drops the compact string form from the
+    `volumes`/`ports`/`devices`/`include` `oneOf`s (object-only), and adds the
+    native-only `extends` field the compat schema skips. Everything else is shared
+    because both formats parse into one `Config`. One asymmetry that's deliberate:
+    only the compat schema carries a `patternProperties` entry admitting top-level
+    `.`-prefixed keys (YAML extensions — TOML has no anchors for one to hold). The
+    same `RATECT_UPDATE_SCHEMA=1` run regenerates both, and a drift in either fails
+    its own test. Things to know before touching it: the schema is
     generated from `ConfigFile` (`pub(crate)` for exactly this reason), not
     `Config` — one *file*'s shape, `include` and all, is what an editor has open,
     not the merged result; it's emitted as draft-07 rather than schemars' own
@@ -386,6 +446,7 @@ Ratect is a **Cargo workspace** with four crates (the
 - **`noyalib`**: Safe, pure-Rust YAML parser (used as a modern alternative to `serde_yaml`).
 - **`tokio`**: The asynchronous runtime.
 - **`clap`**: Command-line argument parsing with derive support.
+- **`clap_complete`** (`ratect`-only, `features = ["unstable-dynamic"]`): shell completion for `ratect completions <shell>`. `ratect`-only because the completion surface is that binary's own, and `ratect-compat` deliberately matches Batect's flat flag interface instead. The subcommand emits the *dynamic* registration script (via `env::EnvCompleter::write_registration`), so there's one mechanism rather than a static script plus a separate `COMPLETE=…` env dance; at `<TAB>` the shell re-invokes `ratect`, a `CompleteEnv` hook in `main` handles it and exits before any normal work, and an `ArgValueCompleter` on `run`'s task argument produces task names. Note the feature is explicitly **unstable** — treat occasional API churn as the cost of the one thing that makes completion worth having on a task runner. Two shape constraints worth knowing: a value completer is handed only the word being completed (which is why `-f` awareness reads the completion process's own args after `--`), and zsh's script ends in `compdef`, so it must be sourced after `compinit`.
 - **`anyhow`**: Simplified error handling with context.
 - **`tracing` / `tracing-subscriber`**: Structured, leveled logging. The subscriber is initialized in `main.rs`, filtered via `RUST_LOG` (defaults to `info`), and writes to stderr.
 - **`async-trait`**: Used for the `ContainerRuntime` trait in `ratect-core/src/docker.rs`, so it can have async methods and be implemented by both the real `DockerClient` and test fakes.
@@ -426,7 +487,7 @@ own yet.
 - **Tests**: `cargo test --workspace` runs in CI, covering unit tests per module (pattern matching in `dockerignore`, config parsing/resolution, expression interpolation, build-context tar construction, interactive-TTY eligibility, user-mapping generation, and task engine logic — dependency cycles, prerequisite dedup, sidecar/dependency resolution, dependency readiness (health-wait/setup-command ordering and failure paths), environment merging, image resolution — via a fake `ContainerRuntime`) and CLI argument/behavior tests in `ratect-compat/src/main.rs`/`ratect-compat/tests/cli.rs`. `ratect-compat/tests/cli.rs` also has end-to-end tests (`#[ignore]`d by default, run explicitly via `cargo test --workspace --test cli -- --ignored`) that exercise a real Docker daemon against the fixtures under `ratect-compat/tests/fixtures/` — one per feature (sidecars, dependency readiness, environment/config variables, image building, `.dockerignore`, interactive mode, user mapping, hostnames/ports, proxy, `--use-network`). These also run as their own `docker-integration` CI job (`--workspace --test cli` picks up `ratect`'s own `ratect/tests/cli.rs` too, against its own `ratect/tests/fixtures/`). See the fixture files themselves for what each one proves.
 - **Where a fixture lives — by *layer*, not by binary.** The two fixture sets look lopsided (~36 under `ratect-compat/tests/fixtures/`, a handful under `ratect/tests/fixtures/`), but that's correct, not debt. Most of `ratect-compat`'s fixtures don't test the *flat CLI* at all — they drive `ratect-core`'s engine/Docker behaviour (sidecars, readiness, build options, devices, proxy, tmpfs, the SSH-agent socket, …) against a real daemon, with the CLI as a mere harness. That behaviour is proven *once*: exhaustively in `ratect-core`'s own fake-`ContainerRuntime` unit tests, and end-to-end here. So the rules:
   - **Core engine/Docker behaviour → a `ratect-compat` fixture.** It's the permanent home because `ratect-compat` is permanently `batect.yml`-format (compatibility requires it — see `ROADMAP.md`), so those fixtures never have to change format, and its thin CLI exercises the whole stack. Don't re-prove the same behaviour through `ratect`'s CLI — that re-tests the engine via a second driver for no added confidence; `ratect` proves *its* CLI reaches the engine with one representative e2e (`run_executes_a_task_via_docker`) and inherits the rest.
-  - **A binary's own CLI surface → that binary's fixtures.** `ratect`'s set is small *because it should be*: its subcommand surface (`tasks.yml`) and its own verbs (`caches`/`resources`/`labels`, which `ratect-compat` doesn't have). From 0.3.0 it also gains fixtures in `ratect`'s *own* config format — which is the deeper reason the two sets are never merged into a shared directory: a file can't be both a valid `batect.yml` and a valid `ratect`-native config, so a "common" fixtures dir would have to fork exactly when that format lands (the very next release). The fixtures belong to the format, and the format is `ratect-compat`'s permanent territory. CI runs the non-Docker suite as `cargo test --workspace --all-targets --all-features` — the `--all-features` part is what runs `ratect-core`'s `schema` module tests (see the module list above); plain `cargo test --workspace` skips them, so run `cargo test -p ratect-core --features schema` after touching anything in `config.rs`. When a config type changes, regenerate the committed schema with `RATECT_UPDATE_SCHEMA=1 cargo test -p ratect-core --features schema schema::` and commit the result alongside — the test fails, with that same command in its message, if you don't.
+  - **A binary's own CLI surface → that binary's fixtures.** `ratect`'s set is small *because it should be*: its subcommand surface (`tasks.yml`) and its own verbs (`caches`/`resources`/`labels`, which `ratect-compat` doesn't have). From 0.3.0 it also has fixtures in `ratect`'s *own* config format — which is the deeper reason the two sets are never merged into a shared directory: a file can't be both a valid `batect.yml` and a valid `ratect`-native config, so a "common" fixtures dir would have to fork exactly when that format lands (the very next release). The fixtures belong to the format, and the format is `ratect-compat`'s permanent territory. CI runs the non-Docker suite as `cargo test --workspace --all-targets --all-features` — the `--all-features` part is what runs `ratect-core`'s `schema` module tests (see the module list above); plain `cargo test --workspace` skips them, so run `cargo test -p ratect-core --features schema` after touching anything in `config.rs`. When a config type changes, regenerate *both* committed schemas (`batect.yml`'s and `ratect.toml`'s) with `RATECT_UPDATE_SCHEMA=1 cargo test -p ratect-core --features schema schema::` and commit the result alongside — the test fails, with that same command in its message, if you don't.
 - **Coverage**: `cargo llvm-cov --workspace --show-missing-lines --summary-only` (requires `rustup component add llvm-tools-preview` and `cargo install cargo-llvm-cov`) reports exact uncovered lines per file — use it to find gaps, not to chase a percentage. `cargo llvm-cov --workspace --html` opens a browsable report at `target/llvm-cov/html`. CI runs this and uploads the HTML report as a `coverage-report` artifact (non-gating).
 
 ## Current Status & Roadmap
@@ -437,7 +498,7 @@ Ratect is currently a **Work in Progress**. For a detailed list of supported fea
 
 The `docs/` directory is user-facing documentation (installation, getting started, architecture, CLI reference, config reference, differences from Batect) — **not** ROADMAP.md/AGENTS.md/CHANGELOG.md/`decisions/`, which are project-management/contributor docs. `docs/` deliberately does not assume familiarity with Batect's own documentation, since Ratect's behavior is a subset of and sometimes diverges from it.
 
-The [`decisions/`](decisions/) directory holds Architecture Decision Records — the **cross-cutting** decisions that get referenced from more than one place (the two-binary split, the runtime-ownership labels, the native config format). Its [`README.md`](decisions/README.md) states the convention; see guideline 14 below for when to write one.
+The [`decisions/`](decisions/) directory holds Architecture Decision Records — the **cross-cutting** decisions that get referenced from more than one place (the two-binary split, the runtime-ownership labels, the native config format, trusting a Git include's host paths). Its [`README.md`](decisions/README.md) states the convention; see guideline 14 below for when to write one.
 
 ## Guidelines for AI Agents
 

@@ -953,7 +953,7 @@ cycle (0.2.0, the first one not about `ratect-compat`):
   reads today's YAML unchanged — a default file name that has to move again in one
   release, or a `config convert` with only one format to convert, would both be
   churn.
-- **0.3.0** (planned) — **A `ratect`-native config format** (TOML, native default
+- **0.3.0** — ~~**A `ratect`-native config format** (TOML, native default
   `ratect.toml`), replacing YAML for this binary only (`ratect-compat` stays
   YAML-only, permanently, for Batect compatibility). The schema redesign it's
   really about: an **`extends`** field replacing YAML anchors (shallow
@@ -967,7 +967,15 @@ cycle (0.2.0, the first one not about `ratect-compat`):
   the `extends` pass are new. Migration is a one-directional **`ratect config
   convert`/`validate`** verb (correctness-by-inlining, best-effort lift to
   `extends`, self-verified against the resolved `Config`), landing with or just
-  after 0.3.0. Full design, alternatives, and consequences:
+  after 0.3.0.~~ — **shipped**, all of it, `config convert`/`validate` included
+  (released jointly with `ratect-compat` 0.24.0). The design held on contact;
+  what it gained along the way was a committed JSON schema for the native format
+  (`schema/ratect-config.schema.json`, generated from the same types as
+  `batect.yml`'s and differing in exactly two ways — object-only entries, plus
+  `extends`), a [`ratect.toml` reference](docs/ratect-config-reference.md),
+  `ratect completions` for every major shell (with task names completed
+  dynamically from the config, offline), and commands grouped by purpose in
+  `--help`. Full design, alternatives, and consequences:
   [decisions/0003](decisions/0003-ratect-native-config-format.md).
 
 Its **1.0.0** means something different from `ratect-compat`'s: interface stability
@@ -1195,7 +1203,7 @@ Improving the developer experience through better tools and feedback.
 
 Exploring innovative features that go beyond the original Batect, as well as planned improvements from the Batect roadmap.
 
-- ~~**Alternative Configuration Format (TOML)**: Undecided, exploratory. TOML is a more typical configuration format for Rust projects than YAML. If pursued, this would apply only to the [`ratect` binary](#two-binaries-ratect-and-ratect-compat) — `ratect-compat` stays YAML-only for Batect compatibility — and would need a migration path for projects moving from `ratect-compat`'s YAML config.~~ — scoped into `ratect` [0.3.0](#ratect): the format is **TOML** (native default `ratect.toml`), with the schema redesign (an `extends` field replacing YAML anchors, one object shape per `volumes`/`ports`/`devices`/`include` entry) and mixed TOML/YAML includes. Migration tooling is the `ratect config convert`/`validate` verb, landing with or just after 0.3.0 — full, settled design at [decisions/0003](decisions/0003-ratect-native-config-format.md).
+- ~~**Alternative Configuration Format (TOML)**: Undecided, exploratory. TOML is a more typical configuration format for Rust projects than YAML. If pursued, this would apply only to the [`ratect` binary](#two-binaries-ratect-and-ratect-compat) — `ratect-compat` stays YAML-only for Batect compatibility — and would need a migration path for projects moving from `ratect-compat`'s YAML config.~~ — scoped into `ratect` [0.3.0](#ratect): the format is **TOML** (native default `ratect.toml`), with the schema redesign (an `extends` field replacing YAML anchors, one object shape per `volumes`/`ports`/`devices`/`include` entry) and mixed TOML/YAML includes. Migration tooling is the `ratect config convert`/`validate` verb, which shipped alongside it — full design at [decisions/0003](decisions/0003-ratect-native-config-format.md).
 
 - **Restrict Nested Git Includes**: **`ratect`-only** — `ratect-compat` must keep Batect's own unrestricted behavior for parity (its `ConfigurationLoader`/`IncludeResolver` have the identical gap: any file, root or reached transitively through a Git include, can declare a further `type: git` include with no restriction on remote). Currently a nested include gets the exact same trust as one the project owner declared themselves — no allowlist, and (post-0.10.0's `container_git_boundaries` fix) a rogue nested include's own containers are at least bounded to its clone directory or the project directory, but the include mechanism itself will still fetch from whatever remote a third-party bundle names. Worth an opt-in gate for `ratect` (e.g. `allow_nested_git_includes`, defaulting `false`) requiring the project owner to consciously accept that a Git-included bundle may itself redirect the process to further remotes. Relatedly worth reconsidering alongside it: whether a nested (non-root-declared) include's clone/checkout failure should keep surfacing git's raw stderr, since the specific transport error (host unreachable vs. connection refused vs. repository-not-found vs. auth-failed) lets repeated attempts fingerprint an internal network — most relevant when `ratect` runs in CI against a bundle whose nested includes a less-trusted contributor can influence, and whose CI logs are visible back to them. Deferred rather than implemented immediately: real projects (including ones outside this one) depend on nested git includes working by default today, and `ratect-compat` has to default this open regardless — squarely a `ratect`-only divergence, not a blocking gap.
 - **Trusting a Git include's host paths** (`allow_host_paths`): a per-include opt-in
