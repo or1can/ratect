@@ -187,37 +187,27 @@ recorded so nobody re-investigates them from scratch.
 Findings from the focused review of the 0.3.0 native TOML config work
 (`git diff 5023a9d..HEAD`, covering `config.rs`'s native load path, `extends`,
 the include refactor and `to_native_toml`, plus `main.rs`'s `config` verbs). The
-implementation review found no correctness bugs. Fixed when the review landed
-(see `git log`): the `config convert` non-atomic/TOCTOU overwrite, the
-cross-include-boundary `extends` anchoring test, the `config convert`
-default-source papercut, and the ADR-0003 self-verification wording. The
-remaining items are all test-coverage gaps — lower-stakes, pick up as convenient.
+implementation review found no correctness bugs.
 
-## Test coverage
+**All findings are now closed** (see `git log`): the `config convert`
+non-atomic/TOCTOU overwrite, the cross-include-boundary `extends` anchoring
+test, the `config convert` default-source papercut, the ADR-0003
+self-verification wording, and — in a follow-up pass before the release — the
+six test-coverage gaps below:
 
 - **Cross-format `extends`** — a native container inheriting from a container
-  defined in a `.yml` Git bundle (ADR-0003's "flows one way" promise). Bundle
-  *discovery* is tested; `extends` reaching across the format boundary into an
-  included container isn't.
-- **`config convert --stdout` behavior** — only the `--stdout` + `--force` arg
-  conflict is tested; the actual branch (print to stdout, write *no* file) has
-  no behavioral test. Add one asserting the document reaches stdout and that no
-  `ratect.toml` is created on disk.
-- **Config-var precedence** — `ratect_local_toml_is_auto_discovered_for_config_variables`
-  proves the local file supplies a value, but nothing proves a `--config-var`
-  on the CLI *overrides* one the local file also sets (the load-bearing
-  `.extend()` order in `main.rs`'s `load()`).
-- **Base-only container** — a container with neither `image` nor
-  `build_directory`, used only via `extends`, is the format's headline reuse
-  pattern (ADR-0003: no `abstract` marker needed), but nothing pins that it
-  loads and `config validate` passes. `native.toml`'s `base` has a real image,
-  so the actual base-only case is untested.
-- **Multi-candidate "No bundle file found"** — the one genuinely new error
-  branch in the include refactor (a pathless `type: git` include where *neither*
-  `ratect-bundle.toml` nor `batect-bundle.yml` exists) is untested; every bundle
-  test has at least one candidate present.
-- **Pin the v1 limitations / minor branches** — assert `config convert` emits
-  the compact string forms for `ports`/`volumes` (so a shape regression that
-  still round-trips is caught), plus: a 3-node `a→b→c→a` `extends` cycle, a local
-  (non-git) `.toml`/`.yml` include from a native root, and an explicit `.yml`
-  `--config-vars-file` at the CLI level.
+  defined in an included YAML file, plus per-extension parser selection for
+  local `.yml`/`.toml` includes from a native root.
+- **`config convert --stdout`** — prints the document and writes no file.
+- **Config-var precedence** — `--config-var` beats the config-vars file, and an
+  explicitly-named `.yml` file replaces the auto-discovered `ratect.local.toml`.
+- **Base-only container** — no `image`/`build_directory`, used only via
+  `extends`, loads and passes `config validate`.
+- **Multi-candidate "No bundle file found"** — a pathless `type: git` include
+  whose repo has neither candidate names both.
+- **v1 limitations and minor branches** — `to_native_toml`'s compact
+  string form for `ports`/`volumes` is pinned, and a 3-node `extends` cycle.
+
+One thing the last pass turned up beyond the list: task `description` is a
+plain string and is *not* interpolated (matching Batect's own typing), so a
+code comment claiming otherwise was corrected.

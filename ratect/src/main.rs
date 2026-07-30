@@ -283,8 +283,11 @@ enum TasksCommand {
 
 #[derive(ClapArgs, Debug)]
 struct TasksListArgs {
-    // A task's own description can interpolate a config variable, so
-    // listing them is a configuration read like any other.
+    // Listing tasks means loading and *resolving* the configuration, which
+    // fails outright if a declared config variable has no value — so the
+    // options that supply one belong here, even though nothing in the listing
+    // itself interpolates. (A task's `description` is a plain string, not an
+    // expression, matching Batect's own typing.)
     #[command(flatten)]
     config_vars: ConfigVarArgs,
 }

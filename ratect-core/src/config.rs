@@ -6764,6 +6764,21 @@ tasks:
             reparsed.containers["app"].image.as_deref(),
             Some("alpine:3.18")
         );
+
+        // Pins `config convert`'s documented v1 limitation: `ports`/`volumes`
+        // come out in the compact *string* form (the existing Batect-compatible
+        // `Serialize` impls), not the object form the native format documents
+        // as canonical. Both are accepted and both round-trip, so nothing is
+        // broken — but a change here is a change to documented behaviour, and
+        // should be noticed rather than discovered.
+        assert!(
+            text.contains("\"8080:80/tcp\""),
+            "ports should still serialize to the compact string form: {text}"
+        );
+        assert!(
+            text.contains("\".:/code\""),
+            "volumes should still serialize to the compact string form: {text}"
+        );
     }
 
     /// A helper: run the native load-and-resolve path on a single TOML string
@@ -6932,6 +6947,81 @@ run = { container = "app" }
         assert_ne!(build_directory, dir.join("ctx").display().to_string());
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `extends` reaches across the *format* boundary: a native container
+    /// inherits from one defined in an included YAML file, because the
+    /// container namespace is flat once includes are merged (ADR-0003's
+    /// "flows one way"). Also covers per-extension parser selection for local
+    /// includes from a native root — a `.yml` and a `.toml` fragment in one
+    /// project, each parsed as its own format.
+    #[tokio::test]
+    async fn extends_can_inherit_from_a_container_defined_in_a_yaml_include() {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("base.yml"),
+            "containers:\n  base:\n    image: alpine:3.18\n    working_directory: /base\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("more.toml"),
+            "[containers.sidecar]\nimage = \"redis:7\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("ratect.toml"),
+            r#"
+project_name = "demo"
+include = [{ path = "base.yml" }, { path = "more.toml" }]
+
+[containers.app]
+extends = "base"
+
+[tasks.t]
+run = { container = "app" }
+"#,
+        )
+        .unwrap();
+
+        let project = load_project_native(&dir.join("ratect.toml"), &HashMap::new())
+            .await
+            .unwrap();
+        let app = &project.config.containers["app"];
+        assert_eq!(app.image.as_deref(), Some("alpine:3.18"));
+        assert_eq!(app.working_directory.as_deref(), Some("/base"));
+        // The TOML fragment came through its own parser.
+        assert_eq!(
+            project.config.containers["sidecar"].image.as_deref(),
+            Some("redis:7")
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A longer cycle than the two-node and self-cases already covered, so the
+    /// ancestor-path walk is pinned for a chain rather than just an immediate
+    /// repeat.
+    #[tokio::test]
+    async fn a_three_container_extends_cycle_errors() {
+        let err = load_native_toml(
+            r#"
+project_name = "demo"
+[containers.a]
+extends = "b"
+[containers.b]
+extends = "c"
+[containers.c]
+extends = "a"
+[tasks.t]
+run = { container = "a" }
+"#,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("cyclic 'extends'"),
+            "got: {err:#}"
+        );
     }
 
     #[tokio::test]
@@ -7874,6 +7964,40 @@ tasks:
         std::fs::remove_dir_all(&bundle).unwrap();
         std::fs::remove_dir_all(&project).unwrap();
         std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    /// The one genuinely new error branch in the bundle-probe refactor: a
+    /// pathless `type: git` include whose repository contains *neither*
+    /// candidate reports both names it looked for, rather than the
+    /// single-candidate "does not exist" message.
+    #[tokio::test]
+    async fn a_pathless_git_include_with_no_bundle_file_names_both_candidates() {
+        let bundle = git_bundle_repo(&[("something-else.yml", "containers: {}\n")]);
+        let project = unique_temp_dir();
+        std::fs::write(
+            project.join("ratect.toml"),
+            format!(
+                "project_name = \"demo\"\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\n",
+                bundle.display()
+            ),
+        )
+        .unwrap();
+
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+        let error =
+            Config::load_from_file_native_with_git_cache(&project.join("ratect.toml"), &git_cache)
+                .await
+                .expect_err("a bundle with no recognised file should fail");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("ratect-bundle.toml") && message.contains("batect-bundle.yml"),
+            "the error should name both candidates: {message}"
+        );
+
+        std::fs::remove_dir_all(&bundle).ok();
+        std::fs::remove_dir_all(&project).ok();
+        std::fs::remove_dir_all(&cache_root).ok();
     }
 
     /// The compat path never looks for `ratect-bundle.toml` — Batect knows
