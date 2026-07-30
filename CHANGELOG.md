@@ -21,6 +21,12 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+## [ratect-compat 0.24.0 · ratect 0.3.0] - 2026-07-30
+
+**`ratect` gets its own configuration format.** From 0.3.0 the forward-looking binary reads a native `ratect.toml` — the same schema `batect.yml` documents, re-spelled in TOML, with `extends` in place of YAML anchors, object-shaped list entries, an auto-discovered `ratect.local.toml`, and includes that can mix TOML and YAML so a project migrates a file at a time. `ratect config convert` translates an existing `batect.yml`, and the format ships with its own JSON schema and reference documentation. `ratect-compat` is untouched by all of it: it stays `batect.yml`-only, permanently, which is what Batect compatibility requires. See [decisions/0003](decisions/0003-ratect-native-config-format.md).
+
+Both binaries also pick up three configuration fixes from `ratect-core`, all found by running real-world Batect bundles: top-level YAML extension keys, `~` expansion in host paths, and — new — `allow_host_paths` for vouching that a Git-included bundle may reach outside its containment.
+
 ### Fixed
 
 - **A leading `~` in a host path is now expanded to the home directory**: a `volumes` entry like `local: ~/.cache/trivy` (or a `build_directory`/`build_secrets.path`) previously resolved to a *literal* `~` directory under the project rather than the user's home, so the mount silently pointed somewhere it shouldn't. Batect expands it (`PathResolver.resolveHomeDir`), and now so does Ratect, with the same component-wise rule: only a whole leading `~` expands, so `~user/…` (another user's home, which Batect doesn't support either) and a `~` anywhere but the front stay literal. Expansion happens before the Git-include containment check, so a third-party bundle asking for `~/.ssh` is still rejected for escaping its repository. Note a bare `~` needs quoting in YAML (`local: "~"`), which otherwise reads as null. Found in a real-world Batect bundle.
