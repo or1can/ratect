@@ -1667,6 +1667,12 @@ pub(crate) enum IncludeEntry {
         repo: String,
         git_ref: String,
         path: Option<String>,
+        /// Vouches for this bundle, letting its containers resolve host paths
+        /// outside the usual containment — see [`GitBoundary::allow_host_paths`]
+        /// and [decisions/0004](../../decisions/0004-git-include-host-path-trust.md).
+        /// Honoured only when the file declaring this entry is one the project
+        /// owner controls.
+        allow_host_paths: bool,
     },
 }
 
@@ -1704,16 +1710,18 @@ impl<'de> Deserialize<'de> for IncludeEntry {
                 let mut include_type: Option<String> = None;
                 let mut repo: Option<String> = None;
                 let mut git_ref: Option<String> = None;
+                let mut allow_host_paths: Option<bool> = None;
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "path" => path = Some(map.next_value()?),
                         "type" => include_type = Some(map.next_value()?),
                         "repo" => repo = Some(map.next_value()?),
                         "ref" => git_ref = Some(map.next_value()?),
+                        "allow_host_paths" => allow_host_paths = Some(map.next_value()?),
                         other => {
                             return Err(serde::de::Error::unknown_field(
                                 other,
-                                &["path", "type", "repo", "ref"],
+                                &["path", "type", "repo", "ref", "allow_host_paths"],
                             ))
                         }
                     }
@@ -1730,6 +1738,7 @@ impl<'de> Deserialize<'de> for IncludeEntry {
                             repo,
                             git_ref,
                             path,
+                            allow_host_paths: allow_host_paths.unwrap_or(false),
                         })
                     }
                     Some(other) if other != "file" => Err(serde::de::Error::custom(format!(
@@ -1740,6 +1749,15 @@ impl<'de> Deserialize<'de> for IncludeEntry {
                         if repo.is_some() || git_ref.is_some() {
                             return Err(serde::de::Error::custom(
                                 "'repo' and 'ref' are only valid for 'type: git' includes",
+                            ));
+                        }
+                        // A local file is always the project owner's own, so
+                        // there's no containment to relax and nothing to vouch
+                        // for — accepting the flag here would only suggest
+                        // otherwise.
+                        if allow_host_paths.is_some() {
+                            return Err(serde::de::Error::custom(
+                                "'allow_host_paths' is only valid for 'type: git' includes",
                             ));
                         }
                         let path = path.ok_or_else(|| serde::de::Error::missing_field("path"))?;
@@ -1767,6 +1785,19 @@ struct GitBoundary {
     repo_dir: PathBuf,
     remote: String,
     git_ref: String,
+    /// The project owner vouched for this bundle with `allow_host_paths: true`
+    /// on the include entry, so its containers' `volumes`/`build_directory`/
+    /// `build_secrets` paths may resolve anywhere (see
+    /// [decisions/0004](../../decisions/0004-git-include-host-path-trust.md)).
+    /// Only ever `true` for a bundle included from a file the owner controls —
+    /// the flag is ignored inside a Git-included file, so a bundle can't grant
+    /// it to itself or to anything it includes.
+    ///
+    /// Deliberately does *not* relax the include-`path` containment
+    /// ([`check_contains`](Self::check_contains)): that stops a bundle pulling
+    /// an arbitrary host *file* into the configuration, which is a separate
+    /// concern from where its containers may mount.
+    allow_host_paths: bool,
 }
 
 impl GitBoundary {
@@ -1829,17 +1860,23 @@ impl GitBoundary {
     /// exist yet at config-resolution time — Docker/`docker build` are the
     /// ones that ultimately dereference it.
     fn check_path_allowed(&self, resolved: &Path, project_dir: &Path) -> Result<()> {
-        if resolved.starts_with(&self.repo_dir) || resolved.starts_with(project_dir) {
+        if self.allow_host_paths
+            || resolved.starts_with(&self.repo_dir)
+            || resolved.starts_with(project_dir)
+        {
             return Ok(());
         }
         anyhow::bail!(
             "Path '{}' escapes both the Git repository '{}' at '{}' it was included from and \
              the project directory '{}' — a container reached through a Git include must \
-             resolve its 'volumes'/'build_directory' paths within one of the two.",
+             resolve its 'volumes'/'build_directory' paths within one of the two. If you trust \
+             this bundle to reach that path, add 'allow_host_paths: true' to the include entry \
+             for '{}' in your own configuration.",
             resolved.display(),
             self.remote,
             self.git_ref,
-            project_dir.display()
+            project_dir.display(),
+            self.remote
         );
     }
 }
@@ -2197,7 +2234,15 @@ impl Config {
                     repo,
                     git_ref,
                     path,
+                    allow_host_paths,
                 } => {
+                    // The owner-controlled rule: `allow_host_paths` counts only
+                    // when the file declaring this include has no boundary of
+                    // its own — i.e. the root config, or a local include of it.
+                    // Inside a Git-included file the flag is ignored, so a
+                    // bundle can neither grant it to itself nor pass it on to
+                    // anything it includes. See decisions/0004.
+                    let vouched_for = *allow_host_paths && boundary.is_none();
                     let key = (repo.clone(), git_ref.clone());
                     let repo_dir = match git_repo_paths.get(&key) {
                         Some(dir) => dir.clone(),
@@ -2213,6 +2258,7 @@ impl Config {
                         repo_dir: repo_dir.clone(),
                         remote: repo.clone(),
                         git_ref: git_ref.clone(),
+                        allow_host_paths: vouched_for,
                     };
                     // An explicit `path` is the single candidate; a pathless
                     // bundle probes the format's default names in order.
@@ -2865,6 +2911,9 @@ fn collect_completion_task_names(
                 repo,
                 git_ref,
                 path,
+                // Irrelevant here: completion only ever *reads* task names, so
+                // there are no container paths to contain.
+                ..
             } => {
                 // Completion never clones — only an already-cached repo counts.
                 let Some(repo_dir) = crate::git_include::cached_working_copy(&repo, &git_ref)
@@ -5177,6 +5226,7 @@ tasks:
     #[test]
     fn resolve_path_rejects_a_git_included_containers_absolute_path_outside_both_allowed_roots() {
         let boundary = GitBoundary {
+            allow_host_paths: false,
             repo_dir: PathBuf::from("/repo"),
             remote: "https://example.com/bundle.git".to_string(),
             git_ref: "v1.0.0".to_string(),
@@ -5200,6 +5250,7 @@ tasks:
     #[test]
     fn resolve_path_rejects_a_git_included_containers_home_directory_path() {
         let boundary = GitBoundary {
+            allow_host_paths: false,
             repo_dir: PathBuf::from("/repo"),
             remote: "https://example.com/bundle.git".to_string(),
             git_ref: "v1.0.0".to_string(),
@@ -5218,6 +5269,7 @@ tasks:
     fn resolve_path_rejects_a_git_included_containers_dot_dot_traversal_outside_both_allowed_roots()
     {
         let boundary = GitBoundary {
+            allow_host_paths: false,
             repo_dir: PathBuf::from("/repo"),
             remote: "https://example.com/bundle.git".to_string(),
             git_ref: "v1.0.0".to_string(),
@@ -5235,6 +5287,7 @@ tasks:
     #[test]
     fn resolve_path_allows_a_git_included_containers_path_within_the_clone_directory() {
         let boundary = GitBoundary {
+            allow_host_paths: false,
             repo_dir: PathBuf::from("/repo"),
             remote: "https://example.com/bundle.git".to_string(),
             git_ref: "v1.0.0".to_string(),
@@ -5258,6 +5311,7 @@ tasks:
         // fully-trusted tree, distinct from the untrusted repository the
         // container definition itself came from.
         let boundary = GitBoundary {
+            allow_host_paths: false,
             repo_dir: PathBuf::from("/repo"),
             remote: "https://example.com/bundle.git".to_string(),
             git_ref: "v1.0.0".to_string(),
@@ -7594,6 +7648,147 @@ tasks:
         std::fs::remove_dir_all(&bundle).unwrap();
         std::fs::remove_dir_all(&project).unwrap();
         std::fs::remove_dir_all(&cache_root).unwrap();
+    }
+
+    /// `allow_host_paths: true` on an include the *project owner* declared lets
+    /// that bundle's containers resolve host paths outside the containment —
+    /// the case that's otherwise a hard failure with no in-config workaround
+    /// (a shared tool cache at `~/.cache/<tool>`). See decisions/0004.
+    #[tokio::test]
+    async fn a_vouched_for_git_include_may_use_host_paths() {
+        let bundle = git_bundle_repo(&[(
+            "batect-bundle.yml",
+            "containers:\n  trivy:\n    image: alpine:3.18\n    volumes:\n      \
+             - local: ~/.cache/trivy\n        container: /cache\n",
+        )]);
+        let project = unique_temp_dir();
+        std::fs::write(
+            project.join("batect.yml"),
+            format!(
+                "project_name: demo\ninclude:\n  - type: git\n    repo: {}\n    ref: v1\n    \
+                 allow_host_paths: true\n",
+                bundle.display()
+            ),
+        )
+        .unwrap();
+
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+        let mut loaded =
+            Config::load_from_file_with_git_cache(&project.join("batect.yml"), &git_cache)
+                .await
+                .unwrap();
+        loaded
+            .resolve_expressions(&project, &HashMap::new())
+            .expect("a vouched-for bundle's host path should be allowed");
+
+        let volume = expect_local(&loaded.config.containers["trivy"].volumes.as_ref().unwrap()[0]);
+        let home = crate::user::home_directory().unwrap();
+        assert_eq!(
+            volume.local,
+            home.join(".cache/trivy").display().to_string()
+        );
+
+        std::fs::remove_dir_all(&bundle).ok();
+        std::fs::remove_dir_all(&project).ok();
+        std::fs::remove_dir_all(&cache_root).ok();
+    }
+
+    /// Property 2 of decisions/0004, and the one that makes the flag a control
+    /// rather than theatre: a bundle setting `allow_host_paths` on *its own*
+    /// nested include grants nothing. Here the project vouches for nothing, the
+    /// outer bundle tries to vouch for the inner one, and the inner one's host
+    /// path is still rejected.
+    #[tokio::test]
+    async fn a_bundle_cannot_grant_host_paths_to_its_own_nested_include() {
+        let inner = git_bundle_repo(&[(
+            "batect-bundle.yml",
+            "containers:\n  inner:\n    image: alpine:3.18\n    volumes:\n      \
+             - local: ~/.ssh\n        container: /keys\n",
+        )]);
+        let outer = git_bundle_repo(&[(
+            "batect-bundle.yml",
+            &format!(
+                "include:\n  - type: git\n    repo: {}\n    ref: v1\n    allow_host_paths: true\n",
+                inner.display()
+            ),
+        )]);
+        let project = unique_temp_dir();
+        std::fs::write(
+            project.join("batect.yml"),
+            format!(
+                "project_name: demo\ninclude:\n  - type: git\n    repo: {}\n    ref: v1\n",
+                outer.display()
+            ),
+        )
+        .unwrap();
+
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+        let mut loaded =
+            Config::load_from_file_with_git_cache(&project.join("batect.yml"), &git_cache)
+                .await
+                .unwrap();
+        let error = loaded
+            .resolve_expressions(&project, &HashMap::new())
+            .expect_err("a bundle must not be able to grant host paths to what it includes");
+        assert!(
+            format!("{error:?}").contains("escapes both the Git repository"),
+            "got: {error:?}"
+        );
+
+        std::fs::remove_dir_all(&inner).ok();
+        std::fs::remove_dir_all(&outer).ok();
+        std::fs::remove_dir_all(&project).ok();
+        std::fs::remove_dir_all(&cache_root).ok();
+    }
+
+    /// Property 1: vouching for a bundle says nothing about bundles *it*
+    /// includes. The project trusts the outer bundle; the inner one — which the
+    /// owner never named — stays contained.
+    #[tokio::test]
+    async fn vouching_for_a_bundle_does_not_extend_to_its_nested_includes() {
+        let inner = git_bundle_repo(&[(
+            "batect-bundle.yml",
+            "containers:\n  inner:\n    image: alpine:3.18\n    volumes:\n      \
+             - local: ~/.ssh\n        container: /keys\n",
+        )]);
+        let outer = git_bundle_repo(&[(
+            "batect-bundle.yml",
+            &format!(
+                "include:\n  - type: git\n    repo: {}\n    ref: v1\n",
+                inner.display()
+            ),
+        )]);
+        let project = unique_temp_dir();
+        std::fs::write(
+            project.join("batect.yml"),
+            format!(
+                "project_name: demo\ninclude:\n  - type: git\n    repo: {}\n    ref: v1\n    \
+                 allow_host_paths: true\n",
+                outer.display()
+            ),
+        )
+        .unwrap();
+
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+        let mut loaded =
+            Config::load_from_file_with_git_cache(&project.join("batect.yml"), &git_cache)
+                .await
+                .unwrap();
+        let error = loaded
+            .resolve_expressions(&project, &HashMap::new())
+            .expect_err("trust must not extend to a nested include");
+        assert!(
+            format!("{error:?}").contains("escapes both the Git repository"),
+            "got: {error:?}"
+        );
+
+        std::fs::remove_dir_all(&inner).ok();
+        std::fs::remove_dir_all(&outer).ok();
+        std::fs::remove_dir_all(&project).ok();
+        std::fs::remove_dir_all(&cache_root).ok();
     }
 
     /// Builds a git repo containing whichever bundle files `bundles` names

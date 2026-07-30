@@ -160,6 +160,31 @@ because referencing it explicitly via
 shared bundle to do — the project directory is your own fully-trusted tree, distinct
 from the repository the container definition itself came from.
 
+**Vouching for a bundle** (`allow_host_paths`): some bundles legitimately need a path
+outside both roots — most often a shared tool cache under your home directory, like
+`~/.cache/trivy`, so the cached data is reused across all your projects rather than
+re-fetched per project. Since neither `customise` nor a local redefinition can add a
+volume to someone else's container, there'd otherwise be no way to use such a bundle
+at all. `allow_host_paths: true` on the include entry lifts the restriction for that
+bundle:
+
+```yaml
+include:
+  - type: git
+    repo: https://github.com/my-org/infra-bundle.git
+    ref: 1.2.3
+    allow_host_paths: true
+```
+
+It applies **only to the bundle named there** — never to bundles *it* includes in
+turn — and is honoured **only in your own configuration**: the same flag written
+inside a Git-included file is ignored, so a bundle can't grant itself the permission
+or pass it along. It doesn't relax the include-`path` containment above either; that
+governs which *files* become part of your configuration, which is a separate question
+from where a container may mount. Full rationale, and what a future allowlist form
+would have to preserve, in
+[decisions/0004](https://github.com/or1can/ratect/blob/main/decisions/0004-git-include-host-path-trust.md).
+
 Cloning requires the system `git` binary to be installed and on `PATH` — Ratect shells
 out to it (`git clone --quiet --no-checkout` followed by
 `git checkout --recurse-submodules <ref>`) rather than embedding a Git library, so

@@ -56,4 +56,4 @@ never delete one (same append-only spirit as the roadmap's versioned lists).
 | [0001](0001-two-binaries.md) | Two binaries (`ratect` + `ratect-compat`) on a shared core | Accepted — shipped (0.20.0) |
 | [0002](0002-runtime-ownership-labels.md) | Runtime-ownership labels (`eu.orican.ratect.*`) | Accepted — shipped (ratect-compat 0.21.1 · ratect 0.2.0) |
 | [0003](0003-ratect-native-config-format.md) | `ratect`-native config format (TOML) | Accepted — planned (ratect 0.3.0) |
-| [0004](0004-git-include-host-path-trust.md) | Trusting a Git include's host paths (`allow_host_paths`) | Accepted — planned |
+| [0004](0004-git-include-host-path-trust.md) | Trusting a Git include's host paths (`allow_host_paths`) | Accepted — implemented |

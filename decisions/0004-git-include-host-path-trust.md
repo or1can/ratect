@@ -1,7 +1,8 @@
 # 0004 — Trusting a Git include's host paths
 
-**Status:** Accepted — planned. The `allow_host_paths` opt-in below is not yet
-implemented; the containment it relaxes shipped in 0.10.0.
+**Status:** Accepted — implemented. The containment it relaxes shipped in
+0.10.0; `allow_host_paths` itself is unreleased at the time of writing (see
+`CHANGELOG.md`). The nested case in *Consequences* remains open by design.
 
 ## Context
 

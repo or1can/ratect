@@ -560,6 +560,17 @@ impl JsonSchema for crate::config::IncludeEntry {
                             "description": "The file to include from within the repository. \
                                             Defaults to batect-bundle.yml.",
                         },
+                        "allow_host_paths": {
+                            "type": "boolean",
+                            "description": "Let this bundle's containers resolve 'volumes'/\
+                                            'build_directory' paths outside the usual \
+                                            containment (its own clone, or your project \
+                                            directory) — for a bundle you trust that needs, \
+                                            say, a shared cache under your home directory. \
+                                            Applies only to the bundle named here, never to \
+                                            bundles it includes itself, and only when set in \
+                                            your own configuration. Defaults to false.",
+                        },
                     },
                     "required": ["type", "repo", "ref"],
                     "additionalProperties": false,
