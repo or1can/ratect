@@ -355,10 +355,15 @@ For a `local` mount, `local` (the host path) is resolved:
 - The path is interpolated first (see [Expressions](#expressions)) — so a config
   variable that itself resolves to an absolute path is used as-is, not treated as a
   literal relative fragment.
+- A leading `~` is then expanded to the host user's home directory, so
+  `~/.cache/tool` mounts the real cache directory. Only a whole leading `~`
+  *component* expands: `~user/…` (another user's home) isn't supported, and a `~`
+  anywhere but the front is a literal character. Note that a bare `~` must be
+  quoted (`local: "~"`) — unquoted, YAML reads it as null.
 - *After* interpolation, if the result is relative, it's resolved to an absolute path
   **relative to the directory containing the config file** (not the current working
-  directory). If it's already absolute (whether literally written that way, or because
-  that's what an expression resolved to), it's left unchanged.
+  directory). If it's already absolute (whether literally written that way, expanded
+  from `~`, or because that's what an expression resolved to), it's left unchanged.
 - This all happens once, after CLI-supplied config variable overrides
   (`--config-var`/`--config-vars-file`) are known — not at config-parse time.
 - `build_directory` is resolved the same way (it has no `:container_path` part to split

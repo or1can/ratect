@@ -2671,7 +2671,35 @@ impl Config {
     }
 }
 
-/// Interpolates expressions within `path`, then resolves the result to an
+/// Expands a leading `~` to the host user's home directory, matching Batect's
+/// own `PathResolver.resolveHomeDir` — so a volume like `~/.cache/trivy`
+/// mounts the real cache directory rather than a literal `~` directory under
+/// the project.
+///
+/// Only when the *first path component* is exactly `~`, which is Batect's rule
+/// (its check is `path.startsWith(Path("~"))`, a component comparison, not a
+/// string prefix). So `~` and `~/x` expand, while `~user/x` doesn't — bash's
+/// "another user's home" form is not supported there and isn't here either,
+/// and a path with `~` anywhere but the front is untouched. `None` means
+/// there was nothing to expand, leaving the caller's own handling alone.
+fn expand_home_directory(path: &str) -> Result<Option<PathBuf>> {
+    let mut components = Path::new(path).components();
+    let leads_with_tilde = matches!(
+        components.next(),
+        Some(std::path::Component::Normal(first)) if first == "~"
+    );
+    if !leads_with_tilde {
+        return Ok(None);
+    }
+    let home = crate::user::home_directory()
+        .with_context(|| format!("Cannot expand '~' in path '{path}'"))?;
+    // For a bare `~` the remainder is empty, and joining that yields the home
+    // directory itself.
+    Ok(Some(home.join(components.as_path())))
+}
+
+/// Interpolates expressions within `path`, expands a leading `~` (see
+/// [`expand_home_directory`]), then resolves the result to an
 /// absolute path (relative to `base_path`) if it's relative — done in this
 /// order because an expression can itself resolve to an absolute path (e.g.
 /// a `<project_root` config variable), which mustn't be prefixed with
@@ -2693,7 +2721,11 @@ fn resolve_path(
     container_boundary: Option<(&GitBoundary, &Path)>,
 ) -> Result<String> {
     let interpolated = crate::expressions::interpolate(path, host_env, config_vars)?;
-    let resolved = if Path::new(&interpolated).is_relative() {
+    let resolved = if let Some(home_relative) = expand_home_directory(&interpolated)? {
+        // Already absolute (it's rooted at the home directory), so it never
+        // joins onto `base_path` — same as any other absolute path below.
+        home_relative.clean()
+    } else if Path::new(&interpolated).is_relative() {
         let absolute_path = base_path.join(&interpolated);
         std::env::current_dir()?.join(absolute_path).clean()
     } else {
@@ -5053,6 +5085,51 @@ tasks:
         assert_eq!(resolved, "/base/docker");
     }
 
+    /// A leading `~` resolves to the host user's home directory rather than
+    /// being joined onto the config file's directory as a literal — matching
+    /// Batect's own `PathResolver.resolveHomeDir`, and what a config like
+    /// `local: ~/.cache/trivy` obviously intends.
+    #[test]
+    fn resolve_path_expands_a_leading_tilde_to_the_home_directory() {
+        let home = crate::user::home_directory().unwrap();
+        for (path, expected) in [
+            ("~/.cache/trivy", home.join(".cache/trivy")),
+            ("~", home.clone()),
+        ] {
+            let resolved = resolve_path(
+                path,
+                Path::new("/base"),
+                &no_host_env,
+                &HashMap::new(),
+                None,
+            )
+            .unwrap();
+            assert_eq!(resolved, expected.display().to_string(), "for '{path}'");
+        }
+    }
+
+    /// Only a whole leading `~` *component* expands, matching Batect's own
+    /// component-wise check: `~user` (bash's "another user's home", which
+    /// Batect doesn't support either) and a `~` anywhere but the front stay
+    /// literal.
+    #[test]
+    fn resolve_path_leaves_a_tilde_that_is_not_a_leading_component_alone() {
+        for (path, expected) in [
+            ("~notauser/x", "/base/~notauser/x"),
+            ("sub/~/x", "/base/sub/~/x"),
+        ] {
+            let resolved = resolve_path(
+                path,
+                Path::new("/base"),
+                &no_host_env,
+                &HashMap::new(),
+                None,
+            )
+            .unwrap();
+            assert_eq!(resolved, expected, "for '{path}'");
+        }
+    }
+
     #[test]
     fn resolve_path_cleans_dot_components_from_the_joined_path() {
         let resolved = resolve_path(
@@ -5106,6 +5183,29 @@ tasks:
         };
         let result = resolve_path(
             "/etc",
+            Path::new("/repo/sub"),
+            &no_host_env,
+            &HashMap::new(),
+            Some((&boundary, Path::new("/project"))),
+        );
+        assert!(format!("{:?}", result.unwrap_err()).contains("escapes both the Git repository"));
+    }
+
+    /// `~` expansion widens what a path can reach, so it must not become a way
+    /// around the Git-include containment check: a third-party bundle asking
+    /// for `~/.ssh` resolves to the real home directory and is then rejected
+    /// for escaping both allowed roots, exactly as a literal `/home/...` would
+    /// be. (Before expansion existed this was inert — it resolved to a
+    /// harmless `<repo>/~/.ssh` — so it's newly load-bearing.)
+    #[test]
+    fn resolve_path_rejects_a_git_included_containers_home_directory_path() {
+        let boundary = GitBoundary {
+            repo_dir: PathBuf::from("/repo"),
+            remote: "https://example.com/bundle.git".to_string(),
+            git_ref: "v1.0.0".to_string(),
+        };
+        let result = resolve_path(
+            "~/.ssh",
             Path::new("/repo/sub"),
             &no_host_env,
             &HashMap::new(),
