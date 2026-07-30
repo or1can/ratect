@@ -234,6 +234,30 @@ fn list_tasks_lists_sample_tasks() {
     }
 }
 
+/// A config using Batect *extensions* — top-level `.`-prefixed keys holding
+/// YAML anchors — loads through the real binary rather than being rejected as
+/// unknown fields. Needs no Docker: getting as far as listing tasks means the
+/// whole file parsed.
+#[test]
+fn list_tasks_accepts_a_config_using_yaml_extensions() {
+    let output = ratect_command()
+        .args(["--list-tasks", "-f"])
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/yaml-extensions.yml"))
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "a config using extensions should load:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("show-environment"),
+        "expected the fixture's task in output:\n{stdout}"
+    );
+}
+
 #[test]
 fn list_tasks_groups_by_group_and_shows_descriptions() {
     let output = ratect_command()

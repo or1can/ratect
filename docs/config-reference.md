@@ -22,6 +22,31 @@ containers:
     working_directory: /worker
 ```
 
+### Extensions
+
+An anchor has to live on something, and sometimes the value you want to share
+isn't a container or task at all — a block of environment variables, say. For
+that, a **top-level key whose name starts with `.`** is an *extension*: Ratect
+ignores it entirely, so it can hold an anchor for the rest of the file to alias
+(matching Batect, which sets kaml's `extensionDefinitionPrefix` to `.`).
+
+```yaml
+.common-environment: &common-environment
+  TZ: UTC
+  CI: "true"
+
+containers:
+  build-env:
+    image: alpine:3.18
+    environment:
+      <<: *common-environment
+      EXTRA_VAR: extra-value
+```
+
+Only *top-level* keys are extensions. A `.`-prefixed key anywhere else is an
+ordinary field name, and rejected if it isn't a real one — so a typo nested
+inside a container still gets caught.
+
 ## Top level
 
 ```yaml

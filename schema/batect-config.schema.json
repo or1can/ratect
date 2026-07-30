@@ -900,6 +900,11 @@
     }
   },
   "description": "A Ratect (batect-compatible) task configuration file. Describes the subset of Batect's own configuration format that Ratect actually accepts — see https://github.com/or1can/ratect/blob/main/docs/differences-from-batect.md",
+  "patternProperties": {
+    "^\\.": {
+      "description": "An extension: ignored by Ratect, and used only to hold a YAML anchor that the rest of the file aliases."
+    }
+  },
   "properties": {
     "config_variables": {
       "additionalProperties": {

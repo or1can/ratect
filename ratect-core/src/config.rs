@@ -1940,10 +1940,47 @@ fn parse_config_file(path: &Path, format: ConfigFormat) -> Result<ConfigFile> {
     }
 }
 
+/// A top-level key prefix marking a Batect *extension*: an entry that exists
+/// only to hold a YAML anchor for the rest of the file to alias, and is
+/// otherwise ignored. Batect enables this via kaml's
+/// `extensionDefinitionPrefix = "."` (its `ConfigurationLoader`), so a config
+/// like
+///
+/// ```yaml
+/// .common-environment: &common-environment
+///   TZ: UTC
+///
+/// containers:
+///   app:
+///     environment:
+///       <<: *common-environment
+/// ```
+///
+/// is valid Batect configuration. `ConfigFile` is `deny_unknown_fields`, so
+/// without stripping these first they'd be rejected as unknown fields.
+const EXTENSION_KEY_PREFIX: char = '.';
+
+/// Parses a YAML config file, dropping Batect's top-level *extension* entries
+/// (see [`EXTENSION_KEY_PREFIX`]) before deserializing.
+///
+/// Deserialized in two steps — text to [`noyalib::Value`], then `Value` to
+/// [`ConfigFile`] — rather than straight into `ConfigFile`, purely so the
+/// extension keys can be removed in between. The parse step is what resolves
+/// anchors, aliases and merge keys, so by the time an extension entry is
+/// dropped its content has already been inlined everywhere it was aliased —
+/// which is exactly what makes dropping it safe. Only *top-level* keys are
+/// considered, matching kaml, so a `.`-prefixed key nested anywhere else still
+/// reaches the schema (and is still rejected if it isn't a real field).
 fn parse_yaml_config_file(path: &Path) -> Result<ConfigFile> {
-    let file =
-        File::open(path).with_context(|| format!("Failed to open config file {:?}", path))?;
-    noyalib::from_reader(file).with_context(|| format!("Failed to parse config file {:?}", path))
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to open config file {:?}", path))?;
+    let mut document: noyalib::Value = noyalib::from_str(&text)
+        .with_context(|| format!("Failed to parse config file {:?}", path))?;
+    if let noyalib::Value::Mapping(mapping) = &mut document {
+        mapping.retain(|key, _| !key.starts_with(EXTENSION_KEY_PREFIX));
+    }
+    noyalib::from_value(&document)
+        .with_context(|| format!("Failed to parse config file {:?}", path))
 }
 
 fn parse_toml_config_file(path: &Path) -> Result<ConfigFile> {
@@ -3734,6 +3771,66 @@ tasks:
             merged.environment.as_ref().unwrap().get("SHARED_VAR"),
             Some(&"shared-value".to_string())
         );
+    }
+
+    /// Batect's *extensions*: a top-level key starting with `.` exists only to
+    /// hold an anchor and is ignored, so a config that factors shared values
+    /// out that way loads rather than being rejected as an unknown field. Goes
+    /// through `parse_yaml_config_file` (not the `parse` helper) because
+    /// stripping happens there. Real-world shape, from a Batect bundle: the
+    /// extension is aliased into a *second* extension, which is then merged
+    /// into a container — so it also proves the anchors are resolved before the
+    /// extension keys are dropped.
+    #[test]
+    fn top_level_extension_keys_are_ignored() {
+        let dir = unique_temp_dir();
+        let path = dir.join("batect-bundle.yml");
+        std::fs::write(
+            &path,
+            r#"
+.aws-environment: &aws-environment
+  AWS_REGION: eu-west-2
+
+.terraform-environment: &terraform-environment
+  <<: *aws-environment
+  COMPONENT: infra
+
+project_name: demo
+containers:
+  terraform:
+    image: alpine:3.18
+    environment:
+      <<: *terraform-environment
+      EXTRA: yes
+tasks: {}
+"#,
+        )
+        .unwrap();
+
+        let file =
+            parse_yaml_config_file(&path).expect("extensions should be ignored, not rejected");
+        let environment = file.containers["terraform"].environment.as_ref().unwrap();
+        assert_eq!(environment.get("AWS_REGION").unwrap(), "eu-west-2");
+        assert_eq!(environment.get("COMPONENT").unwrap(), "infra");
+        assert_eq!(environment.get("EXTRA").unwrap(), "yes");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Only *top-level* keys are extensions, matching kaml's own rule — a
+    /// `.`-prefixed key anywhere else is still an unknown field, so a typo
+    /// nested inside a container isn't silently swallowed.
+    #[test]
+    fn a_dot_prefixed_key_below_the_top_level_is_still_rejected() {
+        let dir = unique_temp_dir();
+        let path = dir.join("batect.yml");
+        std::fs::write(
+            &path,
+            "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    .oops: x\ntasks: {}\n",
+        )
+        .unwrap();
+        assert!(parse_yaml_config_file(&path).is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

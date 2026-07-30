@@ -21,6 +21,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Fixed
+
+- **YAML extensions (top-level `.`-prefixed keys) are now accepted**: a config that factors shared values out into a top-level key starting with `.` — holding a YAML anchor for the rest of the file to alias, which Batect ignores via kaml's `extensionDefinitionPrefix` — previously failed to load with `unknown field: .<name>`, since Ratect's own schema rejects unknown fields. These entries are now stripped before the schema sees the document, matching Batect. Anchors are resolved by the parser first, so an extension's content is already inlined everywhere it was aliased. Only *top-level* keys count, matching kaml, so a `.`-prefixed key nested anywhere else is still rejected as the typo it probably is. The committed `batect.yml` JSON schema admits them too, so an editor doesn't flag configuration Ratect accepts (`ratect.toml`'s schema deliberately doesn't — TOML has no anchors for an extension to hold). Found in a real-world Batect bundle that wouldn't load.
+
 ### Added
 
 - **`ratect completions <shell>`** (`ratect` only): prints a shell completion registration script (`bash`, `zsh`, `fish`, `powershell`, `elvish`) to stdout, to source from your shell's startup file (see the [`ratect` CLI reference](docs/ratect-cli.md#shell-completion)). Completes command and flag names, their fixed values (`-o fancy|simple|…`, `--cache-type volume|directory`), file paths, and — the useful part on a task runner — **task names**: `ratect run <TAB>` lists the tasks the config defines. Task completion honours an explicit `-f` and follows the config's `include`s (local files, and Git includes that are already cached), reading them dynamically at completion time and always without cloning, pulling, or touching Docker, so a `<TAB>` is instant and safe. The task-name part is built on clap's `unstable-dynamic` API. New `clap_complete` dependency (`ratect`-only).

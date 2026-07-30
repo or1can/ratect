@@ -1,0 +1,33 @@
+# Batect *extensions*: a top-level key starting with `.` is ignored by the
+# parser, existing only to hold a YAML anchor the rest of the file aliases
+# (Batect enables this via kaml's `extensionDefinitionPrefix = "."`). Real
+# Batect bundles use this to factor out shared environment blocks, so a config
+# in this shape has to load.
+#
+# Shaped after a real-world bundle: one extension is aliased into a *second*
+# extension, which is then merged into a container — proving the anchors
+# resolve before the extension keys are dropped. Also validated against the
+# committed JSON schema by `ratect-core`'s `schema` tests, which check every
+# fixture here, so it pins the schema's own tolerance of `.`-prefixed keys too.
+.shared-environment: &shared-environment
+  SHARED_VAR: shared-value
+
+.task-environment: &task-environment
+  <<: *shared-environment
+  TASK_VAR: task-value
+
+project_name: ratect-extensions-test
+
+containers:
+  build-env:
+    image: alpine:3.18.2
+    environment:
+      <<: *task-environment
+      EXTRA_VAR: extra-value
+
+tasks:
+  show-environment:
+    description: Print the merged environment
+    run:
+      container: build-env
+      command: sh -c 'echo "$SHARED_VAR $TASK_VAR $EXTRA_VAR"'

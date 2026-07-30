@@ -72,6 +72,21 @@ pub fn config_file_schema() -> serde_json::Value {
         )
         .into(),
     );
+    // Batect *extensions*: a top-level key starting with `.` holds an anchor
+    // for the rest of the file and is otherwise ignored (see
+    // `config::parse_yaml_config_file`). `additionalProperties: false` only
+    // applies to what neither `properties` nor `patternProperties` matched, so
+    // this admits them without loosening anything else — an editor must not
+    // flag configuration Ratect actually accepts.
+    object.insert(
+        "patternProperties".to_string(),
+        serde_json::json!({
+            "^\\.": {
+                "description": "An extension: ignored by Ratect, and used only to hold a YAML \
+                                anchor that the rest of the file aliases.",
+            },
+        }),
+    );
     json
 }
 
