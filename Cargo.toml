@@ -2,13 +2,16 @@
 members = ["ratect", "ratect-compat", "ratect-core", "dockerignore"]
 resolver = "2"
 
-# Carries the one still-unmerged change PR'd upstream: session providers on
-# `build_image`, so one BuildKit build path serves secrets/ssh *and* streams
-# build output — https://github.com/fussybeaver/bollard/pull/731. The branch is
-# based on bollard 0.22, which already includes the now-merged `ping_info`
-# (https://github.com/fussybeaver/bollard/pull/732, exposing the daemon's
-# advertised default builder). See ROADMAP.md's 0.12.0 entry. Cargo.lock pins the
-# exact fork commit, so builds stay reproducible. Remove once #731 lands in a
-# bollard release.
+# Carries two changes that have both now *merged* upstream but not yet shipped in
+# a release: session providers on `build_image`, so one BuildKit build path serves
+# secrets/ssh *and* streams build output
+# (https://github.com/fussybeaver/bollard/pull/731), and `ping_info`, exposing the
+# daemon's advertised default builder
+# (https://github.com/fussybeaver/bollard/pull/732). Both are on bollard's `master`
+# (0.22.0), whose latest crates.io release is still 0.21.0 — hence the patch. See
+# ROADMAP.md's 0.12.0 entry. Cargo.lock pins the exact commit, so builds stay
+# reproducible; the branch is kept (rather than tracking upstream `master`) so the
+# pin doesn't drag in unrelated post-merge work. Drop this patch entirely once
+# bollard 0.22 is published.
 [patch.crates-io]
 bollard = { git = "https://github.com/or1can/bollard.git", branch = "feat/build-image-session-providers" }
