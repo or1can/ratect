@@ -158,6 +158,16 @@ Batect's full flag list, from its [CLI reference](https://github.com/batect/bate
 Batect behavior not implemented in task execution, beyond what's covered by the field
 tables above:
 
+- **Cleanup on interrupt (Ctrl+C)**: **not implemented — a known gap.** Ratect has no
+  signal handling, so pressing Ctrl+C during a task kills Ratect immediately and leaves
+  behind every container the task had started, along with the task's network. Batect
+  traps `SIGINT` and treats it as a task failure, which runs its ordinary cleanup, so an
+  interrupted Batect run leaves nothing behind (unless `--no-cleanup-after-failure` is
+  set). Until this is closed, `ratect resources list` and `ratect resources clean` find
+  and remove what an interrupted run left — see the
+  [`ratect` CLI reference](ratect-cli.md#managing-resources) — or remove them with `docker rm`/
+  `docker network rm`. Note this applies to an interrupt only: a task that *fails*
+  normally, or succeeds, is cleaned up in both tools alike.
 - **Ownership labels**: every container and network Ratect creates carries
   `eu.orican.ratect.*` labels recording the project, task, run, and (for a
   container) which configured container it is and whether it was the task's own or
@@ -188,8 +198,16 @@ tables above:
   [Proxy environment variables](config-reference.md#proxy-environment-variables). The
   `localhost`-rewriting half of this only works on macOS/Windows (no automatic
   Docker-reachable hostname on Linux), and there's no Docker-version-gated hostname
-  fallback chain the way Batect has for very old Docker installs — both accepted gaps,
-  not worth chasing for any actively-maintained Docker daemon.
+  fallback chain the way Batect has for very old Docker installs. The fallback chain
+  stays an accepted gap — it isn't worth chasing for any actively-maintained Docker
+  daemon. The Linux half no longer is: a proxy pointing at `localhost` is currently
+  propagated into the container unchanged, where `localhost` means the container
+  itself, so it silently fails. Batect has the same gap (its own oldest open issue),
+  but Docker 20.10+ makes it fixable with `--add-host
+  host.docker.internal:host-gateway`, and that's scoped as a deliberate improvement
+  over Batect — see [ROADMAP.md](../ROADMAP.md#ratect-compat). Until then, set the
+  proxy variables to a host-reachable address yourself, or use `--no-proxy-vars` and
+  set them per container.
 
 ## What Ratect *does* support today
 
