@@ -927,18 +927,30 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     `behaviourAfterFailure`), and a second Ctrl+C stops the cleanup itself,
     where Batect switches to printing manual cleanup commands instead — Ratect
     just stops, since the ownership labels already make the leftovers findable
-    with `ratect resources`. Three things emerged on contact: the task's own
-    container needed its id recorded as it starts (`run_container` removes it
-    itself on every *other* path, and an interrupt is precisely when that future
-    is dropped before it can); the exit code is now **130** (128 + `SIGINT`)
-    rather than a generic `1`, since Batect's own `-1`/255-for-everything says
-    nothing about which failure it was; and arming the listener had to move out
-    of the synchronous `engine_settings` into each binary's async path, because
-    `tokio::spawn` panics outside a runtime and that function is deliberately
-    synchronous so the flag-mapping tests can call it directly. One residual
-    race, shared with Batect: a container created but not yet recorded is
-    dropped before cleanup can see it and survives — which is what the ownership
-    labels and `ratect resources` are for.
+    with `ratect resources`. Three things emerged on contact: the exit code is
+    now **130** (128 + `SIGINT`) rather than a generic `1`, since Batect's own
+    `-1`/255-for-everything says nothing about which failure it was; arming the
+    listener had to move out of the synchronous `engine_settings` into each
+    binary's async path, because `tokio::spawn` panics outside a runtime and
+    that function is deliberately synchronous so the flag-mapping tests can call
+    it directly; and **cleanup ownership had to be unified before this could be
+    made correct at all**. An interrupt is precisely when `run_container`'s
+    future is dropped before it can remove its own container, so the engine
+    needed to remove it too — which left the same two `--no-cleanup-*` flags
+    being read in two modules against two different notions of "failed".
+    Keeping those in step by hand produced a distinct bug in each of three
+    consecutive review rounds (a leaked container, a masked error, a
+    force-removed container the flag existed to preserve), so the split was
+    retired rather than corrected a fourth time: `run_container` now removes
+    nothing and signals a `created` channel the moment the container exists,
+    and the engine's cleanup stage owns every removal under one classification.
+    That is where Batect draws the line too — `CleanupStagePlanner` plans a
+    removal for every entry in `containersCreated`, with no special case for
+    the task's own container — and matching it also fixed a missing "Cleaning
+    up..." line on a task with no dependencies. One residual race, shared with
+    Batect: a container created but not yet recorded is dropped before cleanup
+    can see it and survives — which is what the ownership labels and
+    `ratect resources` are for.
   - **`build_ssh` full parity** — multiple named agents and, the practically
     important half, explicit private key files (`paths`) served with no running
     agent at all. The last known *feature* gap in the [Batect
