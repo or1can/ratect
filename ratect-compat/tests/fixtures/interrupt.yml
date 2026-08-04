@@ -1,0 +1,36 @@
+# Proves that interrupting a run (Ctrl+C) cleans up after itself rather than
+# leaving containers and the task's network behind — the behaviour ported from
+# Batect's `InterruptionTrap` in 0.25.0.
+#
+# Both containers run a long `sleep` deliberately: the test needs the run to
+# still be in progress when it sends the signal, so there has to be something
+# to interrupt. A task that finishes on its own would race the signal and prove
+# nothing either way.
+#
+# The dependency is what makes this more than a one-container test. A task's own
+# container is removed by `run_container` itself on every path except an
+# interrupt, whereas a dependency is only ever removed by the engine's cleanup
+# section — so having both proves the interrupt path reaches each of them, plus
+# the network they share.
+#
+# `project_name` is its own so the label filters in the test can't match a
+# concurrently-running test's containers.
+project_name: ratect-interrupt-test
+
+containers:
+  database:
+    image: alpine:3.18
+    # No health_check, so this counts as ready the moment it starts — the test
+    # is about interrupting a running task, not about readiness.
+    command: sleep 600
+
+  app:
+    image: alpine:3.18
+    dependencies:
+      - database
+
+tasks:
+  wait:
+    run:
+      container: app
+      command: sleep 600

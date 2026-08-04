@@ -15,7 +15,7 @@
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -902,6 +902,140 @@ fn sidecars_are_reachable_by_name_via_docker() {
 /// Runs against a fixture with a project name of its own: these tests run
 /// concurrently, and filtering by project label would otherwise match
 /// whatever another test using the same fixture had running at that moment.
+/// Interrupting a real run against a real daemon leaves nothing behind.
+///
+/// `ratect-core`'s own unit tests prove the engine's *decisions* against a fake
+/// runtime — that an interrupt abandons the run, that cleanup still happens,
+/// that `--no-cleanup-after-failure` suppresses it. What they can't prove is
+/// that a real `SIGINT`, delivered to a real process mid-run, actually reaches
+/// the handler and that the daemon ends up clean: the fake can't diverge from
+/// reality because it *is* the reality under test. This closes that gap.
+///
+/// Unix-only because it sends a signal. Ratect's own testing is Unix-only
+/// anyway (see `ratect-core/src/user.rs`), but this one is explicit about it
+/// since the mechanism, not just the environment, is what's unavailable.
+#[test]
+#[ignore]
+#[cfg(unix)]
+fn interrupting_a_run_cleans_up_via_docker() {
+    // `tests/fixtures/interrupt.yml` has a project name of its own so these
+    // filters can't match a concurrently-running test's containers.
+    let project_filter = "label=eu.orican.ratect.project=ratect-interrupt-test";
+
+    fn ids(kind: &str, filter: &str, all: bool) -> Vec<String> {
+        let mut arguments = vec![kind, "ls", "-q", "--filter", filter];
+        if all {
+            arguments.insert(2, "-a");
+        }
+        let output = Command::new("docker")
+            .args(&arguments)
+            .output()
+            .expect("failed to run docker ls");
+        assert!(output.status.success(), "docker {kind} ls failed");
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Polls until `condition` holds, or gives up. Every wait here is on a
+    /// real daemon doing real work (pulling, starting, stopping), so a fixed
+    /// sleep would be either flaky or needlessly slow.
+    fn wait_until(what: &str, timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if condition() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        eprintln!("timed out waiting for {what}");
+        false
+    }
+
+    let mut child = ratect_command()
+        .arg("-f")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/interrupt.yml"))
+        .arg("wait")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn ratect");
+
+    // Whatever happens below, this test must not leave the daemon full of its
+    // own containers — including when an assertion fails or the run never got
+    // as far as being interruptible.
+    let force_cleanup = || {
+        for id in ids("container", project_filter, true) {
+            let _ = Command::new("docker").args(["rm", "-fv", &id]).output();
+        }
+        for id in ids("network", project_filter, false) {
+            let _ = Command::new("docker").args(["network", "rm", &id]).output();
+        }
+    };
+
+    // Both containers running is the point at which there is genuinely
+    // something to clean up: the dependency *and* the task's own container.
+    // Generous, because a cold daemon may be pulling alpine first.
+    let started = wait_until("both containers to start", Duration::from_secs(120), || {
+        ids("container", project_filter, false).len() >= 2
+    });
+    if !started {
+        let _ = child.kill();
+        let _ = child.wait();
+        force_cleanup();
+        panic!("the run never reached two running containers, so nothing was interrupted");
+    }
+
+    let signalled = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("failed to run kill");
+    assert!(signalled.success(), "could not send SIGINT to ratect");
+
+    // `try_wait` rather than `wait`, so a regression that hangs the process
+    // fails this test instead of hanging CI until its own job timeout.
+    let mut status = None;
+    let exited = wait_until("ratect to exit", Duration::from_secs(120), || {
+        status = child.try_wait().expect("failed to poll ratect");
+        status.is_some()
+    });
+    if !exited {
+        let _ = child.kill();
+        let _ = child.wait();
+        force_cleanup();
+        panic!("ratect did not exit after SIGINT");
+    }
+    let status = status.expect("exited implies a status");
+
+    // Cleanup is synchronous before exit, so by here the daemon should already
+    // be clean — but stopping two containers is real work against a real
+    // daemon, so this is still polled rather than asserted outright.
+    let cleaned = wait_until(
+        "containers and network to go",
+        Duration::from_secs(60),
+        || {
+            ids("container", project_filter, true).is_empty()
+                && ids("network", project_filter, false).is_empty()
+        },
+    );
+
+    let leftover_containers = ids("container", project_filter, true);
+    let leftover_networks = ids("network", project_filter, false);
+    force_cleanup();
+
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "an interrupted run should exit 130 (128 + SIGINT), not a generic failure code"
+    );
+    assert!(
+        cleaned,
+        "an interrupted run must remove its containers and network; left behind \
+         containers {leftover_containers:?} and networks {leftover_networks:?}"
+    );
+}
+
 #[test]
 #[ignore]
 fn ownership_labels_reach_real_containers_and_networks_via_docker() {
