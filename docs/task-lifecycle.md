@@ -92,6 +92,7 @@ sequenceDiagram
     Main-->>Engine: runs to completion, logs streamed live to stdout
 
     Note over Engine: cleanup — runs even if the task's container failed,<br/>unless --no-cleanup* says otherwise
+    Engine->>Docker: stop_and_remove_container() for the task's own container
     Engine->>Docker: stop_and_remove_container() for each dependency
     Engine->>Docker: remove_network()
 ```

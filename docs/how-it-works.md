@@ -177,8 +177,10 @@ client, and implements `ContainerRuntime`:
   `HostConfig.extra_hosts` via the pure `build_extra_hosts`, and already-expanded
   port triples as `exposed_ports`/`port_bindings` via the pure `build_port_config`),
   joins it to the task's own network (with `additional_hostnames` as extra aliases
-  beyond its name), starts it, streams its output, then removes the container once
-  it exits.
+  beyond its name), starts it, and streams its output until it exits. It does *not*
+  remove the container: the engine's own cleanup stage removes everything a task
+  created, its own container included, so the `--no-cleanup-*` flags are honoured
+  in one place rather than two.
   `cmd` is `command` tokenized into literal argv via `tokenize_command_line` (a
   from-scratch port of Batect's own `Command.parse`) with `additional_args`
   appended, no shell involved at all — same for `Config.entrypoint`, from

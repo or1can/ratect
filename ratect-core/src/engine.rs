@@ -977,11 +977,10 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     /// included, and runs them concurrently with that container's own
     /// command (see docs/task-lifecycle.md's "Known simplifications").
     ///
-    /// `started` resolves with the container's id once `run_container` has
-    /// actually called Docker's own `start` — dropped without ever sending
-    /// (an `Err` here) if the container never got that far, in which case
-    /// there's nothing to wait on: `run_container`'s own `Err` already
-    /// reports that failure.
+    /// `container_id` must already be running: the caller waits for
+    /// `run_container`'s own `started` signal before calling here, since
+    /// both gates need a running container (a health status only appears
+    /// once one exists, and `docker exec` refuses anything else).
     ///
     /// One deliberate divergence from Batect, left for simplicity: Batect
     /// cancels the still-running main command early the moment this gate
@@ -992,24 +991,14 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     /// reported.
     async fn run_task_container_readiness(
         &self,
-        started: tokio::sync::oneshot::Receiver<String>,
-        started_id: &Mutex<Option<String>>,
+        container_id: &str,
         name: &str,
         container_config: &crate::config::Container,
         environment: Option<&HashMap<String, String>>,
         user_mapping: Option<&crate::docker::UserMapping>,
     ) -> Result<()> {
-        let Ok(container_id) = started.await else {
-            return Ok(());
-        };
-        // Recorded here rather than in `run_container` because this is the
-        // one place that already learns the id at the moment it exists —
-        // and an interrupt needs it to remove a container `run_container`
-        // will now never get to remove itself. See `run_task_internal`.
-        *started_id.lock().unwrap() = Some(container_id.clone());
-
         self.docker
-            .wait_for_container_healthy(&container_id)
+            .wait_for_container_healthy(container_id)
             .await
             .with_context(|| format!("Container '{}' did not become healthy", name))?;
         self.event_sink.post(TaskEvent::ContainerBecameHealthy {
@@ -1035,7 +1024,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 let _permit = self.acquire_parallelism_permit().await;
                 self.docker
                     .exec_in_container(
-                        &container_id,
+                        container_id,
                         &setup_command.command,
                         setup_command
                             .working_directory
@@ -1792,8 +1781,8 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             let volumes = self
                 .resolve_volumes(container_config.volumes.as_ref())
                 .await?;
+            let (created_tx, created_rx) = tokio::sync::oneshot::channel();
             let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-            let (readiness_done_tx, readiness_done_rx) = tokio::sync::oneshot::channel();
             let run_future = self.docker.run_container(
                 &run.container,
                 &image,
@@ -1807,32 +1796,45 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 &network_options,
                 health_check.as_ref(),
                 &container_options,
-                self.cleanup_after_success,
-                self.cleanup_after_failure,
+                Some(created_tx),
                 Some(started_tx),
-                Some(readiness_done_rx),
             );
-            // `run_container` itself awaits `readiness_done_rx` (sent here)
-            // before removing the container — see its own doc comment for
-            // why that ordering matters. `tokio::join!` below is what
-            // actually drives this future concurrently with `run_future`;
-            // without something polling it, `readiness_done_rx` would never
-            // resolve.
+            // Two jobs, in order: take ownership of the container as soon as
+            // it exists, then gate on its readiness once it's actually
+            // running. `tokio::join!` below is what drives this concurrently
+            // with `run_future` — without something polling it, neither
+            // channel would ever resolve.
             let readiness_future = async {
-                let result = self
-                    .run_task_container_readiness(
-                        started_rx,
-                        &task_container_id,
-                        &run.container,
-                        container_config,
-                        environment.as_ref(),
-                        user_mapping.as_ref(),
-                    )
-                    .await;
-                let _ = readiness_done_tx.send(result);
+                // A dropped sender means `run_container` failed before
+                // getting this far; its own error is the report, and there
+                // is nothing of ours to record or wait on.
+                let Ok(container_id) = created_rx.await else {
+                    return Ok(());
+                };
+                // Recorded before the container is even started, matching
+                // Batect's `containersCreated` (the set its cleanup stage
+                // plans removals from) rather than `containersStarted`. A
+                // container that fails to start still has to be removed.
+                *task_container_id.lock().unwrap() = Some(container_id.clone());
+                if started_rx.await.is_err() {
+                    return Ok(());
+                }
+                self.run_task_container_readiness(
+                    &container_id,
+                    &run.container,
+                    container_config,
+                    environment.as_ref(),
+                    user_mapping.as_ref(),
+                )
+                .await
             };
-            let (run_result, ()) = tokio::join!(run_future, readiness_future);
+            let (run_result, readiness_result) = tokio::join!(run_future, readiness_future);
+            // Ordered, not merged: a nonzero exit code is the task's own
+            // verdict and the more useful thing to report, so it wins over a
+            // readiness failure that happened alongside it. This is the
+            // precedence `run_container` used to apply internally, kept.
             run_result?;
+            readiness_result?;
 
             Ok(())
         };
@@ -1934,16 +1936,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     "Interrupted; cleaning up. Press Ctrl+C again to stop cleaning up."
                 );
             }
-            // The task's own container is only ours to remove on an
-            // interrupt (see below) — but when it is, that *is* cleanup, and
-            // the guard has to say so. `simple` renders nothing else for the
-            // cleanup stage (it drops `ContainerRemoved` outright), so
-            // without this an interrupted single-container run under
-            // `--use-network` removed a container in silence: neither of the
-            // other two conditions holds there. Deliberately the same shape
-            // as the `else` branch's own guard below.
-            let cleaning_task_container = interrupted && task_container_id.is_some();
-            if !running_sidecars.is_empty() || owns_network || cleaning_task_container {
+            if !running_sidecars.is_empty() || owns_network || task_container_id.is_some() {
                 self.event_sink.post(TaskEvent::CleanupStarting);
             }
             // Every removal below is raced against the next interrupt rather
@@ -1959,14 +1952,13 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             // reported as possibly left behind, which is the honest reading.
             let mut abandoned = false;
 
-            // Only on an interrupt, which is now genuinely the only path where
-            // `run_container` hasn't already removed the task's own container:
-            // it used to `?`-propagate an attach/stream failure before
-            // reaching its own removal, leaking the container, and that is
-            // fixed at source in `docker.rs` rather than covered up here.
-            // Asking Docker to remove it twice would report a spurious
-            // failure.
-            if let Some(container_id) = task_container_id.as_ref().filter(|_| interrupted) {
+            // First, and unconditionally: `run_container` never removes the
+            // container it creates, so this is the only place the task's own
+            // container is removed — however the run ended. `Some` exactly
+            // when Docker got as far as creating one, which is also the only
+            // case where there is anything to remove. Before the sidecars it
+            // depends on, matching Batect's own dependency-ordered cleanup.
+            if let Some(container_id) = task_container_id.as_ref() {
                 let removal = async {
                     match self.docker.stop_and_remove_container(container_id).await {
                         Ok(()) => self.event_sink.post(TaskEvent::ContainerRemoved {
@@ -2035,18 +2027,14 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 );
             }
         } else {
-            // The task's own container counts here too, and only on an
-            // interrupt — otherwise `run_container` has already dealt with
-            // it (removing it, or honouring `--no-cleanup-after-success` by
-            // leaving it and saying so itself). Without it in the guard, an
-            // interrupted single-container task under `--use-network` left a
-            // container running and reported nothing at all, since neither
-            // of the other two conditions held.
-            let abandoned_task_container = interrupted && task_container_id.is_some();
-            if !running_sidecars.is_empty() || owns_network || abandoned_task_container {
+            // The task's own container is reported here like any other:
+            // nothing else deals with it now, so a run kept for
+            // investigation says so once, for everything it kept.
+            let kept_task_container = task_container_id.as_ref().map(|_| run.container.as_str());
+            if !running_sidecars.is_empty() || owns_network || kept_task_container.is_some() {
                 tracing::info!(
                     task = task_name,
-                    task_container = abandoned_task_container.then_some(run.container.as_str()),
+                    task_container = kept_task_container,
                     dependencies = running_sidecars.len(),
                     network = network_name.as_deref(),
                     "cleanup disabled; leaving containers and the task network in place \
@@ -3145,10 +3133,8 @@ mod tests {
             network_options: &crate::docker::NetworkOptions,
             health_check: Option<&crate::docker::HealthCheckOptions>,
             container_options: &crate::docker::ContainerOptions,
-            remove_on_exit: bool,
-            remove_on_failure: bool,
-            started: Option<tokio::sync::oneshot::Sender<String>>,
-            readiness: Option<tokio::sync::oneshot::Receiver<Result<()>>>,
+            created: Option<tokio::sync::oneshot::Sender<String>>,
+            started: Option<tokio::sync::oneshot::Sender<()>>,
         ) -> Result<()> {
             self.environments
                 .lock()
@@ -3201,37 +3187,28 @@ mod tests {
                 additional_args.join(","),
                 network
             ));
-            self.push(format!("remove_on_exit:{name}:{remove_on_exit}"));
-            self.push(format!("remove_on_failure:{name}:{remove_on_failure}"));
-            // Sent as soon as the (simulated) container has "started" — same
-            // id convention `start_background_container` uses, so
+            // Same id convention `start_background_container` uses, so
             // `with_unhealthy_container`/exec-based assertions work
             // identically whether `name` is a dependency or the task's own
-            // container. Fired before `run_delays`' own sleep (if any), so a
-            // concurrent readiness task genuinely overlaps with this call
-            // still being in flight, the same way it would against a real,
-            // still-running container.
+            // container — and so the engine's cleanup of it shows up as the
+            // same `sidecar-stop:sidecar-id-{name}` event, which is what the
+            // cleanup-flag tests assert on. Both fired before `run_delays`'
+            // own sleep (if any), so a concurrent readiness task genuinely
+            // overlaps with this call still being in flight, the same way it
+            // would against a real, still-running container.
+            if let Some(created) = created {
+                let _ = created.send(format!("sidecar-id-{name}"));
+            }
             if let Some(started) = started {
-                let _ = started.send(format!("sidecar-id-{name}"));
+                let _ = started.send(());
             }
             let delay = self.run_delays.lock().unwrap().get(name).copied();
             if let Some(delay) = delay {
                 tokio::time::sleep(delay).await;
             }
-            // Awaited *before* the fail_run check — same "removal (here,
-            // simulated by resolving this call) waits for readiness first"
-            // ordering the real `DockerClient::run_container` now applies,
-            // so a test exercising both a failing setup command and a fast
-            // `run_container` still observes the setup-command failure
-            // rather than racing past it.
-            let readiness_result = match readiness {
-                Some(readiness) => readiness.await.unwrap_or(Ok(())),
-                None => Ok(()),
-            };
             if *self.fail_run.lock().unwrap() {
                 return Err(crate::docker::ContainerExitedNonZero { exit_code: 1 }.into());
             }
-            readiness_result?;
             Ok(())
         }
     }
@@ -5597,6 +5574,86 @@ mod tests {
         );
     }
 
+    /// A readiness-gate failure on the task's own container is an
+    /// *infrastructure* failure, not the container's own verdict — so
+    /// `--no-cleanup-after-failure` keeps it, exactly as it keeps that run's
+    /// sidecars and network. This is only assertable now that the engine
+    /// owns the removal; while `run_container` removed its own container it
+    /// classified the same error as a completed run and force-removed the
+    /// one container the flag existed to preserve.
+    #[tokio::test]
+    async fn a_readiness_failure_on_the_tasks_own_container_honours_no_cleanup_after_failure() {
+        let config = config_with_failing_task_container_setup_command();
+        let docker = FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh");
+        let engine = TaskEngine::new(config, docker.clone()).without_cleanup_after_failure();
+
+        engine.run_task("start", &[]).await.unwrap_err();
+
+        let events = docker.events();
+        assert!(
+            !events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+            "the task's own container must be left for investigation: {events:?}"
+        );
+    }
+
+    /// The other side of the same coin — with the flag left alone, that
+    /// container is cleaned up like anything else.
+    #[tokio::test]
+    async fn a_readiness_failure_on_the_tasks_own_container_still_removes_it_by_default() {
+        let config = config_with_failing_task_container_setup_command();
+        let docker = FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh");
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("start", &[]).await.unwrap_err();
+
+        let events = docker.events();
+        assert!(
+            events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+            "the task's own container should be removed: {events:?}"
+        );
+    }
+
+    /// `--no-cleanup-after-success` must *not* apply to a readiness failure:
+    /// it is the flag for keeping a container whose command ran, and this
+    /// container's didn't get that far. Pins the two flags apart from each
+    /// other on the same scenario as the two tests above.
+    #[tokio::test]
+    async fn a_readiness_failure_is_unaffected_by_no_cleanup_after_success() {
+        let config = config_with_failing_task_container_setup_command();
+        let docker = FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh");
+        let engine = TaskEngine::new(config, docker.clone()).without_cleanup_after_success();
+
+        engine.run_task("start", &[]).await.unwrap_err();
+
+        let events = docker.events();
+        assert!(
+            events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+            "the task's own container should still be removed: {events:?}"
+        );
+    }
+
+    /// One task container whose own `setup_commands` entry fails — the
+    /// shared fixture for the three cleanup-policy tests above, which differ
+    /// only in which flag they set.
+    fn config_with_failing_task_container_setup_command() -> Config {
+        let mut containers = HashMap::new();
+        let mut app = container("alpine:3.18", None);
+        app.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./migrate.sh".to_string(),
+            working_directory: None,
+        }]);
+        containers.insert("app".to_string(), app);
+        let mut tasks = HashMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        }
+    }
+
     #[tokio::test]
     async fn task_containers_own_setup_commands_run_concurrently_with_its_main_command() {
         // Proves the concurrency itself, not just that setup commands run
@@ -5700,15 +5757,8 @@ mod tests {
             "network should be left in place when cleanup-after-success is disabled: {events:?}"
         );
         assert!(
-            events.contains(&"remove_on_exit:app:false".to_string()),
-            "the main container itself must not be removed either: {events:?}"
-        );
-        // Asserted alongside its neighbour deliberately: the two are
-        // adjacent `bool` parameters, so nothing but pinning both apart
-        // catches them being passed the wrong way round.
-        assert!(
-            events.contains(&"remove_on_failure:app:true".to_string()),
-            "the other half of the policy is untouched by this flag: {events:?}"
+            !events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+            "the task's own container must not be removed either: {events:?}"
         );
     }
 
@@ -5790,15 +5840,8 @@ mod tests {
              removed: {events:?}"
         );
         assert!(
-            events.contains(&"remove_on_exit:app:true".to_string()),
-            "the main container should still be removed too: {events:?}"
-        );
-        // The half this flag *does* govern — see the matching assertion in
-        // `without_cleanup_after_success_leaves_everything_in_place_on_a_nonzero_exit`
-        // for why both are pinned.
-        assert!(
-            events.contains(&"remove_on_failure:app:false".to_string()),
-            "an infrastructure failure must leave the main container in place: {events:?}"
+            events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+            "the task's own container should still be removed too: {events:?}"
         );
     }
 
@@ -8674,6 +8717,13 @@ mod tests {
                 container: "build-env".into(),
             },
             TaskEvent::CleanupStarting,
+            // The task's own container is removed by the engine like any
+            // other, and first — before the dependencies it was using.
+            // `run_container` used to remove it silently, which is why this
+            // event didn't exist here before.
+            TaskEvent::ContainerRemoved {
+                container: "build-env".into(),
+            },
             TaskEvent::ContainerRemoved {
                 container: "database".into(),
             },

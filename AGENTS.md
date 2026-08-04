@@ -209,11 +209,15 @@ Ratect is a **Cargo workspace** with four crates (the
     paths (`run_container_interactively`/`run_container_forwarding_stdin`/
     `start_and_stream_logs`) each call Docker's own `start` at a different point
     relative to attaching (the TTY path attaches *before* starting, deliberately, so
-    no early output is missed) — `run_container`'s own `started` parameter (0.21.0,
-    a `oneshot::Sender<String>`) is threaded into all three so each can signal it
-    right after its own `start` call succeeds, regardless of which path actually
-    ran, letting `engine.rs`'s concurrent readiness gate begin at the right moment
-    however the container ends up attached; the interactive path's `RawModeGuard`
+    no early output is missed) — `run_container`'s own `started` parameter (0.21.0)
+    is threaded into all three so each can signal it right after its own `start`
+    call succeeds, regardless of which path actually ran, letting `engine.rs`'s
+    concurrent readiness gate begin at the right moment however the container ends
+    up attached; **`run_container` never removes the container it creates** —
+    `engine.rs`'s cleanup stage removes everything, the task's own container
+    included, so `--no-cleanup-after-success`/`-failure` are read in exactly one
+    place (0.25.0, see `engine.rs`'s own note and `run_container`'s doc comment for
+    why the split was retired rather than corrected again); the interactive path's `RawModeGuard`
     restores the terminal on `Drop`, even on an error return; since Ratect has no `--output`
     streaming mode, a failed build's full log transcript (not just Docker's one-line
     summary) is folded into the returned error instead; `command`/`entrypoint`/
@@ -331,14 +335,20 @@ Ratect is a **Cargo workspace** with four crates (the
     `ContainerRuntime::run_container`'s own attach-and-wait-for-exit via
     `tokio::join!` (the engine's first concurrent-exec path), rather than gating
     anything on it, since nothing else in the graph depends on the task container's
-    own readiness. `run_container` gained two `oneshot` channel parameters for this:
-    `started` (signaled with the container's id right after Docker's own `start`
-    call, letting the readiness gate begin) and `readiness` (which `run_container`
-    itself awaits for the readiness gate's own outcome *before* removing the
-    container — without that ordering, a fast-exiting main command would routinely
-    race the still-in-flight readiness gate against the container's own removal,
-    since a dependency's own version of this never has to, having no main command of
-    its own to race against). See [task
+    own readiness. `run_container` takes two `oneshot::Sender`s for this:
+    `created` (the container's id, sent the moment `create_container` returns —
+    *before* it's started, matching Batect's own `containersCreated` set, which is
+    what its `CleanupStagePlanner` plans removals from) and `started` (a bare `()`,
+    right after Docker's own `start` call, which is when the readiness gate may
+    begin — both its health inspect and its `docker exec` need a *running*
+    container). `created` firing that early is what lets `run_container` `?` freely
+    on every subsequent line: from that instant the engine can remove the
+    container, so no failure can strand it. This replaced (0.25.0) a scheme where
+    `run_container` removed its own container and took a third `readiness` channel
+    purely to order that removal after the gate; the cleanup flags then had to be
+    interpreted identically in two modules, and keeping them in step by hand
+    produced a distinct bug in each of three consecutive review rounds. Don't
+    reintroduce a removal here. See [task
     lifecycle](docs/task-lifecycle.md#known-simplifications-relative-to-batect) for
     the one race this still shares with Batect (a near-instant main command with no
     `health_check` can still race past a `setup_commands` entry's own `docker exec`)

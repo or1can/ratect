@@ -285,20 +285,6 @@ fn remove_container_options() -> bollard::query_parameters::RemoveContainerOptio
         .build()
 }
 
-/// Whether a finished `run_container` call lands in the "success" cleanup
-/// bucket — the container ran to completion and reported an exit code,
-/// whatever that code was — as opposed to the infrastructure-failure one.
-///
-/// This has to agree with `engine.rs`'s own classification of the same
-/// call's return value, since that is what governs the same run's sidecars
-/// and network; see `run_container`'s `remove_on_failure` docs for what
-/// disagreeing costs. Split out as a plain function purely so that rule can
-/// be tested at all: the removal it governs sits mid-way through
-/// `run_container`, which needs a live daemon to reach.
-fn ran_to_completion(exit_code: &Result<i64>, readiness: &Result<()>) -> bool {
-    exit_code.is_ok() && readiness.is_ok()
-}
-
 /// wins, same as building any other `HashMap` from a list — Docker itself
 /// would reject a container with a genuinely duplicate mount point anyway.
 fn build_tmpfs_mounts(tmpfs: Option<&Vec<(String, String)>>) -> Option<HashMap<String, String>> {
@@ -1345,48 +1331,35 @@ pub trait ContainerRuntime {
     /// this. The container's Docker `hostname` is always set to `name`
     /// (matching Batect), independent of `network_options`.
     ///
-    /// `remove_on_exit` is `--no-cleanup`/`--no-cleanup-after-success`'s own
-    /// policy (see `TaskEngine::cleanup_after_success`): `false` leaves the
-    /// exited container behind (never removed) regardless of its exit code
-    /// — a nonzero exit is still "success" for cleanup-gating purposes,
-    /// matching Batect.
+    /// **This never removes the container it creates.** Everything Ratect
+    /// creates is removed by `engine.rs`'s own cleanup stage, under one
+    /// reading of `--no-cleanup-after-success`/`--no-cleanup-after-failure`
+    /// — the task's own container included, exactly like its sidecars and
+    /// network. It used to remove its own, which meant the same two flags
+    /// were interpreted in two places against two different notions of what
+    /// "failed" means; keeping those in step by hand produced a bug in each
+    /// of three consecutive review rounds, so the split is gone rather than
+    /// corrected again. Batect draws the line in the same place: its
+    /// `CleanupStagePlanner` generates a `RemoveContainerStep` for every
+    /// entry in `containersCreated`, with no special case for the task's.
     ///
-    /// `remove_on_failure` is the other half (`TaskEngine::cleanup_after_failure`),
-    /// and applies when the container ran but this function couldn't see it
-    /// through — an attach or log-stream failure, where no exit code is ever
-    /// reported, or a `readiness` gate failure (below). Attach failures used
-    /// to return before any removal, so the flag had nothing to govern; now
-    /// that the error is carried past the removal (so the container isn't
-    /// stranded), the two policies have to be told apart here rather than
-    /// collapsed into `remove_on_exit`. The split has to land on exactly the
-    /// same line `engine.rs` draws when gating the same run's sidecars and
-    /// network, or this force-removes the very container
-    /// `--no-cleanup-after-failure` exists to preserve while the rest of the
-    /// scene is kept — half a preserved scene is worse than none.
+    /// `created`, given, is signaled with the container's own id the moment
+    /// Docker's `create_container` returns — before it is started, and
+    /// before anything else here can fail. That is what makes the paragraph
+    /// above safe: past that point the caller can always remove it, so a
+    /// failure here can propagate immediately instead of having to be
+    /// carried past a removal. `None` for a dependency/sidecar
+    /// (`start_background_container` returns its id directly).
     ///
-    /// `started`, given, is signaled with the container's own id right after
-    /// Docker's own `start` call succeeds — never sent at all if the
-    /// container never gets that far (e.g. `create_container` itself
-    /// failing). Lets `engine.rs` run the task's own container's readiness
-    /// gate (health-check wait, then `setup_commands`, via
-    /// `wait_for_container_healthy`/`exec_in_container`) concurrently with
-    /// this call's own attach-and-wait-for-exit — matching Batect, which
-    /// runs every container (task container included) through the same
-    /// per-container steps, concurrently with that container's own command.
-    /// `None` for a dependency/sidecar (`start_background_container`
-    /// already returns its id immediately, with no attach/wait to run
-    /// concurrently against).
-    ///
-    /// `readiness`, given, is awaited for that same readiness gate's own
-    /// outcome *before* this call removes the container — its `Err` fails
-    /// this call overall, and counts as `remove_on_failure`'s bucket rather
-    /// than `remove_on_exit`'s (unlike a nonzero exit code, which is the
-    /// container's own verdict on a container that did run). Without this, a
-    /// fast-exiting main command would routinely race the still-in-flight
-    /// readiness gate against this container's own removal (unlike a
-    /// dependency, which stays running for the whole task and never hits
-    /// this). `None` skips the wait entirely (matches `started` being
-    /// `None` too, in practice — always given together).
+    /// `started`, given, is signaled right after Docker's own `start` call
+    /// succeeds — never sent at all if the container never gets that far.
+    /// Lets `engine.rs` run the task container's readiness gate (health-check
+    /// wait, then `setup_commands`, via `wait_for_container_healthy`/
+    /// `exec_in_container`) concurrently with this call's own
+    /// attach-and-wait-for-exit — matching Batect, which runs every container
+    /// (task container included) through the same per-container steps,
+    /// concurrently with that container's own command. Carries no id, unlike
+    /// `created`: by the time it fires the caller already has one.
     #[allow(clippy::too_many_arguments)]
     async fn run_container(
         &self,
@@ -1402,10 +1375,8 @@ pub trait ContainerRuntime {
         network_options: &NetworkOptions,
         health_check: Option<&HealthCheckOptions>,
         container_options: &ContainerOptions,
-        remove_on_exit: bool,
-        remove_on_failure: bool,
-        started: Option<tokio::sync::oneshot::Sender<String>>,
-        readiness: Option<tokio::sync::oneshot::Receiver<Result<()>>>,
+        created: Option<tokio::sync::oneshot::Sender<String>>,
+        started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<()>;
 
     /// Lists every Docker volume's name on the daemon — used by
@@ -2134,7 +2105,7 @@ impl DockerClient {
     async fn run_container_interactively(
         &self,
         container_id: &str,
-        started: Option<tokio::sync::oneshot::Sender<String>>,
+        started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<i64> {
         let attach_options = AttachContainerOptionsBuilder::default()
             .stdin(true)
@@ -2159,7 +2130,7 @@ impl DockerClient {
             .context("Failed to start container")?;
         tracing::debug!(container_id, "started container interactively");
         if let Some(started) = started {
-            let _ = started.send(container_id.to_string());
+            let _ = started.send(());
         }
 
         // Syncs the container's TTY to the local terminal's size once, at
@@ -2219,12 +2190,12 @@ impl DockerClient {
         &self,
         container_name: &str,
         container_id: &str,
-        started: Option<tokio::sync::oneshot::Sender<String>>,
+        started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<i64> {
         self.docker.start_container(container_id, None).await?;
         tracing::debug!(container_id, "started container");
         if let Some(started) = started {
-            let _ = started.send(container_id.to_string());
+            let _ = started.send(());
         }
 
         if self.event_sink.container_io_streaming() == ContainerIoStreaming::Interleaved {
@@ -2273,7 +2244,7 @@ impl DockerClient {
         &self,
         container_name: &str,
         container_id: &str,
-        started: Option<tokio::sync::oneshot::Sender<String>>,
+        started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<i64> {
         let attach_options = AttachContainerOptionsBuilder::default()
             .stdin(true)
@@ -2911,10 +2882,8 @@ impl ContainerRuntime for DockerClient {
         network_options: &NetworkOptions,
         health_check: Option<&HealthCheckOptions>,
         container_options: &ContainerOptions,
-        remove_on_exit: bool,
-        remove_on_failure: bool,
-        started: Option<tokio::sync::oneshot::Sender<String>>,
-        readiness: Option<tokio::sync::oneshot::Receiver<Result<()>>>,
+        created: Option<tokio::sync::oneshot::Sender<String>>,
+        started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<()> {
         // Independently re-enforces the same policy `engine.rs` already
         // gated `interactive` on before calling here — see
@@ -2991,6 +2960,13 @@ impl ContainerRuntime for DockerClient {
 
         let container = self.docker.create_container(None, config).await?;
         tracing::debug!(container_id = %container.id, image, "created container");
+        // Handed over the moment the container exists — before it is started,
+        // and before anything below can fail. From here the caller owns
+        // removing it, so every `?` in the rest of this function is safe: the
+        // container has an owner whatever happens next.
+        if let Some(created) = created {
+            let _ = created.send(container.id.clone());
+        }
 
         if let Some(mapping) = user_mapping {
             self.apply_user_mapping(&container.id, mapping).await?;
@@ -3004,12 +2980,6 @@ impl ContainerRuntime for DockerClient {
         )
         .await?;
 
-        // Deliberately *not* `?`-propagated here: the container exists and is
-        // running by this point (each path signals `started` before it can
-        // fail), so returning early would leave it behind — a leak with no
-        // owner, since the engine's own cleanup reasonably assumes this
-        // function removes the container it created. The error is carried
-        // past the removal below and propagated after it instead.
         let exit_code = if use_tty {
             self.run_container_interactively(&container.id, started)
                 .await
@@ -3021,78 +2991,11 @@ impl ContainerRuntime for DockerClient {
                 .await
         };
 
-        // Awaited *before* removal — otherwise a fast-exiting main command
-        // (a common case, unlike a dependency's usually long-running one)
-        // would frequently race the still-in-flight readiness gate's own
-        // `docker exec`/health inspect against this container's removal,
-        // turning what should be a clean "setup command failed" report into
-        // a confusing "container is not running" one instead. `None` (no
-        // readiness receiver, e.g. no caller-supplied `started` either)
-        // behaves exactly as before this existed.
-        let readiness_result = match readiness {
-            Some(readiness) => readiness.await.unwrap_or(Ok(())),
-            None => Ok(()),
-        };
-
-        // `None` when the container never reported one, which now reaches
-        // here rather than returning early — see the comment above.
-        let reported_exit_code = exit_code.as_ref().ok().copied();
-        // Which policy applies depends on how the run ended, not on which
-        // flag happened to be threaded here — see the doc comment. The
-        // buckets must match `engine.rs`'s own classification of this
-        // call's return value exactly, since that is what governs the same
-        // run's sidecars and network: a container that ran to completion is
-        // "success" whatever its exit code, and anything else — an attach
-        // failure here, or a readiness-gate failure carried in from the
-        // concurrent task — is "failure". Putting a readiness failure in
-        // the success bucket force-removed the one container
-        // `--no-cleanup-after-failure` was preserving the rest of the scene
-        // for.
-        let ran_to_completion = ran_to_completion(&exit_code, &readiness_result);
-        let remove = if ran_to_completion {
-            remove_on_exit
-        } else {
-            remove_on_failure
-        };
-        if remove {
-            let removed = self
-                .docker
-                .remove_container(&container.id, Some(remove_container_options()))
-                .await;
-            match removed {
-                Ok(()) => tracing::debug!(
-                    container_id = %container.id,
-                    exit_code = ?reported_exit_code,
-                    "removed container"
-                ),
-                // A failure to remove must not mask the reason we are here.
-                // With an attach/stream or readiness error already in hand,
-                // that is the root cause and this is a consequence of it —
-                // reporting the removal instead would hand back the least
-                // useful of the two. Before the error was deferred past this
-                // block it couldn't arise: the attach error returned first.
-                Err(error) if !ran_to_completion => tracing::warn!(
-                    container_id = %container.id,
-                    ?error,
-                    "failed to remove container after the run itself failed"
-                ),
-                Err(error) => return Err(error.into()),
-            }
-        } else {
-            tracing::info!(
-                container_id = %container.id,
-                exit_code = ?reported_exit_code,
-                "cleanup disabled; leaving container in place for investigation"
-            );
-        }
-
-        // Only now — the container is gone (or deliberately kept), so an
-        // attach/stream failure can no longer strand it.
         let exit_code = exit_code?;
+        tracing::debug!(container_id = %container.id, exit_code, "container exited");
         if exit_code != 0 {
             return Err(ContainerExitedNonZero { exit_code }.into());
         }
-        readiness_result?;
 
         Ok(())
     }
@@ -3404,37 +3307,6 @@ mod tests {
         let options = HashMap::from([("max-size".to_string(), "10m".to_string())]);
 
         assert_eq!(build_log_config(None, Some(&options)), None);
-    }
-
-    /// A container that ran and reported an exit code is "success" for
-    /// cleanup purposes whatever that code was — `--no-cleanup` (not
-    /// `--no-cleanup-after-failure`) is what keeps a failed build's
-    /// container around to poke at.
-    #[test]
-    fn a_nonzero_exit_code_still_counts_as_running_to_completion() {
-        assert!(ran_to_completion(&Ok(1), &Ok(())));
-    }
-
-    #[test]
-    fn an_attach_failure_does_not_count_as_running_to_completion() {
-        assert!(!ran_to_completion(
-            &Err(anyhow::anyhow!("attach failed")),
-            &Ok(())
-        ));
-    }
-
-    /// The readiness gate runs concurrently with the container's own
-    /// command, so it can fail while the command itself exits cleanly.
-    /// That is an infrastructure failure — `engine.rs` puts it in the
-    /// failure bucket when gating this run's sidecars and network, and
-    /// this must agree or `--no-cleanup-after-failure` preserves those
-    /// while force-removing the container they exist to give context to.
-    #[test]
-    fn a_readiness_failure_does_not_count_as_running_to_completion() {
-        assert!(!ran_to_completion(
-            &Ok(0),
-            &Err(anyhow::anyhow!("setup command failed"))
-        ));
     }
 
     #[test]
