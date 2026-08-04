@@ -1839,13 +1839,6 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             .as_ref()
             .err()
             .is_some_and(|error| error.is::<crate::interrupt::TaskInterrupted>());
-        if interrupted {
-            tracing::warn!(
-                task = task_name,
-                "Interrupted; cleaning up. Press Ctrl+C again to stop cleaning up."
-            );
-        }
-
         let task_container_id = task_container_id.into_inner().unwrap();
         let running_sidecars = running_sidecars.into_inner().unwrap();
         // `Some` only if network resolution inside the block above actually
@@ -1874,22 +1867,35 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             self.cleanup_after_failure
         };
 
-        // A second Ctrl+C abandons cleanup itself. Cleanup talks to the
-        // daemon and isn't instant — a container ignoring `SIGTERM` waits
-        // out Docker's full kill timeout — so "stop now" has to mean
-        // something once the user has already asked once. Batect lands in
-        // the same place: a second interrupt during its cleanup stage
-        // switches it to `PostTaskManualCleanup.Required`. What's left
-        // behind is findable by its ownership labels, which is what
-        // `ratect resources` exists for, so this abandons rather than
-        // enumerating removal commands the way Batect does.
+        // A Ctrl+C during cleanup abandons the cleanup itself. Cleanup talks
+        // to the daemon and isn't instant — a container ignoring `SIGTERM`
+        // waits out Docker's full kill timeout — so "stop now" has to mean
+        // something. Batect lands in the same place: an interrupt during its
+        // cleanup stage switches it to `PostTaskManualCleanup.Required`.
+        //
+        // Measured against the count when cleanup *started*, not a fixed
+        // `>= 2`. Arming the handler replaces the process's default `SIGINT`
+        // behaviour for the whole run, so an interrupt Ratect doesn't act on
+        // is one it has silently swallowed — and a fixed threshold swallows
+        // the first Ctrl+C during the cleanup of a run that was never
+        // interrupted (the common case: a task finished, cleanup is slow,
+        // the user wants out). Relative to the baseline, one press abandons
+        // cleanup after a normal run and a second does after an interrupted
+        // one, which is the same rule stated once.
+        let interrupts_before_cleanup = self.interrupt.as_ref().map_or(0, |i| i.count());
         let cleanup_abandoned = || {
             self.interrupt
                 .as_ref()
-                .is_some_and(|interrupt| interrupt.count() >= 2)
+                .is_some_and(|interrupt| interrupt.count() > interrupts_before_cleanup)
         };
 
         if should_cleanup {
+            if interrupted {
+                tracing::warn!(
+                    task = task_name,
+                    "Interrupted; cleaning up. Press Ctrl+C again to stop cleaning up."
+                );
+            }
             if !running_sidecars.is_empty() || owns_network {
                 self.event_sink.post(TaskEvent::CleanupStarting);
             }
@@ -1938,10 +1944,17 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 }
             }
             if cleanup_abandoned() {
+                // Names the label rather than a command: this is shared core,
+                // and `resources` is a `ratect` verb that `ratect-compat`
+                // doesn't have — so naming it would be wrong advice for half
+                // the binaries that reach this line. The label works for both,
+                // and is what `resources` itself searches on.
                 tracing::warn!(
                     task = task_name,
-                    "Interrupted again; stopped cleaning up. Anything left behind carries this \
-                     run's ownership labels — `ratect resources list` will find it."
+                    run = run_id.as_str(),
+                    "Stopped cleaning up. Anything left behind carries the label \
+                     eu.orican.ratect.run with this run's id — `docker ps -a --filter \
+                     label=eu.orican.ratect.run=<run>` lists it."
                 );
             }
         } else if !running_sidecars.is_empty() || owns_network {
@@ -2411,6 +2424,12 @@ mod tests {
         // overlaps with the still-in-flight run rather than happening
         // strictly before or after it (see `with_run_delay`).
         run_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
+        /// When set, every `stop_and_remove_container` records an interrupt
+        /// *before* doing its own work — the only way to land one in the
+        /// middle of cleanup deterministically, since cleanup against this
+        /// fake is otherwise instant. See
+        /// `an_interrupt_during_cleanup_abandons_it_even_when_the_run_was_not_interrupted`.
+        interrupt_on_stop: Arc<Mutex<Option<Arc<crate::interrupt::Interrupt>>>>,
     }
 
     impl Default for FakeContainerRuntime {
@@ -2441,6 +2460,7 @@ mod tests {
                 exec_delays: Default::default(),
                 health_check_delays: Default::default(),
                 run_delays: Default::default(),
+                interrupt_on_stop: Default::default(),
             }
         }
     }
@@ -2510,6 +2530,12 @@ mod tests {
         /// artificially `tokio::time::sleep` for `delay` before reporting
         /// whether the (simulated) main command succeeded — see
         /// `run_delays`' own doc comment for why.
+        /// See the `interrupt_on_stop` field.
+        fn interrupting_on_stop(self, interrupt: &Arc<crate::interrupt::Interrupt>) -> Self {
+            *self.interrupt_on_stop.lock().unwrap() = Some(Arc::clone(interrupt));
+            self
+        }
+
         fn with_run_delay(self, name: &str, delay: std::time::Duration) -> Self {
             self.run_delays
                 .lock()
@@ -2972,6 +2998,9 @@ mod tests {
         }
 
         async fn stop_and_remove_container(&self, container_id: &str) -> Result<()> {
+            if let Some(interrupt) = self.interrupt_on_stop.lock().unwrap().as_ref() {
+                interrupt.record();
+            }
             self.push(format!("sidecar-stop:{container_id}"));
             Ok(())
         }
@@ -5161,24 +5190,100 @@ mod tests {
         );
     }
 
-    /// A second Ctrl+C means "stop now", including stopping the cleanup that
-    /// the first one started — cleanup itself talks to the daemon and can
-    /// take tens of seconds when a container ignores `SIGTERM`.
+    /// The task's own container is removed by `run_container` itself on every
+    /// path *except* an interrupt, where that future is dropped before it can
+    /// — so the engine removes it, from an id recorded as it started. Without
+    /// this, the whole `task_container_id` path could break with the
+    /// non-Docker suite still green.
     #[tokio::test]
-    async fn a_second_interrupt_abandons_cleanup_itself() {
-        let (docker, engine, _interrupt) = interrupted_engine(2);
+    async fn an_interrupt_removes_the_tasks_own_container_too() {
+        let (docker, engine, _interrupt) = interrupted_engine(1);
 
         let error = engine.run_task("start", &[]).await.unwrap_err();
         assert!(error.is::<crate::interrupt::TaskInterrupted>());
 
         let events = docker.events();
         assert!(
-            !events.iter().any(|e| e.starts_with("sidecar-stop:")),
-            "a second interrupt should stop cleanup rather than pressing on: {events:?}"
+            events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+            "the task's own container must be removed on an interrupt, since \
+             run_container never got to: {events:?}"
+        );
+        assert!(
+            events.contains(&"sidecar-stop:sidecar-id-database".to_string()),
+            "and the dependency too: {events:?}"
+        );
+    }
+
+    /// Arming the handler replaces the process's default `SIGINT` behaviour
+    /// for the whole run, so an interrupt Ratect doesn't act on is one it has
+    /// silently swallowed. The abandonment rule is therefore relative to the
+    /// interrupts already seen when cleanup started — otherwise the first
+    /// Ctrl+C during the cleanup of a run that finished normally would do
+    /// nothing at all, which is the common case rather than an exotic one.
+    #[tokio::test]
+    async fn an_interrupt_during_cleanup_abandons_it_even_when_the_run_was_not_interrupted() {
+        let config = config_with_database_dependency(|_| {});
+        let interrupt = crate::interrupt::Interrupt::new();
+        // Fires as cleanup removes its first container, so the run itself
+        // completes entirely uninterrupted.
+        let docker = FakeContainerRuntime::default().interrupting_on_stop(&interrupt);
+        let engine = TaskEngine::new(config, docker.clone()).with_interrupt(Arc::clone(&interrupt));
+
+        engine
+            .run_task("start", &[])
+            .await
+            .expect("the run itself was never interrupted, so it should succeed");
+
+        assert_eq!(
+            interrupt.count(),
+            1,
+            "exactly one interrupt, landing during cleanup"
+        );
+        let events = docker.events();
+        assert!(
+            !events.iter().any(|e| e.starts_with("network-remove:")),
+            "a single Ctrl+C during an uninterrupted run's cleanup should stop it, \
+             leaving the network in place: {events:?}"
+        );
+    }
+
+    /// A second Ctrl+C means "stop now", including stopping the cleanup the
+    /// first one started — cleanup talks to the daemon and can take tens of
+    /// seconds when a container ignores `SIGTERM`.
+    ///
+    /// The second interrupt has to land *during* cleanup, not merely be the
+    /// second one overall: two presses that both arrive while the run is
+    /// still going are one decision ("stop"), and Batect draws the line in
+    /// the same place — only an interrupt reaching its cleanup stage switches
+    /// it to `PostTaskManualCleanup.Required`.
+    #[tokio::test]
+    async fn a_second_interrupt_during_cleanup_abandons_it() {
+        let config = config_with_database_dependency(|_| {});
+        let interrupt = crate::interrupt::Interrupt::new();
+        interrupt.record();
+        let docker = FakeContainerRuntime::default()
+            .with_run_delay("app", std::time::Duration::from_secs(60))
+            .interrupting_on_stop(&interrupt);
+        let engine = TaskEngine::new(config, docker.clone()).with_interrupt(Arc::clone(&interrupt));
+
+        let error = engine.run_task("start", &[]).await.unwrap_err();
+        assert!(error.is::<crate::interrupt::TaskInterrupted>());
+
+        let events = docker.events();
+        // The task's own container is removed first, and it's that removal
+        // which lands the second interrupt — so it goes, and nothing after it
+        // does.
+        assert!(
+            events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+            "the removal already in progress should still finish: {events:?}"
+        );
+        assert!(
+            !events.contains(&"sidecar-stop:sidecar-id-database".to_string()),
+            "cleanup should stop rather than pressing on to the dependency: {events:?}"
         );
         assert!(
             !events.iter().any(|e| e.starts_with("network-remove:")),
-            "a second interrupt should stop before removing the network too: {events:?}"
+            "and should stop before removing the network: {events:?}"
         );
     }
 

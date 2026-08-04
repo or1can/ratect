@@ -902,6 +902,109 @@ fn sidecars_are_reachable_by_name_via_docker() {
 /// Runs against a fixture with a project name of its own: these tests run
 /// concurrently, and filtering by project label would otherwise match
 /// whatever another test using the same fixture had running at that moment.
+#[test]
+#[ignore]
+fn ownership_labels_reach_real_containers_and_networks_via_docker() {
+    fn docker_ids(kind: &str, filter: &str) -> Vec<String> {
+        // Containers need `-a`: the task's own has already exited by now
+        // (its command ran to completion), and a bare `ls` lists only
+        // running ones — which would quietly miss exactly the container
+        // whose `role` label this is checking. `network ls` has no such
+        // flag, and needs none.
+        let mut arguments = vec![kind, "ls", "-q", "--filter", filter];
+        if kind == "container" {
+            arguments.insert(2, "-a");
+        }
+        let output = Command::new("docker")
+            .args(&arguments)
+            .output()
+            .expect("failed to run docker ls");
+        assert!(output.status.success(), "docker {kind} ls failed");
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn label_of(kind: &str, id: &str, label: &str) -> String {
+        let output = Command::new("docker")
+            .args([
+                kind,
+                "inspect",
+                id,
+                "--format",
+                &format!("{{{{index .Config.Labels \"{label}\"}}}}"),
+            ])
+            .output()
+            .expect("failed to run docker inspect");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    // `tests/fixtures/labels.yml` has a project name of its own so this
+    // filter can't match a concurrently-running test's containers.
+    let project_filter = "label=eu.orican.ratect.project=ratect-labels-test";
+
+    let output = ratect_command()
+        .arg("-f")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/labels.yml"))
+        .arg("--no-cleanup-after-success")
+        .arg("check")
+        .output()
+        .expect("failed to run ratect");
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let containers = docker_ids("container", project_filter);
+    let networks = docker_ids("network", project_filter);
+
+    // Everything gets torn down before any assertion can fail, so a
+    // failure here doesn't leave the daemon full of this test's containers.
+    let cleanup = || {
+        for id in &containers {
+            let _ = Command::new("docker").args(["rm", "-fv", id]).output();
+        }
+        for id in &networks {
+            let _ = Command::new("docker").args(["network", "rm", id]).output();
+        }
+    };
+
+    let roles: Vec<String> = containers
+        .iter()
+        .map(|id| label_of("container", id, "eu.orican.ratect.role"))
+        .collect();
+    let runs: Vec<String> = containers
+        .iter()
+        .map(|id| label_of("container", id, "eu.orican.ratect.run"))
+        .collect();
+    let task = containers
+        .first()
+        .map(|id| label_of("container", id, "eu.orican.ratect.task"))
+        .unwrap_or_default();
+    cleanup();
+
+    // `app` plus its one dependency.
+    assert_eq!(containers.len(), 2, "expected two labelled containers");
+    assert_eq!(networks.len(), 1, "expected one labelled network");
+    assert_eq!(task, "check");
+    assert_eq!(
+        roles.iter().filter(|role| *role == "task").count(),
+        1,
+        "exactly one container is the task's own: {roles:?}"
+    );
+    assert_eq!(
+        roles.iter().filter(|role| *role == "dependency").count(),
+        1,
+        "the other is a dependency: {roles:?}"
+    );
+    assert!(
+        runs.windows(2).all(|pair| pair[0] == pair[1]) && !runs[0].is_empty(),
+        "every container should carry the same non-empty run id: {runs:?}"
+    );
+}
+
 /// Interrupting a real run against a real daemon leaves nothing behind.
 ///
 /// `ratect-core`'s own unit tests prove the engine's *decisions* against a fake
@@ -1033,109 +1136,6 @@ fn interrupting_a_run_cleans_up_via_docker() {
         cleaned,
         "an interrupted run must remove its containers and network; left behind \
          containers {leftover_containers:?} and networks {leftover_networks:?}"
-    );
-}
-
-#[test]
-#[ignore]
-fn ownership_labels_reach_real_containers_and_networks_via_docker() {
-    fn docker_ids(kind: &str, filter: &str) -> Vec<String> {
-        // Containers need `-a`: the task's own has already exited by now
-        // (its command ran to completion), and a bare `ls` lists only
-        // running ones — which would quietly miss exactly the container
-        // whose `role` label this is checking. `network ls` has no such
-        // flag, and needs none.
-        let mut arguments = vec![kind, "ls", "-q", "--filter", filter];
-        if kind == "container" {
-            arguments.insert(2, "-a");
-        }
-        let output = Command::new("docker")
-            .args(&arguments)
-            .output()
-            .expect("failed to run docker ls");
-        assert!(output.status.success(), "docker {kind} ls failed");
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(str::to_string)
-            .collect()
-    }
-
-    fn label_of(kind: &str, id: &str, label: &str) -> String {
-        let output = Command::new("docker")
-            .args([
-                kind,
-                "inspect",
-                id,
-                "--format",
-                &format!("{{{{index .Config.Labels \"{label}\"}}}}"),
-            ])
-            .output()
-            .expect("failed to run docker inspect");
-        String::from_utf8_lossy(&output.stdout).trim().to_string()
-    }
-
-    // `tests/fixtures/labels.yml` has a project name of its own so this
-    // filter can't match a concurrently-running test's containers.
-    let project_filter = "label=eu.orican.ratect.project=ratect-labels-test";
-
-    let output = ratect_command()
-        .arg("-f")
-        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/labels.yml"))
-        .arg("--no-cleanup-after-success")
-        .arg("check")
-        .output()
-        .expect("failed to run ratect");
-    assert!(
-        output.status.success(),
-        "stderr:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let containers = docker_ids("container", project_filter);
-    let networks = docker_ids("network", project_filter);
-
-    // Everything gets torn down before any assertion can fail, so a
-    // failure here doesn't leave the daemon full of this test's containers.
-    let cleanup = || {
-        for id in &containers {
-            let _ = Command::new("docker").args(["rm", "-fv", id]).output();
-        }
-        for id in &networks {
-            let _ = Command::new("docker").args(["network", "rm", id]).output();
-        }
-    };
-
-    let roles: Vec<String> = containers
-        .iter()
-        .map(|id| label_of("container", id, "eu.orican.ratect.role"))
-        .collect();
-    let runs: Vec<String> = containers
-        .iter()
-        .map(|id| label_of("container", id, "eu.orican.ratect.run"))
-        .collect();
-    let task = containers
-        .first()
-        .map(|id| label_of("container", id, "eu.orican.ratect.task"))
-        .unwrap_or_default();
-    cleanup();
-
-    // `app` plus its one dependency.
-    assert_eq!(containers.len(), 2, "expected two labelled containers");
-    assert_eq!(networks.len(), 1, "expected one labelled network");
-    assert_eq!(task, "check");
-    assert_eq!(
-        roles.iter().filter(|role| *role == "task").count(),
-        1,
-        "exactly one container is the task's own: {roles:?}"
-    );
-    assert_eq!(
-        roles.iter().filter(|role| *role == "dependency").count(),
-        1,
-        "the other is a dependency: {roles:?}"
-    );
-    assert!(
-        runs.windows(2).all(|pair| pair[0] == pair[1]) && !runs[0].is_empty(),
-        "every container should carry the same non-empty run id: {runs:?}"
     );
 }
 

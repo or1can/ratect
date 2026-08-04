@@ -94,13 +94,46 @@ impl Interrupt {
         let interrupt = Arc::clone(self);
 
         tokio::spawn(async move {
+            // Subscribed *once*, then received from in a loop. Calling
+            // `tokio::signal::ctrl_c()` per iteration would instead drop the
+            // subscription and rebuild it each time, and a signal landing in
+            // that gap is discarded — which is precisely the gap that
+            // matters here, since the interesting second interrupt often
+            // follows hard on the first.
+            //
+            // Signals coalesce regardless of this (the OS and tokio both
+            // collapse several pending `SIGINT`s into one notification), so
+            // two presses in the same instant can still count once. That's
+            // inherent to signal delivery rather than something a listener
+            // can fix, and it's harmless here: the presses this feature
+            // cares about are seconds apart, on either side of a decision
+            // the user is watching happen.
+            #[cfg(unix)]
+            let mut signal =
+                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()) {
+                    Ok(signal) => signal,
+                    Err(error) => {
+                        // Nothing to report to the user: an interrupt they
+                        // haven't sent yet isn't a problem they can act on,
+                        // and the run itself is unaffected.
+                        tracing::debug!(
+                            ?error,
+                            "Could not listen for interrupts; Ctrl+C will not clean up"
+                        );
+                        return;
+                    }
+                };
+
             loop {
-                if tokio::signal::ctrl_c().await.is_err() {
-                    // Installing the handler failed, and retrying in a tight
-                    // loop would spin. Nothing to report to the user: an
-                    // interrupt they haven't sent yet isn't a problem they
-                    // can act on, and the run itself is unaffected.
-                    tracing::debug!("Could not listen for interrupts; Ctrl+C will not clean up");
+                #[cfg(unix)]
+                let received = signal.recv().await.is_some();
+                // No `SignalKind` equivalent off Unix, so this keeps the
+                // portable `ctrl_c` and the rebuild gap along with it.
+                #[cfg(not(unix))]
+                let received = tokio::signal::ctrl_c().await.is_ok();
+
+                if !received {
+                    tracing::debug!("Interrupt listener closed; Ctrl+C will not clean up");
                     return;
                 }
 

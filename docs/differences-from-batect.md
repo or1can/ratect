@@ -165,9 +165,11 @@ tables above:
   cleanup for it exactly as for a build or health-check failure, leaving everything in
   place for investigation. Two deliberate differences: Ratect exits **130** (128 + SIGINT,
   the shell's convention), where Batect returns `-1`/255 for every failure alike and so
-  says nothing about which it was; and a **second Ctrl+C stops the cleanup itself**,
-  since cleanup talks to the daemon and a container ignoring `SIGTERM` waits out Docker's
-  full kill timeout. Batect ends up in the same place by a different route — a second
+  says nothing about which it was; and a **Ctrl+C during the cleanup stops the cleanup
+  itself**, since cleanup talks to the daemon and a container ignoring `SIGTERM` waits out
+  Docker's full kill timeout. That means a second press after an interrupted run, or a
+  first press while a normally-finished run is still tidying up — the rule is about when
+  the press lands, not how many there have been. Batect ends up in the same place by a different route — a second
   interrupt during its cleanup stage switches it to printing manual cleanup commands —
   whereas Ratect just stops, because anything left carries the ownership labels above
   and `ratect resources list`/`clean` finds it (see the
