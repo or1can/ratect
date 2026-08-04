@@ -3009,14 +3009,29 @@ impl ContainerRuntime for DockerClient {
         // here rather than returning early — see the comment above.
         let reported_exit_code = exit_code.as_ref().ok().copied();
         if remove_on_exit {
-            self.docker
+            let removed = self
+                .docker
                 .remove_container(&container.id, Some(remove_container_options()))
-                .await?;
-            tracing::debug!(
-                container_id = %container.id,
-                exit_code = ?reported_exit_code,
-                "removed container"
-            );
+                .await;
+            match removed {
+                Ok(()) => tracing::debug!(
+                    container_id = %container.id,
+                    exit_code = ?reported_exit_code,
+                    "removed container"
+                ),
+                // A failure to remove must not mask the reason we are here.
+                // With an attach/stream error already in hand, that is the
+                // root cause and this is a consequence of it — reporting the
+                // removal instead would hand back the least useful of the
+                // two. Before the error was deferred past this block it
+                // couldn't arise: the attach error returned first.
+                Err(error) if exit_code.is_err() => tracing::warn!(
+                    container_id = %container.id,
+                    ?error,
+                    "failed to remove container after the run itself failed"
+                ),
+                Err(error) => return Err(error.into()),
+            }
         } else {
             tracing::info!(
                 container_id = %container.id,
