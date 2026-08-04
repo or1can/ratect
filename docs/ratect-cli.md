@@ -239,8 +239,11 @@ $ ratect resources list
 Remove them with: ratect resources clean
 ```
 
-Grouped by run, because that's the unit a leftover belongs to: one interrupted task
-leaves a network and every container it started, and they only make sense together.
+Grouped by run, because that's the unit a leftover belongs to: a run that was killed
+outright, or crashed, leaves a network and every container it started, and they only
+make sense together. (An ordinary Ctrl+C isn't one of those cases any more — it cleans
+up after itself; see [Differences from
+Batect](differences-from-batect.md#runtime-behavior-gaps).)
 A container is named as your configuration names it (`database`), not by the random
 words Docker assigns.
 

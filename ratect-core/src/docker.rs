@@ -1335,8 +1335,18 @@ pub trait ContainerRuntime {
     /// policy (see `TaskEngine::cleanup_after_success`): `false` leaves the
     /// exited container behind (never removed) regardless of its exit code
     /// — a nonzero exit is still "success" for cleanup-gating purposes,
-    /// matching Batect (only an infrastructure failure, which never reaches
-    /// this far, is "failure").
+    /// matching Batect.
+    ///
+    /// `remove_on_failure` is the other half (`TaskEngine::cleanup_after_failure`),
+    /// and applies when the container ran but this function couldn't see it
+    /// through — an attach or log-stream failure, where no exit code is ever
+    /// reported. Those used to return before any removal, so the flag had
+    /// nothing to govern; now that the error is carried past the removal
+    /// (so the container isn't stranded), the two policies have to be told
+    /// apart here rather than collapsed into `remove_on_exit`. Getting this
+    /// wrong force-removes the very container `--no-cleanup-after-failure`
+    /// exists to preserve, while the engine keeps that run's sidecars and
+    /// network — half a preserved scene is worse than none.
     ///
     /// `started`, given, is signaled with the container's own id right after
     /// Docker's own `start` call succeeds — never sent at all if the
@@ -1376,6 +1386,7 @@ pub trait ContainerRuntime {
         health_check: Option<&HealthCheckOptions>,
         container_options: &ContainerOptions,
         remove_on_exit: bool,
+        remove_on_failure: bool,
         started: Option<tokio::sync::oneshot::Sender<String>>,
         readiness: Option<tokio::sync::oneshot::Receiver<Result<()>>>,
     ) -> Result<()>;
@@ -2884,6 +2895,7 @@ impl ContainerRuntime for DockerClient {
         health_check: Option<&HealthCheckOptions>,
         container_options: &ContainerOptions,
         remove_on_exit: bool,
+        remove_on_failure: bool,
         started: Option<tokio::sync::oneshot::Sender<String>>,
         readiness: Option<tokio::sync::oneshot::Receiver<Result<()>>>,
     ) -> Result<()> {
@@ -3008,7 +3020,14 @@ impl ContainerRuntime for DockerClient {
         // `None` when the container never reported one, which now reaches
         // here rather than returning early — see the comment above.
         let reported_exit_code = exit_code.as_ref().ok().copied();
-        if remove_on_exit {
+        // Which policy applies depends on how the run ended, not on which
+        // flag happened to be threaded here — see the doc comment.
+        let remove = if exit_code.is_ok() {
+            remove_on_exit
+        } else {
+            remove_on_failure
+        };
+        if remove {
             let removed = self
                 .docker
                 .remove_container(&container.id, Some(remove_container_options()))

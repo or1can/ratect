@@ -961,6 +961,35 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     /// reported as failed overall — this only affects how much of the main
     /// command's own output/runtime you see before that failure is
     /// reported.
+    /// Runs one cleanup step, giving up on it if the user interrupts again.
+    ///
+    /// `false` means the step lost the race and was dropped mid-flight —
+    /// whatever it was removing may still be there. `after` is the interrupt
+    /// count that was already reached when the run ended, so only a *further*
+    /// press counts (see `run_task_internal`).
+    ///
+    /// With no interrupt tracker the step simply runs, which is every unit
+    /// test that doesn't opt in and both binaries before 0.25.0.
+    async fn until_interrupted(
+        &self,
+        after: usize,
+        step: impl std::future::Future<Output = ()>,
+    ) -> bool {
+        match &self.interrupt {
+            Some(interrupt) => {
+                tokio::select! {
+                    biased;
+                    () = step => true,
+                    () = interrupt.wait_for(after + 1) => false,
+                }
+            }
+            None => {
+                step.await;
+                true
+            }
+        }
+    }
+
     async fn run_task_container_readiness(
         &self,
         started: tokio::sync::oneshot::Receiver<String>,
@@ -1779,6 +1808,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 health_check.as_ref(),
                 &container_options,
                 self.cleanup_after_success,
+                self.cleanup_after_failure,
                 Some(started_tx),
                 Some(readiness_done_rx),
             );
@@ -1895,11 +1925,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         // finished, so there is nothing left to abandon except the cleanup
         // the user probably wants — but it is an absorbed press, not a
         // guarantee that none exist.
-        let cleanup_abandoned = || {
-            self.interrupt
-                .as_ref()
-                .is_some_and(|interrupt| interrupt.count() > interrupts_before_cleanup)
-        };
+        let abandon_after = interrupts_before_cleanup;
 
         if should_cleanup {
             if interrupted {
@@ -1911,55 +1937,74 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             if !running_sidecars.is_empty() || owns_network {
                 self.event_sink.post(TaskEvent::CleanupStarting);
             }
-            // Only on an interrupt, which is now genuinely the only path
-            // where `run_container` hasn't already removed the task's own
-            // container: it used to `?`-propagate an attach/stream failure
-            // before reaching its own removal, leaking the container, and
-            // that is fixed at source in `docker.rs` rather than covered up
-            // here. Asking
-            // Docker to remove it twice would report a spurious failure.
-            if let Some(container_id) = task_container_id
-                .as_ref()
-                .filter(|_| interrupted && !cleanup_abandoned())
-            {
-                match self.docker.stop_and_remove_container(container_id).await {
-                    Ok(()) => self.event_sink.post(TaskEvent::ContainerRemoved {
-                        container: run.container.clone(),
-                    }),
-                    Err(e) => {
-                        tracing::warn!(
+            // Every removal below is raced against the next interrupt rather
+            // than merely checked between removals. Checking between them
+            // misses the case the feature exists for: a container ignoring
+            // `SIGTERM` sits in `stop_and_remove_container` for Docker's full
+            // kill timeout, which is exactly when the user presses Ctrl+C
+            // again — and with one container and `--use-network`, "between
+            // removals" never comes around again at all.
+            //
+            // Losing the race cancels that removal's request in flight. Docker
+            // may still finish it server-side; either way the container is
+            // reported as possibly left behind, which is the honest reading.
+            let mut abandoned = false;
+
+            // Only on an interrupt, which is now genuinely the only path where
+            // `run_container` hasn't already removed the task's own container:
+            // it used to `?`-propagate an attach/stream failure before
+            // reaching its own removal, leaking the container, and that is
+            // fixed at source in `docker.rs` rather than covered up here.
+            // Asking Docker to remove it twice would report a spurious
+            // failure.
+            if let Some(container_id) = task_container_id.as_ref().filter(|_| interrupted) {
+                let removal = async {
+                    match self.docker.stop_and_remove_container(container_id).await {
+                        Ok(()) => self.event_sink.post(TaskEvent::ContainerRemoved {
+                            container: run.container.clone(),
+                        }),
+                        Err(e) => tracing::warn!(
                             container = run.container.as_str(),
                             error = ?e,
                             "Failed to clean up the task's own container"
-                        );
+                        ),
                     }
-                }
+                };
+                abandoned = !self.until_interrupted(abandon_after, removal).await;
             }
             for (name, container_id) in &running_sidecars {
-                if cleanup_abandoned() {
+                if abandoned {
                     break;
                 }
-                match self.docker.stop_and_remove_container(container_id).await {
-                    Ok(()) => self.event_sink.post(TaskEvent::ContainerRemoved {
-                        container: name.clone(),
-                    }),
-                    Err(e) => {
-                        tracing::warn!(
+                let removal = async {
+                    match self.docker.stop_and_remove_container(container_id).await {
+                        Ok(()) => self.event_sink.post(TaskEvent::ContainerRemoved {
+                            container: name.clone(),
+                        }),
+                        Err(e) => tracing::warn!(
                             dependency = name.as_str(),
                             error = ?e,
                             "Failed to clean up dependency container"
-                        );
+                        ),
                     }
-                }
+                };
+                abandoned = !self.until_interrupted(abandon_after, removal).await;
             }
-            if owns_network && !cleanup_abandoned() {
+            if owns_network && !abandoned {
                 let network_name = network_name.expect("owns_network implies network_name is Some");
                 self.event_sink.post(TaskEvent::RemovingNetwork);
-                if let Err(e) = self.docker.remove_network(&network_name).await {
-                    tracing::warn!(network = network_name.as_str(), error = ?e, "Failed to remove network");
-                }
+                let removal = async {
+                    if let Err(e) = self.docker.remove_network(&network_name).await {
+                        tracing::warn!(network = network_name.as_str(), error = ?e, "Failed to remove network");
+                    }
+                };
+                abandoned = !self.until_interrupted(abandon_after, removal).await;
             }
-            if cleanup_abandoned() {
+            // Driven by work actually being cut short, not by the raw count:
+            // an interrupt arriving once everything is already removed leaves
+            // nothing behind, and sending someone hunting for leftovers that
+            // don't exist is its own small betrayal.
+            if abandoned {
                 // Names the label rather than a command: this is shared core,
                 // and `resources` is a `ratect` verb that `ratect-compat`
                 // doesn't have — so naming it would be wrong advice for half
@@ -3025,8 +3070,16 @@ mod tests {
         }
 
         async fn stop_and_remove_container(&self, container_id: &str) -> Result<()> {
-            if let Some(interrupt) = self.interrupt_on_stop.lock().unwrap().as_ref() {
+            let interrupt = self.interrupt_on_stop.lock().unwrap().clone();
+            if let Some(interrupt) = interrupt {
                 interrupt.record();
+                // Yields so this removal is genuinely *in flight* when the
+                // engine's race next polls — a real `stop_and_remove` waits
+                // on the daemon (up to Docker's whole kill timeout for a
+                // container ignoring `SIGTERM`), which is the case the race
+                // exists for. Returning `Ready` immediately would instead
+                // test the one situation that can't happen.
+                tokio::task::yield_now().await;
             }
             self.push(format!("sidecar-stop:{container_id}"));
             Ok(())
@@ -3077,6 +3130,7 @@ mod tests {
             health_check: Option<&crate::docker::HealthCheckOptions>,
             container_options: &crate::docker::ContainerOptions,
             remove_on_exit: bool,
+            remove_on_failure: bool,
             started: Option<tokio::sync::oneshot::Sender<String>>,
             readiness: Option<tokio::sync::oneshot::Receiver<Result<()>>>,
         ) -> Result<()> {
@@ -3132,6 +3186,7 @@ mod tests {
                 network
             ));
             self.push(format!("remove_on_exit:{name}:{remove_on_exit}"));
+            self.push(format!("remove_on_failure:{name}:{remove_on_failure}"));
             // Sent as soon as the (simulated) container has "started" — same
             // id convention `start_background_container` uses, so
             // `with_unhealthy_container`/exec-based assertions work
@@ -5298,11 +5353,12 @@ mod tests {
 
         let events = docker.events();
         // The task's own container is removed first, and it's that removal
-        // which lands the second interrupt — so it goes, and nothing after it
-        // does.
+        // which lands the second interrupt — mid-flight, so it's the one that
+        // gets dropped, and nothing after it starts.
         assert!(
-            events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
-            "the removal already in progress should still finish: {events:?}"
+            !events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+            "the removal in flight when the interrupt landed should be dropped, \
+             not run to completion: {events:?}"
         );
         assert!(
             !events.contains(&"sidecar-stop:sidecar-id-database".to_string()),

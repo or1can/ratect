@@ -185,7 +185,8 @@ tables above:
   divergence** — it changes no behavior, and a container's own configured `labels`
   are passed through untouched alongside. Visible in `docker inspect` output, and
   usable as a `docker ps --filter label=...` filter. Groundwork for finding
-  leftovers from an interrupted or `--no-cleanup` run.
+  leftovers from a `--no-cleanup` run, a crash, or a run killed outright — an
+  ordinary Ctrl+C cleans up after itself (see below).
 - **Anonymous volume cleanup**: matches Batect — a container is removed with Docker's
   `v`/`force` options set, so any anonymous volume it created (from a `VOLUME`
   instruction in its image) goes with it. This was a divergence until 0.21.1: Ratect
