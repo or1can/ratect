@@ -2474,6 +2474,9 @@ mod tests {
         // Command whose `exec_in_container` reports a non-zero exit (see
         // `with_failing_setup_command`).
         failing_setup_command: Arc<Mutex<Option<String>>>,
+        // Makes `run_container` fail before it would have created anything
+        // (see `failing_container_creation`).
+        fail_container_creation: Arc<Mutex<bool>>,
         // Images `image_exists_locally` reports as already present (see
         // `with_local_image`) — defaults to empty, so tests that don't care
         // about `image_pull_policy` see the "always needs a pull" behavior
@@ -2530,6 +2533,7 @@ mod tests {
                 execs: Default::default(),
                 unhealthy_container: Default::default(),
                 failing_setup_command: Default::default(),
+                fail_container_creation: Default::default(),
                 locally_present_images: Default::default(),
                 start_delays: Default::default(),
                 pull_delays: Default::default(),
@@ -2576,6 +2580,18 @@ mod tests {
         /// for the given command — simulates a failing setup command.
         fn with_failing_setup_command(self, command: &str) -> Self {
             *self.failing_setup_command.lock().unwrap() = Some(command.to_string());
+            self
+        }
+
+        /// Makes `run_container` fail *before* creating a container, so
+        /// neither the `created` nor the `started` channel is ever sent —
+        /// the one shape every other failure mode here can't produce, since
+        /// they all report after handing the id over. Exercises the
+        /// engine's concurrent readiness task giving up on a dropped
+        /// sender; if it ever waited on one instead, the run would hang
+        /// rather than fail.
+        fn failing_container_creation(self) -> Self {
+            *self.fail_container_creation.lock().unwrap() = true;
             self
         }
 
@@ -3136,6 +3152,13 @@ mod tests {
             created: Option<tokio::sync::oneshot::Sender<String>>,
             started: Option<tokio::sync::oneshot::Sender<()>>,
         ) -> Result<()> {
+            // Before anything is recorded, and before either channel is
+            // sent — both senders drop here (see
+            // `failing_container_creation`).
+            if *self.fail_container_creation.lock().unwrap() {
+                self.push(format!("run-create-failed:{name}"));
+                anyhow::bail!("Failed to create container '{name}'");
+            }
             self.environments
                 .lock()
                 .unwrap()
@@ -5629,6 +5652,51 @@ mod tests {
         assert!(
             events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
             "the task's own container should still be removed: {events:?}"
+        );
+    }
+
+    /// `run_container` can fail before it ever creates a container, in which
+    /// case it drops both channels without sending. The concurrent readiness
+    /// task has to treat that as "nothing to do" — if it awaited a sender
+    /// that will never send, the whole run would hang instead of reporting
+    /// the failure. Every other failure the fake can express sends `created`
+    /// first, so this shape is unreachable without its own switch.
+    ///
+    /// Wrapped in a timeout rather than left to hang: a deadlock here would
+    /// otherwise stall the suite with no indication of which test did it.
+    #[tokio::test]
+    async fn a_run_container_failure_before_creation_reports_rather_than_hanging() {
+        let config = config_with_database_dependency(|_| {});
+        let docker = FakeContainerRuntime::default().failing_container_creation();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            engine.run_task("start", &[]),
+        )
+        .await
+        .expect("the run must not hang waiting on a sender that will never send");
+
+        assert!(result.is_err(), "the creation failure must be reported");
+
+        let events = docker.events();
+        assert!(
+            events.contains(&"run-create-failed:app".to_string()),
+            "the run should have got as far as attempting the task container: {events:?}"
+        );
+        // Nothing was created, so there is nothing of the task container's to
+        // remove — but the rest of the run's cleanup still has to happen.
+        assert!(
+            !events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+            "no task container was created, so none should be removed: {events:?}"
+        );
+        assert!(
+            events.contains(&"sidecar-stop:sidecar-id-database".to_string()),
+            "the dependency should still be cleaned up: {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| e.starts_with("network-remove:")),
+            "the network should still be removed: {events:?}"
         );
     }
 

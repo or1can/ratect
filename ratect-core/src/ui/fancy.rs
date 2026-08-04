@@ -66,8 +66,12 @@ struct State {
     /// `false` once the block froze (task container running, cleanup
     /// started, or the task failed) — no more startup repaints after that.
     keep_updating_startup: bool,
-    /// Dependency containers started and not yet removed — the cleanup
-    /// countdown. `BTreeSet` so the rendered list is stable.
+    /// Containers started and not yet removed — the cleanup countdown.
+    /// The task's own container counts (it is removed during the cleanup
+    /// stage like any other, since 0.25.0), matching Batect's own
+    /// `CleanupProgressDisplayLine`, which counts
+    /// `containersCreated - containersRemoved` with no special case for it.
+    /// `BTreeSet` so the rendered list is stable.
     started_containers: BTreeSet<String>,
     /// The task's own network is being removed (the last cleanup step).
     removing_network: bool,
@@ -558,6 +562,14 @@ impl EventSink for FancyEventLogger {
                 self.repaint_startup(&mut state);
             }
             TaskEvent::RunningTaskContainer { container, command } => {
+                // Before the early return below, deliberately: that guard is
+                // about whether the startup *block* may still be repainted,
+                // and this is cleanup bookkeeping — the container has to be
+                // removed either way. (`DependencyStarted`'s equivalent sits
+                // after its own guard only because a dependency can't start
+                // once the block has frozen; the task container is what
+                // freezes it.)
+                state.started_containers.insert(container.clone());
                 if !state.keep_updating_startup {
                     return;
                 }
@@ -915,7 +927,7 @@ mod tests {
         let after_cleanup = buffer.contents();
         assert_eq!(
             after_cleanup,
-            format!("{before_cleanup}\nCleaning up...\n"),
+            format!("{before_cleanup}\nCleaning up: 1 container (app) left to remove...\n"),
             "cleanup must move to a fresh line, not append to the unterminated \
              container output — otherwise the next repaint's cursor-up erases it"
         );
@@ -951,9 +963,30 @@ mod tests {
             command: None,
         });
         logger.post(TaskEvent::CleanupStarting);
-        assert!(buffer
-            .contents()
-            .ends_with("Cleaning up: 1 container (db) left to remove...\n"));
+        // The task's own container counts too — it is removed during the
+        // cleanup stage like any other (see `engine.rs`), so leaving it out
+        // would under-report what is still to do. Batect's own
+        // `CleanupProgressDisplayLine` counts it for the same reason.
+        assert!(
+            buffer
+                .contents()
+                .ends_with("Cleaning up: 2 containers (app, db) left to remove...\n"),
+            "{:?}",
+            buffer.contents()
+        );
+
+        // Task container first, then its dependency — the order `engine.rs`
+        // actually removes them in.
+        logger.post(TaskEvent::ContainerRemoved {
+            container: "app".into(),
+        });
+        assert!(
+            buffer
+                .contents()
+                .ends_with("Cleaning up: 1 container (db) left to remove...\n"),
+            "{:?}",
+            buffer.contents()
+        );
 
         logger.post(TaskEvent::ContainerRemoved {
             container: "db".into(),
