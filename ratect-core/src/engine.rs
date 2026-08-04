@@ -933,34 +933,6 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         }
     }
 
-    /// The task's own container's readiness gate: waits for it to report
-    /// healthy, then runs its `setup_commands` in order — the same two
-    /// gates `ensure_container_ready` applies to a dependency, ported here
-    /// almost unchanged (this doesn't share that code directly since a
-    /// dependency's version also handles `customise`/cache-key/dedup
-    /// concerns that don't apply to the one, always-present task
-    /// container). Unlike a dependency, nothing in the graph depends on
-    /// *this* container's own readiness, so the caller runs this
-    /// concurrently with `run_container`'s own attach-and-wait-for-exit
-    /// (via `tokio::join!`) rather than gating anything on it — matching
-    /// Batect, which generates the identical health-check-wait/
-    /// `setup_commands` steps for every container, task container
-    /// included, and runs them concurrently with that container's own
-    /// command (see docs/task-lifecycle.md's "Known simplifications").
-    ///
-    /// `started` resolves with the container's id once `run_container` has
-    /// actually called Docker's own `start` — dropped without ever sending
-    /// (an `Err` here) if the container never got that far, in which case
-    /// there's nothing to wait on: `run_container`'s own `Err` already
-    /// reports that failure.
-    ///
-    /// One deliberate divergence from Batect, left for simplicity: Batect
-    /// cancels the still-running main command early the moment this gate
-    /// fails (via coroutine cancellation); Ratect always lets the main
-    /// command run to completion regardless. Either way the task is
-    /// reported as failed overall — this only affects how much of the main
-    /// command's own output/runtime you see before that failure is
-    /// reported.
     /// Runs one cleanup step, giving up on it if the user interrupts again.
     ///
     /// `false` means the step lost the race and was dropped mid-flight —
@@ -990,6 +962,34 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         }
     }
 
+    /// The task's own container's readiness gate: waits for it to report
+    /// healthy, then runs its `setup_commands` in order — the same two
+    /// gates `ensure_container_ready` applies to a dependency, ported here
+    /// almost unchanged (this doesn't share that code directly since a
+    /// dependency's version also handles `customise`/cache-key/dedup
+    /// concerns that don't apply to the one, always-present task
+    /// container). Unlike a dependency, nothing in the graph depends on
+    /// *this* container's own readiness, so the caller runs this
+    /// concurrently with `run_container`'s own attach-and-wait-for-exit
+    /// (via `tokio::join!`) rather than gating anything on it — matching
+    /// Batect, which generates the identical health-check-wait/
+    /// `setup_commands` steps for every container, task container
+    /// included, and runs them concurrently with that container's own
+    /// command (see docs/task-lifecycle.md's "Known simplifications").
+    ///
+    /// `started` resolves with the container's id once `run_container` has
+    /// actually called Docker's own `start` — dropped without ever sending
+    /// (an `Err` here) if the container never got that far, in which case
+    /// there's nothing to wait on: `run_container`'s own `Err` already
+    /// reports that failure.
+    ///
+    /// One deliberate divergence from Batect, left for simplicity: Batect
+    /// cancels the still-running main command early the moment this gate
+    /// fails (via coroutine cancellation); Ratect always lets the main
+    /// command run to completion regardless. Either way the task is
+    /// reported as failed overall — this only affects how much of the main
+    /// command's own output/runtime you see before that failure is
+    /// reported.
     async fn run_task_container_readiness(
         &self,
         started: tokio::sync::oneshot::Receiver<String>,
@@ -1934,7 +1934,16 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     "Interrupted; cleaning up. Press Ctrl+C again to stop cleaning up."
                 );
             }
-            if !running_sidecars.is_empty() || owns_network {
+            // The task's own container is only ours to remove on an
+            // interrupt (see below) — but when it is, that *is* cleanup, and
+            // the guard has to say so. `simple` renders nothing else for the
+            // cleanup stage (it drops `ContainerRemoved` outright), so
+            // without this an interrupted single-container run under
+            // `--use-network` removed a container in silence: neither of the
+            // other two conditions holds there. Deliberately the same shape
+            // as the `else` branch's own guard below.
+            let cleaning_task_container = interrupted && task_container_id.is_some();
+            if !running_sidecars.is_empty() || owns_network || cleaning_task_container {
                 self.event_sink.post(TaskEvent::CleanupStarting);
             }
             // Every removal below is raced against the next interrupt rather
@@ -2005,17 +2014,24 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             // nothing behind, and sending someone hunting for leftovers that
             // don't exist is its own small betrayal.
             if abandoned {
-                // Names the label rather than a command: this is shared core,
-                // and `resources` is a `ratect` verb that `ratect-compat`
-                // doesn't have — so naming it would be wrong advice for half
-                // the binaries that reach this line. The label works for both,
-                // and is what `resources` itself searches on.
+                // Names the label rather than a `ratect` command: this is
+                // shared core, and `resources` is a `ratect` verb that
+                // `ratect-compat` doesn't have — so naming it would be wrong
+                // advice for half the binaries that reach this line. The
+                // label works for both, and is what `resources` itself
+                // searches on.
+                //
+                // Both `ps` and `network ls`, because the abandoned step is
+                // just as often the network: with no sidecars it is the only
+                // thing left to abandon, so a containers-only hint would list
+                // nothing at all in exactly that case.
                 tracing::warn!(
                     task = task_name,
                     run = run_id.as_str(),
                     "Stopped cleaning up. Anything left behind carries the label \
                      eu.orican.ratect.run with this run's id — `docker ps -a --filter \
-                     label=eu.orican.ratect.run=<run>` lists it."
+                     label=eu.orican.ratect.run=<run>` and `docker network ls --filter \
+                     label=eu.orican.ratect.run=<run>` list it."
                 );
             }
         } else {
@@ -5687,6 +5703,13 @@ mod tests {
             events.contains(&"remove_on_exit:app:false".to_string()),
             "the main container itself must not be removed either: {events:?}"
         );
+        // Asserted alongside its neighbour deliberately: the two are
+        // adjacent `bool` parameters, so nothing but pinning both apart
+        // catches them being passed the wrong way round.
+        assert!(
+            events.contains(&"remove_on_failure:app:true".to_string()),
+            "the other half of the policy is untouched by this flag: {events:?}"
+        );
     }
 
     #[tokio::test]
@@ -5769,6 +5792,13 @@ mod tests {
         assert!(
             events.contains(&"remove_on_exit:app:true".to_string()),
             "the main container should still be removed too: {events:?}"
+        );
+        // The half this flag *does* govern — see the matching assertion in
+        // `without_cleanup_after_success_leaves_everything_in_place_on_a_nonzero_exit`
+        // for why both are pinned.
+        assert!(
+            events.contains(&"remove_on_failure:app:false".to_string()),
+            "an infrastructure failure must leave the main container in place: {events:?}"
         );
     }
 

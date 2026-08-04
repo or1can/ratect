@@ -285,6 +285,20 @@ fn remove_container_options() -> bollard::query_parameters::RemoveContainerOptio
         .build()
 }
 
+/// Whether a finished `run_container` call lands in the "success" cleanup
+/// bucket — the container ran to completion and reported an exit code,
+/// whatever that code was — as opposed to the infrastructure-failure one.
+///
+/// This has to agree with `engine.rs`'s own classification of the same
+/// call's return value, since that is what governs the same run's sidecars
+/// and network; see `run_container`'s `remove_on_failure` docs for what
+/// disagreeing costs. Split out as a plain function purely so that rule can
+/// be tested at all: the removal it governs sits mid-way through
+/// `run_container`, which needs a live daemon to reach.
+fn ran_to_completion(exit_code: &Result<i64>, readiness: &Result<()>) -> bool {
+    exit_code.is_ok() && readiness.is_ok()
+}
+
 /// wins, same as building any other `HashMap` from a list — Docker itself
 /// would reject a container with a genuinely duplicate mount point anyway.
 fn build_tmpfs_mounts(tmpfs: Option<&Vec<(String, String)>>) -> Option<HashMap<String, String>> {
@@ -1340,13 +1354,15 @@ pub trait ContainerRuntime {
     /// `remove_on_failure` is the other half (`TaskEngine::cleanup_after_failure`),
     /// and applies when the container ran but this function couldn't see it
     /// through — an attach or log-stream failure, where no exit code is ever
-    /// reported. Those used to return before any removal, so the flag had
-    /// nothing to govern; now that the error is carried past the removal
-    /// (so the container isn't stranded), the two policies have to be told
-    /// apart here rather than collapsed into `remove_on_exit`. Getting this
-    /// wrong force-removes the very container `--no-cleanup-after-failure`
-    /// exists to preserve, while the engine keeps that run's sidecars and
-    /// network — half a preserved scene is worse than none.
+    /// reported, or a `readiness` gate failure (below). Attach failures used
+    /// to return before any removal, so the flag had nothing to govern; now
+    /// that the error is carried past the removal (so the container isn't
+    /// stranded), the two policies have to be told apart here rather than
+    /// collapsed into `remove_on_exit`. The split has to land on exactly the
+    /// same line `engine.rs` draws when gating the same run's sidecars and
+    /// network, or this force-removes the very container
+    /// `--no-cleanup-after-failure` exists to preserve while the rest of the
+    /// scene is kept — half a preserved scene is worse than none.
     ///
     /// `started`, given, is signaled with the container's own id right after
     /// Docker's own `start` call succeeds — never sent at all if the
@@ -1362,9 +1378,10 @@ pub trait ContainerRuntime {
     /// concurrently against).
     ///
     /// `readiness`, given, is awaited for that same readiness gate's own
-    /// outcome *before* this call removes the container (see
-    /// `remove_on_exit`) — its `Err` then takes effect exactly like a
-    /// nonzero exit code, failing this call overall. Without this, a
+    /// outcome *before* this call removes the container — its `Err` fails
+    /// this call overall, and counts as `remove_on_failure`'s bucket rather
+    /// than `remove_on_exit`'s (unlike a nonzero exit code, which is the
+    /// container's own verdict on a container that did run). Without this, a
     /// fast-exiting main command would routinely race the still-in-flight
     /// readiness gate against this container's own removal (unlike a
     /// dependency, which stays running for the whole task and never hits
@@ -3021,8 +3038,18 @@ impl ContainerRuntime for DockerClient {
         // here rather than returning early — see the comment above.
         let reported_exit_code = exit_code.as_ref().ok().copied();
         // Which policy applies depends on how the run ended, not on which
-        // flag happened to be threaded here — see the doc comment.
-        let remove = if exit_code.is_ok() {
+        // flag happened to be threaded here — see the doc comment. The
+        // buckets must match `engine.rs`'s own classification of this
+        // call's return value exactly, since that is what governs the same
+        // run's sidecars and network: a container that ran to completion is
+        // "success" whatever its exit code, and anything else — an attach
+        // failure here, or a readiness-gate failure carried in from the
+        // concurrent task — is "failure". Putting a readiness failure in
+        // the success bucket force-removed the one container
+        // `--no-cleanup-after-failure` was preserving the rest of the scene
+        // for.
+        let ran_to_completion = ran_to_completion(&exit_code, &readiness_result);
+        let remove = if ran_to_completion {
             remove_on_exit
         } else {
             remove_on_failure
@@ -3039,12 +3066,12 @@ impl ContainerRuntime for DockerClient {
                     "removed container"
                 ),
                 // A failure to remove must not mask the reason we are here.
-                // With an attach/stream error already in hand, that is the
-                // root cause and this is a consequence of it — reporting the
-                // removal instead would hand back the least useful of the
-                // two. Before the error was deferred past this block it
-                // couldn't arise: the attach error returned first.
-                Err(error) if exit_code.is_err() => tracing::warn!(
+                // With an attach/stream or readiness error already in hand,
+                // that is the root cause and this is a consequence of it —
+                // reporting the removal instead would hand back the least
+                // useful of the two. Before the error was deferred past this
+                // block it couldn't arise: the attach error returned first.
+                Err(error) if !ran_to_completion => tracing::warn!(
                     container_id = %container.id,
                     ?error,
                     "failed to remove container after the run itself failed"
@@ -3377,6 +3404,37 @@ mod tests {
         let options = HashMap::from([("max-size".to_string(), "10m".to_string())]);
 
         assert_eq!(build_log_config(None, Some(&options)), None);
+    }
+
+    /// A container that ran and reported an exit code is "success" for
+    /// cleanup purposes whatever that code was — `--no-cleanup` (not
+    /// `--no-cleanup-after-failure`) is what keeps a failed build's
+    /// container around to poke at.
+    #[test]
+    fn a_nonzero_exit_code_still_counts_as_running_to_completion() {
+        assert!(ran_to_completion(&Ok(1), &Ok(())));
+    }
+
+    #[test]
+    fn an_attach_failure_does_not_count_as_running_to_completion() {
+        assert!(!ran_to_completion(
+            &Err(anyhow::anyhow!("attach failed")),
+            &Ok(())
+        ));
+    }
+
+    /// The readiness gate runs concurrently with the container's own
+    /// command, so it can fail while the command itself exits cleanly.
+    /// That is an infrastructure failure — `engine.rs` puts it in the
+    /// failure bucket when gating this run's sidecars and network, and
+    /// this must agree or `--no-cleanup-after-failure` preserves those
+    /// while force-removing the container they exist to give context to.
+    #[test]
+    fn a_readiness_failure_does_not_count_as_running_to_completion() {
+        assert!(!ran_to_completion(
+            &Ok(0),
+            &Err(anyhow::anyhow!("setup command failed"))
+        ));
     }
 
     #[test]

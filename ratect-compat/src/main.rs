@@ -739,9 +739,6 @@ mod tests {
         }
     }
 
-    /// With nothing asked for, the engine must behave exactly as it would
-    /// with no settings applied — an inverted boolean would silently change
-    /// the default behavior of every run.
     /// An interrupt tracker must always reach the engine, or Ctrl+C stops
     /// cleaning up after itself — a regression the flag-mapping tests above
     /// deliberately can't see, since they only compare against the defaults
@@ -757,6 +754,9 @@ mod tests {
         );
     }
 
+    /// With nothing asked for, the engine must behave exactly as it would
+    /// with no settings applied — an inverted boolean would silently change
+    /// the default behavior of every run.
     #[test]
     fn no_flags_maps_to_the_engines_own_defaults() {
         let settings = args(&["ratect-compat", "build"]).engine_settings(PathBuf::from("/p"));

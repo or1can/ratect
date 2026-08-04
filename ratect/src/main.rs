@@ -2008,9 +2008,6 @@ mod tests {
         }
     }
 
-    /// With nothing asked for, the engine must be left exactly as it would
-    /// be with no settings applied at all — an inverted boolean here would
-    /// silently change the default behavior of every run.
     /// An interrupt tracker must always reach the engine, or Ctrl+C stops
     /// cleaning up after itself — a regression the flag-mapping tests above
     /// deliberately can't see, since they only compare against the defaults
@@ -2026,6 +2023,9 @@ mod tests {
         );
     }
 
+    /// With nothing asked for, the engine must be left exactly as it would
+    /// be with no settings applied at all — an inverted boolean here would
+    /// silently change the default behavior of every run.
     #[test]
     fn no_flags_maps_to_the_engines_own_defaults() {
         let settings = settings_from(&[]);
