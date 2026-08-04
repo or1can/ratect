@@ -288,8 +288,15 @@ Ratect is a **Cargo workspace** with four crates (the
     `TaskStateMachine` does). Deliberately only the signal half: it *counts*
     interrupts and lets callers await one, and the engine decides what that
     means. Counting rather than latching is load-bearing — the count is the
-    only thing distinguishing a second Ctrl+C ("stop cleaning up, now") from
-    the first, and cleanup is slow enough to need that answer. Two things to
+    only thing distinguishing an interrupt that lands *during cleanup* ("stop
+    cleaning up, now") from the one that started it, and cleanup is slow
+    enough to need that answer. Note the engine's rule is *relative*: it
+    compares against the count when cleanup started, not a fixed `>= 2`.
+    That matters because arming the handler replaces the process's default
+    `SIGINT` behaviour for the whole run, so any interrupt the engine doesn't
+    act on is one it has silently swallowed — and a fixed threshold swallows
+    the first Ctrl+C during the cleanup of a run that was never interrupted,
+    which is the common case rather than an exotic one. Two things to
     preserve when touching it: `wait_for`'s `notified()`-before-check ordering
     (`Notify::notify_waiters` wakes only *existing* waiters, so checking first
     would let an interrupt land in the gap and hang the caller forever — it has
