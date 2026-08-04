@@ -216,6 +216,12 @@ impl EventSink for InterleavedEventLogger {
             // invocation), there was never anything to announce here in
             // the first place.
             TaskEvent::ImageResolved { .. } => {}
+            // Only the fancy logger's cleanup countdown needs to know a
+            // container exists before it is started; here the container's
+            // own "Container removed." line during cleanup is enough, and
+            // Batect's own interleaved logger reports no creation line
+            // either.
+            TaskEvent::TaskContainerCreated { .. } => {}
             TaskEvent::ImagePullCompleted { image } => {
                 for container in Self::containers_for_image(&state, &image) {
                     self.print_for_container(&state, &container, &format!("Pulled {image}."));

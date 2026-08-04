@@ -946,8 +946,13 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     and the engine's cleanup stage owns every removal under one classification.
     That is where Batect draws the line too — `CleanupStagePlanner` plans a
     removal for every entry in `containersCreated`, with no special case for
-    the task's own container — and matching it also fixed a missing "Cleaning
-    up..." line on a task with no dependencies. One residual race, shared with
+    the task's own container — and matching it also corrected how that
+    container's own cleanup is reported: `-o all` announces its removal like
+    any other container's, `fancy`'s countdown counts it rather than listing
+    only dependencies, and a run under `--use-network` with no dependencies
+    reports a cleanup stage at all (previously it had nothing left to report,
+    since the network wasn't Ratect's to remove and the container was removed
+    elsewhere). One residual race, shared with
     Batect: a container created but not yet recorded is dropped before cleanup
     can see it and survives — which is what the ownership labels and
     `ratect resources` are for.

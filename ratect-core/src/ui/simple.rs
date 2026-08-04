@@ -165,6 +165,7 @@ impl EventSink for SimpleEventLogger {
             TaskEvent::ImagePullProgress { .. }
             | TaskEvent::ImageBuildProgress { .. }
             | TaskEvent::ImageResolved { .. }
+            | TaskEvent::TaskContainerCreated { .. }
             | TaskEvent::ContainerRemoved { .. }
             | TaskEvent::RemovingNetwork
             | TaskEvent::TaskFailed { .. }

@@ -561,15 +561,18 @@ impl EventSink for FancyEventLogger {
                 }
                 self.repaint_startup(&mut state);
             }
+            TaskEvent::TaskContainerCreated { container } => {
+                // Counted from *created*, not from `RunningTaskContainer` —
+                // that is posted before the container exists, so counting it
+                // there left the countdown stuck on a container that was
+                // never created whenever creation failed. Outside the
+                // `keep_updating_startup` guard deliberately: that guard is
+                // about whether the startup block may still be repainted, and
+                // this is cleanup bookkeeping, which has to be right either
+                // way.
+                state.started_containers.insert(container);
+            }
             TaskEvent::RunningTaskContainer { container, command } => {
-                // Before the early return below, deliberately: that guard is
-                // about whether the startup *block* may still be repainted,
-                // and this is cleanup bookkeeping — the container has to be
-                // removed either way. (`DependencyStarted`'s equivalent sits
-                // after its own guard only because a dependency can't start
-                // once the block has frozen; the task container is what
-                // freezes it.)
-                state.started_containers.insert(container.clone());
                 if !state.keep_updating_startup {
                     return;
                 }
@@ -916,6 +919,9 @@ mod tests {
             container: "app".into(),
             command: None,
         });
+        logger.post(TaskEvent::TaskContainerCreated {
+            container: "app".into(),
+        });
         // The task container's own output streams raw, outside this
         // logger's control (`docker.rs`) — simulate a final line with no
         // trailing newline landing directly on the console.
@@ -946,6 +952,39 @@ mod tests {
         );
     }
 
+    /// A run whose task container is never created — a bad volume, or
+    /// Docker refusing `create_container` — has nothing of its own to clean
+    /// up, and the countdown must not wait on it.
+    ///
+    /// `RunningTaskContainer` is posted *before* creation is even attempted,
+    /// so counting the container from that event left this stuck at
+    /// "1 container (app) left to remove..." for the whole cleanup, never
+    /// reaching the network line. Counting from `TaskContainerCreated`
+    /// instead is what fixes it.
+    #[test]
+    fn a_task_container_that_was_never_created_is_not_counted_for_cleanup() {
+        let (logger, buffer) = logger_with_width(120);
+        logger.post(TaskEvent::TaskGraphResolved {
+            containers: vec![info("app", Some("app:1"), &[], true)],
+        });
+        logger.post(TaskEvent::RunningTaskContainer {
+            container: "app".into(),
+            command: None,
+        });
+        // No TaskContainerCreated — creation failed.
+
+        logger.post(TaskEvent::CleanupStarting);
+        logger.post(TaskEvent::RemovingNetwork);
+
+        assert!(
+            buffer
+                .contents()
+                .ends_with("Cleaning up: removing task network...\n"),
+            "cleanup should move straight to the network, got: {:?}",
+            buffer.contents()
+        );
+    }
+
     #[test]
     fn cleanup_line_counts_down_then_summary_replaces_it() {
         let (logger, buffer) = logger_with_width(120);
@@ -961,6 +1000,9 @@ mod tests {
         logger.post(TaskEvent::RunningTaskContainer {
             container: "app".into(),
             command: None,
+        });
+        logger.post(TaskEvent::TaskContainerCreated {
+            container: "app".into(),
         });
         logger.post(TaskEvent::CleanupStarting);
         // The task's own container counts too — it is removed during the

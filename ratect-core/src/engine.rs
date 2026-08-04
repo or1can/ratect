@@ -1600,11 +1600,11 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         );
 
         // Recorded the moment Docker reports the task's own container as
-        // started (see the readiness gate below), purely so an interrupt can
-        // remove it. On every other path `run_container` removes it itself;
-        // an interrupt is the one case where that future is dropped before
-        // it can, which would otherwise leak the one container a task is
-        // guaranteed to have.
+        // *created* — before it is started, and regardless of how the run
+        // ends. `run_container` removes nothing, so this is the only record
+        // of the container, and the cleanup stage below is the only place it
+        // is removed. Matches Batect's `containersCreated`, which is what its
+        // `CleanupStagePlanner` plans removals from.
         let task_container_id: Mutex<Option<String>> = Mutex::new(None);
 
         let execution = async {
@@ -1816,6 +1816,12 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 // plans removals from) rather than `containersStarted`. A
                 // container that fails to start still has to be removed.
                 *task_container_id.lock().unwrap() = Some(container_id.clone());
+                // Posted from the same place, so a display's idea of what is
+                // outstanding can never disagree with what cleanup will
+                // actually remove.
+                self.event_sink.post(TaskEvent::TaskContainerCreated {
+                    container: run.container.clone(),
+                });
                 if started_rx.await.is_err() {
                     return Ok(());
                 }
@@ -8775,6 +8781,13 @@ mod tests {
             TaskEvent::RunningTaskContainer {
                 container: "build-env".into(),
                 command: Some("cargo test".into()),
+            },
+            // After `RunningTaskContainer`, not before: that one announces
+            // the *stage*, this one reports Docker having actually created
+            // the container, which is when it becomes the engine's to clean
+            // up.
+            TaskEvent::TaskContainerCreated {
+                container: "build-env".into(),
             },
             // `build-env` has no `health_check` of its own, but the task's
             // own container now goes through the same readiness gate a

@@ -158,11 +158,31 @@ pub enum TaskEvent {
         container: String,
         command: Option<String>,
     },
+    /// Docker has created the task's own container — it exists, but is not
+    /// necessarily started. From here it is the engine's to remove, so this
+    /// is the point a display may start counting it as outstanding cleanup.
+    ///
+    /// Distinct from [`TaskEvent::RunningTaskContainer`], which is posted
+    /// *before* the container is created (and before its volumes are even
+    /// resolved), so it cannot stand in for this: a run that fails to create
+    /// its container would leave a cleanup countdown waiting forever on
+    /// something that never existed. Batect draws the same distinction with
+    /// its own `ContainerCreatedEvent`, which is what its cleanup progress
+    /// display counts.
+    ///
+    /// Only posted for the task's own container; a dependency's id is known
+    /// synchronously from `start_background_container`, so its
+    /// [`TaskEvent::DependencyStarted`] already serves this purpose.
+    TaskContainerCreated {
+        container: String,
+    },
     /// Teardown (stopping dependency containers, removing the task
     /// network) is about to begin. Not posted when there's nothing to tear
-    /// down (`--use-network` and no dependencies started).
+    /// down (`--use-network`, no dependencies started, and no task
+    /// container created).
     CleanupStarting,
-    /// A dependency container was stopped and removed during cleanup.
+    /// A container was stopped and removed during cleanup — a dependency,
+    /// or the task's own.
     ContainerRemoved {
         container: String,
     },
