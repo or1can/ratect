@@ -2975,15 +2975,21 @@ impl ContainerRuntime for DockerClient {
         )
         .await?;
 
+        // Deliberately *not* `?`-propagated here: the container exists and is
+        // running by this point (each path signals `started` before it can
+        // fail), so returning early would leave it behind — a leak with no
+        // owner, since the engine's own cleanup reasonably assumes this
+        // function removes the container it created. The error is carried
+        // past the removal below and propagated after it instead.
         let exit_code = if use_tty {
             self.run_container_interactively(&container.id, started)
-                .await?
+                .await
         } else if interactive {
             self.run_container_forwarding_stdin(name, &container.id, started)
-                .await?
+                .await
         } else {
             self.start_and_stream_logs(name, &container.id, started)
-                .await?
+                .await
         };
 
         // Awaited *before* removal — otherwise a fast-exiting main command
@@ -2999,19 +3005,29 @@ impl ContainerRuntime for DockerClient {
             None => Ok(()),
         };
 
+        // `None` when the container never reported one, which now reaches
+        // here rather than returning early — see the comment above.
+        let reported_exit_code = exit_code.as_ref().ok().copied();
         if remove_on_exit {
             self.docker
                 .remove_container(&container.id, Some(remove_container_options()))
                 .await?;
-            tracing::debug!(container_id = %container.id, exit_code, "removed container");
+            tracing::debug!(
+                container_id = %container.id,
+                exit_code = ?reported_exit_code,
+                "removed container"
+            );
         } else {
             tracing::info!(
                 container_id = %container.id,
-                exit_code,
+                exit_code = ?reported_exit_code,
                 "cleanup disabled; leaving container in place for investigation"
             );
         }
 
+        // Only now — the container is gone (or deliberately kept), so an
+        // attach/stream failure can no longer strand it.
+        let exit_code = exit_code?;
         if exit_code != 0 {
             return Err(ContainerExitedNonZero { exit_code }.into());
         }
