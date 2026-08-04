@@ -511,6 +511,11 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     /// `--tag-image`'s "did this container actually run" check once the
     /// whole invocation finishes (see `run_task`).
     containers_used: Mutex<HashSet<String>>,
+    /// Set by [`TaskEngine::with_interrupt`]: abandons the run when the user
+    /// interrupts it, so cleanup still happens. `None` (the default) means
+    /// interrupts aren't watched at all and a `SIGINT` kills the process
+    /// outright, which is every unit test and was every run before 0.25.0.
+    interrupt: Option<Arc<crate::interrupt::Interrupt>>,
     /// `false` when `--no-cleanup`/`--no-cleanup-after-success` was given:
     /// the task's own container (regardless of exit code — see
     /// `docker::ContainerRuntime::run_container`'s own doc comment for why
@@ -625,6 +630,10 @@ pub struct TaskEngineSettings {
     /// own, since the core's version isn't what a user sees from
     /// `--version`.
     pub ratect_version: Option<String>,
+    /// Set by a binary that watches for Ctrl+C, so an interrupted run still
+    /// cleans up after itself — see [`TaskEngine::with_interrupt`]. `None`
+    /// leaves interrupts unwatched.
+    pub interrupt: Option<Arc<crate::interrupt::Interrupt>>,
 }
 
 impl Default for TaskEngineSettings {
@@ -641,6 +650,7 @@ impl Default for TaskEngineSettings {
             max_parallelism: None,
             cache: None,
             ratect_version: None,
+            interrupt: None,
         }
     }
 }
@@ -669,7 +679,21 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             cache_options: None,
             ratect_version: None,
             cache_key: OnceCell::new(),
+            interrupt: None,
         }
+    }
+
+    /// Makes this engine abandon a run when the user interrupts it (Ctrl+C),
+    /// cleaning up what it created rather than leaving it behind — see
+    /// [`crate::interrupt`] and `run_task_internal`.
+    ///
+    /// Opt-in, like the other settings here, and left off by default so a
+    /// unit test never picks up the process's real signals: only a binary
+    /// that has actually called [`crate::interrupt::Interrupt::listen`]
+    /// wants this.
+    pub fn with_interrupt(mut self, interrupt: Arc<crate::interrupt::Interrupt>) -> Self {
+        self.interrupt = Some(interrupt);
+        self
     }
 
     /// Injects the output-mode logger task-execution milestones render
@@ -810,8 +834,12 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             max_parallelism,
             cache,
             ratect_version,
+            interrupt,
         } = settings;
         self.ratect_version = ratect_version;
+        if let Some(interrupt) = interrupt {
+            self = self.with_interrupt(interrupt);
+        }
         if let Some(network) = existing_network {
             self = self.with_existing_network(network);
         }
@@ -936,6 +964,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     async fn run_task_container_readiness(
         &self,
         started: tokio::sync::oneshot::Receiver<String>,
+        started_id: &Mutex<Option<String>>,
         name: &str,
         container_config: &crate::config::Container,
         environment: Option<&HashMap<String, String>>,
@@ -944,6 +973,11 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         let Ok(container_id) = started.await else {
             return Ok(());
         };
+        // Recorded here rather than in `run_container` because this is the
+        // one place that already learns the id at the moment it exists —
+        // and an interrupt needs it to remove a container `run_container`
+        // will now never get to remove itself. See `run_task_internal`.
+        *started_id.lock().unwrap() = Some(container_id.clone());
 
         self.docker
             .wait_for_container_healthy(&container_id)
@@ -1547,7 +1581,15 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             self.ratect_version.as_deref(),
         );
 
-        let result: Result<()> = async {
+        // Recorded the moment Docker reports the task's own container as
+        // started (see the readiness gate below), purely so an interrupt can
+        // remove it. On every other path `run_container` removes it itself;
+        // an interrupt is the one case where that future is dropped before
+        // it can, which would otherwise leak the one container a task is
+        // guaranteed to have.
+        let task_container_id: Mutex<Option<String>> = Mutex::new(None);
+
+        let execution = async {
             // Always created, even with no dependencies, so the task's own
             // container is never left on Docker's shared default bridge
             // network. Unless `--use-network` was given
@@ -1750,6 +1792,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 let result = self
                     .run_task_container_readiness(
                         started_rx,
+                        &task_container_id,
                         &run.container,
                         container_config,
                         environment.as_ref(),
@@ -1762,9 +1805,48 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             run_result?;
 
             Ok(())
-        }
-        .await;
+        };
 
+        // An interrupt abandons the run and falls through to the cleanup
+        // below, rather than killing the process where it stands. Dropping
+        // `run` is what cancels the work in flight — the Rust equivalent of
+        // Batect's `cancellationContext.cancel()`, and immediate where
+        // Batect then waits for its steps to wind down.
+        //
+        // `biased` so a run that finishes in the same moment it's
+        // interrupted is reported as having finished: the two are
+        // indistinguishable to the user, and completing is the more useful
+        // reading of a tie.
+        //
+        // The residual race is Batect's too: a container created but not yet
+        // recorded (in `running_sidecars`, or `task_container_id` below) is
+        // dropped before cleanup can see it, and survives. The ownership
+        // labels are the answer to that — `ratect resources` finds exactly
+        // this — rather than an ordering that could avoid it.
+        let result: Result<()> = match &self.interrupt {
+            Some(interrupt) => {
+                tokio::select! {
+                    biased;
+                    result = execution => result,
+                    () = interrupt.interrupted() => {
+                        Err(anyhow::Error::new(crate::interrupt::TaskInterrupted))
+                    }
+                }
+            }
+            None => execution.await,
+        };
+        let interrupted = result
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.is::<crate::interrupt::TaskInterrupted>());
+        if interrupted {
+            tracing::warn!(
+                task = task_name,
+                "Interrupted; cleaning up. Press Ctrl+C again to stop cleaning up."
+            );
+        }
+
+        let task_container_id = task_container_id.into_inner().unwrap();
         let running_sidecars = running_sidecars.into_inner().unwrap();
         // `Some` only if network resolution inside the block above actually
         // succeeded — `None` both when `--use-network` was given (we never
@@ -1792,11 +1874,49 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             self.cleanup_after_failure
         };
 
+        // A second Ctrl+C abandons cleanup itself. Cleanup talks to the
+        // daemon and isn't instant — a container ignoring `SIGTERM` waits
+        // out Docker's full kill timeout — so "stop now" has to mean
+        // something once the user has already asked once. Batect lands in
+        // the same place: a second interrupt during its cleanup stage
+        // switches it to `PostTaskManualCleanup.Required`. What's left
+        // behind is findable by its ownership labels, which is what
+        // `ratect resources` exists for, so this abandons rather than
+        // enumerating removal commands the way Batect does.
+        let cleanup_abandoned = || {
+            self.interrupt
+                .as_ref()
+                .is_some_and(|interrupt| interrupt.count() >= 2)
+        };
+
         if should_cleanup {
             if !running_sidecars.is_empty() || owns_network {
                 self.event_sink.post(TaskEvent::CleanupStarting);
             }
+            // Only on an interrupt: on every other path `run_container` has
+            // already removed the task's own container itself, and asking
+            // Docker to remove it twice would report a spurious failure.
+            if let Some(container_id) = task_container_id
+                .as_ref()
+                .filter(|_| interrupted && !cleanup_abandoned())
+            {
+                match self.docker.stop_and_remove_container(container_id).await {
+                    Ok(()) => self.event_sink.post(TaskEvent::ContainerRemoved {
+                        container: run.container.clone(),
+                    }),
+                    Err(e) => {
+                        tracing::warn!(
+                            container = run.container.as_str(),
+                            error = ?e,
+                            "Failed to clean up the task's own container"
+                        );
+                    }
+                }
+            }
             for (name, container_id) in &running_sidecars {
+                if cleanup_abandoned() {
+                    break;
+                }
                 match self.docker.stop_and_remove_container(container_id).await {
                     Ok(()) => self.event_sink.post(TaskEvent::ContainerRemoved {
                         container: name.clone(),
@@ -1810,12 +1930,19 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     }
                 }
             }
-            if owns_network {
+            if owns_network && !cleanup_abandoned() {
                 let network_name = network_name.expect("owns_network implies network_name is Some");
                 self.event_sink.post(TaskEvent::RemovingNetwork);
                 if let Err(e) = self.docker.remove_network(&network_name).await {
                     tracing::warn!(network = network_name.as_str(), error = ?e, "Failed to remove network");
                 }
+            }
+            if cleanup_abandoned() {
+                tracing::warn!(
+                    task = task_name,
+                    "Interrupted again; stopped cleaning up. Anything left behind carries this \
+                     run's ownership labels — `ratect resources list` will find it."
+                );
             }
         } else if !running_sidecars.is_empty() || owns_network {
             tracing::info!(
@@ -4964,6 +5091,118 @@ mod tests {
         );
     }
 
+    /// An already-recorded interrupt wins because `run_task_internal`'s
+    /// `select!` polls the run first (`biased`) and the run can't finish
+    /// synchronously — the run delay is what holds it at an await point long
+    /// enough for the interrupt branch to be reached. Nothing needs virtual
+    /// time to advance, so this stays deterministic.
+    fn interrupted_engine(
+        interrupts: usize,
+    ) -> (
+        FakeContainerRuntime,
+        TaskEngine<FakeContainerRuntime>,
+        Arc<crate::interrupt::Interrupt>,
+    ) {
+        let config = config_with_database_dependency(|_| {});
+        let docker = FakeContainerRuntime::default()
+            .with_run_delay("app", std::time::Duration::from_secs(60));
+        let interrupt = crate::interrupt::Interrupt::new();
+        for _ in 0..interrupts {
+            interrupt.record();
+        }
+        let engine = TaskEngine::new(config, docker.clone()).with_interrupt(Arc::clone(&interrupt));
+        (docker, engine, interrupt)
+    }
+
+    #[tokio::test]
+    async fn an_interrupt_abandons_the_run_and_still_cleans_up() {
+        let (docker, engine, _interrupt) = interrupted_engine(1);
+
+        let error = engine.run_task("start", &[]).await.unwrap_err();
+
+        assert!(
+            error.is::<crate::interrupt::TaskInterrupted>(),
+            "an interrupted run should fail with TaskInterrupted, not a generic error: {error:#}"
+        );
+
+        let events = docker.events();
+        assert!(
+            events.contains(&"sidecar-stop:sidecar-id-database".to_string()),
+            "a dependency started before the interrupt must still be removed: {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| e.starts_with("network-remove:")),
+            "the task's own network must still be removed: {events:?}"
+        );
+    }
+
+    /// The whole point of routing an interrupt through the ordinary failure
+    /// path: `--no-cleanup-after-failure` governs it, exactly as it governs a
+    /// build or health-check failure. Batect behaves identically — its
+    /// `UserInterruptedExecutionEvent` is a `TaskFailedEvent`, so
+    /// `TaskStateMachine` selects `behaviourAfterFailure` for it.
+    #[tokio::test]
+    async fn an_interrupt_leaves_everything_alone_with_cleanup_after_failure_disabled() {
+        let (docker, engine, _interrupt) = interrupted_engine(1);
+        let engine = engine.without_cleanup_after_failure();
+
+        let error = engine.run_task("start", &[]).await.unwrap_err();
+        assert!(error.is::<crate::interrupt::TaskInterrupted>());
+
+        let events = docker.events();
+        assert!(
+            !events.iter().any(|e| e.starts_with("sidecar-stop:")),
+            "--no-cleanup-after-failure must leave an interrupted run's containers alone: \
+             {events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| e.starts_with("network-remove:")),
+            "--no-cleanup-after-failure must leave the network alone too: {events:?}"
+        );
+    }
+
+    /// A second Ctrl+C means "stop now", including stopping the cleanup that
+    /// the first one started — cleanup itself talks to the daemon and can
+    /// take tens of seconds when a container ignores `SIGTERM`.
+    #[tokio::test]
+    async fn a_second_interrupt_abandons_cleanup_itself() {
+        let (docker, engine, _interrupt) = interrupted_engine(2);
+
+        let error = engine.run_task("start", &[]).await.unwrap_err();
+        assert!(error.is::<crate::interrupt::TaskInterrupted>());
+
+        let events = docker.events();
+        assert!(
+            !events.iter().any(|e| e.starts_with("sidecar-stop:")),
+            "a second interrupt should stop cleanup rather than pressing on: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| e.starts_with("network-remove:")),
+            "a second interrupt should stop before removing the network too: {events:?}"
+        );
+    }
+
+    /// Without an interrupt tracker at all — every unit test, and both
+    /// binaries before 0.25.0 — the run is awaited directly and nothing
+    /// about its behaviour changes.
+    #[tokio::test]
+    async fn a_run_with_no_interrupt_tracker_is_unaffected() {
+        let config = config_with_database_dependency(|_| {});
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine
+            .run_task("start", &[])
+            .await
+            .expect("an uninterrupted run should still succeed");
+
+        let events = docker.events();
+        assert!(
+            events.iter().any(|e| e.starts_with("run:")),
+            "the task should have run: {events:?}"
+        );
+    }
+
     #[tokio::test]
     async fn failing_setup_command_fails_the_task_and_still_cleans_up() {
         let config = config_with_database_dependency(|database| {
@@ -6977,10 +7216,16 @@ mod tests {
                 PathBuf::from("/projects/demo"),
             )),
             ratect_version: Some("1.2.3".to_string()),
+            interrupt: Some(crate::interrupt::Interrupt::new()),
         };
         let engine = TaskEngine::new(config, FakeContainerRuntime::default())
             .with_settings(settings)
             .expect("settings naming a real container should apply");
+
+        assert!(
+            engine.interrupt.is_some(),
+            "an interrupt tracker should reach the engine, or Ctrl+C won't clean up"
+        );
 
         assert_eq!(engine.existing_network.as_deref(), Some("existing"));
         assert!(!engine.publish_ports);

@@ -893,7 +893,7 @@ cycle (0.2.0, the first one not about `ratect-compat`):
 - **0.25.0** (planned) — **Cleanup on interrupt, `build_ssh` parity, and the next
   slice of the conformance corpus**. Three separable behaviours, so one `feat:`
   commit each, matching the repo's own commit-packaging convention:
-  - **Clean up when interrupted (Ctrl+C)** — Ratect currently has *no* signal
+  - ~~**Clean up when interrupted (Ctrl+C)** — Ratect currently has *no* signal
     handling at all, in any crate, so `SIGINT` kills the process outright and
     every container the task started, plus its network, is left behind. Batect
     traps it (`InterruptionTrap`, wrapped around the whole execution run in
@@ -914,7 +914,31 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     so the flag suppresses cleanup — read from its source, not run, so confirm
     before porting), and what a *second* Ctrl+C should do, which is Batect's own
     unbuilt "some way to kill a misbehaving task" roadmap item and the obvious
-    place for Ratect to go one better.
+    place for Ratect to go one better.~~ — done: a new `ratect-core::interrupt`
+    module (an interrupt *counter*, not a flag — the count is what distinguishes
+    the second Ctrl+C from the first), armed by each binary from its async path
+    and consumed by `run_task_internal`'s `select!`. Dropping the run future is
+    what cancels the work in flight, the Rust equivalent of Batect's own
+    `cancellationContext.cancel()` and immediate where Batect then waits for its
+    steps to wind down. Both open questions resolved as expected:
+    `--no-cleanup-after-failure` *does* suppress cleanup for an interrupt
+    (confirmed in Batect's `TaskStateMachine` — any `TaskFailedEvent` sets
+    `taskHasFailed`, and `startCleanupStage` then selects
+    `behaviourAfterFailure`), and a second Ctrl+C stops the cleanup itself,
+    where Batect switches to printing manual cleanup commands instead — Ratect
+    just stops, since the ownership labels already make the leftovers findable
+    with `ratect resources`. Three things emerged on contact: the task's own
+    container needed its id recorded as it starts (`run_container` removes it
+    itself on every *other* path, and an interrupt is precisely when that future
+    is dropped before it can); the exit code is now **130** (128 + `SIGINT`)
+    rather than a generic `1`, since Batect's own `-1`/255-for-everything says
+    nothing about which failure it was; and arming the listener had to move out
+    of the synchronous `engine_settings` into each binary's async path, because
+    `tokio::spawn` panics outside a runtime and that function is deliberately
+    synchronous so the flag-mapping tests can call it directly. One residual
+    race, shared with Batect: a container created but not yet recorded is
+    dropped before cleanup can see it and survives — which is what the ownership
+    labels and `ratect resources` are for.
   - **`build_ssh` full parity** — multiple named agents and, the practically
     important half, explicit private key files (`paths`) served with no running
     agent at all. The last known *feature* gap in the [Batect

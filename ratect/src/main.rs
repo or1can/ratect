@@ -588,6 +588,9 @@ async fn main() {
             eprintln!("Error: {error:?}");
             match error.downcast_ref::<ratect_core::docker::ContainerExitedNonZero>() {
                 Some(failure) => failure.exit_code as u8,
+                // 128 + SIGINT — see `ratect-compat`'s own handler for why
+                // an interrupt gets its own code rather than a generic 1.
+                None if error.is::<ratect_core::interrupt::TaskInterrupted>() => 130,
                 None => 1,
             }
         }
@@ -777,6 +780,12 @@ async fn run_task(
 
     // Built before the connection options are consumed below.
     let settings = args.engine_settings(project.project_directory);
+    // Armed here rather than in `engine_settings`, which is synchronous —
+    // see its own comment. From this point a Ctrl+C abandons the run and
+    // cleans up instead of killing the process where it stands.
+    if let Some(interrupt) = &settings.interrupt {
+        interrupt.listen();
+    }
     let docker = DockerClient::new(&args.docker.into())?
         .with_event_sink(Arc::clone(&event_sink))
         .with_enable_buildkit(args.enable_buildkit);
@@ -822,6 +831,9 @@ impl RunArgs {
             // Stamped onto every resource this run creates, so it can be
             // identified later — see `ratect_core::labels`.
             ratect_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            // Created here but *not* yet listening — see `ratect-compat`'s
+            // own settings for both halves of the reasoning.
+            interrupt: Some(ratect_core::interrupt::Interrupt::new()),
         }
     }
 }

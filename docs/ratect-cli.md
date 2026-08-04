@@ -396,8 +396,10 @@ until the first real run caches it.
 ## Exit codes and diagnostics
 
 Identical to `ratect-compat`: a task's own container exit code becomes `ratect`'s exit
-code, anything else that fails exits `1`, and the reason always reaches stderr — in
-every output style, including `quiet`. `RUST_LOG` controls Ratect's own internal
+code, an interrupted run (Ctrl+C) exits `130`, anything else that fails exits `1`, and
+the reason always reaches stderr — in every output style, including `quiet`. Ctrl+C
+abandons the run and then cleans up after it; a second one stops the cleanup too, and
+`ratect resources list` finds whatever that leaves. `RUST_LOG` controls Ratect's own internal
 logging (default `info`, on stderr). Unlike `ratect-compat` there's no `--log-file`;
 redirect stderr if you want one.
 

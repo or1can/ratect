@@ -279,6 +279,26 @@ Ratect is a **Cargo workspace** with four crates (the
     `ProxyEnvironmentVariablesProvider`/`ProxyEnvironmentVariablePreprocessor`.
     Rewrites `localhost`/`127.0.0.1`/`::1` proxy URLs to `host.docker.internal`
     (macOS/Windows only — `None` on Linux).
+  - **`ratect-core/src/interrupt.rs`** (0.25.0): Ctrl+C tracking, so an
+    interrupted run still cleans up instead of leaving its containers and
+    network behind — a port of Batect's `InterruptionTrap`, whose
+    `UserInterruptedExecutionEvent` is a `TaskFailedEvent`, which is why an
+    interrupt takes the *ordinary failure* path here too (and so
+    `--no-cleanup-after-failure` suppresses cleanup for it, exactly as Batect's
+    `TaskStateMachine` does). Deliberately only the signal half: it *counts*
+    interrupts and lets callers await one, and the engine decides what that
+    means. Counting rather than latching is load-bearing — the count is the
+    only thing distinguishing a second Ctrl+C ("stop cleaning up, now") from
+    the first, and cleanup is slow enough to need that answer. Two things to
+    preserve when touching it: `wait_for`'s `notified()`-before-check ordering
+    (`Notify::notify_waiters` wakes only *existing* waiters, so checking first
+    would let an interrupt land in the gap and hang the caller forever — it has
+    its own regression test), and the fact that `listen` spawns, so it can only
+    be called from inside a runtime — which is why both binaries arm it from
+    their async path rather than in the synchronous `engine_settings` their
+    flag-mapping tests call directly. Interactive tasks are deliberately
+    untouched: a raw-mode terminal doesn't turn Ctrl+C into a signal at all,
+    forwarding `0x03` to the container instead, matching `docker run -it`.
   - **`ratect-core/src/engine.rs`**: The core execution logic — task lifecycle,
     prerequisites, dependency-cycle detection, sidecar/dependency container resolution
     (see [`docs/task-lifecycle.md`](docs/task-lifecycle.md)), and once-per-session

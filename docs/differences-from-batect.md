@@ -158,16 +158,24 @@ Batect's full flag list, from its [CLI reference](https://github.com/batect/bate
 Batect behavior not implemented in task execution, beyond what's covered by the field
 tables above:
 
-- **Cleanup on interrupt (Ctrl+C)**: **not implemented — a known gap.** Ratect has no
-  signal handling, so pressing Ctrl+C during a task kills Ratect immediately and leaves
-  behind every container the task had started, along with the task's network. Batect
-  traps `SIGINT` and treats it as a task failure, which runs its ordinary cleanup, so an
-  interrupted Batect run leaves nothing behind (unless `--no-cleanup-after-failure` is
-  set). Until this is closed, `ratect resources list` and `ratect resources clean` find
-  and remove what an interrupted run left — see the
-  [`ratect` CLI reference](ratect-cli.md#managing-resources) — or remove them with `docker rm`/
-  `docker network rm`. Note this applies to an interrupt only: a task that *fails*
-  normally, or succeeds, is cleaned up in both tools alike.
+- **Cleanup on interrupt (Ctrl+C)**: matches Batect — pressing Ctrl+C abandons the run
+  and then cleans up after it, rather than killing Ratect where it stands and leaving
+  every container and the task's network behind. As in Batect, an interrupt counts as a
+  task *failure*, so `--no-cleanup-after-failure` (and `--no-cleanup`) suppresses the
+  cleanup for it exactly as for a build or health-check failure, leaving everything in
+  place for investigation. Two deliberate differences: Ratect exits **130** (128 + SIGINT,
+  the shell's convention), where Batect returns `-1`/255 for every failure alike and so
+  says nothing about which it was; and a **second Ctrl+C stops the cleanup itself**,
+  since cleanup talks to the daemon and a container ignoring `SIGTERM` waits out Docker's
+  full kill timeout. Batect ends up in the same place by a different route — a second
+  interrupt during its cleanup stage switches it to printing manual cleanup commands —
+  whereas Ratect just stops, because anything left carries the ownership labels above
+  and `ratect resources list`/`clean` finds it (see the
+  [`ratect` CLI reference](ratect-cli.md#managing-resources)). One case where the
+  keystroke deliberately doesn't reach Ratect at all: an
+  [interactive](config-reference.md#interactive-mode) task puts the terminal in raw mode,
+  where Ctrl+C isn't turned into a signal but forwarded to the container as a keystroke —
+  matching `docker run -it`, where it belongs to the program you're talking to.
 - **Ownership labels**: every container and network Ratect creates carries
   `eu.orican.ratect.*` labels recording the project, task, run, and (for a
   container) which configured container it is and whether it was the task's own or

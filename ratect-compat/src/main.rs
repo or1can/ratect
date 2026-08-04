@@ -268,6 +268,14 @@ impl Args {
             // Stamped onto every resource this run creates, so it can be
             // identified later — see `ratect_core::labels`.
             ratect_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            // Created here rather than in `ratect-core`, because a library
+            // shouldn't take over a process's signal handling on its own
+            // initiative. It isn't listening yet, though: `listen` spawns,
+            // so it panics outside a runtime, and this function is
+            // deliberately synchronous so the flag-mapping tests can call it
+            // directly. The async path that actually runs a task arms it,
+            // right after calling this.
+            interrupt: Some(ratect_core::interrupt::Interrupt::new()),
         }
     }
 }
@@ -401,6 +409,13 @@ async fn main() {
             // inspect what actually happened.
             match err.downcast_ref::<ratect_core::docker::ContainerExitedNonZero>() {
                 Some(failure) => failure.exit_code as u8,
+                // 128 + SIGINT, the shell's own convention for "killed by
+                // this signal", so a script or CI job can tell an interrupted
+                // run apart from a failed one. A divergence from Batect,
+                // which returns -1 (255) for every failure alike and so says
+                // nothing about which it was — Ratect already diverges here
+                // by using 1 rather than 255 for an ordinary failure.
+                None if err.is::<ratect_core::interrupt::TaskInterrupted>() => 130,
                 None => 1,
             }
         }
@@ -519,6 +534,13 @@ async fn run(args: Args) -> Result<()> {
             )?;
             // Built before the connection options consume `args` below.
             let settings = args.engine_settings(project_directory);
+            // Armed here rather than in `engine_settings`, which is
+            // synchronous — see its own comment. From this point a Ctrl+C
+            // abandons the run and cleans up instead of killing the process
+            // where it stands.
+            if let Some(interrupt) = &settings.interrupt {
+                interrupt.listen();
+            }
             let docker_connection = DockerConnectionOptions {
                 host: args.docker_host,
                 context: args.docker_context,
