@@ -4128,14 +4128,28 @@ mod tests {
         }
     }
 
-    /// The two `connect_over_tls_*` tests both drive bollard's
-    /// `connect_with_ssl`, which loads the OS trust store
+    /// Every `connect_over_tls_*` test reaches `connect`'s
+    /// `Docker::connect_with_ssl`, which loads the OS trust store
     /// (`rustls-native-certs`) on top of our throwaway test CA. On macOS that
     /// native-cert load intermittently fails ("Could not load native certs")
-    /// when two threads hit the Security framework at once — so these two, the
-    /// only tests that open a TLS connection, take a shared lock instead of
-    /// running concurrently. Recovered from poisoning so a failing test
-    /// reports its own assertion rather than cascading a `PoisonError`.
+    /// when two threads hit the Security framework at once — so they take a
+    /// shared lock around `connect` instead of running concurrently.
+    /// Recovered from poisoning so a failing test reports its own assertion
+    /// rather than cascading a `PoisonError`.
+    ///
+    /// **Every TLS-enabled `connect` in these tests needs this lock, not just
+    /// the ones that complete a handshake.** The racy step is the native-cert
+    /// load, which happens inside `connect_with_ssl` for a bad certificate
+    /// path just as much as a good one — so the two error-path tests below
+    /// take it too, even though neither ever opens a socket. Leaving them out
+    /// is what made the *handshake* test fail intermittently under a full
+    /// `--workspace` run: an unlocked error-path test would race it and the
+    /// wrong test would report the failure.
+    ///
+    /// The lock can't help across processes, so it relies on these being the
+    /// only TLS `connect` callers in one test binary. A new one belongs here
+    /// too. (`connect` calls that fail *before* the TLS branch — the
+    /// context-conflict tests — don't need it, and take no lock.)
     static TLS_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn serial_tls() -> std::sync::MutexGuard<'static, ()> {
@@ -4248,7 +4262,10 @@ mod tests {
             ..Default::default()
         };
 
-        let err = connect(&options).unwrap_err();
+        let err = {
+            let _guard = serial_tls();
+            connect(&options).unwrap_err()
+        };
         assert!(err.to_string().contains("over TLS"), "{err}");
     }
 
@@ -4264,7 +4281,10 @@ mod tests {
             ..Default::default()
         };
 
-        let err = connect(&options).unwrap_err();
+        let err = {
+            let _guard = serial_tls();
+            connect(&options).unwrap_err()
+        };
         assert!(err.to_string().contains("over TLS"), "{err}");
     }
 
