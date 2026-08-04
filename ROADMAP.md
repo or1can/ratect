@@ -952,11 +952,19 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     API this stacks on is now settled rather than provisional. Note it does *not*
     wait on bollard 0.22 reaching crates.io: the fork branch already carries the
     merged code, so the work proceeds on the existing `[patch.crates-io]` entry and
-    dropping that patch stays a separate later chore. Full design (the
-    `SshAgentSource` shape, the in-process keyring's agent-protocol loop, and the
-    `rsa-sha2-*` signature flags modern sshd requires) is in the issue; the plan
-    remains to implement on the fork, ship here, and PR upstream as the third
-    contribution.
+    dropping that patch stays a separate later chore.
+
+    Lands as **two commits, split along the line between plumbing and
+    cryptography**: named agents backed by Unix sockets in the fork (a real
+    id → backend map replacing today's hardcoded single-agent path — no crypto,
+    no new dependencies, and the half that gets PR'd upstream), then the
+    keyring that serves `paths` in *Ratect*, as an ssh-agent protocol server
+    over a temporary Unix socket. Full rationale, alternatives, and the four
+    properties any later change must preserve — including keeping the keyring
+    extractable so the upstream *offer* stays a copy rather than a rewrite:
+    [decisions/0005](decisions/0005-build-ssh-keyring-placement.md), which
+    revises [issue #1](https://github.com/or1can/ratect/issues/1)'s original
+    all-on-the-fork plan.
   - **More of Batect's journey corpus** — the [conformance phase](#ratect-compat)
     above hasn't moved since 0.23.0, since 0.24.0 was really a `ratect` release
     that carried three shared-core config fixes along. Takes the deferrals 0.23.0
