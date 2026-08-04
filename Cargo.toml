@@ -2,16 +2,24 @@
 members = ["ratect", "ratect-compat", "ratect-core", "dockerignore"]
 resolver = "2"
 
-# Carries two changes that have both now *merged* upstream but not yet shipped in
-# a release: session providers on `build_image`, so one BuildKit build path serves
-# secrets/ssh *and* streams build output
-# (https://github.com/fussybeaver/bollard/pull/731), and `ping_info`, exposing the
-# daemon's advertised default builder
-# (https://github.com/fussybeaver/bollard/pull/732). Both are on bollard's `master`
-# (0.22.0), whose latest crates.io release is still 0.21.0 — hence the patch. See
-# ROADMAP.md's 0.12.0 entry. Cargo.lock pins the exact commit, so builds stay
-# reproducible; the branch is kept (rather than tracking upstream `master`) so the
-# pin doesn't drag in unrelated post-merge work. Drop this patch entirely once
-# bollard 0.22 is published.
+# Upstream `master` plus one commit of ours that hasn't landed yet: sshforward
+# dispatch to *named* ssh agents, which `build_ssh`'s multi-agent and `paths`
+# support is built on (decisions/0005). Master already carries the two changes
+# this patch originally existed for — session providers on `build_image`
+# (https://github.com/fussybeaver/bollard/pull/731) and `ping_info`
+# (https://github.com/fussybeaver/bollard/pull/732) — both merged, but the latest
+# crates.io release is still 0.21.0. See ROADMAP.md's 0.12.0 entry.
+#
+# The branch is cut fresh from upstream `master`, not from the old
+# `feat/build-image-session-providers` PR branch: upstream squash-merged that PR
+# and reshaped it during review, so the branch and master now express the same
+# feature as different commits touching the same lines. Comparing them conflicts,
+# which makes that branch unable to raise a PR and unable to pick up later
+# upstream fixes. Keep this pin on a branch that is `master` + our own unlanded
+# commits, and rebase it rather than merging master into it.
+#
+# Cargo.lock pins the exact commit, so builds stay reproducible. Dropping this
+# patch needs *both* bollard 0.22 published and the named-agent change landed
+# upstream — 0.22 alone isn't enough, since it won't carry `set_ssh_agent`.
 [patch.crates-io]
-bollard = { git = "https://github.com/or1can/bollard.git", branch = "feat/build-image-session-providers" }
+bollard = { git = "https://github.com/or1can/bollard.git", branch = "feat/ssh-named-agents" }

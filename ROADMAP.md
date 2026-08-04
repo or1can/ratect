@@ -424,6 +424,12 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     [bollard#732](https://github.com/fussybeaver/bollard/pull/732)) and sit on
     bollard's `master` (0.22.0); the patch remains only because the latest
     crates.io release is still 0.21.0, and is dropped outright once 0.22 ships.
+    *Superseded in 0.25.0*: the pin moved to `feat/ssh-named-agents` (upstream
+    `master` plus our own unlanded sshforward named-agent commit), so dropping
+    the patch now needs that change landed as well as 0.22 published. The
+    branch named above became unusable once upstream squash-merged and reshaped
+    it — see the `bollard` entry in AGENTS.md for why, and the root
+    `Cargo.toml` for the current pin.
     (A third, separable upstream contribution remains open: named
     agents/explicit key files for full `build_ssh` parity, which needs an
     in-process ssh keyring agent). Deliberately *not* a build-library switch: no
