@@ -1823,17 +1823,23 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         // dropped before cleanup can see it, and survives. The ownership
         // labels are the answer to that — `ratect resources` finds exactly
         // this — rather than an ordering that could avoid it.
-        let result: Result<()> = match &self.interrupt {
+        // Captured in the same expression that ends the run, not further
+        // down: every interrupt after this instant is one the *cleanup*
+        // should react to, and reading the count later would fold anything
+        // arriving in between into the baseline and swallow it. The window
+        // is small either way, but it is the window that matters.
+        let (result, interrupts_before_cleanup): (Result<()>, usize) = match &self.interrupt {
             Some(interrupt) => {
                 tokio::select! {
                     biased;
-                    result = execution => result,
-                    () = interrupt.interrupted() => {
-                        Err(anyhow::Error::new(crate::interrupt::TaskInterrupted))
-                    }
+                    result = execution => (result, interrupt.count()),
+                    () = interrupt.interrupted() => (
+                        Err(anyhow::Error::new(crate::interrupt::TaskInterrupted)),
+                        interrupt.count(),
+                    ),
                 }
             }
-            None => execution.await,
+            None => (execution.await, 0),
         };
         let interrupted = result
             .as_ref()
@@ -1873,16 +1879,22 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         // something. Batect lands in the same place: an interrupt during its
         // cleanup stage switches it to `PostTaskManualCleanup.Required`.
         //
-        // Measured against the count when cleanup *started*, not a fixed
-        // `>= 2`. Arming the handler replaces the process's default `SIGINT`
-        // behaviour for the whole run, so an interrupt Ratect doesn't act on
-        // is one it has silently swallowed — and a fixed threshold swallows
-        // the first Ctrl+C during the cleanup of a run that was never
-        // interrupted (the common case: a task finished, cleanup is slow,
-        // the user wants out). Relative to the baseline, one press abandons
-        // cleanup after a normal run and a second does after an interrupted
-        // one, which is the same rule stated once.
-        let interrupts_before_cleanup = self.interrupt.as_ref().map_or(0, |i| i.count());
+        // Measured against the count when the run *ended* (captured above),
+        // not a fixed `>= 2`. Arming the handler replaces the process's
+        // default `SIGINT` behaviour for the whole run, so an interrupt
+        // Ratect doesn't act on is one it has silently swallowed — and a
+        // fixed threshold swallows the first Ctrl+C during the cleanup of a
+        // run that was never interrupted (the common case: a task finished,
+        // cleanup is slow, the user wants out). Relative to the baseline,
+        // one press abandons cleanup after a normal run and a second does
+        // after an interrupted one, which is the same rule stated once.
+        //
+        // One press is still absorbed rather than acted on: the one that
+        // arrives in the same instant the run completes, which `biased`
+        // resolves in the run's favour. That tie is deliberate — the run
+        // finished, so there is nothing left to abandon except the cleanup
+        // the user probably wants — but it is an absorbed press, not a
+        // guarantee that none exist.
         let cleanup_abandoned = || {
             self.interrupt
                 .as_ref()
@@ -1899,8 +1911,12 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             if !running_sidecars.is_empty() || owns_network {
                 self.event_sink.post(TaskEvent::CleanupStarting);
             }
-            // Only on an interrupt: on every other path `run_container` has
-            // already removed the task's own container itself, and asking
+            // Only on an interrupt, which is now genuinely the only path
+            // where `run_container` hasn't already removed the task's own
+            // container: it used to `?`-propagate an attach/stream failure
+            // before reaching its own removal, leaking the container, and
+            // that is fixed at source in `docker.rs` rather than covered up
+            // here. Asking
             // Docker to remove it twice would report a spurious failure.
             if let Some(container_id) = task_container_id
                 .as_ref()
@@ -1957,14 +1973,25 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                      label=eu.orican.ratect.run=<run>` lists it."
                 );
             }
-        } else if !running_sidecars.is_empty() || owns_network {
-            tracing::info!(
-                task = task_name,
-                dependencies = running_sidecars.len(),
-                network = network_name.as_deref(),
-                "cleanup disabled; leaving dependency containers and the task network in place \
-                 for investigation"
-            );
+        } else {
+            // The task's own container counts here too, and only on an
+            // interrupt — otherwise `run_container` has already dealt with
+            // it (removing it, or honouring `--no-cleanup-after-success` by
+            // leaving it and saying so itself). Without it in the guard, an
+            // interrupted single-container task under `--use-network` left a
+            // container running and reported nothing at all, since neither
+            // of the other two conditions held.
+            let abandoned_task_container = interrupted && task_container_id.is_some();
+            if !running_sidecars.is_empty() || owns_network || abandoned_task_container {
+                tracing::info!(
+                    task = task_name,
+                    task_container = abandoned_task_container.then_some(run.container.as_str()),
+                    dependencies = running_sidecars.len(),
+                    network = network_name.as_deref(),
+                    "cleanup disabled; leaving containers and the task network in place \
+                     for investigation"
+                );
+            }
         }
 
         // "Finished" means the task's own command ran to completion and
@@ -2530,17 +2557,17 @@ mod tests {
         /// artificially `tokio::time::sleep` for `delay` before reporting
         /// whether the (simulated) main command succeeded — see
         /// `run_delays`' own doc comment for why.
-        /// See the `interrupt_on_stop` field.
-        fn interrupting_on_stop(self, interrupt: &Arc<crate::interrupt::Interrupt>) -> Self {
-            *self.interrupt_on_stop.lock().unwrap() = Some(Arc::clone(interrupt));
-            self
-        }
-
         fn with_run_delay(self, name: &str, delay: std::time::Duration) -> Self {
             self.run_delays
                 .lock()
                 .unwrap()
                 .insert(name.to_string(), delay);
+            self
+        }
+
+        /// See the `interrupt_on_stop` field.
+        fn interrupting_on_stop(self, interrupt: &Arc<crate::interrupt::Interrupt>) -> Self {
+            *self.interrupt_on_stop.lock().unwrap() = Some(Arc::clone(interrupt));
             self
         }
 
