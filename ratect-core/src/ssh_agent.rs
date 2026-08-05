@@ -80,6 +80,12 @@ const MAX_MESSAGE_LENGTH: usize = 256 * 1024;
 /// short on purpose — see [`MAX_SOCKET_PATH_LENGTH`].
 const SOCKET_FILE_NAME: &str = "agent";
 
+/// Prefixes each agent's own directory, so a stray one is attributable to
+/// whoever left it behind. **The only place in this module that names the
+/// program embedding it** — deliberately a constant so lifting the module
+/// out is a one-line change rather than a search for stray branding.
+const DIRECTORY_NAME_PREFIX: &str = "ratect-ssh-";
+
 /// A conservative ceiling on the socket path's length. A Unix socket
 /// address is a fixed-size `sun_path` buffer — 104 bytes on macOS, 108 on
 /// Linux — so a path longer than this fails to bind with an error that says
@@ -118,8 +124,10 @@ impl Keyring {
         // it again — otherwise a bind failure leaks an empty directory into
         // the temporary directory on every attempt.
         let result = check_socket_path_length(&socket_path).and_then(|()| {
-            UnixListener::bind(&socket_path)
-                .with_context(|| format!("Failed to listen on '{}'", socket_path.display()))
+            let listener = UnixListener::bind(&socket_path)
+                .with_context(|| format!("Failed to listen on '{}'", socket_path.display()))?;
+            restrict_socket_to_owner(&socket_path)?;
+            Ok(listener)
         });
         let listener = match result {
             Ok(listener) => listener,
@@ -218,7 +226,7 @@ fn create_private_directory() -> Result<PathBuf> {
     // Half a UUID: 48 bits of unpredictability, while keeping the socket
     // path comfortably inside `sun_path` (see `MAX_SOCKET_PATH_LENGTH`).
     let suffix = uuid::Uuid::new_v4().simple().to_string();
-    let directory = std::env::temp_dir().join(format!("ratect-ssh-{}", &suffix[..12]));
+    let directory = std::env::temp_dir().join(format!("{DIRECTORY_NAME_PREFIX}{}", &suffix[..12]));
 
     // `create` (not `create_all`) fails rather than reusing an existing
     // directory, so a name collision — or another user having got there
@@ -229,6 +237,29 @@ fn create_private_directory() -> Result<PathBuf> {
         .with_context(|| format!("Failed to create '{}'", directory.display()))?;
 
     Ok(directory)
+}
+
+/// Narrows the socket file itself to `0600`, so it is the *second*
+/// independent barrier rather than relying on its directory alone.
+///
+/// `bind` creates the socket under the process umask — commonly `022`,
+/// which leaves it world-readable at `0755`. The enclosing `0700` directory
+/// already makes that unreachable, and this makes it unreachable a second
+/// way. OpenSSH's own `ssh-agent` takes exactly this pair of precautions
+/// (`mkdtemp` for the directory, `umask(0177)` around the bind for the
+/// socket); doing only one of the two leaves the whole protection resting
+/// on a single `mode` argument.
+///
+/// Applied after binding rather than by setting the umask, because the
+/// umask is process-global and this process is multi-threaded — a
+/// concurrent `create`/`open` anywhere else would silently inherit it. The
+/// window where the socket exists at its umask-derived mode is covered by
+/// the directory, which is created restrictive before the bind.
+fn restrict_socket_to_owner(socket_path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("Failed to restrict access to '{}'", socket_path.display()))
 }
 
 fn check_socket_path_length(socket_path: &Path) -> Result<()> {
@@ -849,6 +880,21 @@ wq5n6O9bZ1kNQ1vKBt7358x8sWgvoxUAOLDF0=
             mode & 0o777,
             0o700,
             "the agent's directory should be private to this user"
+        );
+
+        // The second, independent barrier. `bind` leaves the socket at the
+        // process umask (commonly `0755`), which the directory above
+        // already covers — but resting the whole protection on one `mode`
+        // argument is what this guards against, and it is what OpenSSH's
+        // own agent does too.
+        let socket_mode = std::fs::metadata(keyring.socket_path())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(
+            socket_mode & 0o777,
+            0o600,
+            "the socket itself should be private to this user"
         );
 
         let mut stream = UnixStream::connect(keyring.socket_path()).await.unwrap();

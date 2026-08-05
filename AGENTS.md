@@ -307,9 +307,18 @@ Ratect is a **Cargo workspace** with four crates (the
     **extractable** — no config/engine/Docker types, and no error message
     naming Ratect, so it could be lifted out or offered upstream to `bollard`
     as a copy rather than a rewrite; private keys never cross the socket, only
-    signatures; and the socket's directory is both unpredictably named and
-    `0700`, since the system temporary directory is world-writable and the
-    socket grants signing to anything that can reach it. Two non-obvious
+    signatures; and the socket is protected *twice* — an
+    unpredictably-named `0700` directory (the system temporary directory is
+    world-writable) plus the socket file itself chmod'ed to `0600` after
+    binding, since `bind` otherwise leaves it at the process umask. That
+    pairing is OpenSSH's own (`mkdtemp` + `umask(0177)` around the bind);
+    doing only the directory rests the whole protection on one `mode`
+    argument. It's a `chmod` rather than a umask because the umask is
+    process-global and this process is multi-threaded. Worth knowing that
+    Go BuildKit needs *neither*: its `sshprovider` serves a keyring over an
+    in-memory `net.Pipe()`, so no socket exists on the filesystem at all —
+    Ratect needs one only because the fork's `SshAgentSource` is
+    socket-based. Two non-obvious
     details: **`ssh-key` 0.6.7's own RSA conversion is broken** (it passes the
     prime `p` twice instead of `p` and `q`, so *no* RSA key can be signed with
     through its `Signer` impl either) — `rsa_private_key` rebuilds the key from
