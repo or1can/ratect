@@ -37,6 +37,8 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- **A `build_ssh` entry that can't be classified now names its container**: `classify_ssh_agent_paths` reports an agent id, which said nothing about which container was misconfigured in a project with several. Every other config error in Ratect names its container.
+
 - **A container combining `image` with `build_directory` or any build-only field is now rejected** in `ratect-compat`, matching Batect's own `resolveImageSource`. Previously all seven combinations Batect rejects were accepted and resolved silently: `image` takes precedence over `build_directory`, so a container with both never built despite saying it should, and `build_args`/`build_target`/`dockerfile`/`build_secrets`/`build_ssh` alongside `image` were read by nothing at all — a configured build secret could be ignored without a word. The "neither `image` nor `build_directory`" case is now caught when the file loads rather than when a task runs, with the same wording as before.
 
   Deliberately **not** applied to `ratect`'s native format, where `extends` gives these combinations a meaning they don't have in a `batect.yml`: inheritance is per-field with no way to unset, so setting `image` on a child is the only way to override a parent's `build_directory` (which necessarily leaves both set), and a container used only as an `extends` base legitimately has neither field. See the [`ratect.toml` reference](docs/ratect-config-reference.md#extends-inheritance-instead-of-yaml-anchors).

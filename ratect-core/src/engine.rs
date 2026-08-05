@@ -182,7 +182,18 @@ fn tmpfs_mounts(
 /// source here — see [`crate::docker::classify_ssh_agent_paths`], which is
 /// what makes this fallible. Ids are unique by the time this runs, checked
 /// by [`crate::config::Config::resolve_expressions_with`].
-fn buildkit_options(container: &Container) -> Result<Option<crate::docker::BuildKitOptions>> {
+///
+/// Takes `container_name` only to attribute those failures. This is the one
+/// config-derived error on the build path that isn't already attributable:
+/// `build_image`'s own failures name the image tag, which carries the
+/// container name, whereas `classify_ssh_agent_paths` speaks the Docker
+/// layer's vocabulary (an agent id) and has no idea which container it came
+/// from. Every other config error in Ratect names its container, so this one
+/// should too.
+fn buildkit_options(
+    container_name: &str,
+    container: &Container,
+) -> Result<Option<crate::docker::BuildKitOptions>> {
     let secrets = container.build_secrets.as_ref();
     let ssh = container.build_ssh.as_ref();
     if secrets.is_none() && ssh.is_none() {
@@ -194,7 +205,9 @@ fn buildkit_options(container: &Container) -> Result<Option<crate::docker::Build
         let paths: Vec<PathBuf> = agent.paths.iter().map(PathBuf::from).collect();
         ssh_agents.insert(
             agent.id.clone(),
-            crate::docker::classify_ssh_agent_paths(&agent.id, &paths)?,
+            crate::docker::classify_ssh_agent_paths(&agent.id, &paths).with_context(|| {
+                format!("Container '{container_name}' has an invalid 'build_ssh' entry")
+            })?,
         );
     }
 
@@ -1312,7 +1325,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                             .dockerfile
                             .as_deref()
                             .unwrap_or("Dockerfile");
-                        let buildkit = buildkit_options(container_config)?;
+                        let buildkit = buildkit_options(container_name, container_config)?;
                         // Batect's second use of `image_pull_policy`: on a
                         // `build_directory` container, `always` force-pulls
                         // the build's own base image before building
@@ -4655,6 +4668,59 @@ mod tests {
                 PathBuf::from("/base/keys/id_rsa"),
             ]))
         );
+    }
+
+    /// `classify_ssh_agent_paths` speaks the Docker layer's vocabulary — an
+    /// agent id — so its errors say nothing about which container is
+    /// misconfigured. In a project with many containers that leaves the user
+    /// searching. Every other config error in Ratect names its container.
+    #[tokio::test]
+    async fn an_invalid_build_ssh_entry_names_the_container_it_came_from() {
+        let mut containers = HashMap::new();
+        let mut container = container_with_build_directory("./docker", None);
+        // Two sockets under one id: rejected, and only reachable from here
+        // because whether a path is a socket is a filesystem question that
+        // config loading can't answer.
+        let directory =
+            std::env::temp_dir().join(format!("ratect-engine-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let sockets: Vec<String> = ["a", "b"]
+            .iter()
+            .map(|name| {
+                let path = directory.join(name);
+                std::os::unix::net::UnixListener::bind(&path).unwrap();
+                path.display().to_string()
+            })
+            .collect();
+        container.build_ssh = Some(vec![crate::config::SshAgent {
+            id: "deploy".to_string(),
+            paths: sockets,
+        }]);
+        containers.insert("build-env".to_string(), container);
+        let mut tasks = HashMap::new();
+        tasks.insert("build".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let engine = TaskEngine::new(config, FakeContainerRuntime::default());
+        let err = engine.run_task("build", &[]).await.unwrap_err();
+
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("Container 'build-env'"),
+            "the error should name the container: {message}"
+        );
+        assert!(
+            message.contains("deploy"),
+            "and still name the agent: {message}"
+        );
+
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 
     #[tokio::test]

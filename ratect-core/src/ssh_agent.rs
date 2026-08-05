@@ -98,9 +98,11 @@ const MAX_SOCKET_PATH_LENGTH: usize = 100;
 ///
 /// The socket grants signing to anything that can connect to it, so the
 /// directory holding it is created with `0700` permissions and a name no
-/// other process can predict. Dropping this removes the socket, the
-/// directory, and stops the accept loop — so an agent lives exactly as long
-/// as the value representing it.
+/// other process can predict. Dropping this removes the socket and the
+/// directory, and aborts both the accept loop *and* every connection it is
+/// still serving (see [`serve`]) — so an agent lives exactly as long as the
+/// value representing it, with no window in which an already-connected
+/// client can still obtain signatures.
 #[derive(Debug)]
 pub struct Keyring {
     directory: PathBuf,
@@ -275,23 +277,56 @@ fn check_socket_path_length(socket_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// How long to wait before accepting again after an error that isn't a
+/// single connection going wrong — long enough that a listener which is
+/// genuinely broken can't spin the CPU for the rest of the build, short
+/// enough to be invisible if the condition clears.
+const ACCEPT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Accepts connections until the task is dropped, serving each one
+/// concurrently.
+///
+/// Connections are spawned into a [`tokio::task::JoinSet`] this task owns,
+/// which is what makes the agent stop when [`Keyring`] is dropped: aborting
+/// this task drops the set, which aborts every connection still open. A
+/// detached `tokio::spawn` per connection would leave clients able to keep
+/// requesting signatures after the build that needed them had finished —
+/// and would break the guarantee that an agent lives exactly as long as the
+/// value representing it.
+///
+/// Accept errors never end the loop. Most are per-connection
+/// (`ECONNABORTED`) or transient resource limits (`EMFILE`), and a build's
+/// later `RUN --mount=type=ssh` steps still need an agent — quietly serving
+/// nothing for the rest of the build is the worst available outcome, since
+/// it surfaces as an unexplained authentication failure much later.
 async fn serve(listener: UnixListener, keys: Arc<Vec<LoadedKey>>) {
+    let mut connections = tokio::task::JoinSet::new();
     loop {
-        match listener.accept().await {
-            Ok((stream, _)) => {
-                let keys = Arc::clone(&keys);
-                tokio::spawn(async move {
-                    if let Err(error) = serve_connection(stream, &keys).await {
-                        tracing::debug!(%error, "ssh-agent connection failed");
+        tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok((stream, _)) => {
+                    let keys = Arc::clone(&keys);
+                    connections.spawn(async move {
+                        if let Err(error) = serve_connection(stream, &keys).await {
+                            tracing::debug!(%error, "ssh-agent connection failed");
+                        }
+                    });
+                }
+                Err(error) => {
+                    let transient = matches!(
+                        error.kind(),
+                        ErrorKind::ConnectionAborted | ErrorKind::Interrupted
+                    );
+                    tracing::debug!(%error, "ssh-agent failed to accept a connection");
+                    if !transient {
+                        tokio::time::sleep(ACCEPT_RETRY_DELAY).await;
                     }
-                });
-            }
-            Err(error) => {
-                // Nothing can re-arm a listener that has stopped accepting,
-                // so the loop ends rather than spinning on the same error.
-                tracing::debug!(%error, "ssh-agent stopped accepting connections");
-                return;
-            }
+                }
+            },
+            // Reap finished connections, so the set doesn't grow for the
+            // whole life of the agent. Disabled when empty, where
+            // `join_next` resolves to `None` immediately.
+            Some(_) = connections.join_next(), if !connections.is_empty() => {}
         }
     }
 }
@@ -960,6 +995,49 @@ wq5n6O9bZ1kNQ1vKBt7358x8sWgvoxUAOLDF0=
         assert!(
             !socket_directory.exists(),
             "dropping the agent should remove its socket directory"
+        );
+
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    /// Dropping the agent has to stop the connections it is *already*
+    /// serving, not just the accept loop. A detached task per connection
+    /// leaves an open client able to keep getting signatures after the
+    /// build that needed the keys has finished — the socket file is gone,
+    /// but an established connection doesn't care.
+    #[tokio::test]
+    async fn dropping_the_agent_stops_a_connection_it_is_already_serving() {
+        let directory = unique_temp_dir();
+        let key = test_key(11, "still-connected").key;
+        let key_file = write_key_file(&directory, "id_ed25519", &key);
+
+        let keyring = Keyring::start(&[key_file]).await.unwrap();
+        let mut stream = UnixStream::connect(keyring.socket_path()).await.unwrap();
+
+        // Establish the connection properly first: a client that has never
+        // been served would prove nothing about tearing one down.
+        let response = round_trip(&mut stream, &[REQUEST_IDENTITIES]).await;
+        assert_eq!(response[0], IDENTITIES_ANSWER);
+
+        drop(keyring);
+
+        // The abort has to land before the peer is observably gone.
+        tokio::task::yield_now().await;
+        let mut length = [0u8; 4];
+        stream
+            .write_all(&[0, 0, 0, 1, REQUEST_IDENTITIES])
+            .await
+            .ok();
+        let read = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream.read_exact(&mut length),
+        )
+        .await
+        .expect("the dropped agent should not leave the client waiting");
+
+        assert!(
+            read.is_err(),
+            "the connection should be closed, but it answered {length:?}"
         );
 
         std::fs::remove_dir_all(&directory).unwrap();
