@@ -2,9 +2,17 @@
 
 ## Status
 
-Accepted — planned (`ratect-compat` 0.25.0). Revises
-[issue #1](https://github.com/or1can/ratect/issues/1), which put all of this on
-the `bollard` fork.
+Accepted — implemented in `ratect-compat` 0.25.0, as the two commits described
+below. Revises [issue #1](https://github.com/or1can/ratect/issues/1), which put
+all of this on the `bollard` fork.
+
+Built as decided, with one correction to the sketch below: `paths` is not a
+plain "keyring" input. Following Go BuildKit's own `sshprovider`, a path that
+*is* a Unix socket forwards that agent instead (and must then be the entry's
+only path), so the keyring serves the *remaining* case — ordinary key files.
+The classification lives in `docker.rs` (`classify_ssh_agent_paths`), leaving
+the keyring itself with no notion of `build_ssh` at all, which is what keeps
+property 2 below honest.
 
 ## Context
 

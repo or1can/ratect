@@ -23,5 +23,6 @@ pub mod labels;
 pub mod proxy;
 #[cfg(feature = "schema")]
 pub mod schema;
+pub mod ssh_agent;
 pub mod ui;
 pub mod user;

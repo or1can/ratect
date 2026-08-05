@@ -152,7 +152,7 @@
           ]
         },
         "build_ssh": {
-          "description": "Forwards an SSH agent from the host into a `build_directory` build, for a Dockerfile's `RUN --mount=type=ssh` instructions — Batect's `build_ssh` field. **Ratect only supports forwarding the host's running ssh-agent (via its `SSH_AUTH_SOCK`) under the implicit `default` agent id** — at most one entry, and if given, its `id` (if set) must be `\"default\"` and its `paths` must be empty (checked in `Config::resolve_expressions_with`). Batect additionally supports multiple named agents and forwarding explicit private key files instead of a running agent; the underlying Docker client this is built on doesn't expose either — see [Differences from Batect](https://github.com/or1can/ratect/blob/main/docs/differences-from-batect.md#container-fields).",
+          "description": "Makes SSH keys available to a `build_directory` build, for a Dockerfile's `RUN --mount=type=ssh` instructions. Each entry is one agent, named by an `id` a `RUN` instruction can select (`--mount=type=ssh,id=<id>`), and ids must be unique across the list (checked in `Config::resolve_expressions_with`). An entry with no `paths` forwards the host's own running ssh-agent via `SSH_AUTH_SOCK`; an entry with `paths` serves those private key files instead, which is what works in CI where no agent is running. See `SshAgent`, and [Image building](https://github.com/or1can/ratect/blob/main/docs/config-reference.md#image-building).",
           "items": {
             "$ref": "#/definitions/SshAgent"
           },
@@ -644,10 +644,10 @@
     },
     "SshAgent": {
       "additionalProperties": false,
-      "description": "One entry in a container's `build_ssh` list — see `Container::build_ssh` for why Ratect only supports a single `default`-id, agent-forwarding (no explicit `paths`) entry, checked in `Config::resolve_expressions_with` rather than here (so the error can name the offending container).",
+      "description": "One agent in a container's `build_ssh` list — see `Container::build_ssh`. Ids must be unique across the list, which is checked in `Config::resolve_expressions_with` rather than here, so the error can name the offending container.",
       "properties": {
         "id": {
-          "description": "The agent id a Dockerfile's `RUN --mount=type=ssh,id=<id>` refers to. Ratect only supports the implicit `default` agent, so this must be `default` if given at all.",
+          "description": "The agent id a Dockerfile's `RUN --mount=type=ssh,id=<id>` refers to. Defaults to BuildKit's own implicit `default` id, which is what a bare `RUN --mount=type=ssh` uses.",
           "type": [
             "string",
             "null"
@@ -655,7 +655,7 @@
         },
         "paths": {
           "default": [],
-          "description": "Private key files to forward instead of a running agent. Not supported by Ratect — must be empty.",
+          "description": "Private key files to serve instead of forwarding a running agent — the case that works in CI, where there is usually no agent at all. Values support expressions and are resolved the same way as `build_directory`. Leave empty to forward the host's own running agent via `SSH_AUTH_SOCK`.",
           "items": {
             "type": "string"
           },

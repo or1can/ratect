@@ -39,6 +39,10 @@ rustls = { version = "0.23", default-features = false }
 # a TLS stack: nothing here ever resolves a remote `$ref`.
 schemars = { version = "1.2", optional = true }
 jsonschema = { version = "0.48", optional = true, default-features = false }
+ssh-key = { version = "0.6.7", default-features = false, features = ["std", "ed25519", "rsa", "p256", "p384", "p521", "getrandom"] }
+rsa = "0.9.10"
+ssh-encoding = "0.2"
+signature = "2"
 
 [features]
 # Generates the JSON schema for `batect.yml` (`src/schema.rs`) — a tooling
@@ -60,3 +64,4 @@ tokio = { version = "1.52", features = ["test-util"] }
 rcgen = "0.14"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 time = "0.3"
+rand_chacha = "0.3"

@@ -1,0 +1,41 @@
+# Configuration for `cargo audit`, which CI runs against the committed
+# Cargo.lock (see .github/workflows/ci.yml).
+#
+# Entries here are deliberate, reviewed exceptions — not a way to quieten a
+# noisy check. Each one states what the advisory covers, why it is accepted,
+# what mitigates it in the meantime, and what would let it be removed. An
+# advisory with a fixed release available should never appear here: upgrade
+# instead.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — "Marvin Attack: potential key recovery through
+    # timing sidechannels", in `rsa` 0.9.x. No fixed release exists; the
+    # RustCrypto rewrite that addresses it has not shipped, so there is
+    # nothing to upgrade to.
+    #
+    # Where `rsa` is used: only by `ratect-core`'s in-process ssh-agent
+    # (`src/ssh_agent.rs`), to sign with an RSA private key a `build_ssh`
+    # entry's `paths` names. Ratect never performs RSA *decryption*, which is
+    # the operation the advisory's proof-of-concept attacks.
+    #
+    # Why it is accepted rather than fixed by dropping RSA: RSA keys remain
+    # common as deploy keys and in older CI setups, and refusing them would
+    # be a real gap in the `build_ssh` parity this exists to provide.
+    #
+    # Mitigations actually in place:
+    #
+    #  * Signing goes through `try_sign_with_rng`, not `try_sign`, so the
+    #    `rsa` crate applies RSA blinding — the standard defence against
+    #    precisely this class of timing side channel. `try_sign` skips it.
+    #  * The exposure is narrow. The signing oracle is a Unix socket in a
+    #    `0700` directory, reachable only by the invoking user's own
+    #    processes and only for the duration of one image build. Anything
+    #    able to make the many precisely-timed requests the attack needs can
+    #    already *use* the key directly over that same socket, so key
+    #    recovery buys persistence rather than access.
+    #
+    # Remove this entry when a fixed `rsa` release exists, or if `build_ssh`
+    # stops supporting RSA keys.
+    "RUSTSEC-2023-0071",
+]

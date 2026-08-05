@@ -1,0 +1,33 @@
+# Exercises the other two halves of `build_ssh` against a real BuildKit
+# build: a *named* agent (`deploy`, which the Dockerfile selects with
+# `--mount=type=ssh,id=deploy` rather than the implicit `default`), served
+# from an explicit private key *file* rather than a running ssh-agent.
+#
+# The test runs `ratect` with no `SSH_AUTH_SOCK` at all, which is what makes
+# this sound: there is no agent on the host to forward, so anything
+# `ssh-add -l` lists inside the build can only have come from Ratect's own
+# in-process agent (`ratect-core/src/ssh_agent.rs`) serving the key file.
+# That's also the case that matters in practice — CI, where a key exists but
+# no agent is running.
+#
+# CACHE_BUST exists for the same reason as in build-ssh.yml: a
+# `build_ssh`-only build uses BuildKit's normal layer caching, so without an
+# every-run-unique build arg consumed by the same `RUN`, a later run would be
+# served a cached layer listing a previous run's keys. The Dockerfile's text
+# also differs from build-ssh.yml's deliberately, so the two fixtures can
+# never share a cached layer with each other.
+project_name: ratect-build-ssh-paths-test
+containers:
+  build-env:
+    build_directory: ./build-ssh-paths
+    build_args:
+      CACHE_BUST: $RATECT_BUILD_SSH_TEST_CACHE_BUST
+    build_ssh:
+      - id: deploy
+        paths:
+          - $RATECT_BUILD_SSH_KEY_PATH
+tasks:
+  print-keys:
+    run:
+      container: build-env
+      command: cat /deploy-agent-keys.txt

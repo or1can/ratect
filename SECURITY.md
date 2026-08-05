@@ -32,3 +32,8 @@ existing hardening lives:
   content — injection via config-controlled values is a vulnerability.
 - **`build_secrets`/`build_ssh`**: a secret's value or the forwarded agent leaking
   into image layers, logs, error messages, or cache keys.
+- **`build_ssh`'s in-process ssh-agent** (`ratect-core/src/ssh_agent.rs`), which
+  serves a `paths` entry's private keys: anything that lets a private key itself
+  (rather than a signature over data the build supplied) leave the `ratect`
+  process, or that lets a process other than the invoking user reach the socket
+  it is served on, is a vulnerability.

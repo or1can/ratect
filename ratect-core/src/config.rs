@@ -110,17 +110,15 @@ pub struct Container {
     /// — matching Batect's own typing for both. Only meaningful alongside
     /// `build_directory`, same as `dockerfile`/`build_target`/`build_args`.
     pub build_secrets: Option<HashMap<String, BuildSecret>>,
-    /// Forwards an SSH agent from the host into a `build_directory` build,
-    /// for a Dockerfile's `RUN --mount=type=ssh` instructions — Batect's
-    /// `build_ssh` field. **Ratect only supports forwarding the host's
-    /// running ssh-agent (via its `SSH_AUTH_SOCK`) under the implicit
-    /// `default` agent id** — at most one entry, and if given, its `id`
-    /// (if set) must be `"default"` and its `paths` must be empty (checked
-    /// in [`Config::resolve_expressions_with`]). Batect additionally
-    /// supports multiple named agents and forwarding explicit private key
-    /// files instead of a running agent; the underlying Docker client this
-    /// is built on doesn't expose either — see
-    /// [Differences from Batect](https://github.com/or1can/ratect/blob/main/docs/differences-from-batect.md#container-fields).
+    /// Makes SSH keys available to a `build_directory` build, for a
+    /// Dockerfile's `RUN --mount=type=ssh` instructions. Each entry is one
+    /// agent, named by an `id` a `RUN` instruction can select
+    /// (`--mount=type=ssh,id=<id>`), and ids must be unique across the list
+    /// (checked in [`Config::resolve_expressions_with`]). An entry with no
+    /// `paths` forwards the host's own running ssh-agent via
+    /// `SSH_AUTH_SOCK`; an entry with `paths` serves those private key
+    /// files instead, which is what works in CI where no agent is running.
+    /// See [`SshAgent`], and [Image building](https://github.com/or1can/ratect/blob/main/docs/config-reference.md#image-building).
     pub build_ssh: Option<Vec<SshAgent>>,
     /// Host bind mounts (`local`) and/or named cache volumes (`cache`) — see
     /// [`VolumeMount`]. A `local` mount's host path is resolved in
@@ -977,23 +975,35 @@ impl Serialize for BuildSecret {
     }
 }
 
-/// One entry in a container's `build_ssh` list — see [`Container::build_ssh`]
-/// for why Ratect only supports a single `default`-id, agent-forwarding
-/// (no explicit `paths`) entry, checked in
-/// [`Config::resolve_expressions_with`] rather than here (so the error can
-/// name the offending container).
+/// One agent in a container's `build_ssh` list — see
+/// [`Container::build_ssh`]. Ids must be unique across the list, which is
+/// checked in [`Config::resolve_expressions_with`] rather than here, so the
+/// error can name the offending container.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SshAgent {
     /// The agent id a Dockerfile's `RUN --mount=type=ssh,id=<id>` refers
-    /// to. Ratect only supports the implicit `default` agent, so this must
-    /// be `default` if given at all.
+    /// to. Defaults to BuildKit's own implicit `default` id, which is what
+    /// a bare `RUN --mount=type=ssh` uses.
     pub id: Option<String>,
-    /// Private key files to forward instead of a running agent. Not
-    /// supported by Ratect — must be empty.
+    /// Private key files to serve instead of forwarding a running agent —
+    /// the case that works in CI, where there is usually no agent at all.
+    /// Values support [expressions](#expressions) and are resolved the same
+    /// way as `build_directory`. Leave empty to forward the host's own
+    /// running agent via `SSH_AUTH_SOCK`.
     #[serde(default)]
     pub paths: Vec<String>,
+}
+
+impl SshAgent {
+    /// This agent's id, with BuildKit's implicit `default` applied when the
+    /// entry doesn't name one. The single place that default is decided, so
+    /// the uniqueness check and the engine's own conversion can't disagree
+    /// about whether two unnamed entries collide.
+    pub fn id(&self) -> &str {
+        self.id.as_deref().unwrap_or("default")
+    }
 }
 
 /// Overrides the [health check configuration](https://docs.docker.com/engine/reference/builder/#healthcheck)
@@ -2573,36 +2583,30 @@ impl Config {
                     }
                 }
             }
-            if let Some(build_ssh) = &container.build_ssh {
-                if build_ssh.len() > 1 {
-                    anyhow::bail!(
-                        "Container '{}' has {} 'build_ssh' entries, but Ratect only supports \
-                         forwarding a single SSH agent from the host — see \
-                         docs/differences-from-batect.md#container-fields",
-                        container_name,
-                        build_ssh.len()
-                    );
-                }
-                if let Some(agent) = build_ssh.first() {
-                    if let Some(id) = &agent.id {
-                        if id != "default" {
-                            anyhow::bail!(
-                                "Container '{}' has a 'build_ssh' entry with id '{}', but \
-                                 Ratect only supports the implicit 'default' SSH agent id — \
-                                 see docs/differences-from-batect.md#container-fields",
-                                container_name,
-                                id
-                            );
-                        }
-                    }
-                    if !agent.paths.is_empty() {
+            if let Some(build_ssh) = &mut container.build_ssh {
+                let mut ids_seen = HashSet::new();
+                for agent in build_ssh.iter_mut() {
+                    let id = agent.id().to_string();
+                    if !ids_seen.insert(id.clone()) {
+                        // A Dockerfile selects an agent by id, so two
+                        // entries claiming one id have no defined meaning —
+                        // rejected here rather than silently letting one win,
+                        // matching Batect's own `checkForDuplicateSSHAgents`.
                         anyhow::bail!(
-                            "Container '{}' has a 'build_ssh' entry with explicit key \
-                             'paths', but Ratect only supports forwarding the host's \
-                             running ssh-agent (via SSH_AUTH_SOCK), not explicit key files \
-                             — see docs/differences-from-batect.md#container-fields",
-                            container_name
+                            "Container '{}' has more than one 'build_ssh' entry with the id \
+                             '{}', but each SSH agent must have a unique id",
+                            container_name,
+                            id
                         );
+                    }
+                    for path in &mut agent.paths {
+                        *path = resolve_path(
+                            path,
+                            container_base_path,
+                            &host_env,
+                            &config_vars,
+                            container_boundary,
+                        )?;
                     }
                 }
             }
@@ -5547,19 +5551,97 @@ tasks:
             .unwrap();
     }
 
+    /// Several agents under distinct ids is Batect's own behaviour, and
+    /// what a Dockerfile selecting `--mount=type=ssh,id=deploy` needs.
     #[test]
-    fn resolve_expressions_rejects_more_than_one_build_ssh_agent() {
+    fn resolve_expressions_accepts_several_distinctly_named_build_ssh_agents() {
         let mut config = Config {
             project_name: "demo".to_string(),
             containers: HashMap::from([(
                 "build-env".to_string(),
                 container_with_build_ssh(vec![
                     SshAgent {
-                        id: Some("default".to_string()),
+                        id: None,
                         paths: Vec::new(),
                     },
                     SshAgent {
-                        id: Some("other".to_string()),
+                        id: Some("deploy".to_string()),
+                        paths: Vec::new(),
+                    },
+                ]),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        config
+            .resolve_expressions_with(
+                Path::new("/base"),
+                &HashMap::new(),
+                &HashMap::new(),
+                no_host_env,
+            )
+            .unwrap();
+    }
+
+    /// A `paths` entry is a host path, resolved against the config file's
+    /// own directory exactly like `build_directory` and `build_secrets`
+    /// — so `id_ed25519` means one next to the config file, not one in
+    /// whatever directory `ratect` happened to be run from.
+    #[test]
+    fn resolve_expressions_resolves_build_ssh_paths_against_the_config_directory() {
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_build_ssh(vec![SshAgent {
+                    id: None,
+                    paths: vec![
+                        "keys/id_ed25519".to_string(),
+                        "/etc/keys/id_rsa".to_string(),
+                    ],
+                }]),
+            )]),
+            tasks: HashMap::new(),
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        config
+            .resolve_expressions_with(
+                Path::new("/base"),
+                &HashMap::new(),
+                &HashMap::new(),
+                no_host_env,
+            )
+            .unwrap();
+
+        let agents = config.containers["build-env"].build_ssh.as_ref().unwrap();
+        assert_eq!(
+            agents[0].paths,
+            vec![
+                "/base/keys/id_ed25519".to_string(),
+                "/etc/keys/id_rsa".to_string(),
+            ]
+        );
+    }
+
+    /// A Dockerfile picks an agent by id, so two entries claiming one id
+    /// have no defined meaning — matching Batect, which rejects them too.
+    #[test]
+    fn resolve_expressions_rejects_duplicate_build_ssh_agent_ids() {
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([(
+                "build-env".to_string(),
+                container_with_build_ssh(vec![
+                    SshAgent {
+                        id: Some("deploy".to_string()),
+                        paths: Vec::new(),
+                    },
+                    SshAgent {
+                        id: Some("deploy".to_string()),
                         paths: Vec::new(),
                     },
                 ]),
@@ -5578,19 +5660,31 @@ tasks:
             )
             .unwrap_err();
 
-        assert!(format!("{err:#}").contains("only supports forwarding a single SSH agent"));
+        assert!(
+            format!("{err:#}").contains("more than one 'build_ssh' entry with the id 'deploy'"),
+            "unexpected error: {err:#}"
+        );
     }
 
+    /// The collision an id-less entry can cause is the one most easily
+    /// written by accident: neither entry names an id, so both are
+    /// `default` and neither looks like a duplicate in the file.
     #[test]
-    fn resolve_expressions_rejects_a_non_default_build_ssh_agent_id() {
+    fn resolve_expressions_rejects_two_build_ssh_agents_that_both_default_their_id() {
         let mut config = Config {
             project_name: "demo".to_string(),
             containers: HashMap::from([(
                 "build-env".to_string(),
-                container_with_build_ssh(vec![SshAgent {
-                    id: Some("other".to_string()),
-                    paths: Vec::new(),
-                }]),
+                container_with_build_ssh(vec![
+                    SshAgent {
+                        id: None,
+                        paths: Vec::new(),
+                    },
+                    SshAgent {
+                        id: Some("default".to_string()),
+                        paths: Vec::new(),
+                    },
+                ]),
             )]),
             tasks: HashMap::new(),
             config_variables: None,
@@ -5606,35 +5700,10 @@ tasks:
             )
             .unwrap_err();
 
-        assert!(format!("{err:#}").contains("implicit 'default' SSH agent id"));
-    }
-
-    #[test]
-    fn resolve_expressions_rejects_build_ssh_explicit_key_paths() {
-        let mut config = Config {
-            project_name: "demo".to_string(),
-            containers: HashMap::from([(
-                "build-env".to_string(),
-                container_with_build_ssh(vec![SshAgent {
-                    id: None,
-                    paths: vec!["~/.ssh/id_rsa".to_string()],
-                }]),
-            )]),
-            tasks: HashMap::new(),
-            config_variables: None,
-            forbid_telemetry: None,
-        };
-
-        let err = config
-            .resolve_expressions_with(
-                Path::new("/base"),
-                &HashMap::new(),
-                &HashMap::new(),
-                no_host_env,
-            )
-            .unwrap_err();
-
-        assert!(format!("{err:#}").contains("not explicit key files"));
+        assert!(
+            format!("{err:#}").contains("more than one 'build_ssh' entry with the id 'default'"),
+            "unexpected error: {err:#}"
+        );
     }
 
     fn container_with_run_as_current_user(

@@ -324,8 +324,8 @@ actual behavior — it doesn't yet distinguish "nothing to do" from "success":
 | `DOCKER_BUILDKIT` | Forces the image builder on (`1`/`true`) or off (`0`/`false`) — see `--enable-buildkit` and [config reference](config-reference.md#image-building). |
 
 Ratect supports interpolating host environment variables and config variables into
-`environment` values, volume host paths, `build_directory`, and `build_args` in
-`batect.yml` (`$VAR`, `${VAR:-default}`, `<name` — see
-[config reference](config-reference.md#expressions)), but not yet within fields that
-don't exist yet (`build_secrets.path`, `build_ssh.paths`) — see
+`environment` values, volume host paths, `build_directory`, `build_args`,
+`build_secrets`' `path`, and a `build_ssh` entry's `paths` in `batect.yml` (`$VAR`,
+`${VAR:-default}`, `<name` — see
+[config reference](config-reference.md#expressions)) — see
 [differences from Batect](differences-from-batect.md).

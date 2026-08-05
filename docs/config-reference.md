@@ -295,14 +295,44 @@ task's own container, as a dependency, or by more than one task) — but never r
   from its cache key (so it can't leak into one), which would otherwise let an
   unrelated Dockerfile change reuse a cached layer built with a now-stale secret
   value.
-- `build_ssh` forwards an SSH agent from the host into the build, for a Dockerfile's
-  `RUN --mount=type=ssh` instructions. **Ratect only supports forwarding the host's
-  running `ssh-agent` (via its `SSH_AUTH_SOCK`) under the implicit `default` agent
-  id** — at most one entry (`build_ssh: [{id: default}]`, or an empty/omitted `id`),
-  and an entry with explicit key `paths` is rejected — see
-  [Differences from Batect](differences-from-batect.md#container-fields) for why.
-  Requires the BuildKit builder (see builder selection above). The agent is proxied
-  over the build's session, not mounted as a socket — so this works unchanged on
+- `build_ssh` makes SSH keys available to the build, for a Dockerfile's
+  `RUN --mount=type=ssh` instructions. Each entry is one agent, named by an `id` a
+  `RUN` instruction selects with `--mount=type=ssh,id=<id>`; an omitted `id` means
+  BuildKit's implicit `default`, which is what a bare `RUN --mount=type=ssh` uses.
+  Ids must be unique across the list. Each entry's `paths` decides where its keys
+  come from, following BuildKit's own rules:
+
+  ```yaml
+  build_ssh:
+    - id: default             # no paths: forwards the host's own running
+                              # ssh-agent, via its SSH_AUTH_SOCK
+    - id: deploy
+      paths:
+        - ~/.ssh/deploy_key   # one or more private key files, served with no
+        - keys/ci_ed25519     # agent running at all
+    - id: other
+      paths:
+        - /tmp/other-agent.sock   # a path that *is* a Unix socket forwards
+                                  # that agent instead; it must be the entry's
+                                  # only path
+  ```
+
+  `paths` values support [expressions](#expressions) and are resolved relative to
+  the config file, the same way `build_directory` and `build_secrets`' `path` are.
+  Key files are served by an ssh-agent Ratect runs in-process for the duration of
+  the build: the keys themselves never leave the `ratect` process — only signatures
+  cross into the build — and the socket they're served on lives in a directory only
+  the current user can open. This is the form that works in CI, where a deploy key
+  usually exists but no agent is running.
+
+  Keys must not be protected by a passphrase, and must be Ed25519, RSA or ECDSA
+  (Ratect rejects anything else up front, naming the file, rather than failing
+  mid-build). RSA keys are signed with `rsa-sha2-256`/`rsa-sha2-512`; the legacy
+  SHA-1 `ssh-rsa` algorithm, which OpenSSH has disabled by default since 8.8, is
+  not offered.
+
+  Requires the BuildKit builder (see builder selection above). Agents are proxied
+  over the build's session, not mounted as sockets — so this works unchanged on
   macOS/Windows, where Docker Desktop's VM boundary otherwise blocks mounting host
   sockets into containers (no `/run/host-services/ssh-auth.sock` workaround
   involved).

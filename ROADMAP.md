@@ -6,10 +6,10 @@ This document outlines the planned journey for Ratect, from achieving parity wit
 
 The primary goal is to support the core features of Batect to ensure a seamless transition for existing users. This work targets the [`ratect-compat` binary](#two-binaries-ratect-and-ratect-compat) specifically — the `ratect` binary is not expected to maintain 1:1 Batect parity.
 
-- **Image Building**: Building a Docker image from a `build_directory`, including `build_args` and `.dockerignore` support (0.3.0), custom Dockerfile naming/location (`dockerfile`), a multi-stage build target (`build_target`), secrets (`build_secrets`), and SSH agent forwarding (`build_ssh`, a single default host agent only — see [Differences from Batect](docs/differences-from-batect.md#container-fields)) (0.11.0), building with the builder the daemon advertises as its default — BuildKit on any modern daemon, matching Batect, with `DOCKER_BUILDKIT` honored as the force-on/off override (0.12.0) — see [config reference](docs/config-reference.md#image-building). Cross-invocation build caching and automatic image cleanup are not implemented.
+- **Image Building**: Building a Docker image from a `build_directory`, including `build_args` and `.dockerignore` support (0.3.0), custom Dockerfile naming/location (`dockerfile`), a multi-stage build target (`build_target`), secrets (`build_secrets`), and SSH keys for a build (`build_ssh` — multiple named agents, forwarding the host's own agent or another by socket path, and serving explicit private key files with no agent running; 0.11.0, completed in 0.25.0), building with the builder the daemon advertises as its default — BuildKit on any modern daemon, matching Batect, with `DOCKER_BUILDKIT` honored as the force-on/off override (0.12.0) — see [config reference](docs/config-reference.md#image-building). Cross-invocation build caching and automatic image cleanup are not implemented.
 - **Full Docker Networking**: Every task execution gets its own isolated network (see [the task lifecycle](docs/task-lifecycle.md)), `--use-network` reuses an existing one instead, `additional_hostnames`/`additional_hosts` add extra aliases/`/etc/hosts` entries, and `ports`/`--disable-ports` publish container ports to the host, including port ranges and the expanded object form, plus additional per-task `run.ports` (0.6.0) — see [config reference](docs/config-reference.md#port-mappings) and [CLI reference](docs/cli-reference.md).
 - **Interactive Mode**: A task's own container gets a real Docker TTY, automatically, when both Ratect's own stdin and stdout are real terminals (0.4.0); its stdin forwarding and the host's `TERM` propagation both apply more broadly than that (whenever the task is interactive-eligible, not gated on a real TTY), and a real TTY's terminal size stays in sync for the whole session, not just once at attach (0.10.0) — see [Interactive mode](docs/config-reference.md#interactive-mode). One known, deliberate divergence from Batect remains — see [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
-- **Full Environment Variable Interpolation & Batect Expressions**: `environment` on containers/tasks, `config_variables` (including Batect's one built-in, `batect.project_directory`), and `$VAR`/`${VAR}`/`${VAR:-default}`/`<name`/`<{name}` expressions are implemented for `environment` values, volume host paths, `build_directory`, `build_args`, and a `build_secrets` entry's `path` (0.11.0) — every already-supported field that could meaningfully take one; `build_ssh.paths` stays moot while explicit key files are unsupported — see [Expressions](docs/differences-from-batect.md#expressions).
+- **Full Environment Variable Interpolation & Batect Expressions**: `environment` on containers/tasks, `config_variables` (including Batect's one built-in, `batect.project_directory`), and `$VAR`/`${VAR}`/`${VAR:-default}`/`<name`/`<{name}` expressions are implemented for `environment` values, volume host paths, `build_directory`, `build_args`, a `build_secrets` entry's `path` (0.11.0), and a `build_ssh` entry's `paths` (0.25.0) — every field Batect supports one in — see [Expressions](docs/differences-from-batect.md#expressions).
 - **Dependency Readiness**: A started dependency isn't treated as ready until it
   reports healthy (its image's own Docker health check, or the `health_check`
   override) and completes its `setup_commands` — only then do its dependents start
@@ -962,7 +962,7 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     Batect: a container created but not yet recorded is dropped before cleanup
     can see it and survives — which is what the ownership labels and
     `ratect resources` are for.
-  - **`build_ssh` full parity** — multiple named agents and, the practically
+  - ~~**`build_ssh` full parity** — multiple named agents and, the practically
     important half, explicit private key files (`paths`) served with no running
     agent at all. The last known *feature* gap in the [Batect
     Parity](#batect-parity) field tables, so it's on the 1.0.0 critical path
@@ -987,7 +987,43 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     extractable so the upstream *offer* stays a copy rather than a rewrite:
     [decisions/0005](decisions/0005-build-ssh-keyring-placement.md), which
     revises [issue #1](https://github.com/or1can/ratect/issues/1)'s original
-    all-on-the-fork plan.
+    all-on-the-fork plan.~~ — done, as the two planned commits: the fork's
+    named-agent dispatch (`SshAgentSource`/`set_ssh_agent`, on a branch cut
+    fresh from upstream `master` — see the 0.12.0 entry above), then a new
+    `ratect-core::ssh_agent` module serving the agent protocol (RFC 9987) over
+    a `0700` temporary directory's socket. `paths` are classified BuildKit's
+    own way (`docker.rs`'s `classify_ssh_agent_paths`): none forwards the
+    host's `SSH_AUTH_SOCK`, a path that *is* a socket forwards that agent and
+    must be the entry's only path, anything else is a private key file.
+
+    Four things emerged on contact. **`ssh-key` 0.6.7 cannot sign with RSA at
+    all** — its `TryFrom<&RsaKeypair> for rsa::RsaPrivateKey` passes the prime
+    `p` twice instead of `p` and `q`, so `from_components` rejects every real
+    key; fixed only on the unreleased 0.7 line, so `rsa_private_key` rebuilds
+    the key from components itself. Two narrowings were taken deliberately
+    rather than inherited: a passphrase-protected key is refused (Go BuildKit
+    can't use one either, and a build has no terminal to prompt on), and RSA
+    signing offers only `rsa-sha2-256`/`rsa-sha2-512`, not the SHA-1 `ssh-rsa`
+    that OpenSSH disabled by default in 8.8 — the "re-check a ported Batect
+    behaviour against what's current" habit again, since Batect's support for
+    both comes from Go's `x/crypto` rather than from a decision. And the
+    socket path's length is checked before binding: `sun_path` is 104 bytes on
+    macOS, ~50 of which its per-user `TMPDIR` already spends, which is close
+    enough to matter — the *test* helper hit that limit before the production
+    code did.
+
+    One consequence to keep visible: `rsa` 0.9.x carries
+    [RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071) (the
+    Marvin timing attack) with **no fixed release to upgrade to**, so CI's
+    `cargo audit` needed the repository's first accepted-advisory entry
+    (`.cargo/audit.toml`). Accepted rather than dodged by dropping RSA, since
+    RSA deploy keys are still common; mitigated by signing through
+    `try_sign_with_rng`, which is what makes the `rsa` crate apply blinding
+    (`try_sign` silently doesn't), and by the oracle being a `0700` socket
+    that anything able to time it could already just use the key on. The
+    entry carries that reasoning inline — an ignore without it is
+    indistinguishable from silencing the check, and `cargo audit` says
+    nothing about what it skipped.
   - **More of Batect's journey corpus** — the [conformance phase](#ratect-compat)
     above hasn't moved since 0.23.0, since 0.24.0 was really a `ratect` release
     that carried three shared-core config fixes along. Takes the deferrals 0.23.0

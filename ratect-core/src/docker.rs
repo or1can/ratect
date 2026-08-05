@@ -445,13 +445,71 @@ pub struct BuildKitOptions {
     /// Keyed by the id a Dockerfile's `RUN --mount=type=secret,id=<key>`
     /// references.
     pub secrets: HashMap<String, BuildSecretSource>,
-    /// Forwards the *host* process's own `SSH_AUTH_SOCK` ssh-agent under
-    /// BuildKit's implicit `default` agent id, for a Dockerfile's `RUN
-    /// --mount=type=ssh`. Ratect's only supported form of the `build_ssh`
-    /// config field — see its doc comment for why (`bollard`, the Docker
-    /// client this is built on, only exposes this single on/off toggle,
-    /// not Batect's multiple named agents / explicit key file forwarding).
-    pub forward_default_ssh_agent: bool,
+    /// SSH agents to serve to the build, keyed by the id a Dockerfile's
+    /// `RUN --mount=type=ssh,id=<key>` selects (BuildKit's implicit
+    /// `default` for a bare `RUN --mount=type=ssh`).
+    pub ssh_agents: HashMap<String, SshAgentSource>,
+}
+
+/// Where one `build_ssh` agent's keys come from, mirroring
+/// `config::SshAgent` after its `paths` have been classified by
+/// [`classify_ssh_agent_paths`] — `docker.rs` deliberately doesn't depend
+/// on config types (same conversion boundary as [`BuildSecretSource`]
+/// above).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SshAgentSource {
+    /// Forward the *host* process's own `SSH_AUTH_SOCK` ssh-agent — an
+    /// entry with no `paths`.
+    HostAgent,
+    /// Forward the ssh-agent listening on the given Unix socket.
+    Socket(PathBuf),
+    /// Serve the given private key files from an in-process agent, with no
+    /// running agent involved at all — see [`crate::ssh_agent`].
+    Keys(Vec<PathBuf>),
+}
+
+/// Classifies one `build_ssh` agent's resolved `paths` the way BuildKit's
+/// own `sshprovider` does: no paths forwards the host's agent, a path that
+/// *is* a Unix socket is an agent to forward to, and anything else is a
+/// private key file to serve.
+///
+/// The rules about combining them are BuildKit's too, and are errors there
+/// rather than config-schema violations — hence checking them here, at
+/// build time, rather than at config load: a socket can't be combined with
+/// anything, since forwarding to two agents at once under one id has no
+/// meaning.
+pub fn classify_ssh_agent_paths(id: &str, paths: &[PathBuf]) -> Result<SshAgentSource> {
+    if paths.is_empty() {
+        return Ok(SshAgentSource::HostAgent);
+    }
+
+    let sockets: Vec<&PathBuf> = paths.iter().filter(|path| is_socket(path)).collect();
+    match (sockets.len(), paths.len()) {
+        (0, _) => Ok(SshAgentSource::Keys(paths.to_vec())),
+        (1, 1) => Ok(SshAgentSource::Socket(sockets[0].clone())),
+        (1, _) => Err(anyhow::anyhow!(
+            "The 'build_ssh' agent '{}' lists both the agent socket '{}' and other files — \
+             an agent socket has to be the entry's only path",
+            id,
+            sockets[0].display()
+        )),
+        _ => Err(anyhow::anyhow!(
+            "The 'build_ssh' agent '{}' lists {} agent sockets, but only one agent can be \
+             forwarded under a single id",
+            id,
+            sockets.len()
+        )),
+    }
+}
+
+/// Whether `path` is a Unix socket. A path that doesn't exist (or can't be
+/// read) is *not* reported as a socket, so it goes down the private-key
+/// route and fails naming the file, rather than as an opaque failure to
+/// connect.
+fn is_socket(path: &Path) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+
+    std::fs::metadata(path).is_ok_and(|metadata| metadata.file_type().is_socket())
 }
 
 /// One `build_secrets` entry's source, mirroring `config::BuildSecret` —
@@ -630,6 +688,9 @@ async fn build_image_via_buildkit(
     }
 
     let mut providers = bollard::grpc::build::ImageBuildSessionProviders::default();
+    // One in-process ssh-agent per `build_ssh` entry that names key files,
+    // each alive for as long as this vector is — see the `Keys` arm below.
+    let mut keyrings = Vec::new();
     if let Some(buildkit) = buildkit {
         for (id, secret) in &buildkit.secrets {
             let source = match secret {
@@ -655,8 +716,26 @@ async fn build_image_via_buildkit(
             // vary the way a secret's value is).
             options_builder = options_builder.nocache(true);
         }
-        if buildkit.forward_default_ssh_agent {
-            providers = providers.enable_ssh(true);
+        for (id, source) in &buildkit.ssh_agents {
+            let source = match source {
+                SshAgentSource::HostAgent => bollard::grpc::SshAgentSource::DefaultAgentSocket,
+                SshAgentSource::Socket(path) => bollard::grpc::SshAgentSource::Socket(path.clone()),
+                SshAgentSource::Keys(key_files) => {
+                    // Held in `keyrings` until the build's stream is fully
+                    // drained below: dropping one stops its agent and
+                    // removes its socket, so an early drop would break
+                    // exactly the `RUN --mount=type=ssh` this exists for.
+                    let keyring = crate::ssh_agent::Keyring::start(key_files)
+                        .await
+                        .with_context(|| {
+                            format!("Failed to serve the keys for SSH agent '{id}'")
+                        })?;
+                    let socket = keyring.socket_path().to_path_buf();
+                    keyrings.push(keyring);
+                    bollard::grpc::SshAgentSource::Socket(socket)
+                }
+            };
+            providers = providers.set_ssh_agent(id, &source);
         }
     }
     let options = options_builder.build();
@@ -751,6 +830,12 @@ async fn build_image_via_buildkit(
         }
     }
 
+    // Explicit rather than incidental: every `RUN --mount=type=ssh` in the
+    // build is served over these sockets, so they have to outlive the
+    // stream above. Dropping them here says so, where dropping them at the
+    // end of the function would leave it to whoever moves this code next.
+    drop(keyrings);
+
     let image_id = image_id.ok_or_else(|| {
         anyhow::anyhow!("Docker did not report an image ID after building '{}'", tag)
     })?;
@@ -758,7 +843,7 @@ async fn build_image_via_buildkit(
     Ok(image_id)
 }
 
-/// Formats `output` (the build log accumulated so far) as a "Build output:"/// Formats `output` (the build log accumulated so far) as a "Build output:"
+/// Formats `output` (the build log accumulated so far) as a "Build output:"
 /// section to append to a build failure message, or an empty string if
 /// nothing was captured yet (e.g. the build failed before Docker streamed
 /// anything). Kept separate from `build_image` so it's unit-testable without
@@ -3307,6 +3392,123 @@ mod tests {
         let options = HashMap::from([("max-size".to_string(), "10m".to_string())]);
 
         assert_eq!(build_log_config(None, Some(&options)), None);
+    }
+
+    /// A scratch directory holding real files and real Unix sockets, so
+    /// `classify_ssh_agent_paths` is exercised against the filesystem it
+    /// actually inspects rather than a stand-in for it — the socket-vs-file
+    /// distinction is a `stat` result, and nothing else can fake it.
+    struct ScratchPaths {
+        directory: PathBuf,
+        listeners: Vec<std::os::unix::net::UnixListener>,
+    }
+
+    impl ScratchPaths {
+        fn new() -> Self {
+            // Deliberately short: a socket path has to fit `sun_path`, and
+            // macOS's per-user temporary directory already spends ~50 of
+            // those characters before this name starts.
+            let id = uuid::Uuid::new_v4().simple().to_string();
+            let directory = std::env::temp_dir().join(format!("rt-{}", &id[..12]));
+            std::fs::create_dir_all(&directory).unwrap();
+            Self {
+                directory,
+                listeners: Vec::new(),
+            }
+        }
+
+        fn file(&self, name: &str) -> PathBuf {
+            let path = self.directory.join(name);
+            std::fs::write(&path, b"not really a key").unwrap();
+            path
+        }
+
+        fn socket(&mut self, name: &str) -> PathBuf {
+            let path = self.directory.join(name);
+            self.listeners
+                .push(std::os::unix::net::UnixListener::bind(&path).unwrap());
+            path
+        }
+    }
+
+    impl Drop for ScratchPaths {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    #[test]
+    fn an_ssh_agent_with_no_paths_forwards_the_host_agent() {
+        assert_eq!(
+            classify_ssh_agent_paths("default", &[]).unwrap(),
+            SshAgentSource::HostAgent
+        );
+    }
+
+    #[test]
+    fn ssh_agent_paths_naming_ordinary_files_are_private_keys() {
+        let scratch = ScratchPaths::new();
+        let paths = vec![scratch.file("id_ed25519"), scratch.file("id_rsa")];
+
+        assert_eq!(
+            classify_ssh_agent_paths("default", &paths).unwrap(),
+            SshAgentSource::Keys(paths.clone())
+        );
+    }
+
+    /// A path that doesn't exist is *not* a socket, so it takes the private
+    /// key route and fails there naming the file — a much better error than
+    /// a connection failure against a socket that was never there.
+    #[test]
+    fn a_missing_ssh_agent_path_is_treated_as_a_private_key() {
+        let paths = vec![PathBuf::from("/nonexistent/ratect/id_ed25519")];
+
+        assert_eq!(
+            classify_ssh_agent_paths("default", &paths).unwrap(),
+            SshAgentSource::Keys(paths.clone())
+        );
+    }
+
+    #[test]
+    fn an_ssh_agent_path_naming_a_socket_forwards_that_socket() {
+        let mut scratch = ScratchPaths::new();
+        let socket = scratch.socket("agent.sock");
+
+        assert_eq!(
+            classify_ssh_agent_paths("default", std::slice::from_ref(&socket)).unwrap(),
+            SshAgentSource::Socket(socket.clone())
+        );
+    }
+
+    /// BuildKit's own rule, and the only sensible one: an id maps to one
+    /// agent, so a socket can't be combined with anything.
+    #[test]
+    fn an_ssh_agent_mixing_a_socket_with_key_files_is_rejected() {
+        let mut scratch = ScratchPaths::new();
+        let socket = scratch.socket("agent.sock");
+        let key = scratch.file("id_ed25519");
+
+        let error = classify_ssh_agent_paths("deploy", &[socket.clone(), key]).unwrap_err();
+
+        let message = format!("{error:#}");
+        assert!(message.contains("deploy"), "unexpected error: {message}");
+        assert!(
+            message.contains(&socket.display().to_string()),
+            "the error should name the socket, but was: {message}"
+        );
+    }
+
+    #[test]
+    fn an_ssh_agent_naming_two_sockets_is_rejected() {
+        let mut scratch = ScratchPaths::new();
+        let paths = vec![scratch.socket("one.sock"), scratch.socket("two.sock")];
+
+        let error = classify_ssh_agent_paths("deploy", &paths).unwrap_err();
+
+        assert!(
+            format!("{error:#}").contains("only one agent can be forwarded"),
+            "unexpected error: {error:#}"
+        );
     }
 
     #[test]

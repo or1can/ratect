@@ -176,17 +176,29 @@ fn tmpfs_mounts(
 /// docker-side [`crate::docker::BuildKitOptions`] — `None` when neither is
 /// set (no session providers to serve; which *builder* runs the build is
 /// decided separately, by the `DockerClient` itself, from the daemon's
-/// advertised default). `build_ssh`'s shape (at most one `default`-id,
-/// no-`paths` entry) is already validated by
-/// [`crate::config::Config::resolve_expressions_with`] by the time this
-/// runs — this only reads whether an entry is present at all.
-fn buildkit_options(container: &Container) -> Option<crate::docker::BuildKitOptions> {
+/// advertised default).
+///
+/// Each `build_ssh` entry's already-resolved `paths` are classified into a
+/// source here — see [`crate::docker::classify_ssh_agent_paths`], which is
+/// what makes this fallible. Ids are unique by the time this runs, checked
+/// by [`crate::config::Config::resolve_expressions_with`].
+fn buildkit_options(container: &Container) -> Result<Option<crate::docker::BuildKitOptions>> {
     let secrets = container.build_secrets.as_ref();
     let ssh = container.build_ssh.as_ref();
     if secrets.is_none() && ssh.is_none() {
-        return None;
+        return Ok(None);
     }
-    Some(crate::docker::BuildKitOptions {
+
+    let mut ssh_agents = HashMap::new();
+    for agent in ssh.into_iter().flatten() {
+        let paths: Vec<PathBuf> = agent.paths.iter().map(PathBuf::from).collect();
+        ssh_agents.insert(
+            agent.id().to_string(),
+            crate::docker::classify_ssh_agent_paths(agent.id(), &paths)?,
+        );
+    }
+
+    Ok(Some(crate::docker::BuildKitOptions {
         secrets: secrets
             .map(|secrets| {
                 secrets
@@ -205,8 +217,8 @@ fn buildkit_options(container: &Container) -> Option<crate::docker::BuildKitOpti
                     .collect()
             })
             .unwrap_or_default(),
-        forward_default_ssh_agent: ssh.is_some_and(|agents| !agents.is_empty()),
-    })
+        ssh_agents,
+    }))
 }
 
 /// The outcome of a memoized async operation (an image pull/build, or a
@@ -1300,7 +1312,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                             .dockerfile
                             .as_deref()
                             .unwrap_or("Dockerfile");
-                        let buildkit = buildkit_options(container_config);
+                        let buildkit = buildkit_options(container_config)?;
                         // Batect's second use of `image_pull_policy`: on a
                         // `build_directory` container, `always` force-pulls
                         // the build's own base image before building
@@ -4569,7 +4581,10 @@ mod tests {
         let buildkit = docker
             .buildkit_options_for("demo-build-env")
             .expect("build_secrets/build_ssh should have produced BuildKitOptions");
-        assert!(buildkit.forward_default_ssh_agent);
+        assert_eq!(
+            buildkit.ssh_agents.get("default"),
+            Some(&crate::docker::SshAgentSource::HostAgent)
+        );
         assert_eq!(
             buildkit.secrets.get("token"),
             Some(&crate::docker::BuildSecretSource::Environment(
@@ -4581,6 +4596,64 @@ mod tests {
             Some(&crate::docker::BuildSecretSource::File(PathBuf::from(
                 "/base/cert.pem"
             )))
+        );
+    }
+
+    /// The other two `build_ssh` shapes reaching Docker: several agents
+    /// under distinct ids, one of them serving explicit key files. Without
+    /// this the conversion is only proven by the `#[ignore]`d real-daemon
+    /// test, which doesn't run in the default suite — so a regression in
+    /// how config becomes a `SshAgentSource` would go unnoticed there.
+    #[tokio::test]
+    async fn build_ssh_key_paths_reach_docker_as_a_named_key_source() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "build-env".to_string(),
+            Container {
+                build_ssh: Some(vec![
+                    crate::config::SshAgent {
+                        id: None,
+                        paths: Vec::new(),
+                    },
+                    crate::config::SshAgent {
+                        id: Some("deploy".to_string()),
+                        paths: vec![
+                            "/base/keys/id_ed25519".to_string(),
+                            "/base/keys/id_rsa".to_string(),
+                        ],
+                    },
+                ]),
+                ..container_with_build_directory("./docker", None)
+            },
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("build".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = TaskEngine::new(config, docker.clone());
+
+        engine.run_task("build", &[]).await.unwrap();
+
+        let buildkit = docker
+            .buildkit_options_for("demo-build-env")
+            .expect("build_ssh should have produced BuildKitOptions");
+        assert_eq!(
+            buildkit.ssh_agents.get("default"),
+            Some(&crate::docker::SshAgentSource::HostAgent)
+        );
+        assert_eq!(
+            buildkit.ssh_agents.get("deploy"),
+            Some(&crate::docker::SshAgentSource::Keys(vec![
+                PathBuf::from("/base/keys/id_ed25519"),
+                PathBuf::from("/base/keys/id_rsa"),
+            ]))
         );
     }
 
