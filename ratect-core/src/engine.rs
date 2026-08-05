@@ -193,8 +193,8 @@ fn buildkit_options(container: &Container) -> Result<Option<crate::docker::Build
     for agent in ssh.into_iter().flatten() {
         let paths: Vec<PathBuf> = agent.paths.iter().map(PathBuf::from).collect();
         ssh_agents.insert(
-            agent.id().to_string(),
-            crate::docker::classify_ssh_agent_paths(agent.id(), &paths)?,
+            agent.id.clone(),
+            crate::docker::classify_ssh_agent_paths(&agent.id, &paths)?,
         );
     }
 
@@ -4557,7 +4557,7 @@ mod tests {
                     ),
                 ])),
                 build_ssh: Some(vec![crate::config::SshAgent {
-                    id: Some("default".to_string()),
+                    id: "default".to_string(),
                     paths: Vec::new(),
                 }]),
                 ..container_with_build_directory("./docker", None)
@@ -4612,11 +4612,11 @@ mod tests {
             Container {
                 build_ssh: Some(vec![
                     crate::config::SshAgent {
-                        id: None,
+                        id: "default".to_string(),
                         paths: Vec::new(),
                     },
                     crate::config::SshAgent {
-                        id: Some("deploy".to_string()),
+                        id: "deploy".to_string(),
                         paths: vec![
                             "/base/keys/id_ed25519".to_string(),
                             "/base/keys/id_rsa".to_string(),

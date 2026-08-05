@@ -984,9 +984,17 @@ impl Serialize for BuildSecret {
 #[serde(deny_unknown_fields)]
 pub struct SshAgent {
     /// The agent id a Dockerfile's `RUN --mount=type=ssh,id=<id>` refers
-    /// to. Defaults to BuildKit's own implicit `default` id, which is what
-    /// a bare `RUN --mount=type=ssh` uses.
-    pub id: Option<String>,
+    /// to. Required, matching Batect — use `default` for the id a bare `RUN
+    /// --mount=type=ssh` uses, which is BuildKit's own implicit one.
+    ///
+    /// Deliberately not defaulted, even though BuildKit itself would: a
+    /// `batect.yml` omitting it is invalid, so accepting it here would let
+    /// a config work under `ratect-compat` and fail under `batect` — the
+    /// one direction a drop-in replacement must not diverge in. Required
+    /// in the native format too rather than only in `ratect-compat`, since
+    /// making a field's *requiredness* format-dependent would be a new kind
+    /// of difference between the two, for one line of saved typing.
+    pub id: String,
     /// Private key files to serve instead of forwarding a running agent —
     /// the case that works in CI, where there is usually no agent at all.
     /// Values support [expressions](#expressions) and are resolved the same
@@ -994,16 +1002,6 @@ pub struct SshAgent {
     /// running agent via `SSH_AUTH_SOCK`.
     #[serde(default)]
     pub paths: Vec<String>,
-}
-
-impl SshAgent {
-    /// This agent's id, with BuildKit's implicit `default` applied when the
-    /// entry doesn't name one. The single place that default is decided, so
-    /// the uniqueness check and the engine's own conversion can't disagree
-    /// about whether two unnamed entries collide.
-    pub fn id(&self) -> &str {
-        self.id.as_deref().unwrap_or("default")
-    }
 }
 
 /// Overrides the [health check configuration](https://docs.docker.com/engine/reference/builder/#healthcheck)
@@ -2586,7 +2584,7 @@ impl Config {
             if let Some(build_ssh) = &mut container.build_ssh {
                 let mut ids_seen = HashSet::new();
                 for agent in build_ssh.iter_mut() {
-                    let id = agent.id().to_string();
+                    let id = agent.id.clone();
                     if !ids_seen.insert(id.clone()) {
                         // A Dockerfile selects an agent by id, so two
                         // entries claiming one id have no defined meaning —
@@ -4631,7 +4629,7 @@ tasks: {}
         let container = config.containers.get("build-env").unwrap();
         let agents = container.build_ssh.as_ref().unwrap();
         assert_eq!(agents.len(), 1);
-        assert_eq!(agents[0].id.as_deref(), Some("default"));
+        assert_eq!(agents[0].id, "default");
         assert!(agents[0].paths.is_empty());
     }
 
@@ -5506,7 +5504,7 @@ tasks:
             containers: HashMap::from([(
                 "build-env".to_string(),
                 container_with_build_ssh(vec![SshAgent {
-                    id: Some("default".to_string()),
+                    id: "default".to_string(),
                     paths: Vec::new(),
                 }]),
             )]),
@@ -5525,30 +5523,31 @@ tasks:
             .unwrap();
     }
 
+    /// Batect's own `SSHAgent.id` has no default, so a `build_ssh` entry
+    /// omitting it is invalid there. Accepting it here would let a config
+    /// work under `ratect-compat` and fail under `batect`, which is the one
+    /// direction a drop-in replacement must not diverge in — BuildKit's
+    /// implicit `default` id has to be written out.
     #[test]
-    fn resolve_expressions_accepts_a_build_ssh_agent_with_no_id() {
-        let mut config = Config {
-            project_name: "demo".to_string(),
-            containers: HashMap::from([(
-                "build-env".to_string(),
-                container_with_build_ssh(vec![SshAgent {
-                    id: None,
-                    paths: Vec::new(),
-                }]),
-            )]),
-            tasks: HashMap::new(),
-            config_variables: None,
-            forbid_telemetry: None,
-        };
+    fn parsing_rejects_a_build_ssh_agent_with_no_id() {
+        let err = try_parse(
+            r#"
+project_name: demo
+containers:
+  build-env:
+    build_directory: ./docker
+    build_ssh:
+      - paths:
+          - keys/id_ed25519
+tasks: {}
+"#,
+        )
+        .unwrap_err();
 
-        config
-            .resolve_expressions_with(
-                Path::new("/base"),
-                &HashMap::new(),
-                &HashMap::new(),
-                no_host_env,
-            )
-            .unwrap();
+        assert!(
+            format!("{err:#}").contains("id"),
+            "the error should name the missing field: {err:#}"
+        );
     }
 
     /// Several agents under distinct ids is Batect's own behaviour, and
@@ -5561,11 +5560,11 @@ tasks:
                 "build-env".to_string(),
                 container_with_build_ssh(vec![
                     SshAgent {
-                        id: None,
+                        id: "default".to_string(),
                         paths: Vec::new(),
                     },
                     SshAgent {
-                        id: Some("deploy".to_string()),
+                        id: "deploy".to_string(),
                         paths: Vec::new(),
                     },
                 ]),
@@ -5596,7 +5595,7 @@ tasks:
             containers: HashMap::from([(
                 "build-env".to_string(),
                 container_with_build_ssh(vec![SshAgent {
-                    id: None,
+                    id: "default".to_string(),
                     paths: vec![
                         "keys/id_ed25519".to_string(),
                         "/etc/keys/id_rsa".to_string(),
@@ -5637,11 +5636,11 @@ tasks:
                 "build-env".to_string(),
                 container_with_build_ssh(vec![
                     SshAgent {
-                        id: Some("deploy".to_string()),
+                        id: "deploy".to_string(),
                         paths: Vec::new(),
                     },
                     SshAgent {
-                        id: Some("deploy".to_string()),
+                        id: "deploy".to_string(),
                         paths: Vec::new(),
                     },
                 ]),
@@ -5662,46 +5661,6 @@ tasks:
 
         assert!(
             format!("{err:#}").contains("more than one 'build_ssh' entry with the id 'deploy'"),
-            "unexpected error: {err:#}"
-        );
-    }
-
-    /// The collision an id-less entry can cause is the one most easily
-    /// written by accident: neither entry names an id, so both are
-    /// `default` and neither looks like a duplicate in the file.
-    #[test]
-    fn resolve_expressions_rejects_two_build_ssh_agents_that_both_default_their_id() {
-        let mut config = Config {
-            project_name: "demo".to_string(),
-            containers: HashMap::from([(
-                "build-env".to_string(),
-                container_with_build_ssh(vec![
-                    SshAgent {
-                        id: None,
-                        paths: Vec::new(),
-                    },
-                    SshAgent {
-                        id: Some("default".to_string()),
-                        paths: Vec::new(),
-                    },
-                ]),
-            )]),
-            tasks: HashMap::new(),
-            config_variables: None,
-            forbid_telemetry: None,
-        };
-
-        let err = config
-            .resolve_expressions_with(
-                Path::new("/base"),
-                &HashMap::new(),
-                &HashMap::new(),
-                no_host_env,
-            )
-            .unwrap_err();
-
-        assert!(
-            format!("{err:#}").contains("more than one 'build_ssh' entry with the id 'default'"),
             "unexpected error: {err:#}"
         );
     }

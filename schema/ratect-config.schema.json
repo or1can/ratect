@@ -618,11 +618,8 @@
       "description": "One agent in a container's `build_ssh` list — see `Container::build_ssh`. Ids must be unique across the list, which is checked in `Config::resolve_expressions_with` rather than here, so the error can name the offending container.",
       "properties": {
         "id": {
-          "description": "The agent id a Dockerfile's `RUN --mount=type=ssh,id=<id>` refers to. Defaults to BuildKit's own implicit `default` id, which is what a bare `RUN --mount=type=ssh` uses.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "description": "The agent id a Dockerfile's `RUN --mount=type=ssh,id=<id>` refers to. Required, matching Batect — use `default` for the id a bare `RUN --mount=type=ssh` uses, which is BuildKit's own implicit one.",
+          "type": "string"
         },
         "paths": {
           "default": [],
@@ -633,6 +630,9 @@
           "type": "array"
         }
       },
+      "required": [
+        "id"
+      ],
       "type": "object"
     },
     "Task": {

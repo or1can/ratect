@@ -1024,6 +1024,19 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     entry carries that reasoning inline — an ignore without it is
     indistinguishable from silencing the check, and `cargo audit` says
     nothing about what it skipped.
+
+    One behaviour break went the other way, found by reading Batect's own
+    config model rather than its docs: **`build_ssh`'s `id` is required
+    there**, and Ratect had been defaulting it to `default` since 0.11.0.
+    Being *more* permissive than Batect looks harmless and isn't: it lets a
+    `batect.yml` be written against `ratect-compat` that `batect` itself
+    then refuses, which is the one direction a drop-in replacement can't
+    diverge in. Tightened in both formats rather than only in
+    `ratect-compat` — the three existing native/compat differences are all
+    about parsing *shape* (object-only forms, the `extends` pass, the
+    bundle-file probe), and making a field's requiredness format-dependent
+    would be a new category of divergence to justify, for one line of saved
+    typing.
   - **More of Batect's journey corpus** — the [conformance phase](#ratect-compat)
     above hasn't moved since 0.23.0, since 0.24.0 was really a `ratect` release
     that carried three shared-core config fixes along. Takes the deferrals 0.23.0

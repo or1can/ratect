@@ -297,14 +297,18 @@ task's own container, as a dependency, or by more than one task) — but never r
   value.
 - `build_ssh` makes SSH keys available to the build, for a Dockerfile's
   `RUN --mount=type=ssh` instructions. Each entry is one agent, named by an `id` a
-  `RUN` instruction selects with `--mount=type=ssh,id=<id>`; an omitted `id` means
-  BuildKit's implicit `default`, which is what a bare `RUN --mount=type=ssh` uses.
-  Ids must be unique across the list. Each entry's `paths` decides where its keys
-  come from, following BuildKit's own rules:
+  `RUN` instruction selects with `--mount=type=ssh,id=<id>`. `id` is required, and
+  ids must be unique across the list. Write `default` for the agent a bare `RUN
+  --mount=type=ssh` uses — BuildKit's implicit id is not applied for you, because
+  Batect requires `id` too and a config that omitted it would work here but not
+  under `batect`. Each entry's `paths` decides where its keys come from, following
+  BuildKit's own rules:
 
   ```yaml
   build_ssh:
-    - id: default             # no paths: forwards the host's own running
+    - id: default             # required; `default` is the id a bare
+                              # `RUN --mount=type=ssh` selects. No paths:
+                              # forwards the host's own running
                               # ssh-agent, via its SSH_AUTH_SOCK
     - id: deploy
       paths:
