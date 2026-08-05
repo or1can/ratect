@@ -314,7 +314,17 @@ Ratect is a **Cargo workspace** with four crates (the
     pairing is OpenSSH's own (`mkdtemp` + `umask(0177)` around the bind);
     doing only the directory rests the whole protection on one `mode`
     argument. It's a `chmod` rather than a umask because the umask is
-    process-global and this process is multi-threaded. Worth knowing that
+    process-global and this process is multi-threaded. Its accept loop owns
+    connections in a `tokio::task::JoinSet` rather than detaching them, so
+    dropping the `Keyring` aborts the connections it is *already* serving and
+    not merely the loop — an established client doesn't care that the socket
+    file has been unlinked. That matches the convention every other
+    `tokio::spawn` in `ratect-core` already follows (the handle is owned and
+    aborted — `stdin_pump`, `spawn_resize_listener`); a bare detached spawn is
+    the thing to look twice at. The loop also never gives up on an `accept`
+    error: most are per-connection or transient, and quietly serving nothing
+    for the rest of a build surfaces much later as an unexplained
+    authentication failure. Worth knowing that
     Go BuildKit needs *neither*: its `sshprovider` serves a keyring over an
     in-memory `net.Pipe()`, so no socket exists on the filesystem at all —
     Ratect needs one only because the fork's `SshAgentSource` is
@@ -591,6 +601,17 @@ Ratect is currently a **Work in Progress**. For a detailed list of supported fea
 
 The `docs/` directory is user-facing documentation (installation, getting started, architecture, CLI reference, config reference, differences from Batect) — **not** ROADMAP.md/AGENTS.md/CHANGELOG.md/`decisions/`, which are project-management/contributor docs. `docs/` deliberately does not assume familiarity with Batect's own documentation, since Ratect's behavior is a subset of and sometimes diverges from it.
 
+**`docs/ratect-config-reference.md` defers to `docs/config-reference.md` for most
+field semantics, and that deferral is only safe while the differences are about
+*shape*.** It says every field "applies, with the same meaning" and then links
+into the `batect.yml` reference from ~19 places, so any behaviour that is
+`ratect-compat`-only silently falsifies it for native readers who followed a
+link. The first semantic divergence (0.25.0's image-source validation, which
+`extends` requires the native format not to have) is why there is now a **Where
+the semantics differ** table in the native reference: a new behavioural
+divergence needs a row there *and* a marker at the compat end of the link, not
+just a sentence wherever it was implemented.
+
 The [`decisions/`](decisions/) directory holds Architecture Decision Records — the **cross-cutting** decisions that get referenced from more than one place (the two-binary split, the runtime-ownership labels, the native config format, trusting a Git include's host paths). Its [`README.md`](decisions/README.md) states the convention; see guideline 14 below for when to write one.
 
 ## Guidelines for AI Agents
@@ -614,6 +635,12 @@ The [`decisions/`](decisions/) directory holds Architecture Decision Records —
 14. **Architecture Decision Records** ([`decisions/`](decisions/)): the home for a decision's rationale is decided by whether it's **cross-cutting or version-scoped**. A decision referenced from more than one place — the two-binary split, the labels namespace, the native config format — becomes an ADR (`decisions/NNNN-slug.md`, `Status`/`Context`/`Decision`/`Alternatives considered`/`Consequences`), and its ROADMAP.md entry shrinks to a summary plus a `decisions/NNNN` pointer. A decision that belongs to one release stays **inline** in that release's ROADMAP.md entry, using the existing "Scope, settled before building:" / "As built:" subsection pattern — don't extract it. Practical trigger: a decision earns an ADR the moment it's about to be referenced from a *second* place; most never cross that line. ADRs are append-only like the versioned lists — supersede and link forward, never delete. See [`decisions/README.md`](decisions/README.md) for the full convention.
 15. **Review before committing, not after.** Run a review pass over the working diff (`/code-review`) *before* each commit rather than over a run of commits afterwards. Adopted after 0.25.0's interrupt work, where a post-hoc review found six issues that all existed at commit time — one of them a behaviour bug, not a slip. Four checks earned their place there, each having actually missed something:
     - **Anchor an inserted item on the preceding item's closing brace, never on the new one's attributes.** A Rust item's doc comment sits *above* its `#[test]`/`#[derive]` attributes, so anchoring an insertion there splices the new item into the previous one's documentation — silently, and the compiler is happy. This is how a new e2e test ended up wearing its neighbour's doc comment.
-    - **Re-read every string you added, in its final control-flow position.** Log and error messages are correct when written and quietly become wrong as the code around them moves; nothing type-checks them. Two messages shipped claiming work that a flag had disabled, and naming a `ratect` verb from shared core that `ratect-compat` doesn't have.
+    - **Re-read every string you added, in its final control-flow position.** Log and error messages are correct when written and quietly become wrong as the code around them moves; nothing type-checks them. Two messages shipped claiming work that a flag had disabled, and naming a `ratect` verb from shared core that `ratect-compat` doesn't have. A
+      related check for *errors* specifically: an error has to name something the
+      user actually wrote. A lower layer speaks its own vocabulary — `docker.rs`
+      knows an ssh agent id, not which container declared it — so an error
+      crossing up from one needs the caller to attach that. `classify_ssh_agent_paths`
+      shipped naming only the agent, in a codebase where every other config error
+      names its container.
     - **Watch for coverage shaped by the test harness rather than the behaviour.** If the fake can only express one ordering of something inherently timing-dependent, the untestable orderings are where the bug will be — extend the harness instead of concluding the cases are covered. Every interrupt test could only pre-record interrupts *before* a run, and the broken case was an interrupt arriving mid-cleanup.
     - **A real-daemon test can mask a missing unit test.** The `#[ignore]`d Docker tests don't run in the default suite, so a path they cover can be entirely unprotected in `cargo test --workspace`. Assert each effect separately — one assertion per thing removed, not one for "cleanup happened".

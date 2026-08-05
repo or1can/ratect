@@ -192,10 +192,12 @@ includes are merged.
 ## Field reference
 
 Every container and task field from [`config-reference.md`](config-reference.md)
-applies, with the same meaning. Scalars, string maps (`environment`, `labels`,
-`build_args`, …) and scalar lists (`capabilities_to_add`, `additional_hostnames`,
-…) are a direct 1:1 spelling; the only fields whose *shape* differs are the
-object-per-entry lists above. The container fields, by area:
+applies, with the same meaning except where [Where the semantics
+differ](#where-the-semantics-differ) says otherwise. Scalars, string maps
+(`environment`, `labels`, `build_args`, …) and scalar lists
+(`capabilities_to_add`, `additional_hostnames`, …) are a direct 1:1 spelling;
+the only fields whose *shape* differs are the object-per-entry lists above.
+The container fields, by area:
 
 | Area | Fields | Semantics |
 | --- | --- | --- |
@@ -206,6 +208,25 @@ object-per-entry lists above. The container fields, by area:
 | Readiness | `health_check`, `setup_commands` | [Dependency readiness](config-reference.md#dependency-readiness) |
 | User | `run_as_current_user` | [User mapping](config-reference.md#user-mapping) |
 | Inheritance | `extends` | [above](#extends-inheritance-instead-of-yaml-anchors) *(native only)* |
+
+### Where the semantics differ
+
+Almost nothing: the two formats parse into the same model, so a field means
+what [`config-reference.md`](config-reference.md) says it means. The
+exceptions are the places where `extends` gives a combination a meaning it
+cannot have in a `batect.yml`, which has no inheritance.
+
+| Behaviour | `batect.yml` (`ratect-compat`) | `ratect.toml` (`ratect`) |
+| --- | --- | --- |
+| A container with **both** `image` and `build_directory` | Rejected when the file loads, matching Batect | Allowed — `image` wins, and this is the only way to override a `build_directory` inherited from an `extends` parent, since inheritance is per-field with no way to unset one |
+| A container with **neither** `image` nor `build_directory` | Rejected when the file loads | Allowed — a container used only as an `extends` base needs neither; the requirement is enforced when a task actually runs a container, so no `abstract` marker is needed |
+| `image` alongside a build-only field (`build_args`, `build_target`, `dockerfile`, `build_secrets`, `build_ssh`) | Rejected when the file loads | Allowed and **ignored**, for the same inheritance reason — a child overriding a build with an `image` still carries the parent's build fields |
+
+The last row is the one to watch: setting `build_secrets` or `build_ssh` on a
+container that also has an `image` does nothing at all, and the native format
+cannot tell you so without forbidding the override above. If a build field
+looks like it is being ignored, check whether the container resolves to an
+`image`.
 
 Task fields: `run` (a [`TaskRun`](config-reference.md#taskrun) table —
 `container`, `command`, `entrypoint`, `environment`, `ports`,
