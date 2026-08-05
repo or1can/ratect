@@ -975,9 +975,9 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     API this stacks on is now settled rather than provisional. Note it does *not*
     wait on bollard 0.22 reaching crates.io: the fork branch already carries the
     merged code, so the work proceeds on the existing `[patch.crates-io]` entry and
-    dropping that patch stays a separate later chore.
+    dropping that patch stays a separate later chore.~~
 
-    Lands as **two commits, split along the line between plumbing and
+    ~~Lands as **two commits, split along the line between plumbing and
     cryptography**: named agents backed by Unix sockets in the fork (a real
     id → backend map replacing today's hardcoded single-agent path — no crypto,
     no new dependencies, and the half that gets PR'd upstream), then the
