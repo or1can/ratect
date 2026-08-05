@@ -432,6 +432,11 @@ run = { container = "app" }
 /// because that requirement is enforced lazily, only for containers a task
 /// actually runs. Nothing pinned it, so an eager check added later would have
 /// silently broken the format's headline reuse pattern.
+///
+/// Which is exactly what it then caught: 0.25.0's port of Batect's
+/// `resolveImageSource` validation started out applying to both formats, and
+/// this test is what forced it to `ratect-compat` only. Don't delete it as
+/// hypothetical.
 #[test]
 fn a_base_only_container_needs_no_image_and_validates() {
     let dir = unique_project_dir();
