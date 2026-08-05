@@ -183,17 +183,11 @@ fn tmpfs_mounts(
 /// what makes this fallible. Ids are unique by the time this runs, checked
 /// by [`crate::config::Config::resolve_expressions_with`].
 ///
-/// Takes `container_name` only to attribute those failures. This is the one
-/// config-derived error on the build path that isn't already attributable:
-/// `build_image`'s own failures name the image tag, which carries the
-/// container name, whereas `classify_ssh_agent_paths` speaks the Docker
-/// layer's vocabulary (an agent id) and has no idea which container it came
-/// from. Every other config error in Ratect names its container, so this one
-/// should too.
-fn buildkit_options(
-    container_name: &str,
-    container: &Container,
-) -> Result<Option<crate::docker::BuildKitOptions>> {
+/// Failures here name an agent id rather than a container, deliberately:
+/// [`TaskEngine::resolve_image`] attributes every way one container's build
+/// can fail, in a single place, so nothing along the path carries the name
+/// itself.
+fn buildkit_options(container: &Container) -> Result<Option<crate::docker::BuildKitOptions>> {
     let secrets = container.build_secrets.as_ref();
     let ssh = container.build_ssh.as_ref();
     if secrets.is_none() && ssh.is_none() {
@@ -205,9 +199,7 @@ fn buildkit_options(
         let paths: Vec<PathBuf> = agent.paths.iter().map(PathBuf::from).collect();
         ssh_agents.insert(
             agent.id.clone(),
-            crate::docker::classify_ssh_agent_paths(&agent.id, &paths).with_context(|| {
-                format!("Container '{container_name}' has an invalid 'build_ssh' entry")
-            })?,
+            crate::docker::classify_ssh_agent_paths(&agent.id, &paths)?,
         );
     }
 
@@ -1307,7 +1299,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             let cell = get_or_create_cell(&self.built_images, container_name);
             let result = cell
                 .get_or_init(|| async {
-                    let outcome: Result<String> = async {
+                    let build: Result<String> = async {
                         let tag = format!("{}-{}", self.config.project_name, container_name);
                         // No `extra_no_proxy_entries` at build time — matches
                         // Batect, which never adds container names to
@@ -1325,7 +1317,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                             .dockerfile
                             .as_deref()
                             .unwrap_or("Dockerfile");
-                        let buildkit = buildkit_options(container_name, container_config)?;
+                        let buildkit = buildkit_options(container_config)?;
                         // Batect's second use of `image_pull_policy`: on a
                         // `build_directory` container, `always` force-pulls
                         // the build's own base image before building
@@ -1366,6 +1358,19 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         Ok(image_id)
                     }
                     .await;
+                    let outcome = build
+                        // One place attributes everything this build can fail
+                        // on, rather than each error site remembering to. The
+                        // failures come from three layers with three
+                        // vocabularies — an ssh agent id (`build_ssh`
+                        // classification), a key file path (the keyring), an
+                        // image tag (Docker itself) — and none of them knows
+                        // which container the user has to go and edit. Adding
+                        // it per-site is what left two adjacent `build_ssh`
+                        // errors disagreeing about whether they named one.
+                        .with_context(|| {
+                            format!("Failed to build the image for container '{container_name}'")
+                        });
                     outcome.map_err(Arc::new)
                 })
                 .await;
@@ -2508,6 +2513,9 @@ mod tests {
         // Makes `run_container` fail before it would have created anything
         // (see `failing_container_creation`).
         fail_container_creation: Arc<Mutex<bool>>,
+        // Makes `build_image` fail, standing in for any Docker-layer build
+        // failure (see `failing_image_build`).
+        fail_image_build: Arc<Mutex<bool>>,
         // Images `image_exists_locally` reports as already present (see
         // `with_local_image`) — defaults to empty, so tests that don't care
         // about `image_pull_policy` see the "always needs a pull" behavior
@@ -2565,6 +2573,7 @@ mod tests {
                 unhealthy_container: Default::default(),
                 failing_setup_command: Default::default(),
                 fail_container_creation: Default::default(),
+                fail_image_build: Default::default(),
                 locally_present_images: Default::default(),
                 start_delays: Default::default(),
                 pull_delays: Default::default(),
@@ -2623,6 +2632,14 @@ mod tests {
         /// rather than fail.
         fn failing_container_creation(self) -> Self {
             *self.fail_container_creation.lock().unwrap() = true;
+            self
+        }
+
+        /// Makes `build_image` fail with an error of the Docker layer's own
+        /// wording — one that says nothing about which container asked for
+        /// the build.
+        fn failing_image_build(self) -> Self {
+            *self.fail_image_build.lock().unwrap() = true;
             self
         }
 
@@ -2973,6 +2990,9 @@ mod tests {
                 .unwrap()
                 .insert(tag.to_string(), force_pull);
             self.push(format!("build:{tag}:{}", build_directory.display()));
+            if *self.fail_image_build.lock().unwrap() {
+                anyhow::bail!("the daemon said no");
+            }
             // Real Docker returns an image ID distinct from the tag; the fake
             // has no such concept, so it just echoes the tag back — tests
             // that assert `image_for(name) == tag` still hold either way.
@@ -4712,7 +4732,7 @@ mod tests {
 
         let message = format!("{err:#}");
         assert!(
-            message.contains("Container 'build-env'"),
+            message.contains("container 'build-env'"),
             "the error should name the container: {message}"
         );
         assert!(
@@ -4721,6 +4741,46 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    /// The attribution belongs to the *build*, not to any one error site:
+    /// a Docker-layer failure knows only an image tag, and the keyring's
+    /// knows only a key file path. Pinning it on a failure from the Docker
+    /// layer — the one furthest from the config — is what proves the
+    /// wrapper covers everything rather than just the case it was added
+    /// for.
+    #[tokio::test]
+    async fn a_failed_build_names_the_container_whatever_layer_failed() {
+        let mut containers = HashMap::new();
+        containers.insert(
+            "build-env".to_string(),
+            container_with_build_directory("./docker", None),
+        );
+        let mut tasks = HashMap::new();
+        tasks.insert("build".to_string(), task("build-env", "echo hi"));
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let engine = TaskEngine::new(
+            config,
+            FakeContainerRuntime::default().failing_image_build(),
+        );
+        let err = engine.run_task("build", &[]).await.unwrap_err();
+
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("container 'build-env'"),
+            "the error should name the container: {message}"
+        );
+        assert!(
+            message.contains("the daemon said no"),
+            "and keep the underlying cause: {message}"
+        );
     }
 
     #[tokio::test]
