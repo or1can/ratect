@@ -1,0 +1,11 @@
+# Revisions that changed only where code lives, never what it does. Skip them
+# when tracing a line's real history:
+#
+#   git blame --ignore-revs-file .git-blame-ignore-revs <file>
+#
+# Or set it once and forget it:
+#
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Add a commit here only if it is a pure move or reformat. A commit that
+# changes behaviour must never be listed, however mechanical it looks.
