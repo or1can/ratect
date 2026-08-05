@@ -9,3 +9,6 @@
 #
 # Add a commit here only if it is a pure move or reformat. A commit that
 # changes behaviour must never be listed, however mechanical it looks.
+
+# refactor: move unit tests into sibling <module>_tests.rs files
+e49454ae7507139249f9cbd1ec4cef301075e7b8
