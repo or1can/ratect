@@ -2974,6 +2974,7 @@ async fn load_project_impl(
     };
     if format == ConfigFormat::Compat {
         reject_extends_in_compat(&loaded.config)?;
+        validate_image_sources_in_compat(&loaded.config.containers)?;
     }
     let base_path = base_path_for(config_file);
     let project_directory = project_directory_path(base_path)?;
@@ -2989,6 +2990,76 @@ async fn load_project_impl(
         config,
         project_directory,
     })
+}
+
+/// Rejects a container whose image source is ambiguous or absent, and the
+/// `build_*` fields that only mean something for a build.
+///
+/// Ported from Batect's own `resolveImageSource`, which rejects all seven
+/// combinations below. Ratect previously accepted every one of them and let
+/// `resolve_image`'s precedence decide silently: `image` wins over
+/// `build_directory`, so a container with both quietly never built, and
+/// `build_args`/`build_ssh`/`build_secrets` alongside `image` were read by
+/// nothing at all. Configuring a build secret and having it ignored without
+/// a word is the failure this exists to prevent.
+///
+/// **Compat-only, and this one really is a format difference rather than a
+/// convenience.** `ratect`'s native format has `extends`, which gives every
+/// combination here a defined meaning it lacks in a `batect.yml`: a base
+/// container legitimately has *neither* field (ADR-0003's "no `abstract`
+/// marker needed" — pinned by `ratect`'s own
+/// `a_base_only_container_needs_no_image_and_validates`), and because
+/// inheritance is `child.or(parent)` with no way to unset, `image` on a
+/// child is the *only* way to override a parent's `build_directory`, which
+/// necessarily leaves both set. Applying these checks there would forbid the
+/// format's headline reuse pattern to gain a diagnostic. Native keeps
+/// today's lazy behaviour: the requirement is enforced when a task actually
+/// runs a container.
+///
+/// Errors name the container, where Batect names a line and column instead
+/// — it keeps positions on its parsed nodes and Ratect doesn't, and the
+/// container name is what the rest of Ratect's config errors identify.
+fn validate_image_sources_in_compat(containers: &HashMap<String, Container>) -> Result<()> {
+    // Sorted, so a project with more than one offending container always
+    // reports the same one rather than whichever the hash order surfaced.
+    let mut names: Vec<&String> = containers.keys().collect();
+    names.sort_unstable();
+
+    for name in names {
+        let container = &containers[name];
+        match (&container.image, &container.build_directory) {
+            (Some(_), Some(_)) => anyhow::bail!(
+                "Container '{name}' has both 'image' and 'build_directory', but only one of \
+                 the two can be given."
+            ),
+            // Deliberately the same wording as `engine.rs`'s own lazy check,
+            // which still fires for the native format (and for a `Config`
+            // built without going through `load_project`). One condition
+            // should read the same however it was reached.
+            (None, None) => {
+                anyhow::bail!("Container '{name}' has neither 'image' nor 'build_directory' set")
+            }
+            _ => {}
+        }
+
+        if container.image.is_none() {
+            continue;
+        }
+        let build_only = [
+            ("build_args", container.build_args.is_some()),
+            ("build_target", container.build_target.is_some()),
+            ("dockerfile", container.dockerfile.is_some()),
+            ("build_secrets", container.build_secrets.is_some()),
+            ("build_ssh", container.build_ssh.is_some()),
+        ];
+        if let Some((field, _)) = build_only.iter().find(|(_, present)| *present) {
+            anyhow::bail!(
+                "Container '{name}' has '{field}', which cannot be used with 'image' — it \
+                 only applies to a container built from a 'build_directory'."
+            );
+        }
+    }
+    Ok(())
 }
 
 /// `extends` is a `ratect`-native field; a `batect.yml` that uses it is
@@ -5489,6 +5560,106 @@ tasks:
                 .unwrap()["token"],
             BuildSecret::Environment("$HOST_VAR".to_string())
         );
+    }
+
+    /// Batect rejects each `build_*` field alongside `image`, because none
+    /// of them mean anything for a pulled image. Ratect read none of them in
+    /// that case and said nothing — the silent half of this gap, and the
+    /// worse half: a configured `build_secrets` that is quietly ignored
+    /// looks exactly like one that worked.
+    #[test]
+    fn compat_rejects_build_only_fields_alongside_an_image() {
+        for (field, mutate) in [
+            (
+                "build_args",
+                Box::new(|c: &mut Container| {
+                    c.build_args = Some(HashMap::from([("A".to_string(), "b".to_string())]))
+                }) as Box<dyn Fn(&mut Container)>,
+            ),
+            (
+                "build_target",
+                Box::new(|c: &mut Container| c.build_target = Some("stage".to_string())),
+            ),
+            (
+                "dockerfile",
+                Box::new(|c: &mut Container| c.dockerfile = Some("Dockerfile".to_string())),
+            ),
+            (
+                "build_secrets",
+                Box::new(|c: &mut Container| c.build_secrets = Some(HashMap::new())),
+            ),
+            (
+                "build_ssh",
+                Box::new(|c: &mut Container| c.build_ssh = Some(Vec::new())),
+            ),
+        ] {
+            let mut container = image_container();
+            mutate(&mut container);
+            let containers = HashMap::from([("app".to_string(), container)]);
+
+            let err = validate_image_sources_in_compat(&containers)
+                .expect_err("{field} alongside 'image' should be rejected");
+
+            assert!(
+                format!("{err:#}")
+                    .contains(&format!("'{field}', which cannot be used with 'image'")),
+                "unexpected error for {field}: {err:#}"
+            );
+        }
+    }
+
+    /// `resolve_image` prefers `image`, so a container with both silently
+    /// never built — the configuration said to build and Ratect pulled.
+    #[test]
+    fn compat_rejects_a_container_with_both_image_and_build_directory() {
+        let mut container = image_container();
+        container.build_directory = Some("./docker".to_string());
+        let containers = HashMap::from([("app".to_string(), container)]);
+
+        let err = validate_image_sources_in_compat(&containers)
+            .expect_err("both an image and a build directory should be rejected");
+
+        assert!(
+            format!("{err:#}").contains("has both 'image' and 'build_directory'"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    /// The eager check exists to move this diagnostic from "when the task
+    /// ran" to "when the file loaded", so it has to use the wording
+    /// `engine.rs` already uses — the native format and any `Config` built
+    /// without `load_project` still reach the lazy one.
+    #[test]
+    fn compat_rejects_a_container_with_neither_image_nor_build_directory() {
+        let mut container = image_container();
+        container.image = None;
+        let containers = HashMap::from([("app".to_string(), container)]);
+
+        let err = validate_image_sources_in_compat(&containers)
+            .expect_err("a container with no image source should be rejected");
+
+        assert!(
+            format!("{err:#}")
+                .contains("Container 'app' has neither 'image' nor 'build_directory' set"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    /// A container with a plain pulled image and no build fields at all —
+    /// the valid baseline each rejection test above perturbs by one field.
+    fn image_container() -> Container {
+        let mut container = container_with_build("./docker", HashMap::new());
+        container.build_directory = None;
+        // `container_with_build` sets `build_args`, which is itself one of
+        // the fields under test — clear every build-only field so each case
+        // below perturbs exactly one.
+        container.build_args = None;
+        container.build_target = None;
+        container.dockerfile = None;
+        container.build_secrets = None;
+        container.build_ssh = None;
+        container.image = Some("alpine:3.18".to_string());
+        container
     }
 
     fn container_with_build_ssh(agents: Vec<SshAgent>) -> Container {

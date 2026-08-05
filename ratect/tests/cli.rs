@@ -378,6 +378,55 @@ fn config_convert_to_stdout_writes_no_file() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// The other half of why `batect.yml`'s image-source validation is
+/// deliberately not applied to the native format: `extends` is
+/// `child.or(parent)` with no way to *unset* an inherited field, so setting
+/// `image` on a child is the only way to override a parent's
+/// `build_directory` — which necessarily leaves both set. `ratect-compat`
+/// rejects that combination (Batect does, and has no `extends` to need it);
+/// rejecting it here would forbid the reuse pattern the format exists for.
+#[test]
+fn a_native_container_may_override_an_inherited_build_directory_with_an_image() {
+    let dir = unique_project_dir();
+    // `config validate` also checks that a build directory exists, and the
+    // inherited one is still present on the child — this test is about the
+    // config loading, so give it something real to point at.
+    std::fs::create_dir(dir.join("ctx")).unwrap();
+    std::fs::write(dir.join("ctx/Dockerfile"), "FROM alpine:3.18\n").unwrap();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        r#"
+project_name = "demo"
+
+[containers.base]
+build_directory = "ctx"
+
+[containers.app]
+extends = "base"
+image = "alpine:3.18"
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .unwrap();
+
+    let output = ratect_command()
+        .arg("-f")
+        .arg(dir.join("ratect.toml"))
+        .args(["config", "validate"])
+        .output()
+        .expect("failed to run ratect");
+    assert!(
+        output.status.success(),
+        "overriding an inherited build with an image should be valid:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// A container used only as an `extends` base needs neither `image` nor
 /// `build_directory` — ADR-0003's "no `abstract` marker needed", which holds
 /// because that requirement is enforced lazily, only for containers a task

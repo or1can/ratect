@@ -78,6 +78,14 @@ The rules:
   absolute, so an inherited `build_directory` or volume host path stays anchored
   to the file that *declared* it, not the child's location — this matters when
   the parent came from an [included file](#includes).
+- **Overriding a build with an image.** Because inheritance is per-field with no
+  way to *unset* one, setting `image` on a child is how you override a parent's
+  `build_directory`: `image` wins, and the inherited `build_directory` is simply
+  unused. `ratect-compat` rejects a container with both fields (Batect does, and
+  has no `extends` that would need the override) — this is a deliberate
+  difference, not an oversight. A container used only as an `extends` base
+  likewise needs neither field; the requirement is enforced when a task actually
+  runs a container, so no `abstract` marker is needed.
 - **Containers only.** Tasks do not `extends` (compose task behaviour with
   `prerequisites`/`dependencies` instead).
 

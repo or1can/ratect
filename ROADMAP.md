@@ -1037,6 +1037,22 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     bundle-file probe), and making a field's requiredness format-dependent
     would be a new category of divergence to justify, for one line of saved
     typing.
+
+    Reading Batect's config model for that also turned up a second, wholly
+    separate gap: **Batect rejects seven `image`-versus-`build_*`
+    combinations that Ratect accepted silently** (`resolveImageSource`).
+    `image` beats `build_directory` in `resolve_image`, so a container with
+    both never built despite asking to, and `build_args`/`build_secrets`/
+    `build_ssh` alongside `image` were read by nothing at all. Fixed for
+    `ratect-compat` and deliberately *not* for the native format — there,
+    `extends` is per-field with no way to unset, so `image` on a child is
+    the only way to override a parent's `build_directory`, and a base-only
+    container legitimately has neither field (ADR-0003). That one *is* a
+    format difference worth having, unlike the `id` case above: an eager
+    check would forbid the native format's headline reuse pattern, which
+    `ratect`'s own `a_base_only_container_needs_no_image_and_validates`
+    already existed to prevent. A validation gap rather than a feature gap,
+    so it doesn't change the parity tables.
   - **More of Batect's journey corpus** — the [conformance phase](#ratect-compat)
     above hasn't moved since 0.23.0, since 0.24.0 was really a `ratect` release
     that carried three shared-core config fixes along. Takes the deferrals 0.23.0

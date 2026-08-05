@@ -29,6 +29,12 @@ history, from when it was the only binary.
 
   This is Ratect's first cryptographic dependency (`ssh-key` and companions), taken knowingly — see [decisions/0005](decisions/0005-build-ssh-keyring-placement.md), which also records why the plumbing half went to the `bollard` fork (and upstream) while the keys stayed here. Proven end-to-end by a new `#[ignore]`d integration test that builds against a real daemon with `SSH_AUTH_SOCK` removed from the environment entirely, so nothing but the served key file can satisfy the build's `ssh-add -l`. See [config reference](docs/config-reference.md#image-building).
 
+### Fixed
+
+- **A container combining `image` with `build_directory` or any build-only field is now rejected** in `ratect-compat`, matching Batect's own `resolveImageSource`. Previously all seven combinations Batect rejects were accepted and resolved silently: `image` takes precedence over `build_directory`, so a container with both never built despite saying it should, and `build_args`/`build_target`/`dockerfile`/`build_secrets`/`build_ssh` alongside `image` were read by nothing at all — a configured build secret could be ignored without a word. The "neither `image` nor `build_directory`" case is now caught when the file loads rather than when a task runs, with the same wording as before.
+
+  Deliberately **not** applied to `ratect`'s native format, where `extends` gives these combinations a meaning they don't have in a `batect.yml`: inheritance is per-field with no way to unset, so setting `image` on a child is the only way to override a parent's `build_directory` (which necessarily leaves both set), and a container used only as an `extends` base legitimately has neither field. See the [`ratect.toml` reference](docs/ratect-config-reference.md#extends-inheritance-instead-of-yaml-anchors).
+
 ### Changed
 
 - **A `build_ssh` entry's `id` is now required**, matching Batect, where `SSHAgent.id` has no default. Previously an omitted `id` meant BuildKit's implicit `default`. That was more permissive than Batect in the one direction a drop-in replacement shouldn't be: a `batect.yml` written against Ratect could omit `id` and then fail to load under `batect` itself. Write `id: default` for the agent a bare `RUN --mount=type=ssh` selects. Applies to `ratect`'s native format too — making a field's *requiredness* depend on which format a file is written in would be a new kind of difference between the two, for one line of saved typing. Affects configuration accepted since 0.11.0; the fix is mechanical and the error names the missing field.

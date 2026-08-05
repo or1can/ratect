@@ -93,6 +93,10 @@ fn no_image_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/no-image.yml")
 }
 
+fn image_with_build_fields_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/image-with-build-fields.yml")
+}
+
 fn environment_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/environment.yml")
 }
@@ -429,6 +433,34 @@ fn container_without_image_or_build_directory_reports_error() {
         stderr.contains("Container 'build-env' has neither 'image' nor 'build_directory' set"),
         "stderr:\n{}",
         stderr
+    );
+}
+
+/// `image` with a build-only field is rejected when the configuration
+/// loads, not when something runs — `--list-tasks` starts no container.
+///
+/// Batect rejects all seven `image`-versus-`build_*` combinations; Ratect
+/// accepted them and resolved silently, so a configured `build_ssh` here
+/// was read by nothing. The engine's own lazy check can't stand in for this
+/// one: it only fires when *neither* field is set.
+#[test]
+fn image_combined_with_a_build_field_is_rejected_when_the_config_loads() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(image_with_build_fields_config_path())
+        .arg("--list-tasks")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        !output.status.success(),
+        "stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Container 'build-env' has 'build_ssh', which cannot be used with 'image'"),
+        "stderr:\n{stderr}"
     );
 }
 

@@ -1,0 +1,20 @@
+# A container that both pulls an `image` and configures a build. Batect
+# rejects this outright; Ratect used to accept it and let `image` win, so
+# the `build_ssh` here reached nothing at all.
+#
+# Used with `--list-tasks`, which runs no container: that is what makes it
+# prove the check happens when the *configuration loads*. The engine's own
+# lazy "neither image nor build_directory" check could never catch this one
+# — it is happy with an `image` — so a failure here can only come from the
+# eager validation.
+project_name: image-with-build-fields
+containers:
+  build-env:
+    image: alpine:3.18.2
+    build_ssh:
+      - id: default
+tasks:
+  noop:
+    run:
+      container: build-env
+      command: "true"
