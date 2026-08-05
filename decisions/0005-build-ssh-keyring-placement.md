@@ -145,6 +145,31 @@ decline it, or take it later, and none of those block shipping here.
   `#[cfg(not(windows))]`, so the Unix-socket assumption predates this decision
   rather than being introduced by it. Windows support for `build_ssh` would need
   named pipes on both sides and is out of scope here.
+- **The keyring is reachable through a filesystem socket, where Go BuildKit's is
+  not** — the one place this design is measurably weaker than what it ports, so
+  it is recorded rather than left to be rediscovered. `sshprovider` serves its
+  keyring over an in-memory `net.Pipe()`: no filesystem object exists, so there
+  is no permissions question and no local attack surface at all. Ratect needs a
+  socket only because the fork's `SshAgentSource` (decision 1 above) is
+  socket-based — `SshProvider::connect` returns a concrete `UnixStream`.
+
+  The position taken, deliberately: **match OpenSSH's own `ssh-agent`**, which
+  is the reference implementation of an agent that *does* expose a socket. That
+  means both of its barriers, not one — an unpredictably-named `0700` directory
+  (`mkdtemp`) *and* the socket file itself at `0600` (`umask(0177)` around the
+  bind; a `chmod` here, since our umask is process-global and we are
+  multi-threaded). Either alone suffices in isolation, which is exactly why
+  taking only one would rest the whole protection on a single `mode` argument.
+  Combined with the exposure being one build long, and only ever the keys the
+  config already names, that is judged good enough.
+
+  The gap could be closed outright by having the provider serve from an
+  in-process duplex stream instead of a socket path, matching `net.Pipe()`
+  exactly. Not taken *now* because it costs the fork's public API its
+  plain-data enum — `SshAgentSource` would have to carry a stream factory,
+  losing `Clone`/`PartialEq`/`Debug` — and the upstream PR's whole argument is
+  that it is small and mechanical. Worth offering if upstream shows appetite for
+  it; revisit here rather than deciding it inside a review.
 - Extractability is a standing constraint, not a preference. Coupling the
   keyring to Ratect's config or error types costs nothing visible and silently
   forfeits the upstream offer.

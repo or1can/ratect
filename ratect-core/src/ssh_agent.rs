@@ -509,6 +509,7 @@ mod tests {
 
     use rand_chacha::rand_core::SeedableRng;
     use signature::Verifier;
+    use ssh_key::EcdsaCurve;
 
     /// Every request below is assembled from the numbers written in [RFC
     /// 9987](https://www.rfc-editor.org/rfc/rfc9987) rather than from this
@@ -532,6 +533,18 @@ mod tests {
         LoadedKey {
             blob: key.public_key().to_bytes().unwrap(),
             comment: comment.to_string(),
+            key,
+        }
+    }
+
+    /// A deterministic key on the given curve — same reasoning as
+    /// [`test_key`], and fast enough to generate per test unlike RSA below.
+    fn test_ecdsa_key(curve: EcdsaCurve) -> LoadedKey {
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([7; 32]);
+        let key = PrivateKey::random(&mut rng, Algorithm::Ecdsa { curve }).unwrap();
+        LoadedKey {
+            blob: key.public_key().to_bytes().unwrap(),
+            comment: key.comment().to_string(),
             key,
         }
     }
@@ -649,6 +662,34 @@ fzqxqMSMGQFJc7sAAAAMcnNhLXRlc3Qta2V5AQIDBAUGBw==
         // signatures that would otherwise shadow the trait method.
         Verifier::verify(keys[0].key.public_key(), data, &signature)
             .expect("the signature should verify against the public key");
+    }
+
+    /// The ECDSA curves are enabled as `ssh-key` features and accepted by
+    /// [`load_keys`], so each one needs a signature that actually verifies —
+    /// the features cost dependencies, and "it compiles" is not evidence the
+    /// path works. Signing goes through `try_sign` here rather than
+    /// [`rsa_signature`], and RFC 9987's flags are RSA-only, so a client
+    /// sending flags with an ECDSA key must still get its one valid
+    /// signature format back rather than a failure.
+    #[test]
+    fn signing_with_an_ecdsa_key_verifies_on_every_supported_curve() {
+        for (curve, expected) in [
+            (EcdsaCurve::NistP256, "ecdsa-sha2-nistp256"),
+            (EcdsaCurve::NistP384, "ecdsa-sha2-nistp384"),
+            (EcdsaCurve::NistP521, "ecdsa-sha2-nistp521"),
+        ] {
+            let keys = vec![test_ecdsa_key(curve)];
+            let data = b"session identifier and authentication request";
+
+            let response = respond(&keys, &sign_request(&keys[0].blob, data, RSA_SHA2_512_FLAG));
+
+            let (algorithm, _) = signature_parts(&response);
+            assert_eq!(algorithm, expected);
+            let mut reader = Reader::new(&response[1..]);
+            let signature = Signature::try_from(reader.string().unwrap()).unwrap();
+            Verifier::verify(keys[0].key.public_key(), data, &signature)
+                .unwrap_or_else(|_| panic!("the {expected} signature should verify"));
+        }
     }
 
     /// RFC 9987's flags exist for RSA alone, and getting them wrong is
