@@ -249,6 +249,15 @@ fn tmpfs_mounts(
 /// [`TaskEngine::resolve_image`] attributes every way one container's build
 /// can fail, in a single place, so nothing along the path carries the name
 /// itself.
+/// Whether a mount's Docker options mark it read-only — the `ro` flag in the
+/// comma-separated list Docker itself parses. `rw` is the default and needs
+/// no special casing.
+fn is_read_only(options: &Option<String>) -> bool {
+    options
+        .as_deref()
+        .is_some_and(|o| o.split(',').any(|flag| flag.trim() == "ro"))
+}
+
 fn buildkit_options(container: &Container) -> Result<Option<crate::docker::BuildKitOptions>> {
     let secrets = container.build_secrets.as_ref();
     let ssh = container.build_ssh.as_ref();
@@ -1478,7 +1487,14 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             .iter()
             .flatten()
             .filter_map(|volume| match volume {
-                crate::config::VolumeMount::Cache(cache) => Some(cache.container.clone()),
+                // A read-only cache can't be chowned: the put-archive would
+                // hit the read-only bind and abort the run before the task
+                // starts, where it previously worked. Nothing needs to write
+                // to it either, which is the whole point of `ro`. Batect
+                // shares the gap; skipping is the safe side of it.
+                crate::config::VolumeMount::Cache(cache) if !is_read_only(&cache.options) => {
+                    Some(cache.container.clone())
+                }
                 _ => None,
             })
             .collect();

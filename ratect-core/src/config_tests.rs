@@ -2437,6 +2437,74 @@ fn image_container() -> Container {
     container
 }
 
+/// `run_as_current_user` takes ownership of each cache mount, which means
+/// uploading an archive to that path — so a non-absolute one has to be
+/// caught, and caught here, where every other config error names the
+/// container the user wrote. Previously it surfaced from the Docker layer
+/// against a 64-hex container id.
+#[test]
+fn resolve_expressions_rejects_a_relative_cache_path_under_run_as_current_user() {
+    let mut container = container_with_run_as_current_user(true, Some("/home/x"));
+    container.volumes = Some(vec![VolumeMount::Cache(CacheVolumeMount {
+        name: "c".to_string(),
+        container: "relative/path".to_string(),
+        options: None,
+    })]);
+    let mut config = Config {
+        project_name: "demo".to_string(),
+        containers: HashMap::from([("build-env".to_string(), container)]),
+        tasks: HashMap::new(),
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let err = config
+        .resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            no_host_env,
+        )
+        .unwrap_err();
+
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("Container 'build-env'") && message.contains("not an absolute path"),
+        "unexpected error: {message}"
+    );
+}
+
+/// Deliberately scoped to what Batect checks. It never validates a `local`
+/// or `tmpfs` destination, so rejecting one here would stop a
+/// Windows-container config (`container: C:\code`) from even loading,
+/// while it still runs under `batect` — a `--list-tasks` that fails is a
+/// worse divergence than a mount Docker rejects later.
+#[test]
+fn resolve_expressions_accepts_a_non_slash_local_mount_path() {
+    let mut container = container_with_build("./docker", HashMap::new());
+    container.volumes = Some(vec![VolumeMount::Local(LocalVolumeMount {
+        local: ".".to_string(),
+        container: "C:\\code".to_string(),
+        options: None,
+    })]);
+    let mut config = Config {
+        project_name: "demo".to_string(),
+        containers: HashMap::from([("build-env".to_string(), container)]),
+        tasks: HashMap::new(),
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    config
+        .resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            no_host_env,
+        )
+        .expect("a Windows-style container path should still load");
+}
+
 fn container_with_build_ssh(agents: Vec<SshAgent>) -> Container {
     let mut container = container_with_build("./docker", HashMap::new());
     container.build_ssh = Some(agents);

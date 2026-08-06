@@ -2158,12 +2158,19 @@ impl DockerClient {
         Ok(())
     }
 
-    /// Uploads the synthetic `/etc/passwd`/`/etc/shadow`/`/etc/group` and the
-    /// home directory `mapping` needs into `container_id` — must be called
-    /// after the container is created but before it's started (Docker's own
-    /// "upload archive to container" API works on an already-created
-    /// container's filesystem; the container needs those files in place
-    /// before its own process starts reading them).
+    /// Uploads the synthetic `/etc/passwd`/`/etc/shadow`/`/etc/group`
+    /// `mapping` needs into `container_id`, then takes ownership of its home
+    /// directory and each of its cache mounts for the mapped user.
+    ///
+    /// Must be called after the container is created but before it's started
+    /// (Docker's own "upload archive to container" API works on an
+    /// already-created container's filesystem; the container needs those
+    /// files in place before its own process starts reading them).
+    ///
+    /// The cache mounts are the non-obvious half: a fresh Docker volume is
+    /// created root-owned, so without this the container mounts its cache
+    /// successfully and then fails on the first write. `engine.rs` filters
+    /// out read-only ones, which cannot be chowned and don't need to be.
     async fn apply_user_mapping(&self, container_id: &str, mapping: &UserMapping) -> Result<()> {
         let passwd_tar = build_user_mapping_tar(mapping)?;
         let passwd_options = UploadToContainerOptionsBuilder::default()
@@ -2187,9 +2194,13 @@ impl DockerClient {
             std::iter::once(&mapping.home_directory).chain(mapping.cache_directories.iter())
         {
             let tar = build_owned_directory_tar(directory, mapping.user.uid, mapping.user.gid)
-                .with_context(|| {
-                    format!("Container '{container_id}' has an invalid directory to own")
-                })?;
+                // Not attributed to a container here: a non-absolute
+                // mount path is a *config* error, rejected by
+                // `Config::resolve_expressions_with` naming the container
+                // the user wrote. Reaching this is a bug in Ratect, so the
+                // Docker id is the useful identifier rather than a
+                // misleading one.
+                .context("Failed to build the directory-ownership archive")?;
             let options = UploadToContainerOptionsBuilder::default()
                 .path(&owned_directory_parent(directory))
                 .build();

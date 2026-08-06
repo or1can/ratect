@@ -2724,6 +2724,32 @@ impl Config {
                             home_directory
                         );
                     }
+                    // Each `cache` mount's container path, for the same
+                    // reason and in the same place: `run_as_current_user`
+                    // takes ownership of them, which means uploading an
+                    // archive to that path. A non-absolute one would
+                    // otherwise surface from the Docker layer, whose only
+                    // identifier is a container id — reading as though the
+                    // configuration had named that.
+                    //
+                    // Scoped to `cache` mounts under an *enabled*
+                    // `run_as_current_user`, matching Batect exactly. Wider
+                    // would be tempting and wrong: Batect never checks
+                    // `local`/`tmpfs` destinations, so a Windows-container
+                    // config mounting `C:\code` would stop loading here
+                    // while still working there.
+                    for volume in container.volumes.iter().flatten() {
+                        if let VolumeMount::Cache(cache) = volume {
+                            if !cache.container.starts_with('/') {
+                                anyhow::bail!(
+                                    "Container '{}' has an invalid 'cache' volume mount: \
+                                     '{}' is not an absolute path",
+                                    container_name,
+                                    cache.container
+                                );
+                            }
+                        }
+                    }
                     // `home_directory` is interpolated raw into a
                     // colon-delimited `/etc/passwd`/`/etc/shadow` line
                     // (`user::generate_passwd_file`) — a `:` shifts that

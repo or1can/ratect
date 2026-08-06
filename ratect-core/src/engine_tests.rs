@@ -1696,6 +1696,57 @@ async fn cache_mounts_are_owned_by_the_mapped_user() {
     );
 }
 
+/// A read-only cache cannot be chowned — the put-archive hits the
+/// read-only bind and aborts the run before the task starts, turning a
+/// configuration that worked into a hard failure. Nothing needs to write to
+/// it either, which is what `ro` means.
+#[tokio::test]
+async fn a_read_only_cache_mount_is_not_owned_by_the_mapped_user() {
+    let mut container =
+        container_with_run_as_current_user("alpine:3.18", None, "/home/container-user");
+    container.volumes = Some(vec![
+        crate::config::VolumeMount::Cache(crate::config::CacheVolumeMount {
+            name: "writable".to_string(),
+            container: "/cache".to_string(),
+            options: None,
+        }),
+        crate::config::VolumeMount::Cache(crate::config::CacheVolumeMount {
+            name: "readonly".to_string(),
+            container: "/ro-cache".to_string(),
+            options: Some("ro".to_string()),
+        }),
+        crate::config::VolumeMount::Cache(crate::config::CacheVolumeMount {
+            name: "readonly-with-friends".to_string(),
+            container: "/ro-z-cache".to_string(),
+            options: Some("z,ro".to_string()),
+        }),
+    ]);
+    let mut containers = HashMap::new();
+    containers.insert("app".to_string(), container);
+    let mut tasks = HashMap::new();
+    tasks.insert("run".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let project = std::env::temp_dir().join(format!("ratect-ro-cache-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&project).unwrap();
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(config, docker.clone())
+        .with_cache_options(crate::cache::CacheType::Volume, project.clone());
+    engine.run_task("run", &[]).await.unwrap();
+    std::fs::remove_dir_all(&project).ok();
+
+    let (_, _, _, cache_directories) = docker
+        .user_mapping_for("app")
+        .expect("run_as_current_user should have produced a mapping");
+    assert_eq!(cache_directories, vec!["/cache".to_string()]);
+}
+
 #[tokio::test]
 async fn run_as_current_user_reaches_the_container() {
     let mut containers = HashMap::new();
