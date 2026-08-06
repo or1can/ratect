@@ -228,11 +228,15 @@ The [`decisions/`](decisions/) directory holds Architecture Decision Records —
       and the engine, and retiring the split ended it — not a fourth correction.
       When one area keeps producing findings, the design is the finding.
     - **A repeated process error is a defect in the process, not in the attempt.**
-      Resolving to be more careful is not a fix. `git add -A` swept two intended
-      commits into one twice in a single day; the answer is to stage paths
-      explicitly whenever more than one commit is planned. Four doc-comment
-      splices produced the anchoring rule in 15. When something recurs, change the
-      method, then write it down here.
+      Resolving to be more careful is not a fix. Three git-staging errors in one
+      day — `git add -A` merging two intended commits twice, then `commit --amend`
+      landing on the wrong one — so the method changes: **stage explicit paths,
+      never `-A`, whenever more than one commit is planned, and rebuild a
+      mis-split pair with `reset --soft` rather than reaching for `--amend` or an
+      interactive rebase.** (An earlier `rebase -i` fixup to correct one of these
+      squashed the two commits it was meant to separate.) Four doc-comment splices
+      produced the anchoring rule in 15. When something recurs, change the method,
+      then write it down here.
     - **Not every finding is a class, and saying so is part of the job.** The
       sweeps that came back clean this cycle — ROADMAP/CHANGELOG overlap at 2%,
       appended module docs at 0–9%, exactly one stale "no such concept" claim in
