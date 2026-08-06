@@ -188,4 +188,19 @@ The [`decisions/`](decisions/) directory holds Architecture Decision Records —
       shipped naming only the agent, in a codebase where every other config error
       names its container.
     - **Watch for coverage shaped by the test harness rather than the behaviour.** If the fake can only express one ordering of something inherently timing-dependent, the untestable orderings are where the bug will be — extend the harness instead of concluding the cases are covered. Every interrupt test could only pre-record interrupts *before* a run, and the broken case was an interrupt arriving mid-cleanup.
+    - **A test that cleans up after itself has to be run twice.** A single run
+      passes whether or not the cleanup matched anything — the first run starts
+      clean by definition. Extracting `remove_cache_mount_volumes` into a
+      parameterised helper broke its match string, every conformance run leaked a
+      Docker volume, and the suite stayed green because a *sibling* test was
+      deleting the project's cache key and so handing each run a fresh volume
+      name. Two defects concealing each other, both invisible to one run. Run it
+      twice and assert the external state (`docker volume ls`), not just the exit
+      code.
+    - **Two tests sharing a fixture directory need a lock, not luck.** `cargo
+      test` runs a binary's tests on several threads. `cache-mount` is driven by
+      two conformance cases; they contend for `.batect/caches/key` even though
+      they use different cache *types*, which surfaces as "the cache did not
+      persist" rather than as a race. A `static Mutex` around the shared project
+      is the cheap fix — see `CACHE_MOUNT_PROJECT`.
     - **A real-daemon test can mask a missing unit test.** The `#[ignore]`d Docker tests don't run in the default suite, so a path they cover can be entirely unprotected in `cargo test --workspace`. Assert each effect separately — one assertion per thing removed, not one for "cleanup happened".

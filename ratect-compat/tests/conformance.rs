@@ -656,26 +656,45 @@ fn combined_output(output: &std::process::Output) -> String {
     )
 }
 
+/// Serialises the two tests that share the `cache-mount` project directory.
+///
+/// They use different cache *types*, so they never contend for the cache
+/// itself — but both read and write `.batect/caches/key`, the file naming
+/// this project's cache volumes. One test resetting that while the other is
+/// mid-run silently reassigns the second run's volume, which shows up as
+/// "the cache did not persist" rather than as a race. `cargo test` runs a
+/// binary's tests on several threads, so nothing else prevents it.
+static CACHE_MOUNT_PROJECT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Removes every Docker volume for `cache-mount`'s named cache, whatever the
 /// project key that produced it (the full name is
 /// `batect-cache-<key>-<config name>`). Key-independent on purpose: it must
 /// clear a volume a crashed earlier run left behind just as well as the one
 /// this test creates, so the first run below reliably starts empty.
 fn remove_cache_mount_volumes() {
-    remove_cache_volumes_named("cache-mount-journey-test-cache");
+    // The name this project configures, which itself begins "batect-cache-"
+    // — an oddity of Batect's own fixture, and the reason the argument here
+    // is the *configured* name rather than a bare suffix.
+    remove_cache_volumes_named("batect-cache-mount-journey-test-cache");
 }
 
 /// Removes every cache volume for one configured cache name, whatever
 /// project key produced it — see [`remove_cache_mount_volumes`] for why the
 /// key is deliberately not matched on.
+///
+/// Matches on the configured name alone. A volume is
+/// `batect-cache-<key>-<configured name>`, so prefixing the match with
+/// `batect-cache-` would put the key on the wrong side of it and match
+/// nothing at all — which is exactly what a previous version did, silently,
+/// because the only symptom is a leaked volume on the *second* run.
 fn remove_cache_volumes_named(cache_name: &str) {
-    let suffix = format!("batect-cache-{cache_name}");
+    let suffix = cache_name;
     let listed = Command::new("docker")
         .args(["volume", "ls", "-q"])
         .output()
         .expect("failed to list docker volumes");
     for name in String::from_utf8_lossy(&listed.stdout).lines() {
-        if name.ends_with(&suffix) {
+        if name.ends_with(suffix) {
             let _ = Command::new("docker")
                 .args(["volume", "rm", "-f", name])
                 .output();
@@ -699,13 +718,28 @@ fn host_user_and_group() -> (String, String) {
 }
 
 /// The project-local directory standing in for Batect's own build tree —
-/// see the note in these projects' `batect.yml`. Removed before the run so
-/// a previous run's `created-file` can't satisfy the assertion, and left in
-/// place afterwards so a failure can be inspected (`.gitignore`d, and the
-/// next run clears it).
+/// see the note in these projects' `batect.yml`.
+///
+/// Removed, not emptied: **`ratect-compat` creating it is part of what is
+/// under test.** `run_as_current_user` pre-creates a bind mount's host
+/// directory (`ensure_host_volume_directories_exist`) precisely so Docker
+/// does not create it root-owned, and leaving one behind here would let
+/// that regress unnoticed. Removing it also means a previous run's
+/// `created-file` can't satisfy the ownership assertion.
+///
+/// Left in place afterwards so a failure can be inspected; `.gitignore`
+/// covers it and the next run clears it.
+///
+/// A removal failure is fatal rather than ignored — the assertions below
+/// are only meaningful against a directory this run produced, so carrying
+/// on with a stale one would turn a real failure into a false pass.
 fn reset_output_dir(project: &str) -> PathBuf {
     let dir = project_dir(project).join("output");
-    let _ = std::fs::remove_dir_all(&dir);
+    match std::fs::remove_dir_all(&dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => panic!("failed to clear {}: {e}", dir.display()),
+    }
     dir
 }
 
@@ -799,13 +833,21 @@ fn run_as_current_user_with_mount() {
 #[test]
 #[ignore]
 fn run_as_current_user_with_cache() {
-    for name in [
+    const CACHES: [&str; 3] = [
         "run-as-current-user-with-cache-test-normal-cache",
         "run-as-current-user-with-cache-test-nested-cache",
         "run-as-current-user-with-cache-test-deeply-nested-cache",
-    ] {
-        remove_cache_volumes_named(name);
-    }
+    ];
+    // Before *and* after: the point of the test is what happens to a
+    // freshly created volume, so a leftover from a previous run would let
+    // it pass against an already-chowned one. Cleaning up afterwards is
+    // what keeps that true on the next run.
+    let reset = || {
+        CACHES
+            .iter()
+            .for_each(|name| remove_cache_volumes_named(name))
+    };
+    reset();
 
     let output = ratect_command()
         .current_dir(project_dir("run-as-current-user-with-cache"))
@@ -813,6 +855,9 @@ fn run_as_current_user_with_cache() {
         .output()
         .expect("failed to run ratect-compat");
     let combined = combined_output(&output);
+
+    // Reset before asserting, so a failure doesn't strand the volumes.
+    reset();
 
     assert_eq!(
         output.status.code(),
@@ -882,6 +927,10 @@ fn git_include() {
 #[test]
 #[ignore]
 fn cache_mount_persists_across_runs() {
+    let _guard = CACHE_MOUNT_PROJECT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
     remove_cache_mount_volumes();
 
     let run = || {
@@ -934,9 +983,18 @@ fn cache_mount_persists_across_runs() {
 #[test]
 #[ignore]
 fn cache_mount_persists_across_runs_as_a_directory() {
-    let caches = project_dir("cache-mount").join(".batect/caches");
+    let _guard = CACHE_MOUNT_PROJECT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    // Only this cache's own directory. `.batect/caches/` also holds `key`,
+    // which names every *volume* this project ever creates — removing that
+    // would hand the volume test a new name mid-run and orphan the old one.
+    let cache_directory = project_dir("cache-mount")
+        .join(".batect/caches")
+        .join("batect-cache-mount-journey-test-cache");
     let reset = || {
-        let _ = std::fs::remove_dir_all(&caches);
+        let _ = std::fs::remove_dir_all(&cache_directory);
     };
     reset();
 
