@@ -536,15 +536,18 @@ A few things happen automatically to make this actually work, not just set `--us
   uid/gid) before it starts — it's a path inside the container's own filesystem, not
   host-mounted, so it doesn't persist across runs, matching Ratect's existing
   ephemeral-container model.
+- **Every [`cache` mount](#cache-volumes) on the container gets the same ownership
+  treatment.** A Docker volume is created root-owned, so without this the container
+  would mount its cache and then fail on the first write — the mount having
+  succeeded, which makes it a confusing place to find out. Applies to a cache
+  anywhere, including one nested inside `home_directory`.
 
 Applies per-container, independently — a task's own container and each of its
 dependencies can each set `run_as_current_user` on their own; it isn't inherited or
 shared task-wide.
 
-Not supported yet: an equivalent to Batect's "cache mounts" (Ratect has no such config
-concept at all — see [Differences from Batect](differences-from-batect.md)), and
-host-side uid/gid lookup is Unix-only (this errors clearly on other platforms rather
-than guessing).
+One limitation: host-side uid/gid lookup is Unix-only, and errors clearly on other
+platforms rather than guessing.
 
 ### Port mappings
 
