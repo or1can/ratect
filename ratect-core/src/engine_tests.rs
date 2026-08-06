@@ -43,7 +43,7 @@ type CapturedImages = Arc<Mutex<HashMap<String, String>>>;
 type CapturedCommands = Arc<Mutex<HashMap<String, Option<String>>>>;
 type CapturedInteractive = Arc<Mutex<HashMap<String, bool>>>;
 /// `(uid, gid, home_directory)`, keyed by container name.
-type CapturedUserMapping = Arc<Mutex<HashMap<String, Option<(u32, u32, String)>>>>;
+type CapturedUserMapping = Arc<Mutex<HashMap<String, Option<(u32, u32, String, Vec<String>)>>>>;
 /// `(additional_hostnames, additional_hosts, ports)`.
 type NetworkOptionsValue = (
     Option<Vec<String>>,
@@ -416,10 +416,10 @@ impl FakeContainerRuntime {
         self.interactive.lock().unwrap().get(name).copied()
     }
 
-    /// The `(uid, gid, home_directory)` a prior `run_container`/
-    /// `start_background_container` call for `name` was given
-    /// (flattened, same convention as `environment_for`).
-    fn user_mapping_for(&self, name: &str) -> Option<(u32, u32, String)> {
+    /// The `(uid, gid, home_directory, cache_directories)` a prior
+    /// `run_container`/`start_background_container` call for `name` was
+    /// given (flattened, same convention as `environment_for`).
+    fn user_mapping_for(&self, name: &str) -> Option<(u32, u32, String, Vec<String>)> {
         self.user_mapping
             .lock()
             .unwrap()
@@ -687,7 +687,14 @@ impl ContainerRuntime for FakeContainerRuntime {
             .insert(alias.to_string(), image.to_string());
         self.user_mapping.lock().unwrap().insert(
             alias.to_string(),
-            user_mapping.map(|m| (m.user.uid, m.user.gid, m.home_directory.clone())),
+            user_mapping.map(|m| {
+                (
+                    m.user.uid,
+                    m.user.gid,
+                    m.home_directory.clone(),
+                    m.cache_directories.clone(),
+                )
+            }),
         );
         self.network_options.lock().unwrap().insert(
             alias.to_string(),
@@ -858,7 +865,14 @@ impl ContainerRuntime for FakeContainerRuntime {
             .insert(name.to_string(), interactive);
         self.user_mapping.lock().unwrap().insert(
             name.to_string(),
-            user_mapping.map(|m| (m.user.uid, m.user.gid, m.home_directory.clone())),
+            user_mapping.map(|m| {
+                (
+                    m.user.uid,
+                    m.user.gid,
+                    m.home_directory.clone(),
+                    m.cache_directories.clone(),
+                )
+            }),
         );
         self.network_options.lock().unwrap().insert(
             name.to_string(),
@@ -1618,6 +1632,70 @@ fn container_with_run_as_current_user(
     }
 }
 
+/// A fresh Docker volume is created root-owned, so a container running as
+/// the host user cannot write to a `cache` mount unless its ownership is
+/// changed too — the mount succeeds and the first write fails, which is a
+/// confusing place to find out. Batect uploads a directory entry per cache
+/// mount for exactly this reason; this asserts the paths reach the Docker
+/// layer that does it.
+///
+/// Covered end to end by the `run-as-current-user-with-cache` conformance
+/// case, which is `#[ignore]`d — so without this the default suite would
+/// pass with the behaviour removed, which is how the gap was there to be
+/// found in the first place.
+#[tokio::test]
+async fn cache_mounts_are_owned_by_the_mapped_user() {
+    let mut container =
+        container_with_run_as_current_user("alpine:3.18", None, "/home/container-user");
+    container.volumes = Some(vec![
+        crate::config::VolumeMount::Cache(crate::config::CacheVolumeMount {
+            name: "shared".to_string(),
+            container: "/cache".to_string(),
+            options: None,
+        }),
+        crate::config::VolumeMount::Cache(crate::config::CacheVolumeMount {
+            name: "nested".to_string(),
+            container: "/home/container-user/cache".to_string(),
+            options: None,
+        }),
+    ]);
+    let mut containers = HashMap::new();
+    containers.insert("app".to_string(), container);
+    let mut tasks = HashMap::new();
+    tasks.insert("run".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    // Resolving a `cache` mount needs somewhere to put it; the engine
+    // requires this to have been configured rather than guessing.
+    // A real directory: resolving a cache also writes the project's own
+    // cache key under `.batect/`.
+    let project = std::env::temp_dir().join(format!("ratect-cache-owner-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&project).unwrap();
+    let engine = TaskEngine::new(config, docker.clone())
+        .with_cache_options(crate::cache::CacheType::Volume, project.clone());
+    engine.run_task("run", &[]).await.unwrap();
+
+    let (_, _, _, cache_directories) = docker
+        .user_mapping_for("app")
+        .expect("run_as_current_user should have produced a mapping");
+    std::fs::remove_dir_all(&project).ok();
+
+    assert_eq!(
+        cache_directories,
+        vec![
+            "/cache".to_string(),
+            "/home/container-user/cache".to_string()
+        ]
+    );
+}
+
 #[tokio::test]
 async fn run_as_current_user_reaches_the_container() {
     let mut containers = HashMap::new();
@@ -1646,7 +1724,8 @@ async fn run_as_current_user_reaches_the_container() {
         Some((
             expected_user.uid,
             expected_user.gid,
-            "/home/container-user".to_string()
+            "/home/container-user".to_string(),
+            Vec::new()
         ))
     );
 }
@@ -1683,7 +1762,8 @@ async fn a_dependencys_run_as_current_user_is_independent_of_its_own_containers(
         Some((
             expected_user.uid,
             expected_user.gid,
-            "/home/container-user".to_string()
+            "/home/container-user".to_string(),
+            Vec::new()
         )),
         "the dependency's own run_as_current_user should be applied"
     );

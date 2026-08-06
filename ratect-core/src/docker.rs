@@ -1149,6 +1149,15 @@ fn collect_build_context_entries(
 pub struct UserMapping {
     pub user: crate::user::CurrentUser,
     pub home_directory: String,
+    /// Absolute container paths of this container's `cache` mounts, which
+    /// need the same ownership treatment the home directory gets.
+    ///
+    /// A fresh Docker volume is created root-owned, so a container running
+    /// as the host user cannot write to one — the mount succeeds and the
+    /// first write fails, which is a confusing place to discover it. Batect
+    /// uploads a directory entry per cache mount for exactly this reason
+    /// (`uploadCacheDirectories`); this is the same list.
+    pub cache_directories: Vec<String>,
 }
 
 /// Appends a plain file entry (`name`, `contents`, `mode`) to `builder`,
@@ -1195,49 +1204,50 @@ fn build_user_mapping_tar(mapping: &UserMapping) -> Result<Vec<u8>> {
         .context("Failed to finalize user mapping archive")
 }
 
-/// Builds an in-memory tar containing a single directory entry for
-/// `mapping.home_directory`'s leaf name, owned by `mapping.user`'s uid/gid,
-/// mode `0755` — extracted to the home directory's *parent* (see
-/// `ContainerRuntime::run_container`'s `user_mapping` handling), matching
-/// Batect's `uploadHomeDirectoryForConfiguration`. Pure (no Docker
+/// Builds an in-memory tar containing a single directory entry for `path`'s
+/// leaf name, owned by `uid`/`gid`, mode `0755` — extracted into `path`'s
+/// *parent*, which is how Docker's archive API is made to set ownership on
+/// a directory that already exists (a mount point, typically).
+///
+/// Used for both the home directory and each cache mount, matching Batect's
+/// `uploadHomeDirectoryForConfiguration`/`uploadCacheDirectories`, which
+/// share one `uploadDirectory` for the same reason. Pure (no Docker
 /// involved), so it's unit-testable directly.
-fn build_home_directory_tar(mapping: &UserMapping) -> Result<Vec<u8>> {
-    let leaf_name = Path::new(&mapping.home_directory)
+fn build_owned_directory_tar(path: &str, uid: u32, gid: u32) -> Result<Vec<u8>> {
+    if !path.starts_with('/') {
+        anyhow::bail!("'{path}' is not an absolute path");
+    }
+    let leaf_name = Path::new(path)
         .file_name()
-        .with_context(|| {
-            format!(
-                "Invalid home directory '{}': no directory name",
-                mapping.home_directory
-            )
-        })?
+        .with_context(|| format!("Invalid directory '{path}': no directory name"))?
         .to_string_lossy()
         .into_owned();
 
     let mut header = tar::Header::new_gnu();
     header.set_entry_type(tar::EntryType::Directory);
     header.set_mode(0o755);
-    header.set_uid(mapping.user.uid as u64);
-    header.set_gid(mapping.user.gid as u64);
+    header.set_uid(uid as u64);
+    header.set_gid(gid as u64);
     header.set_size(0);
     header
         .set_path(format!("{leaf_name}/"))
-        .with_context(|| format!("Invalid home directory '{}'", mapping.home_directory))?;
+        .with_context(|| format!("Invalid directory '{path}'"))?;
     header.set_cksum();
 
     let mut builder = tar::Builder::new(Vec::new());
     builder
         .append(&header, std::io::empty())
-        .context("Failed to add home directory to user mapping archive")?;
+        .context("Failed to add directory to user mapping archive")?;
 
     builder
         .into_inner()
-        .context("Failed to finalize home directory archive")
+        .context("Failed to finalize directory archive")
 }
 
-/// The parent directory `build_home_directory_tar`'s entry should be
-/// extracted into — `/` if `home_directory` has no parent (e.g. `/home`).
-fn home_directory_parent(home_directory: &str) -> String {
-    Path::new(home_directory)
+/// The parent directory `build_owned_directory_tar`'s entry should be
+/// extracted into — `/` if `path` has no parent (e.g. `/home`).
+fn owned_directory_parent(path: &str) -> String {
+    Path::new(path)
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("/"))
@@ -2170,21 +2180,28 @@ impl DockerClient {
                 format!("Failed to upload user mapping files to container '{container_id}'")
             })?;
 
-        let home_tar = build_home_directory_tar(mapping)?;
-        let home_parent = home_directory_parent(&mapping.home_directory);
-        let home_options = UploadToContainerOptionsBuilder::default()
-            .path(&home_parent)
-            .build();
-        self.docker
-            .upload_to_container(
-                container_id,
-                Some(home_options),
-                bollard::body_full(home_tar.into()),
-            )
-            .await
-            .with_context(|| {
-                format!("Failed to upload home directory to container '{container_id}'")
-            })?;
+        // The home directory, then every cache mount — each an existing
+        // mount point whose ownership has to be changed to the mapped user,
+        // and all done the same way for that reason.
+        for directory in
+            std::iter::once(&mapping.home_directory).chain(mapping.cache_directories.iter())
+        {
+            let tar = build_owned_directory_tar(directory, mapping.user.uid, mapping.user.gid)
+                .with_context(|| {
+                    format!("Container '{container_id}' has an invalid directory to own")
+                })?;
+            let options = UploadToContainerOptionsBuilder::default()
+                .path(&owned_directory_parent(directory))
+                .build();
+            self.docker
+                .upload_to_container(container_id, Some(options), bollard::body_full(tar.into()))
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to take ownership of '{directory}' in container '{container_id}'"
+                    )
+                })?;
+        }
 
         tracing::debug!(
             container_id,

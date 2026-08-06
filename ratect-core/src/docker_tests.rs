@@ -1458,6 +1458,7 @@ fn user_mapping_fixture() -> UserMapping {
             groupname: "ratect".to_string(),
         },
         home_directory: "/home/ratect".to_string(),
+        cache_directories: Vec::new(),
     }
 }
 
@@ -1513,8 +1514,8 @@ fn build_user_mapping_tar_entries_are_root_owned_with_correct_modes() {
 }
 
 #[test]
-fn build_home_directory_tar_creates_a_directory_entry_owned_by_the_mapped_user() {
-    let tar_bytes = build_home_directory_tar(&user_mapping_fixture()).unwrap();
+fn build_owned_directory_tar_creates_a_directory_entry_owned_by_the_mapped_user() {
+    let tar_bytes = build_owned_directory_tar("/home/ratect", 1000, 1000).unwrap();
     let mut archive = tar::Archive::new(tar_bytes.as_slice());
     let mut entries = archive.entries().unwrap().map(|e| e.unwrap());
     let entry = entries.next().unwrap();
@@ -1528,13 +1529,39 @@ fn build_home_directory_tar_creates_a_directory_entry_owned_by_the_mapped_user()
 }
 
 #[test]
-fn home_directory_parent_is_the_directory_above_the_leaf() {
-    assert_eq!(home_directory_parent("/home/ratect"), "/home");
+fn owned_directory_parent_is_the_directory_above_the_leaf() {
+    assert_eq!(owned_directory_parent("/home/ratect"), "/home");
+}
+
+/// A cache mount is the other caller, and its container path is arbitrary —
+/// `/cache` sits directly under the root, and a nested one several levels
+/// down. Both have to land in the right parent for the ownership change to
+/// apply to the mount point rather than something else.
+#[test]
+fn owned_directory_parent_handles_a_cache_mount_at_any_depth() {
+    assert_eq!(owned_directory_parent("/cache"), "/");
+    assert_eq!(
+        owned_directory_parent("/home/special-place/subdir/cache"),
+        "/home/special-place/subdir"
+    );
+}
+
+/// Batect rejects a non-absolute cache mount path rather than uploading to
+/// a surprising place — `uploadDirectory` would otherwise resolve it
+/// relative to whatever `path` the API call names.
+#[test]
+fn build_owned_directory_tar_rejects_a_relative_path() {
+    let err = build_owned_directory_tar("cache", 1000, 1000)
+        .expect_err("a relative path should be rejected");
+    assert!(
+        format!("{err:#}").contains("not an absolute path"),
+        "unexpected error: {err:#}"
+    );
 }
 
 #[test]
-fn home_directory_parent_is_root_for_a_top_level_home_directory() {
-    assert_eq!(home_directory_parent("/ratect"), "/");
+fn owned_directory_parent_is_root_for_a_top_level_home_directory() {
+    assert_eq!(owned_directory_parent("/ratect"), "/");
 }
 
 #[test]

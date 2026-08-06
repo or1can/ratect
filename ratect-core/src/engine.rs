@@ -1471,9 +1471,22 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             .clone()
             .expect("validated non-None by Config::resolve_expressions when enabled is true");
 
+        // A cache mount's container path — the volume behind it is created
+        // root-owned, so without this the mapped user cannot write to it.
+        let cache_directories = container_config
+            .volumes
+            .iter()
+            .flatten()
+            .filter_map(|volume| match volume {
+                crate::config::VolumeMount::Cache(cache) => Some(cache.container.clone()),
+                _ => None,
+            })
+            .collect();
+
         Ok(Some(crate::docker::UserMapping {
             user,
             home_directory,
+            cache_directories,
         }))
     }
 
