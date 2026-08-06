@@ -204,3 +204,37 @@ The [`decisions/`](decisions/) directory holds Architecture Decision Records —
       persist" rather than as a race. A `static Mutex` around the shared project
       is the cheap fix — see `CACHE_MOUNT_PROJECT`.
     - **A real-daemon test can mask a missing unit test.** The `#[ignore]`d Docker tests don't run in the default suite, so a path they cover can be entirely unprotected in `cargo test --workspace`. Assert each effect separately — one assertion per thing removed, not one for "cleanup happened".
+
+16. **Fix the class, not the instance — and say what you swept.** A review finding
+    is a *sample*, not the defect. Before fixing it, ask what else in the codebase
+    has that shape and go and look; then report the sweep, including when it comes
+    back clean. A negative result is information, and it saves the next reviewer
+    re-deriving it.
+
+    The cost of skipping this is measured in review rounds. Error attribution took
+    two: one round found `classify_ssh_agent_paths` reporting an agent id with no
+    container, the fix added context at that one call site, and the next round
+    found `Keyring::start` beside it still bare. The structural fix — one wrapper
+    attributing everything the build can fail on — was available the first time
+    and would have made the second finding impossible. A review that only surfaces
+    siblings of something already fixed is **failure demand**: work created by not
+    having finished the job the first time.
+
+    Three corollaries, each with a scar behind it:
+
+    - **Prefer the structural fix when the local one leaves the invariant
+      unstated.** 0.25.0's cleanup ownership is the precedent: three consecutive
+      rounds each found a *distinct* bug in the same split between `run_container`
+      and the engine, and retiring the split ended it — not a fourth correction.
+      When one area keeps producing findings, the design is the finding.
+    - **A repeated process error is a defect in the process, not in the attempt.**
+      Resolving to be more careful is not a fix. `git add -A` swept two intended
+      commits into one twice in a single day; the answer is to stage paths
+      explicitly whenever more than one commit is planned. Four doc-comment
+      splices produced the anchoring rule in 15. When something recurs, change the
+      method, then write it down here.
+    - **Not every finding is a class, and saying so is part of the job.** The
+      sweeps that came back clean this cycle — ROADMAP/CHANGELOG overlap at 2%,
+      appended module docs at 0–9%, exactly one stale "no such concept" claim in
+      `docs/` — were each worth the minutes it took to know rather than assume,
+      and worth reporting so nobody checks them again.
