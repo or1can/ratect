@@ -12,6 +12,93 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Wraps `bollard` for all Docker daemon interaction
+//! — pulling/building images, running a task's own container, per-task networks,
+//! sidecar/dependency containers, the interactive-mode TTY attach path
+//! ([docs](https://github.com/or1can/ratect/blob/main/docs/config-reference.md#interactive-mode)), and the user-mapping upload
+//! path ([docs](https://github.com/or1can/ratect/blob/main/docs/config-reference.md#user-mapping)). Exposes a `ContainerRuntime`
+//! trait so the engine can be tested against a fake instead of a live daemon. Gotchas
+//! worth knowing before touching it: `run_container`'s three actual start/attach
+//! paths (`run_container_interactively`/`run_container_forwarding_stdin`/
+//! `start_and_stream_logs`) each call Docker's own `start` at a different point
+//! relative to attaching (the TTY path attaches *before* starting, deliberately, so
+//! no early output is missed) — `run_container`'s own `started` parameter (0.21.0)
+//! is threaded into all three so each can signal it right after its own `start`
+//! call succeeds, regardless of which path actually ran, letting `engine.rs`'s
+//! concurrent readiness gate begin at the right moment however the container ends
+//! up attached; **`run_container` never removes the container it creates** —
+//! `engine.rs`'s cleanup stage removes everything, the task's own container
+//! included, so `--no-cleanup-after-success`/`-failure` are read in exactly one
+//! place (0.25.0, see `engine.rs`'s own note and `run_container`'s doc comment for
+//! why the split was retired rather than corrected again); the interactive path's `RawModeGuard`
+//! restores the terminal on `Drop`, even on an error return; since Ratect has no `--output`
+//! streaming mode, a failed build's full log transcript (not just Docker's one-line
+//! summary) is folded into the returned error instead; `command`/`entrypoint`/
+//! `setup_commands.command` are all tokenized into literal argv by
+//! `tokenize_command_line` (a from-scratch port of Batect's own `Command.parse`)
+//! rather than run via a shell — `setup_commands` used to be a `sh -c` exception
+//! (closed once noticed it was never actually deliberate; see
+//! `config::SetupCommand`'s doc comment); and `ContainerOptions` bundles the
+//! still-growing set of per-container Docker options shared by `run_container`/
+//! `start_background_container` (0.13.0's `working_directory` through
+//! `enable_init_process`) — add new container-level fields there rather than as more
+//! flat parameters, converting from config types to plain values in `engine.rs`
+//! (`docker.rs` deliberately never depends on `config` types directly).
+//! `log_driver`/`log_options` (0.19.0) followed the same pattern onto
+//! bollard's `HostConfig.log_config` (`build_log_config`, pure/unit-testable,
+//! same shape as `build_devices`) — `None`/absent leaves the daemon's own
+//! configured default alone rather than baking in a literal `"json-file"`
+//! default the way Batect's own config model does. `tmpfs` (0.21.0)
+//! followed the same pattern again, onto bollard's `HostConfig.Tmpfs`
+//! (`build_tmpfs_mounts`, pure/unit-testable, same shape as `build_devices`/
+//! `build_log_config`) — unlike `devices`/`log_options`, its `(container_path,
+//! options)` pairs come from the same `volumes` config field `resolve_volumes`
+//! already handles, just pulled out separately (`engine.rs`'s `tmpfs_mounts`)
+//! since a tmpfs mount can't be expressed as a bind string. `build_image` also
+//! gained a `force_pull: bool` parameter (0.19.0, both the classic and
+//! BuildKit paths' `BuildImageOptionsBuilder::pull("true")`) — Batect's
+//! second, distinct use of `image_pull_policy` on a `build_directory`
+//! container (`engine.rs`'s `resolve_image` computes it from
+//! `container_config.image_pull_policy == Always`, since `docker.rs` still
+//! doesn't depend on `config` types directly).
+//! `classify_ssh_agent_paths` (0.25.0) turns one `build_ssh` entry's already
+//! resolved `paths` into a `SshAgentSource` (`HostAgent`/`Socket`/`Keys`) by
+//! the same rules Go BuildKit's own `sshprovider` uses — no paths means the
+//! host's `SSH_AUTH_SOCK`, a path that *is* a Unix socket forwards that agent
+//! and has to be the entry's only path, and anything else is a private key
+//! file. Deliberately a `stat` rather than a config-schema rule, matching
+//! where BuildKit draws the line: a nonexistent path is *not* a socket, so it
+//! goes down the key-file route and fails naming the file instead of failing
+//! to connect to something that was never there. `Keys` is what makes
+//! `build_image_via_buildkit` start a `crate::ssh_agent::Keyring` and hand
+//! bollard its socket — those keyrings are held in a local `Vec` and
+//! explicitly dropped *after* the build stream is drained, since dropping one
+//! stops the agent that every `RUN --mount=type=ssh` in the build depends on.
+//! `ensure_host_volume_directories_exist` (the `run_as_current_user` host-dir
+//! pre-creation step) only `mkdir -p`s a bind's source when it's *absolute*
+//! (a bare non-absolute source is a `CacheType::Volume` name, 0.18.0, not a
+//! host path), *doesn't already exist* (an existing directory Docker reuses,
+//! or a single file/socket the config bind-mounts like `~/.gitconfig` or an
+//! SSH agent socket — `mkdir` over a non-directory both fails and is wrong),
+//! and *isn't a special Docker Desktop path* (`/run/host-services`/
+//! `/run/guest-services`, which Docker injects into its own VM and don't
+//! exist on a macOS host — the SSH agent socket lives at
+//! `/run/host-services/ssh-auth.sock`). The latter two guards are a
+//! straight port of Batect's `!Files.exists && !isSpecialDockerDesktopPath`;
+//! 0.10.0's `52e8d59` dropped the exists-check as "TOCTOU-prone" and the
+//! special-path one was never ported, which together broke mounting the SSH
+//! agent under `run_as_current_user` — don't re-simplify them away. `list_volumes`/`remove_volume` (0.18.0, `--clean`/
+//! `--clean-cache`) are thin wrappers over bollard's own volume API — see
+//! `cache.rs` for the actual removal-decision logic built on top of them.
+//! `list_containers`/`list_networks` (0.2.0-dev) are the equivalent pair for
+//! finding what a previous run left behind, both returning the same
+//! `LabelledResource` (a container and a network want reporting identically,
+//! so the reporting code isn't written twice) and both filtering *daemon-side*
+//! via `label_filters` — Docker ANDs the values under one `label` filter name,
+//! which is what makes "this project *and* this run" mean both rather than
+//! either. `list_containers` passes `all: true` deliberately: a leftover has
+//! usually exited, and Docker's default lists only running containers.
+
 use crate::ui::{ContainerIoStreaming, EventSink, NullEventSink, TaskEvent};
 use anyhow::{Context, Result};
 use bollard::container::AttachContainerResults;

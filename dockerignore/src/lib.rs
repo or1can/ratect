@@ -24,7 +24,7 @@
 //! # Attribution
 //!
 //! Ports `ignorefile/ignorefile.go` (this file's [`read_ignore_file`]) and
-//! `patternmatcher.go` (the [`pattern`] module) from
+//! `patternmatcher.go` (the private `pattern` module) from
 //! [`github.com/moby/patternmatcher`](https://github.com/moby/patternmatcher),
 //! including its test suite, carried over as this crate's own tests. That
 //! project is Copyright 2012-2017 Docker, Inc., licensed under the Apache

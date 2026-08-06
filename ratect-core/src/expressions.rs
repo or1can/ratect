@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Batect's expression syntax (`$VAR`,
+//! `${VAR:-default}`, `<name`/`<{name}` for config variables, including the built-in
+//! `batect.project_directory`). Host environment and resolved config variable values
+//! are injected as parameters rather than read from the real process environment, so
+//! resolution stays deterministic and unit-testable.
+
 use anyhow::{bail, Result};
 use std::collections::HashMap;
 

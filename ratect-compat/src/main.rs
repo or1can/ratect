@@ -176,7 +176,7 @@ struct Args {
 
     /// Storage mechanism for `cache` volume mounts: volume (a Docker named
     /// volume) or directory (a host directory under
-    /// <project_directory>/.batect/caches/<name>).
+    /// `<project_directory>/.batect/caches/<name>`).
     #[arg(
         long = "cache-type",
         value_enum,

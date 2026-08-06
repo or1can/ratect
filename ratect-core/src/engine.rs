@@ -12,6 +12,68 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! The core execution logic — task lifecycle,
+//! prerequisites, dependency-cycle detection, sidecar/dependency container resolution
+//! (see [`docs/task-lifecycle.md`](https://github.com/or1can/ratect/blob/main/docs/task-lifecycle.md)), and once-per-session
+//! dedup of image pulls/builds/task runs. `TaskEngine` is generic over
+//! `ContainerRuntime`. Worth knowing: opt-in settings (`existing_network`,
+//! `publish_ports`, etc.) are builder methods rather than `TaskEngine::new`
+//! parameters, so each new one lands without a mass-edit of the ~30 existing call
+//! sites — with `TaskEngineSettings`/`with_settings` (0.2.0-dev) as the
+//! plain-data form of that same set, which is what the *binaries* use (both
+//! expose the same ~10 knobs behind differently-named flags, so neither
+//! duplicates the builder chain; a new setting needs adding in both places or a
+//! binary can't reach it, and this module's own tests keep using the builders,
+//! where naming one setting reads better than a mostly-default struct); and only
+//! the task actually named on the command line (never a
+//! prerequisite) is ever eligible for interactive-TTY mode. `run_task_internal`
+//! runs `prerequisites` first, then returns early (no error) if the task itself has
+//! no `run` (0.14.0) — everything after can assume `run` is present. `customise`
+//! threads through `start_dependency`'s own recursion unconditionally, so it
+//! reaches its target regardless of depth in the dependency graph. The task's own
+//! container goes through the same readiness gate a dependency always has too
+//! (0.21.0, `run_task_container_readiness`) — health-check wait, then
+//! `setup_commands`, in order — but run *concurrently* with
+//! `ContainerRuntime::run_container`'s own attach-and-wait-for-exit via
+//! `tokio::join!` (the engine's first concurrent-exec path), rather than gating
+//! anything on it, since nothing else in the graph depends on the task container's
+//! own readiness. `run_container` takes two `oneshot::Sender`s for this:
+//! `created` (the container's id, sent the moment `create_container` returns —
+//! *before* it's started, matching Batect's own `containersCreated` set, which is
+//! what its `CleanupStagePlanner` plans removals from) and `started` (a bare `()`,
+//! right after Docker's own `start` call, which is when the readiness gate may
+//! begin — both its health inspect and its `docker exec` need a *running*
+//! container). `created` firing that early is what lets `run_container` `?` freely
+//! on every subsequent line: from that instant the engine can remove the
+//! container, so no failure can strand it. This replaced (0.25.0) a scheme where
+//! `run_container` removed its own container and took a third `readiness` channel
+//! purely to order that removal after the gate; the cleanup flags then had to be
+//! interpreted identically in two modules, and keeping them in step by hand
+//! produced a distinct bug in each of three consecutive review rounds. Don't
+//! reintroduce a removal here. See [task
+//! lifecycle](https://github.com/or1can/ratect/blob/main/docs/task-lifecycle.md#known-simplifications-relative-to-batect) for
+//! the one race this still shares with Batect (a near-instant main command with no
+//! `health_check` can still race past a `setup_commands` entry's own `docker exec`)
+//! and the one deliberate divergence (the main command is never cancelled early
+//! just because the readiness gate fails first, unlike Batect's own coroutine
+//! cancellation).
+//! `resolve_volumes` (0.18.0) turns a container's `VolumeMount`s into the
+//! literal bind strings `docker.rs` expects — a `Local` mount's already fully
+//! resolved by `config.rs`, nothing left to do but reassemble the string; a
+//! `Cache` mount goes through `cache::resolve_cache_mount`, memoizing the
+//! project's own cache key in a `tokio::sync::OnceCell` field (computed at
+//! most once per invocation, and only if a `cache` mount is actually
+//! resolved — never eagerly). `with_cache_options` (`--cache-type` + the
+//! project directory) is `main.rs`'s own builder call, always made in
+//! practice despite being optional here, same convention as the other opt-in
+//! settings above. `Tmpfs` mounts are deliberately *not* resolved by
+//! `resolve_volumes` at all (0.21.0) — a tmpfs mount can't be expressed as a
+//! bind string, and needs no async cache-key lookup either, so a separate,
+//! synchronous `tmpfs_mounts` helper (alongside `capability_names`/
+//! `device_triples`) pulls them out into a new `ContainerOptions.tmpfs` field
+//! instead, mapped onto Docker's own `HostConfig.Tmpfs` map by `docker.rs`'s
+//! `build_tmpfs_mounts`.
+
 use crate::config::{
     container_names_in_task, BuildSecret, Config, Container, PortMapping, Task,
     TaskContainerCustomisation,

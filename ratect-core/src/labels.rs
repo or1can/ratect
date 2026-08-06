@@ -29,6 +29,22 @@
 //! Both binaries stamp these. It's a divergence from Batect, which labels
 //! nothing of its own, but a strictly additive one — see
 //! [Differences from Batect](../../docs/differences-from-batect.md#runtime-behavior-gaps).
+//!
+//! the `eu.orican.ratect.*` Docker
+//! labels stamped on every container and network the engine creates, so the
+//! planned `resources` verb can find what a previous run left behind (see
+//! `ROADMAP.md`). `RunLabels` is built once per task execution in
+//! `engine.rs`'s `run_task_internal` and threaded down through
+//! `ensure_container_ready`, so a task's containers and its network all agree
+//! on one run id — generated there rather than alongside the network,
+//! deliberately, since `--use-network` creates no network to take it from.
+//! Two things to preserve when touching it: Ratect's own keys must win over a
+//! container's configured `labels` on an exact collision (they're load-bearing
+//! for cleanup — a config setting `eu.orican.ratect.run` would otherwise make
+//! its own containers unfindable), and the version label comes from the
+//! *binary* (`TaskEngineSettings::ratect_version`, `env!("CARGO_PKG_VERSION")`
+//! at each `main.rs`) rather than `ratect-core`'s own version, which isn't
+//! what a user sees from `--version`.
 
 use std::collections::HashMap;
 

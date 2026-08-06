@@ -309,7 +309,7 @@ enum CachesCommand {
 #[derive(ClapArgs, Debug)]
 struct CachesArgs {
     /// Storage to look in: volume (Docker named volumes) or directory (host
-    /// directories under <project>/.batect/caches/<name>).
+    /// directories under `<project>/.batect/caches/<name>`).
     #[arg(long = "cache-type", value_enum, default_value = "volume")]
     cache_type: CacheTypeArg,
 
@@ -398,7 +398,7 @@ struct RunArgs {
     max_parallelism: Option<u32>,
 
     /// Storage for `cache` volume mounts: volume (a Docker named volume) or
-    /// directory (a host directory under <project>/.batect/caches/<name>).
+    /// directory (a host directory under `<project>/.batect/caches/<name>`).
     #[arg(long = "cache-type", value_enum, default_value = "volume")]
     cache_type: CacheTypeArg,
 

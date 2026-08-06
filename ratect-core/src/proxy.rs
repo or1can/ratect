@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Proxy environment variable detection/propagation
+//! (`--no-proxy-vars` to disable) — ported from Batect's
+//! `ProxyEnvironmentVariablesProvider`/`ProxyEnvironmentVariablePreprocessor`.
+//! Rewrites `localhost`/`127.0.0.1`/`::1` proxy URLs to `host.docker.internal`
+//! (macOS/Windows only — `None` on Linux).
+
 use std::collections::{BTreeSet, HashMap};
 
 /// The proxy-related environment variable names Batect looks for, lowercase.

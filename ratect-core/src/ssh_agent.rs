@@ -38,6 +38,57 @@
 //!
 //! Wire formats and constants are from [RFC 9987](https://www.rfc-editor.org/rfc/rfc9987),
 //! the SSH agent protocol.
+//!
+//! a minimal in-process ssh-agent
+//! (`Keyring`), serving a `build_ssh` entry's `paths` private keys over a Unix
+//! socket in a `0700` temporary directory — which is what lets `paths` work
+//! with no agent running on the host at all, the normal CI case. BuildKit's
+//! `sshforward` bridges each forwarded stream to *anything* speaking the agent
+//! protocol, so serving it ourselves is indistinguishable from forwarding a
+//! real agent (exactly what Go BuildKit's own `sshprovider` does with
+//! `x/crypto`'s `agent.NewKeyring`). Wire formats come from
+//! [RFC 9987](https://www.rfc-editor.org/rfc/rfc9987); only
+//! `REQUEST_IDENTITIES` and `SIGN_REQUEST` get real answers and everything
+//! else returns `SSH_AGENT_FAILURE`, which is all an SSH *client* doing
+//! public-key auth needs. Things to preserve when touching it, all from
+//! [decisions/0005](https://github.com/or1can/ratect/blob/main/decisions/0005-build-ssh-keyring-placement.md): it stays
+//! **extractable** — no config/engine/Docker types, and no error message
+//! naming Ratect, so it could be lifted out or offered upstream to `bollard`
+//! as a copy rather than a rewrite; private keys never cross the socket, only
+//! signatures; and the socket is protected *twice* — an
+//! unpredictably-named `0700` directory (the system temporary directory is
+//! world-writable) plus the socket file itself chmod'ed to `0600` after
+//! binding, since `bind` otherwise leaves it at the process umask. That
+//! pairing is OpenSSH's own (`mkdtemp` + `umask(0177)` around the bind);
+//! doing only the directory rests the whole protection on one `mode`
+//! argument. It's a `chmod` rather than a umask because the umask is
+//! process-global and this process is multi-threaded. Its accept loop owns
+//! connections in a `tokio::task::JoinSet` rather than detaching them, so
+//! dropping the `Keyring` aborts the connections it is *already* serving and
+//! not merely the loop — an established client doesn't care that the socket
+//! file has been unlinked. That matches the convention every other
+//! `tokio::spawn` in `ratect-core` already follows (the handle is owned and
+//! aborted — `stdin_pump`, `spawn_resize_listener`); a bare detached spawn is
+//! the thing to look twice at. The loop also never gives up on an `accept`
+//! error: most are per-connection or transient, and quietly serving nothing
+//! for the rest of a build surfaces much later as an unexplained
+//! authentication failure. Worth knowing that
+//! Go BuildKit needs *neither*: its `sshprovider` serves a keyring over an
+//! in-memory `net.Pipe()`, so no socket exists on the filesystem at all —
+//! Ratect needs one only because the fork's `SshAgentSource` is
+//! socket-based. Two non-obvious
+//! details: **`ssh-key` 0.6.7's own RSA conversion is broken** (it passes the
+//! prime `p` twice instead of `p` and `q`, so *no* RSA key can be signed with
+//! through its `Signer` impl either) — `rsa_private_key` rebuilds the key from
+//! components to work around it, and the workaround goes when `ssh-key` 0.7 is
+//! published and adopted; and the socket path length is checked before binding,
+//! because `sun_path` is only 104 bytes on macOS and its per-user `TMPDIR`
+//! already spends about half of that. Its tests build every request from RFC
+//! 9987's own numbers rather than from this module's constants — a test that
+//! derives its input from the code can't validate a constant that crosses a
+//! protocol boundary. `docker.rs`'s `classify_ssh_agent_paths` decides *when*
+//! a keyring is needed (see below); this module knows nothing about
+//! `build_ssh`.
 
 use std::io::ErrorKind;
 use std::os::unix::fs::DirBuilderExt;

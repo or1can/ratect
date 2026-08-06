@@ -18,6 +18,31 @@
 //! `libs/git-client`/`app/.../config/includes` (see ROADMAP.md's 0.8.0
 //! entry for the full rationale). [`config.rs`](crate::config) drives this
 //! module; nothing here knows about `batect.yml` parsing.
+//!
+//! Git includes (`type: git` entries
+//! in `include`) — `GitIncludeCache::ensure_cached`, driven by
+//! `config.rs`'s own include-resolution loop, clones a `(remote, ref)` pair
+//! once into `~/.ratect/incl/<sha256 key>/` and reuses it forever (0.8.0);
+//! a `<key>.toml` sidecar (`CacheInfo`) records `last_used` (a Unix
+//! timestamp, not `atime`/`mtime` — unreliable across platforms/CI),
+//! bumped on every `ensure_cached` call regardless of whether a clone
+//! actually happened. `GitIncludeCache::cleanup_stale` (0.19.0) sweeps that
+//! same cache: any entry whose `last_used` is more than 30 days old gets
+//! both its working copy and its `.toml` sidecar removed, matching
+//! Batect's own `GitRepositoryCacheCleanupTask` exactly except that it's a
+//! `tokio::spawn`ed async task, not a literal OS thread (Batect's own JVM
+//! daemon thread is the equivalent to port the *behavior* of — unconditional,
+//! fire-and-forget, never awaited — not literally a `std::thread::spawn`).
+//! Started unconditionally from `main.rs`'s "run a task" branch (not
+//! `--list-tasks`), before the Docker connectivity check, mirroring where
+//! Batect's own `BackgroundTaskManager` fires it. One stale entry failing
+//! to delete (unreadable/unparsable sidecar, filesystem error) is logged
+//! and skipped rather than aborting the whole sweep — same per-entry
+//! try/catch Batect's own cleanup task has. `cached_working_copy` (0.3.0) is
+//! the read-only counterpart to `ensure_cached`: it computes the same
+//! `~/.ratect/incl` path and returns it only if the clone already exists —
+//! never cloning, locking, or touching the network — for offline callers
+//! (`config::task_names_for_completion`) that must not stall a shell `<TAB>`.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};

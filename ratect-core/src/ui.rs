@@ -30,6 +30,47 @@
 //! `tracing` remains separate and unchanged by this layer: diagnostics and
 //! breadcrumbs to stderr, controlled by `RUST_LOG`. Events here are the
 //! product's actual output, on stdout — see docs/how-it-works.md.
+//!
+//! The user-facing output layer (0.16.0's output-modes
+//! work) — a port of Batect's `TaskEventSink`/`EventLogger` design: `engine.rs`
+//! posts typed `TaskEvent` milestones and `docker.rs` posts fine-grained
+//! pull/build progress to an injected `EventSink` (both default to the silent
+//! `NullEventSink`; `main.rs` wires the real logger into both so one sink sees
+//! the whole stream), and the selected logger decides what each event renders
+//! as — never `println!` from `engine.rs`/`docker.rs` directly. Loggers must
+//! serialize rendering internally (events arrive concurrently since 0.15.0);
+//! `Console` keeps color and cursor movement as *independent* axes,
+//! deliberately unlike Batect's single `enableComplexOutput` flag — that
+//! coupling is the only reason Batect rejects `fancy` + `--no-color`, a
+//! combination Ratect supports instead (colorless fancy). Milestone events are
+//! keyed by container/task name (engine's vocabulary); progress events by
+//! image/tag (all `docker.rs` knows) — a logger maps one to the other via the
+//! `TaskGraphResolved` event's `TaskContainerInfo`s. The logger also *owns the
+//! container I/O policy* (`EventSink::container_io_streaming`, mirroring
+//! Batect's `EventLogger.ioStreamingOptions`): `engine.rs` and `docker.rs`
+//! consult it rather than being configured separately, which is how `all` mode
+//! line-buffers every container's output into `ContainerOutput` events (no
+//! TTY/stdin, `TERM=dumb` everywhere) while the other three modes stream the
+//! task container raw to stdout — add any future per-mode I/O behavior through
+//! that method, not a new engine/docker setting. That raw-streaming half is
+//! also why `simple.rs` *drops* the task container's own
+//! `ContainerBecameHealthy`/`RunningSetupCommand`/`SetupCommandsCompleted`
+//! lines (0.21.0, `is_task_container` — the same three `if (container ==
+//! taskContainer) return` guards Batect's own `SimpleEventLogger` has): since
+//! the task container's readiness gate now runs *concurrently* with its
+//! command (`engine.rs`), printing them would drop a line into the middle of
+//! that command's unframed output. `all` mode has no such collision (prefixed,
+//! line-buffered) and reports them for every container, matching Batect's own
+//! `InterleavedEventLogger`; `fancy` never sees them, since its block freezes
+//! the moment the task container starts. Any *new* milestone event for the
+//! task's own container needs the same decision made for it. Style selection and logger
+//! construction (including the explicit-`fancy`-without-an-interactive-console
+//! error) live in `ui::create_event_sink`, not `main.rs` — deliberately, so the
+//! `ratect` binary (see `ROADMAP.md`'s two-binaries section) gets this for free
+//! once it needs it, instead of reimplementing the style→logger match itself;
+//! `ratect-compat/src/main.rs` only gathers the terminal facts once and hands them
+//! to it (and to `select_output_style`, for `--list-tasks`'s own quiet-format
+//! decision).
 
 pub mod fancy;
 pub mod interleaved;

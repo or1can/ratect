@@ -12,6 +12,100 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Data models for the configuration — **two text
+//! formats, one model**. Every entry point comes in a pair: `load_project`/
+//! `load_from_file` (Batect-compatible, YAML via `noyalib`) and their `_native`
+//! siblings (`ratect`'s `ratect.toml`, TOML via `toml`, with `.yml`/`.yaml`
+//! includes still parsed as YAML *by extension*). A binary picks a format by
+//! *which function it calls*, so the private `ConfigFormat` policy enum never
+//! leaks into the public API; `parse_config_file` is the single dispatch point,
+//! and both parsers feed the same `ConfigFile`, so nothing downstream knows which
+//! format a file came from. Three things ride on that policy — the native-only
+//! `extends` pass, the `ratect-bundle.toml`-before-`batect-bundle.yml` probe for a
+//! pathless git include, and the object-only *documented* schema (the parser
+//! itself stays string-tolerant, which is what lets one set of hand-written
+//! `Deserialize` impls serve both formats). **`extends`** (native only; a
+//! `batect.yml` using it is *rejected*, not ignored) is a final pass *after*
+//! expression/path resolution — mechanically `child.or(parent)` over the
+//! already-`Option` fields, so a set field replaces and an unset one inherits,
+//! single-parent, transitive, cycle-checked. `inherit_container_fields`
+//! destructures the parent exhaustively on purpose: a new `Container` field that
+//! forgets to inherit is a compile error, not a silent gap. Ordering is
+//! load-bearing — resolve *then* extend, so an inherited relative path stays
+//! anchored to the *parent's* own file rather than re-anchoring to the child's.
+//! See [decisions/0003](https://github.com/or1can/ratect/blob/main/decisions/0003-ratect-native-config-format.md).
+//! Two Batect behaviours worth knowing, both found by running real-world bundles
+//! and both applying to *either* format's YAML: a top-level key starting with `.`
+//! is an **extension** (it exists only to hold a YAML anchor and is stripped
+//! before the schema sees it — which is why YAML is deserialized in two steps,
+//! text → `noyalib::Value` → `ConfigFile`, since anchors must resolve *before*
+//! the key is dropped), and a **leading `~`** in a host path expands to the home
+//! directory (component-wise, matching Batect's `PathResolver.resolveHomeDir`, so
+//! `~user/…` stays literal). `task_names_for_completion` is a deliberate
+//! *non*-load for shell completion: names only, follows local and
+//! already-cached-git includes, never clones or errors.
+//! `Config::load_from_file` parses the root file and resolves
+//! `include` (local files and Git bundles — see
+//! [config reference](https://github.com/or1can/ratect/blob/main/docs/config-reference.md#includes)), merging every loaded
+//! file's `containers`/`tasks`/`config_variables` into one `Config`, returned inside a
+//! `LoadedConfig` alongside a `container_base_paths` map (each container name → its
+//! own origin file's directory). A separate `LoadedConfig::resolve_expressions` call
+//! (needs CLI-supplied `--config-var`/`--config-vars-file` overrides, so it can't
+//! happen inside `load_from_file`) interpolates and resolves paths — per-container,
+//! against `container_base_paths` rather than a single shared directory, so an
+//! included file's relative paths resolve against *its own* directory while
+//! `batect.project_directory` still always resolves to the root's (`Config`'s own
+//! `resolve_expressions` stays available too, unchanged, for a `Config` built without
+//! going through `load_from_file`). `load_project` (0.2.0-dev) wraps that whole
+//! sequence — existence check, `load_from_file`, `base_path_for`,
+//! `project_directory_path`, `resolve_expressions` — into the one call a binary
+//! actually wants, returning a `LoadedProject`; it exists so `ratect` and
+//! `ratect-compat` can't get the ordering (includes before expressions) or the
+//! missing-file error wording out of step with each other. Merging
+//! `--config-vars-file` with individually-supplied variables stays the caller's
+//! job — only the caller knows what its own flags are called.
+//! `run_as_current_user.home_directory` is
+//! interpolated but *not* resolved against a base path — it's a container-side path,
+//! validated to start with `/` instead. `PortRange`/`PortMapping`,
+//! `DeviceMapping` (`devices`), and `VolumeMount` (`volumes` — `Local`/`Cache`
+//! variants, 0.18.0, plus `Tmpfs`, 0.21.0) all have hand-written `Deserialize`
+//! impls so an entry can be either Batect's string form (`"local:container[/protocol]"` /
+//! `"local:container[:options]"` — `VolumeMount`'s string form is always
+//! `Local`; there's no compact string form for `Cache`/`Tmpfs`) or the expanded
+//! object form. A `VolumeMount::Local`'s host path is resolved here (against
+//! `container_base_paths`, same as `build_directory`); a `Cache`'s `name`/
+//! `container` are plain strings, not `Expression`s, matching Batect — nothing
+//! to resolve here at all, since `--cache-type` and the project's own cache
+//! key (needed to actually resolve one) aren't known until `engine.rs`/
+//! `cache.rs`. A `Tmpfs`'s `container`/`options` are likewise plain strings —
+//! nothing to resolve here either, matching Batect's own `TmpfsMount` typing.
+//! `Capability`
+//! (`capabilities_to_add`/`capabilities_to_drop`) and `ImagePullPolicy` are fixed
+//! enums validated at parse time — `Capability`'s list is a deliberate *superset* of
+//! Batect's own (unmaintained) one, not a strict port, see its doc comment.
+//! `Task.run` is `Option<TaskRun>` (0.14.0, see docs/task-lifecycle.md) — still
+//! requires at least one of `run`/`prerequisites`. `dependencies` (task-level
+//! sidecars, distinct from `Container.dependencies`) requires `run` and is
+//! rejected without it; `customise` requires `run` too but is merely inert
+//! without it, matching Batect. `container_names_in_task` lives here (moved from
+//! `engine.rs`) since both the `no_proxy` exemption list and `customise`'s
+//! graph-membership check need the same transitive-dependency walk.
+//! `format_task_list` is the single source of `--list-tasks` formatting.
+//! `Container.command` (a container's own default `CMD` override, symmetric with
+//! `Container.entrypoint`) was missed when 0.13.0's container runtime options
+//! landed — `run.command` covered the task's own container, but a dependency had
+//! no way to set a command of its own at all, silently defaulting to the image's
+//! own `CMD` regardless. Closed once noticed, threading through
+//! `ContainerRuntime::start_background_container` (a new `command` parameter,
+//! reusing `docker.rs`'s existing `build_cmd`/`tokenize_command_line`) the same
+//! way `run_container`'s already did. `forbid_telemetry`
+//! (`Config`/`ConfigFile`) and `config_variables.<name>.description`
+//! (`ConfigVariable`) are recognized but inert (0.19.0), the same "no
+//! effect" treatment already given `--upgrade`/`--no-update-notification`/
+//! `--no-wrapper-cache-cleanup` (0.17.0, `main.rs`) — parsed and, for
+//! `forbid_telemetry`, carried onto the merged `Config` (root file only,
+//! same precedent as `project_name`), but never read anywhere else.
+
 use anyhow::{Context, Result};
 use path_clean::PathClean;
 use serde::{Deserialize, Serialize};

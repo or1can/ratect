@@ -12,6 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Ratect's engine, shared by the `ratect` and `ratect-compat` binaries.
+//!
+//! Each module's own `//!` carries its notes — what it does, the gotchas, and
+//! the decisions that are easy to undo by accident (see
+//! [decisions/0006](https://github.com/or1can/ratect/blob/main/decisions/0006-code-and-documentation-locality.md)).
+//! Read these with:
+//!
+//! ```text
+//! cargo doc --open -p ratect-core --all-features --document-private-items
+//! ```
+//!
+//! `--document-private-items` is not optional here: this is an internal
+//! library whose audience is contributors, so its doc comments link freely to
+//! private items — which is what the allow below permits. `dockerignore`
+//! deliberately keeps the strict default, since it is meant to be publishable
+//! on its own.
+#![allow(rustdoc::private_intra_doc_links)]
+
 pub mod cache;
 pub mod config;
 pub mod docker;

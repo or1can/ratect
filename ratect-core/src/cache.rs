@@ -26,6 +26,32 @@
 //! purpose: this is `ratect-compat`'s territory (see `ROADMAP.md`'s
 //! `## Two Binaries` section), and a project migrating from real `batect`
 //! should find its existing cache volumes/directories reused, not orphaned.
+//!
+//! Resolves a `VolumeMount::Cache`
+//! (`config.rs`) into an actual Docker bind-mount string — a named volume
+//! (`CacheType::Volume`, the default) or a host directory
+//! (`CacheType::Directory`, `--cache-type=directory`) — and implements
+//! `--clean`/`--clean-cache` (`clean_volume_caches`/`clean_directory_caches`),
+//! which remove them. Ported from Batect's own `CacheManager`/
+//! `VolumeMountResolver`/`CacheType`/`CleanupCachesCommand`, kept
+//! byte-for-byte compatible with Batect's own `.batect/caches/` location and
+//! `batect-cache-<project-key>-<name>` volume-naming convention *on purpose*
+//! — this is `ratect-compat`'s territory (see `ROADMAP.md`'s two-binaries
+//! section), so a project migrating from real `batect` should find its
+//! existing cache volumes/directories reused, not orphaned. The one
+//! deliberate divergence: a freshly generated `project_cache_key` is a full
+//! `uuid::Uuid::new_v4()`, not Batect's 6-char `a-z0-9` id — an existing
+//! Batect-created key file is still read and reused byte-for-byte (tolerant
+//! of its `#`-comment-header format), since nothing depends on matching the
+//! *generation* format, only the file's path and read-compatible layout, and
+//! Batect's own alphabet is meaningfully more collision-prone across many
+//! projects on one machine. The actual removal *decision* (which
+//! volumes/directories match this project's prefix, restricted to
+//! `--clean-cache`'s allowlist) is split into plain synchronous functions
+//! (`matching_cache_volumes`/`matching_cache_directories`), deliberately kept
+//! separate from the async I/O around them, so they're unit-testable against
+//! plain `Vec<String>`/tempdir fixtures without needing a fake
+//! `ContainerRuntime`.
 
 use crate::config::CacheVolumeMount;
 use anyhow::{Context, Result};

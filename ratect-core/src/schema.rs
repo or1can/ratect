@@ -30,7 +30,7 @@
 //!
 //! Two deliberate choices worth knowing:
 //!
-//! - It describes one *file*'s shape ([`ConfigFile`] — including `include`,
+//! - It describes one *file*'s shape ([`crate::config::ConfigFile`] — including `include`,
 //!   which only exists per-file), not the merged [`Config`](crate::config::Config)
 //!   that several included files add up to. That's what an editor has open.
 //! - Draft-07, not schemars' own default (2020-12): that's what
@@ -44,8 +44,44 @@
 //! [`schema/batect-config.schema.json`](../../schema/batect-config.schema.json)
 //! and [`schema/ratect-config.schema.json`](../../schema/ratect-config.schema.json)
 //! — since those files are what editors actually consume;
-//! [`tests::committed_schema_is_up_to_date`] and its native counterpart fail if
+//! `committed_schema_is_up_to_date` and its native counterpart fail if
 //! either drifts, and print the one command that regenerates both.
+//!
+//! generates **two** JSON schemas from `config.rs`'s own types —
+//! `batect.yml`'s (`config_file_schema`, committed at
+//! `schema/batect-config.schema.json`) and, since 0.3.0, `ratect.toml`'s
+//! (`native_config_file_schema`, at `schema/ratect-config.schema.json`) — see
+//! [config reference](https://github.com/or1can/ratect/blob/main/docs/config-reference.md#editor-autocompletion-and-validation)
+//! and the [`ratect.toml` reference](https://github.com/or1can/ratect/blob/main/docs/ratect-config-reference.md#editor-support)
+//! for the user-facing halves. The native one is the same generated base put
+//! through `make_native`, which applies *exactly* the two differences that define
+//! the format: it drops the compact string form from the
+//! `volumes`/`ports`/`devices`/`include` `oneOf`s (object-only), and adds the
+//! native-only `extends` field the compat schema skips. Everything else is shared
+//! because both formats parse into one `Config`. One asymmetry that's deliberate:
+//! only the compat schema carries a `patternProperties` entry admitting top-level
+//! `.`-prefixed keys (YAML extensions — TOML has no anchors for one to hold). The
+//! same `RATECT_UPDATE_SCHEMA=1` run regenerates both, and a drift in either fails
+//! its own test. Things to know before touching it: the schema is
+//! generated from `ConfigFile` (`pub(crate)` for exactly this reason), not
+//! `Config` — one *file*'s shape, `include` and all, is what an editor has open,
+//! not the merged result; it's emitted as draft-07 rather than schemars' own
+//! default 2020-12, because `yaml-language-server` (what VS Code and JetBrains
+//! run) only implements draft-07 fully — under 2020-12 it drops keywords sitting
+//! beside a `$ref`, which is every description on a `$ref`'d field; every type
+//! with a hand-written `Deserialize` impl needs a hand-written `JsonSchema` impl
+//! to match, and they live here rather than in `config.rs` (`PortMapping`,
+//! `PortRange`, `DeviceMapping`, `VolumeMount`, `BuildSecret`, `IncludeEntry` —
+//! add one here whenever a new string-or-object config type lands, or the derive
+//! won't compile); and field documentation is the config types' own doc comments,
+//! run through `summarize` (first paragraph, reflowed, rustdoc link syntax
+//! stripped) rather than a second `schemars(description = ...)` copy per field,
+//! which would be free to drift. So a new config field needs a doc comment whose
+//! *first paragraph* stands alone as user-facing documentation — everything after
+//! it is for contributors and never reaches the schema. The `schema` feature also
+//! pulls in `jsonschema` (an optional normal dependency, not a dev-dependency —
+//! Cargo won't let those be optional) purely for this module's own tests, which
+//! validate every fixture in the repository against the generated schema.
 
 use crate::config::{BuildSecret, DeviceMapping, PortMapping, PortRange, VolumeMount};
 use schemars::generate::SchemaSettings;

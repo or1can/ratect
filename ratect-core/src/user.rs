@@ -12,6 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Host user lookup (`current_user`, via the `nix`
+//! crate — Unix-only) and the pure `/etc/passwd`/`/etc/shadow`/`/etc/group` content
+//! generators `docker.rs` uses — ported from Batect's
+//! `RunAsCurrentUserConfigurationProvider`, including its `uid == 0`/`gid == 0`
+//! special-casing so running as the current user doesn't produce a duplicate
+//! conflicting `root` entry.
+
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
