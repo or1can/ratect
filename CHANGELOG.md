@@ -29,15 +29,14 @@ history, from when it was the only binary.
 
   This is Ratect's first cryptographic dependency (`ssh-key` and companions), taken knowingly — see [decisions/0005](decisions/0005-build-ssh-keyring-placement.md), which also records why the plumbing half went to the `bollard` fork (and upstream) while the keys stayed here. Proven end-to-end by a new `#[ignore]`d integration test that builds against a real daemon with `SSH_AUTH_SOCK` removed from the environment entirely, so nothing but the served key file can satisfy the build's `ssh-add -l`. See [config reference](docs/config-reference.md#image-building).
 
+
+- **The Batect conformance corpus now covers 28 of Batect's 29 journey projects**, up from 23 — adding `config-with-include`, `git-include`, and the three `run_as_current_user` projects, plus a second `cache-mount` case exercising `--cache-type=directory`. Only `windows-container` remains, out of reach until cross-platform work starts. The `run_as_current_user` projects bind `/output` to Batect's own Gradle build tree upstream, so those two use `<{batect.project_directory}/output` instead — the only deviation from verbatim, recorded in the fixtures and the corpus [README](ratect-compat/tests/conformance/README.md). `git-include` needs network access on its first run.
+
 ### Changed
 
 - **A `build_ssh` entry's `id` is now required**, matching Batect, where `SSHAgent.id` has no default. Previously an omitted `id` meant BuildKit's implicit `default`. That was more permissive than Batect in the one direction a drop-in replacement shouldn't be: a `batect.yml` written against Ratect could omit `id` and then fail to load under `batect` itself. Write `id: default` for the agent a bare `RUN --mount=type=ssh` selects. Applies to `ratect`'s native format too — making a field's *requiredness* depend on which format a file is written in would be a new kind of difference between the two, for one line of saved typing. Affects configuration accepted since 0.11.0; the fix is mechanical and the error names the missing field.
 
 - **The pinned `bollard` fork now tracks upstream `master`** rather than the old pull-request branch, picking up fixes Ratect had been missing: JSON build-output streams parsed as whitespace-separated values (bollard [#733](https://github.com/fussybeaver/bollard/pull/733)), the API version prefix sent in request paths ([#737](https://github.com/fussybeaver/bollard/pull/737)), and `204` distinguished from `304` when starting/stopping a container ([#738](https://github.com/fussybeaver/bollard/pull/738)). No Ratect behaviour changes deliberately here, but build-output handling in particular is worth knowing has moved underneath. The pin still carries one unreleased change of our own (sshforward dispatch to named ssh agents), so it can't be dropped on bollard 0.22 alone — see the root `Cargo.toml`.
-
-### Added
-
-- **The Batect conformance corpus now covers 28 of Batect's 29 journey projects**, up from 23 — adding `config-with-include`, `git-include`, and the three `run_as_current_user` projects, plus a second `cache-mount` case exercising `--cache-type=directory`. Only `windows-container` remains, out of reach until cross-platform work starts. The `run_as_current_user` projects bind `/output` to Batect's own Gradle build tree upstream, so those two use `<{batect.project_directory}/output` instead — the only deviation from verbatim, recorded in the fixtures and the corpus [README](ratect-compat/tests/conformance/README.md). `git-include` needs network access on its first run.
 
 ### Fixed
 

@@ -864,19 +864,24 @@ fn run_as_current_user_with_cache() {
         Some(0),
         "the task should succeed — output:\n{combined}"
     );
-    for expected in [
+    // One `\n`-joined block, not six `contains` calls: "/cache exists" is a
+    // substring of "/home/special-place/cache exists", so asserting the
+    // shorter lines individually passes even if `/cache` was never mounted
+    // — the script's `else` branch only echoes, so nothing fails the run.
+    // Batect joins them for the same reason.
+    let expected = [
         "/cache exists",
         "/cache/created-file created",
         "/home/special-place/cache exists",
         "/home/special-place/cache/created-file created",
         "/home/special-place/subdir/cache exists",
         "/home/special-place/subdir/cache/created-file created",
-    ] {
-        assert!(
-            combined.contains(expected),
-            "expected {expected:?} in output:\n{combined}"
-        );
-    }
+    ]
+    .join("\n");
+    assert!(
+        combined.contains(&expected),
+        "expected this block in output:\n{expected}\n\nactual output:\n{combined}"
+    );
 }
 
 /// `config-with-include`: a root file that pulls its containers and tasks
