@@ -17,6 +17,22 @@ clap = { version = "4.6", features = ["derive"] }
 # adds the callback-at-completion-time engine that completes task names from
 # the config; it's an explicitly unstable clap API (prototype — see the
 # `completions`/`complete_task_names` code and CHANGELOG).
+# **`clap_complete`** (`ratect`-only, `features = ["unstable-dynamic"]`):
+# shell completion for `ratect completions <shell>`. `ratect`-only because
+# the completion surface is that binary's own, and `ratect-compat`
+# deliberately matches Batect's flat flag interface instead. The subcommand
+# emits the *dynamic* registration script (via
+# `env::EnvCompleter::write_registration`), so there's one mechanism rather
+# than a static script plus a separate `COMPLETE=…` env dance; at `<TAB>`
+# the shell re-invokes `ratect`, a `CompleteEnv` hook in `main` handles it
+# and exits before any normal work, and an `ArgValueCompleter` on `run`'s
+# task argument produces task names. Note the feature is explicitly
+# **unstable** — treat occasional API churn as the cost of the one thing
+# that makes completion worth having on a task runner. Two shape constraints
+# worth knowing: a value completer is handed only the word being completed
+# (which is why `-f` awareness reads the completion process's own args after
+# `--`), and zsh's script ends in `compdef`, so it must be sourced after
+# `compinit`.
 clap_complete = { version = "4.6", features = ["unstable-dynamic"] }
 tokio = { version = "1.52", features = ["full"] }
 anyhow = "1.0"

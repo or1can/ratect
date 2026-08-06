@@ -8,26 +8,143 @@ repository = "https://github.com/or1can/ratect"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
+# **`serde_json`**: parses the Docker CLI's own context-store JSON files for
+# `--docker-context` (`ratect-core/src/docker.rs`'s
+# `docker_context_host`/`active_docker_context`) —
+# `<config_directory>/contexts/meta/<sha256(name)>/meta.json`'s
+# `Endpoints.docker.Host`, and `<config_directory>/config.json`'s
+# `currentContext`. `serde` itself was already a dependency (for `noyalib`'s
+# `compat-serde-yaml`); `serde_json` is the standard, ubiquitous choice for
+# the same derive-based approach applied to actual JSON.
 serde_json = "1.0"
+# **`noyalib`**: Safe, pure-Rust YAML parser (used as a modern alternative
+# to `serde_yaml`).
 noyalib = { version = "0.0.15", features = ["compat-serde-yaml"] }
+# **`bollard`** (`features = ["buildkit_providerless", "chrono", "ssl"]`,
+# **consumed via a `[patch.crates-io]` fork** — see the root `Cargo.toml`):
+# Asynchronous Docker API client. The fork (`or1can/bollard`, branch
+# `feat/ssh-named-agents`) is upstream `master` plus one commit of ours that
+# hasn't landed yet: sshforward dispatch to *named* ssh agents, which
+# `build_ssh`'s multi-agent and `paths` support builds on
+# ([decisions/0005](https://github.com/or1can/ratect/blob/main/decisions/0005-build-ssh-keyring-placement.md)).
+# The two changes the patch originally existed for — session providers on
+# `build_image` ([#731](https://github.com/fussybeaver/bollard/pull/731))
+# and `ping_info` ([#732](https://github.com/fussybeaver/bollard/pull/732))
+# — **have merged upstream** and are on `master` (0.22.0); the patch remains
+# only because the latest crates.io release is still 0.21.0. Dropping it
+# needs *both* 0.22 published and the named-agent change landed, since 0.22
+# alone won't carry `set_ssh_agent`. **Keep the pin on a branch cut from
+# upstream `master`, and rebase it — never merge `master` into it.** The
+# predecessor branch (`feat/build-image-session-providers`) was the #731 PR
+# branch itself; upstream squash-merged and reshaped that work, so branch
+# and master came to express the same feature as different commits touching
+# the same lines. It could then neither raise a pull request (GitHub
+# reported an unmergeable comparison) nor pick up later upstream fixes — a
+# dead end reached without anything visibly breaking, which is why the rule
+# above is a rule. See `ROADMAP.md`'s 0.12.0 entry for the full fork
+# mechanics and PR links, and its 0.25.0 entry for what the named-agent
+# commit unlocked. `chrono` is required transitively once
+# `buildkit_providerless` is on (BuildKit OAuth token expiry needs a
+# date/time type) — bollard won't compile without it or the `time` feature.
+# `ssl` (added for `--docker-tls`/`-verify`, `ratect-core/src/docker.rs`'s
+# `connect`) turns on `rustls`'s `ring` cryptographic provider feature on
+# top of `ssl_providerless` (already pulled in by `buildkit_providerless`) —
+# `Docker::connect_with_ssl` panics if asked to build a TLS connection
+# before a provider is installed, so `ensure_crypto_provider_installed`
+# calls `rustls::crypto::ring::default_provider().install_default()` once,
+# guarded by a `std::sync::Once`.
 bollard = { version = "0.22", features = ["buildkit_providerless", "chrono", "ssl"] }
+# **`anyhow`**: Simplified error handling with context.
 anyhow = "1.0"
 futures = "0.3"
+# **`tracing` / `tracing-subscriber`**: Structured, leveled logging. The
+# subscriber is initialized in `main.rs`, filtered via `RUST_LOG` (defaults
+# to `info`), and writes to stderr.
 tracing = "0.1"
 async-recursion = "1.1"
+# **`async-trait`**: Used for the `ContainerRuntime` trait in
+# `ratect-core/src/docker.rs`, so it can have async methods and be
+# implemented by both the real `DockerClient` and test fakes.
 async-trait = "0.1"
+# **`uuid`**: Generates collision-resistant per-task Docker network names
+# (`ratect-<uuid>`) in `ratect-core/src/engine.rs`. Deliberately not
+# `std::process::id()` — that's frequently `1` when `ratect` itself runs
+# inside a container (e.g. CI), which would collide across concurrent runs.
+# Built images are tagged `<project_name>-<container_name>` instead
+# (human-readable, matching Batect's convention) — `resolve_image` avoids
+# the same collision hazard for these not via a random name but by running
+# the image *ID* Docker's build reports back, not the (non-unique) tag. Also
+# generates a freshly-created project cache key (0.18.0,
+# `ratect-core/src/cache.rs`'s `project_cache_key`) — a full UUID rather
+# than Batect's own shorter 6-char id, deliberately: nothing depends on
+# matching Batect's generation format for a *new* key (an existing
+# Batect-created one is read back byte-for-byte instead), and Batect's own
+# alphabet is meaningfully more collision-prone across many projects sharing
+# one machine.
 uuid = { version = "1", features = ["v4"] }
+# **`tar`**: Builds the in-memory build-context tarball `docker.rs`'s
+# `build_context_tar` hands to `bollard`'s `build_image`.
 tar = "0.4"
+# **`dockerignore`** (local workspace crate, not external): `.dockerignore`
+# pattern matching — see the Architecture section above.
 dockerignore = { path = "../dockerignore" }
+# **`path-clean`**: Lexically normalizes (`.`/`..`/trailing-slash) resolved
+# paths in `ratect-core/src/config.rs` (`resolve_path`, and the built-in
+# `batect.project_directory` config variable) — `PathBuf::join` alone
+# doesn't do this, so without it a `base_path` like `""` or `"."` (both
+# common — see `ratect-compat/src/main.rs`'s `-f` handling) would leave a
+# stray `.` or trailing slash in every path/expression derived from it.
+# Already a `dockerignore` dependency; reused here rather than hand-rolling
+# the same normalization twice.
 path-clean = "1"
+# **`tokio`**: The asynchronous runtime.
 tokio = { version = "1.52", features = ["full"] }
+# **`crossterm`**: Raw-mode terminal enable/disable and terminal size
+# queries for interactive mode's attach path (`ratect-core/src/docker.rs`).
+# Deliberately not used for its structured `event`/`EventStream` API —
+# that's for TUI-style key/mouse/resize events and would consume/interpret
+# stdin bytes instead of passing them through raw. `std::io::IsTerminal`
+# (stable stdlib) covers the separate "is this actually a terminal" checks;
+# no crate needed for that part. Live terminal-resize forwarding (0.10.0) is
+# built on `tokio::signal::unix`'s `SIGWINCH` listener instead of
+# crossterm's `event`/`EventStream` — a plain OS signal, not a
+# stdin-consuming abstraction, so it doesn't reintroduce the problem this
+# entry warns off; `crossterm::terminal::size()` is still what's actually
+# queried on each signal.
 crossterm = "0.29.0"
+# **`nix`** (`features = ["user"]`): looks up the real host user
+# (`Uid`/`Gid::current`, `User`/`Group::from_uid`/`from_gid`) for
+# `run_as_current_user` (`ratect-core/src/user.rs`) — Unix-only, matching
+# Ratect's own Unix-only testing so far. Already resolved in `Cargo.lock`
+# transitively (via `portable-pty`'s own dependency graph in
+# `ratect-compat`'s dev-dependencies); adding it directly to `ratect-core`
+# was a low-risk addition, not a new unknown quantity.
 nix = { version = "0.31.3", features = ["user"] }
+# **`url`**: parses/rewrites `localhost`/`127.0.0.1`/`::1` proxy URLs to
+# `host.docker.internal` in `ratect-core/src/proxy.rs`. Already resolved in
+# `Cargo.lock` transitively (via `bollard`'s own dependency graph) — same
+# low-risk-addition reasoning as `nix` above.
 url = "2.5.8"
 sha2 = "0.11"
 toml = "1.1"
 regex = "1"
+# **`unicode-width`**: real terminal display-column widths (CJK wide
+# characters count as 2, zero-width/combining marks count as 0) for
+# `ratect-core/src/ui/fancy.rs`'s repaint-width clipping and
+# `ratect-core/src/ui/interleaved.rs`'s prefix-column padding — a plain
+# `char`/byte count under-measures exactly those characters, which let a
+# rendered line silently wrap onto more terminal rows than the fancy
+# logger's own cursor-movement math accounts for. Zero transitive
+# dependencies; the same crate ripgrep/bat/etc. use for this.
 unicode-width = "0.2.2"
+# **`rustls`** (`default-features = false`, matching `bollard`'s own
+# dependency line so no extra features get pulled in beyond what `bollard`'s
+# `ssl` feature already requests): declared directly so `ratect-core` can
+# call `rustls::crypto::ring::default_provider().install_default()` itself
+# (see the `bollard` entry above) — Rust's strict-deps rule means a crate
+# can't `use` another crate's items unless it's a direct dependency of its
+# own, even when (as here) that crate is already fully resolved
+# transitively.
 rustls = { version = "0.23", default-features = false }
 # Both only ever built under the `schema` feature (below) — see
 # src/schema.rs. `jsonschema` is used by that module's own tests only (it
@@ -37,8 +154,55 @@ rustls = { version = "0.23", default-features = false }
 # a JSON-schema validator, and its transitive tree, in every `cargo test`
 # run that has no use for it. `default-features = false` drops `reqwest` and
 # a TLS stack: nothing here ever resolves a remote `$ref`.
+# **`schemars`**, **`jsonschema`** (`ratect-core`, both optional — enabled
+# only by its non-default `schema` feature): generate the committed JSON
+# schema for `batect.yml` (`ratect-core/src/schema.rs`) and, in that
+# module's own tests, validate the repository's fixtures against it.
+# Optional so neither shipped binary carries the derived `JsonSchema` impls
+# or a JSON-schema validator; `jsonschema` is declared as an optional
+# *normal* dependency despite being test-only because Cargo doesn't allow
+# optional `[dev-dependencies]`, and `default-features = false` keeps
+# `reqwest` and a TLS stack out of the tree (nothing here ever resolves a
+# remote `$ref`). Ratect's first optional dependencies — every other entry
+# above is unconditional.
 schemars = { version = "1.2", optional = true }
 jsonschema = { version = "0.48", optional = true, default-features = false }
+# **`ssh-key`** (`default-features = false`, features
+# `std`/`ed25519`/`rsa`/`p256`/`p384`/`p521`/`getrandom`), plus
+# **`ssh-encoding`**, **`signature`** and **`rsa`**: parse OpenSSH private
+# key files and sign with them, for `build_ssh`'s `paths`
+# (`ratect-core/src/ssh_agent.rs`, 0.25.0). Ratect's **only cryptographic
+# dependency**, taken knowingly —
+# [decisions/0005](https://github.com/or1can/ratect/blob/main/decisions/0005-build-ssh-keyring-placement.md)
+# chose owning that choice over pushing it onto the `bollard` fork, and it
+# deserves proportionate scrutiny plus an eye on advisories (`cargo audit`
+# already runs in CI). Feature selection is the whole cost control: this is
+# the RustCrypto tree, so it's granular by design (~45 crates), and each
+# flag is a deliberate call — `encryption` is **off**, which alone saves ~16
+# crates and matches Go BuildKit's own inability to use a
+# passphrase-protected key; `p384`/`p521` cost only two crates on top of
+# `p256`, so all of ECDSA is covered rather than an arbitrary slice of it;
+# `dsa` is off (removed from OpenSSH entirely). `std` is what provides
+# `PrivateKey::read_openssh_file`. **`getrandom` is load-bearing and looks
+# redundant** — it is what puts `OsRng` in `rand_core`, and `OsRng` is what
+# `rsa_signature` passes to `try_sign_with_rng`, the blinded path
+# `.cargo/audit.toml` names as the sole mitigation for RUSTSEC-2023-0071.
+# Removing the flag compiles today only because `p256`/`p384`/`p521` happen
+# to enable `rand_core/getrandom` themselves; the day the curve features
+# change, blinding would go with them and nothing would say so. Declared
+# explicitly for that reason, not because the build currently needs it. The
+# other three add **no** crates — all are already in `ssh-key`'s own tree —
+# and exist only because Rust's strict-deps rule won't let us `use` a
+# transitive dependency's items: `ssh-encoding` for the `Encode`/`Decode`
+# traits, `signature` for the `Signer`/`Verifier` traits (`ssh-key`
+# re-exports neither), and `rsa` to sign under `rsa-sha2-256` and to work
+# around 0.6.7's broken RSA key conversion. **Take SHA-2 from
+# `ssh_key::sha2`, not from `ratect-core`'s own direct `sha2`**: the two are
+# different major versions (0.10 vs 0.11) and only the re-export matches
+# what `rsa` expects. Not `ssh-agent-lib`: it would have added ~5 more
+# crates including a socket-activation tree (`service-binding`/`raunch`) for
+# a use case we don't have, while still leaving the per-algorithm signing to
+# us — and this module has to own socket creation anyway, to make it `0700`.
 ssh-key = { version = "0.6.7", default-features = false, features = ["std", "ed25519", "rsa", "p256", "p384", "p521", "getrandom"] }
 rsa = "0.9.10"
 ssh-encoding = "0.2"
@@ -59,9 +223,40 @@ schema = ["dep:schemars", "dep:jsonschema"]
 # on top of the `full` set above for test builds only — not linked into the
 # real binary.
 [dev-dependencies]
+# **`bytes`** (`ratect-core` dev-dependency only): constructs
+# `bollard::container::LogOutput` values directly in `docker.rs`'s own unit
+# tests (`drain_interleaved_log_stream`'s tests, which feed it a synthetic
+# log stream via `futures::stream::iter` instead of needing a live daemon) —
+# `LogOutput`'s variants wrap a `bytes::Bytes` message, which bollard itself
+# doesn't re-export. Already resolved in `Cargo.lock` transitively (via
+# `bollard`/`hyper`'s own dependency graph) — same low-risk-addition
+# reasoning as `nix`/`url` above.
 bytes = "1.12.1"
 tokio = { version = "1.52", features = ["test-util"] }
+# **`rcgen`**, **`tokio-rustls`**, **`time`** (`ratect-core`
+# dev-dependencies only): generate a throwaway self-signed CA + leaf
+# certificate/key pair at test run time and run a real in-process TLS server
+# against it, for `docker.rs`'s `--docker-tls`/`-verify` tests
+# (`connect_over_tls_completes_a_real_handshake_against_a_valid_certificate`/`_rejects_an_expired_certificate`)
+# — proving an actual `rustls` handshake succeeds against a valid
+# certificate and fails against an expired one, through Ratect's own
+# `connect` path, not just that a client object builds. Generating at test
+# time (rather than a fixed PEM committed to the repo) means validity is
+# always computed relative to "now" — a static embedded certificate would
+# eventually expire on its own and fail with a stale, disconnected-looking
+# failure years later, unrelated to whatever change actually triggered it;
+# `rcgen` also makes it trivial to generate a deliberately-already-expired
+# certificate on demand for the rejection test. All three already resolved
+# transitively (via `bollard`'s `ssl` feature and its own `rustls`
+# dependency) — low-risk additions, not new unknown quantities.
 rcgen = "0.14"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 time = "0.3"
+# **`rand_chacha`** (`ratect-core` dev-dependency only): a deterministic RNG
+# for generating Ed25519 test keys in `ssh_agent.rs`'s unit tests, so a
+# failure is always the same failure. Already resolved transitively (via
+# `ssh-key`'s own tree) — same low-risk-addition reasoning as
+# `nix`/`url`/`bytes` above. RSA test keys are *not* generated this way: a
+# 2048-bit keygen takes tens of seconds in an unoptimized test build, so
+# those tests use a throwaway key embedded in the test module instead.
 rand_chacha = "0.3"

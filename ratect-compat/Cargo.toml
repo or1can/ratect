@@ -7,6 +7,7 @@ license = "Apache-2.0"
 repository = "https://github.com/or1can/ratect"
 
 [dependencies]
+# **`clap`**: Command-line argument parsing with derive support.
 clap = { version = "4.6", features = ["derive"] }
 tokio = { version = "1.52", features = ["full"] }
 anyhow = "1.0"
@@ -15,4 +16,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ratect-core = { path = "../ratect-core" }
 
 [dev-dependencies]
+# **`portable-pty`** (dev-dependency, `ratect-compat/tests/cli.rs` only):
+# creates a real (emulated) pseudo-terminal pair in-process, so an
+# integration test can spawn `ratect-compat` attached to something that
+# genuinely passes `IsTerminal` checks and actually drive an interactive
+# session — no existing test infrastructure here could otherwise exercise
+# that path at all. Works in headless CI; no real terminal required. A
+# reusable pattern worth reaching for again for any other feature that's
+# only meaningfully testable from a real terminal.
 portable-pty = "0.9.0"
