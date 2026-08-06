@@ -1053,7 +1053,7 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     `ratect`'s own `a_base_only_container_needs_no_image_and_validates`
     already existed to prevent. A validation gap rather than a feature gap,
     so it doesn't change the parity tables.
-  - **More of Batect's journey corpus** — the [conformance phase](#ratect-compat)
+  - ~~**More of Batect's journey corpus** — the [conformance phase](#ratect-compat)
     above hasn't moved since 0.23.0, since 0.24.0 was really a `ratect` release
     that carried three shared-core config fixes along. Takes the deferrals 0.23.0
     named: the `cache-mount` *directory* variant, git includes, and the three
@@ -1062,7 +1062,28 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     verbatim — the deviation is worth recording in the harness where it's visible).
     The Windows-container project stays out, still: it's unreachable until
     [First-class Cross-platform Support](#rust-enhancements) starts, which is not
-    this release.
+    this release.~~ — done: the corpus now vendors **28 of Batect's 29** journey
+    projects (31 cases, since `cache-mount` runs under both cache types and
+    `simple-task-using-dockerfile` also under `--tag-image`). Only
+    `windows-container` remains, still out of reach until cross-platform work
+    starts.
+
+    **It caught its first bug, which is the entire justification for having
+    it**: `run-as-current-user-with-cache` failed outright, because a fresh
+    Docker volume is root-owned and Ratect only ever took ownership of
+    `home_directory`, never of a `cache` mount — so the container mounted the
+    cache successfully and then failed on its first write. Batect handles both
+    through one `uploadDirectory`; ours now does too. Fixed separately from the
+    corpus commit, with an engine-level test, since the conformance case is
+    `#[ignore]`d and would not have protected it in CI.
+
+    Two projects needed the one adaptation 0.23.0 predicted: `/output` is bound
+    to Batect's own Gradle build tree upstream, so both now use
+    `<{batect.project_directory}/output`. Recorded in the corpus README and in
+    the fixtures themselves — an unremarked edit to a vendored fixture turns
+    "Batect's own scenario passes" into "our version of it passes".
+    `config-with-include` was also picked up, which the entry above didn't name.
+
 - **0.26.0** (planned) — **Proxies that point at the host on Linux**. Closes
   [batect#10](https://github.com/batect/batect/issues/10), Batect's oldest open
   issue (8 years) and one it never fixed. Not a parity gap — Ratect already

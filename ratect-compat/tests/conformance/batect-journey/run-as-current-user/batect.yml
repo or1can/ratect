@@ -1,0 +1,23 @@
+project_name: run-as-current-user-test
+
+containers:
+  build-env:
+    image: alpine:3.18.3
+    volumes:
+      # ADAPTED FROM BATECT: upstream points this at its own Gradle build
+      # tree (../../../../build/test-results/journey-tests/run-as-current-user), which
+      # does not exist here. The harness creates and removes this directory
+      # around the run. Nothing else in this project is changed.
+      - local: <{batect.project_directory}/output
+        container: /output
+      - local: .
+        container: /scripts
+    run_as_current_user:
+      enabled: true
+      home_directory: /home/special-place
+
+tasks:
+  the-task:
+    run:
+      container: build-env
+      command: /scripts/test.sh

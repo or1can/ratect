@@ -9,3 +9,9 @@
 # The file itself says not to commit it: the key is per-checkout, and sharing
 # one would point unrelated machines at the same Docker volumes.
 .batect/
+
+# The `/output` bind the two run-as-current-user conformance projects write
+# into. Upstream Batect points that mount at its own Gradle build tree; here
+# the harness creates and removes a project-local directory instead, so a
+# crashed run leaves one behind rather than dirtying `git status`.
+ratect-compat/tests/conformance/batect-journey/*/output/

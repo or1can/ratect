@@ -18,6 +18,25 @@ never change, which is exactly what a conformance corpus wants, and there's no
 network or submodule dependency. Attribution is recorded in the repository's
 [`NOTICE`](../../../NOTICE) file, alongside the `dockerignore` port.
 
+## Deviations from the vendored originals
+
+Two projects are **not** verbatim, and each says so in the file itself:
+`run-as-current-user` and `run-as-current-user-with-mount` bind `/output` to
+`../../../../build/test-results/journey-tests/<name>` upstream — a path inside
+Batect's own Gradle build tree, which does not exist here. Both now use
+`<{batect.project_directory}/output`, which the harness resets before each run
+and `.gitignore` covers. Nothing else in either project changes, and the
+assertion that matters — that the file the container creates is owned by the
+invoking user rather than root — is unaffected by where it is written.
+
+Recorded here rather than only in a commit message because a conformance corpus
+is only as trustworthy as its provenance: an unremarked edit to a vendored
+fixture turns "Batect's own scenario passes" into "our version of it passes".
+
+`git-include` is verbatim but **needs network access on its first run** — it
+clones a bundle from GitHub, then reuses `~/.ratect/incl`. It is the only case
+here that reaches outside Docker.
+
 ## What is (and isn't) asserted
 
 Batect's own assertions are Kotlin and often check Batect's *exact* output

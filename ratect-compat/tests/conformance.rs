@@ -662,12 +662,20 @@ fn combined_output(output: &std::process::Output) -> String {
 /// clear a volume a crashed earlier run left behind just as well as the one
 /// this test creates, so the first run below reliably starts empty.
 fn remove_cache_mount_volumes() {
+    remove_cache_volumes_named("cache-mount-journey-test-cache");
+}
+
+/// Removes every cache volume for one configured cache name, whatever
+/// project key produced it — see [`remove_cache_mount_volumes`] for why the
+/// key is deliberately not matched on.
+fn remove_cache_volumes_named(cache_name: &str) {
+    let suffix = format!("batect-cache-{cache_name}");
     let listed = Command::new("docker")
         .args(["volume", "ls", "-q"])
         .output()
         .expect("failed to list docker volumes");
     for name in String::from_utf8_lossy(&listed.stdout).lines() {
-        if name.ends_with("batect-cache-mount-journey-test-cache") {
+        if name.ends_with(&suffix) {
             let _ = Command::new("docker")
                 .args(["volume", "rm", "-f", name])
                 .output();
@@ -675,11 +683,198 @@ fn remove_cache_mount_volumes() {
     }
 }
 
+/// The container user/group names `run_as_current_user` should map onto —
+/// the host's own, which is the entire point of the feature. Batect reads
+/// these from the JVM and `id -gn`; the same two shell-outs here, so the
+/// expectation is derived from the host rather than hard-coded.
+fn host_user_and_group() -> (String, String) {
+    let run = |args: &[&str]| {
+        let out = Command::new("id")
+            .args(args)
+            .output()
+            .expect("failed to run id");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    (run(&["-un"]), run(&["-gn"]))
+}
+
+/// The project-local directory standing in for Batect's own build tree —
+/// see the note in these projects' `batect.yml`. Removed before the run so
+/// a previous run's `created-file` can't satisfy the assertion, and left in
+/// place afterwards so a failure can be inspected (`.gitignore`d, and the
+/// next run clears it).
+fn reset_output_dir(project: &str) -> PathBuf {
+    let dir = project_dir(project).join("output");
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+/// Asserts the shared shape of the two `run_as_current_user` projects that
+/// write into `/output`: the container ran as the host's own user, saw its
+/// `home_directory` owned by that user, and the file it created on the host
+/// belongs to the invoking user rather than root.
+///
+/// The ownership half is the one that matters and the one a
+/// pure-output assertion would miss — a container running as root still
+/// prints plausible-looking lines, but leaves a root-owned file the
+/// developer then cannot delete. That is the bug `run_as_current_user`
+/// exists to prevent, so it is checked on the host, not in the container.
+fn run_as_current_user_case(project: &str) {
+    let (user, group) = host_user_and_group();
+    let output_dir = reset_output_dir(project);
+
+    let output = ratect_command()
+        .current_dir(project_dir(project))
+        .args(["-f", "batect.yml", "the-task"])
+        .output()
+        .expect("failed to run ratect-compat");
+    let combined = combined_output(&output);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the task should succeed — output:\n{combined}"
+    );
+    for expected in [
+        format!("User: {user}"),
+        format!("Group: {group}"),
+        "Home directory: /home/special-place".to_string(),
+        "Home directory exists".to_string(),
+        format!("Home directory owned by user: {user}"),
+        format!("Home directory owned by group: {group}"),
+        "/etc/hosts exists".to_string(),
+    ] {
+        assert!(
+            combined.contains(&expected),
+            "expected {expected:?} in output:\n{combined}"
+        );
+    }
+
+    let created = output_dir.join("created-file");
+    let metadata = std::fs::metadata(&created)
+        .unwrap_or_else(|e| panic!("{} should exist: {e}", created.display()));
+    assert_eq!(
+        std::os::unix::fs::MetadataExt::uid(&metadata),
+        nix_getuid(),
+        "the file the container created should belong to the invoking user, \
+         not root — output:\n{combined}"
+    );
+}
+
+/// The invoking user's real uid. Deliberately not `nix`, which
+/// `ratect-compat` doesn't depend on — `id -u` is already being shelled out
+/// to above.
+fn nix_getuid() -> u32 {
+    let out = Command::new("id")
+        .arg("-u")
+        .output()
+        .expect("failed to run id -u");
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse()
+        .expect("id -u should print a number")
+}
+
+/// `run-as-current-user`: the task container runs as the host user, with a
+/// `home_directory` Ratect creates and chowns inside the container.
+#[test]
+#[ignore]
+fn run_as_current_user() {
+    run_as_current_user_case("run-as-current-user");
+}
+
+/// `run-as-current-user-with-mount`: the same, but the project directory is
+/// bind-mounted *inside* the container's home directory, so Ratect's home
+/// setup has to coexist with a mount rather than owning the whole tree.
+#[test]
+#[ignore]
+fn run_as_current_user_with_mount() {
+    run_as_current_user_case("run-as-current-user-with-mount");
+}
+
+/// `run-as-current-user-with-cache`: three `type: cache` mounts under
+/// `run_as_current_user` — one outside the home directory, one directly
+/// inside it, and one nested a level deeper. All three must be writable by
+/// the mapped user, which is the case a cache created root-owned would fail.
+#[test]
+#[ignore]
+fn run_as_current_user_with_cache() {
+    for name in [
+        "run-as-current-user-with-cache-test-normal-cache",
+        "run-as-current-user-with-cache-test-nested-cache",
+        "run-as-current-user-with-cache-test-deeply-nested-cache",
+    ] {
+        remove_cache_volumes_named(name);
+    }
+
+    let output = ratect_command()
+        .current_dir(project_dir("run-as-current-user-with-cache"))
+        .args(["-f", "batect.yml", "the-task"])
+        .output()
+        .expect("failed to run ratect-compat");
+    let combined = combined_output(&output);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the task should succeed — output:\n{combined}"
+    );
+    for expected in [
+        "/cache exists",
+        "/cache/created-file created",
+        "/home/special-place/cache exists",
+        "/home/special-place/cache/created-file created",
+        "/home/special-place/subdir/cache exists",
+        "/home/special-place/subdir/cache/created-file created",
+    ] {
+        assert!(
+            combined.contains(expected),
+            "expected {expected:?} in output:\n{combined}"
+        );
+    }
+}
+
+/// `config-with-include`: a root file that pulls its containers and tasks
+/// from a local `include`, and whose included file mounts a script using
+/// `<{batect.project_directory}`. Proves the built-in resolves to the *root*
+/// project directory rather than the included file's own — the one thing an
+/// include can silently get wrong while still loading cleanly.
+#[test]
+#[ignore]
+fn config_with_include() {
+    run_case(&ConformanceCase::new(
+        "config-with-include",
+        &["the-task"],
+        123,
+        &["This is some output from the task"],
+    ));
+}
+
+/// `git-include`: the root file's only content is a `type: git` include of
+/// Batect's own `hello-world-bundle` at a pinned tag, so the task being run
+/// exists solely inside the clone.
+///
+/// **Needs network access on first run**, unlike every other case here: it
+/// clones from GitHub. Afterwards it is served from `~/.ratect/incl`, which
+/// this deliberately does not clear — reusing the cache is the behaviour a
+/// second run should exercise, and clearing it would make every run pay for
+/// a clone.
+#[test]
+#[ignore]
+fn git_include() {
+    run_case(&ConformanceCase::new(
+        "git-include",
+        &["say-hello"],
+        0,
+        &["Hello world!"],
+    ));
+}
+
 /// `cache-mount`: a `type: cache` volume mounted at `/cache`, whose contents
 /// persist across runs. Batect's own journey test runs the task twice and
 /// asserts the cache is empty the first time and populated the second. This
-/// is the volume-cache variant (`--cache-type=volume`, the default); the
-/// directory variant writes into the project tree and is left for later.
+/// is the volume-cache variant (`--cache-type=volume`, the default); see
+/// [`cache_mount_persists_across_runs_as_a_directory`] for the other.
 ///
 /// A bespoke test rather than a [`ConformanceCase`]: it runs the task twice
 /// with different expected output per run, and resets the shared cache
@@ -722,6 +917,62 @@ fn cache_mount_persists_across_runs() {
     assert!(
         second_output.contains("File created in task exists"),
         "second run should reuse the cache the first populated — output:\n{second_output}"
+    );
+}
+
+/// The same project under `--cache-type=directory`: the cache is a host
+/// directory under `.batect/caches/` rather than a Docker volume, so
+/// persistence has to hold through an entirely different mechanism.
+///
+/// Worth having as well as the volume variant rather than instead of it —
+/// the two differ in who creates the directory and who owns it, which is
+/// exactly where `run_as_current_user` interacts badly with caches (see
+/// [`run_as_current_user_with_cache`]).
+///
+/// Removes the host directory rather than a volume, so it shares no cleanup
+/// with the volume case.
+#[test]
+#[ignore]
+fn cache_mount_persists_across_runs_as_a_directory() {
+    let caches = project_dir("cache-mount").join(".batect/caches");
+    let reset = || {
+        let _ = std::fs::remove_dir_all(&caches);
+    };
+    reset();
+
+    let run = || {
+        ratect_command()
+            .current_dir(project_dir("cache-mount"))
+            .args(["-f", "batect.yml", "--cache-type=directory", "the-task"])
+            .output()
+            .expect("failed to run ratect-compat")
+    };
+
+    let first = run();
+    let first_output = combined_output(&first);
+    let second = run();
+    let second_output = combined_output(&second);
+
+    reset();
+
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "first run should succeed — output:\n{first_output}"
+    );
+    assert!(
+        first_output.contains("File created in task does not exist, creating it"),
+        "first run should see an empty cache — output:\n{first_output}"
+    );
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "second run should succeed — output:\n{second_output}"
+    );
+    assert!(
+        second_output.contains("File created in task exists"),
+        "second run should reuse the directory the first populated — \
+         output:\n{second_output}"
     );
 }
 
