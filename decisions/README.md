@@ -57,4 +57,5 @@ never delete one (same append-only spirit as the roadmap's versioned lists).
 | [0002](0002-runtime-ownership-labels.md) | Runtime-ownership labels (`eu.orican.ratect.*`) | Accepted — shipped (ratect-compat 0.21.1 · ratect 0.2.0) |
 | [0003](0003-ratect-native-config-format.md) | `ratect`-native config format (TOML) | Accepted — shipped (ratect 0.3.0) |
 | [0004](0004-git-include-host-path-trust.md) | Trusting a Git include's host paths (`allow_host_paths`) | Accepted — implemented |
-| [0005](0005-build-ssh-keyring-placement.md) | Where `build_ssh`'s ssh-agent keyring lives | Accepted — planned (ratect-compat 0.25.0) |
+| [0005](0005-build-ssh-keyring-placement.md) | Where `build_ssh`'s ssh-agent keyring lives | Accepted — implemented (ratect-compat 0.25.0) |
+| [0006](0006-code-and-documentation-locality.md) | Where code and its documentation live | Accepted — adopted incrementally |
