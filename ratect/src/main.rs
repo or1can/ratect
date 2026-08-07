@@ -438,7 +438,7 @@ struct RunArgs {
 /// since it's about building images, not reaching a daemon). Its own struct,
 /// flattened into every subcommand that connects, so each picks up the
 /// identical surface rather than growing a second, subtly different copy.
-#[derive(ClapArgs, Debug, Clone)]
+#[derive(ClapArgs, Debug)]
 struct DockerArgs {
     /// Docker host to use, e.g. 'unix:///var/run/docker.sock' or
     /// 'tcp://1.2.3.4:5678'. Defaults to DOCKER_HOST, then Docker's own
@@ -892,7 +892,14 @@ async fn manage_caches(
     let quiet = style == OutputStyle::Quiet;
 
     let wanted: Option<ratect_core::config::CacheScope> = args.scope.map(Into::into);
-    let found = find_caches(&args, cache_type, &project_directory, wanted).await?;
+    // One connection for the whole command: both the listing below and the
+    // removal after it need the same daemon, and each `DockerClient::new`
+    // opens its own.
+    let docker = match cache_type {
+        ratect_core::cache::CacheType::Volume => Some(DockerClient::new(&args.docker.into())?),
+        ratect_core::cache::CacheType::Directory => None,
+    };
+    let found = find_caches(docker.as_ref(), cache_type, &project_directory, wanted).await?;
 
     let Some(names) = names else {
         // Quiet is the machine-readable form, same contract as `tasks list`:
@@ -948,10 +955,12 @@ async fn manage_caches(
     if in_scope(ratect_core::config::CacheScope::Project) {
         removed.extend(match cache_type {
             ratect_core::cache::CacheType::Volume => {
-                let docker = DockerClient::new(&args.docker.clone().into())?;
+                let docker = docker
+                    .as_ref()
+                    .expect("a volume cache needs a Docker client");
                 let key = ratect_core::cache::project_cache_key(&project_directory)?;
                 let prefix = ratect_core::cache::cache_volume_name(&key, "");
-                ratect_core::cache::clean_volume_caches(&docker, &key, &only)
+                ratect_core::cache::clean_volume_caches(docker, &key, &only)
                     .await?
                     .into_iter()
                     .map(|volume| {
@@ -972,8 +981,10 @@ async fn manage_caches(
     if in_scope(ratect_core::config::CacheScope::Shared) {
         removed.extend(match cache_type {
             ratect_core::cache::CacheType::Volume => {
-                let docker = DockerClient::new(&args.docker.into())?;
-                ratect_core::cache::clean_shared_volume_caches(&docker, &only).await?
+                let docker = docker
+                    .as_ref()
+                    .expect("a volume cache needs a Docker client");
+                ratect_core::cache::clean_shared_volume_caches(docker, &only).await?
             }
             ratect_core::cache::CacheType::Directory => {
                 ratect_core::cache::clean_shared_directory_caches(&only)?
@@ -1004,7 +1015,7 @@ async fn manage_caches(
 /// see [`CachesArgs`] for why that matters. A project cache is found by its
 /// `batect-cache-<key>-` prefix, a shared one by `ratect-shared-cache-`.
 async fn find_caches(
-    args: &CachesArgs,
+    docker: Option<&DockerClient>,
     cache_type: ratect_core::cache::CacheType,
     project_directory: &std::path::Path,
     wanted: Option<ratect_core::config::CacheScope>,
@@ -1016,11 +1027,11 @@ async fn find_caches(
 
     match cache_type {
         ratect_core::cache::CacheType::Volume => {
-            let docker = DockerClient::new(&args.docker.clone().into())?;
+            let docker = docker.expect("a volume cache needs a Docker client");
             if want(CacheScope::Project) {
                 let key = ratect_core::cache::project_cache_key(project_directory)?;
                 found.extend(
-                    ratect_core::cache::list_volume_caches(&docker, &key)
+                    ratect_core::cache::list_volume_caches(docker, &key)
                         .await?
                         .into_iter()
                         .map(|name| (name, CacheScope::Project)),
@@ -1028,7 +1039,7 @@ async fn find_caches(
             }
             if want(CacheScope::Shared) {
                 found.extend(
-                    ratect_core::cache::list_shared_volume_caches(&docker)
+                    ratect_core::cache::list_shared_volume_caches(docker)
                         .await?
                         .into_iter()
                         .map(|name| (name, CacheScope::Shared)),
