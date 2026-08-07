@@ -1254,6 +1254,32 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     `cache.rs`'s existing volume/directory resolution; the new question is the
     scope key (today's cache name is namespaced by the project's own cache key,
     and a shared one deliberately isn't).
+
+    **Scope, settled before building:**
+
+    - **`scope = "shared"` on a `cache` mount**, defaulting to `"project"`.
+      Names the concept rather than adding a boolean, so a third scope would
+      not need a second field. Native-only and *rejected* in a `batect.yml`
+      rather than ignored — the same treatment `extends` gets, for the same
+      one-way-lock-in reason: a `batect.yml` using it would stop working
+      under real `batect`.
+    - **Scope has to be readable from the storage name, not the config.**
+      `ratect caches` deliberately never loads the configuration file (a
+      cache belongs to the project *directory*, so the verb still works when
+      the config doesn't parse — which is when clearing one is most likely
+      to be wanted). So a shared cache is `ratect-shared-cache-<name>` as a
+      volume and `~/.ratect/caches/<name>` as a directory, beside
+      `~/.ratect/incl`. A deliberate second benefit: that prefix differs
+      from `batect-cache-<key>-`, so `--clean`'s existing project sweep
+      cannot match a shared cache even by accident.
+    - **A cache name has one scope per project**, checked at config load.
+      Two entries sharing a name across scopes would map one name to two
+      volumes, and `caches clean <name>` could not resolve it.
+    - **`caches list` gains a scope column**, with a filter to restrict it;
+      **`caches clean <name>` resolves a name in either scope**, but a bare
+      `caches clean` sweeps *project* caches only. Removing every shared
+      cache by default would discard other projects' state, which is the one
+      thing a shared cache must not do casually.
   - **`allow_nested_git_includes`** (defaulting `false`) — the [Future
     Vision](#future-vision) item: today a bundle reached through a Git include
     can itself declare a further `type: git` include pointing at any remote, with

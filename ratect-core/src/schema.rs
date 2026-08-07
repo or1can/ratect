@@ -184,6 +184,10 @@ fn make_native(json: &mut serde_json::Value) {
         }
     }
 
+    if let Some(definition) = definitions.get_mut("VolumeMount") {
+        add_native_cache_scope(definition);
+    }
+
     // Add the native-only `extends` field to a container — skipped from the
     // compat schema (`Container::extends`'s `schemars(skip)`, since
     // `ratect-compat` rejects it), but valid and worth completing here.
@@ -203,6 +207,49 @@ fn make_native(json: &mut serde_json::Value) {
                                 named container.",
             }),
         );
+    }
+}
+
+/// Adds the native-only `scope` field to the `cache` form of a volume mount.
+///
+/// Kept out of the compat schema for the same reason `ratect-compat` rejects
+/// it at load: Batect has no shared cache, so advertising the field there
+/// would autocomplete a config that real `batect` refuses.
+///
+/// Finds the cache form by its `type` const rather than by index, so
+/// reordering the `oneOf` can't silently attach this to `local` or `tmpfs`.
+fn add_native_cache_scope(definition: &mut serde_json::Value) {
+    let forms = match definition.get_mut("oneOf").and_then(|f| f.as_array_mut()) {
+        Some(forms) => forms,
+        // `drop_string_shorthand` unwraps a single remaining form, so a
+        // one-form definition is the object itself.
+        None => std::slice::from_mut(definition),
+    };
+    for form in forms {
+        let is_cache = form
+            .get("properties")
+            .and_then(|p| p.get("type"))
+            .and_then(|t| t.get("const"))
+            .and_then(serde_json::Value::as_str)
+            == Some("cache");
+        if !is_cache {
+            continue;
+        }
+        if let Some(properties) = form
+            .get_mut("properties")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            properties.insert(
+                "scope".to_string(),
+                serde_json::json!({
+                    "enum": ["project", "shared"],
+                    "description": "Whether this cache is private to the project (the default) \
+                                    or shared with every other project on this machine. A \
+                                    shared cache carries no project key, so one Cargo registry \
+                                    or npm cache is populated once and reused everywhere.",
+                }),
+            );
+        }
     }
 }
 

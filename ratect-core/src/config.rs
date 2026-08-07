@@ -505,6 +505,37 @@ pub struct CacheVolumeMount {
     pub name: String,
     pub container: String,
     pub options: Option<String>,
+    /// Whether this cache belongs to one project or is shared across every
+    /// project on the machine — see [`CacheScope`]. `ratect.toml` only;
+    /// Batect has no equivalent, so a `batect.yml` using it is rejected.
+    pub scope: CacheScope,
+}
+
+/// How widely a [`CacheVolumeMount`] is shared.
+///
+/// Batect has only the project-scoped kind, which is why a bundle wanting a
+/// cache that outlives one project has to spell it as a host path — the
+/// thing [`allow_host_paths`](IncludeEntry) exists to permit and
+/// [decisions/0004](https://github.com/or1can/ratect/blob/main/decisions/0004-git-include-host-path-trust.md)
+/// would rather solve properly.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheScope {
+    /// Private to this project — the Docker volume name carries the
+    /// project's own cache key, so two projects declaring the same cache
+    /// name get different storage. The default, and Batect's only
+    /// behaviour.
+    #[default]
+    Project,
+    /// Shared by every project on the machine that names it. The storage
+    /// carries no project key, which is the whole point: one Cargo registry
+    /// or npm cache, populated once.
+    ///
+    /// Deliberately never removed by a bare `ratect caches clean`, which
+    /// sweeps this project's caches — discarding storage other projects are
+    /// still using should take naming it.
+    Shared,
 }
 
 /// An in-memory filesystem mount — Batect's `tmpfs` mount type. Lost when
@@ -586,6 +617,7 @@ impl<'de> Deserialize<'de> for VolumeMount {
                 let mut options: Option<String> = None;
                 let mut name: Option<String> = None;
                 let mut mount_type: Option<String> = None;
+                let mut scope: Option<CacheScope> = None;
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "local" => local = Some(map.next_value()?),
@@ -593,10 +625,11 @@ impl<'de> Deserialize<'de> for VolumeMount {
                         "options" => options = Some(map.next_value()?),
                         "name" => name = Some(map.next_value()?),
                         "type" => mount_type = Some(map.next_value()?),
+                        "scope" => scope = Some(map.next_value()?),
                         other => {
                             return Err(serde::de::Error::unknown_field(
                                 other,
-                                &["local", "container", "options", "name", "type"],
+                                &["local", "container", "options", "name", "type", "scope"],
                             ))
                         }
                     }
@@ -606,6 +639,11 @@ impl<'de> Deserialize<'de> for VolumeMount {
 
                 match mount_type.as_deref().unwrap_or("local") {
                     "local" => {
+                        if scope.is_some() {
+                            return Err(serde::de::Error::custom(
+                                "Field 'scope' is only permitted for cache mounts.",
+                            ));
+                        }
                         if name.is_some() {
                             return Err(serde::de::Error::custom(
                                 "Field 'name' is not permitted for local path mounts.",
@@ -630,9 +668,15 @@ impl<'de> Deserialize<'de> for VolumeMount {
                             name,
                             container,
                             options,
+                            scope: scope.unwrap_or_default(),
                         }))
                     }
                     "tmpfs" => {
+                        if scope.is_some() {
+                            return Err(serde::de::Error::custom(
+                                "Field 'scope' is only permitted for cache mounts.",
+                            ));
+                        }
                         if local.is_some() {
                             return Err(serde::de::Error::custom(
                                 "Field 'local' is not permitted for tmpfs mounts.",
@@ -3094,6 +3138,7 @@ async fn load_project_impl(
     };
     if format == ConfigFormat::Compat {
         reject_extends_in_compat(&loaded.config)?;
+        reject_shared_caches_in_compat(&loaded.config)?;
         validate_image_sources_in_compat(&loaded.config.containers)?;
     }
     let base_path = base_path_for(config_file);
@@ -3106,6 +3151,9 @@ async fn load_project_impl(
     if format == ConfigFormat::Native {
         resolve_extends(&mut config.containers)?;
     }
+    // After `extends`, so an inherited cache mount is judged on the scope
+    // the container effectively has.
+    reject_conflicting_cache_scopes(&config)?;
     Ok(LoadedProject {
         config,
         project_directory,
@@ -3198,6 +3246,68 @@ fn reject_extends_in_compat(config: &Config) -> Result<()> {
             "The container '{name}' uses 'extends', which is a ratect-native field \
              not supported in Batect-compatible configuration."
         );
+    }
+    Ok(())
+}
+
+/// Rejects `scope` on a cache mount in a `batect.yml`, for the same reason
+/// as [`reject_extends_in_compat`]: Batect has no such field, so accepting
+/// it would let a config be written here that real `batect` refuses. The
+/// default (`Project`) is Batect's only behaviour, so nothing is lost —
+/// this only rejects a file that asked for the native one.
+fn reject_shared_caches_in_compat(config: &Config) -> Result<()> {
+    let mut offenders: Vec<(&str, &str)> = config
+        .containers
+        .iter()
+        .flat_map(|(container_name, container)| {
+            container
+                .volumes
+                .iter()
+                .flatten()
+                .filter_map(move |volume| match volume {
+                    VolumeMount::Cache(cache) if cache.scope == CacheScope::Shared => {
+                        Some((container_name.as_str(), cache.name.as_str()))
+                    }
+                    _ => None,
+                })
+        })
+        .collect();
+    offenders.sort_unstable();
+    if let Some((container_name, cache_name)) = offenders.first() {
+        anyhow::bail!(
+            "The container '{container_name}' declares the cache '{cache_name}' with \
+             'scope: shared', which is a ratect-native field not supported in \
+             Batect-compatible configuration."
+        );
+    }
+    Ok(())
+}
+
+/// Rejects a project that gives one cache name two different scopes.
+///
+/// The name maps to storage — a project-scoped `cargo` and a shared `cargo`
+/// are two different volumes — so one name meaning both is incoherent, and
+/// `ratect caches clean cargo` could not say which was meant. Checked across
+/// the whole project rather than per container, because two *containers*
+/// naming the same cache is the ordinary way to share one between them.
+fn reject_conflicting_cache_scopes(config: &Config) -> Result<()> {
+    let mut seen: std::collections::BTreeMap<&str, CacheScope> = std::collections::BTreeMap::new();
+    for container in config.containers.values() {
+        for volume in container.volumes.iter().flatten() {
+            let VolumeMount::Cache(cache) = volume else {
+                continue;
+            };
+            match seen.get(cache.name.as_str()) {
+                Some(scope) if *scope != cache.scope => anyhow::bail!(
+                    "The cache '{}' is declared with both 'project' and 'shared' scope. \
+                     A cache name refers to one piece of storage, so it can only have one.",
+                    cache.name
+                ),
+                _ => {
+                    seen.insert(cache.name.as_str(), cache.scope);
+                }
+            }
+        }
     }
     Ok(())
 }

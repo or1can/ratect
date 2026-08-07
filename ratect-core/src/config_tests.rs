@@ -1587,6 +1587,7 @@ tasks:
             name: "gradle-cache".to_string(),
             container: "/root/.gradle".to_string(),
             options: Some("rw".to_string()),
+            scope: Default::default(),
         })]
     );
 }
@@ -1950,6 +1951,7 @@ fn resolve_expressions_does_not_touch_cache_volume_mounts() {
         name: "gradle-cache".to_string(),
         container: "/root/.gradle".to_string(),
         options: None,
+        scope: Default::default(),
     })]);
     let mut config = Config {
         project_name: "demo".to_string(),
@@ -1971,6 +1973,7 @@ fn resolve_expressions_does_not_touch_cache_volume_mounts() {
             name: "gradle-cache".to_string(),
             container: "/root/.gradle".to_string(),
             options: None,
+            scope: Default::default(),
         })
     );
 }
@@ -2449,6 +2452,7 @@ fn resolve_expressions_rejects_a_relative_cache_path_under_run_as_current_user()
         name: "c".to_string(),
         container: "relative/path".to_string(),
         options: None,
+        scope: Default::default(),
     })]);
     let mut config = Config {
         project_name: "demo".to_string(),
@@ -2503,6 +2507,70 @@ fn resolve_expressions_accepts_a_non_slash_local_mount_path() {
             no_host_env,
         )
         .expect("a Windows-style container path should still load");
+}
+
+/// `scope` is `ratect`-native, so a `batect.yml` using it is rejected rather
+/// than silently given the default — the same treatment `extends` gets, and
+/// for the same reason: a config accepted here that real `batect` refuses is
+/// one-way lock-in, which is the whole thing the compat binary exists to
+/// avoid.
+#[tokio::test]
+async fn a_shared_cache_is_rejected_in_a_batect_yml() {
+    let dir = std::env::temp_dir().join(format!("ratect-scope-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    volumes:\n      \
+         - type: cache\n        name: registry\n        container: /registry\n        \
+         scope: shared\ntasks:\n  t:\n    run:\n      container: app\n",
+    )
+    .unwrap();
+
+    let err = load_project(&dir.join("batect.yml"), &HashMap::new())
+        .await
+        .expect_err("scope is native-only");
+    std::fs::remove_dir_all(&dir).ok();
+
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("not supported in Batect-compatible configuration"),
+        "unexpected error: {message}"
+    );
+}
+
+/// One cache name means one piece of storage, so a project cannot give the
+/// same name two scopes — `caches clean <name>` would have no way to resolve
+/// it. Two *containers* naming one cache is the ordinary way to share it
+/// between them, so the check is per project rather than per container.
+#[test]
+fn resolve_expressions_rejects_one_cache_name_with_two_scopes() {
+    let cache = |scope| {
+        VolumeMount::Cache(CacheVolumeMount {
+            name: "registry".to_string(),
+            container: "/registry".to_string(),
+            options: None,
+            scope,
+        })
+    };
+    let mut first = container_with_build("./docker", HashMap::new());
+    first.volumes = Some(vec![cache(CacheScope::Project)]);
+    let mut second = container_with_build("./docker", HashMap::new());
+    second.volumes = Some(vec![cache(CacheScope::Shared)]);
+
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers: HashMap::from([("a".to_string(), first), ("b".to_string(), second)]),
+        tasks: HashMap::new(),
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let err = reject_conflicting_cache_scopes(&config)
+        .expect_err("one name cannot mean two pieces of storage");
+    assert!(
+        format!("{err:#}").contains("both 'project' and 'shared' scope"),
+        "unexpected error: {err:#}"
+    );
 }
 
 fn container_with_build_ssh(agents: Vec<SshAgent>) -> Container {

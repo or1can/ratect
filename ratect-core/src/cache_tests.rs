@@ -72,6 +72,7 @@ fn resolve_cache_mount_builds_a_volume_bind_string() {
         name: "gradle-cache".to_string(),
         container: "/root/.gradle".to_string(),
         options: None,
+        scope: Default::default(),
     };
 
     let resolved = resolve_cache_mount(&options, "abc123", &mount).unwrap();
@@ -92,6 +93,7 @@ fn resolve_cache_mount_includes_options_when_given() {
         name: "gradle-cache".to_string(),
         container: "/root/.gradle".to_string(),
         options: Some("ro".to_string()),
+        scope: Default::default(),
     };
 
     let resolved = resolve_cache_mount(&options, "abc123", &mount).unwrap();
@@ -115,6 +117,7 @@ fn resolve_cache_mount_creates_and_uses_a_host_directory_for_directory_type() {
         name: "gradle-cache".to_string(),
         container: "/root/.gradle".to_string(),
         options: None,
+        scope: Default::default(),
     };
 
     let resolved = resolve_cache_mount(&options, "abc123", &mount).unwrap();
@@ -143,7 +146,8 @@ fn matching_cache_volumes_matches_only_this_projects_prefix() {
         "some-unrelated-volume".to_string(),
     ];
 
-    let matched = matching_cache_volumes(&existing, "abc123", &HashSet::new());
+    let matched =
+        matching_cache_volumes(&existing, &cache_volume_name("abc123", ""), &HashSet::new());
 
     assert_eq!(matched, vec!["batect-cache-abc123-gradle-cache"]);
 }
@@ -156,7 +160,7 @@ fn matching_cache_volumes_restricts_to_the_only_set_when_given() {
     ];
     let only = HashSet::from(["npm-cache".to_string()]);
 
-    let matched = matching_cache_volumes(&existing, "abc123", &only);
+    let matched = matching_cache_volumes(&existing, &cache_volume_name("abc123", ""), &only);
 
     assert_eq!(matched, vec!["batect-cache-abc123-npm-cache"]);
 }
@@ -165,7 +169,8 @@ fn matching_cache_volumes_restricts_to_the_only_set_when_given() {
 fn matching_cache_volumes_is_empty_when_nothing_matches_the_prefix() {
     let existing = vec!["some-unrelated-volume".to_string()];
 
-    let matched = matching_cache_volumes(&existing, "abc123", &HashSet::new());
+    let matched =
+        matching_cache_volumes(&existing, &cache_volume_name("abc123", ""), &HashSet::new());
 
     assert!(matched.is_empty());
 }
@@ -244,4 +249,54 @@ fn clean_directory_caches_does_nothing_when_the_cache_directory_does_not_exist()
     assert!(removed.is_empty());
 
     fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A shared cache's volume name carries no project key — that *is* the
+/// feature. Two projects resolving the same shared cache must land on one
+/// volume, where two projects resolving the same project-scoped cache must
+/// not.
+#[test]
+fn a_shared_cache_resolves_to_the_same_volume_for_every_project() {
+    let mount = CacheVolumeMount {
+        name: "registry".to_string(),
+        container: "/registry".to_string(),
+        options: None,
+        scope: crate::config::CacheScope::Shared,
+    };
+    let options = CacheOptions {
+        cache_type: CacheType::Volume,
+        project_directory: PathBuf::from("/irrelevant"),
+    };
+
+    let first = resolve_cache_mount(&options, "project-one-key", &mount).unwrap();
+    let second = resolve_cache_mount(&options, "project-two-key", &mount).unwrap();
+
+    assert_eq!(first, "ratect-shared-cache-registry:/registry");
+    assert_eq!(first, second);
+}
+
+/// The prefixes are what keep the two scopes apart in storage, and what
+/// stops `--clean`'s project sweep touching a shared cache. Pinned as
+/// literals: deriving the expectation from the same function under test
+/// would agree with any value it produced.
+#[test]
+fn the_two_scopes_use_prefixes_that_cannot_match_each_other() {
+    let project = cache_volume_name("some-key", "registry");
+    let shared = shared_cache_volume_name("registry");
+
+    assert_eq!(project, "batect-cache-some-key-registry");
+    assert_eq!(shared, "ratect-shared-cache-registry");
+
+    // The sweep `--clean` performs, against both names.
+    let existing = vec![project.clone(), shared.clone()];
+    let matched = matching_cache_volumes(
+        &existing,
+        &cache_volume_name("some-key", ""),
+        &HashSet::new(),
+    );
+    assert_eq!(
+        matched,
+        vec![project.as_str()],
+        "a project sweep must never match a shared cache"
+    );
 }

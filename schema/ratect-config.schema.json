@@ -829,6 +829,13 @@
               "description": "Docker mount options (for example \"ro\").",
               "type": "string"
             },
+            "scope": {
+              "description": "Whether this cache is private to the project (the default) or shared with every other project on this machine. A shared cache carries no project key, so one Cargo registry or npm cache is populated once and reused everywhere.",
+              "enum": [
+                "project",
+                "shared"
+              ]
+            },
             "type": {
               "const": "cache",
               "description": "A cache that persists between ratect invocations — a Docker volume by default, or a directory under .batect/caches with --cache-type=directory."

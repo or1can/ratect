@@ -1652,11 +1652,13 @@ async fn cache_mounts_are_owned_by_the_mapped_user() {
             name: "shared".to_string(),
             container: "/cache".to_string(),
             options: None,
+            scope: Default::default(),
         }),
         crate::config::VolumeMount::Cache(crate::config::CacheVolumeMount {
             name: "nested".to_string(),
             container: "/home/container-user/cache".to_string(),
             options: None,
+            scope: Default::default(),
         }),
     ]);
     let mut containers = HashMap::new();
@@ -1709,16 +1711,19 @@ async fn a_read_only_cache_mount_is_not_owned_by_the_mapped_user() {
             name: "writable".to_string(),
             container: "/cache".to_string(),
             options: None,
+            scope: Default::default(),
         }),
         crate::config::VolumeMount::Cache(crate::config::CacheVolumeMount {
             name: "readonly".to_string(),
             container: "/ro-cache".to_string(),
             options: Some("ro".to_string()),
+            scope: Default::default(),
         }),
         crate::config::VolumeMount::Cache(crate::config::CacheVolumeMount {
             name: "readonly-with-friends".to_string(),
             container: "/ro-z-cache".to_string(),
             options: Some("z,ro".to_string()),
+            scope: Default::default(),
         }),
     ]);
     let mut containers = HashMap::new();

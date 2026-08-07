@@ -136,6 +136,34 @@ pub fn cache_volume_name(project_cache_key: &str, name: &str) -> String {
     format!("batect-cache-{project_cache_key}-{name}")
 }
 
+/// The Docker volume name a **shared** cache resolves to —
+/// `ratect-shared-cache-<name>`, with no project key, which is the whole
+/// point: every project naming it gets the same storage.
+///
+/// The `ratect-` prefix is deliberate on two counts. Batect has no shared
+/// cache, so there is no naming convention to stay compatible with; and
+/// because it differs from [`cache_volume_name`]'s `batect-cache-` prefix,
+/// [`matching_cache_volumes`] cannot match a shared cache even by accident,
+/// so a bare `--clean` can never discard storage other projects are using.
+pub fn shared_cache_volume_name(name: &str) -> String {
+    format!("ratect-shared-cache-{name}")
+}
+
+/// The host directory a **shared** cache resolves to under
+/// `CacheType::Directory` — `~/.ratect/caches/<name>`, beside
+/// `~/.ratect/incl`'s Git-include clones, for the same reason: it belongs to
+/// the user's machine rather than to any one project.
+pub fn shared_cache_directory(name: &str) -> Result<PathBuf> {
+    Ok(shared_cache_root()?.join(name))
+}
+
+/// Where every shared cache directory lives — `~/.ratect/caches`.
+pub fn shared_cache_root() -> Result<PathBuf> {
+    Ok(crate::user::home_directory()?
+        .join(".ratect")
+        .join("caches"))
+}
+
 /// Resolves `mount` to a Docker bind-mount string (`"source:container[:options]"`,
 /// the same shape `docker.rs`'s `HostConfig.binds` already expects) —
 /// `source` is a bare Docker volume name under `CacheType::Volume` (Docker
@@ -148,10 +176,16 @@ pub fn resolve_cache_mount(
     project_cache_key: &str,
     mount: &CacheVolumeMount,
 ) -> Result<String> {
+    let shared = mount.scope == crate::config::CacheScope::Shared;
     let source = match options.cache_type {
+        CacheType::Volume if shared => shared_cache_volume_name(&mount.name),
         CacheType::Volume => cache_volume_name(project_cache_key, &mount.name),
         CacheType::Directory => {
-            let dir = cache_directory(&options.project_directory).join(&mount.name);
+            let dir = if shared {
+                shared_cache_directory(&mount.name)?
+            } else {
+                cache_directory(&options.project_directory).join(&mount.name)
+            };
             fs::create_dir_all(&dir)
                 .with_context(|| format!("Failed to create cache directory {dir:?}"))?;
             dir.display().to_string()
@@ -164,6 +198,70 @@ pub fn resolve_cache_mount(
     })
 }
 
+/// Every **shared** cache volume on the daemon, by cache name — the
+/// cross-project counterpart to [`list_volume_caches`]. Takes no project
+/// key, because a shared cache has none.
+pub async fn list_shared_volume_caches(
+    runtime: &impl crate::docker::ContainerRuntime,
+) -> Result<Vec<String>> {
+    let existing = runtime.list_volumes().await?;
+    let mut names: Vec<String> =
+        matching_cache_volumes(&existing, &shared_cache_volume_name(""), &HashSet::new())
+            .into_iter()
+            .map(|name| {
+                name.strip_prefix(shared_cache_volume_name("").as_str())
+                    .unwrap_or(name)
+                    .to_string()
+            })
+            .collect();
+    names.sort();
+    Ok(names)
+}
+
+/// Removes the named shared cache volumes, returning the cache names
+/// actually removed.
+///
+/// Unlike [`clean_volume_caches`], `only` is never empty in practice: a
+/// bare `caches clean` deliberately does not sweep shared caches, since
+/// they hold storage other projects are still using.
+pub async fn clean_shared_volume_caches(
+    runtime: &impl crate::docker::ContainerRuntime,
+    only: &HashSet<String>,
+) -> Result<Vec<String>> {
+    let existing = runtime.list_volumes().await?;
+    let prefix = shared_cache_volume_name("");
+    let matched: Vec<String> = matching_cache_volumes(&existing, &prefix, only)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+
+    for name in &matched {
+        runtime.remove_volume(name).await?;
+    }
+
+    Ok(matched
+        .iter()
+        .map(|name| name.strip_prefix(&prefix).unwrap_or(name).to_string())
+        .collect())
+}
+
+/// Every **shared** cache directory, by name — the counterpart to
+/// [`list_directory_caches`] under `CacheType::Directory`.
+pub fn list_shared_directory_caches() -> Result<Vec<String>> {
+    matching_cache_directories(&shared_cache_root()?, &HashSet::new())
+}
+
+/// Removes the named shared cache directories, returning those removed.
+pub fn clean_shared_directory_caches(only: &HashSet<String>) -> Result<Vec<String>> {
+    let root = shared_cache_root()?;
+    let matched = matching_cache_directories(&root, only)?;
+    for name in &matched {
+        let dir = root.join(name);
+        fs::remove_dir_all(&dir).with_context(|| format!("Failed to remove {dir:?}"))?;
+    }
+    Ok(matched)
+}
+
 /// Filters `existing_volumes` (from [`crate::docker::ContainerRuntime::list_volumes`])
 /// down to this project's own cache volumes — those with the
 /// `batect-cache-<project_cache_key>-` prefix — further restricted to
@@ -174,14 +272,13 @@ pub fn resolve_cache_mount(
 /// `Vec<String>` fixtures without needing a fake `ContainerRuntime`.
 fn matching_cache_volumes<'a>(
     existing_volumes: &'a [String],
-    project_cache_key: &str,
+    prefix: &str,
     only: &HashSet<String>,
 ) -> Vec<&'a str> {
-    let prefix = cache_volume_name(project_cache_key, "");
     existing_volumes
         .iter()
         .filter_map(|name| {
-            let cache_name = name.strip_prefix(&prefix)?;
+            let cache_name = name.strip_prefix(prefix)?;
             (only.is_empty() || only.contains(cache_name)).then_some(name.as_str())
         })
         .collect()
@@ -202,11 +299,14 @@ pub async fn list_volume_caches(
 ) -> Result<Vec<String>> {
     let existing = runtime.list_volumes().await?;
     let prefix = cache_volume_name(project_cache_key, "");
-    let mut names: Vec<String> =
-        matching_cache_volumes(&existing, project_cache_key, &HashSet::new())
-            .into_iter()
-            .map(|volume| volume.strip_prefix(&prefix).unwrap_or(volume).to_string())
-            .collect();
+    let mut names: Vec<String> = matching_cache_volumes(
+        &existing,
+        &cache_volume_name(project_cache_key, ""),
+        &HashSet::new(),
+    )
+    .into_iter()
+    .map(|volume| volume.strip_prefix(&prefix).unwrap_or(volume).to_string())
+    .collect();
     names.sort();
     Ok(names)
 }
@@ -227,10 +327,11 @@ pub async fn clean_volume_caches(
     only: &HashSet<String>,
 ) -> Result<Vec<String>> {
     let existing = runtime.list_volumes().await?;
-    let matched: Vec<String> = matching_cache_volumes(&existing, project_cache_key, only)
-        .into_iter()
-        .map(str::to_string)
-        .collect();
+    let matched: Vec<String> =
+        matching_cache_volumes(&existing, &cache_volume_name(project_cache_key, ""), only)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
 
     for name in &matched {
         runtime.remove_volume(name).await?;
