@@ -300,3 +300,25 @@ fn the_two_scopes_use_prefixes_that_cannot_match_each_other() {
         "a project sweep must never match a shared cache"
     );
 }
+
+/// The shared directory location, pinned by shape rather than exercised:
+/// `home_directory()` reads the passwd entry rather than `$HOME`, so a test
+/// cannot redirect it without writing into the developer's own home. The
+/// sweep and removal machinery underneath is shared with project-scoped
+/// directory caches and covered by their tests; what is specific here — and
+/// what this pins — is *where* it points.
+#[test]
+fn a_shared_cache_directory_lives_beside_the_git_include_cache() {
+    let root = shared_cache_root().unwrap();
+    let home = crate::user::home_directory().unwrap();
+
+    assert_eq!(root, home.join(".ratect").join("caches"));
+    assert_eq!(
+        shared_cache_directory("registry").unwrap(),
+        root.join("registry")
+    );
+    // `git_include`'s clones sit at `~/.ratect/incl`; both belong to the
+    // machine rather than to any one project, which is the whole reason a
+    // shared cache cannot live under `.batect/caches` in a project.
+    assert_eq!(root.parent().unwrap(), home.join(".ratect"));
+}

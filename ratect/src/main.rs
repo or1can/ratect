@@ -313,8 +313,34 @@ struct CachesArgs {
     #[arg(long = "cache-type", value_enum, default_value = "volume")]
     cache_type: CacheTypeArg,
 
+    /// Restrict to one scope. Listing shows both by default; on `clean` this
+    /// is how an ambiguous name is disambiguated.
+    #[arg(long = "scope", value_enum)]
+    scope: Option<CacheScopeArg>,
+
     #[command(flatten)]
     docker: DockerArgs,
+}
+
+/// `--scope`, this binary's own mirror of [`ratect_core::config::CacheScope`]
+/// — the same duplication `CacheTypeArg`/`OutputStyleArg` exist for, keeping
+/// `clap` out of `ratect-core` and the accepted spellings part of this
+/// binary's interface rather than the library's.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum CacheScopeArg {
+    /// This project's own caches.
+    Project,
+    /// Caches shared with every other project on this machine.
+    Shared,
+}
+
+impl From<CacheScopeArg> for ratect_core::config::CacheScope {
+    fn from(value: CacheScopeArg) -> Self {
+        match value {
+            CacheScopeArg::Project => Self::Project,
+            CacheScopeArg::Shared => Self::Shared,
+        }
+    }
 }
 
 #[derive(ClapArgs, Debug)]
@@ -412,7 +438,7 @@ struct RunArgs {
 /// since it's about building images, not reaching a daemon). Its own struct,
 /// flattened into every subcommand that connects, so each picks up the
 /// identical surface rather than growing a second, subtly different copy.
-#[derive(ClapArgs, Debug)]
+#[derive(ClapArgs, Debug, Clone)]
 struct DockerArgs {
     /// Docker host to use, e.g. 'unix:///var/run/docker.sock' or
     /// 'tcp://1.2.3.4:5678'. Defaults to DOCKER_HOST, then Docker's own
@@ -865,58 +891,95 @@ async fn manage_caches(
     let cache_type: ratect_core::cache::CacheType = args.cache_type.into();
     let quiet = style == OutputStyle::Quiet;
 
+    let wanted: Option<ratect_core::config::CacheScope> = args.scope.map(Into::into);
+    let found = find_caches(&args, cache_type, &project_directory, wanted).await?;
+
     let Some(names) = names else {
-        let existing = match cache_type {
-            ratect_core::cache::CacheType::Volume => {
-                let docker = DockerClient::new(&args.docker.into())?;
-                let key = ratect_core::cache::project_cache_key(&project_directory)?;
-                ratect_core::cache::list_volume_caches(&docker, &key).await?
-            }
-            ratect_core::cache::CacheType::Directory => {
-                ratect_core::cache::list_directory_caches(&project_directory)?
-            }
-        };
         // Quiet is the machine-readable form, same contract as `tasks list`:
         // bare names, one per line, nothing else on stdout.
         if quiet {
-            for name in existing {
+            for (name, _) in &found {
                 println!("{name}");
             }
-        } else if existing.is_empty() {
+        } else if found.is_empty() {
             println!("This project has no caches.");
         } else {
             println!("Caches for this project:");
-            for name in existing {
-                println!("- {name}");
+            for (name, scope) in &found {
+                println!("- {name} ({})", scope_label(*scope));
             }
         }
         return Ok(());
     };
 
     let only: HashSet<String> = names.into_iter().collect();
+
+    // A name existing in both scopes is refused rather than guessed at:
+    // removing the shared one discards storage other projects are still
+    // using, and removing the project one silently leaves the cache the user
+    // probably meant. `--scope` is how they say which.
+    if wanted.is_none() {
+        let mut ambiguous: Vec<&String> = only
+            .iter()
+            .filter(|name| {
+                let scopes: Vec<_> = found
+                    .iter()
+                    .filter(|(found_name, _)| found_name == *name)
+                    .collect();
+                scopes.len() > 1
+            })
+            .collect();
+        ambiguous.sort();
+        if let Some(name) = ambiguous.first() {
+            anyhow::bail!(
+                "'{name}' names both a project cache and a shared one. Re-run with \
+                 '--scope project' or '--scope shared' to say which to remove."
+            );
+        }
+    }
+
     // Reported by *cache* name whichever storage was used — a volume's own
-    // Docker name carries the `batect-cache-<key>-` prefix, which is an
-    // implementation detail of where it's kept, not what the user called it.
-    let removed: Vec<String> = match cache_type {
-        ratect_core::cache::CacheType::Volume => {
-            let docker = DockerClient::new(&args.docker.into())?;
-            let key = ratect_core::cache::project_cache_key(&project_directory)?;
-            let prefix = ratect_core::cache::cache_volume_name(&key, "");
-            ratect_core::cache::clean_volume_caches(&docker, &key, &only)
-                .await?
-                .into_iter()
-                .map(|volume| {
-                    volume
-                        .strip_prefix(&prefix)
-                        .unwrap_or(volume.as_str())
-                        .to_string()
-                })
-                .collect()
-        }
-        ratect_core::cache::CacheType::Directory => {
-            ratect_core::cache::clean_directory_caches(&project_directory, &only)?
-        }
+    // Docker name carries a prefix, which is an implementation detail of
+    // where it's kept, not what the user called it.
+    let in_scope = |scope: ratect_core::config::CacheScope| {
+        wanted.is_none_or(|w| w == scope) && found.iter().any(|(_, s)| *s == scope)
     };
+    let mut removed: Vec<String> = Vec::new();
+    if in_scope(ratect_core::config::CacheScope::Project) {
+        removed.extend(match cache_type {
+            ratect_core::cache::CacheType::Volume => {
+                let docker = DockerClient::new(&args.docker.clone().into())?;
+                let key = ratect_core::cache::project_cache_key(&project_directory)?;
+                let prefix = ratect_core::cache::cache_volume_name(&key, "");
+                ratect_core::cache::clean_volume_caches(&docker, &key, &only)
+                    .await?
+                    .into_iter()
+                    .map(|volume| {
+                        volume
+                            .strip_prefix(&prefix)
+                            .unwrap_or(volume.as_str())
+                            .to_string()
+                    })
+                    .collect::<Vec<_>>()
+            }
+            ratect_core::cache::CacheType::Directory => {
+                ratect_core::cache::clean_directory_caches(&project_directory, &only)?
+            }
+        });
+    }
+    // Shared caches are only ever removed by name — a bare `caches clean`
+    // sweeps this project's, and `only` is non-empty by construction here.
+    if in_scope(ratect_core::config::CacheScope::Shared) {
+        removed.extend(match cache_type {
+            ratect_core::cache::CacheType::Volume => {
+                let docker = DockerClient::new(&args.docker.into())?;
+                ratect_core::cache::clean_shared_volume_caches(&docker, &only).await?
+            }
+            ratect_core::cache::CacheType::Directory => {
+                ratect_core::cache::clean_shared_directory_caches(&only)?
+            }
+        });
+    }
 
     if !quiet {
         for name in &removed {
@@ -932,6 +995,75 @@ async fn manage_caches(
     }
 
     Ok(())
+}
+
+/// Every cache this project can see, as `(name, scope)`, sorted and
+/// optionally restricted to one scope.
+///
+/// Both scopes are read from *storage*, never from the configuration file —
+/// see [`CachesArgs`] for why that matters. A project cache is found by its
+/// `batect-cache-<key>-` prefix, a shared one by `ratect-shared-cache-`.
+async fn find_caches(
+    args: &CachesArgs,
+    cache_type: ratect_core::cache::CacheType,
+    project_directory: &std::path::Path,
+    wanted: Option<ratect_core::config::CacheScope>,
+) -> anyhow::Result<Vec<(String, ratect_core::config::CacheScope)>> {
+    use ratect_core::config::CacheScope;
+
+    let want = |scope: CacheScope| wanted.is_none_or(|w| w == scope);
+    let mut found: Vec<(String, CacheScope)> = Vec::new();
+
+    match cache_type {
+        ratect_core::cache::CacheType::Volume => {
+            let docker = DockerClient::new(&args.docker.clone().into())?;
+            if want(CacheScope::Project) {
+                let key = ratect_core::cache::project_cache_key(project_directory)?;
+                found.extend(
+                    ratect_core::cache::list_volume_caches(&docker, &key)
+                        .await?
+                        .into_iter()
+                        .map(|name| (name, CacheScope::Project)),
+                );
+            }
+            if want(CacheScope::Shared) {
+                found.extend(
+                    ratect_core::cache::list_shared_volume_caches(&docker)
+                        .await?
+                        .into_iter()
+                        .map(|name| (name, CacheScope::Shared)),
+                );
+            }
+        }
+        ratect_core::cache::CacheType::Directory => {
+            if want(CacheScope::Project) {
+                found.extend(
+                    ratect_core::cache::list_directory_caches(project_directory)?
+                        .into_iter()
+                        .map(|name| (name, CacheScope::Project)),
+                );
+            }
+            if want(CacheScope::Shared) {
+                found.extend(
+                    ratect_core::cache::list_shared_directory_caches()?
+                        .into_iter()
+                        .map(|name| (name, CacheScope::Shared)),
+                );
+            }
+        }
+    }
+
+    found.sort();
+    Ok(found)
+}
+
+/// How a scope is spelled in `caches list` output — the same words
+/// `--scope` accepts, so what is read can be pasted back.
+fn scope_label(scope: ratect_core::config::CacheScope) -> &'static str {
+    match scope {
+        ratect_core::config::CacheScope::Project => "project",
+        ratect_core::config::CacheScope::Shared => "shared",
+    }
 }
 
 /// `ratect resources list` / `ratect resources clean` — the containers and

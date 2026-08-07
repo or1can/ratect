@@ -690,6 +690,109 @@ fn caches_command(project: &Path) -> Command {
     command
 }
 
+/// Requires a real Docker daemon. Run with `cargo test -- --ignored`.
+///
+/// The shared half of `caches`, which only volumes can exercise: a shared
+/// cache's directory form lives under the real `~/.ratect/caches`, and
+/// `home_directory()` reads the passwd entry rather than `$HOME`, so a test
+/// cannot redirect it without writing into the developer's own home.
+///
+/// Covers the scope column, the `--scope` filter, and the case the column
+/// exists for — one name in both scopes, which `clean` must refuse rather
+/// than guess at, since removing the shared one discards storage other
+/// projects are still using.
+#[test]
+#[ignore]
+fn caches_reports_scope_and_refuses_an_ambiguous_name() {
+    let _guard = serial_docker();
+
+    let project = project_with_directory_caches(&[]);
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(
+        project.join("batect.yml"),
+        "project_name: scope-demo\ncontainers: {}\ntasks: {}\n",
+    )
+    .unwrap();
+
+    // Written rather than read back: the key file is created lazily, the
+    // first time something resolves a cache, and this test creates its
+    // volumes directly. Fixing the key is also what makes the project
+    // volume's name predictable enough to assert on.
+    let project_key = "scope-demo-key";
+    std::fs::create_dir_all(project.join(".batect/caches")).unwrap();
+    std::fs::write(project.join(".batect/caches/key"), "scope-demo-key\n").unwrap();
+
+    let volumes = [
+        format!("batect-cache-{project_key}-clash"),
+        "ratect-shared-cache-clash".to_string(),
+        "ratect-shared-cache-only-shared".to_string(),
+    ];
+    for volume in &volumes {
+        std::process::Command::new("docker")
+            .args(["volume", "create", volume])
+            .output()
+            .expect("failed to create a docker volume");
+    }
+    let cleanup = || {
+        for volume in &volumes {
+            let _ = std::process::Command::new("docker")
+                .args(["volume", "rm", "-f", volume])
+                .output();
+        }
+    };
+
+    let run = |args: &[&str]| {
+        caches_command(&project)
+            .args(args)
+            .output()
+            .expect("failed to run ratect")
+    };
+
+    let listed = run(&["caches", "list"]);
+    let listed_out = String::from_utf8_lossy(&listed.stdout).to_string();
+
+    let filtered = run(&["caches", "list", "--scope", "shared"]);
+    let filtered_out = String::from_utf8_lossy(&filtered.stdout).to_string();
+
+    let ambiguous = run(&["caches", "clean", "clash"]);
+    let ambiguous_err = String::from_utf8_lossy(&ambiguous.stderr).to_string();
+
+    let disambiguated = run(&["caches", "clean", "clash", "--scope", "shared"]);
+    let survived = std::process::Command::new("docker")
+        .args([
+            "volume",
+            "inspect",
+            &format!("batect-cache-{project_key}-clash"),
+        ])
+        .output()
+        .expect("failed to inspect");
+
+    cleanup();
+    std::fs::remove_dir_all(&project).ok();
+
+    assert!(
+        listed_out.contains("clash (project)") && listed_out.contains("clash (shared)"),
+        "both scopes should be listed and labelled:\n{listed_out}"
+    );
+    assert!(
+        filtered_out.contains("only-shared") && !filtered_out.contains("(project)"),
+        "--scope shared should list only shared caches:\n{filtered_out}"
+    );
+    assert!(
+        !ambiguous.status.success() && ambiguous_err.contains("--scope"),
+        "an ambiguous name should be refused, pointing at --scope:\n{ambiguous_err}"
+    );
+    assert!(
+        disambiguated.status.success(),
+        "--scope should resolve it:\n{}",
+        String::from_utf8_lossy(&disambiguated.stderr)
+    );
+    assert!(
+        survived.status.success(),
+        "removing the shared cache must leave the project one alone"
+    );
+}
+
 #[test]
 fn caches_list_reports_this_projects_caches_by_name() {
     let project = project_with_directory_caches(&["npm-cache", "gradle-cache"]);
