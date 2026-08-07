@@ -13,44 +13,31 @@
 // limitations under the License.
 
 //! Resolves `cache` volume mounts ([`crate::config::CacheVolumeMount`]) to an
-//! actual Docker bind-mount string — either a named volume that persists
-//! between separate `ratect` invocations, or a host directory under
-//! `--cache-type=directory` — and implements `--clean`/`--clean-cache`
+//! actual Docker bind-mount string — a named volume that persists between
+//! separate `ratect` invocations ([`CacheType::Volume`], the default) or a
+//! host directory ([`CacheType::Directory`], `--cache-type=directory`) — and
+//! implements `--clean`/`--clean-cache`
 //! ([`clean_volume_caches`]/[`clean_directory_caches`]), which remove them.
-//! Ported from Batect's own `CacheManager`/`VolumeMountResolver`/`CacheType`/
-//! `CleanupCachesCommand`, with one deliberate divergence: the project cache
-//! key is a full UUID rather than Batect's 6-char `a-z0-9` id (see
-//! [`project_cache_key`]'s own doc comment for why) — everything else,
-//! including the `.batect/caches/` location and `batect-cache-` volume
-//! prefix, is kept byte-for-byte compatible with Batect's own convention on
-//! purpose: this is `ratect-compat`'s territory (see `ROADMAP.md`'s
-//! `## Two Binaries` section), and a project migrating from real `batect`
-//! should find its existing cache volumes/directories reused, not orphaned.
 //!
-//! Resolves a `VolumeMount::Cache`
-//! (`config.rs`) into an actual Docker bind-mount string — a named volume
-//! (`CacheType::Volume`, the default) or a host directory
-//! (`CacheType::Directory`, `--cache-type=directory`) — and implements
-//! `--clean`/`--clean-cache` (`clean_volume_caches`/`clean_directory_caches`),
-//! which remove them. Ported from Batect's own `CacheManager`/
-//! `VolumeMountResolver`/`CacheType`/`CleanupCachesCommand`, kept
-//! byte-for-byte compatible with Batect's own `.batect/caches/` location and
-//! `batect-cache-<project-key>-<name>` volume-naming convention *on purpose*
-//! — this is `ratect-compat`'s territory (see `ROADMAP.md`'s two-binaries
-//! section), so a project migrating from real `batect` should find its
-//! existing cache volumes/directories reused, not orphaned. The one
-//! deliberate divergence: a freshly generated `project_cache_key` is a full
-//! `uuid::Uuid::new_v4()`, not Batect's 6-char `a-z0-9` id — an existing
-//! Batect-created key file is still read and reused byte-for-byte (tolerant
-//! of its `#`-comment-header format), since nothing depends on matching the
-//! *generation* format, only the file's path and read-compatible layout, and
-//! Batect's own alphabet is meaningfully more collision-prone across many
-//! projects on one machine. The actual removal *decision* (which
-//! volumes/directories match this project's prefix, restricted to
-//! `--clean-cache`'s allowlist) is split into plain synchronous functions
-//! (`matching_cache_volumes`/`matching_cache_directories`), deliberately kept
-//! separate from the async I/O around them, so they're unit-testable against
-//! plain `Vec<String>`/tempdir fixtures without needing a fake
+//! Ported from Batect's own `CacheManager`/`VolumeMountResolver`/`CacheType`/
+//! `CleanupCachesCommand`, and kept byte-for-byte compatible with its
+//! `.batect/caches/` location and `batect-cache-<project key>-<name>` volume
+//! naming *on purpose*: this is `ratect-compat`'s territory, so a project
+//! migrating from real `batect` finds its existing caches reused rather than
+//! orphaned.
+//!
+//! One deliberate divergence: a freshly generated [`project_cache_key`] is a
+//! full `uuid::Uuid::new_v4()`, not Batect's 6-character `a-z0-9` id, whose
+//! alphabet is meaningfully more collision-prone across many projects on one
+//! machine. An existing Batect-written key file is still read and reused
+//! byte-for-byte, tolerant of its `#`-comment header — nothing depends on
+//! matching the *generation* format, only on the file's path and layout.
+//!
+//! The removal *decision* — which volumes or directories match this project,
+//! restricted to `--clean-cache`'s allowlist — lives in plain synchronous
+//! functions ([`matching_cache_volumes`]/[`matching_cache_directories`]),
+//! deliberately separate from the async I/O around them, so it is testable
+//! against plain `Vec<String>`/tempdir fixtures with no fake
 //! `ContainerRuntime`.
 
 use crate::config::CacheVolumeMount;

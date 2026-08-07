@@ -30,10 +30,7 @@
 //! nothing of its own, but a strictly additive one — see
 //! [Differences from Batect](../../docs/differences-from-batect.md#runtime-behavior-gaps).
 //!
-//! the `eu.orican.ratect.*` Docker
-//! labels stamped on every container and network the engine creates, so the
-//! planned `resources` verb can find what a previous run left behind (see
-//! `ROADMAP.md`). `RunLabels` is built once per task execution in
+//! `RunLabels` is built once per task execution in
 //! `engine.rs`'s `run_task_internal` and threaded down through
 //! `ensure_container_ready`, so a task's containers and its network all agree
 //! on one run id — generated there rather than alongside the network,
