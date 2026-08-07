@@ -921,6 +921,16 @@ async fn manage_caches(
 
     let only: HashSet<String> = names.into_iter().collect();
 
+    // `--scope shared` with nothing named would silently do nothing, since
+    // shared caches are only ever removed by name. Say so instead.
+    if only.is_empty() && wanted == Some(ratect_core::config::CacheScope::Shared) {
+        anyhow::bail!(
+            "Name the shared caches to remove. A shared cache holds storage other \
+             projects are still using, so it is never swept without being named — \
+             'ratect caches list --scope shared' shows what is there."
+        );
+    }
+
     // A name existing in both scopes is refused rather than guessed at:
     // removing the shared one discards storage other projects are still
     // using, and removing the project one silently leaves the cache the user

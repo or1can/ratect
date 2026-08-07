@@ -198,6 +198,26 @@ pub fn resolve_cache_mount(
     })
 }
 
+/// Which shared cache volumes `only` names — the removal *decision*, kept
+/// synchronous and separate from the I/O around it, the same way
+/// [`matching_cache_volumes`] is.
+///
+/// **An empty `only` matches nothing**, the opposite of the project-scoped
+/// rule where empty means "all of this project's". A shared cache holds
+/// storage other projects are still using, so a bare `caches clean` must
+/// never reach one. Stating that as a precondition on the caller was not
+/// enough — it read as satisfied and wasn't, and every shared cache on the
+/// machine was swept.
+fn matching_shared_cache_volumes<'a>(
+    existing_volumes: &'a [String],
+    only: &HashSet<String>,
+) -> Vec<&'a str> {
+    if only.is_empty() {
+        return Vec::new();
+    }
+    matching_cache_volumes(existing_volumes, &shared_cache_volume_name(""), only)
+}
+
 /// Every **shared** cache volume on the daemon, by cache name — the
 /// cross-project counterpart to [`list_volume_caches`]. Takes no project
 /// key, because a shared cache has none.
@@ -221,16 +241,20 @@ pub async fn list_shared_volume_caches(
 /// Removes the named shared cache volumes, returning the cache names
 /// actually removed.
 ///
-/// Unlike [`clean_volume_caches`], `only` is never empty in practice: a
-/// bare `caches clean` deliberately does not sweep shared caches, since
-/// they hold storage other projects are still using.
+/// **An empty `only` removes nothing**, the opposite of
+/// [`clean_volume_caches`], where empty means "this project's, all of
+/// them". A shared cache holds storage other projects are still using, so
+/// sweeping them can never be the default — and stating that as a
+/// precondition on the caller was not enough: it read as satisfied and
+/// wasn't, so a bare `caches clean` removed every shared cache on the
+/// machine. The rule lives here now, where it cannot be forgotten.
 pub async fn clean_shared_volume_caches(
     runtime: &impl crate::docker::ContainerRuntime,
     only: &HashSet<String>,
 ) -> Result<Vec<String>> {
     let existing = runtime.list_volumes().await?;
     let prefix = shared_cache_volume_name("");
-    let matched: Vec<String> = matching_cache_volumes(&existing, &prefix, only)
+    let matched: Vec<String> = matching_shared_cache_volumes(&existing, only)
         .into_iter()
         .map(str::to_string)
         .collect();
@@ -252,7 +276,14 @@ pub fn list_shared_directory_caches() -> Result<Vec<String>> {
 }
 
 /// Removes the named shared cache directories, returning those removed.
+///
+/// An empty `only` removes nothing — see
+/// [`clean_shared_volume_caches`] for why that is the opposite of the
+/// project-scoped rule.
 pub fn clean_shared_directory_caches(only: &HashSet<String>) -> Result<Vec<String>> {
+    if only.is_empty() {
+        return Ok(Vec::new());
+    }
     let root = shared_cache_root()?;
     let matched = matching_cache_directories(&root, only)?;
     for name in &matched {

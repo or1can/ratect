@@ -322,3 +322,31 @@ fn a_shared_cache_directory_lives_beside_the_git_include_cache() {
     // shared cache cannot live under `.batect/caches` in a project.
     assert_eq!(root.parent().unwrap(), home.join(".ratect"));
 }
+
+/// A bare `caches clean` passes an empty name set, which for a *project*
+/// cache means "all of them". For a shared one it has to mean "none" —
+/// otherwise one project's routine cleanup discards storage every other
+/// project is still using.
+///
+/// This shipped the wrong way round: the rule was written as a precondition
+/// on the caller ("`only` is never empty in practice"), which read as
+/// satisfied and wasn't. Verifying the documentation against the binary is
+/// what caught it, so the rule now lives in the decision function.
+#[test]
+fn a_shared_cache_is_never_removed_without_being_named() {
+    let existing = vec![
+        "ratect-shared-cache-registry".to_string(),
+        "ratect-shared-cache-other".to_string(),
+        "batect-cache-some-key-registry".to_string(),
+    ];
+
+    assert!(
+        matching_shared_cache_volumes(&existing, &HashSet::new()).is_empty(),
+        "an empty name set must match no shared cache"
+    );
+    assert_eq!(
+        matching_shared_cache_volumes(&existing, &HashSet::from(["registry".to_string()])),
+        vec!["ratect-shared-cache-registry"],
+        "and naming one must not also match the project cache of the same name"
+    );
+}
