@@ -74,8 +74,8 @@ group headings there, so the order alone carries them.
 
 | Command | What it does |
 | --- | --- |
-| `ratect caches list` | Lists this project's existing caches. |
-| `ratect caches clean [NAME...]` | Removes this project's caches, or just the named ones. |
+| `ratect caches list` | Lists the caches this project can see, project-scoped and shared, with the scope of each. |
+| `ratect caches clean [NAME...]` | Removes this project's caches, or just the named ones — which may be shared. |
 | `ratect includes list` | Lists the cached Git includes shared by every project on this machine. |
 | `ratect includes clean [--all]` | Removes cached Git includes. |
 | `ratect includes refresh` | Re-clones them, picking up a `ref` that has moved. |
@@ -181,10 +181,38 @@ match how the project runs its tasks.
 missing entirely — which is exactly when clearing a cache tends to be what's needed.
 
 `caches list` prints each cache under the name a `volumes` entry gives it, not the
-`batect-cache-<key>-<name>` Docker volume it's stored in; that name is what
-`caches clean` takes back. Under `-o quiet` it's one name per line and nothing else,
-for scripting. Naming a cache that doesn't exist warns on stderr rather than passing
-silently, since the likeliest cause is a typo.
+Docker volume it's stored in; that name is what `caches clean` takes back. Under
+`-o quiet` it's one name per line and nothing else, for scripting. Naming a cache
+that doesn't exist warns on stderr rather than passing silently, since the likeliest
+cause is a typo.
+
+`--scope <project|shared>` restricts both commands to one kind of cache. A
+[shared cache](ratect-config-reference.md#shared-caches) is one every project on
+the machine can use, so the two are worth telling apart:
+
+```
+$ ratect caches list
+Caches for this project:
+- build-output (project)
+- cargo-registry (shared)
+```
+
+**`caches clean` with no names removes this project's caches only, never a shared
+one.** Discarding storage other projects are still using should take naming it.
+Naming one does remove it — and if a project cache and a shared cache happen to
+share a name, the command refuses rather than guessing, since removing the wrong
+one is silent either way:
+
+```
+$ ratect caches clean cargo-registry
+Error: 'cargo-registry' names both a project cache and a shared one. Re-run with
+'--scope project' or '--scope shared' to say which to remove.
+```
+
+Both scopes are read from *storage*, not from the configuration — a project cache
+is found by its `batect-cache-<key>-` prefix, a shared one by
+`ratect-shared-cache-`. That is what keeps these commands working on a project
+whose configuration is broken.
 
 ## `includes` options
 

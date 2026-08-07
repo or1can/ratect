@@ -189,6 +189,55 @@ An `extends` in a native file may inherit from a container defined in *any*
 included file, including a YAML bundle — the container namespace is flat once
 includes are merged.
 
+## Shared caches
+
+A `cache` mount is private to the project by default: the storage carries the
+project's own key, so two projects declaring `cargo-registry` get two
+different caches. `scope = "shared"` drops that key, so every project on the
+machine naming it gets the *same* storage.
+
+```toml
+[[containers.build-env.volumes]]
+type = "cache"
+name = "cargo-registry"
+container = "/usr/local/cargo/registry"
+scope = "shared"        # or "project", the default
+
+[[containers.build-env.volumes]]
+type = "cache"
+name = "build-output"
+container = "/build"    # no scope: private to this project
+```
+
+This exists because the alternative is worse. A bundle that wants one Cargo
+registry or npm cache across projects has, until now, had to spell it as a
+host path (`local = "~/.cache/cargo"`), which means granting the bundle access
+to your home directory — the thing
+[`allow_host_paths`](config-reference.md#git-includes) exists to permit and
+[decisions/0004](https://github.com/or1can/ratect/blob/main/decisions/0004-git-include-host-path-trust.md)
+would rather solve properly. A shared cache says the same thing directly,
+grants no host filesystem access at all, and keeps the location under Ratect's
+control.
+
+**Where it is stored.** A shared cache is the Docker volume
+`ratect-shared-cache-<name>`, or the directory `~/.ratect/caches/<name>` under
+`--cache-type=directory` — beside `~/.ratect/incl`, where Git includes are
+cloned, because both belong to the machine rather than to any one project. A
+project cache remains `batect-cache-<project key>-<name>`.
+
+**A name has one scope per project.** Declaring `cargo-registry` as `project`
+in one container and `shared` in another is rejected when the file loads: one
+name would mean two different pieces of storage. Two *containers* naming the
+same cache is the ordinary way to share it between them, and is unaffected.
+
+**Removing one takes naming it.** `ratect caches clean` with no arguments
+sweeps this project's caches and never a shared one — discarding storage other
+projects are still using should not be a side effect. See
+[the `caches` options](ratect-cli.md#caches-options).
+
+`batect.yml` has no equivalent, so `scope` is rejected there rather than
+ignored — see [Differences](#differences-from-batectyml-at-a-glance) below.
+
 ## Field reference
 
 Every container and task field from [`config-reference.md`](config-reference.md)
@@ -277,10 +326,15 @@ so it also works as a CI gate.
 | Format | YAML | TOML |
 | Default file | `batect.yml` | `ratect.toml` |
 | Reuse | anchors / aliases / merge keys | [`extends`](#extends-inheritance-instead-of-yaml-anchors) |
+| Cross-project cache | — | [`scope = "shared"`](#shared-caches) on a `cache` mount |
 | List entries | string shorthand *or* object | object (inline table or `[[...]]`) |
 | Local overrides | `batect.local.yml` | `ratect.local.toml` |
 | Git bundle default | `batect-bundle.yml` | `ratect-bundle.toml`, then `batect-bundle.yml` |
 | Includes | YAML | TOML or YAML, by extension |
 
-Field *meanings* are unchanged; only the spelling and these format-level rules
-differ.
+Most field *meanings* are unchanged; the spelling and the format-level rules
+above are the bulk of the difference. The exceptions are the native-only
+fields (`extends`, a cache's `scope`) and the handful of behaviours in [Where
+the semantics differ](#where-the-semantics-differ), which exist because
+`extends` gives some combinations a meaning `batect.yml` has no way to
+express.
