@@ -2573,6 +2573,95 @@ fn resolve_expressions_rejects_one_cache_name_with_two_scopes() {
     );
 }
 
+/// A cache `name` becomes a host directory under `--cache-type directory`,
+/// and `Path::join` neither rejects `..` nor refuses an absolute path — it
+/// replaces the base with one. Both forms escaped the cache root and got an
+/// arbitrary host directory bind-mounted read-write into the container.
+///
+/// The reachable version of this is a Git-included bundle, which is
+/// configuration the project owner may not have written: containment checks
+/// `local` mounts and include paths, and deliberately skips `cache` mounts,
+/// on the reasoning that a cache name was never a path.
+#[test]
+fn resolve_expressions_rejects_a_cache_name_that_is_a_path() {
+    for name in [
+        "/etc",
+        "../../.ssh",
+        "..",
+        "nested/name",
+        "-leading-dash",
+        "",
+        "with space",
+    ] {
+        let mut container = container_with_build("./docker", HashMap::new());
+        container.volumes = Some(vec![VolumeMount::Cache(CacheVolumeMount {
+            name: name.to_string(),
+            container: "/cache".to_string(),
+            options: None,
+            scope: Default::default(),
+        })]);
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([("build-env".to_string(), container)]),
+            tasks: HashMap::new(),
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let err = config
+            .resolve_expressions_with(
+                Path::new("/base"),
+                &HashMap::new(),
+                &HashMap::new(),
+                no_host_env,
+            )
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("not a valid cache name"),
+            "{name:?} should be rejected, got: {err:#}"
+        );
+    }
+}
+
+/// The names real projects use must keep working — the check is Docker's own
+/// volume-name character set, which `--cache-type volume` already enforces,
+/// so this only brings the directory form in line.
+#[test]
+fn resolve_expressions_accepts_ordinary_cache_names() {
+    for name in [
+        "gradle-cache",
+        "cargo_registry",
+        "node.modules",
+        "batect-cache-mount-journey-test-cache",
+        "a",
+        "9lives",
+    ] {
+        let mut container = container_with_build("./docker", HashMap::new());
+        container.volumes = Some(vec![VolumeMount::Cache(CacheVolumeMount {
+            name: name.to_string(),
+            container: "/cache".to_string(),
+            options: None,
+            scope: Default::default(),
+        })]);
+        let mut config = Config {
+            project_name: "demo".to_string(),
+            containers: HashMap::from([("build-env".to_string(), container)]),
+            tasks: HashMap::new(),
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        config
+            .resolve_expressions_with(
+                Path::new("/base"),
+                &HashMap::new(),
+                &HashMap::new(),
+                no_host_env,
+            )
+            .unwrap_or_else(|e| panic!("{name:?} should be accepted: {e:#}"));
+    }
+}
+
 fn container_with_build_ssh(agents: Vec<SshAgent>) -> Container {
     let mut container = container_with_build("./docker", HashMap::new());
     container.build_ssh = Some(agents);

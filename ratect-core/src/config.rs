@@ -2669,8 +2669,14 @@ impl Config {
             }
             if let Some(volumes) = &mut container.volumes {
                 for volume in volumes {
-                    // `Cache` mounts have nothing to resolve here — `name`/
-                    // `container` are plain strings, not expressions,
+                    // A cache `name` becomes a host directory under
+                    // `--cache-type directory`, so it is checked before
+                    // anything can join it onto one.
+                    if let VolumeMount::Cache(cache) = volume {
+                        validate_cache_name(container_name, &cache.name)?;
+                    }
+                    // `Cache` mounts have nothing else to resolve here —
+                    // `name`/`container` are plain strings, not expressions,
                     // matching Batect's own `CacheMount` typing. Their
                     // Docker volume name/host directory is resolved later,
                     // once `--cache-type` and the project's cache key are
@@ -3245,6 +3251,48 @@ fn reject_extends_in_compat(config: &Config) -> Result<()> {
         anyhow::bail!(
             "The container '{name}' uses 'extends', which is a ratect-native field \
              not supported in Batect-compatible configuration."
+        );
+    }
+    Ok(())
+}
+
+/// Rejects a cache `name` that isn't a safe single path segment.
+///
+/// A cache name is joined onto a directory to produce a host path
+/// (`.batect/caches/<name>`, or `~/.ratect/caches/<name>` when shared), and
+/// `Path::join` neither rejects `..` nor refuses an absolute path — it
+/// *replaces* the base with one. So without this, `name = "/etc"` or
+/// `name = "../../.ssh"` gets an arbitrary host directory created and
+/// bind-mounted read-write into the container, under `--cache-type
+/// directory`.
+///
+/// That matters most for a **Git-included bundle**, which is configuration
+/// the project owner may not have written: containment
+/// ([decisions/0004](https://github.com/or1can/ratect/blob/main/decisions/0004-git-include-host-path-trust.md))
+/// deliberately checks `local` mounts and include paths, and just as
+/// deliberately skips `cache` mounts — because a cache name was never
+/// supposed to be a path.
+///
+/// The permitted shape is Docker's own volume-name character set. Under
+/// `--cache-type volume` Docker already enforces it, so this only tightens
+/// the directory form to match, and no name that works today stops working.
+/// Batect performs no equivalent check; diverging in the safer direction is
+/// the same call [decisions/0004](https://github.com/or1can/ratect/blob/main/decisions/0004-git-include-host-path-trust.md)
+/// made for include containment.
+fn validate_cache_name(container_name: &str, name: &str) -> Result<()> {
+    let valid = name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
+    if !valid {
+        anyhow::bail!(
+            "Container '{container_name}' has a 'cache' volume mount named '{name}', which \
+             is not a valid cache name. A cache name must start with a letter or digit and \
+             contain only letters, digits, underscores, dots and dashes — it names storage, \
+             not a path."
         );
     }
     Ok(())
