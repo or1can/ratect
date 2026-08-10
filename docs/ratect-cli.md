@@ -182,9 +182,11 @@ missing entirely — which is exactly when clearing a cache tends to be what's n
 
 `caches list` prints each cache under the name a `volumes` entry gives it, not the
 Docker volume it's stored in; that name is what `caches clean` takes back. Under
-`-o quiet` it's one name per line and nothing else, for scripting. Naming a cache
-that doesn't exist warns on stderr rather than passing silently, since the likeliest
-cause is a typo.
+`-o quiet` it's one name per line and nothing else, for scripting — deduplicated,
+since the same name can exist in both scopes. Pair it with `--scope` for a list
+that is unambiguous, and so safe to pipe straight back into
+`caches clean --scope`. Naming a cache that doesn't exist warns on stderr rather
+than passing silently, since the likeliest cause is a typo.
 
 `--scope <project|shared>` restricts both commands to one kind of cache. A
 [shared cache](ratect-config-reference.md#shared-caches) is one every project on

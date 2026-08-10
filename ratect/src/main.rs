@@ -905,8 +905,17 @@ async fn manage_caches(
         // Quiet is the machine-readable form, same contract as `tasks list`:
         // bare names, one per line, nothing else on stdout.
         if quiet {
+            // Bare names, one per line — the documented contract, and what
+            // `caches clean` takes back. Deduplicated because a name can
+            // exist in both scopes: printing it twice would be two identical
+            // lines carrying no way to tell them apart. Add `--scope` to get
+            // an unambiguous list, which is also what makes the result
+            // safely pipeable into `clean --scope`.
+            let mut seen = std::collections::HashSet::new();
             for (name, _) in &found {
-                println!("{name}");
+                if seen.insert(name) {
+                    println!("{name}");
+                }
             }
         } else if found.is_empty() {
             println!("This project has no caches.");
@@ -1012,7 +1021,19 @@ async fn manage_caches(
     // A name that matched nothing is worth saying out loud: the likeliest
     // cause is a typo, and silence there reads exactly like success.
     for name in only.iter().filter(|name| !removed.contains(name)) {
-        tracing::warn!("No cache named '{name}' exists for this project.");
+        // Named after what was actually searched: under `--scope shared`
+        // "for this project" points at the wrong storage entirely.
+        match wanted {
+            Some(ratect_core::config::CacheScope::Shared) => {
+                tracing::warn!("No shared cache named '{name}' exists.")
+            }
+            Some(ratect_core::config::CacheScope::Project) => {
+                tracing::warn!("No cache named '{name}' exists for this project.")
+            }
+            None => tracing::warn!(
+                "No cache named '{name}' exists for this project, or as a shared cache."
+            ),
+        }
     }
 
     Ok(())
