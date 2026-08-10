@@ -190,13 +190,17 @@ than passing silently, since the likeliest cause is a typo.
 
 `--scope <project|shared>` restricts both commands to one kind of cache. A
 [shared cache](ratect-config-reference.md#shared-caches) is one every project on
-the machine can use, so the two are worth telling apart:
+the machine can use, so the listing keeps them apart — a shared cache is
+**not** this project's, and most of the ones shown will belong to other
+projects:
 
 ```
 $ ratect caches list
 Caches for this project:
-- build-output (project)
-- cargo-registry (shared)
+- build-output
+
+Shared caches on this machine:
+- cargo-registry
 ```
 
 **`caches clean` with no names removes this project's caches only, never a shared

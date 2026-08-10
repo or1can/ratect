@@ -187,6 +187,19 @@ The [`decisions/`](decisions/) directory holds Architecture Decision Records —
       crossing up from one needs the caller to attach that. `classify_ssh_agent_paths`
       shipped naming only the agent, in a codebase where every other config error
       names its container.
+    - **When a change widens what something covers, grep for every string that
+      names its old scope.** Not the strings you wrote — the ones your change
+      just falsified. Output text, `--help`, the docs sections, the roadmap
+      entry. `ratect caches list` went from listing a project's caches to
+      listing the machine's shared ones too, and kept printing them under
+      "Caches for this project:"; `--help` kept saying "this project's", the
+      compat config reference never gained the new cache-name rule, the native
+      reference's link kept pointing at a section the change contradicted, and
+      the roadmap entry still read as outstanding. That was **five of eight
+      findings in one review round**, all one habit. It is also not cosmetic:
+      the stale heading made a documented scripting idiom
+      (`caches list -o quiet | xargs ratect caches clean`) delete another
+      project's cache.
     - **Watch for coverage shaped by the test harness rather than the behaviour.** If the fake can only express one ordering of something inherently timing-dependent, the untestable orderings are where the bug will be — extend the harness instead of concluding the cases are covered. Every interrupt test could only pre-record interrupts *before* a run, and the broken case was an interrupt arriving mid-cleanup.
     - **A test that cleans up after itself has to be run twice.** A single run
       passes whether or not the cleanup matched anything — the first run starts
