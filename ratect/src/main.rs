@@ -310,8 +310,9 @@ enum CachesCommand {
 /// clearing a cache is most likely to be what's needed.
 #[derive(ClapArgs, Debug)]
 struct CachesArgs {
-    /// Storage to look in: volume (Docker named volumes) or directory (host
-    /// directories under `<project>/.batect/caches/<name>`).
+    /// Storage to look in: volume (Docker named volumes) or directory (this
+    /// project's under `<project>/.batect/caches/<name>`, shared ones under
+    /// `~/.ratect/caches/<name>`).
     #[arg(long = "cache-type", value_enum, default_value = "volume")]
     cache_type: CacheTypeArg,
 
@@ -954,18 +955,25 @@ async fn manage_caches(
         );
     }
 
-    // A name in both scopes is refused rather than guessed at: removing the
-    // shared one discards storage other projects are still using, and
-    // removing the project one silently leaves the cache probably meant.
-    if let Some(name) = found
-        .ambiguous()
-        .into_iter()
-        .find(|name| only.contains(*name))
-    {
-        anyhow::bail!(
-            "'{name}' names both a project cache and a shared one. Re-run with \
-             '--scope project' or '--scope shared' to say which to remove."
-        );
+    // **Removing a shared cache always takes `--scope shared`.** Not "when
+    // named", not "when unambiguous" — always.
+    //
+    // This is the one rule, replacing three special cases that each had to
+    // be discovered separately: a bare `clean` sweeping every shared cache,
+    // `-o quiet` feeding machine-wide names into a pipe, and naming a cache
+    // this project has never had and silently removing someone else's. All
+    // three were the same invariant — an unqualified operation touches only
+    // what this project owns — being violated somewhere new.
+    //
+    // The refusal names the flag, so a shared cache stays removable by name;
+    // it just cannot happen by accident.
+    if wanted != Some(ratect_core::config::CacheScope::Shared) {
+        if let Some(name) = found.shared_only(&only).first() {
+            anyhow::bail!(
+                "'{name}' is a shared cache, used by every project on this machine. \
+                 Re-run with '--scope shared' to remove it."
+            );
+        }
     }
 
     // Reported by *cache* name whichever storage was used — a volume's own
@@ -1083,16 +1091,20 @@ impl CacheSelection {
         }
     }
 
-    /// Names that exist in both scopes, which `clean <name>` must refuse
-    /// rather than guess at — unless `--scope` has already said which.
-    fn ambiguous(&self) -> Vec<&String> {
-        if self.scope.is_some() {
-            return Vec::new();
-        }
+    /// Which of `wanted` name a shared cache and *not* one of this
+    /// project's — the names a `clean` without `--scope shared` must refuse.
+    ///
+    /// Covers both the case where the name is only shared and the case where
+    /// it is both: in either, removing the shared storage is something the
+    /// caller has to ask for explicitly. That is one rule where there were
+    /// previously two, and the second (ambiguity) only ever fired on
+    /// collision — which is why naming a cache this project had never
+    /// created removed another project's without a word.
+    fn shared_only<'a>(&'a self, wanted: &'a HashSet<String>) -> Vec<&'a String> {
         let mut names: Vec<&String> = self
-            .owned
+            .shared
             .iter()
-            .filter(|name| self.shared.contains(name))
+            .filter(|name| wanted.contains(*name))
             .collect();
         names.sort();
         names

@@ -263,7 +263,6 @@ pub async fn clean_shared_volume_caches(
     only: &HashSet<String>,
 ) -> Result<Vec<String>> {
     let existing = runtime.list_volumes().await?;
-    let prefix = shared_cache_volume_name("");
     let matched: Vec<String> = matching_shared_cache_volumes(&existing, only)
         .into_iter()
         .map(str::to_string)
@@ -273,6 +272,7 @@ pub async fn clean_shared_volume_caches(
         runtime.remove_volume(name).await?;
     }
 
+    let prefix = shared_cache_volume_name("");
     Ok(matched
         .iter()
         .map(|name| name.strip_prefix(&prefix).unwrap_or(name).to_string())
@@ -282,7 +282,14 @@ pub async fn clean_shared_volume_caches(
 /// Every **shared** cache directory, by name — the counterpart to
 /// [`list_directory_caches`] under `CacheType::Directory`.
 pub fn list_shared_directory_caches() -> Result<Vec<String>> {
-    matching_cache_directories(&shared_cache_root()?, &HashSet::new())
+    // A host with no passwd entry for the current uid has no home, and so
+    // no shared caches — that is an empty list, not a failure. `caches
+    // --cache-type directory` worked on such a host before shared caches
+    // existed, and has no reason to stop.
+    let Ok(root) = shared_cache_root() else {
+        return Ok(Vec::new());
+    };
+    matching_cache_directories(&root, &HashSet::new())
 }
 
 /// Removes the named shared cache directories, returning those removed.
@@ -294,7 +301,11 @@ pub fn clean_shared_directory_caches(only: &HashSet<String>) -> Result<Vec<Strin
     if only.is_empty() {
         return Ok(Vec::new());
     }
-    let root = shared_cache_root()?;
+    // Same tolerance as [`list_shared_directory_caches`]: no home means no
+    // shared caches to remove.
+    let Ok(root) = shared_cache_root() else {
+        return Ok(Vec::new());
+    };
     let matched = matching_cache_directories(&root, only)?;
     for name in &matched {
         let dir = root.join(name);
@@ -304,10 +315,17 @@ pub fn clean_shared_directory_caches(only: &HashSet<String>) -> Result<Vec<Strin
 }
 
 /// Filters `existing_volumes` (from [`crate::docker::ContainerRuntime::list_volumes`])
-/// down to this project's own cache volumes — those with the
-/// `batect-cache-<project_cache_key>-` prefix — further restricted to
+/// down to those whose name starts with `prefix`, further restricted to
 /// `only` when non-empty (the `--clean-cache <name>` allowlist; empty means
-/// "every one of this project's cache volumes", matching plain `--clean`).
+/// "everything under this prefix").
+///
+/// Takes the prefix rather than a project key so both scopes share it —
+/// `batect-cache-<key>-` for a project's own, `ratect-shared-cache-` for
+/// the machine's. **The empty-`only` rule differs by scope and is decided by
+/// the caller**: for a project cache empty means "all of them", and for a
+/// shared one it must mean "none", which is why
+/// [`matching_shared_cache_volumes`] guards it before delegating here.
+///
 /// A pure, synchronous decision function deliberately kept separate from
 /// the I/O in [`clean_volume_caches`], so it's unit-testable against plain
 /// `Vec<String>` fixtures without needing a fake `ContainerRuntime`.

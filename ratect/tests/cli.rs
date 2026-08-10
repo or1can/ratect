@@ -684,6 +684,14 @@ fn project_with_directory_caches(names: &[&str]) -> PathBuf {
     directory
 }
 
+/// The default-suite cache tests all pass `--scope project`.
+///
+/// A shared cache lives under the *real* `~/.ratect/caches` — `home_directory()`
+/// reads the passwd entry, not `$HOME`, so a test cannot redirect it. Without
+/// the flag these tests would read, and one would remove, a developer's own
+/// shared caches: a machine with `~/.ratect/caches/npm-cache` saw this suite
+/// delete it. Scoping them says what they are actually about, which is a
+/// project's own storage.
 fn caches_command(project: &Path) -> Command {
     let mut command = ratect_command();
     command.arg("-f").arg(project.join("batect.yml"));
@@ -818,7 +826,14 @@ fn caches_list_reports_this_projects_caches_by_name() {
     let project = project_with_directory_caches(&["npm-cache", "gradle-cache"]);
 
     let output = caches_command(&project)
-        .args(["caches", "list", "--cache-type", "directory"])
+        .args([
+            "caches",
+            "list",
+            "--cache-type",
+            "directory",
+            "--scope",
+            "project",
+        ])
         .output()
         .expect("failed to run ratect");
 
@@ -849,7 +864,15 @@ fn caches_list_in_quiet_output_prints_names_that_clean_accepts() {
     assert_eq!(String::from_utf8_lossy(&listed.stdout), "npm-cache\n");
 
     let cleaned = caches_command(&project)
-        .args(["caches", "clean", "npm-cache", "--cache-type", "directory"])
+        .args([
+            "caches",
+            "clean",
+            "npm-cache",
+            "--cache-type",
+            "directory",
+            "--scope",
+            "project",
+        ])
         .output()
         .expect("failed to run ratect");
     assert!(cleaned.status.success());
@@ -866,7 +889,14 @@ fn caches_clean_without_names_removes_every_cache() {
     let project = project_with_directory_caches(&["npm-cache", "gradle-cache"]);
 
     let output = caches_command(&project)
-        .args(["caches", "clean", "--cache-type", "directory"])
+        .args([
+            "caches",
+            "clean",
+            "--cache-type",
+            "directory",
+            "--scope",
+            "project",
+        ])
         .output()
         .expect("failed to run ratect");
 
@@ -886,7 +916,14 @@ fn caches_works_without_a_configuration_file() {
     assert!(!project.join("batect.yml").exists());
 
     let output = caches_command(&project)
-        .args(["caches", "clean", "--cache-type", "directory"])
+        .args([
+            "caches",
+            "clean",
+            "--cache-type",
+            "directory",
+            "--scope",
+            "project",
+        ])
         .output()
         .expect("failed to run ratect");
 
