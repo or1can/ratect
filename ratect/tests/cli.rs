@@ -781,7 +781,7 @@ fn caches_reports_scope_and_refuses_an_ambiguous_name() {
     // this project — most of them belong to other projects on the machine.
     let (project_section, shared_section) = listed_out
         .split_once("Shared caches on this machine:")
-        .expect("both groups should appear:\n{listed_out}");
+        .unwrap_or_else(|| panic!("both groups should appear:\n{listed_out}"));
     assert!(
         project_section.contains("Caches for this project:") && project_section.contains("clash"),
         "the project's own cache belongs in the first group:\n{listed_out}"

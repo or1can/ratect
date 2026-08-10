@@ -315,8 +315,9 @@ struct CachesArgs {
     #[arg(long = "cache-type", value_enum, default_value = "volume")]
     cache_type: CacheTypeArg,
 
-    /// Restrict to one scope. Listing shows both by default; on `clean` this
-    /// is how an ambiguous name is disambiguated.
+    /// Restrict to one scope. The readable listing shows both by default,
+    /// `-o quiet` shows this project's only, and on `clean` this is how an
+    /// ambiguous name is disambiguated.
     #[arg(long = "scope", value_enum)]
     scope: Option<CacheScopeArg>,
 
@@ -912,7 +913,13 @@ async fn manage_caches(
                 println!("{name}");
             }
         } else if found.is_empty() {
-            println!("This project has no caches.");
+            // Named after what was searched, not after the project: with
+            // `--scope shared` this project's caches were never looked at.
+            match args.scope {
+                Some(CacheScopeArg::Shared) => println!("There are no shared caches."),
+                Some(CacheScopeArg::Project) => println!("This project has no caches."),
+                None => println!("This project has no caches, and there are no shared ones."),
+            }
         } else {
             if !found.owned.is_empty() {
                 println!("Caches for this project:");

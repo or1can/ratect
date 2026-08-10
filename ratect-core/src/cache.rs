@@ -220,8 +220,8 @@ fn matching_shared_cache_volumes<'a>(
 
 /// Every cache volume this project can see, with the scope each one's name
 /// implies — one `list_volumes` call covering both, rather than
-/// [`list_volume_caches`] and [`list_shared_volume_caches`] listing the
-/// daemon twice for the same answer.
+/// [`list_volume_caches`] listing the daemon once per scope for the same
+/// answer.
 pub async fn list_all_volume_caches(
     runtime: &impl crate::docker::ContainerRuntime,
     project_cache_key: &str,
@@ -246,26 +246,6 @@ pub async fn list_all_volume_caches(
         .collect();
     found.sort();
     Ok(found)
-}
-
-/// Every **shared** cache volume on the daemon, by cache name — the
-/// cross-project counterpart to [`list_volume_caches`]. Takes no project
-/// key, because a shared cache has none.
-pub async fn list_shared_volume_caches(
-    runtime: &impl crate::docker::ContainerRuntime,
-) -> Result<Vec<String>> {
-    let existing = runtime.list_volumes().await?;
-    let mut names: Vec<String> =
-        matching_cache_volumes(&existing, &shared_cache_volume_name(""), &HashSet::new())
-            .into_iter()
-            .map(|name| {
-                name.strip_prefix(shared_cache_volume_name("").as_str())
-                    .unwrap_or(name)
-                    .to_string()
-            })
-            .collect();
-    names.sort();
-    Ok(names)
 }
 
 /// Removes the named shared cache volumes, returning the cache names
