@@ -261,7 +261,7 @@ fn a_shared_cache_resolves_to_the_same_volume_for_every_project() {
         name: "registry".to_string(),
         container: "/registry".to_string(),
         options: None,
-        scope: crate::config::CacheScope::Shared,
+        scope: Some(crate::config::CacheScope::Shared),
     };
     let options = CacheOptions {
         cache_type: CacheType::Volume,

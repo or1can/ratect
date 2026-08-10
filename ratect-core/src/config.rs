@@ -508,7 +508,21 @@ pub struct CacheVolumeMount {
     /// Whether this cache belongs to one project or is shared across every
     /// project on the machine — see [`CacheScope`]. `ratect.toml` only;
     /// Batect has no equivalent, so a `batect.yml` using it is rejected.
-    pub scope: CacheScope,
+    ///
+    /// `None` means the field was absent, which is not the same as
+    /// `Some(Project)`: `ratect-compat` has to reject the *field*, since
+    /// real `batect` rejects any unknown property — writing `scope: project`
+    /// in a `batect.yml` is still a config that only Ratect will load. Use
+    /// [`CacheVolumeMount::scope`] for the effective value.
+    pub scope: Option<CacheScope>,
+}
+
+impl CacheVolumeMount {
+    /// This cache's effective scope — [`CacheScope::Project`] when the field
+    /// was omitted, which is Batect's only behaviour.
+    pub fn scope(&self) -> CacheScope {
+        self.scope.unwrap_or_default()
+    }
 }
 
 /// How widely a [`CacheVolumeMount`] is shared.
@@ -668,7 +682,7 @@ impl<'de> Deserialize<'de> for VolumeMount {
                             name,
                             container,
                             options,
-                            scope: scope.unwrap_or_default(),
+                            scope,
                         }))
                     }
                     "tmpfs" => {
@@ -724,6 +738,12 @@ impl Serialize for VolumeMount {
                 map.serialize_entry("container", &mount.container)?;
                 if let Some(options) = &mount.options {
                     map.serialize_entry("options", options)?;
+                }
+                // Emitted only when it was set: `config convert` writes a
+                // `ratect.toml` from a `batect.yml`, where it never can be,
+                // and a round trip must not invent it.
+                if let Some(scope) = &mount.scope {
+                    map.serialize_entry("scope", scope)?;
                 }
                 map.end()
             }
@@ -3313,7 +3333,10 @@ fn reject_shared_caches_in_compat(config: &Config) -> Result<()> {
                 .iter()
                 .flatten()
                 .filter_map(move |volume| match volume {
-                    VolumeMount::Cache(cache) if cache.scope == CacheScope::Shared => {
+                    // Presence, not value: real `batect` rejects any unknown
+                    // property, so `scope: project` is just as unloadable
+                    // there as `scope: shared`.
+                    VolumeMount::Cache(cache) if cache.scope.is_some() => {
                         Some((container_name.as_str(), cache.name.as_str()))
                     }
                     _ => None,
@@ -3323,8 +3346,8 @@ fn reject_shared_caches_in_compat(config: &Config) -> Result<()> {
     offenders.sort_unstable();
     if let Some((container_name, cache_name)) = offenders.first() {
         anyhow::bail!(
-            "The container '{container_name}' declares the cache '{cache_name}' with \
-             'scope: shared', which is a ratect-native field not supported in \
+            "The container '{container_name}' declares the cache '{cache_name}' with a \
+             'scope', which is a ratect-native field not supported in \
              Batect-compatible configuration."
         );
     }
@@ -3345,14 +3368,17 @@ fn reject_conflicting_cache_scopes(config: &Config) -> Result<()> {
             let VolumeMount::Cache(cache) = volume else {
                 continue;
             };
+            // The *effective* scope: an omitted `scope` is `project`, so
+            // one entry writing it out and another leaving it off is not a
+            // conflict.
             match seen.get(cache.name.as_str()) {
-                Some(scope) if *scope != cache.scope => anyhow::bail!(
+                Some(scope) if *scope != cache.scope() => anyhow::bail!(
                     "The cache '{}' is declared with both 'project' and 'shared' scope. \
                      A cache name refers to one piece of storage, so it can only have one.",
                     cache.name
                 ),
                 _ => {
-                    seen.insert(cache.name.as_str(), cache.scope);
+                    seen.insert(cache.name.as_str(), cache.scope());
                 }
             }
         }

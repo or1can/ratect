@@ -2553,9 +2553,9 @@ fn resolve_expressions_rejects_one_cache_name_with_two_scopes() {
         })
     };
     let mut first = container_with_build("./docker", HashMap::new());
-    first.volumes = Some(vec![cache(CacheScope::Project)]);
+    first.volumes = Some(vec![cache(Some(CacheScope::Project))]);
     let mut second = container_with_build("./docker", HashMap::new());
-    second.volumes = Some(vec![cache(CacheScope::Shared)]);
+    second.volumes = Some(vec![cache(Some(CacheScope::Shared))]);
 
     let config = Config {
         project_name: "demo".to_string(),
@@ -2660,6 +2660,81 @@ fn resolve_expressions_accepts_ordinary_cache_names() {
             )
             .unwrap_or_else(|e| panic!("{name:?} should be accepted: {e:#}"));
     }
+}
+
+/// `scope` has to survive serialization, or `ratect config convert` and any
+/// native round trip silently downgrade a shared cache to project-scoped —
+/// pointing the project at different storage without saying so.
+///
+/// The existing round-trip assertion could not catch this: the field was
+/// dropped on both sides of the comparison, so they agreed.
+#[test]
+fn a_shared_cache_survives_a_serialization_round_trip() {
+    let mount = VolumeMount::Cache(CacheVolumeMount {
+        name: "registry".to_string(),
+        container: "/registry".to_string(),
+        options: None,
+        scope: Some(CacheScope::Shared),
+    });
+
+    let json = serde_json::to_string(&mount).unwrap();
+    assert!(
+        json.contains("\"scope\":\"shared\""),
+        "scope should be emitted: {json}"
+    );
+
+    let VolumeMount::Cache(round_tripped) = serde_json::from_str::<VolumeMount>(&json).unwrap()
+    else {
+        panic!("a cache mount should round-trip as one");
+    };
+    assert_eq!(round_tripped.scope, Some(CacheScope::Shared));
+}
+
+/// An omitted `scope` must stay omitted. `config convert` writes a
+/// `ratect.toml` from a `batect.yml`, where the field cannot appear, so
+/// inventing `scope = "project"` on the way out would put a native-only
+/// field into every converted file.
+#[test]
+fn an_absent_cache_scope_is_not_invented_on_the_way_out() {
+    let mount = VolumeMount::Cache(CacheVolumeMount {
+        name: "registry".to_string(),
+        container: "/registry".to_string(),
+        options: None,
+        scope: None,
+    });
+
+    let json = serde_json::to_string(&mount).unwrap();
+    assert!(
+        !json.contains("scope"),
+        "an absent scope should stay absent: {json}"
+    );
+}
+
+/// `ratect-compat` rejects the *field*, not the value `shared`. Real
+/// `batect` refuses any unknown property, so `scope: project` in a
+/// `batect.yml` is just as unloadable there — accepting it here would be
+/// exactly the one-way lock-in the compat binary exists to avoid.
+#[tokio::test]
+async fn even_a_project_scope_is_rejected_in_a_batect_yml() {
+    let dir = std::env::temp_dir().join(format!("ratect-scope-p-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    volumes:\n      \
+         - type: cache\n        name: registry\n        container: /registry\n        \
+         scope: project\ntasks:\n  t:\n    run:\n      container: app\n",
+    )
+    .unwrap();
+
+    let err = load_project(&dir.join("batect.yml"), &HashMap::new())
+        .await
+        .expect_err("the field itself is native-only");
+    std::fs::remove_dir_all(&dir).ok();
+
+    assert!(
+        format!("{err:#}").contains("not supported in Batect-compatible configuration"),
+        "unexpected error: {err:#}"
+    );
 }
 
 fn container_with_build_ssh(agents: Vec<SshAgent>) -> Container {

@@ -176,7 +176,7 @@ pub fn resolve_cache_mount(
     project_cache_key: &str,
     mount: &CacheVolumeMount,
 ) -> Result<String> {
-    let shared = mount.scope == crate::config::CacheScope::Shared;
+    let shared = mount.scope() == crate::config::CacheScope::Shared;
     let source = match options.cache_type {
         CacheType::Volume if shared => shared_cache_volume_name(&mount.name),
         CacheType::Volume => cache_volume_name(project_cache_key, &mount.name),
