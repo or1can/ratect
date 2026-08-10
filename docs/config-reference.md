@@ -434,6 +434,15 @@ expression support there either.
 
 ### Cache volumes
 
+A cache `name` must start with a letter or digit and contain only letters,
+digits, underscores, dots and dashes — Docker's own volume-name character set.
+The name becomes a host directory under `--cache-type=directory`, so a name
+like `/etc` or `../../.ssh` would otherwise have an arbitrary host directory
+bind-mounted into the container; Batect performs no such check, and Ratect
+diverges here for the same reason it applies [containment to Git
+includes](#git-includes). Under `--cache-type=volume` Docker already enforced
+this, so no name that worked before is affected.
+
 A `cache` mount persists between separate `ratect` invocations — unlike `local`, its
 contents aren't tied to a specific host path in `batect.yml`. `name` identifies it,
 combined with a per-project key into either a Docker named volume (the default) or a

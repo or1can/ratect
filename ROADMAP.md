@@ -1243,7 +1243,7 @@ cycle (0.2.0, the first one not about `ratect-compat`):
   `allow_host_paths` left off, taking the two pieces that are `ratect`-only by
   nature — both need a new config field, which is exactly what `ratect-compat`
   can never have.
-  - **A cross-project shared cache** — [decisions/0004](decisions/0004-git-include-host-path-trust.md)'s
+  - ~~**A cross-project shared cache** — [decisions/0004](decisions/0004-git-include-host-path-trust.md)'s
     second track, and the one it calls "solve the underlying need properly". What
     a bundle mounting `~/.cache/<tool>` actually wants is a cache that persists
     *and* is shared across projects; it's spelled as a host path only because
@@ -1253,17 +1253,17 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     neither `allow_host_paths` nor the containment escape it opens. Builds on
     `cache.rs`'s existing volume/directory resolution; the new question is the
     scope key (today's cache name is namespaced by the project's own cache key,
-    and a shared one deliberately isn't).
+    and a shared one deliberately isn't).~~
 
-    **Scope, settled before building:**
+    ~~**Scope, settled before building:**~~
 
-    - **`scope = "shared"` on a `cache` mount**, defaulting to `"project"`.
+    - ~~**`scope = "shared"` on a `cache` mount**, defaulting to `"project"`.
       Names the concept rather than adding a boolean, so a third scope would
       not need a second field. Native-only and *rejected* in a `batect.yml`
       rather than ignored — the same treatment `extends` gets, for the same
       one-way-lock-in reason: a `batect.yml` using it would stop working
-      under real `batect`.
-    - **Scope has to be readable from the storage name, not the config.**
+      under real `batect`.~~
+    - ~~**Scope has to be readable from the storage name, not the config.**
       `ratect caches` deliberately never loads the configuration file (a
       cache belongs to the project *directory*, so the verb still works when
       the config doesn't parse — which is when clearing one is most likely
@@ -1271,15 +1271,37 @@ cycle (0.2.0, the first one not about `ratect-compat`):
       volume and `~/.ratect/caches/<name>` as a directory, beside
       `~/.ratect/incl`. A deliberate second benefit: that prefix differs
       from `batect-cache-<key>-`, so `--clean`'s existing project sweep
-      cannot match a shared cache even by accident.
-    - **A cache name has one scope per project**, checked at config load.
+      cannot match a shared cache even by accident.~~
+    - ~~**A cache name has one scope per project**, checked at config load.
       Two entries sharing a name across scopes would map one name to two
-      volumes, and `caches clean <name>` could not resolve it.
-    - **`caches list` gains a scope column**, with a filter to restrict it;
+      volumes, and `caches clean <name>` could not resolve it.~~
+    - ~~**`caches list` gains a scope column**, with a filter to restrict it;
       **`caches clean <name>` resolves a name in either scope**, but a bare
       `caches clean` sweeps *project* caches only. Removing every shared
       cache by default would discard other projects' state, which is the one
-      thing a shared cache must not do casually.
+      thing a shared cache must not do casually.~~ — done: `scope = "shared"` on a
+    `ratect.toml` cache mount. The scope key resolved to something simpler
+    than a key at all: `ratect caches` deliberately never loads the config,
+    so scope has to be readable from the *storage name* — hence
+    `ratect-shared-cache-<name>` as a volume, `~/.ratect/caches/<name>` as a
+    directory, beside the Git-include clones. That prefix earns its keep
+    twice: it cannot alias `batect-cache-<key>-`, so the project sweep behind
+    a bare `--clean` structurally cannot reach shared storage.
+
+    Native-only and rejected in a `batect.yml`, like `extends`; one cache name
+    gets one scope per project. `caches list` groups the two and deliberately
+    does *not* call the shared ones this project's, since most belong to other
+    projects on the machine; `-o quiet` omits them unless `--scope` asks,
+    because its documented use is being piped straight into `caches clean`.
+
+    Two defects worth recording, both found by review rather than by tests. A
+    bare `caches clean` passes an empty name set, which for a project cache
+    means "all of them" — the shared path inherited that and removed every
+    shared cache on the machine. And a cache `name` was joined onto a host
+    path unvalidated, so `name: /etc` under `--cache-type=directory`
+    bind-mounted an arbitrary directory into the container; that one predates
+    this work, affects `ratect-compat`, and Batect has it too.
+
   - **`allow_nested_git_includes`** (defaulting `false`) — the [Future
     Vision](#future-vision) item: today a bundle reached through a Git include
     can itself declare a further `type: git` include pointing at any remote, with

@@ -3363,7 +3363,24 @@ fn reject_shared_caches_in_compat(config: &Config) -> Result<()> {
 /// naming the same cache is the ordinary way to share one between them.
 fn reject_conflicting_cache_scopes(config: &Config) -> Result<()> {
     let mut seen: std::collections::BTreeMap<&str, CacheScope> = std::collections::BTreeMap::new();
-    for container in config.containers.values() {
+    // Sorted, so a project with more than one conflict always reports the
+    // same one — `config.containers` is a `HashMap`, and its order varies
+    // between runs. Same reason [`reject_shared_caches_in_compat`] sorts.
+    let mut containers: Vec<&Container> = config.containers.values().collect();
+    containers.sort_by_key(|container| {
+        container
+            .volumes
+            .iter()
+            .flatten()
+            .filter_map(|volume| match volume {
+                VolumeMount::Cache(cache) => Some(cache.name.as_str()),
+                _ => None,
+            })
+            .min()
+            .unwrap_or("")
+            .to_string()
+    });
+    for container in containers {
         for volume in container.volumes.iter().flatten() {
             let VolumeMount::Cache(cache) = volume else {
                 continue;

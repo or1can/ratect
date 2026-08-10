@@ -251,7 +251,7 @@ The container fields, by area:
 | Area | Fields | Semantics |
 | --- | --- | --- |
 | Image | `image`, `image_pull_policy`, `build_directory`, `dockerfile`, `build_target`, `build_args`, `build_secrets`, `build_ssh` | [Image building](config-reference.md#image-building) |
-| Mounts | `volumes` (host / `cache` / `tmpfs`) | [Volumes](config-reference.md#volume-path-resolution), [caches](config-reference.md#cache-volumes), [tmpfs](config-reference.md#tmpfs-mounts) |
+| Mounts | `volumes` (host / `cache` / `tmpfs`) | [Volumes](config-reference.md#volume-path-resolution), [caches](config-reference.md#cache-volumes), [tmpfs](config-reference.md#tmpfs-mounts). A cache also takes [`scope`](#shared-caches) *(native only)* — the linked section describes project-keyed storage, which `scope = "shared"` deliberately does not use. |
 | Runtime | `command`, `entrypoint`, `working_directory`, `environment`, `enable_init_process`, `privileged`, `shm_size`, `capabilities_to_add`, `capabilities_to_drop`, `devices`, `labels`, `log_driver`, `log_options` | [Container](config-reference.md#container) |
 | Networking | `ports`, `additional_hostnames`, `additional_hosts`, `dependencies` | [Ports](config-reference.md#port-mappings), [readiness](config-reference.md#dependency-readiness) |
 | Readiness | `health_check`, `setup_commands` | [Dependency readiness](config-reference.md#dependency-readiness) |

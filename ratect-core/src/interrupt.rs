@@ -32,6 +32,13 @@
 //! the commands to remove things by hand. Counting is what lets the engine
 //! distinguish the two.
 //!
+//! The engine's rule is *relative*: it compares against the count when
+//! cleanup started, not a fixed `>= 2`. Arming the handler replaces the
+//! process's default `SIGINT` behaviour for the whole run, so any interrupt
+//! the engine doesn't act on is one it has silently swallowed — and a fixed
+//! threshold swallows the first Ctrl+C during the cleanup of a run that was
+//! never interrupted, which is the common case rather than an exotic one.
+//!
 //! # Interactive tasks
 //!
 //! A task attached to a real TTY puts the terminal in raw mode, and a raw
@@ -42,13 +49,6 @@
 //! *non*-interactive run, which is all of CI and most local task runs, and
 //! an interactive session is served by the container receiving the keystroke
 //! itself.
-//!
-//! The engine's rule is *relative*: it compares against the count when
-//! cleanup started, not a fixed `>= 2`. Arming the handler replaces the
-//! process's default `SIGINT` behaviour for the whole run, so any interrupt
-//! the engine doesn't act on is one it has silently swallowed — and a fixed
-//! threshold swallows the first Ctrl+C during the cleanup of a run that was
-//! never interrupted, which is the common case rather than an exotic one.
 //!
 //! # Two invariants to preserve
 //!
