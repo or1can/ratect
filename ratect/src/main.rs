@@ -128,7 +128,7 @@ enum Command {
         command: TasksCommand,
     },
 
-    /// Inspect and remove this project's caches.
+    /// Inspect and remove caches — this project's, and the machine's shared ones.
     Caches {
         #[command(subcommand)]
         command: CachesCommand,
@@ -294,10 +294,12 @@ struct TasksListArgs {
 
 #[derive(Subcommand, Debug)]
 enum CachesCommand {
-    /// List this project's existing caches.
+    /// List the caches this project can see: its own, and the machine's
+    /// shared ones.
     List(CachesArgs),
 
-    /// Remove this project's caches, or just the named ones.
+    /// Remove this project's caches, or just the named ones — which may
+    /// be shared, and so used by other projects.
     Clean(CleanCachesArgs),
 }
 
@@ -904,25 +906,47 @@ async fn manage_caches(
     let Some(names) = names else {
         // Quiet is the machine-readable form, same contract as `tasks list`:
         // bare names, one per line, nothing else on stdout.
+        let (project, shared): (Vec<_>, Vec<_>) = found
+            .iter()
+            .partition(|(_, scope)| *scope == ratect_core::config::CacheScope::Project);
+
         if quiet {
             // Bare names, one per line — the documented contract, and what
-            // `caches clean` takes back. Deduplicated because a name can
-            // exist in both scopes: printing it twice would be two identical
-            // lines carrying no way to tell them apart. Add `--scope` to get
-            // an unambiguous list, which is also what makes the result
-            // safely pipeable into `clean --scope`.
-            let mut seen = std::collections::HashSet::new();
-            for (name, _) in &found {
-                if seen.insert(name) {
-                    println!("{name}");
-                }
+            // `caches clean` takes back.
+            //
+            // Shared caches are omitted unless `--scope` asks for them.
+            // Every shared cache on the machine is visible from here, most
+            // of them belonging to other projects, and the documented use of
+            // this output is piping it into `caches clean` — which would
+            // then delete them. Discovery is the readable listing's job;
+            // this one has to be safe to feed back.
+            let listed = if args.scope.is_some() {
+                found.iter().collect::<Vec<_>>()
+            } else {
+                project.clone()
+            };
+            for (name, _) in listed {
+                println!("{name}");
             }
         } else if found.is_empty() {
             println!("This project has no caches.");
         } else {
-            println!("Caches for this project:");
-            for (name, scope) in &found {
-                println!("- {name} ({})", scope_label(*scope));
+            if !project.is_empty() {
+                println!("Caches for this project:");
+                for (name, _) in &project {
+                    println!("- {name}");
+                }
+            }
+            // Listed separately, and never as "this project's": these are
+            // machine-wide, and most of them will belong to other projects.
+            if !shared.is_empty() {
+                if !project.is_empty() {
+                    println!();
+                }
+                println!("Shared caches on this machine:");
+                for (name, _) in &shared {
+                    println!("- {name}");
+                }
             }
         }
         return Ok(());
@@ -1059,23 +1083,14 @@ async fn find_caches(
     match cache_type {
         ratect_core::cache::CacheType::Volume => {
             let docker = docker.expect("a volume cache needs a Docker client");
-            if want(CacheScope::Project) {
-                let key = ratect_core::cache::project_cache_key(project_directory)?;
-                found.extend(
-                    ratect_core::cache::list_volume_caches(docker, &key)
-                        .await?
-                        .into_iter()
-                        .map(|name| (name, CacheScope::Project)),
-                );
-            }
-            if want(CacheScope::Shared) {
-                found.extend(
-                    ratect_core::cache::list_shared_volume_caches(docker)
-                        .await?
-                        .into_iter()
-                        .map(|name| (name, CacheScope::Shared)),
-                );
-            }
+            let key = ratect_core::cache::project_cache_key(project_directory)?;
+            // One listing for both scopes — see `list_all_volume_caches`.
+            found.extend(
+                ratect_core::cache::list_all_volume_caches(docker, &key)
+                    .await?
+                    .into_iter()
+                    .filter(|(_, scope)| want(*scope)),
+            );
         }
         ratect_core::cache::CacheType::Directory => {
             if want(CacheScope::Project) {
@@ -1097,15 +1112,6 @@ async fn find_caches(
 
     found.sort();
     Ok(found)
-}
-
-/// How a scope is spelled in `caches list` output — the same words
-/// `--scope` accepts, so what is read can be pasted back.
-fn scope_label(scope: ratect_core::config::CacheScope) -> &'static str {
-    match scope {
-        ratect_core::config::CacheScope::Project => "project",
-        ratect_core::config::CacheScope::Shared => "shared",
-    }
 }
 
 /// `ratect resources list` / `ratect resources clean` — the containers and

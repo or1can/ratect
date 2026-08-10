@@ -766,16 +766,32 @@ fn caches_reports_scope_and_refuses_an_ambiguous_name() {
         ])
         .output()
         .expect("failed to inspect");
+    // Asserted separately from the project volume surviving: checking only
+    // that would stay green if `clean --scope shared` regressed to removing
+    // nothing at all.
+    let shared_gone = std::process::Command::new("docker")
+        .args(["volume", "inspect", "ratect-shared-cache-clash"])
+        .output()
+        .expect("failed to inspect");
 
     cleanup();
     std::fs::remove_dir_all(&project).ok();
 
+    // Grouped under headings that don't claim the shared ones belong to
+    // this project — most of them belong to other projects on the machine.
+    let (project_section, shared_section) = listed_out
+        .split_once("Shared caches on this machine:")
+        .expect("both groups should appear:\n{listed_out}");
     assert!(
-        listed_out.contains("clash (project)") && listed_out.contains("clash (shared)"),
-        "both scopes should be listed and labelled:\n{listed_out}"
+        project_section.contains("Caches for this project:") && project_section.contains("clash"),
+        "the project's own cache belongs in the first group:\n{listed_out}"
     );
     assert!(
-        filtered_out.contains("only-shared") && !filtered_out.contains("(project)"),
+        shared_section.contains("clash") && shared_section.contains("only-shared"),
+        "shared caches belong in the second:\n{listed_out}"
+    );
+    assert!(
+        filtered_out.contains("only-shared") && !filtered_out.contains("Caches for this project:"),
         "--scope shared should list only shared caches:\n{filtered_out}"
     );
     assert!(
@@ -790,6 +806,10 @@ fn caches_reports_scope_and_refuses_an_ambiguous_name() {
     assert!(
         survived.status.success(),
         "removing the shared cache must leave the project one alone"
+    );
+    assert!(
+        !shared_gone.status.success(),
+        "the shared cache named should actually have been removed"
     );
 }
 
