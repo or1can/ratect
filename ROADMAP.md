@@ -1293,6 +1293,9 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     does *not* call the shared ones this project's, since most belong to other
     projects on the machine; `-o quiet` omits them unless `--scope` asks,
     because its documented use is being piped straight into `caches clean`.
+    **Removing a shared cache always takes `--scope shared`** — the single
+    rule that replaced three special cases, each of which had been discovered
+    only after it caused a defect.
 
     Two defects worth recording, both found by review rather than by tests. A
     bare `caches clean` passes an empty name set, which for a project cache

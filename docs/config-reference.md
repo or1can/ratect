@@ -434,6 +434,10 @@ expression support there either.
 
 ### Cache volumes
 
+> `ratect`'s native format adds a [`scope`](ratect-config-reference.md#shared-caches)
+> field here, for a cache shared across projects. Everything below describes the
+> project-scoped kind, which is the only one `batect.yml` has.
+
 A cache `name` must start with a letter or digit and contain only letters,
 digits, underscores, dots and dashes — Docker's own volume-name character set.
 The name becomes a host directory under `--cache-type=directory`, so a name

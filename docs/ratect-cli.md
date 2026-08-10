@@ -174,7 +174,9 @@ Taken by `run` and by `caches` (whose default storage is Docker volumes); never 
 
 `--cache-type <volume|directory>` (default `volume`) selects which storage to act on,
 for both `list` and `clean` — a cache in one is invisible to the other, so this has to
-match how the project runs its tasks.
+match how the project runs its tasks. Under `directory`, this project's caches are
+host directories under `<project>/.batect/caches/<name>` and shared ones live at
+`~/.ratect/caches/<name>`.
 
 `caches` never reads the configuration file. A cache belongs to the project
 *directory*, so both commands work on a project whose configuration is broken or
@@ -185,7 +187,7 @@ Docker volume it's stored in; that name is what `caches clean` takes back. Under
 `-o quiet` it's one name per line and nothing else, for scripting — and it prints
 **this project's caches only**, unless `--scope shared` asks otherwise. What it
 emits is exactly what a `caches clean` carrying the same flags would act on, so
-the output is always safe to pipe straight back. Naming a cache that doesn't
+the output can be piped straight back. Naming a cache that doesn't
 exist warns on stderr rather than passing silently, since the likeliest cause is
 a typo.
 
@@ -204,17 +206,18 @@ Shared caches on this machine:
 - cargo-registry
 ```
 
-**`caches clean` with no names removes this project's caches only, never a shared
-one.** Discarding storage other projects are still using should take naming it.
-Naming one does remove it — and if a project cache and a shared cache happen to
-share a name, the command refuses rather than guessing, since removing the wrong
-one is silent either way:
+**Removing a shared cache always takes `--scope shared`** — whether it is named
+or not, and whether or not this project has a cache of the same name. A shared
+cache holds storage every other project on the machine is using, so it is never
+reached by an unqualified `clean`:
 
 ```
 $ ratect caches clean cargo-registry
-Error: 'cargo-registry' names both a project cache and a shared one. Re-run with
-'--scope project' or '--scope shared' to say which to remove.
+Error: 'cargo-registry' is a shared cache, used by every project on this
+machine. Re-run with '--scope shared' to remove it.
 ```
+
+`caches clean` with no names therefore sweeps this project's caches only.
 
 Both scopes are read from *storage*, not from the configuration — a project cache
 is found by its `batect-cache-<key>-` prefix, a shared one by
