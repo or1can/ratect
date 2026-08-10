@@ -187,19 +187,37 @@ The [`decisions/`](decisions/) directory holds Architecture Decision Records —
       crossing up from one needs the caller to attach that. `classify_ssh_agent_paths`
       shipped naming only the agent, in a codebase where every other config error
       names its container.
-    - **When a change widens what something covers, grep for every string that
-      names its old scope.** Not the strings you wrote — the ones your change
-      just falsified. Output text, `--help`, the docs sections, the roadmap
-      entry. `ratect caches list` went from listing a project's caches to
-      listing the machine's shared ones too, and kept printing them under
-      "Caches for this project:"; `--help` kept saying "this project's", the
-      compat config reference never gained the new cache-name rule, the native
-      reference's link kept pointing at a section the change contradicted, and
-      the roadmap entry still read as outstanding. That was **five of eight
-      findings in one review round**, all one habit. It is also not cosmetic:
-      the stale heading made a documented scripting idiom
+    - **When a change alters observable behaviour, re-read that behaviour's whole
+      doc section and *run* each claim against the binary.** Not grep — execute.
+      Every claim: the example output, the flag descriptions, the "this does X"
+      sentences. Capture real output and `diff` it rather than editing what looks
+      wrong, since what looks wrong is exactly the set you already believe.
+
+      This is a rewrite of a check that said to *grep for strings naming the old
+      scope*, which failed on its first outing. `ratect caches list` widened from
+      a project's caches to the machine's shared ones as well, and the grep — for
+      "this project's caches" and friends — missed `"This project has no
+      caches."`, `--scope`'s "Listing shows both by default", and a paragraph
+      describing deduplication, because none of them contained the words expected.
+      Worse, it reported clean, so the sweep was recorded as done. Executing the
+      section's claims caught all three, and had already caught a stale example
+      block the grep also missed.
+
+      Grep is the fallback for claims nothing can be run against (a roadmap
+      entry, a design note). It is not the check.
+
+      The stakes are not cosmetic: a stale heading claiming shared caches were
+      "Caches for this project:" made a documented idiom
       (`caches list -o quiet | xargs ratect caches clean`) delete another
-      project's cache.
+      project's cache. Across two rounds this one habit accounted for eight
+      findings.
+    - **Verify a claim before writing it, not after a reviewer questions it.**
+      "No name that worked before stops working" was written into a CHANGELOG
+      entry and two doc pages, and was false — the new validation had been
+      enforced by Docker for volume caches only, so directory caches silently
+      became a breaking change. Disabling the check and running it took a
+      minute. An unverified claim about past behaviour is a guess with a
+      citation's confidence.
     - **Watch for coverage shaped by the test harness rather than the behaviour.** If the fake can only express one ordering of something inherently timing-dependent, the untestable orderings are where the bug will be — extend the harness instead of concluding the cases are covered. Every interrupt test could only pre-record interrupts *before* a run, and the broken case was an interrupt arriving mid-cleanup.
     - **A test that cleans up after itself has to be run twice.** A single run
       passes whether or not the cleanup matched anything — the first run starts
