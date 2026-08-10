@@ -440,8 +440,11 @@ The name becomes a host directory under `--cache-type=directory`, so a name
 like `/etc` or `../../.ssh` would otherwise have an arbitrary host directory
 bind-mounted into the container; Batect performs no such check, and Ratect
 diverges here for the same reason it applies [containment to Git
-includes](#git-includes). Under `--cache-type=volume` Docker already enforced
-this, so no name that worked before is affected.
+includes](#git-includes). Under `--cache-type=volume` Docker already enforced this, so nothing that
+worked there is affected. **Directory caches are a breaking change**: they
+accepted any name, so `name: my cache` or `name: node/modules` loaded before
+and now fails. Rename the cache — the storage is rebuilt on the next run, which
+is what a cache is for.
 
 A `cache` mount persists between separate `ratect` invocations — unlike `local`, its
 contents aren't tied to a specific host path in `batect.yml`. `name` identifies it,
