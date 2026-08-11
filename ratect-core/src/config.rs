@@ -3366,8 +3366,12 @@ fn reject_conflicting_cache_scopes(config: &Config) -> Result<()> {
     // Sorted, so a project with more than one conflict always reports the
     // same one — `config.containers` is a `HashMap`, and its order varies
     // between runs. Same reason [`reject_shared_caches_in_compat`] sorts.
-    let mut containers: Vec<&Container> = config.containers.values().collect();
-    containers.sort_by_key(|container| {
+    //
+    // The container name breaks ties, which is what makes this an order at
+    // all: two containers can share a lowest cache name, and a sort that
+    // leaves them equal falls back to the `HashMap` order this exists to
+    // escape.
+    fn lowest_cache_name(container: &Container) -> &str {
         container
             .volumes
             .iter()
@@ -3378,9 +3382,14 @@ fn reject_conflicting_cache_scopes(config: &Config) -> Result<()> {
             })
             .min()
             .unwrap_or("")
-            .to_string()
+    }
+    let mut containers: Vec<(&String, &Container)> = config.containers.iter().collect();
+    containers.sort_by(|(left_name, left), (right_name, right)| {
+        lowest_cache_name(left)
+            .cmp(lowest_cache_name(right))
+            .then_with(|| left_name.cmp(right_name))
     });
-    for container in containers {
+    for (_, container) in containers {
         for volume in container.volumes.iter().flatten() {
             let VolumeMount::Cache(cache) = volume else {
                 continue;

@@ -433,6 +433,46 @@ async fn list_reports_each_entry_oldest_first_with_its_size() {
     tokio::fs::remove_dir_all(&root).await.ok();
 }
 
+/// `last_used` is whole seconds, so every include a single run resolves shares
+/// one — the common case, not a corner. Sorting on it alone leaves those tied
+/// and hands the listing whatever order `read_dir` yielded, which is neither
+/// stable across runs nor the same on two filesystems.
+#[tokio::test]
+async fn entries_sharing_a_second_are_listed_in_a_stable_order() {
+    let root = unique_temp_dir();
+    let remotes: Vec<String> = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"]
+        .iter()
+        .map(|name| format!("https://example.com/{name}.git"))
+        .collect();
+    let git = remotes.iter().fold(FakeGitClient::new(), |git, remote| {
+        git.with_files(
+            remote,
+            "v1.0.0",
+            HashMap::from([("bundle.yml".to_string(), "tasks: {}".to_string())]),
+        )
+    });
+
+    // One cache, so one clock reading: every entry lands on the same second.
+    let cache = GitIncludeCache::for_test(root.clone(), git, 1_000);
+    for remote in &remotes {
+        cache.ensure_cached(remote, "v1.0.0").await.unwrap();
+    }
+
+    let listed = cache.list().await.unwrap();
+
+    assert_eq!(listed.len(), 6);
+    assert!(
+        listed.iter().all(|entry| entry.last_used == 1_000),
+        "the fixture only proves anything while every entry ties: {listed:?}"
+    );
+    let keys: Vec<&str> = listed.iter().map(|entry| entry.key.as_str()).collect();
+    let mut sorted = keys.clone();
+    sorted.sort_unstable();
+    assert_eq!(keys, sorted, "tied entries were left in directory order");
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
 #[tokio::test]
 async fn list_is_empty_when_nothing_has_ever_been_cached() {
     let root = unique_temp_dir();

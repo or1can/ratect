@@ -2573,6 +2573,59 @@ fn resolve_expressions_rejects_one_cache_name_with_two_scopes() {
     );
 }
 
+/// The scope-conflict error names one cache, and which one must not depend on
+/// `HashMap` iteration order — a message that changes between identical runs
+/// is unquotable in a bug report and undiffable in a test.
+///
+/// The containers here are deliberately symmetric: each declares both names,
+/// so both share a lowest cache name and sorting on that alone leaves them
+/// tied. Every iteration builds a fresh `HashMap`, which is what varies the
+/// order — one build would pass whether or not the tie is broken.
+#[test]
+fn the_reported_scope_conflict_does_not_depend_on_hashmap_order() {
+    let cache = |name: &str, scope| {
+        VolumeMount::Cache(CacheVolumeMount {
+            name: name.to_string(),
+            container: format!("/{name}"),
+            options: None,
+            scope: Some(scope),
+        })
+    };
+
+    let messages: std::collections::HashSet<String> = (0..64)
+        .map(|_| {
+            let mut first = container_with_build("./docker", HashMap::new());
+            first.volumes = Some(vec![
+                cache("y", CacheScope::Project),
+                cache("x", CacheScope::Shared),
+            ]);
+            let mut second = container_with_build("./docker", HashMap::new());
+            second.volumes = Some(vec![
+                cache("x", CacheScope::Project),
+                cache("y", CacheScope::Shared),
+            ]);
+
+            let config = Config {
+                project_name: "demo".to_string(),
+                containers: HashMap::from([("a".to_string(), first), ("b".to_string(), second)]),
+                tasks: HashMap::new(),
+                config_variables: None,
+                forbid_telemetry: None,
+            };
+
+            let err = reject_conflicting_cache_scopes(&config)
+                .expect_err("one name cannot mean two pieces of storage");
+            format!("{err:#}")
+        })
+        .collect();
+
+    assert_eq!(
+        messages.len(),
+        1,
+        "the same project reported different conflicts: {messages:?}"
+    );
+}
+
 /// A cache `name` becomes a host directory under `--cache-type directory`,
 /// and `Path::join` neither rejects `..` nor refuses an absolute path — it
 /// replaces the base with one. Both forms escaped the cache root and got an

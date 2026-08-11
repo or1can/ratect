@@ -520,7 +520,8 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// across entries: a bundle-sized clone (a few megabytes, ~1,000 files)
     /// walks in about 10ms, so the whole cache costs roughly the slowest
     /// one rather than their sum. Entries are sorted by `last_used`,
-    /// oldest first — the order someone clearing space wants to read.
+    /// oldest first — the order someone clearing space wants to read —
+    /// and by key within a second, so the listing is stable between runs.
     ///
     /// An unreadable or unparsable sidecar is logged and skipped rather
     /// than failing the listing, the same per-entry tolerance
@@ -529,7 +530,15 @@ impl<G: GitClient> GitIncludeCache<G> {
     pub async fn list(&self) -> Result<Vec<CachedInclude>> {
         let root = self.root.resolve()?;
         let mut entries = self.read_entries(&root).await?;
-        entries.sort_by_key(|entry| entry.last_used);
+        // The key breaks ties: `last_used` is whole seconds, so includes
+        // resolved by the same run routinely share one, and `read_entries`
+        // walks a directory — leaving those equal would order them by
+        // whatever `read_dir` happened to yield.
+        entries.sort_by(|left, right| {
+            left.last_used
+                .cmp(&right.last_used)
+                .then_with(|| left.key.cmp(&right.key))
+        });
 
         let sizes = futures::future::join_all(entries.iter().map(|entry| {
             let path = entry.path.clone();
