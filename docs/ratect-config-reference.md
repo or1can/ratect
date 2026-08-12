@@ -238,6 +238,63 @@ projects are still using should not be a side effect. See
 `batect.yml` has no equivalent, so `scope` is rejected there rather than
 ignored — see [Differences](#differences-from-batectyml-at-a-glance) below.
 
+## Nested Git includes
+
+A [Git include](config-reference.md#git-includes) fetches configuration from a
+repository and merges it into yours. That bundle can declare `include` entries
+of its own — and in a `batect.yml` those may be further `type: git` entries,
+naming any remote, with the same trust your own includes get.
+
+In `ratect.toml` that is **refused by default**:
+
+```
+The bundle 'https://github.com/my-org/infra-bundle.git' at '1.2.3' declares a
+Git include of its own ('https://elsewhere.example/other.git'), which would
+fetch and run configuration from a remote you have not named. Set
+'allow_nested_git_includes' to true on that bundle's own include entry to
+accept this.
+```
+
+You chose the bundle; you did not choose whatever it decides to pull in next,
+and that choice can change under you the next time the ref moves. Opt in per
+bundle:
+
+```toml
+[[include]]
+type = "git"
+repo = "https://github.com/my-org/infra-bundle.git"
+ref = "1.2.3"
+allow_nested_git_includes = true
+```
+
+The entry doesn't have to be in the `ratect.toml` itself — a native project can
+[include](#includes) a local `.yml`, and an entry declared there is just as much
+your own configuration, spelled `allow_nested_git_includes: true`. What makes a
+file yours is that it was not reached through a Git include, not its extension.
+
+**The grant is one level deep.** It admits that bundle's own Git includes; it
+does not let *those* bundles declare further ones. Like
+[`allow_host_paths`](config-reference.md#git-includes), it counts only in
+configuration you control — written inside a Git-included file it is ignored,
+so a bundle can neither grant itself the permission nor pass on the one you
+gave it. If a bundle genuinely needs a chain deeper than that, include the
+second repository yourself, where you can see it.
+
+**A nested include's clone failure is reported without `git`'s own message.**
+Whether a remote is unreachable, refusing connections, missing, or demanding
+credentials is a readout on a network — and for a nested include the remote
+was named by the bundle, not by you, so the answer is of more use to whoever
+wrote it than to you. In CI, where the log is often visible to anyone who can
+propose a change to that bundle, repeated attempts map an internal network one
+include at a time. The failure is still reported and still names both
+repositories; only the transport detail moves behind `RUST_LOG=debug`. An
+include *you* declared keeps `git`'s message in full — it describes a remote
+you wrote down, and hiding it would only make your own typo harder to find.
+
+The field is rejected in a `batect.yml` rather than ignored, value and all:
+setting `allow_nested_git_includes` to false there would claim a restriction
+that format never applies.
+
 ## Field reference
 
 Every container and task field from [`config-reference.md`](config-reference.md)
@@ -263,10 +320,14 @@ The container fields, by area:
 Almost nothing: the two formats parse into the same model, so a field means
 what [`config-reference.md`](config-reference.md) says it means. The
 exceptions are the places where `extends` gives a combination a meaning it
-cannot have in a `batect.yml`, which has no inheritance.
+cannot have in a `batect.yml`, which has no inheritance — plus one place
+where this format is deliberately stricter, because it has no Batect
+compatibility to preserve.
 
 | Behaviour | `batect.yml` (`ratect-compat`) | `ratect.toml` (`ratect`) |
 | --- | --- | --- |
+| A Git-included bundle declaring a **`type: git` include of its own** | Always allowed, matching Batect | Refused unless the bundle's own include entry sets [`allow_nested_git_includes`](#nested-git-includes) |
+| A **nested** Git include failing to clone | Reports `git`'s own error | Reports that it failed, with the transport detail behind `RUST_LOG=debug` — see [Nested Git includes](#nested-git-includes) |
 | A container with **both** `image` and `build_directory` | Rejected when the file loads, matching Batect | Allowed — `image` wins, and this is the only way to override a `build_directory` inherited from an `extends` parent, since inheritance is per-field with no way to unset one |
 | A container with **neither** `image` nor `build_directory` | Rejected when the file loads | Allowed — a container used only as an `extends` base needs neither; the requirement is enforced when a task actually runs a container, so no `abstract` marker is needed |
 | `image` alongside a build-only field (`build_args`, `build_target`, `dockerfile`, `build_secrets`, `build_ssh`) | Rejected when the file loads | Allowed and **ignored**, for the same inheritance reason — a child overriding a build with an `image` still carries the parent's build fields |

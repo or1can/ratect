@@ -2083,6 +2083,7 @@ fn resolve_path_interpolates_expression_before_resolving() {
 fn resolve_path_rejects_a_git_included_containers_absolute_path_outside_both_allowed_roots() {
     let boundary = GitBoundary {
         allow_host_paths: false,
+        allow_nested_git_includes: false,
         repo_dir: PathBuf::from("/repo"),
         remote: "https://example.com/bundle.git".to_string(),
         git_ref: "v1.0.0".to_string(),
@@ -2107,6 +2108,7 @@ fn resolve_path_rejects_a_git_included_containers_absolute_path_outside_both_all
 fn resolve_path_rejects_a_git_included_containers_home_directory_path() {
     let boundary = GitBoundary {
         allow_host_paths: false,
+        allow_nested_git_includes: false,
         repo_dir: PathBuf::from("/repo"),
         remote: "https://example.com/bundle.git".to_string(),
         git_ref: "v1.0.0".to_string(),
@@ -2125,6 +2127,7 @@ fn resolve_path_rejects_a_git_included_containers_home_directory_path() {
 fn resolve_path_rejects_a_git_included_containers_dot_dot_traversal_outside_both_allowed_roots() {
     let boundary = GitBoundary {
         allow_host_paths: false,
+        allow_nested_git_includes: false,
         repo_dir: PathBuf::from("/repo"),
         remote: "https://example.com/bundle.git".to_string(),
         git_ref: "v1.0.0".to_string(),
@@ -2143,6 +2146,7 @@ fn resolve_path_rejects_a_git_included_containers_dot_dot_traversal_outside_both
 fn resolve_path_allows_a_git_included_containers_path_within_the_clone_directory() {
     let boundary = GitBoundary {
         allow_host_paths: false,
+        allow_nested_git_includes: false,
         repo_dir: PathBuf::from("/repo"),
         remote: "https://example.com/bundle.git".to_string(),
         git_ref: "v1.0.0".to_string(),
@@ -2167,6 +2171,7 @@ fn resolve_path_allows_a_git_included_containers_path_under_the_project_director
     // container definition itself came from.
     let boundary = GitBoundary {
         allow_host_paths: false,
+        allow_nested_git_includes: false,
         repo_dir: PathBuf::from("/repo"),
         remote: "https://example.com/bundle.git".to_string(),
         git_ref: "v1.0.0".to_string(),
@@ -5200,6 +5205,453 @@ async fn vouching_for_a_bundle_does_not_extend_to_its_nested_includes() {
     std::fs::remove_dir_all(&cache_root).ok();
 }
 
+/// Sets up a native project whose root includes `outer`, which in turn
+/// includes a bundle of its own — the shape the gate governs. `grant` is
+/// written verbatim onto the root's include entry, so a test can supply
+/// `allow_nested_git_includes: true`, the explicit `false`, or nothing.
+fn native_project_with_a_nested_include(grant: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let inner = git_bundle_repo(&[(
+        "ratect-bundle.toml",
+        "[tasks.inner-task.run]\ncontainer = \"build-env\"\n",
+    )]);
+    let outer = git_bundle_repo(&[(
+        "ratect-bundle.toml",
+        &format!(
+            "[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\n",
+            inner.display()
+        ),
+    )]);
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("ratect.toml"),
+        format!(
+            "project_name = \"demo\"\n\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\n{grant}",
+            outer.display()
+        ),
+    )
+    .unwrap();
+    (inner, outer, project)
+}
+
+/// The gate's default. A bundle the owner chose may not, on its own say-so,
+/// send the loader to a remote the owner never named.
+#[tokio::test]
+async fn a_native_bundle_cannot_declare_a_git_include_by_default() {
+    let (inner, outer, project) = native_project_with_a_nested_include("");
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+
+    let error =
+        Config::load_from_file_native_with_git_cache(&project.join("ratect.toml"), &git_cache)
+            .await
+            .expect_err("a bundle must not redirect the load to a remote of its own choosing");
+    let error = format!("{error:?}");
+    assert!(
+        error.contains("declares a Git include of its own"),
+        "got: {error}"
+    );
+    assert!(
+        error.contains("allow_nested_git_includes"),
+        "the refusal must name the flag that lifts it: {error}"
+    );
+
+    std::fs::remove_dir_all(&inner).ok();
+    std::fs::remove_dir_all(&outer).ok();
+    std::fs::remove_dir_all(&project).ok();
+    std::fs::remove_dir_all(&cache_root).ok();
+}
+
+/// Writing the default out explicitly means what leaving it off means. Worth
+/// pinning separately: the flag is an `Option` so that a `batect.yml` can
+/// reject the *field*, which makes "absent" and "present but false" different
+/// values right up until the gate reads them.
+#[tokio::test]
+async fn an_explicit_false_refuses_like_an_absent_flag() {
+    let (inner, outer, project) =
+        native_project_with_a_nested_include("allow_nested_git_includes = false\n");
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+
+    let error =
+        Config::load_from_file_native_with_git_cache(&project.join("ratect.toml"), &git_cache)
+            .await
+            .expect_err("an explicit false is still a refusal");
+    assert!(
+        format!("{error:?}").contains("declares a Git include of its own"),
+        "got: {error:?}"
+    );
+
+    std::fs::remove_dir_all(&inner).ok();
+    std::fs::remove_dir_all(&outer).ok();
+    std::fs::remove_dir_all(&project).ok();
+    std::fs::remove_dir_all(&cache_root).ok();
+}
+
+/// The grant works — otherwise the gate would just be a ban.
+#[tokio::test]
+async fn a_native_bundle_can_declare_a_git_include_when_granted() {
+    let (inner, outer, project) =
+        native_project_with_a_nested_include("allow_nested_git_includes = true\n");
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+
+    let loaded =
+        Config::load_from_file_native_with_git_cache(&project.join("ratect.toml"), &git_cache)
+            .await
+            .expect("the owner accepted this bundle's own includes");
+    assert!(loaded.config.tasks.contains_key("inner-task"));
+
+    std::fs::remove_dir_all(&inner).ok();
+    std::fs::remove_dir_all(&outer).ok();
+    std::fs::remove_dir_all(&project).ok();
+    std::fs::remove_dir_all(&cache_root).ok();
+}
+
+/// The grant is one level deep, like `allow_host_paths`: admitting a bundle's
+/// own includes doesn't let *those* keep going. Writing the flag inside a
+/// bundle is what a compromised bundle would try, so it has to be inert —
+/// which it is, because the flag counts only in a file the owner controls.
+#[tokio::test]
+async fn a_granted_bundle_cannot_pass_the_grant_on() {
+    let innermost = git_bundle_repo(&[(
+        "ratect-bundle.toml",
+        "[tasks.innermost-task.run]\ncontainer = \"build-env\"\n",
+    )]);
+    let inner = git_bundle_repo(&[(
+        "ratect-bundle.toml",
+        &format!(
+            "[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\n",
+            innermost.display()
+        ),
+    )]);
+    // The outer bundle grants its own child everything it can write down.
+    let outer = git_bundle_repo(&[(
+        "ratect-bundle.toml",
+        &format!(
+            "[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\nallow_nested_git_includes = true\n",
+            inner.display()
+        ),
+    )]);
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("ratect.toml"),
+        format!(
+            "project_name = \"demo\"\n\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\nallow_nested_git_includes = true\n",
+            outer.display()
+        ),
+    )
+    .unwrap();
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+
+    let error =
+        Config::load_from_file_native_with_git_cache(&project.join("ratect.toml"), &git_cache)
+            .await
+            .expect_err("a bundle cannot grant the permission it was given");
+    assert!(
+        format!("{error:?}").contains("declares a Git include of its own"),
+        "got: {error:?}"
+    );
+
+    std::fs::remove_dir_all(&innermost).ok();
+    std::fs::remove_dir_all(&inner).ok();
+    std::fs::remove_dir_all(&outer).ok();
+    std::fs::remove_dir_all(&project).ok();
+    std::fs::remove_dir_all(&cache_root).ok();
+}
+
+/// `batect.yml` has no gate at all, so the field would describe a behaviour
+/// that format doesn't have. Rejected rather than ignored, like `scope` —
+/// and note this rejects the *field*, not the value: writing `false` is just
+/// as wrong, since it claims a restriction compat never applies.
+#[tokio::test]
+async fn the_nested_include_flag_is_rejected_in_a_batect_yml() {
+    for value in ["true", "false"] {
+        let bundle = git_bundle_repo(&[(
+            "batect-bundle.yml",
+            "containers:\n  bundled:\n    image: alpine:3.18\n",
+        )]);
+        let project = unique_temp_dir();
+        std::fs::write(
+            project.join("batect.yml"),
+            format!(
+                "project_name: demo\ninclude:\n  - type: git\n    repo: {}\n    ref: v1\n    \
+                 allow_nested_git_includes: {value}\n",
+                bundle.display()
+            ),
+        )
+        .unwrap();
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+
+        let error = Config::load_from_file_with_git_cache(&project.join("batect.yml"), &git_cache)
+            .await
+            .expect_err("a native-only field must not be silently accepted here");
+        assert!(
+            format!("{error:?}").contains("ratect-native field"),
+            "value {value} got: {error:?}"
+        );
+
+        std::fs::remove_dir_all(&bundle).ok();
+        std::fs::remove_dir_all(&project).ok();
+        std::fs::remove_dir_all(&cache_root).ok();
+    }
+}
+
+/// Completion has to agree with the loader about which includes exist, or
+/// `<TAB>` offers a task that `ratect run` then refuses. This pins the rule
+/// table [`IncludeTrust`] encodes; the *wiring* that consumes it is not
+/// covered, because reaching completion's `type: git` branch needs a
+/// populated `~/.ratect/incl` and `cached_working_copy` hardcodes the real
+/// home — writing a fixture there is the same hazard that had an earlier
+/// test deleting a developer's own caches.
+#[test]
+fn completion_trust_matches_the_loaders_grant_rule() {
+    let owner = IncludeTrust::OWNER;
+    assert!(
+        owner.owner && owner.may_declare_git,
+        "the root config is free"
+    );
+
+    // An owner-declared bundle may declare its own only when granted.
+    assert!(!owner.into_bundle(None).may_declare_git);
+    assert!(!owner.into_bundle(Some(false)).may_declare_git);
+    assert!(owner.into_bundle(Some(true)).may_declare_git);
+
+    // ...and nothing it reaches is owner-controlled any more, so the grant
+    // stops there however loudly the bundle asks — the same one-level-deep
+    // property `a_granted_bundle_cannot_pass_the_grant_on` proves end to end.
+    let granted = owner.into_bundle(Some(true));
+    assert!(!granted.owner);
+    assert!(!granted.into_bundle(Some(true)).may_declare_git);
+}
+
+/// A native project can include a local `.yml`, and that file can be where
+/// the Git include is declared — so "native" does not mean "TOML". The grant
+/// has to be honoured there, since it is still the owner's own configuration:
+/// what makes a file owner-controlled is having no Git boundary, not its
+/// extension.
+#[tokio::test]
+async fn the_grant_is_honoured_in_a_locally_included_yaml_file() {
+    let inner = git_bundle_repo(&[(
+        "ratect-bundle.toml",
+        "[tasks.inner-task.run]\ncontainer = \"build-env\"\n",
+    )]);
+    let outer = git_bundle_repo(&[(
+        "ratect-bundle.toml",
+        &format!(
+            "[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\n",
+            inner.display()
+        ),
+    )]);
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("ratect.toml"),
+        "project_name = \"demo\"\ninclude = [{ path = \"bundles.yml\" }]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("bundles.yml"),
+        format!(
+            "include:\n  - type: git\n    repo: {}\n    ref: v1\n    \
+             allow_nested_git_includes: true\n",
+            outer.display()
+        ),
+    )
+    .unwrap();
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+
+    let loaded =
+        Config::load_from_file_native_with_git_cache(&project.join("ratect.toml"), &git_cache)
+            .await
+            .expect("a local YAML include is still the owner's own configuration");
+    assert!(loaded.config.tasks.contains_key("inner-task"));
+
+    std::fs::remove_dir_all(&inner).ok();
+    std::fs::remove_dir_all(&outer).ok();
+    std::fs::remove_dir_all(&project).ok();
+    std::fs::remove_dir_all(&cache_root).ok();
+}
+
+/// The suppression is native-only, like the gate. `ratect-compat` is a
+/// drop-in for a tool that prints git's error here, and quietly withholding
+/// it would be a parity break dressed as hardening — the compat binary's job
+/// is to behave like Batect, including where Batect is less careful.
+#[tokio::test]
+async fn a_compat_nested_clone_failure_keeps_gits_stderr() {
+    // `unique_temp_dir` creates the directory; keep the handle so the test
+    // removes it, and point at a child that was never created.
+    let missing_parent = unique_temp_dir();
+    let missing = missing_parent.join("no-such-repo.git");
+    let outer = git_bundle_repo(&[(
+        "batect-bundle.yml",
+        &format!(
+            "include:\n  - type: git\n    repo: {}\n    ref: v1\n",
+            missing.display()
+        ),
+    )]);
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("batect.yml"),
+        format!(
+            "project_name: demo\ninclude:\n  - type: git\n    repo: {}\n    ref: v1\n",
+            outer.display()
+        ),
+    )
+    .unwrap();
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+
+    let error = Config::load_from_file_with_git_cache(&project.join("batect.yml"), &git_cache)
+        .await
+        .expect_err("the nested clone cannot succeed");
+    assert!(
+        format!("{error:?}").contains("git exited with"),
+        "compat must keep git's own error: {error:?}"
+    );
+
+    std::fs::remove_dir_all(&outer).ok();
+    std::fs::remove_dir_all(&project).ok();
+    std::fs::remove_dir_all(&cache_root).ok();
+    std::fs::remove_dir_all(&missing_parent).ok();
+}
+
+/// The field can be written inside a bundle, where a `ratect-compat` user
+/// can't edit it. The error has to say which bundle, or it describes a
+/// problem in a file they have never seen and cannot find.
+#[tokio::test]
+async fn the_compat_rejection_names_the_bundle_that_set_the_field() {
+    let inner = git_bundle_repo(&[(
+        "batect-bundle.yml",
+        "containers:\n  bundled:\n    image: alpine:3.18\n",
+    )]);
+    let outer = git_bundle_repo(&[(
+        "batect-bundle.yml",
+        &format!(
+            "include:\n  - type: git\n    repo: {}\n    ref: v1\n    \
+             allow_nested_git_includes: true\n",
+            inner.display()
+        ),
+    )]);
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("batect.yml"),
+        format!(
+            "project_name: demo\ninclude:\n  - type: git\n    repo: {}\n    ref: v1\n",
+            outer.display()
+        ),
+    )
+    .unwrap();
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+
+    let error = Config::load_from_file_with_git_cache(&project.join("batect.yml"), &git_cache)
+        .await
+        .expect_err("a native-only field must not be silently accepted here");
+    let error = format!("{error:?}");
+    assert!(
+        error.contains(&outer.display().to_string()),
+        "the error must name the bundle that wrote the field: {error}"
+    );
+
+    std::fs::remove_dir_all(&inner).ok();
+    std::fs::remove_dir_all(&outer).ok();
+    std::fs::remove_dir_all(&project).ok();
+    std::fs::remove_dir_all(&cache_root).ok();
+}
+
+/// A bundle's own include names a remote the project owner didn't choose, so
+/// git's transport error is the bundle author's readout, not the owner's:
+/// host-unreachable, connection-refused and repository-not-found are
+/// distinguishable, and a CI log carrying them back to whoever can edit that
+/// bundle maps an internal network one include at a time. The failure is
+/// still reported — only the transport detail moves to `RUST_LOG=debug`.
+#[tokio::test]
+async fn a_nested_includes_clone_failure_does_not_leak_gits_stderr() {
+    // `unique_temp_dir` creates the directory; keep the handle so the test
+    // removes it, and point at a child that was never created.
+    let missing_parent = unique_temp_dir();
+    let missing = missing_parent.join("no-such-repo.git");
+    let outer = git_bundle_repo(&[(
+        "ratect-bundle.toml",
+        &format!(
+            "[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\n",
+            missing.display()
+        ),
+    )]);
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("ratect.toml"),
+        format!(
+            "project_name = \"demo\"\n\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\nallow_nested_git_includes = true\n",
+            outer.display()
+        ),
+    )
+    .unwrap();
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+
+    let error =
+        Config::load_from_file_native_with_git_cache(&project.join("ratect.toml"), &git_cache)
+            .await
+            .expect_err("the nested clone cannot succeed");
+    let error = format!("{error:?}");
+    // Asserts on Ratect's own wrapper text, not git's "does not exist" —
+    // git localizes its stderr, so a negative assertion against an English
+    // string passes vacuously under any other locale, and the one assertion
+    // guarding a security property would be the one that fails open.
+    assert!(
+        !error.contains("git exited with"),
+        "git's own diagnosis leaked: {error}"
+    );
+    assert!(
+        error.contains("RUST_LOG=debug"),
+        "the detail has to be reachable by the person running the build: {error}"
+    );
+
+    std::fs::remove_dir_all(&outer).ok();
+    std::fs::remove_dir_all(&project).ok();
+    std::fs::remove_dir_all(&cache_root).ok();
+    std::fs::remove_dir_all(&missing_parent).ok();
+}
+
+/// The other half of the rule. When the owner named the remote, the full
+/// error is theirs — it describes a repo they wrote down, and hiding it
+/// would just make their own typo harder to find.
+#[tokio::test]
+async fn an_owner_declared_includes_clone_failure_keeps_gits_stderr() {
+    // `unique_temp_dir` creates the directory; keep the handle so the test
+    // removes it, and point at a child that was never created.
+    let missing_parent = unique_temp_dir();
+    let missing = missing_parent.join("no-such-repo.git");
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("ratect.toml"),
+        format!(
+            "project_name = \"demo\"\n\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\n",
+            missing.display()
+        ),
+    )
+    .unwrap();
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+
+    let error =
+        Config::load_from_file_native_with_git_cache(&project.join("ratect.toml"), &git_cache)
+            .await
+            .expect_err("the clone cannot succeed");
+    let error = format!("{error:?}");
+    assert!(
+        error.contains("git exited with"),
+        "the owner's own typo must stay diagnosable: {error}"
+    );
+
+    std::fs::remove_dir_all(&project).ok();
+    std::fs::remove_dir_all(&cache_root).ok();
+    std::fs::remove_dir_all(&missing_parent).ok();
+}
+
 /// Builds a git repo containing whichever bundle files `bundles` names
 /// (path -> contents), commits them at tag `v1`, and returns its directory.
 fn git_bundle_repo(bundles: &[(&str, &str)]) -> std::path::PathBuf {
@@ -5938,11 +6390,16 @@ include:
     )
     .unwrap();
 
-    let git_cache = GitIncludeCache::for_test(unique_temp_dir(), FakeGitClient::new(), 1000);
+    // Bound, not inlined: `unique_temp_dir` creates the directory, so an
+    // inlined call orphans it — these tests fail parsing before anything is
+    // ever cloned into the cache, so nothing else would remove it.
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), FakeGitClient::new(), 1000);
     let result = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache).await;
     assert!(result.is_err());
 
     std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).ok();
 }
 
 #[tokio::test]
@@ -5960,11 +6417,42 @@ include:
     )
     .unwrap();
 
-    let git_cache = GitIncludeCache::for_test(unique_temp_dir(), FakeGitClient::new(), 1000);
+    // Bound, not inlined: `unique_temp_dir` creates the directory, so an
+    // inlined call orphans it — these tests fail parsing before anything is
+    // ever cloned into the cache, so nothing else would remove it.
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), FakeGitClient::new(), 1000);
     let result = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache).await;
     assert!(format!("{:?}", result.unwrap_err()).contains("only valid for 'type: git'"));
 
     std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).ok();
+}
+
+/// A local file can't be the thing that redirects the load to a remote, so
+/// permitting it there would describe a risk that doesn't exist.
+#[tokio::test]
+async fn the_nested_include_flag_is_rejected_on_a_non_git_include() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "project_name = \"demo\"\n\n[[include]]\npath = \"extra.toml\"\n\
+         allow_nested_git_includes = true\n",
+    )
+    .unwrap();
+
+    // Bound, not inlined: `unique_temp_dir` creates the directory, so an
+    // inlined call orphans it — these tests fail parsing before anything is
+    // ever cloned into the cache, so nothing else would remove it.
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), FakeGitClient::new(), 1000);
+    let result =
+        Config::load_from_file_native_with_git_cache(&dir.join("ratect.toml"), &git_cache).await;
+    assert!(format!("{:?}", result.unwrap_err())
+        .contains("'allow_nested_git_includes' is only valid for 'type: git' includes"));
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).ok();
 }
 
 #[tokio::test]

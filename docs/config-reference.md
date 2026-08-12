@@ -148,6 +148,11 @@ unrestricted, since it's always something already in your own project checkout).
 Git-included bundle *can* still declare a further `type: git` include of its own —
 that's a fresh repository with its own boundary, not an escape from this one.
 
+> **`ratect.toml` differs here.** The native format refuses a bundle's own Git
+> includes unless you opt in per bundle with `allow_nested_git_includes` — see
+> [Nested Git includes](ratect-config-reference.md#nested-git-includes). This
+> page describes `batect.yml`, where they are always allowed, matching Batect.
+
 The same containment applies to a `volumes` host path, `build_directory`, or
 `build_secrets` entry's `path` declared by a *container* defined inside a
 Git-included file: it must resolve to somewhere inside

@@ -185,7 +185,48 @@ fn make_native(json: &mut serde_json::Value) {
     }
 
     if let Some(definition) = definitions.get_mut("VolumeMount") {
-        add_native_cache_scope(definition);
+        add_native_property(
+            definition,
+            "cache",
+            "scope",
+            serde_json::json!({
+                "enum": ["project", "shared"],
+                "description": "Whether this cache is private to the project (the default) \
+                                or shared with every other project on this machine. A \
+                                shared cache carries no project key, so one Cargo registry \
+                                or npm cache is populated once and reused everywhere.",
+            }),
+        );
+    }
+
+    if let Some(definition) = definitions.get_mut("Include") {
+        // Corrects, rather than adds: the shared description names compat's
+        // only candidate, but `git_bundle_candidates` probes
+        // `ratect-bundle.toml` first here. Overwriting the property is how
+        // `add_native_property` already behaves, so one helper covers both.
+        add_native_property(
+            definition,
+            "git",
+            "path",
+            serde_json::json!({
+                "type": "string",
+                "description": "The file to include from within the repository. \
+                                Defaults to ratect-bundle.toml, then batect-bundle.yml.",
+            }),
+        );
+        add_native_property(
+            definition,
+            "git",
+            "allow_nested_git_includes",
+            serde_json::json!({
+                "type": "boolean",
+                "description": "Let this bundle declare Git includes of its own, fetching \
+                                configuration from remotes you have not named. Refused by \
+                                default. Applies only to the bundle named here — the bundles \
+                                it admits cannot pass the permission on — and only when set \
+                                in your own configuration. Defaults to false.",
+            }),
+        );
     }
 
     // Add the native-only `extends` field to a container — skipped from the
@@ -210,15 +251,23 @@ fn make_native(json: &mut serde_json::Value) {
     }
 }
 
-/// Adds the native-only `scope` field to the `cache` form of a volume mount.
+/// Adds a native-only `property` to the one form of a tagged `oneOf` whose
+/// `type` const is `tag` — the `cache` form of a volume mount, the `git` form
+/// of an include, and whatever comes next.
 ///
-/// Kept out of the compat schema for the same reason `ratect-compat` rejects
-/// it at load: Batect has no shared cache, so advertising the field there
-/// would autocomplete a config that real `batect` refuses.
+/// These are kept out of the compat schema for the same reason
+/// `ratect-compat` rejects them at load: Batect has no such field, so
+/// advertising it there would autocomplete a config that real `batect`
+/// refuses.
 ///
-/// Finds the cache form by its `type` const rather than by index, so
-/// reordering the `oneOf` can't silently attach this to `local` or `tmpfs`.
-fn add_native_cache_scope(definition: &mut serde_json::Value) {
+/// Finds the form by its `type` const rather than by index, so reordering the
+/// `oneOf` can't silently attach a field to `local`, `tmpfs` or `file`.
+fn add_native_property(
+    definition: &mut serde_json::Value,
+    tag: &str,
+    property: &str,
+    schema: serde_json::Value,
+) {
     let forms = match definition.get_mut("oneOf").and_then(|f| f.as_array_mut()) {
         Some(forms) => forms,
         // `drop_string_shorthand` unwraps a single remaining form, so a
@@ -226,29 +275,20 @@ fn add_native_cache_scope(definition: &mut serde_json::Value) {
         None => std::slice::from_mut(definition),
     };
     for form in forms {
-        let is_cache = form
+        let tagged = form
             .get("properties")
             .and_then(|p| p.get("type"))
             .and_then(|t| t.get("const"))
             .and_then(serde_json::Value::as_str)
-            == Some("cache");
-        if !is_cache {
+            == Some(tag);
+        if !tagged {
             continue;
         }
         if let Some(properties) = form
             .get_mut("properties")
             .and_then(serde_json::Value::as_object_mut)
         {
-            properties.insert(
-                "scope".to_string(),
-                serde_json::json!({
-                    "enum": ["project", "shared"],
-                    "description": "Whether this cache is private to the project (the default) \
-                                    or shared with every other project on this machine. A \
-                                    shared cache carries no project key, so one Cargo registry \
-                                    or npm cache is populated once and reused everywhere.",
-                }),
-            );
+            properties.insert(property.to_string(), schema.clone());
         }
     }
 }

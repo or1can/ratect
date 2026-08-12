@@ -1305,7 +1305,7 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     bind-mounted an arbitrary directory into the container; that one predates
     this work, affects `ratect-compat`, and Batect has it too.
 
-  - **`allow_nested_git_includes`** (defaulting `false`) — the [Future
+  - ~~**`allow_nested_git_includes`** (defaulting `false`) — the [Future
     Vision](#future-vision) item: today a bundle reached through a Git include
     can itself declare a further `type: git` include pointing at any remote, with
     the same trust the project owner's own includes get and no way to say no.
@@ -1315,7 +1315,25 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     non-recursive), the other axis of the same trust question. Worth deciding
     alongside it whether a nested include's clone failure should keep surfacing
     git's raw stderr, which lets repeated attempts fingerprint an internal
-    network from CI logs.
+    network from CI logs.~~ — done, in both halves.
+
+    ~~As built: the gate is per-include-entry and refuses *before* the clone, so
+    a bundle can't use an unreachable remote to probe for one. The grant is one
+    level deep as a *consequence* rather than a rule — it counts only in
+    owner-controlled configuration, and a bundle admitted by it has none to
+    write. The stderr question went the same way: detail suppressed for a nested
+    include, kept in full for an owner-declared one, on the reasoning that
+    whoever can read `RUST_LOG=debug` is the person running the build rather
+    than the person who wrote the bundle. The field is rejected in a `batect.yml`
+    by presence, not value.~~
+
+    ~~The one trap, worth knowing before touching it: the gate must test
+    `ConfigFormat::Native`. Written without that check it compiled, passed every
+    new test, and broke three existing ones that load nested bundles through the
+    *compat* loader — which is exactly the parity break this entry rules out.
+    The schema needed a second edit for the same reason it's easy to miss: the
+    include entry's JSON schema is hand-written in `schema.rs`, so adding a Rust
+    field leaves it silently stale and the schema test still passes.~~
   - **Expressions in `image`** — riding along rather than part of the theme, since
     it's small and native-only for the same reason `extends` is. Batect's
     highest-priority open suggestion
@@ -1628,7 +1646,7 @@ Exploring innovative features that go beyond the original Batect, as well as pla
 
 - ~~**Alternative Configuration Format (TOML)**: Undecided, exploratory. TOML is a more typical configuration format for Rust projects than YAML. If pursued, this would apply only to the [`ratect` binary](#two-binaries-ratect-and-ratect-compat) — `ratect-compat` stays YAML-only for Batect compatibility — and would need a migration path for projects moving from `ratect-compat`'s YAML config.~~ — scoped into `ratect` [0.3.0](#ratect): the format is **TOML** (native default `ratect.toml`), with the schema redesign (an `extends` field replacing YAML anchors, one object shape per `volumes`/`ports`/`devices`/`include` entry) and mixed TOML/YAML includes. Migration tooling is the `ratect config convert`/`validate` verb, which shipped alongside it — full design at [decisions/0003](decisions/0003-ratect-native-config-format.md).
 
-- **Restrict Nested Git Includes**: **`ratect`-only** — `ratect-compat` must keep Batect's own unrestricted behavior for parity (its `ConfigurationLoader`/`IncludeResolver` have the identical gap: any file, root or reached transitively through a Git include, can declare a further `type: git` include with no restriction on remote). Currently a nested include gets the exact same trust as one the project owner declared themselves — no allowlist, and (post-0.10.0's `container_git_boundaries` fix) a rogue nested include's own containers are at least bounded to its clone directory or the project directory, but the include mechanism itself will still fetch from whatever remote a third-party bundle names. Worth an opt-in gate for `ratect` (e.g. `allow_nested_git_includes`, defaulting `false`) requiring the project owner to consciously accept that a Git-included bundle may itself redirect the process to further remotes. Relatedly worth reconsidering alongside it: whether a nested (non-root-declared) include's clone/checkout failure should keep surfacing git's raw stderr, since the specific transport error (host unreachable vs. connection refused vs. repository-not-found vs. auth-failed) lets repeated attempts fingerprint an internal network — most relevant when `ratect` runs in CI against a bundle whose nested includes a less-trusted contributor can influence, and whose CI logs are visible back to them. Deferred rather than implemented immediately: real projects (including ones outside this one) depend on nested git includes working by default today, and `ratect-compat` has to default this open regardless — squarely a `ratect`-only divergence, not a blocking gap. — scoped into `ratect` [0.4.0](#ratect), alongside the shared cache, as the other axis of the same include-trust question.
+- ~~**Restrict Nested Git Includes**: **`ratect`-only** — `ratect-compat` must keep Batect's own unrestricted behavior for parity (its `ConfigurationLoader`/`IncludeResolver` have the identical gap: any file, root or reached transitively through a Git include, can declare a further `type: git` include with no restriction on remote). Currently a nested include gets the exact same trust as one the project owner declared themselves — no allowlist, and (post-0.10.0's `container_git_boundaries` fix) a rogue nested include's own containers are at least bounded to its clone directory or the project directory, but the include mechanism itself will still fetch from whatever remote a third-party bundle names. Worth an opt-in gate for `ratect` (e.g. `allow_nested_git_includes`, defaulting `false`) requiring the project owner to consciously accept that a Git-included bundle may itself redirect the process to further remotes. Relatedly worth reconsidering alongside it: whether a nested (non-root-declared) include's clone/checkout failure should keep surfacing git's raw stderr, since the specific transport error (host unreachable vs. connection refused vs. repository-not-found vs. auth-failed) lets repeated attempts fingerprint an internal network — most relevant when `ratect` runs in CI against a bundle whose nested includes a less-trusted contributor can influence, and whose CI logs are visible back to them. Deferred rather than implemented immediately: real projects (including ones outside this one) depend on nested git includes working by default today, and `ratect-compat` has to default this open regardless — squarely a `ratect`-only divergence, not a blocking gap.~~ — shipped in `ratect` [0.4.0](#ratect) as `allow_nested_git_includes`, per-include-entry and defaulting `false`, with the stderr question resolved the same way: a nested include's clone failure reports that it failed and moves git's own diagnosis behind `RUST_LOG=debug`, while an owner-declared include keeps it in full. `ratect-compat` is unchanged, as this entry required.
 - **Trusting a Git include's host paths** (`allow_host_paths`): a per-include opt-in
   letting a bundle the project owner explicitly vouches for resolve host paths outside
   the containment 0.10.0 introduced — needed because a legitimate, common bundle

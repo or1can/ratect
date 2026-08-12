@@ -218,6 +218,29 @@ The [`decisions/`](decisions/) directory holds Architecture Decision Records —
       became a breaking change. Disabling the check and running it took a
       minute. An unverified claim about past behaviour is a guess with a
       citation's confidence.
+    - **A behaviour that depends on which format/mode you're in needs one
+      derived value, not a guard per call site.** `allow_nested_git_includes`
+      got this wrong twice in one change: the gate was written unguarded (the
+      existing compat tests caught it), and then the *error redaction* beside
+      it was left unguarded too (review caught it, because its own tests were
+      all native). Each site guarded correctly in isolation; the invariant —
+      "these behaviours are native-only, together" — was stated nowhere. Deriving
+      `restricted: Option<&GitBoundary>` once, and having every site consume it,
+      makes the divergence unrepresentable. Guarding site-by-site means the next
+      site added is unguarded by default.
+    - **Never spell config syntax in an error message — name the field.**
+      `set 'x' to true`, not `add 'x: true'` or `'x = true'`. `allow_host_paths`
+      shipped the YAML spelling in shared core, where `ratect.toml` readers hit
+      it, and the new nested-include gate repeated the mistake in TOML.
+
+      This started as a weaker rule — *"or prove the message fires in exactly
+      one format"* — which is what the gate's author (me) did, correctly, and
+      still got wrong: `ConfigFormat::Native` is the **project's** format, not
+      the **file's**. A native project can locally include a `.yml`, so the very
+      entry the message tells you to edit may be YAML. Any rule of the form
+      "prove which syntax the reader is using" fails on mixed-format includes,
+      which is why the rule is now unconditional. The first version of this rule
+      survived one review and was refuted by the next.
     - **Watch for coverage shaped by the test harness rather than the behaviour.** If the fake can only express one ordering of something inherently timing-dependent, the untestable orderings are where the bug will be — extend the harness instead of concluding the cases are covered. Every interrupt test could only pre-record interrupts *before* a run, and the broken case was an interrupt arriving mid-cleanup.
     - **A test that cleans up after itself has to be run twice.** A single run
       passes whether or not the cleanup matched anything — the first run starts
