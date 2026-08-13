@@ -316,9 +316,7 @@ tasks:
         no_host_env,
     );
 
-    assert!(result
-        .unwrap_err()
-        .to_string()
+    assert!(format!("{:#}", result.unwrap_err())
         .contains("Task 'test' must have at least one of 'run' or 'prerequisites'"));
 }
 
@@ -343,9 +341,7 @@ tasks:
         no_host_env,
     );
 
-    assert!(result
-        .unwrap_err()
-        .to_string()
+    assert!(format!("{:#}", result.unwrap_err())
         .contains("Task 'test' must have at least one of 'run' or 'prerequisites'"));
 }
 
@@ -406,9 +402,7 @@ tasks:
         no_host_env,
     );
 
-    assert!(result
-        .unwrap_err()
-        .to_string()
+    assert!(format!("{:#}", result.unwrap_err())
         .contains("'run' is required if 'dependencies' is provided"));
 }
 
@@ -505,9 +499,7 @@ tasks:
         no_host_env,
     );
 
-    assert!(result
-        .unwrap_err()
-        .to_string()
+    assert!(format!("{:#}", result.unwrap_err())
         .contains("Cannot apply customisations to main task container 'build-env'"));
 }
 
@@ -538,7 +530,7 @@ tasks:
         no_host_env,
     );
 
-    assert!(result.unwrap_err().to_string().contains(
+    assert!(format!("{:#}", result.unwrap_err()).contains(
         "Task 'test' has customisations for container 'unrelated', but the container \
              'unrelated' will not be started as part of the task"
     ));
@@ -3638,10 +3630,7 @@ fn resolve_expressions_errors_when_run_as_current_user_enabled_without_home_dire
         no_host_env,
     );
 
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("no 'home_directory' was provided"));
+    assert!(format!("{:#}", result.unwrap_err()).contains("no 'home_directory' was provided"));
 }
 
 #[test]
@@ -3658,10 +3647,9 @@ fn resolve_expressions_errors_when_home_directory_given_without_run_as_current_u
         no_host_env,
     );
 
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("'run_as_current_user.enabled' is not true"));
+    assert!(
+        format!("{:#}", result.unwrap_err()).contains("'run_as_current_user.enabled' is not true")
+    );
 }
 
 #[test]
@@ -3678,10 +3666,7 @@ fn resolve_expressions_errors_when_run_as_current_user_home_directory_is_not_abs
         no_host_env,
     );
 
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("is not an absolute path"));
+    assert!(format!("{:#}", result.unwrap_err()).contains("is not an absolute path"));
 }
 
 #[test]
@@ -3700,10 +3685,7 @@ fn resolve_expressions_errors_when_run_as_current_user_home_directory_contains_a
         no_host_env,
     );
 
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("contains a ':' or a control character"));
+    assert!(format!("{:#}", result.unwrap_err()).contains("contains a ':' or a control character"));
 }
 
 #[test]
@@ -3722,10 +3704,7 @@ fn resolve_expressions_errors_when_run_as_current_user_home_directory_contains_a
         no_host_env,
     );
 
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("contains a ':' or a control character"));
+    assert!(format!("{:#}", result.unwrap_err()).contains("contains a ':' or a control character"));
 }
 
 #[test]
@@ -7047,4 +7026,160 @@ fn resolve_expressions_errors_if_project_directory_is_given_as_a_cli_override() 
     let result =
         config.resolve_expressions_with(Path::new("/base"), &HashMap::new(), &overrides, |_| None);
     assert!(result.is_err());
+}
+
+/// The point of the feature: a pipeline picks its image per run without a
+/// flag, defaulting sensibly when nothing overrides it.
+#[tokio::test]
+async fn a_native_image_resolves_a_config_variable() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        r#"
+project_name = "demo"
+
+[config_variables.tag]
+default = "latest"
+
+[containers.app]
+image = "my-repo/my-image:<{tag}"
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .unwrap();
+
+    let defaulted = load_project_native(&dir.join("ratect.toml"), &HashMap::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        defaulted.config.containers["app"].image.as_deref(),
+        Some("my-repo/my-image:latest")
+    );
+
+    let overridden = load_project_native(
+        &dir.join("ratect.toml"),
+        &HashMap::from([("tag".to_string(), "1.2.3".to_string())]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        overridden.config.containers["app"].image.as_deref(),
+        Some("my-repo/my-image:1.2.3")
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `batect` resolves nothing in `image`, so a `batect.yml` using an
+/// expression would stop working under the tool this binary is a drop-in
+/// for. Rejected rather than silently resolved — see
+/// [`reject_image_expressions_in_compat`].
+#[tokio::test]
+async fn an_image_expression_is_rejected_in_a_batect_yml() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: my-repo/my-image:${TAG:-latest}\n",
+    )
+    .unwrap();
+
+    let err = load_project(&dir.join("batect.yml"), &HashMap::new())
+        .await
+        .expect_err("an expression here would not survive a move back to batect");
+    let err = format!("{err:#}");
+    assert!(err.contains("'app'"), "must name the container: {err}");
+    assert!(
+        err.contains("my-repo/my-image:${TAG:-latest}"),
+        "must quote what was written: {err}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The rejection must not fire on an ordinary image, or every existing
+/// `batect.yml` stops loading. Includes the near-misses that a
+/// "contains a sigil" check would wrongly catch.
+#[tokio::test]
+async fn an_ordinary_image_still_loads_in_a_batect_yml() {
+    for image in ["alpine:3.18", "my-repo/my-image:1.2.3", "ubuntu"] {
+        let dir = unique_temp_dir();
+        std::fs::write(
+            dir.join("batect.yml"),
+            format!("project_name: demo\ncontainers:\n  app:\n    image: {image}\n"),
+        )
+        .unwrap();
+
+        let project = load_project(&dir.join("batect.yml"), &HashMap::new())
+            .await
+            .unwrap_or_else(|e| panic!("{image} should still load: {e:#}"));
+        assert_eq!(
+            project.config.containers["app"].image.as_deref(),
+            Some(image)
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+/// The error names one container, and which one must not depend on `HashMap`
+/// iteration order — the same rule as
+/// [`the_reported_scope_conflict_does_not_depend_on_hashmap_order`].
+#[tokio::test]
+async fn the_reported_image_expression_does_not_depend_on_hashmap_order() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  zebra:\n    image: img:$ONE\n  \
+         alpha:\n    image: img:$TWO\n",
+    )
+    .unwrap();
+
+    let mut messages = std::collections::HashSet::new();
+    for _ in 0..32 {
+        let err = load_project(&dir.join("batect.yml"), &HashMap::new())
+            .await
+            .expect_err("both containers use an expression");
+        messages.insert(format!("{err:#}"));
+    }
+    assert_eq!(
+        messages.len(),
+        1,
+        "the same project reported different containers: {messages:?}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The rejection is whole-file, and that is the deliberate, *breaking* part:
+/// a container nothing references never reaches Docker, so it worked here
+/// before and still works under `batect` today. Rejected anyway, because the
+/// file stops being portable the moment a task uses that container — better
+/// found at load than on that day. Pinned so a later "fix" narrowing this to
+/// referenced containers has to argue with the decision rather than assume
+/// it was an oversight. See CHANGELOG's note on the breaking change.
+#[tokio::test]
+async fn an_image_expression_is_rejected_even_on_an_unreferenced_container() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  used:\n    image: alpine:3.18\n  \
+         never-referenced:\n    image: my-repo/img:${TAG}\ntasks:\n  t:\n    run:\n      \
+         container: used\n",
+    )
+    .unwrap();
+
+    let err = load_project(&dir.join("batect.yml"), &HashMap::new())
+        .await
+        .expect_err("the check is whole-file, not per-used-container");
+    let err = format!("{err:#}");
+    assert!(err.contains("'never-referenced'"), "got: {err}");
+    // Names what to do, not a flag that cannot get past a load-time check.
+    assert!(
+        err.contains("--override-image never-referenced="),
+        "the remedy must be actionable: {err}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
 }

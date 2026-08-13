@@ -73,7 +73,7 @@ A **sibling** file (a `[local]`-style *section* can't be gitignored independentl
 of the tracked config it'd sit in), holding **config-variable values only**, not a
 general field overlay. Config variables are already the sanctioned "this varies by
 environment" surface, so anything locally overridable should be a declared
-variable interpolated into the field (`image = "app:<{tag}>"`) — keeping
+variable interpolated into the field (`image = "app:<{tag}"`) — keeping
 variability opt-in and visible in the tracked file rather than lurking in an
 untracked one (the same stance `doctor`'s floating-tag warning takes). The escape
 valve for "override a non-variable field" is "promote it to a variable," a

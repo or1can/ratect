@@ -58,6 +58,38 @@ pub fn interpolate(
     Ok(result)
 }
 
+/// Whether `input` holds anything [`interpolate`] would treat as an
+/// expression rather than as literal text.
+///
+/// Shares [`parse_token`] with `interpolate` instead of scanning for `$`/`<`,
+/// so the two cannot disagree about what counts. `interpolate` is deliberately
+/// lenient — a `$` not followed by a valid identifier, or an unterminated
+/// `${`, is literal — and a detector written separately would drift from that
+/// on exactly the inputs where being wrong is a false rejection.
+///
+/// A well-formed token whose variable happens not to resolve here counts as
+/// present: it *is* an expression, it just cannot be evaluated without the
+/// caller's environment, which this deliberately does not take.
+pub(crate) fn contains_expression(input: &str) -> bool {
+    let chars: Vec<char> = input.chars().collect();
+    let no_config_vars = HashMap::new();
+    let any_host_var = |_: &str| Some(String::new());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if (c == '$' || c == '<')
+            && !matches!(
+                parse_token(&chars[i..], c, &any_host_var, &no_config_vars),
+                Ok(None)
+            )
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
 fn is_ident_start(c: char) -> bool {
     c.is_ascii_alphabetic() || c == '_'
 }

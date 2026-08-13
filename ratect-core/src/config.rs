@@ -20,8 +20,9 @@
 //! *which function it calls*, so the private `ConfigFormat` policy enum never
 //! leaks into the public API; `parse_config_file` is the single dispatch point,
 //! and both parsers feed the same `ConfigFile`, so nothing downstream knows which
-//! format a file came from. Three things ride on that policy — the native-only
-//! `extends` pass, the `ratect-bundle.toml`-before-`batect-bundle.yml` probe for a
+//! format a file came from. Several things ride on that policy — the native-only
+//! `extends` pass, the nested-git-include gate and its error redaction, expressions
+//! in `image`, the `ratect-bundle.toml`-before-`batect-bundle.yml` probe for a
 //! pathless git include, and the object-only *documented* schema (the parser
 //! itself stays string-tolerant, which is what lets one set of hand-written
 //! `Deserialize` impls serve both formats). **`extends`** (native only; a
@@ -152,7 +153,16 @@ pub struct Container {
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub extends: Option<String>,
     /// The image to run, in Docker's own `name:tag` form. Exactly one of
-    /// `image` or `build_directory` is required.
+    /// `image` or `build_directory` is required. No expression support here:
+    /// Batect resolves none, so one is rejected when the file loads rather
+    /// than resolved.
+    ///
+    /// The paragraph above is the *compat* schema's `description` (only a doc
+    /// comment's first paragraph becomes one, per `schema.rs`'s summarizer), which is
+    /// why the rejection is stated there rather than here. `ratect.toml` does
+    /// resolve expressions in this field, and `make_native` overrides the
+    /// text to say so; the rejection itself is
+    /// [`reject_image_expressions_in_compat`].
     pub image: Option<String>,
     /// Controls whether an `image` container's image is pulled fresh or
     /// only when missing locally — Docker's own pull semantics
@@ -2718,8 +2728,11 @@ impl Config {
     }
 
     /// Resolves every expression-bearing value in the config — `environment`
-    /// entries (on containers and task `run`s) and volume host paths —
-    /// through Batect's expression syntax: `$VAR`/`${VAR}`/`${VAR:-default}`
+    /// entries (on containers and task `run`s), volume host paths, and a
+    /// container's `image` (native-only in effect: an expression there is
+    /// refused in a `batect.yml` before this runs, so interpolating it is a
+    /// no-op for that format) — through Batect's expression syntax:
+    /// `$VAR`/`${VAR}`/`${VAR:-default}`
     /// against the real host environment, and `<name`/`<{name}` against
     /// `config_variables`, merged with `config_var_overrides` (highest
     /// precedence — from `--config-var`/`--config-vars-file`).
@@ -2829,174 +2842,188 @@ impl Config {
         config_vars.insert(PROJECT_DIRECTORY_VAR.to_string(), Some(project_directory));
 
         for (container_name, container) in self.containers.iter_mut() {
-            let container_base_path = container_base_paths
-                .get(container_name)
-                .map(PathBuf::as_path)
-                .unwrap_or(base_path);
-            let container_boundary = container_git_boundaries
-                .get(container_name)
-                .map(|boundary| (boundary, project_directory_path.as_path()));
-            if let Some(environment) = &mut container.environment {
-                for value in environment.values_mut() {
-                    *value = crate::expressions::interpolate(value, &host_env, &config_vars)?;
+            // One attribution point for the whole block. Everything below
+            // speaks its own vocabulary — `expressions` knows a variable
+            // name, `resolve_path` a path — and none of them know which
+            // container asked. Naming it per call site means the next
+            // field added is unattributed by default, which is how `image`
+            // shipped reporting an unset variable with no container while
+            // the compat rejection beside it named one.
+            (|| -> Result<()> {
+                let container_base_path = container_base_paths
+                    .get(container_name)
+                    .map(PathBuf::as_path)
+                    .unwrap_or(base_path);
+                let container_boundary = container_git_boundaries
+                    .get(container_name)
+                    .map(|boundary| (boundary, project_directory_path.as_path()));
+                // Unconditional, though only `ratect.toml` can reach it with an
+                // expression in it: a `batect.yml` carrying one is refused at load
+                // (see [`reject_image_expressions_in_compat`]), and anything that
+                // survives that has nothing here to substitute. Keeping the
+                // *decision* at the rejection — where the format is already known —
+                // is what saves threading `ConfigFormat` through path resolution.
+                if let Some(image) = &mut container.image {
+                    *image = crate::expressions::interpolate(image, &host_env, &config_vars)?;
                 }
-            }
-            if let Some(volumes) = &mut container.volumes {
-                for volume in volumes {
-                    // A cache `name` becomes a host directory under
-                    // `--cache-type directory`, so it is checked before
-                    // anything can join it onto one.
-                    if let VolumeMount::Cache(cache) = volume {
-                        validate_cache_name(container_name, &cache.name)?;
-                    }
-                    // `Cache` mounts have nothing else to resolve here —
-                    // `name`/`container` are plain strings, not expressions,
-                    // matching Batect's own `CacheMount` typing. Their
-                    // Docker volume name/host directory is resolved later,
-                    // once `--cache-type` and the project's cache key are
-                    // known — see `crate::cache::resolve_cache_mount`. `Tmpfs`
-                    // mounts likewise have nothing to resolve — `container`/
-                    // `options` are plain strings too, matching Batect's own
-                    // `TmpfsMount` typing.
-                    if let VolumeMount::Local(local) = volume {
-                        local.local = resolve_path(
-                            &local.local,
-                            container_base_path,
-                            &host_env,
-                            &config_vars,
-                            container_boundary,
-                        )?;
+                if let Some(environment) = &mut container.environment {
+                    for value in environment.values_mut() {
+                        *value = crate::expressions::interpolate(value, &host_env, &config_vars)?;
                     }
                 }
-            }
-            if let Some(build_directory) = &mut container.build_directory {
-                *build_directory = resolve_path(
-                    build_directory,
-                    container_base_path,
-                    &host_env,
-                    &config_vars,
-                    container_boundary,
-                )?;
-            }
-            if let Some(build_args) = &mut container.build_args {
-                for value in build_args.values_mut() {
-                    *value = crate::expressions::interpolate(value, &host_env, &config_vars)?;
-                }
-            }
-            if let Some(build_secrets) = &mut container.build_secrets {
-                for secret in build_secrets.values_mut() {
-                    // `Environment` is a literal host env var *name*, not
-                    // itself an expression — matches Batect's own `String`
-                    // (not `Expression`) typing for that variant.
-                    if let BuildSecret::Path(path) = secret {
-                        *path = resolve_path(
-                            path,
-                            container_base_path,
-                            &host_env,
-                            &config_vars,
-                            container_boundary,
-                        )?;
-                    }
-                }
-            }
-            if let Some(build_ssh) = &mut container.build_ssh {
-                let mut ids_seen = HashSet::new();
-                for agent in build_ssh.iter_mut() {
-                    let id = agent.id.clone();
-                    if !ids_seen.insert(id.clone()) {
-                        // A Dockerfile selects an agent by id, so two
-                        // entries claiming one id have no defined meaning —
-                        // rejected here rather than silently letting one win,
-                        // matching Batect's own `checkForDuplicateSSHAgents`.
-                        anyhow::bail!(
-                            "Container '{}' has more than one 'build_ssh' entry with the id \
-                             '{}', but each SSH agent must have a unique id",
-                            container_name,
-                            id
-                        );
-                    }
-                    for path in &mut agent.paths {
-                        *path = resolve_path(
-                            path,
-                            container_base_path,
-                            &host_env,
-                            &config_vars,
-                            container_boundary,
-                        )?;
-                    }
-                }
-            }
-            if let Some(run_as_current_user) = &mut container.run_as_current_user {
-                if run_as_current_user.enabled {
-                    let home_directory =
-                        run_as_current_user.home_directory.as_mut().ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "Container '{}' has 'run_as_current_user.enabled' set to true, \
-                                 but no 'home_directory' was provided",
-                                container_name
-                            )
-                        })?;
-                    // Not `resolve_path` — this is a path *inside the
-                    // container*, never resolved against `base_path`.
-                    *home_directory =
-                        crate::expressions::interpolate(home_directory, &host_env, &config_vars)?;
-                    if !home_directory.starts_with('/') {
-                        anyhow::bail!(
-                            "Container '{}' has an invalid 'run_as_current_user.home_directory': \
-                             '{}' is not an absolute path",
-                            container_name,
-                            home_directory
-                        );
-                    }
-                    // Each `cache` mount's container path, for the same
-                    // reason and in the same place: `run_as_current_user`
-                    // takes ownership of them, which means uploading an
-                    // archive to that path. A non-absolute one would
-                    // otherwise surface from the Docker layer, whose only
-                    // identifier is a container id — reading as though the
-                    // configuration had named that.
-                    //
-                    // Scoped to `cache` mounts under an *enabled*
-                    // `run_as_current_user`, matching Batect exactly. Wider
-                    // would be tempting and wrong: Batect never checks
-                    // `local`/`tmpfs` destinations, so a Windows-container
-                    // config mounting `C:\code` would stop loading here
-                    // while still working there.
-                    for volume in container.volumes.iter().flatten() {
+                if let Some(volumes) = &mut container.volumes {
+                    for volume in volumes {
+                        // A cache `name` becomes a host directory under
+                        // `--cache-type directory`, so it is checked before
+                        // anything can join it onto one.
                         if let VolumeMount::Cache(cache) = volume {
-                            if !cache.container.starts_with('/') {
-                                anyhow::bail!(
-                                    "Container '{}' has an invalid 'cache' volume mount: \
-                                     '{}' is not an absolute path",
-                                    container_name,
-                                    cache.container
-                                );
-                            }
+                            validate_cache_name(&cache.name)?;
+                        }
+                        // `Cache` mounts have nothing else to resolve here —
+                        // `name`/`container` are plain strings, not expressions,
+                        // matching Batect's own `CacheMount` typing. Their
+                        // Docker volume name/host directory is resolved later,
+                        // once `--cache-type` and the project's cache key are
+                        // known — see `crate::cache::resolve_cache_mount`. `Tmpfs`
+                        // mounts likewise have nothing to resolve — `container`/
+                        // `options` are plain strings too, matching Batect's own
+                        // `TmpfsMount` typing.
+                        if let VolumeMount::Local(local) = volume {
+                            local.local = resolve_path(
+                                &local.local,
+                                container_base_path,
+                                &host_env,
+                                &config_vars,
+                                container_boundary,
+                            )?;
                         }
                     }
-                    // `home_directory` is interpolated raw into a
-                    // colon-delimited `/etc/passwd`/`/etc/shadow` line
-                    // (`user::generate_passwd_file`) — a `:` shifts that
-                    // line's fields, and a newline/other control character
-                    // injects an entirely new (attacker-chosen) entry.
-                    if home_directory.contains(':') || home_directory.chars().any(char::is_control)
-                    {
+                }
+                if let Some(build_directory) = &mut container.build_directory {
+                    *build_directory = resolve_path(
+                        build_directory,
+                        container_base_path,
+                        &host_env,
+                        &config_vars,
+                        container_boundary,
+                    )?;
+                }
+                if let Some(build_args) = &mut container.build_args {
+                    for value in build_args.values_mut() {
+                        *value = crate::expressions::interpolate(value, &host_env, &config_vars)?;
+                    }
+                }
+                if let Some(build_secrets) = &mut container.build_secrets {
+                    for secret in build_secrets.values_mut() {
+                        // `Environment` is a literal host env var *name*, not
+                        // itself an expression — matches Batect's own `String`
+                        // (not `Expression`) typing for that variant.
+                        if let BuildSecret::Path(path) = secret {
+                            *path = resolve_path(
+                                path,
+                                container_base_path,
+                                &host_env,
+                                &config_vars,
+                                container_boundary,
+                            )?;
+                        }
+                    }
+                }
+                if let Some(build_ssh) = &mut container.build_ssh {
+                    let mut ids_seen = HashSet::new();
+                    for agent in build_ssh.iter_mut() {
+                        let id = agent.id.clone();
+                        if !ids_seen.insert(id.clone()) {
+                            // A Dockerfile selects an agent by id, so two
+                            // entries claiming one id have no defined meaning —
+                            // rejected here rather than silently letting one win,
+                            // matching Batect's own `checkForDuplicateSSHAgents`.
+                            anyhow::bail!(
+                                "has more than one 'build_ssh' entry with the id \
+                                 '{}', but each SSH agent must have a unique id",
+                                id
+                            );
+                        }
+                        for path in &mut agent.paths {
+                            *path = resolve_path(
+                                path,
+                                container_base_path,
+                                &host_env,
+                                &config_vars,
+                                container_boundary,
+                            )?;
+                        }
+                    }
+                }
+                if let Some(run_as_current_user) = &mut container.run_as_current_user {
+                    if run_as_current_user.enabled {
+                        let home_directory =
+                            run_as_current_user.home_directory.as_mut().ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "has 'run_as_current_user.enabled' set to true, \
+                                     but no 'home_directory' was provided",
+                                )
+                            })?;
+                        // Not `resolve_path` — this is a path *inside the
+                        // container*, never resolved against `base_path`.
+                        *home_directory =
+                            crate::expressions::interpolate(home_directory, &host_env, &config_vars)?;
+                        if !home_directory.starts_with('/') {
+                            anyhow::bail!(
+                                "has an invalid 'run_as_current_user.home_directory': \
+                                 '{}' is not an absolute path",
+                                home_directory
+                            );
+                        }
+                        // Each `cache` mount's container path, for the same
+                        // reason and in the same place: `run_as_current_user`
+                        // takes ownership of them, which means uploading an
+                        // archive to that path. A non-absolute one would
+                        // otherwise surface from the Docker layer, whose only
+                        // identifier is a container id — reading as though the
+                        // configuration had named that.
+                        //
+                        // Scoped to `cache` mounts under an *enabled*
+                        // `run_as_current_user`, matching Batect exactly. Wider
+                        // would be tempting and wrong: Batect never checks
+                        // `local`/`tmpfs` destinations, so a Windows-container
+                        // config mounting `C:\code` would stop loading here
+                        // while still working there.
+                        for volume in container.volumes.iter().flatten() {
+                            if let VolumeMount::Cache(cache) = volume {
+                                if !cache.container.starts_with('/') {
+                                    anyhow::bail!(
+                                        "has an invalid 'cache' volume mount: \
+                                         '{}' is not an absolute path",
+                                        cache.container
+                                    );
+                                }
+                            }
+                        }
+                        // `home_directory` is interpolated raw into a
+                        // colon-delimited `/etc/passwd`/`/etc/shadow` line
+                        // (`user::generate_passwd_file`) — a `:` shifts that
+                        // line's fields, and a newline/other control character
+                        // injects an entirely new (attacker-chosen) entry.
+                        if home_directory.contains(':') || home_directory.chars().any(char::is_control)
+                        {
+                            anyhow::bail!(
+                                "has an invalid 'run_as_current_user.home_directory': \
+                                 '{}' contains a ':' or a control character, which would corrupt the \
+                                 generated /etc/passwd and /etc/shadow entries",
+                                home_directory
+                            );
+                        }
+                    } else if run_as_current_user.home_directory.is_some() {
                         anyhow::bail!(
-                            "Container '{}' has an invalid 'run_as_current_user.home_directory': \
-                             '{}' contains a ':' or a control character, which would corrupt the \
-                             generated /etc/passwd and /etc/shadow entries",
-                            container_name,
-                            home_directory
+                            "has 'run_as_current_user.home_directory' set, but \
+                             'run_as_current_user.enabled' is not true",
                         );
                     }
-                } else if run_as_current_user.home_directory.is_some() {
-                    anyhow::bail!(
-                        "Container '{}' has 'run_as_current_user.home_directory' set, but \
-                         'run_as_current_user.enabled' is not true",
-                        container_name
-                    );
                 }
-            }
+                Ok(())
+            })()
+            .with_context(|| format!("Container '{container_name}'"))?;
         }
 
         for (task_name, task) in self.tasks.iter_mut() {
@@ -3365,6 +3392,9 @@ async fn load_project_impl(
         reject_extends_in_compat(&loaded.config)?;
         reject_shared_caches_in_compat(&loaded.config)?;
         validate_image_sources_in_compat(&loaded.config.containers)?;
+        // Before `resolve_expressions` below, so it judges what was written
+        // rather than what an expression resolved to.
+        reject_image_expressions_in_compat(&loaded.config)?;
     }
     let base_path = base_path_for(config_file);
     let project_directory = project_directory_path(base_path)?;
@@ -3498,7 +3528,7 @@ fn reject_extends_in_compat(config: &Config) -> Result<()> {
 /// Batect performs no equivalent check; diverging in the safer direction is
 /// the same call [decisions/0004](https://github.com/or1can/ratect/blob/main/decisions/0004-git-include-host-path-trust.md)
 /// made for include containment.
-fn validate_cache_name(container_name: &str, name: &str) -> Result<()> {
+fn validate_cache_name(name: &str) -> Result<()> {
     let valid = name
         .chars()
         .next()
@@ -3508,10 +3538,61 @@ fn validate_cache_name(container_name: &str, name: &str) -> Result<()> {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
     if !valid {
         anyhow::bail!(
-            "Container '{container_name}' has a 'cache' volume mount named '{name}', which \
+            "has a 'cache' volume mount named '{name}', which \
              is not a valid cache name. A cache name must start with a letter or digit and \
              contain only letters, digits, underscores, dots and dashes — it names storage, \
              not a path."
+        );
+    }
+    Ok(())
+}
+
+/// Rejects an expression in a container's `image` in a `batect.yml`.
+///
+/// The objection is **one-way lock-in**: a `batect.yml` using it stops working
+/// under real `batect`, and "you can go back" is the whole proposition of the
+/// compat binary. A parameterised image tag would be used on every pipeline,
+/// so that lock-in would be routine rather than incidental — which is what
+/// separates this from the `Capability` superset. A `ratect.toml` cannot run
+/// under Batect anyway, so it creates none of it.
+///
+/// **This is a breaking change, and the tempting justification for it is
+/// wrong.** "`$`/`{`/`}` are invalid in a Docker reference, so such a config
+/// already fails everywhere" holds only for a container that actually runs.
+/// Checked over the whole file *before task selection*, this also rejects
+/// three configurations that worked before and work under `batect` today.
+/// In rising order of how often they occur: a container whose image
+/// `--override-image` replaces; a container nothing references at all; and
+/// — the common one — a container used only by some *other* task, which now
+/// fails every task in the file rather than only the one that would have
+/// broken. All three are rejected deliberately — the latent portability bug is worth surfacing at
+/// load rather than on the day someone adds a task that uses the container —
+/// but the cost is real and is recorded in CHANGELOG.md rather than papered
+/// over here. Whole-file is also what [`validate_image_sources_in_compat`]
+/// does, for the same reason.
+fn reject_image_expressions_in_compat(config: &Config) -> Result<()> {
+    let mut offenders: Vec<(&str, &str)> = config
+        .containers
+        .iter()
+        .filter_map(|(container_name, container)| {
+            let image = container.image.as_deref()?;
+            crate::expressions::contains_expression(image)
+                .then_some((container_name.as_str(), image))
+        })
+        .collect();
+    // Sorted on the whole pair, so a project with several always reports the
+    // same one — `containers` is a `HashMap` whose order varies between runs.
+    offenders.sort_unstable();
+    if let Some((container_name, image)) = offenders.first() {
+        anyhow::bail!(
+            // Names what to do, not a flag that would fix this file: the
+            // check runs at load, so '--override-image' does not get past it
+            // — the expression has to go first.
+            "Container '{container_name}' uses an expression in its 'image' ('{image}'), which \
+             is a ratect-native feature not supported in Batect-compatible configuration. \
+             Batect resolves no expression there, so a file using one would stop working under \
+             'batect' itself. Write a fixed image here; '--override-image {container_name}=...' \
+             is how this binary chooses one per run."
         );
     }
     Ok(())

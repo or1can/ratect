@@ -129,9 +129,12 @@ and [`config validate`](ratect-cli.md#config) treat the object form as canonical
 ## Config variables and expressions
 
 Config variables are declared under `[config_variables]` and referenced with the
-same `<name` / `<{name}` expression syntax as `batect.yml` — expressions are
-values inside strings, so they're format-independent and carry across verbatim.
-See [ConfigVariable](config-reference.md#configvariable) and
+same `<name` / `<{name}` expression syntax as `batect.yml` — the *syntax* is
+values inside strings, so it carries across verbatim. Which **fields** resolve
+one is not identical: this format also resolves them in `image`, which a
+`batect.yml` refuses — see [Expressions in `image`](#expressions-in-image), and
+note that the `image` line in the example below is exactly that case. Otherwise
+see [ConfigVariable](config-reference.md#configvariable) and
 [Expressions](config-reference.md#expressions).
 
 ```toml
@@ -140,7 +143,7 @@ default = "latest"
 description = "The image tag to run."
 
 [containers.app]
-image = "myapp:<{tag}>"                 # a config variable
+image = "myapp:<{tag}"                 # a config variable
 environment = { HOME = "${HOME}" }      # a host environment variable
 ```
 
@@ -238,6 +241,51 @@ projects are still using should not be a side effect. See
 `batect.yml` has no equivalent, so `scope` is rejected there rather than
 ignored — see [Differences](#differences-from-batectyml-at-a-glance) below.
 
+## Expressions in `image`
+
+A container's `image` takes [expressions](config-reference.md#expressions), so a
+pipeline can choose its image per run without a flag:
+
+```toml
+[config_variables.tag]
+default = "latest"
+
+[containers.app]
+image = "my-repo/my-image:<{tag}"
+
+[containers.tools]
+image = "my-repo/tools:${IMAGE_TAG:-latest}"
+```
+
+Both forms work: `<{tag}` reads a [`config_variables`](#config-variables) entry
+(settable with `--config-var tag=1.2.3`), and `${IMAGE_TAG:-latest}` reads the
+host environment with a fallback. The same rules apply as everywhere else — an
+unset host variable with no `:-default` is a hard error naming it, rather than a
+silent empty string that would produce a puzzling image reference.
+
+Resolution happens before `extends` is applied, so a container inheriting an
+`image` inherits the *resolved* value, consistent with `build_directory` and
+volume host paths.
+
+**Resolution is eager and covers the whole file**, not just the containers your
+task uses — again like every other expression-bearing field. So an unset
+variable with no `:-default` fails *every* task in the file, including tasks
+that never touch the container declaring it. Give a default where a variable is
+genuinely optional. The error names the container, so you are not left hunting
+for which one.
+
+**Rejected in a `batect.yml`**, rather than resolved or ignored. Batect has no
+expression support in `image`, so a file using one would load here and fail
+under `batect` itself — and unlike an exotic capability, a parameterised image
+tag is something a pipeline would use on every run, so the lock-in would be
+routine rather than incidental. `ratect-compat` users have `--override-image`,
+which covers most of the same ground; what it can't express is an in-config
+default, which is what this adds.
+
+The rejection is on what you wrote, not on what it would resolve to, and it
+knows the difference between an expression and a literal `$`: `alpine:3.18` and
+`repo/img:1.2.3` load exactly as before.
+
 ## Nested Git includes
 
 A [Git include](config-reference.md#git-includes) fetches configuration from a
@@ -319,15 +367,17 @@ The container fields, by area:
 
 Almost nothing: the two formats parse into the same model, so a field means
 what [`config-reference.md`](config-reference.md) says it means. The
-exceptions are the places where `extends` gives a combination a meaning it
-cannot have in a `batect.yml`, which has no inheritance — plus one place
-where this format is deliberately stricter, because it has no Batect
-compatibility to preserve.
+exceptions fall into three groups: places where `extends` gives a combination
+a meaning it cannot have in a `batect.yml`, which has no inheritance; places
+where this format is deliberately **stricter**, having no Batect
+compatibility to preserve; and one place where it does **more** than Batect,
+which `batect.yml` then has to refuse rather than quietly accept.
 
 | Behaviour | `batect.yml` (`ratect-compat`) | `ratect.toml` (`ratect`) |
 | --- | --- | --- |
 | A Git-included bundle declaring a **`type: git` include of its own** | Always allowed, matching Batect | Refused unless the bundle's own include entry sets [`allow_nested_git_includes`](#nested-git-includes) |
 | A **nested** Git include failing to clone | Reports `git`'s own error | Reports that it failed, with the transport detail behind `RUST_LOG=debug` — see [Nested Git includes](#nested-git-includes) |
+| An **expression in `image`** | Rejected when the file loads — Batect resolves nothing there | Resolved like any other expression — see [Expressions in `image`](#expressions-in-image) |
 | A container with **both** `image` and `build_directory` | Rejected when the file loads, matching Batect | Allowed — `image` wins, and this is the only way to override a `build_directory` inherited from an `extends` parent, since inheritance is per-field with no way to unset one |
 | A container with **neither** `image` nor `build_directory` | Rejected when the file loads | Allowed — a container used only as an `extends` base needs neither; the requirement is enforced when a task actually runs a container, so no `abstract` marker is needed |
 | `image` alongside a build-only field (`build_args`, `build_target`, `dockerfile`, `build_secrets`, `build_ssh`) | Rejected when the file loads | Allowed and **ignored**, for the same inheritance reason — a child overriding a build with an `image` still carries the parent's build fields |

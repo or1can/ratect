@@ -265,7 +265,7 @@
           "description": "Overrides the health check configuration baked into the image — see `HealthCheckConfig`. Applied at container creation; a dependency container with a health check (from here or from its image) must report healthy before its dependents start."
         },
         "image": {
-          "description": "The image to run, in Docker's own `name:tag` form. Exactly one of `image` or `build_directory` is required.",
+          "description": "The image to run, in Docker's own `name:tag` form. Supports expressions, so a tag can be chosen per run — e.g. \"my-repo/my-image:${IMAGE_TAG:-latest}\". Usually paired with `build_directory` as the alternative, though `extends` makes both — or neither — legal on one container.",
           "type": [
             "string",
             "null"

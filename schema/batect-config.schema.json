@@ -261,7 +261,7 @@
           "description": "Overrides the health check configuration baked into the image — see `HealthCheckConfig`. Applied at container creation; a dependency container with a health check (from here or from its image) must report healthy before its dependents start."
         },
         "image": {
-          "description": "The image to run, in Docker's own `name:tag` form. Exactly one of `image` or `build_directory` is required.",
+          "description": "The image to run, in Docker's own `name:tag` form. Exactly one of `image` or `build_directory` is required. No expression support here: Batect resolves none, so one is rejected when the file loads rather than resolved.",
           "type": [
             "string",
             "null"

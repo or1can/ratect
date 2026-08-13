@@ -248,6 +248,21 @@ fn make_native(json: &mut serde_json::Value) {
                                 named container.",
             }),
         );
+        // Corrects the shared description on both counts it is wrong about
+        // here: this format resolves expressions in `image`, and `extends`
+        // means the compat "exactly one of image/build_directory" rule does
+        // not hold (see the divergence table in the native reference).
+        properties.insert(
+            "image".to_string(),
+            serde_json::json!({
+                "type": ["string", "null"],
+                "description": "The image to run, in Docker's own `name:tag` form. Supports \
+                                expressions, so a tag can be chosen per run — e.g. \
+                                \"my-repo/my-image:${IMAGE_TAG:-latest}\". Usually paired with \
+                                `build_directory` as the alternative, though `extends` makes \
+                                both — or neither — legal on one container.",
+            }),
+        );
     }
 }
 

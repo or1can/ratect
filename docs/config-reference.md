@@ -221,7 +221,7 @@ containers:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `image` | string | one of `image`/`build_directory` | A Docker image reference to pull and run (e.g. `alpine:3.18`). Exactly one of `image`/`build_directory` is required, and giving both is an error rather than one silently winning. `image` also can't be combined with any build-only field (`build_args`, `build_target`, `dockerfile`, `build_secrets`, `build_ssh`) — those apply only to a container built from a `build_directory`. All of this is `ratect-compat` behaviour; `ratect`'s native format deliberately allows these combinations because `extends` needs them — see [where the semantics differ](ratect-config-reference.md#where-the-semantics-differ). |
+| `image` | string | one of `image`/`build_directory` | A Docker image reference to pull and run (e.g. `alpine:3.18`). Exactly one of `image`/`build_directory` is required, and giving both is an error rather than one silently winning. `image` also can't be combined with any build-only field (`build_args`, `build_target`, `dockerfile`, `build_secrets`, `build_ssh`) — those apply only to a container built from a `build_directory`. All of this is `ratect-compat` behaviour; `ratect`'s native format deliberately allows these combinations because `extends` needs them — see [where the semantics differ](ratect-config-reference.md#where-the-semantics-differ). No [expression](#expressions) support: Batect resolves none here, so one is rejected when the file loads rather than resolved, which would make the file unusable under `batect` itself. `ratect.toml` does resolve them — see [Expressions in `image`](ratect-config-reference.md#expressions-in-image). |
 | `image_pull_policy` | `IfNotPresent` or `Always` | no | On an `image` container: whether to pull it fresh or only when it's missing locally. On a `build_directory` container: whether to force-pull the build's own base image (`docker build --pull`) before building, or leave Docker's own local-cache-if-present behavior alone — Batect's own second, distinct use of this same field. Defaults to `IfNotPresent` either way, matching Batect. No expression support. |
 | `build_directory` | string | one of `image`/`build_directory` | Builds an image from a `Dockerfile` in this directory (see [Image building](#image-building) below) instead of pulling a pre-built one. Supports [expressions](#expressions) and is resolved to an absolute path the same way a volume's `host_path` is — see [Volume path resolution](#volume-path-resolution). |
 | `build_args` | map of string → string | no | Build-time variables passed to `docker build` (Docker's own `--build-arg` mechanism), e.g. `VERSION: "1.2.3"`. Only meaningful alongside `build_directory`. Values support [expressions](#expressions). |
@@ -539,6 +539,15 @@ group instead.
 > `home_directory` still set — e.g. simply flipping `enabled` back to `false` without
 > also deleting `home_directory` fails config loading. Remove `home_directory`
 > entirely to disable user mapping, not just `enabled`.
+
+`home_directory` takes [expressions](#expressions) (e.g.
+`home_directory: /home/${USER:-container-user}`). It is interpolated but, unlike
+`build_directory` or a volume's host path, **not** resolved against the config
+file's directory — it names a path *inside* the container, so a relative value
+would be meaningless there and is rejected as not absolute. A `:` or control
+character in the resolved value is also rejected: it is written into the
+generated `/etc/passwd` and `/etc/shadow` entries, where either would corrupt
+the line.
 
 A few things happen automatically to make this actually work, not just set `--user`:
 
@@ -938,14 +947,26 @@ config_variables:
 
 `environment` values (on both [Container](#container) and [TaskRun](#taskrun)), a
 volume's `host_path` (see [Volume path resolution](#volume-path-resolution)),
-`build_directory`, `build_args`, and a `build_secrets` entry's `path` (not its
+`build_directory`, `build_args`, a `build_secrets` entry's `path` (not its
 `environment` — that's a literal host environment variable *name*, not itself
-interpolated) support two kinds of expression, resolved once — after CLI-supplied
+interpolated), a `build_ssh` entry's `paths`, and
+[`run_as_current_user`](#run_as_current_user)'s `home_directory` (interpolated
+but *not* resolved against the config file, since it names a path inside the
+container) support two kinds of expression, resolved once — after CLI-supplied
 config variable overrides (`--config-var`/`--config-vars-file`) are known, so before
 any task runs but not at config-parse time itself. Everywhere else in the config, a
 string is used exactly as written, with no substitution — expression support is
 scoped to fields that can meaningfully take one; it'll extend to more fields as they
-themselves get built, not automatically. Literal
+themselves get built, not automatically.
+
+> **`ratect.toml` differs here.** The native format also resolves expressions in
+> `image`, so a tag can be chosen per run — see [Expressions in
+> `image`](ratect-config-reference.md#expressions-in-image). It is rejected in a
+> `batect.yml` rather than ignored, because Batect resolves nothing there and a
+> file using one would stop working under `batect` itself. In this format,
+> `--override-image` is the way to choose an image per run.
+
+Literal
 text around an expression is left untouched (`"prefix-$VAR-suffix"` interpolates just
 `$VAR`), and a `$`/`<` not followed by a valid identifier (or an unterminated `${`/`<{`)
 is treated as a literal character rather than an error.

@@ -1334,7 +1334,7 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     The schema needed a second edit for the same reason it's easy to miss: the
     include entry's JSON schema is hand-written in `schema.rs`, so adding a Rust
     field leaves it silently stale and the schema test still passes.~~
-  - **Expressions in `image`** — riding along rather than part of the theme, since
+  - ~~**Expressions in `image`** — riding along rather than part of the theme, since
     it's small and native-only for the same reason `extends` is. Batect's
     highest-priority open suggestion
     ([batect#974](https://github.com/batect/batect/issues/974), `priority:high` —
@@ -1342,9 +1342,9 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     a plain string in both tools, so a CI pipeline can't say
     `image: my-repo/my-image:${IMAGE_TAG:-latest}` and pick a version per run.
     Ratect already resolves expressions in five other fields, so this is close to
-    free.
+    free.~~
 
-    **Native-only, and rejected in a `batect.yml` rather than ignored** — exactly
+    ~~**Native-only, and rejected in a `batect.yml` rather than ignored** — exactly
     the treatment `extends` gets, making this the fourth behaviour riding on
     `config.rs`'s private `ConfigFormat` policy enum. Not because it's unsafe in
     compat: `$`/`{`/`}` are invalid in a Docker image reference, so any config
@@ -1356,13 +1356,36 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     exotic capability is rare, whereas a parameterised image tag would be used
     on every pipeline, so the lock-in would be routine rather than incidental. A
     `ratect.toml` can't run under Batect anyway, so native-only creates none of
-    it.
+    it.~~
 
-    `ratect-compat` users keep `--override-image`, which already covers most of
+    ~~`ratect-compat` users keep `--override-image`, which already covers most of
     batect#974's own use case (`--override-image cypress=repo/img:0.5.7` versus
     the wished-for `--config-var`). What it can't express, and what this adds, is
     an in-config default (`${TAG:-latest}`) and selection straight from a host
-    environment variable with no flag at all.
+    environment variable with no flag at all.~~
+
+    ~~As built: `image` joins the seven fields that already resolve expressions,
+    on identical rules. The format decision lives at the *rejection* rather
+    than the interpolation — `batect.yml` refuses an expression at load, so
+    interpolation itself stays unconditional and `ConfigFormat` never had to
+    be threaded through path resolution. Detection reuses the interpolator's
+    own `parse_token` instead of scanning for `$`/`<`, because `interpolate`
+    is deliberately lenient (a `$` not followed by a valid identifier is
+    literal) and a separate detector would drift from it on exactly the
+    inputs where being wrong means falsely rejecting a valid `batect.yml`.~~
+
+    ~~**The scope note above was wrong on one point, and it is left standing
+    rather than edited** (this list is append-only). "Any config this would
+    change already fails under both tools with 'invalid reference format',
+    which makes it additive" holds only for a container that actually runs.
+    The check is whole-file and runs before task selection, so it also
+    rejects three configurations that worked before and still work under
+    `batect`: a container used only by a task you aren't running — which now
+    fails *every* task in the file — one nothing references at all, and one
+    whose image `--override-image` replaces. Rejecting them is the deliberate
+    call (the file stops being portable the moment that container is used),
+    but it is a breaking change for `ratect-compat`, recorded as one in
+    CHANGELOG.md.~~
   - **Not in scope: the allowlist form of `allow_host_paths`**
     ([decisions/0004](decisions/0004-git-include-host-path-trust.md)'s third
     track). Deferred there for a reason that still holds — one real data point,
