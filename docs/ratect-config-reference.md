@@ -328,13 +328,15 @@ so a bundle can neither grant itself the permission nor pass on the one you
 gave it. If a bundle genuinely needs a chain deeper than that, include the
 second repository yourself, where you can see it.
 
-**Declare it in your root file.** A repository is read once however many entries
-name it, so if another bundle also pulls in the same repository, the first entry
-reached decides what it may do — and this grant, on a losing entry, would do
-nothing at all. Root-file entries are always reached first. Where two entries
-name the same repository and the losing one carries a grant, Ratect refuses to
-load and names the repository, rather than dropping it silently; the same rule
-covers [`allow_host_paths`](config-reference.md#git-includes).
+**Put it on the entry that is reached first.** A repository is read once however
+many entries name it, so the first entry reached decides what it may do — and
+this grant, on a losing entry, would do nothing at all. Every entry in your root
+file is reached before any bundle's own, so declaring the include yourself beats
+a bundle to it; between two entries in the same file, the earlier one wins.
+Where two entries name the same repository and the losing one carries a grant,
+Ratect refuses to load and names the repository, rather than dropping it
+silently; the same rule covers
+[`allow_host_paths`](config-reference.md#git-includes).
 
 That is a different case from the paragraph above, which two words could easily
 blur. A grant written *inside* a bundle is **ignored** — accepted by the parser

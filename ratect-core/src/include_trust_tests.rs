@@ -237,9 +237,14 @@ fn a_grant_the_winning_route_did_not_carry_is_refused() {
             message.contains(&format!("'{field}' was set on the include of 'shared'")),
             "names the field that did nothing and the repository it was on: {message}"
         );
+        // The remedy is about *order*, not location: two root-level entries
+        // race each other, so "declare it in the root file" would be advice
+        // the reader has already taken.
         assert!(
-            message.contains("Declare this include in your root configuration file"),
-            "gives the remedy: {message}"
+            message.contains(&format!(
+                "Move '{field}' onto whichever include of 'shared' is resolved first"
+            )),
+            "gives a remedy that holds wherever the losing entry was written: {message}"
         );
     }
 }

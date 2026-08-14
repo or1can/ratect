@@ -190,15 +190,15 @@ from where a container may mount. Full rationale, and what a future allowlist fo
 would have to preserve, in
 [decisions/0004](https://github.com/or1can/ratect/blob/main/decisions/0004-git-include-host-path-trust.md).
 
-**Declare a vouched-for include in your root file.** A repository is cloned and
-read *once*, however many entries name it, so if one of your bundles also pulls
-in the same repository, whichever entry is reached first decides what that
-bundle is allowed — and a grant on the loser would quietly do nothing. Entries
-in the root configuration file are always reached before any bundle's own, so a
-grant written there always wins. Where two entries name the same repository and
-the losing one carries a grant, Ratect refuses to load, names the repository and
-tells you to move it, rather than leaving you to wonder why the flag had no
-effect. Note the two outcomes are different: a grant written *inside* a bundle
+**Put a vouched-for include on the entry that is reached first.** A repository is
+cloned and read *once*, however many entries name it, so whichever entry is
+reached first decides what that bundle is allowed — and a grant on the loser
+would quietly do nothing. Entries in the root configuration file are always
+reached before any bundle's own, so declaring the include yourself beats a
+bundle to it; between two entries in the same file, the earlier one wins. Where
+two entries name the same repository and the losing one carries a grant, Ratect
+refuses to load, names the repository and tells you which entry to move it to,
+rather than leaving you to wonder why the flag had no effect. Note the two outcomes are different: a grant written *inside* a bundle
 is **ignored** (accepted, worth nothing — see above), while one of your own that
 loses this race is **refused** outright.
 

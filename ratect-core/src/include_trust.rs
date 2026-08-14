@@ -336,11 +336,11 @@ impl EffectiveGrants {
         };
         anyhow::bail!(
             "'{lost}' was set on the include of '{repo}', but that repository was \
-             already reached through another include, and a file is only loaded \
-             once — so the permission would have had no effect. Declare this \
-             include in your root configuration file, which is always resolved \
-             before any bundle's own includes, or remove the '{lost}' that \
-             cannot apply."
+             already reached through an earlier include, and a file is only \
+             loaded once — so the permission would have had no effect. Move \
+             '{lost}' onto whichever include of '{repo}' is resolved first — \
+             every include in the root configuration file is resolved before \
+             any bundle's own — or remove the '{lost}' that cannot apply."
         );
     }
 }
