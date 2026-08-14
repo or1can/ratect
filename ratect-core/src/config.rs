@@ -3163,6 +3163,18 @@ pub fn to_native_toml(config: &Config) -> Result<String> {
 /// *already* cached (see [`crate::git_include::cached_working_copy`]), never
 /// cloning. Any unreadable or half-written file contributes nothing rather than
 /// producing an error, which is the only sane behaviour on `<TAB>`.
+///
+/// It therefore mirrors the loader's decisions about **which files are read**,
+/// and deliberately not its decisions about **whether to fail**. That is why
+/// the nested-Git gate is honoured here — it stops a bundle being read at all,
+/// so ignoring it would offer tasks the loader never sees — while
+/// [`include_trust::EffectiveGrants`]'s lost-grant refusal is not: it fires
+/// only on an include whose target was *already* loaded by an earlier route,
+/// so it changes nothing about the set of files, only whether the load
+/// aborts. Honouring it would mean completing to nothing for a config whose
+/// task names are all perfectly well known — the wrong trade at a `<TAB>`,
+/// where the user is most likely reaching for the very task that will print
+/// the refusal and tell them how to fix it.
 pub fn task_names_for_completion(config_file: &Path) -> Vec<String> {
     let mut names = std::collections::BTreeSet::new();
     let mut visited = HashSet::new();

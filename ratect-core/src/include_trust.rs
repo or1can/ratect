@@ -313,6 +313,10 @@ impl EffectiveGrants {
     /// `Option`. A local include inherits its declaring file's boundary and
     /// asks for nothing, so it can arrive second carrying more trust than the
     /// winner without any grant having been written, let alone lost.
+    ///
+    /// The one rule in this module that shell completion deliberately does
+    /// *not* mirror, because it fires on an already-loaded file and so changes
+    /// no file's contents — see [`crate::config::task_names_for_completion`].
     pub(crate) fn check(&self, file: &Path, wanted: Trust, repo: &str) -> Result<()> {
         let effective = self.0.get(file).copied().unwrap_or(Trust::NONE);
         let lost = match (wanted, effective) {

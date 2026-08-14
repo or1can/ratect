@@ -240,9 +240,9 @@ CHANGELOG sections, which are append-only.
       it was left unguarded too (review caught it, because its own tests were
       all native). Each site guarded correctly in isolation; the invariant —
       "these behaviours are native-only, together" — was stated nowhere. Deriving
-      `restricted: Option<&GitBoundary>` once, and having every site consume it,
-      makes the divergence unrepresentable. Guarding site-by-site means the next
-      site added is unguarded by default.
+      `restricted: Option<&Bundle>` once (`include_trust::restricting`), and
+      having every site consume it, makes the divergence unrepresentable.
+      Guarding site-by-site means the next site added is unguarded by default.
     - **Never spell config syntax in an error message — name the field.**
       `set 'x' to true`, not `add 'x: true'` or `'x = true'`. `allow_host_paths`
       shipped the YAML spelling in shared core, where `ratect.toml` readers hit
