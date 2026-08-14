@@ -190,6 +190,15 @@ from where a container may mount. Full rationale, and what a future allowlist fo
 would have to preserve, in
 [decisions/0004](https://github.com/or1can/ratect/blob/main/decisions/0004-git-include-host-path-trust.md).
 
+**Declare a vouched-for include in your root file.** A repository is cloned and
+read *once*, however many entries name it, so if one of your bundles also pulls
+in the same repository, whichever entry is reached first decides what that
+bundle is allowed — and a grant on the loser would quietly do nothing. Entries
+in the root configuration file are always reached before any bundle's own, so a
+grant written there always wins. Ratect refuses to load a configuration where a
+grant would have been discarded, naming the repository and telling you to move
+it, rather than leaving you to wonder why the flag had no effect.
+
 Cloning requires the system `git` binary to be installed and on `PATH` — Ratect shells
 out to it (`git clone --quiet --no-checkout` followed by
 `git checkout --recurse-submodules <ref>`) rather than embedding a Git library, so

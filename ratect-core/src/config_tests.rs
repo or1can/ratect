@@ -7183,3 +7183,110 @@ async fn an_image_expression_is_rejected_even_on_an_unreferenced_container() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// A file is loaded once, so a repository reachable by two routes keeps
+/// whichever boundary arrived first — see CONTEXT.md's "effective boundary".
+/// A grant on the later route therefore does nothing, and used to do nothing
+/// *silently*: the owner wrote `allow_host_paths`, the bundle's containers
+/// were still contained, and no diagnostic said why.
+///
+/// The race needs both entries at the same traversal depth. A root-level
+/// grant always wins (every root entry is drained before any bundle's own),
+/// which `a_root_level_grant_wins_over_a_bundles_arrival` pins — so this one
+/// puts the owner's entry inside a local include to lose the race.
+#[tokio::test]
+async fn a_grant_discarded_by_an_earlier_arrival_is_reported() {
+    let inner = git_bundle_repo(&[(
+        "ratect-bundle.toml",
+        "[containers.a-con]\nimage = \"alpine:3.18\"\n",
+    )]);
+    let outer = git_bundle_repo(&[(
+        "ratect-bundle.toml",
+        &format!(
+            "[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\n",
+            inner.display()
+        ),
+    )]);
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("ratect.toml"),
+        format!(
+            "project_name = \"demo\"\n\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\n\
+             allow_nested_git_includes = true\n\n[[include]]\npath = \"more.toml\"\n",
+            outer.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("more.toml"),
+        format!(
+            "[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\nallow_host_paths = true\n",
+            inner.display()
+        ),
+    )
+    .unwrap();
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+
+    let error =
+        Config::load_from_file_native_with_git_cache(&project.join("ratect.toml"), &git_cache)
+            .await
+            .expect_err("a permission that cannot take effect must not pass silently");
+    let error = format!("{error:#}");
+    assert!(error.contains("'allow_host_paths' was set"), "got: {error}");
+    // The remedy has to be actionable: the competing entry lives inside a
+    // bundle the reader cannot edit, so the only thing they *can* do is raise
+    // their own include to the root file.
+    assert!(
+        error.contains("root configuration file"),
+        "the error must say how to resolve it: {error}"
+    );
+
+    std::fs::remove_dir_all(&inner).ok();
+    std::fs::remove_dir_all(&outer).ok();
+    std::fs::remove_dir_all(&project).ok();
+    std::fs::remove_dir_all(&cache_root).ok();
+}
+
+/// The remedy the error names, and the reason it works: root entries are all
+/// drained before any bundle's own, so a grant declared there beats a bundle
+/// reaching the same repository — even when listed after it.
+#[tokio::test]
+async fn a_root_level_grant_wins_over_a_bundles_arrival() {
+    let inner = git_bundle_repo(&[(
+        "ratect-bundle.toml",
+        "[containers.a-con]\nimage = \"alpine:3.18\"\n\n[tasks.a-task]\nrun = { container = \"a-con\" }\n",
+    )]);
+    let outer = git_bundle_repo(&[(
+        "ratect-bundle.toml",
+        &format!(
+            "[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\n",
+            inner.display()
+        ),
+    )]);
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("ratect.toml"),
+        format!(
+            "project_name = \"demo\"\n\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\n\
+             allow_nested_git_includes = true\n\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\n\
+             ref = \"v1\"\nallow_host_paths = true\n",
+            outer.display(),
+            inner.display()
+        ),
+    )
+    .unwrap();
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+
+    let loaded =
+        Config::load_from_file_native_with_git_cache(&project.join("ratect.toml"), &git_cache)
+            .await
+            .expect("a root-level grant is never the loser of this race");
+    assert!(loaded.config.tasks.contains_key("a-task"));
+
+    std::fs::remove_dir_all(&inner).ok();
+    std::fs::remove_dir_all(&outer).ok();
+    std::fs::remove_dir_all(&project).ok();
+    std::fs::remove_dir_all(&cache_root).ok();
+}

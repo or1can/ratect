@@ -328,6 +328,14 @@ so a bundle can neither grant itself the permission nor pass on the one you
 gave it. If a bundle genuinely needs a chain deeper than that, include the
 second repository yourself, where you can see it.
 
+**Declare it in your root file.** A repository is read once however many entries
+name it, so if another bundle also pulls in the same repository, the first entry
+reached decides what it may do — and this grant, on a losing entry, would do
+nothing at all. Root-file entries are always reached first. A grant that would
+have been discarded is refused at load with the repository named, rather than
+silently ignored; the same rule covers
+[`allow_host_paths`](config-reference.md#git-includes).
+
 **A nested include's clone failure is reported without `git`'s own message.**
 Whether a remote is unreachable, refusing connections, missing, or demanding
 credentials is a readout on a network — and for a nested include the remote

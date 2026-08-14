@@ -1978,6 +1978,29 @@ impl<'de> Deserialize<'de> for IncludeEntry {
     }
 }
 
+/// The grant an include entry asked for that the file's *effective* boundary
+/// does not carry, if any — see CONTEXT.md's "effective boundary".
+///
+/// Only ever reports a permission being *lost*: a route that grants less than
+/// the winning one is the ordinary case (a bundle reaching a repository the
+/// owner also vouched for), and erroring on it would break configurations that
+/// work today for no gain, since the stricter ask is already satisfied.
+fn lost_grant(wanted: (bool, bool), effective: (bool, bool)) -> Option<&'static str> {
+    match (wanted, effective) {
+        ((true, _), (false, _)) => Some("allow_host_paths"),
+        ((_, true), (_, false)) => Some("allow_nested_git_includes"),
+        _ => None,
+    }
+}
+
+/// The repository an include entry names, or `None` for a local file include.
+fn include_repo(include: &IncludeEntry) -> Option<&str> {
+    match include {
+        IncludeEntry::Git { repo, .. } => Some(repo),
+        IncludeEntry::File { .. } => None,
+    }
+}
+
 /// The Git-clone boundary a file's own further `include` entries must stay
 /// within, once traversal has crossed from the caller's own local project
 /// tree into a Git-included bundle's content — see the security note on
@@ -2479,6 +2502,13 @@ impl Config {
         let mut seen: HashSet<PathBuf> = HashSet::new();
         seen.insert(root_path.clone());
 
+        // The grants the boundary that *won* each file carries. A file is
+        // loaded once, so a repository reachable by more than one route keeps
+        // whichever route arrived first — see CONTEXT.md's "effective
+        // boundary". Recorded so a grant that arrived too late to take effect
+        // can be reported instead of silently doing nothing.
+        let mut effective_grants: HashMap<PathBuf, (bool, bool)> = HashMap::new();
+
         let mut git_repo_paths: HashMap<(String, String), PathBuf> = HashMap::new();
 
         let mut queue: VecDeque<(PathBuf, Option<GitBoundary>, IncludeEntry)> = root_file
@@ -2607,9 +2637,38 @@ impl Config {
             if let Some(boundary) = &boundary {
                 boundary.check_contains_canonical(&resolved)?;
             }
+            let wanted_grants = boundary
+                .as_ref()
+                .map(|boundary| {
+                    (
+                        boundary.allow_host_paths,
+                        boundary.allow_nested_git_includes,
+                    )
+                })
+                .unwrap_or((false, false));
             if !seen.insert(resolved.clone()) {
+                // Already loaded by another route. If this entry asked for a
+                // permission the winning route didn't, the grant is inert —
+                // and silently so, which is the one outcome a trust boundary
+                // must not have.
+                let effective = effective_grants
+                    .get(&resolved)
+                    .copied()
+                    .unwrap_or((false, false));
+                if let Some(lost) = lost_grant(wanted_grants, effective) {
+                    anyhow::bail!(
+                        "'{lost}' was set on the include of '{}', but that repository was \
+                         already reached through another include, and a file is only loaded \
+                         once — so the permission would have had no effect. Declare this \
+                         include in your root configuration file, which is always resolved \
+                         before any bundle's own includes, or remove the '{lost}' that \
+                         cannot apply.",
+                        include_repo(&include).unwrap_or("(unknown)")
+                    );
+                }
                 continue;
             }
+            effective_grants.insert(resolved.clone(), wanted_grants);
 
             let file = parse_config_file(&resolved, format)?;
             if file.project_name.is_some() {
