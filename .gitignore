@@ -15,3 +15,6 @@
 # the harness creates and removes a project-local directory instead, so a
 # crashed run leaves one behind rather than dirtying `git status`.
 ratect-compat/tests/conformance/batect-journey/*/output/
+
+# Python bytecode from tools/ (see AGENTS.md guideline 15).
+__pycache__/

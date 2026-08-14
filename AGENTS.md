@@ -221,6 +221,17 @@ CHANGELOG sections, which are append-only.
       Grep is the fallback for claims nothing can be run against (a roadmap
       entry, a design note). It is not the check.
 
+      For *finding* which claims to re-read — as opposed to checking one you
+      already suspect — `python3 tools/stale-claims.py` ranks prose by how
+      much the code it names has moved since the claim was last touched.
+      Roughly 30 candidates on this repo, so it is a skim, not a report. It
+      measures churn rather than wrongness, so expect false positives (a
+      claim about a hot file looks suspicious while staying true) and treat
+      a hit as "re-read this", never as "this is wrong". Its motivating case
+      is [0006](decisions/0006-code-and-documentation-locality.md), whose
+      empirical detector was true when written and was invalidated by the
+      ADR's own Rule 1 — nothing else in the repo looks for that shape.
+
       The stakes are not cosmetic: a stale heading claiming shared caches were
       "Caches for this project:" made a documented idiom
       (`caches list -o quiet | xargs ratect caches clean`) delete another
