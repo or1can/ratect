@@ -2512,12 +2512,14 @@ impl Config {
                 .unwrap_or(Trust::NONE);
             if !seen.insert(resolved.clone()) {
                 // Already loaded by another route, so this entry's grants
-                // cannot apply.
-                effective_grants.check(
-                    &resolved,
-                    wanted,
-                    include_repo(&include).unwrap_or("(unknown)"),
-                )?;
+                // cannot apply — but only a `type: git` entry has grants of
+                // its own to lose. A local include inherits its declaring
+                // file's boundary and asks for nothing, so refusing one would
+                // name a field the reader never wrote, on an entry that has no
+                // repository to name.
+                if let Some(repo) = include_repo(&include) {
+                    effective_grants.check(&resolved, wanted, repo)?;
+                }
                 continue;
             }
             effective_grants.record(resolved.clone(), wanted);

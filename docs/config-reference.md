@@ -195,9 +195,12 @@ read *once*, however many entries name it, so if one of your bundles also pulls
 in the same repository, whichever entry is reached first decides what that
 bundle is allowed — and a grant on the loser would quietly do nothing. Entries
 in the root configuration file are always reached before any bundle's own, so a
-grant written there always wins. Ratect refuses to load a configuration where a
-grant would have been discarded, naming the repository and telling you to move
-it, rather than leaving you to wonder why the flag had no effect.
+grant written there always wins. Where two entries name the same repository and
+the losing one carries a grant, Ratect refuses to load, names the repository and
+tells you to move it, rather than leaving you to wonder why the flag had no
+effect. Note the two outcomes are different: a grant written *inside* a bundle
+is **ignored** (accepted, worth nothing — see above), while one of your own that
+loses this race is **refused** outright.
 
 Cloning requires the system `git` binary to be installed and on `PATH` — Ratect shells
 out to it (`git clone --quiet --no-checkout` followed by

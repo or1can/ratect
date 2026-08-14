@@ -7207,6 +7207,49 @@ async fn a_grant_discarded_by_an_earlier_arrival_is_reported() {
     std::fs::remove_dir_all(&cache_root).ok();
 }
 
+/// A *local* include carries its declaring file's boundary but asks for
+/// nothing of its own, so it can reach the lost-grant check without any grant
+/// being at stake. Here the owner's own `type: file` entry reaches a file
+/// inside a clone (nothing contains an owned file's includes) and wins the
+/// race, leaving the bundle's own local include of the same file arriving
+/// second with the trust its Git entry was granted.
+///
+/// Nobody wrote a grant on either local entry, so refusing the load names a
+/// field the reader never set — and, before this was gated, named it on "the
+/// include of '(unknown)'", a placeholder no configuration can contain.
+#[tokio::test]
+async fn a_local_include_reaching_a_bundles_file_first_is_not_a_lost_grant() {
+    let bundle = git_bundle_repo(&[
+        ("ratect-bundle.toml", "[[include]]\npath = \"sub.toml\"\n"),
+        ("sub.toml", "[containers.a-con]\nimage = \"alpine:3.18\"\n"),
+    ]);
+    let cache_root = unique_temp_dir();
+    let remote = bundle.display().to_string();
+    let clone_dir = cache_root.join(crate::git_include::cache_key(&remote, "v1"));
+
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("ratect.toml"),
+        format!(
+            "project_name = \"demo\"\n\n[[include]]\ntype = \"git\"\nrepo = \"{remote}\"\n\
+             ref = \"v1\"\nallow_host_paths = true\n\n[[include]]\npath = \"{}\"\n",
+            clone_dir.join("sub.toml").display()
+        ),
+    )
+    .unwrap();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+
+    let loaded =
+        Config::load_from_file_native_with_git_cache(&project.join("ratect.toml"), &git_cache)
+            .await
+            .expect("no grant was written on either local include, so none can be lost");
+    assert!(loaded.config.containers.contains_key("a-con"));
+
+    std::fs::remove_dir_all(&bundle).ok();
+    std::fs::remove_dir_all(&project).ok();
+    std::fs::remove_dir_all(&cache_root).ok();
+}
+
 /// The remedy the error names, and the reason it works: root entries are all
 /// drained before any bundle's own, so a grant declared there beats a bundle
 /// reaching the same repository — even when listed after it.

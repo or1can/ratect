@@ -307,6 +307,12 @@ impl EffectiveGrants {
     /// the owner also vouched for — and erroring on it would break
     /// configurations that work today for no gain, since the stricter ask is
     /// already satisfied.
+    ///
+    /// Asked only for a `type: git` entry, which is the only kind that carries
+    /// a grant of its own — hence `repo` being a plain `&str` rather than an
+    /// `Option`. A local include inherits its declaring file's boundary and
+    /// asks for nothing, so it can arrive second carrying more trust than the
+    /// winner without any grant having been written, let alone lost.
     pub(crate) fn check(&self, file: &Path, wanted: Trust, repo: &str) -> Result<()> {
         let effective = self.0.get(file).copied().unwrap_or(Trust::NONE);
         let lost = match (wanted, effective) {

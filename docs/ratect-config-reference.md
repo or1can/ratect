@@ -331,10 +331,17 @@ second repository yourself, where you can see it.
 **Declare it in your root file.** A repository is read once however many entries
 name it, so if another bundle also pulls in the same repository, the first entry
 reached decides what it may do — and this grant, on a losing entry, would do
-nothing at all. Root-file entries are always reached first. A grant that would
-have been discarded is refused at load with the repository named, rather than
-silently ignored; the same rule covers
-[`allow_host_paths`](config-reference.md#git-includes).
+nothing at all. Root-file entries are always reached first. Where two entries
+name the same repository and the losing one carries a grant, Ratect refuses to
+load and names the repository, rather than dropping it silently; the same rule
+covers [`allow_host_paths`](config-reference.md#git-includes).
+
+That is a different case from the paragraph above, which two words could easily
+blur. A grant written *inside* a bundle is **ignored** — accepted by the parser
+and worth nothing, because honouring it would let a bundle grant itself. A
+grant written in your own configuration that loses the race above is
+**refused** — the load stops, because you wrote something that cannot take
+effect and nothing else would tell you.
 
 **A nested include's clone failure is reported without `git`'s own message.**
 Whether a remote is unreachable, refusing connections, missing, or demanding
