@@ -3166,8 +3166,10 @@ pub fn to_native_toml(config: &Config) -> Result<String> {
 ///
 /// It therefore mirrors the loader's decisions about **which files are read**,
 /// and deliberately not its decisions about **whether to fail**. That is why
-/// the nested-Git gate is honoured here — it stops a bundle being read at all,
-/// so ignoring it would offer tasks the loader never sees — while
+/// both the nested-Git gate and a bundle's [`GitBoundary`] containment are
+/// honoured here — each stops a file being read at all, so ignoring either
+/// would offer tasks the loader never sees, and in containment's case would
+/// read a file outside the clone that the loader refuses outright — while
 /// [`include_trust::EffectiveGrants`]'s lost-grant refusal is not: it fires
 /// only on an include whose target was *already* loaded by an earlier route,
 /// so it changes nothing about the set of files, only whether the load
@@ -3189,7 +3191,7 @@ fn collect_completion_task_names(
     config_file: &Path,
     names: &mut std::collections::BTreeSet<String>,
     visited: &mut HashSet<PathBuf>,
-    declaring: Option<Bundle>,
+    declaring: Option<GitBoundary>,
 ) {
     let Ok(absolute) = absolute_path(config_file) else {
         return;
@@ -3204,10 +3206,11 @@ fn collect_completion_task_names(
 
     let base_dir = absolute.parent().unwrap_or(Path::new(""));
     for include in file.include {
+        let bundle = declaring.as_ref().map(|boundary| &boundary.bundle);
         let (next_file, declaring) = match include {
             // A local include is the declaring file's own tree, so it carries
-            // that file's trust unchanged — exactly as the loader propagates a
-            // boundary through `type: file`.
+            // that file's boundary unchanged — exactly as the loader propagates
+            // one through `type: file`.
             IncludeEntry::File { path } => (base_dir.join(path), declaring.clone()),
             IncludeEntry::Git {
                 repo,
@@ -3224,8 +3227,7 @@ fn collect_completion_task_names(
                 // The loader refuses this include, so offering its tasks would
                 // complete a `ratect run` that then fails. Completion is
                 // native-only, which is the format that has the gate at all.
-                let restricted =
-                    include_trust::restricting(declaring.as_ref(), ConfigFormat::Native);
+                let restricted = include_trust::restricting(bundle, ConfigFormat::Native);
                 if include_trust::refusing_nested_git(restricted).is_some() {
                     continue;
                 }
@@ -3241,29 +3243,44 @@ fn collect_completion_task_names(
                         .map(|name| name.to_string())
                         .collect(),
                 };
+                let boundary = GitBoundary {
+                    repo_dir: repo_dir.clone(),
+                    bundle: Bundle::granted(
+                        bundle,
+                        BundleId {
+                            remote: repo,
+                            git_ref,
+                        },
+                        Grants {
+                            host_paths: allow_host_paths,
+                            nested_git: allow_nested_git_includes,
+                        },
+                    ),
+                };
+                // Containment before `is_file`, as in the loader: a `path`
+                // engineered to escape is dropped without the filesystem ever
+                // being touched at the escaped location.
                 match candidates
                     .iter()
                     .map(|candidate| repo_dir.join(candidate))
-                    .find(|candidate| candidate.is_file())
-                {
-                    Some(bundle_file) => (
-                        bundle_file,
-                        Some(Bundle::granted(
-                            declaring.as_ref(),
-                            BundleId {
-                                remote: repo,
-                                git_ref,
-                            },
-                            Grants {
-                                host_paths: allow_host_paths,
-                                nested_git: allow_nested_git_includes,
-                            },
-                        )),
-                    ),
+                    .find(|candidate| {
+                        boundary.check_contains(candidate).is_ok() && candidate.is_file()
+                    }) {
+                    Some(bundle_file) => (bundle_file, Some(boundary)),
                     None => continue,
                 }
             }
         };
+        // The second half of the loader's containment check, against the
+        // symlink-resolved forms. A boundary declines rather than errors here,
+        // like every other fallible step on this walk.
+        if let Some(boundary) = &declaring {
+            if boundary.check_contains(&next_file).is_err()
+                || boundary.check_contains_canonical(&next_file).is_err()
+            {
+                continue;
+            }
+        }
         collect_completion_task_names(&next_file, names, visited, declaring);
     }
 }
