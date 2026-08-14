@@ -154,6 +154,20 @@ just a sentence wherever it was implemented.
 
 The [`decisions/`](decisions/) directory holds Architecture Decision Records — the **cross-cutting** decisions that get referenced from more than one place (the two-binary split, the runtime-ownership labels, the native config format, trusting a Git include's host paths). Its [`README.md`](decisions/README.md) states the convention; see guideline 14 below for when to write one.
 
+[`CONTEXT.md`](CONTEXT.md) at the root is the **glossary**: what each term in
+the configuration model denotes, and nothing else — no implementation detail,
+no decisions, no behaviour. It exists because several of this project's bugs
+have been one word covering two concepts (a *grant* is written on an include
+entry, an *effective boundary* is what a file ends up with; `ConfigFormat` is a
+*project's* dialect, not a *file's* syntax). Add a term when settling one
+resolves an ambiguity, not to catalogue vocabulary that was never in doubt.
+
+So: glossary at the root, cross-cutting rationale in `decisions/`, user-facing
+behaviour in `docs/`, contributor process here. `decisions/` deliberately is
+*not* `docs/adr/` — `docs/` is the user-facing tree, and ADRs are for
+contributors. Moving them would also break links from already-released
+CHANGELOG sections, which are append-only.
+
 ## Guidelines for AI Agents
 
 1.  **Idiomatic Rust**: Always strive for idiomatic and safe Rust. Use `anyhow::Context` to provide meaningful error messages.
