@@ -2071,15 +2071,26 @@ fn resolve_path_interpolates_expression_before_resolving() {
     assert_eq!(resolved, "/abs/root");
 }
 
+/// A bundle granted nothing, for the containment checks below — the only
+/// interesting case, since `allow_host_paths` waives them outright and
+/// [`crate::include_trust`] is where whether it was granted is decided and
+/// tested.
+fn ungranted_git_boundary() -> GitBoundary {
+    GitBoundary {
+        repo_dir: PathBuf::from("/repo"),
+        bundle: Bundle {
+            id: BundleId {
+                remote: "https://example.com/bundle.git".to_string(),
+                git_ref: "v1.0.0".to_string(),
+            },
+            trust: Trust::NONE,
+        },
+    }
+}
+
 #[test]
 fn resolve_path_rejects_a_git_included_containers_absolute_path_outside_both_allowed_roots() {
-    let boundary = GitBoundary {
-        allow_host_paths: false,
-        allow_nested_git_includes: false,
-        repo_dir: PathBuf::from("/repo"),
-        remote: "https://example.com/bundle.git".to_string(),
-        git_ref: "v1.0.0".to_string(),
-    };
+    let boundary = ungranted_git_boundary();
     let result = resolve_path(
         "/etc",
         Path::new("/repo/sub"),
@@ -2098,13 +2109,7 @@ fn resolve_path_rejects_a_git_included_containers_absolute_path_outside_both_all
 /// harmless `<repo>/~/.ssh` — so it's newly load-bearing.)
 #[test]
 fn resolve_path_rejects_a_git_included_containers_home_directory_path() {
-    let boundary = GitBoundary {
-        allow_host_paths: false,
-        allow_nested_git_includes: false,
-        repo_dir: PathBuf::from("/repo"),
-        remote: "https://example.com/bundle.git".to_string(),
-        git_ref: "v1.0.0".to_string(),
-    };
+    let boundary = ungranted_git_boundary();
     let result = resolve_path(
         "~/.ssh",
         Path::new("/repo/sub"),
@@ -2117,13 +2122,7 @@ fn resolve_path_rejects_a_git_included_containers_home_directory_path() {
 
 #[test]
 fn resolve_path_rejects_a_git_included_containers_dot_dot_traversal_outside_both_allowed_roots() {
-    let boundary = GitBoundary {
-        allow_host_paths: false,
-        allow_nested_git_includes: false,
-        repo_dir: PathBuf::from("/repo"),
-        remote: "https://example.com/bundle.git".to_string(),
-        git_ref: "v1.0.0".to_string(),
-    };
+    let boundary = ungranted_git_boundary();
     let result = resolve_path(
         "../../etc",
         Path::new("/repo/sub"),
@@ -2136,13 +2135,7 @@ fn resolve_path_rejects_a_git_included_containers_dot_dot_traversal_outside_both
 
 #[test]
 fn resolve_path_allows_a_git_included_containers_path_within_the_clone_directory() {
-    let boundary = GitBoundary {
-        allow_host_paths: false,
-        allow_nested_git_includes: false,
-        repo_dir: PathBuf::from("/repo"),
-        remote: "https://example.com/bundle.git".to_string(),
-        git_ref: "v1.0.0".to_string(),
-    };
+    let boundary = ungranted_git_boundary();
     let resolved = resolve_path(
         "sub/docker",
         Path::new("/repo"),
@@ -2161,13 +2154,7 @@ fn resolve_path_allows_a_git_included_containers_path_under_the_project_director
     // case, not an escape — the project directory is the caller's own,
     // fully-trusted tree, distinct from the untrusted repository the
     // container definition itself came from.
-    let boundary = GitBoundary {
-        allow_host_paths: false,
-        allow_nested_git_includes: false,
-        repo_dir: PathBuf::from("/repo"),
-        remote: "https://example.com/bundle.git".to_string(),
-        git_ref: "v1.0.0".to_string(),
-    };
+    let boundary = ungranted_git_boundary();
     let resolved = resolve_path(
         "/project/output",
         Path::new("/repo"),
@@ -5375,34 +5362,6 @@ async fn the_nested_include_flag_is_rejected_in_a_batect_yml() {
         std::fs::remove_dir_all(&project).ok();
         std::fs::remove_dir_all(&cache_root).ok();
     }
-}
-
-/// Completion has to agree with the loader about which includes exist, or
-/// `<TAB>` offers a task that `ratect run` then refuses. This pins the rule
-/// table [`IncludeTrust`] encodes; the *wiring* that consumes it is not
-/// covered, because reaching completion's `type: git` branch needs a
-/// populated `~/.ratect/incl` and `cached_working_copy` hardcodes the real
-/// home — writing a fixture there is the same hazard that had an earlier
-/// test deleting a developer's own caches.
-#[test]
-fn completion_trust_matches_the_loaders_grant_rule() {
-    let owner = IncludeTrust::OWNER;
-    assert!(
-        owner.owner && owner.may_declare_git,
-        "the root config is free"
-    );
-
-    // An owner-declared bundle may declare its own only when granted.
-    assert!(!owner.into_bundle(None).may_declare_git);
-    assert!(!owner.into_bundle(Some(false)).may_declare_git);
-    assert!(owner.into_bundle(Some(true)).may_declare_git);
-
-    // ...and nothing it reaches is owner-controlled any more, so the grant
-    // stops there however loudly the bundle asks — the same one-level-deep
-    // property `a_granted_bundle_cannot_pass_the_grant_on` proves end to end.
-    let granted = owner.into_bundle(Some(true));
-    assert!(!granted.owner);
-    assert!(!granted.into_bundle(Some(true)).may_declare_git);
 }
 
 /// A native project can include a local `.yml`, and that file can be where

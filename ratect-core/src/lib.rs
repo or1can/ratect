@@ -36,6 +36,10 @@ pub mod docker;
 pub mod engine;
 pub mod expressions;
 pub mod git_include;
+// Deliberately un-documented here: an outer doc comment on a `mod` item is
+// resolved in *this* module's scope, so every intra-doc link in the module's
+// own `//!` header would silently break. See the header itself.
+pub(crate) mod include_trust;
 pub mod interrupt;
 pub mod labels;
 pub mod proxy;

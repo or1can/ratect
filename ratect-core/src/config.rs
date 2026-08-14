@@ -114,6 +114,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+use crate::include_trust::{self, Bundle, BundleId, EffectiveGrants, Grants, Trust};
+
 /// Batect's one built-in config variable, resolvable via `<batect.project_directory`/
 /// `<{batect.project_directory}` without being declared in `config_variables` — always
 /// the absolute path of the directory containing the config file. See
@@ -1844,21 +1846,20 @@ pub(crate) enum IncludeEntry {
         git_ref: String,
         path: Option<String>,
         /// Vouches for this bundle, letting its containers resolve host paths
-        /// outside the usual containment — see [`GitBoundary::allow_host_paths`]
-        /// and [decisions/0004](../../decisions/0004-git-include-host-path-trust.md).
+        /// outside the usual containment — see [`Trust::host_paths`] and
+        /// [decisions/0004](../../decisions/0004-git-include-host-path-trust.md).
         /// Honoured only when the file declaring this entry is one the project
         /// owner controls.
         allow_host_paths: bool,
         /// Lets this bundle declare `type: git` includes of its own, which is
-        /// otherwise refused in the native format — see
-        /// [`GitBoundary::allow_nested_git_includes`]. Honoured only when the
-        /// file declaring this entry is one the project owner controls.
+        /// otherwise refused in the native format — see [`Trust::nested_git`].
+        /// Honoured only when the file declaring this entry is one the project
+        /// owner controls.
         ///
         /// `Option` because presence, not value, is what
-        /// [`load_from_file_impl`](Config::load_from_file_impl) rejects in a
-        /// `batect.yml`: writing `allow_nested_git_includes: false` there
-        /// would otherwise look accepted while describing the opposite of
-        /// what that format does.
+        /// [`include_trust::check_dialect`] rejects in a `batect.yml`: writing
+        /// `allow_nested_git_includes: false` there would otherwise look
+        /// accepted while describing the opposite of what that format does.
         allow_nested_git_includes: Option<bool>,
     },
 }
@@ -1978,21 +1979,6 @@ impl<'de> Deserialize<'de> for IncludeEntry {
     }
 }
 
-/// The grant an include entry asked for that the file's *effective* boundary
-/// does not carry, if any — see CONTEXT.md's "effective boundary".
-///
-/// Only ever reports a permission being *lost*: a route that grants less than
-/// the winning one is the ordinary case (a bundle reaching a repository the
-/// owner also vouched for), and erroring on it would break configurations that
-/// work today for no gain, since the stricter ask is already satisfied.
-fn lost_grant(wanted: (bool, bool), effective: (bool, bool)) -> Option<&'static str> {
-    match (wanted, effective) {
-        ((true, _), (false, _)) => Some("allow_host_paths"),
-        ((_, true), (_, false)) => Some("allow_nested_git_includes"),
-        _ => None,
-    }
-}
-
 /// The repository an include entry names, or `None` for a local file include.
 fn include_repo(include: &IncludeEntry) -> Option<&str> {
     match include {
@@ -2013,33 +1999,16 @@ fn include_repo(include: &IncludeEntry) -> Option<&str> {
 #[derive(Debug, Clone)]
 struct GitBoundary {
     repo_dir: PathBuf,
-    remote: String,
-    git_ref: String,
-    /// The project owner vouched for this bundle with `allow_host_paths: true`
-    /// on the include entry, so its containers' `volumes`/`build_directory`/
-    /// `build_secrets` paths may resolve anywhere (see
-    /// [decisions/0004](../../decisions/0004-git-include-host-path-trust.md)).
-    /// Only ever `true` for a bundle included from a file the owner controls —
-    /// the flag is ignored inside a Git-included file, so a bundle can't grant
-    /// it to itself or to anything it includes.
+    /// Which bundle this is, and what it was granted. The grants half is
+    /// [`crate::include_trust`]'s: this type is the *containment* half, and
+    /// carries the bundle so the two travel together, since every containment
+    /// failure has to name the bundle the path came from.
     ///
-    /// Deliberately does *not* relax the include-`path` containment
+    /// A grant deliberately does *not* relax the include-`path` containment
     /// ([`check_contains`](Self::check_contains)): that stops a bundle pulling
     /// an arbitrary host *file* into the configuration, which is a separate
     /// concern from where its containers may mount.
-    allow_host_paths: bool,
-    /// The project owner accepted, with `allow_nested_git_includes: true` on
-    /// this bundle's include entry, that it may redirect the load to further
-    /// remotes of its own choosing. Native format only — a `batect.yml` has
-    /// no gate at all, matching Batect.
-    ///
-    /// Set the same way [`allow_host_paths`](Self::allow_host_paths) is, and
-    /// for the same reason: only ever `true` for a bundle included from a
-    /// file the owner controls. That is what makes the grant one level deep
-    /// rather than a subtree — the bundle it admits gets a boundary with this
-    /// `false`, so it cannot pass the permission on, and no file the owner
-    /// controls exists further down to re-grant it.
-    allow_nested_git_includes: bool,
+    bundle: Bundle,
 }
 
 impl GitBoundary {
@@ -2055,8 +2024,8 @@ impl GitBoundary {
             "Included file '{}' escapes the Git repository '{}' at '{}' it was included from \
              — includes reached through a Git include must resolve within that repository.",
             resolved.display(),
-            self.remote,
-            self.git_ref
+            self.bundle.id.remote,
+            self.bundle.id.git_ref
         );
     }
 
@@ -2081,8 +2050,8 @@ impl GitBoundary {
              (via a symlink) — includes reached through a Git include must resolve within that \
              repository.",
             resolved.display(),
-            self.remote,
-            self.git_ref
+            self.bundle.id.remote,
+            self.bundle.id.git_ref
         );
     }
 
@@ -2102,7 +2071,7 @@ impl GitBoundary {
     /// exist yet at config-resolution time — Docker/`docker build` are the
     /// ones that ultimately dereference it.
     fn check_path_allowed(&self, resolved: &Path, project_dir: &Path) -> Result<()> {
-        if self.allow_host_paths
+        if self.bundle.trust.host_paths
             || resolved.starts_with(&self.repo_dir)
             || resolved.starts_with(project_dir)
         {
@@ -2115,10 +2084,10 @@ impl GitBoundary {
              this bundle to reach that path, set 'allow_host_paths' to true on the include entry \
              for '{}' in your own configuration.",
             resolved.display(),
-            self.remote,
-            self.git_ref,
+            self.bundle.id.remote,
+            self.bundle.id.git_ref,
             project_dir.display(),
-            self.remote
+            self.bundle.id.remote
         );
     }
 }
@@ -2266,51 +2235,6 @@ fn parse_toml_config_file(path: &Path) -> Result<ConfigFile> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to open config file {:?}", path))?;
     toml::from_str(&text).with_context(|| format!("Failed to parse config file {:?}", path))
-}
-
-/// Attributes a failed Git-include clone, keeping `git`'s own stderr only
-/// when the project owner named the remote themselves.
-///
-/// `declaring` is `Some` only when a bundle chose this remote *and* the
-/// format restricts what a bundle may do — the caller's `restricted`, so this
-/// and the gate can never disagree about which includes are a bundle's own.
-/// `None` covers both the root config's own includes and every include in a
-/// `batect.yml`, where withholding git's error would be a parity break rather
-/// than hardening. There, the full error is what someone debugging their own
-/// typo needs, and it reveals nothing they didn't write.
-///
-/// Otherwise the remote was chosen by a third-party bundle, and git's stderr
-/// distinguishes host-unreachable from connection-refused from
-/// repository-not-found from auth-failed. A bundle able to name hosts and
-/// read the resulting CI log can walk an internal network one include at a
-/// time; the same log is often visible to whoever can propose a change to
-/// that bundle. The detail goes to `RUST_LOG=debug` instead, which is a
-/// deliberate trade: the person who can read the debug log is the person
-/// running the build, not the person who wrote the bundle.
-fn hide_nested_clone_detail(
-    error: anyhow::Error,
-    repo: &str,
-    git_ref: &str,
-    declaring: Option<&GitBoundary>,
-) -> anyhow::Error {
-    let Some(declaring) = declaring else {
-        return error.context(format!(
-            "Failed to resolve Git include '{repo}' at '{git_ref}'"
-        ));
-    };
-    tracing::debug!(
-        error = format!("{error:#}"),
-        repo,
-        git_ref,
-        "Failed to resolve a nested Git include"
-    );
-    anyhow::anyhow!(
-        "Failed to resolve the Git include of '{repo}' at '{git_ref}', declared by the bundle \
-         '{}' at '{}'. The underlying error is not shown here because that remote was named by \
-         the bundle rather than by you — re-run with RUST_LOG=debug to see it.",
-        declaring.remote,
-        declaring.git_ref
-    )
 }
 
 /// Resolves `path` to an absolute, lexically-cleaned path, anchored at the
@@ -2502,12 +2426,7 @@ impl Config {
         let mut seen: HashSet<PathBuf> = HashSet::new();
         seen.insert(root_path.clone());
 
-        // The grants the boundary that *won* each file carries. A file is
-        // loaded once, so a repository reachable by more than one route keeps
-        // whichever route arrived first — see CONTEXT.md's "effective
-        // boundary". Recorded so a grant that arrived too late to take effect
-        // can be reported instead of silently doing nothing.
-        let mut effective_grants: HashMap<PathBuf, (bool, bool)> = HashMap::new();
+        let mut effective_grants = EffectiveGrants::default();
 
         let mut git_repo_paths: HashMap<(String, String), PathBuf> = HashMap::new();
 
@@ -2531,73 +2450,18 @@ impl Config {
                     allow_host_paths,
                     allow_nested_git_includes,
                 } => {
-                    // The owner-controlled rule: `allow_host_paths` counts only
-                    // when the file declaring this include has no boundary of
-                    // its own — i.e. the root config, or a local include of it.
-                    // Inside a Git-included file the flag is ignored, so a
-                    // bundle can neither grant it to itself nor pass it on to
-                    // anything it includes. See decisions/0004.
-                    let owner_declared = boundary.is_none();
-                    let vouched_for = *allow_host_paths && owner_declared;
-                    if allow_nested_git_includes.is_some() && matches!(format, ConfigFormat::Compat)
-                    {
-                        // Names where the field was written. It can appear
-                        // inside a bundle, which a `ratect-compat` user cannot
-                        // edit — an error about "the Git include of X" would
-                        // then describe a file they have never seen.
-                        let subject = match &boundary {
-                            Some(declaring) => format!(
-                                "The bundle '{}' at '{}' sets 'allow_nested_git_includes' on its \
-                                 Git include of '{repo}'",
-                                declaring.remote, declaring.git_ref
-                            ),
-                            None => {
-                                format!(
-                                    "The Git include of '{repo}' sets 'allow_nested_git_includes'"
-                                )
-                            }
-                        };
-                        anyhow::bail!(
-                            "{subject}, which is a ratect-native field not supported in \
-                             Batect-compatible configuration. A bundle may declare Git includes \
-                             of its own here regardless, matching Batect."
-                        );
-                    }
-                    // The single value every native-only behaviour below keys
-                    // off: the bundle that declared this include, and only in
-                    // the format that restricts what a bundle may do. A
-                    // `batect.yml` has no such restriction, so this is `None`
-                    // there and the gate *and* the error redaction fall away
-                    // together.
-                    //
-                    // Derived once on purpose. The first cut guarded the gate
-                    // and left the redaction unguarded, which silently changed
-                    // `ratect-compat` — a parity break that no test caught,
-                    // because the redaction's tests were all native.
-                    let restricted: Option<&GitBoundary> = match format {
-                        ConfigFormat::Native => boundary.as_ref(),
-                        ConfigFormat::Compat => None,
+                    let asked = Grants {
+                        host_paths: *allow_host_paths,
+                        nested_git: *allow_nested_git_includes,
                     };
-                    // Refused *before* the clone, so a bundle naming an
-                    // unreachable remote can't even be used to probe for one.
-                    if let Some(declaring) = restricted {
-                        if !declaring.allow_nested_git_includes {
-                            anyhow::bail!(
-                                // No syntax in the hint: the format is native,
-                                // but a native project's own include entry can
-                                // sit in a local `.yml`, so `= true` would be
-                                // wrong exactly there. Same reason the
-                                // `allow_host_paths` message names the field
-                                // rather than spelling it.
-                                "The bundle '{}' at '{}' declares a Git include of its own \
-                                 ('{repo}'), which would fetch and run configuration from a \
-                                 remote you have not named. Set 'allow_nested_git_includes' to \
-                                 true on that bundle's own include entry to accept this.",
-                                declaring.remote,
-                                declaring.git_ref
-                            );
-                        }
-                    }
+                    let declaring = boundary.as_ref().map(|boundary| &boundary.bundle);
+                    include_trust::check_dialect(asked, declaring, repo, format)?;
+                    // The single value every native-only behaviour below keys
+                    // off, derived once so the gate and the clone-detail
+                    // redaction can never disagree about which includes are a
+                    // bundle's own.
+                    let restricted = include_trust::restricting(declaring, format);
+                    include_trust::check_may_declare_git(restricted, repo)?;
                     let key = (repo.clone(), git_ref.clone());
                     let repo_dir =
                         match git_repo_paths.get(&key) {
@@ -2605,7 +2469,9 @@ impl Config {
                             None => {
                                 let dir = git_cache.ensure_cached(repo, git_ref).await.map_err(
                                     |error| {
-                                        hide_nested_clone_detail(error, repo, git_ref, restricted)
+                                        include_trust::hide_clone_detail(
+                                            error, repo, git_ref, restricted,
+                                        )
                                     },
                                 )?;
                                 git_repo_paths.insert(key, dir.clone());
@@ -2614,11 +2480,14 @@ impl Config {
                         };
                     let boundary = GitBoundary {
                         repo_dir: repo_dir.clone(),
-                        remote: repo.clone(),
-                        git_ref: git_ref.clone(),
-                        allow_host_paths: vouched_for,
-                        allow_nested_git_includes: allow_nested_git_includes.unwrap_or(false)
-                            && owner_declared,
+                        bundle: Bundle::granted(
+                            declaring,
+                            BundleId {
+                                remote: repo.clone(),
+                                git_ref: git_ref.clone(),
+                            },
+                            asked,
+                        ),
                     };
                     // An explicit `path` is the single candidate; a pathless
                     // bundle probes the format's default names in order.
@@ -2637,38 +2506,21 @@ impl Config {
             if let Some(boundary) = &boundary {
                 boundary.check_contains_canonical(&resolved)?;
             }
-            let wanted_grants = boundary
+            let wanted = boundary
                 .as_ref()
-                .map(|boundary| {
-                    (
-                        boundary.allow_host_paths,
-                        boundary.allow_nested_git_includes,
-                    )
-                })
-                .unwrap_or((false, false));
+                .map(|boundary| boundary.bundle.trust)
+                .unwrap_or(Trust::NONE);
             if !seen.insert(resolved.clone()) {
-                // Already loaded by another route. If this entry asked for a
-                // permission the winning route didn't, the grant is inert —
-                // and silently so, which is the one outcome a trust boundary
-                // must not have.
-                let effective = effective_grants
-                    .get(&resolved)
-                    .copied()
-                    .unwrap_or((false, false));
-                if let Some(lost) = lost_grant(wanted_grants, effective) {
-                    anyhow::bail!(
-                        "'{lost}' was set on the include of '{}', but that repository was \
-                         already reached through another include, and a file is only loaded \
-                         once — so the permission would have had no effect. Declare this \
-                         include in your root configuration file, which is always resolved \
-                         before any bundle's own includes, or remove the '{lost}' that \
-                         cannot apply.",
-                        include_repo(&include).unwrap_or("(unknown)")
-                    );
-                }
+                // Already loaded by another route, so this entry's grants
+                // cannot apply.
+                effective_grants.check(
+                    &resolved,
+                    wanted,
+                    include_repo(&include).unwrap_or("(unknown)"),
+                )?;
                 continue;
             }
-            effective_grants.insert(resolved.clone(), wanted_grants);
+            effective_grants.record(resolved.clone(), wanted);
 
             let file = parse_config_file(&resolved, format)?;
             if file.project_name.is_some() {
@@ -3312,42 +3164,8 @@ pub fn to_native_toml(config: &Config) -> Result<String> {
 pub fn task_names_for_completion(config_file: &Path) -> Vec<String> {
     let mut names = std::collections::BTreeSet::new();
     let mut visited = HashSet::new();
-    collect_completion_task_names(config_file, &mut names, &mut visited, IncludeTrust::OWNER);
+    collect_completion_task_names(config_file, &mut names, &mut visited, None);
     names.into_iter().collect()
-}
-
-/// What [`collect_completion_task_names`] is allowed to follow from the file
-/// it is looking at — the completion-side mirror of the loader's
-/// [`GitBoundary::allow_nested_git_includes`] rule.
-///
-/// Completion has to agree with the loader about which includes exist, or
-/// `<TAB>` offers a task that `ratect run` then refuses. It carries the two
-/// bits the loader derives from `boundary`: whether this file is the owner's
-/// own, and whether its `type: git` includes are permitted at all.
-#[derive(Clone, Copy)]
-struct IncludeTrust {
-    /// Not reached through a `type: git` include — the root config, or a local
-    /// include of it. Only such a file can grant anything.
-    owner: bool,
-    /// This file's own `type: git` entries may be followed.
-    may_declare_git: bool,
-}
-
-impl IncludeTrust {
-    /// The root config: the owner's own, and free to include what it likes.
-    const OWNER: Self = Self {
-        owner: true,
-        may_declare_git: true,
-    };
-
-    /// The trust carried into a bundle this file included, mirroring
-    /// `GitBoundary`'s `flag && owner_declared`.
-    fn into_bundle(self, granted: Option<bool>) -> Self {
-        Self {
-            owner: false,
-            may_declare_git: granted.unwrap_or(false) && self.owner,
-        }
-    }
 }
 
 /// Recursive worker for [`task_names_for_completion`]. `visited` (cleaned
@@ -3357,7 +3175,7 @@ fn collect_completion_task_names(
     config_file: &Path,
     names: &mut std::collections::BTreeSet<String>,
     visited: &mut HashSet<PathBuf>,
-    trust: IncludeTrust,
+    declaring: Option<Bundle>,
 ) {
     let Ok(absolute) = absolute_path(config_file) else {
         return;
@@ -3372,24 +3190,29 @@ fn collect_completion_task_names(
 
     let base_dir = absolute.parent().unwrap_or(Path::new(""));
     for include in file.include {
-        let (bundle, trust) = match include {
+        let (next_file, declaring) = match include {
             // A local include is the declaring file's own tree, so it carries
             // that file's trust unchanged — exactly as the loader propagates a
             // boundary through `type: file`.
-            IncludeEntry::File { path } => (base_dir.join(path), trust),
+            IncludeEntry::File { path } => (base_dir.join(path), declaring.clone()),
             IncludeEntry::Git {
                 repo,
                 git_ref,
                 path,
-                // `allow_host_paths` stays irrelevant here: completion only
-                // ever *reads* task names, so there are no container paths to
-                // contain.
-                allow_host_paths: _,
+                // `allow_host_paths` matters to the loader but not here:
+                // completion only ever *reads* task names, so there are no
+                // container paths to contain. It is still carried through
+                // [`Bundle::granted`] rather than dropped, so the one rule
+                // stays one rule.
+                allow_host_paths,
                 allow_nested_git_includes,
             } => {
                 // The loader refuses this include, so offering its tasks would
-                // complete a `ratect run` that then fails.
-                if !trust.may_declare_git {
+                // complete a `ratect run` that then fails. Completion is
+                // native-only, which is the format that has the gate at all.
+                let restricted =
+                    include_trust::restricting(declaring.as_ref(), ConfigFormat::Native);
+                if include_trust::refusing_nested_git(restricted).is_some() {
                     continue;
                 }
                 // Completion never clones — only an already-cached repo counts.
@@ -3409,12 +3232,25 @@ fn collect_completion_task_names(
                     .map(|candidate| repo_dir.join(candidate))
                     .find(|candidate| candidate.is_file())
                 {
-                    Some(bundle) => (bundle, trust.into_bundle(allow_nested_git_includes)),
+                    Some(bundle_file) => (
+                        bundle_file,
+                        Some(Bundle::granted(
+                            declaring.as_ref(),
+                            BundleId {
+                                remote: repo,
+                                git_ref,
+                            },
+                            Grants {
+                                host_paths: allow_host_paths,
+                                nested_git: allow_nested_git_includes,
+                            },
+                        )),
+                    ),
                     None => continue,
                 }
             }
         };
-        collect_completion_task_names(&bundle, names, visited, trust);
+        collect_completion_task_names(&next_file, names, visited, declaring);
     }
 }
 

@@ -61,6 +61,7 @@ Ratect is a **Cargo workspace** with four crates (the
   | --- | --- |
   | `config.rs` | Two text formats, one model: `batect.yml` (YAML) and `ratect.toml` (TOML), includes, expression/path resolution, `extends` |
   | `git_include.rs` | `type: git` includes — the `~/.ratect/incl` clone cache and its staleness sweep |
+  | `include_trust.rs` | What a Git-included bundle may do: the grant rule, its native-only gate, and every refusal that cites them |
   | `cache.rs` | `volumes` `cache` mounts → a named volume or host directory, and `--clean`/`--clean-cache` |
   | `expressions.rs` | Batect's `$VAR`/`${VAR:-default}`/`<name` expression syntax |
   | `docker.rs` | All `bollard`/daemon interaction, behind the fakeable `ContainerRuntime` trait |
