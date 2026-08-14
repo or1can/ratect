@@ -7250,6 +7250,67 @@ async fn a_local_include_reaching_a_bundles_file_first_is_not_a_lost_grant() {
     std::fs::remove_dir_all(&cache_root).ok();
 }
 
+/// The race is between two entries reaching one *file*, not one repository.
+/// Two entries naming the same repo with different `path`s pull in two
+/// different files, so nothing is lost and nothing is refused — and each file
+/// keeps only the grant written on the entry that reached it, which is what
+/// stops "read once" being read as "trusted once".
+#[tokio::test]
+async fn two_paths_into_one_repository_each_keep_their_own_grant() {
+    let bundle = git_bundle_repo(&[
+        (
+            "ratect-bundle.toml",
+            "[containers.granted]\nimage = \"alpine:3.18\"\n\
+             volumes = [{ local = \"~/.cache/tool\", container = \"/cache\" }]\n",
+        ),
+        (
+            "extras.toml",
+            "[containers.ungranted]\nimage = \"alpine:3.18\"\n\
+             volumes = [{ local = \"~/.cache/tool\", container = \"/cache\" }]\n",
+        ),
+    ]);
+    let project = unique_temp_dir();
+    let root = project.join("ratect.toml");
+    // The pathless entry carries the grant and resolves to `ratect-bundle.toml`;
+    // the second names `extras.toml` and carries nothing.
+    std::fs::write(
+        &root,
+        format!(
+            "project_name = \"demo\"\n\n[[include]]\ntype = \"git\"\nrepo = \"{repo}\"\n\
+             ref = \"v1\"\nallow_host_paths = true\n\n[[include]]\ntype = \"git\"\n\
+             repo = \"{repo}\"\nref = \"v1\"\npath = \"extras.toml\"\n",
+            repo = bundle.display()
+        ),
+    )
+    .unwrap();
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+
+    let mut loaded = Config::load_from_file_native_with_git_cache(&root, &git_cache)
+        .await
+        .expect("two different files in one repository do not race");
+    assert!(loaded.config.containers.contains_key("granted"));
+    assert!(loaded.config.containers.contains_key("ungranted"));
+
+    let error = loaded
+        .resolve_expressions(&project, &HashMap::new())
+        .expect_err("the grant on one entry must not reach the file another pulled in");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("ungranted"),
+        "the refusal names the container in the file that was granted nothing: {error}"
+    );
+    assert!(
+        !error.contains("'allow_host_paths' was set"),
+        "nothing was lost: neither entry raced the other, so the lost-grant \
+         refusal must not fire: {error}"
+    );
+
+    std::fs::remove_dir_all(&bundle).ok();
+    std::fs::remove_dir_all(&project).ok();
+    std::fs::remove_dir_all(&cache_root).ok();
+}
+
 /// The remedy the error names, and the reason it works: root entries are all
 /// drained before any bundle's own, so a grant declared there beats a bundle
 /// reaching the same repository — even when listed after it.

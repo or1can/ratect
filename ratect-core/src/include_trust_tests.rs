@@ -242,11 +242,47 @@ fn a_grant_the_winning_route_did_not_carry_is_refused() {
         // the reader has already taken.
         assert!(
             message.contains(&format!(
-                "Move '{field}' onto whichever include of 'shared' is resolved first"
+                "Move '{field}' onto whichever include reaches that file first"
             )),
             "gives a remedy that holds wherever the losing entry was written: {message}"
         );
+        assert!(
+            !message.contains("that repository was already reached"),
+            "the race is between two entries reaching one *file*; two entries \
+             naming one repository with different paths pull in two files and \
+             each keeps its own grant: {message}"
+        );
     }
+}
+
+/// An entry can lose both grants at once, and reporting only the first would
+/// send the reader back round the loop: they fix what the message named, run
+/// again, and are refused for the other.
+#[test]
+fn an_entry_losing_both_grants_is_told_about_both() {
+    let file = PathBuf::from("/clone/bundle.toml");
+    let mut effective = EffectiveGrants::default();
+    effective.record(file.clone(), Trust::NONE);
+
+    let error = effective
+        .check(
+            &file,
+            Trust {
+                host_paths: true,
+                nested_git: true,
+            },
+            "shared",
+        )
+        .unwrap_err();
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("'allow_host_paths' and 'allow_nested_git_includes' were set"),
+        "names both fields, and agrees with itself grammatically: {message}"
+    );
+    assert!(
+        message.contains("so the permissions would have had no effect"),
+        "plural throughout, not just in the list: {message}"
+    );
 }
 
 /// The ordinary case, and the reason this only ever reports a permission being

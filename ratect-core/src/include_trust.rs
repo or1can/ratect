@@ -285,8 +285,10 @@ pub(crate) fn hide_clone_detail(
 /// **effective boundary**, recorded so a grant that arrived too late to take
 /// effect can be reported instead of silently doing nothing.
 ///
-/// A file is loaded once, so a repository reachable by more than one route
-/// keeps whichever route arrived first. A later entry then carries grants that
+/// Keyed on the *file*, which is the unit that is loaded once — not on the
+/// repository, of which two entries may pull in different files with a `path`
+/// each, neither racing the other. A file reachable by more than one route
+/// keeps whichever route arrived first; a later entry then carries grants that
 /// cannot apply — and silently, which is the one outcome a trust boundary must
 /// not have, since the flag is written precisely by someone who has no other
 /// way to tell whether it took.
@@ -303,8 +305,8 @@ impl EffectiveGrants {
     /// `file` that was loaded with less.
     ///
     /// Only ever refuses a permission being *lost*. A route granting less than
-    /// the winning one is the ordinary case — a bundle reaching a repository
-    /// the owner also vouched for — and erroring on it would break
+    /// the winning one is the ordinary case — a bundle reaching a file the
+    /// owner also vouched for — and erroring on it would break
     /// configurations that work today for no gain, since the stricter ask is
     /// already satisfied.
     ///
@@ -319,32 +321,32 @@ impl EffectiveGrants {
     /// no file's contents — see [`crate::config::task_names_for_completion`].
     pub(crate) fn check(&self, file: &Path, wanted: Trust, repo: &str) -> Result<()> {
         let effective = self.0.get(file).copied().unwrap_or(Trust::NONE);
-        let lost = match (wanted, effective) {
-            (
-                Trust {
-                    host_paths: true, ..
-                },
-                Trust {
-                    host_paths: false, ..
-                },
-            ) => "allow_host_paths",
-            (
-                Trust {
-                    nested_git: true, ..
-                },
-                Trust {
-                    nested_git: false, ..
-                },
-            ) => "allow_nested_git_includes",
-            _ => return Ok(()),
+        // Every lost field, not the first: an entry can carry both, and
+        // reporting one would send the reader round the loop again for the
+        // other after they had already fixed what they were told about.
+        let mut lost = Vec::new();
+        if wanted.host_paths && !effective.host_paths {
+            lost.push("allow_host_paths");
+        }
+        if wanted.nested_git && !effective.nested_git {
+            lost.push("allow_nested_git_includes");
+        }
+        if lost.is_empty() {
+            return Ok(());
+        }
+        let named = lost.join("' and '");
+        let (were, permission) = if lost.len() == 1 {
+            ("was", "the permission")
+        } else {
+            ("were", "the permissions")
         };
         anyhow::bail!(
-            "'{lost}' was set on the include of '{repo}', but that repository was \
-             already reached through an earlier include, and a file is only \
-             loaded once — so the permission would have had no effect. Move \
-             '{lost}' onto whichever include of '{repo}' is resolved first — \
-             every include in the root configuration file is resolved before \
-             any bundle's own — or remove the '{lost}' that cannot apply."
+            "'{named}' {were} set on the include of '{repo}', but the file it \
+             pulls in had already been reached through an earlier include, and \
+             a file is only loaded once — so {permission} would have had no \
+             effect. Move '{named}' onto whichever include reaches that file \
+             first — every include in the root configuration file is resolved \
+             before any bundle's own — or remove what cannot apply."
         );
     }
 }
