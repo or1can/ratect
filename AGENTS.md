@@ -171,6 +171,98 @@ CHANGELOG sections, which are append-only.
 
 ## Guidelines for AI Agents
 
+### Working principles
+
+Reproduced verbatim (headings demoted to fit this document) from
+[andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills/blob/main/CLAUDE.md),
+MIT-licensed, so anyone working in this repo has them without installing
+anything. Unlike the numbered guidelines below, none of these was written after
+something went wrong in Ratect — they are general habits, and where the two ever
+disagree the specific one wins. Two places they meet are noted after the
+principles; don't read either as an exception to them.
+
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with
+project-specific instructions as needed.
+
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial
+tasks, use judgment.
+
+#### 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+#### 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+#### 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+#### 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+#### Where these meet Ratect's own rules
+
+Two of the principles above sit next to a repo rule that reads like its
+opposite. Neither is an exception:
+
+- **Simplicity first** governs *code*. Explanatory prose is governed by
+  [0006](decisions/0006-code-and-documentation-locality.md), which asks for more
+  of it deliberately — a module here is often mostly doc comment, and that is
+  not the 200-lines-could-be-50 case.
+- **Surgical changes** and guideline 16's "fix the class, not the instance"
+  agree: when the class is the defect, the class is what you must touch, and a
+  sweep that comes back clean changes nothing. What neither licenses is
+  improving code you happened to read on the way.
+
+### Repo-specific guidelines
+
 1.  **Idiomatic Rust**: Always strive for idiomatic and safe Rust. Use `anyhow::Context` to provide meaningful error messages.
 2.  **Async/Await**: The codebase is heavily asynchronous. Ensure new I/O or Docker-related code uses `await` and integrates with the `tokio` runtime.
 3.  **Dependency Management**: Keep each `Cargo.toml` clean and dependencies updated — and in the right crate (CLI-only deps in `ratect`'s `Cargo.toml`, everything else in `ratect-core`'s). If a library becomes deprecated or unmaintained, propose a migration to a better alternative.
