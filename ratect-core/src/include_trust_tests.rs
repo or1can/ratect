@@ -213,7 +213,7 @@ fn a_restricted_clone_failure_withholds_gits_error() {
 fn a_grant_the_winning_route_did_not_carry_is_refused() {
     let file = PathBuf::from("/clone/bundle.toml");
     let mut effective = EffectiveGrants::default();
-    effective.record(file.clone(), Trust::NONE);
+    effective.record(file.clone(), Some(Trust::NONE));
 
     for (wanted, field) in [
         (
@@ -262,7 +262,7 @@ fn a_grant_the_winning_route_did_not_carry_is_refused() {
 fn an_entry_losing_both_grants_is_told_about_both() {
     let file = PathBuf::from("/clone/bundle.toml");
     let mut effective = EffectiveGrants::default();
-    effective.record(file.clone(), Trust::NONE);
+    effective.record(file.clone(), Some(Trust::NONE));
 
     let error = effective
         .check(
@@ -294,10 +294,10 @@ fn a_route_asking_for_less_than_the_winner_still_loads() {
     let mut effective = EffectiveGrants::default();
     effective.record(
         file.clone(),
-        Trust {
+        Some(Trust {
             host_paths: true,
             nested_git: true,
-        },
+        }),
     );
 
     assert!(effective.check(&file, Trust::NONE, "shared").is_ok());

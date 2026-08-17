@@ -292,12 +292,19 @@ pub(crate) fn hide_clone_detail(
 /// cannot apply — and silently, which is the one outcome a trust boundary must
 /// not have, since the flag is written precisely by someone who has no other
 /// way to tell whether it took.
+/// `None` against a file means it was loaded under **no boundary at all** —
+/// the project owner's own tree — which is not the same as a boundary that
+/// grants nothing, and is the distinction [`Trust`] alone cannot carry. An
+/// unbounded file is contained by nothing and may resolve any host path, so
+/// it is strictly more permissive than any grant; a later route reaching it
+/// has lost nothing, however much that route was granted.
 #[derive(Debug, Default)]
-pub(crate) struct EffectiveGrants(HashMap<PathBuf, Trust>);
+pub(crate) struct EffectiveGrants(HashMap<PathBuf, Option<Trust>>);
 
 impl EffectiveGrants {
-    /// Records the trust `file` was loaded under, on first arrival.
-    pub(crate) fn record(&mut self, file: PathBuf, trust: Trust) {
+    /// Records what `file` was loaded under, on first arrival — `None` for an
+    /// owned file, which has no boundary.
+    pub(crate) fn record(&mut self, file: PathBuf, trust: Option<Trust>) {
         self.0.insert(file, trust);
     }
 
@@ -310,17 +317,27 @@ impl EffectiveGrants {
     /// configurations that work today for no gain, since the stricter ask is
     /// already satisfied.
     ///
-    /// Asked only for a `type: git` entry, which is the only kind that carries
-    /// a grant of its own — hence `repo` being a plain `&str` rather than an
-    /// `Option`. A local include inherits its declaring file's boundary and
-    /// asks for nothing, so it can arrive second carrying more trust than the
-    /// winner without any grant having been written, let alone lost.
+    /// `repo` is whichever repository the lost grant was written against — the
+    /// entry's own for a `type: git` include, and for a local include the
+    /// bundle it sits in, whose entry is where the owner wrote the flag. It is
+    /// a plain `&str` rather than an `Option` because trust only ever comes
+    /// from a boundary, so anything with something to lose has a repository to
+    /// name; the caller skips this entirely when there is neither.
     ///
     /// The one rule in this module that shell completion deliberately does
     /// *not* mirror, because it fires on an already-loaded file and so changes
     /// no file's contents — see [`crate::config::task_names_for_completion`].
     pub(crate) fn check(&self, file: &Path, wanted: Trust, repo: &str) -> Result<()> {
-        let effective = self.0.get(file).copied().unwrap_or(Trust::NONE);
+        let effective = match self.0.get(file) {
+            // Loaded outside every boundary, so it is contained by nothing and
+            // a grant would only ever have narrowed it. Nothing to lose.
+            Some(None) => return Ok(()),
+            Some(Some(trust)) => *trust,
+            // Never recorded, which the traversal makes unreachable — assume
+            // the strictest thing it could have been rather than the loosest,
+            // so a gap here fails loudly instead of waving a grant through.
+            None => Trust::NONE,
+        };
         // Every lost field, not the first: an entry can carry both, and
         // reporting one would send the reader round the loop again for the
         // other after they had already fixed what they were told about.

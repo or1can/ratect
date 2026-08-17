@@ -14,6 +14,7 @@
 
 use super::*;
 use crate::git_include::{FakeGitClient, GitIncludeCache, SystemGitClient};
+use crate::include_trust::Trust;
 use std::io::Cursor;
 
 fn parse(yaml: &str) -> Config {
@@ -7456,6 +7457,65 @@ async fn a_root_level_grant_wins_over_a_bundles_arrival() {
 
     std::fs::remove_dir_all(&inner).ok();
     std::fs::remove_dir_all(&outer).ok();
+    std::fs::remove_dir_all(&project).ok();
+    std::fs::remove_dir_all(&cache_root).ok();
+}
+
+/// A grant is lost to an earlier arrival even when the *losing* entry is a
+/// local include, which carries no grant of its own but does carry the
+/// boundary of the bundle it sits in. Root entry one pulls `sub.toml` out of
+/// the bundle with no grant; root entry two vouches for the same bundle; the
+/// bundle's own local include of `sub.toml` then arrives second carrying the
+/// grant, and finds the file already loaded without it.
+///
+/// Skipping every `type: file` entry — the first fix for a *different* defect
+/// here — left exactly this case silent: the load succeeded and the owner
+/// found out when a container they had vouched for was refused its host path,
+/// with nothing connecting that to the flag they wrote.
+#[tokio::test]
+async fn a_grant_lost_through_a_bundles_own_local_include_is_reported() {
+    let bundle = git_bundle_repo(&[
+        (
+            "ratect-bundle.toml",
+            "include = [{ path = \"sub.toml\" }]\n[containers.a-con]\nimage = \"alpine:3.18\"\n",
+        ),
+        (
+            "sub.toml",
+            "[containers.b-con]\nimage = \"alpine:3.18\"\n\
+             volumes = [{ local = \"~/.cache/tool\", container = \"/c\" }]\n",
+        ),
+    ]);
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("ratect.toml"),
+        format!(
+            "project_name = \"demo\"\n\n[[include]]\ntype = \"git\"\nrepo = \"{repo}\"\n\
+             ref = \"v1\"\npath = \"sub.toml\"\n\n[[include]]\ntype = \"git\"\n\
+             repo = \"{repo}\"\nref = \"v1\"\nallow_host_paths = true\n",
+            repo = bundle.display()
+        ),
+    )
+    .unwrap();
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+
+    let error =
+        Config::load_from_file_native_with_git_cache(&project.join("ratect.toml"), &git_cache)
+            .await
+            .expect_err("the grant reached the file too late and must not pass silently");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("'allow_host_paths' was set on the include of"),
+        "names the field that did nothing: {error}"
+    );
+    assert!(
+        error.contains(&bundle.display().to_string()),
+        "names the bundle whose include entry carries the flag, which is the \
+         line the owner has to edit — a local include has no repository of its \
+         own to name: {error}"
+    );
+
+    std::fs::remove_dir_all(&bundle).ok();
     std::fs::remove_dir_all(&project).ok();
     std::fs::remove_dir_all(&cache_root).ok();
 }

@@ -114,7 +114,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use crate::include_trust::{self, Bundle, BundleId, EffectiveGrants, Grants, Trust};
+use crate::include_trust::{self, Bundle, BundleId, EffectiveGrants, Grants};
 
 /// Batect's one built-in config variable, resolvable via `<batect.project_directory`/
 /// `<{batect.project_directory}` without being declared in `config_variables` — always
@@ -1846,13 +1846,13 @@ pub(crate) enum IncludeEntry {
         git_ref: String,
         path: Option<String>,
         /// Vouches for this bundle, letting its containers resolve host paths
-        /// outside the usual containment — see [`Trust::host_paths`] and
+        /// outside the usual containment — see [`crate::include_trust::Trust::host_paths`] and
         /// [decisions/0004](../../decisions/0004-git-include-host-path-trust.md).
         /// Honoured only when the file declaring this entry is one the project
         /// owner controls.
         allow_host_paths: bool,
         /// Lets this bundle declare `type: git` includes of its own, which is
-        /// otherwise refused in the native format — see [`Trust::nested_git`].
+        /// otherwise refused in the native format — see [`crate::include_trust::Trust::nested_git`].
         /// Honoured only when the file declaring this entry is one the project
         /// owner controls.
         ///
@@ -2523,23 +2523,33 @@ impl Config {
             if let Some(boundary) = &boundary {
                 boundary.check_contains_canonical(&resolved)?;
             }
-            let wanted = boundary
-                .as_ref()
-                .map(|boundary| boundary.bundle.trust)
-                .unwrap_or(Trust::NONE);
+            // `None` where there is no boundary — an owned file, contained
+            // by nothing. Kept distinct from a boundary granting nothing all
+            // the way into `EffectiveGrants`, since the two are opposites.
+            let effective = boundary.as_ref().map(|boundary| boundary.bundle.trust);
             if !seen.insert(resolved.clone()) {
-                // Already loaded by another route, so this entry's grants
-                // cannot apply — but only a `type: git` entry has grants of
-                // its own to lose. A local include inherits its declaring
-                // file's boundary and asks for nothing, so refusing one would
-                // name a field the reader never wrote, on an entry that has no
-                // repository to name.
-                if let Some(repo) = include_repo(&include) {
+                // Already loaded by another route, so whatever trust this
+                // entry arrived carrying cannot apply. Which repository the
+                // refusal names depends on where that trust came from: a
+                // `type: git` entry carries its own grant, while a local
+                // include carries the boundary of the bundle it sits in — and
+                // that bundle's include entry is where the owner wrote the
+                // flag, so naming it points at the line to edit.
+                //
+                // Both are `None` together, for an owned file's own local
+                // include: no boundary, so no trust arrived and no repository
+                // is involved to name.
+                let repo = include_repo(&include).or_else(|| {
+                    boundary
+                        .as_ref()
+                        .map(|boundary| boundary.bundle.id.remote.as_str())
+                });
+                if let (Some(repo), Some(wanted)) = (repo, effective) {
                     effective_grants.check(&resolved, wanted, repo)?;
                 }
                 continue;
             }
-            effective_grants.record(resolved.clone(), wanted);
+            effective_grants.record(resolved.clone(), effective);
 
             let file = parse_config_file(&resolved, format)?;
             if file.project_name.is_some() {

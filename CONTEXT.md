@@ -40,6 +40,11 @@ containers' host paths may resolve), together with the grants it carries.
 the first Git include entry to reach it. Distinct from what a later entry
 reaching the same file asks for.
 
+An owned file has *no* effective boundary, which is not the same as one that
+grants nothing: the first is unrestricted, the second is contained. They sit at
+opposite ends of the same scale, so a model with one value for both orders them
+backwards.
+
 ## Formats
 
 **Dialect** — which binary's rules govern a project: Batect-compatible
