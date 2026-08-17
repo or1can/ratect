@@ -2133,6 +2133,55 @@ fn resolve_path_rejects_a_git_included_containers_dot_dot_traversal_outside_both
     assert!(format!("{:?}", result.unwrap_err()).contains("escapes both the Git repository"));
 }
 
+/// The traversal above written as an *absolute* path, which is the form a
+/// bundle can build without knowing anything about the machine it runs on:
+/// `batect.project_directory` is a built-in config variable, so
+/// `<{batect.project_directory}/../../../etc` needs no guess at the project's
+/// location or at the sha256-named clone directory. `Path::starts_with`
+/// compares components without interpreting `..`, so before the paths were
+/// normalized this passed containment and was handed to Docker as a
+/// bind-mount source.
+#[test]
+fn resolve_path_rejects_a_git_included_containers_absolute_path_with_a_traversal() {
+    let boundary = ungranted_git_boundary();
+    for path in [
+        "/repo/../../etc/shadow",
+        "<{batect.project_directory}/../../../etc/shadow",
+    ] {
+        let result = resolve_path(
+            path,
+            Path::new("/repo/sub"),
+            &no_host_env,
+            &HashMap::from([(
+                "batect.project_directory".to_string(),
+                Some("/home/dev/project".to_string()),
+            )]),
+            Some((&boundary, Path::new("/home/dev/project"))),
+        );
+        assert!(
+            format!("{:?}", result).contains("escapes both the Git repository"),
+            "'{path}' must not reach outside both allowed roots: {result:?}"
+        );
+    }
+}
+
+/// The normalization above must not narrow what a bundle may legitimately
+/// reach: a `..` that stays inside an allowed root is still allowed, and the
+/// resolved path comes back normalized rather than as written.
+#[test]
+fn resolve_path_allows_a_traversal_that_stays_inside_an_allowed_root() {
+    let boundary = ungranted_git_boundary();
+    let resolved = resolve_path(
+        "/repo/sub/../docker",
+        Path::new("/repo/sub"),
+        &no_host_env,
+        &HashMap::new(),
+        Some((&boundary, Path::new("/project"))),
+    )
+    .expect("a traversal that lands back inside the clone is not an escape");
+    assert_eq!(resolved, "/repo/docker");
+}
+
 #[test]
 fn resolve_path_allows_a_git_included_containers_path_within_the_clone_directory() {
     let boundary = ungranted_git_boundary();

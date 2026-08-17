@@ -2016,7 +2016,16 @@ impl GitBoundary {
     /// `resolved` is confirmed to exist, so a `path` engineered to escape
     /// (an absolute path, or a `../..` traversal) is rejected without ever
     /// touching the filesystem at the escaped location.
+    ///
+    /// Normalizes `resolved` itself rather than trusting the caller to. The
+    /// comparison is [`Path::starts_with`], which matches components without
+    /// interpreting any of them, so `<repo_dir>/../../elsewhere` starts with
+    /// `<repo_dir>` and passes — the check is inert on exactly the input it
+    /// exists to reject. Two call sites got this wrong (completion's walk, and
+    /// [`resolve_path`]'s absolute branch below), which is one more than a
+    /// convention survives; cleaning here makes the mistake unrepresentable.
     fn check_contains(&self, resolved: &Path) -> Result<()> {
+        let resolved = &resolved.clean();
         if resolved.starts_with(&self.repo_dir) {
             return Ok(());
         }
@@ -2070,7 +2079,15 @@ impl GitBoundary {
     /// and is read as a file), a `volumes`/`build_directory` path need not
     /// exist yet at config-resolution time — Docker/`docker build` are the
     /// ones that ultimately dereference it.
+    ///
+    /// Normalizes `resolved` for the same reason
+    /// [`check_contains`](Self::check_contains) does — and here it was not
+    /// merely theoretical: `<{batect.project_directory}/../../../etc` is an
+    /// absolute path a bundle can write without knowing anything about the
+    /// machine, and it starts with the project directory component-for-
+    /// component.
     fn check_path_allowed(&self, resolved: &Path, project_dir: &Path) -> Result<()> {
+        let resolved = &resolved.clean();
         if self.bundle.trust.host_paths
             || resolved.starts_with(&self.repo_dir)
             || resolved.starts_with(project_dir)
@@ -3061,7 +3078,12 @@ fn resolve_path(
         let absolute_path = base_path.join(&interpolated);
         std::env::current_dir()?.join(absolute_path).clean()
     } else {
-        PathBuf::from(&interpolated)
+        // Cleaned like the two branches above, not left as written: an
+        // absolute path is the one form a Git-included bundle can build
+        // without knowing anything about the machine — `<{batect
+        // .project_directory}/../../../etc` — and the containment check it
+        // then faces compares path components without interpreting `..`.
+        PathBuf::from(&interpolated).clean()
     };
 
     if let Some((boundary, project_dir)) = container_boundary {
@@ -3268,12 +3290,12 @@ fn collect_completion_task_names(
                         },
                     ),
                 };
-                // Containment before `is_file`, as in the loader: a `path`
-                // engineered to escape is dropped without the filesystem ever
-                // being touched at the escaped location.
+                // Containment before `is_file`, as in the loader, so a `path`
+                // engineered to escape is dropped without the filesystem being
+                // touched where it points.
                 match candidates
                     .iter()
-                    .map(|candidate| repo_dir.join(candidate))
+                    .filter_map(|candidate| absolute_path(&repo_dir.join(candidate)).ok())
                     .find(|candidate| {
                         boundary.check_contains(candidate).is_ok() && candidate.is_file()
                     }) {
@@ -3281,6 +3303,12 @@ fn collect_completion_task_names(
                     None => continue,
                 }
             }
+        };
+        // Absolute and normalized before anything looks at it — what the
+        // loader's `resolve_include_target` does, and what makes `visited`
+        // dedup two spellings of one file.
+        let Ok(next_file) = absolute_path(&next_file) else {
+            continue;
         };
         // The second half of the loader's containment check, against the
         // symlink-resolved forms. A boundary declines rather than errors here,
