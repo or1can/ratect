@@ -306,8 +306,9 @@ pub(crate) fn cache_key(remote: &str, git_ref: &str) -> String {
 /// `None` if it isn't cached or the home directory can't be resolved.
 ///
 /// `root` is the cache directory to look in, `None` meaning the real
-/// `~/.ratect/incl` — the same seam [`GitIncludeCache::for_test`] has, and for
-/// the same reason: without it, everything reachable only through this
+/// `~/.ratect/incl` — the same seam `GitIncludeCache::for_test` has (named
+/// without a link, since it is `#[cfg(test)]` and rustdoc cannot resolve it),
+/// and for the same reason: without it, everything reachable only through this
 /// function is untestable in-process, which is how completion's own walk came
 /// to enforce a containment rule with no test behind it.
 pub(crate) fn cached_working_copy(
