@@ -100,6 +100,9 @@ def main(root: Path, top: int) -> int:
         rel = str(doc.relative_to(root))
         discusses_modules = rel.startswith("decisions/") or rel == "AGENTS.md"
         lines = doc.read_text(encoding="utf-8", errors="replace").splitlines()
+        if not lines:
+            continue
+        # A file with no headings is one section starting at its first line.
         starts = [i for i, l in enumerate(lines) if HEADING_RE.match(l)] or [0]
         append_only_from = None
         for start, end in zip(starts, starts[1:] + [len(lines)]):
