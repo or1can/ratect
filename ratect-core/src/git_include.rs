@@ -299,17 +299,27 @@ pub(crate) fn cache_key(remote: &str, git_ref: &str) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// The working copy for `(remote, git_ref)` if it's *already* cached under
-/// `~/.ratect/incl` — without cloning, locking, or any network. For offline
-/// consumers (shell completion, [`crate::config::task_names_for_completion`])
-/// that must never block a `<TAB>` on a fetch: an uncached include simply
-/// contributes nothing. `None` if it isn't cached or the home directory can't
-/// be resolved.
-pub(crate) fn cached_working_copy(remote: &str, git_ref: &str) -> Option<PathBuf> {
-    let working_copy = CacheRoot::Home
-        .resolve()
-        .ok()?
-        .join(cache_key(remote, git_ref));
+/// The working copy for `(remote, git_ref)` if it's *already* cached —
+/// without cloning, locking, or any network. For offline consumers (shell
+/// completion, [`crate::config::task_names_for_completion`]) that must never
+/// block a `<TAB>` on a fetch: an uncached include simply contributes nothing.
+/// `None` if it isn't cached or the home directory can't be resolved.
+///
+/// `root` is the cache directory to look in, `None` meaning the real
+/// `~/.ratect/incl` — the same seam [`GitIncludeCache::for_test`] has, and for
+/// the same reason: without it, everything reachable only through this
+/// function is untestable in-process, which is how completion's own walk came
+/// to enforce a containment rule with no test behind it.
+pub(crate) fn cached_working_copy(
+    remote: &str,
+    git_ref: &str,
+    root: Option<&Path>,
+) -> Option<PathBuf> {
+    let root = match root {
+        Some(root) => root.to_path_buf(),
+        None => CacheRoot::Home.resolve().ok()?,
+    };
+    let working_copy = root.join(cache_key(remote, git_ref));
     working_copy.is_dir().then_some(working_copy)
 }
 

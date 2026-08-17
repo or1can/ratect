@@ -3178,9 +3178,18 @@ pub fn to_native_toml(config: &Config) -> Result<String> {
 /// where the user is most likely reaching for the very task that will print
 /// the refusal and tell them how to fix it.
 pub fn task_names_for_completion(config_file: &Path) -> Vec<String> {
+    task_names_for_completion_in(config_file, None)
+}
+
+/// [`task_names_for_completion`], against a named Git-include cache directory
+/// — `None` being the real `~/.ratect/incl`. The seam exists so this walk can
+/// be tested at all: reaching its `type: git` arm needs a populated cache, and
+/// pointing at the developer's own would make the test depend on what they
+/// happen to have cloned.
+fn task_names_for_completion_in(config_file: &Path, cache_root: Option<&Path>) -> Vec<String> {
     let mut names = std::collections::BTreeSet::new();
     let mut visited = HashSet::new();
-    collect_completion_task_names(config_file, &mut names, &mut visited, None);
+    collect_completion_task_names(config_file, &mut names, &mut visited, None, cache_root);
     names.into_iter().collect()
 }
 
@@ -3192,6 +3201,7 @@ fn collect_completion_task_names(
     names: &mut std::collections::BTreeSet<String>,
     visited: &mut HashSet<PathBuf>,
     declaring: Option<GitBoundary>,
+    cache_root: Option<&Path>,
 ) {
     let Ok(absolute) = absolute_path(config_file) else {
         return;
@@ -3232,7 +3242,8 @@ fn collect_completion_task_names(
                     continue;
                 }
                 // Completion never clones — only an already-cached repo counts.
-                let Some(repo_dir) = crate::git_include::cached_working_copy(&repo, &git_ref)
+                let Some(repo_dir) =
+                    crate::git_include::cached_working_copy(&repo, &git_ref, cache_root)
                 else {
                     continue;
                 };
@@ -3281,7 +3292,7 @@ fn collect_completion_task_names(
                 continue;
             }
         }
-        collect_completion_task_names(&next_file, names, visited, declaring);
+        collect_completion_task_names(&next_file, names, visited, declaring, cache_root);
     }
 }
 

@@ -4025,6 +4025,63 @@ fn task_names_for_completion_follows_local_includes_without_looping() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Completion is confined to a bundle's clone exactly as loading is: a
+/// `<TAB>` must not read a file the bundle picked from anywhere on the host,
+/// which is what pulling only the *grants* half of a boundary through this
+/// walk allowed until 0.25.0.
+///
+/// The bundle's own task is asserted too, and is not decoration: without it
+/// the test passes just as well when the `type: git` arm is never reached at
+/// all, which — given completion silently declines everything it cannot read
+/// — is the likeliest way for it to rot.
+#[test]
+fn completion_will_not_follow_a_bundle_include_out_of_its_clone() {
+    let scratch = unique_temp_dir();
+    let cache_root = scratch.join("incl");
+    let remote = "https://example.com/bundle.git";
+    let clone = cache_root.join(crate::git_include::cache_key(remote, "v1"));
+    std::fs::create_dir_all(&clone).unwrap();
+
+    // `../..` from the clone directory lands beside the cache root, so the
+    // escape target is this test's own scratch space rather than whatever
+    // else the temp directory happens to hold.
+    std::fs::write(
+        scratch.join("outside.toml"),
+        "[tasks.leaked-task]\nrun = { container = \"a\" }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        clone.join("ratect-bundle.toml"),
+        "include = [{ path = \"../../outside.toml\" }]\n\
+         [tasks.bundle-task]\nrun = { container = \"a\" }\n",
+    )
+    .unwrap();
+
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("ratect.toml"),
+        // Both ways out of a clone: the bundle's own local include (above),
+        // and a `path` on the Git entry itself.
+        format!(
+            "project_name = \"demo\"\n\
+             include = [\n\
+             \x20 {{ type = \"git\", repo = \"{remote}\", ref = \"v1\" }},\n\
+             \x20 {{ type = \"git\", repo = \"{remote}\", ref = \"v1\", path = \"../../outside.toml\" }},\n\
+             ]\n"
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        task_names_for_completion_in(&project.join("ratect.toml"), Some(&cache_root)),
+        vec!["bundle-task".to_string()],
+        "the bundle's own tasks are offered; the file outside its clone is not read"
+    );
+
+    std::fs::remove_dir_all(&scratch).ok();
+    std::fs::remove_dir_all(&project).ok();
+}
+
 /// `to_native_toml` renders a config (here one with the interleaved scalar
 /// and table fields that trip naive TOML serialization, plus the custom
 /// `volumes`/`ports` (de)serializers) and its own round-trip check passes,
