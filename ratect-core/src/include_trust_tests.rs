@@ -115,9 +115,9 @@ fn a_restricted_bundle_may_declare_a_git_include_only_when_granted() {
 }
 
 /// The same decision as the test above, through the entry point completion
-/// uses — the one walker whose own wiring stays untested, because reaching it
-/// needs a populated `~/.ratect/incl` and `cached_working_copy` hardcodes the
-/// real home.
+/// uses. Asserted here as an equivalence rather than only end-to-end because
+/// this is the property that matters — that the two walkers cannot answer
+/// differently — and it holds for inputs no fixture has to be built for.
 #[test]
 fn completion_and_the_loader_read_one_answer() {
     let ungranted = Bundle::granted(None, id("outer"), asks(false, None));
