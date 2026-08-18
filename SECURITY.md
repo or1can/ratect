@@ -26,6 +26,15 @@ existing hardening lives:
   [config reference](docs/config-reference.md#git-includes)). Anything that lets a
   fetched bundle read or write outside its clone (or the project directory) is a
   vulnerability.
+- **What a bundle is *granted***: widening a bundle's containment
+  (`allow_host_paths`) or letting it pull in further remotes of its own
+  (`allow_nested_git_includes`, `ratect.toml`) is deliberate and one level deep,
+  and counts only when written in configuration the project owner controls. A
+  bundle obtaining either without that — by writing the flag itself, passing on
+  one it was given, or racing another entry to a file — is a vulnerability, as is
+  a grant that silently fails to apply. See [Git
+  includes](docs/config-reference.md#git-includes) and
+  [decisions/0004](decisions/0004-git-include-host-path-trust.md).
 - **Container/volume path resolution**: escapes of the documented containment
   rules via config values (volumes, `build_directory`, `build_secrets.path`, …).
 - **`run_as_current_user`**: the generated `/etc/passwd`/`/etc/shadow`/`/etc/group`
