@@ -304,8 +304,12 @@ pub(crate) struct EffectiveGrants(HashMap<PathBuf, Option<Trust>>);
 impl EffectiveGrants {
     /// Records what `file` was loaded under, on first arrival — `None` for an
     /// owned file, which has no boundary.
+    ///
+    /// First arrival wins *here*, not only in the caller's own dedup: this is
+    /// the answer every later route is compared against, so a second write
+    /// would silently redefine what "already loaded with" means.
     pub(crate) fn record(&mut self, file: PathBuf, trust: Option<Trust>) {
-        self.0.insert(file, trust);
+        self.0.entry(file).or_insert(trust);
     }
 
     /// Errors when an entry carrying `wanted` reaches an already-loaded
