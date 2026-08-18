@@ -278,6 +278,23 @@ opposite. Neither is an exception:
   sweep that comes back clean changes nothing. What neither licenses is
   improving code you happened to read on the way.
 
+**Constant gardening.** Read strictly, "touch only what you must" says to leave
+every defect you notice in passing, and things left that way rot: the
+`load_project` doc comment sat on the wrong function on `main` until a reviewer
+found it, and `TODO.md` still described behaviour a release had deleted. So the
+rule here is the opposite of leaving it — when you are already working in an
+area and you spot something wrong, fix it then, because that is the cheapest
+this fix will ever be and nobody is coming back for it.
+
+This does not conflict with surgical changes, because the thing that rule is
+actually protecting is the **diff**, not the defect. Give the gardening its own
+commit (guideline 13), so every changed line still traces to one intent and the
+unrelated fix can be reviewed, bisected or reverted on its own. Fold it into the
+feature commit and you have the problem the rule warns about; land it separately
+and you have a tidier repo and a reviewable history. What stays out of scope is
+work you cannot finish or verify to the same standard as the change you came
+for — note that in `TODO.md` instead.
+
 ### Repo-specific guidelines
 
 1.  **Idiomatic Rust**: Always strive for idiomatic and safe Rust. Use `anyhow::Context` to provide meaningful error messages.
