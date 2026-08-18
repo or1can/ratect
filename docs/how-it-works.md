@@ -24,9 +24,10 @@ aren't known at the first:
    (see [Includes](config-reference.md#includes)). No expression interpolation yet.
    The result is a `LoadedConfig`: the merged `Config`, plus a `container_base_paths`
    map recording which directory each container came from (needed by step 2 below).
-2. **`LoadedConfig::resolve_expressions`**: called once from `main.rs`, after
+2. **`LoadedConfig::resolve_expressions`**: called once, after
    `--config-var`/`--config-vars-file` have been parsed and merged into an overrides
-   map. In one pass:
+   map — from `load_project`/`load_project_native` in `config.rs`, which run both
+   steps in order so neither binary has to know the order. In one pass:
    - Resolves [expressions](config-reference.md#expressions) (`$VAR`, `${VAR:-default}`,
      `<name`, `<{name}`, plus the built-in `batect.project_directory`) within every
      `environment` value (container and task `run`) and every `local` volume mount's

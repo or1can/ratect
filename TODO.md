@@ -86,7 +86,7 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
 
 ## Maintainability / latent hazards
 
-3. **`CleanupStarting` doesn't post under `--use-network` with no
+3. ~~**`CleanupStarting` doesn't post under `--use-network` with no
    dependencies** (`ratect-core/src/engine.rs`) — correct/honest
    behavior (nothing is actually cleaned up in that case, and
    `TaskEvent::CleanupStarting`'s own doc comment documents
@@ -95,7 +95,11 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
    lines.len()` when no `"Cleaning up..."` line is found) would
    silently sweep the summary line into an extracted chunk if a future
    test combined `--use-network` with `task_output`. No existing test
-   is affected — the two current `--use-network` tests never call it.
+   is affected — the two current `--use-network` tests never call it.~~
+   — gone in 0.25.0: unifying cleanup ownership made the task's own
+   container the engine's to remove, so such a run now has something to
+   report and posts the stage like any other. The `task_output` fallback
+   it warned about is no longer reachable that way.
 
 ## Test coverage
 
