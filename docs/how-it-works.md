@@ -6,33 +6,52 @@ for a map of the source layout.
 
 ## 1. CLI parsing
 
-`ratect-compat/src/main.rs` parses arguments with [`clap`](https://docs.rs/clap). See the
-[CLI reference](cli-reference.md) for the full flag list. This has to happen before
-config resolution (step 2 below) can finish, since `--config-var`/`--config-vars-file`
-feed into it.
+Each binary has its own `main.rs`, and both parse arguments with
+[`clap`](https://docs.rs/clap): `ratect-compat/src/main.rs` for Batect's flat flag
+interface ([CLI reference](cli-reference.md)), and `ratect/src/main.rs` for the
+subcommand interface ([`ratect` CLI reference](ratect-cli.md)). Everything below
+this step is shared — both call into `ratect-core`, which is where the rest of
+this document lives. Parsing has to happen before config resolution (step 2)
+can finish, since `--config-var`/`--config-vars-file` feed into it.
 
 ## 2. Config loading and resolution (`ratect-core/src/config.rs`)
 
 This is two separate steps, not one, because the second depends on CLI flags that
 aren't known at the first:
 
-1. **`Config::load_from_file`**: the root YAML file (`batect.yml` by default) is parsed
-   into `Config`/`Container`/`Task`/`TaskRun`/`ConfigVariable` structs using
-   [`noyalib`](https://docs.rs/noyalib), and its top-level `include` list (if any) is
-   resolved — recursively, relative to each declaring file's own directory — with
-   every loaded file's `containers`/`tasks`/`config_variables` merged into one `Config`
-   (see [Includes](config-reference.md#includes)). No expression interpolation yet.
-   The result is a `LoadedConfig`: the merged `Config`, plus a `container_base_paths`
-   map recording which directory each container came from (needed by step 2 below).
+1. **`Config::load_from_file`** (or `load_from_file_native`, for `ratect.toml`):
+   the root file is parsed into `Config`/`Container`/`Task`/`TaskRun`/`ConfigVariable`
+   structs — YAML via [`noyalib`](https://docs.rs/noyalib), TOML via
+   [`toml`](https://docs.rs/toml), one struct set for both formats — and its
+   top-level `include` list (if any) is resolved, with every loaded file's
+   `containers`/`tasks`/`config_variables` merged into one `Config` (see
+   [Includes](config-reference.md#includes)). No expression interpolation yet.
+
+   Includes are walked breadth-first, so every entry in the root file is reached
+   before any included file's own, and each file is loaded exactly once however
+   many entries name it. A `type: git` entry clones its repository into
+   `~/.ratect/incl` first (`ratect-core/src/git_include.rs`), and everything
+   reached through one is confined to that clone and may do only what the entry
+   granted it — see [Git includes](config-reference.md#git-includes) for the
+   rules, and [`CONTEXT.md`](../CONTEXT.md) for what *bundle*, *grant* and
+   *boundary* each denote.
+
+   The result is a `LoadedConfig`: the merged `Config`, plus two maps step 2
+   needs — `container_base_paths`, recording which directory each container came
+   from, and `container_git_boundaries`, recording the clone each container
+   reached through a Git include must resolve its host paths within.
 2. **`LoadedConfig::resolve_expressions`**: called once, after
    `--config-var`/`--config-vars-file` have been parsed and merged into an overrides
    map — from `load_project`/`load_project_native` in `config.rs`, which run both
    steps in order so neither binary has to know the order. In one pass:
    - Resolves [expressions](config-reference.md#expressions) (`$VAR`, `${VAR:-default}`,
-     `<name`, `<{name}`, plus the built-in `batect.project_directory`) within every
-     `environment` value (container and task `run`) and every `local` volume mount's
-     host path (a `cache` mount's `name`/`container` are plain strings, matching
-     Batect — nothing to interpolate; see [Cache volumes](config-reference.md#cache-volumes)).
+     `<name`, `<{name}`, plus the built-in `batect.project_directory`) in every field
+     that takes one: `environment` values (container and task `run`), `local` volume
+     mount host paths, `build_directory`, `build_args`, a `build_secrets` entry's
+     `path`, a `build_ssh` entry's `paths`, `run_as_current_user.home_directory`, and
+     — `ratect.toml` only — `image`. A `cache` mount's `name`/`container` are plain
+     strings, matching Batect: nothing to interpolate (see
+     [Cache volumes](config-reference.md#cache-volumes)).
    - **Volume path resolution**: *after* interpolating a `local` mount's host path, if
      the result is relative, it's resolved to an absolute path relative to *that
      container's own origin file's* directory (via `container_base_paths` — the root
@@ -44,6 +63,13 @@ aren't known at the first:
      Docker volume name/host directory is resolved later instead (`ratect-core/src/cache.rs`,
      via `engine.rs`'s `resolve_volumes`), once `--cache-type` and the project's own
      cache key are known — neither available at this stage.
+
+     The resolved path is then checked against `container_git_boundaries`: a
+     container that came from a Git-included file may only reach inside its own
+     clone or your project directory, unless that include was granted
+     [`allow_host_paths`](config-reference.md#git-includes). Both the check and
+     the path it validates are lexically normalized first, since the comparison
+     comes down to `Path::starts_with`, which does not interpret `..`.
 
    See the [configuration reference](config-reference.md#expressions) for the full
    expression syntax, precedence, and error rules.
