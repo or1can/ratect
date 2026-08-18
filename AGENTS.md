@@ -371,12 +371,13 @@ for — note that in `TODO.md` instead.
       For *finding* which claims to re-read — as opposed to checking one you
       already suspect — `python3 tools/stale-claims.py` ranks prose by how
       much the code it names has moved since the claim was last touched. A
-      skim, not a report:
-
-      <!-- verify: python3 tools/stale-claims.py | head -1 -->
-      ```
-      21 claims name code that changed after them. Churn, not wrongness — verify by executing the claim.
-      ```
+      couple of dozen candidates on this repo: a skim, not a report. Don't
+      write the exact number down anywhere. It was pinned here as a
+      `verify-docs` block for one afternoon and needed refreshing four times,
+      the last of those because three *source* files were touched — the count
+      tracks how much code has moved, so it rises on commits that fix nothing
+      and fall on ones that fix a doc. A number that moves for both reasons
+      measures neither.
 
       It measures churn rather than wrongness, so expect false positives (a
       claim about a hot file looks suspicious while staying true) and treat
