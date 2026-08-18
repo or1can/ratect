@@ -978,14 +978,6 @@ impl Drop for RawModeGuard {
     }
 }
 
-/// Resizes `container_id`'s TTY to the local terminal's current size —
-/// shared by the initial attach-time sync and every subsequent local resize
-/// while the session is live (see `run_container_interactively` and
-/// `spawn_resize_listener` below). Takes `&Docker` directly rather than
-/// `&self` so it can also be called from a separately spawned task, holding
-/// its own cloned client rather than borrowing the caller's. Best-effort: a
-/// failure is logged and otherwise ignored, matching the previous one-shot
-/// call this replaces.
 /// Drives `container_id`'s Docker log stream to completion, line-buffering
 /// its output into [`TaskEvent::ContainerOutput`] events on `event_sink` —
 /// the [`ContainerIoStreaming::Interleaved`] policy's (the `all` output
@@ -1042,6 +1034,14 @@ async fn drain_interleaved_log_stream(
     result
 }
 
+/// Resizes `container_id`'s TTY to the local terminal's current size —
+/// shared by the initial attach-time sync and every subsequent local resize
+/// while the session is live (see `run_container_interactively` and
+/// `spawn_resize_listener` below). Takes `&Docker` directly rather than
+/// `&self` so it can also be called from a separately spawned task, holding
+/// its own cloned client rather than borrowing the caller's. Best-effort: a
+/// failure is logged and otherwise ignored, matching the previous one-shot
+/// call this replaces.
 async fn resize_tty(docker: &Docker, container_id: &str) {
     let Ok((cols, rows)) = crossterm::terminal::size() else {
         return;

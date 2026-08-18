@@ -473,13 +473,13 @@ impl FakeContainerRuntime {
             .and_then(|options| options.entrypoint.clone())
     }
 
-    /// The `container_options.labels` a prior `run_container`/
-    /// `start_background_container` call for `name` was given.
     /// The labels a prior `create_network` call was given.
     fn network_labels(&self) -> Option<HashMap<String, String>> {
         self.network_labels.lock().unwrap().clone()
     }
 
+    /// The `container_options.labels` a prior `run_container`/
+    /// `start_background_container` call for `name` was given.
     fn labels_for(&self, name: &str) -> Option<HashMap<String, String>> {
         self.container_options
             .lock()
