@@ -3145,20 +3145,6 @@ pub struct LoadedProject {
     pub project_directory: PathBuf,
 }
 
-/// Loads `config_file`, resolves its `include`s, and resolves every
-/// expression in the result — the whole config-to-usable-`Config` sequence
-/// both binaries need, in one call, so neither has to know the order the
-/// steps go in (includes before expressions; the config-vars file before
-/// `--config-var`, which overrides it).
-///
-/// `config_var_overrides` is the merged result of a `--config-vars-file`
-/// (load it with [`Config::load_config_vars_file`]) and any individually
-/// supplied variables, the latter winning — merging them is the caller's
-/// job, since only the caller knows what its own flags are called.
-///
-/// A missing file is an error here rather than an empty config: every
-/// caller so far wants to fail fast, and doing it in one place means the
-/// message is identical whichever binary is running.
 /// Serializes a merged, *unresolved* [`Config`] to native `ratect.toml` text —
 /// the rendering half of `ratect config convert`. Goes through [`toml::Value`]
 /// rather than serializing the struct directly, so scalar fields are emitted
@@ -3334,6 +3320,20 @@ fn collect_completion_task_names(
     }
 }
 
+/// Loads `config_file`, resolves its `include`s, and resolves every
+/// expression in the result — the whole config-to-usable-`Config` sequence
+/// both binaries need, in one call, so neither has to know the order the
+/// steps go in (includes before expressions; the config-vars file before
+/// `--config-var`, which overrides it).
+///
+/// `config_var_overrides` is the merged result of a `--config-vars-file`
+/// (load it with [`Config::load_config_vars_file`]) and any individually
+/// supplied variables, the latter winning — merging them is the caller's
+/// job, since only the caller knows what its own flags are called.
+///
+/// A missing file is an error here rather than an empty config: every
+/// caller so far wants to fail fast, and doing it in one place means the
+/// message is identical whichever binary is running.
 pub async fn load_project(
     config_file: &Path,
     config_var_overrides: &HashMap<String, String>,
