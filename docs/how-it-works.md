@@ -76,106 +76,65 @@ aren't known at the first:
 
 ## 3. Task engine (`ratect-core/src/engine.rs`)
 
-`TaskEngine::run_task(name)` is a recursive async function:
+`TaskEngine::run_task(name)` is a recursive async function. The order of its five
+steps is the part worth knowing here; for what each one does in detail, read
+`engine.rs`'s own module comment (`cargo doc --open -p ratect-core`), which is
+where that lives and stays current.
 
-1. **Already executed?** If this task has already run successfully in this invocation,
-   return immediately (no-op). This is what makes shared prerequisites run only once.
-2. **Cycle detection**: if this task is already in the middle of being run (i.e. it's
-   an ancestor of itself in the current call stack), return an error immediately
-   instead of recursing forever.
-3. **Run prerequisites**: each entry in the task's `prerequisites` list is run (via the
-   same recursive function, `run_task_scoped`) before the task's own container step —
-   but with `top_level: false`, unlike the task actually named on the command line
-   (`top_level: true`). That flag is what decides interactive-TTY eligibility in step 5
-   below — a prerequisite chain isn't the thing being "run" interactively, so only the
-   originally-requested task's own container is ever eligible, however deeply nested
-   its prerequisites are. If the task itself has no `run` (valid since 0.14.0 — a task
-   can exist purely to chain `prerequisites` together, see [config
-   reference](config-reference.md#task)), `run_task_internal` stops right here and
-   returns success: there's no container of the task's own left to run, matching
-   Batect's own `TaskRunner`.
-4. **Create the task's network**: every task execution gets its own Docker network,
-   whether or not its container declares `dependencies` — a task's container is
-   never left running on Docker's shared default bridge network. Everything in the
-   task's own container graph is started on that network before the task's own
-   container, so it can reach them by name: the container's own `dependencies`,
-   unioned with the task's own `dependencies` (0.14.0 — sidecars scoped to this one
-   task specifically, distinct from the container-level field — see [config
-   reference](config-reference.md#task)), resolved recursively for nested
-   dependencies via `container_names_in_task`/`start_dependency`. A task's
-   `customise` map (0.14.0 — per-task `environment`/`ports`/`working_directory`
-   overrides for a non-main container somewhere in that graph, at any depth — see
-   [config reference](config-reference.md#taskcontainercustomisation)) is threaded
-   through this same resolution and applied to whichever dependency it targets, on
-   top of that container's own base config. This is scoped to just this one task
-   execution and torn down afterward — see [the task lifecycle](task-lifecycle.md)
-   for the full step-by-step detail and diagrams. With `--use-network`, an existing
-   network is validated to exist (`ContainerRuntime::network_exists`) and reused
-   instead — never created, and never removed at cleanup, since Ratect didn't
-   create it.
-5. **Resolve and run the image**: `TaskEngine::resolve_image` turns the container's
-   `image` or `build_directory` into the image reference to actually run — pulling (per
-   `image_pull_policy`: `IfNotPresent`, the default, skips the pull if
-   `ContainerRuntime::image_exists_locally` already says yes; `Always` never checks —
-   either way, decided once per image name per run) if `image` is set, or building
-   (unless already built once this run — see below) if `build_directory` is set, or
-   erroring if neither is. The same method is used for a task's own container and for
-   dependency containers (in step 4), so both support either form identically.
-   `TaskEngine::resolve_user_mapping` similarly turns a container's
-   `run_as_current_user` (if enabled) into a `UserMapping` — also called for both a
-   task's own container and each dependency independently (a dependency's own
-   `run_as_current_user` doesn't depend on the task's), unlike `interactive` below,
-   which only ever applies to the task's own container — see
-   [User mapping](config-reference.md#user-mapping). Then the container runs with the
-   task's `command`, joined to the task's own network, with its `environment` built
-   from four layers — the host's `TERM` (lowest precedence, gated on `interactive`
-   below rather than a real TTY — see [`TERM`
-   propagation](config-reference.md#term-propagation)), then [proxy environment
-   variables](config-reference.md#proxy-environment-variables) (with every container
-   name in this task appended to `no_proxy`, computed once per task via
-   `container_names_in_task`), then the container's own `environment`, then the
-   task's `run.environment` (each winning over the last on a key collision) — its
-   `NetworkOptions` (`additional_hostnames`/`additional_hosts`, plus `ports` merged
-   with any `run.ports` and expanded to concrete port triples via `merged_ports`,
-   unless `--disable-ports`), its `ContainerOptions` (`working_directory` and
-   `entrypoint` — each the task-level `run` override if set, else the container's
-   own; `labels`, `capabilities_to_add`/`capabilities_to_drop` (converted from
-   `config::Capability` to plain Docker capability names via `capability_names`),
-   `privileged`, `shm_size`, `devices` (converted from `config::DeviceMapping` via
-   `device_triples`), and `enable_init_process` — these eight are container level
-   only, no `run` override, matching Batect), and `interactive` set to `top_level`
-   from step 3 — eligibility only; see [Interactive mode](config-reference.md#interactive-mode)
-   and the Docker integration section below for what this eligibility actually
-   unlocks (stdin forwarding and `TERM`, unconditionally) versus what additionally
-   requires a real TTY. Proxy variables (gated by the same `--no-proxy-vars` flag,
-   `TERM` never applies here at all) are also merged underneath `build_args` when
-   `resolve_image` builds an image.
+1. **Already executed?** If this task has already run successfully in this
+   invocation, return immediately. This is what makes shared prerequisites run
+   only once.
+2. **Cycle detection**: a task already in the middle of being run — an ancestor of
+   itself in the current call stack — errors immediately rather than recursing
+   forever.
+3. **Run prerequisites**, each through the same recursive function, before the
+   task's own container step. They run with `top_level: false`, unlike the task
+   actually named on the command line, and that flag is the whole of
+   interactive-TTY eligibility: a prerequisite chain isn't the thing being run
+   interactively, so only the originally-requested task's own container is ever
+   eligible, however deeply nested its prerequisites are. A task with no `run` of
+   its own stops here and succeeds — it exists purely to chain prerequisites (see
+   [config reference](config-reference.md#task)), matching Batect's own
+   `TaskRunner`.
+4. **Create the task's network** and start everything in the task's container
+   graph on it, before the task's own container, so it can reach them by name. The
+   graph is the container's own `dependencies` unioned with the task's, resolved
+   recursively, with any [`customise`](config-reference.md#taskcontainercustomisation)
+   overrides applied to whichever container they target at whatever depth. Every
+   task execution gets its own network — a task's container is never left on
+   Docker's shared default bridge — and it is torn down afterwards. With
+   `--use-network` an existing network is validated and reused instead, and never
+   removed, since Ratect didn't create it. See [the task
+   lifecycle](task-lifecycle.md) for the step-by-step and diagrams.
+5. **Resolve and run the image.** `resolve_image` turns a container's `image` or
+   `build_directory` into something runnable — pulling (per
+   [`image_pull_policy`](config-reference.md#container)) or building, or
+   erroring if neither is set — and is used identically for the task's own
+   container and for dependencies. The container then runs with the task's
+   `command`, joined to the task's network, its environment layered host `TERM` →
+   [proxy variables](config-reference.md#proxy-environment-variables) → the
+   container's `environment` → the task's `run.environment`, each winning over the
+   last. Everything else on the container — ports, hostnames, working directory,
+   entrypoint, capabilities, devices, and the rest — is assembled here from the
+   config and handed to `docker.rs` as plain values; the [config
+   reference](config-reference.md) is the list of what those fields mean, and which
+   accept a task-level `run` override.
 
-The "run once", "pull once", and "build once" guarantees are tracked with in-memory
-maps/sets (`executed_tasks`, `pulled_images`, `built_images`, `in_progress_tasks`)
-scoped to a single `ratect` invocation — nothing persists between runs (a
-`build_directory` container is rebuilt fresh every invocation, retagging
-`<project_name>-<container_name>` each time — see
-[config reference](config-reference.md#image-building)). `pulled_images`/
-`built_images` cache a memoized, shareable future per key (`Arc<tokio::sync::OnceCell<...>>`,
-see `engine.rs`'s `ReadyCell`) rather than a plain set/map, so two containers that
-concurrently resolve the same image (0.15.0) share one in-flight pull/build instead of
-racing to do it twice.
-Dependency/network state, by contrast, is scoped to a single *task* execution, not the
-whole invocation — a task's own dependency-readiness cache (the same `ReadyCell`
-mechanism, keyed by container name this time) is built fresh per task execution and
-discarded once it finishes — see [the task lifecycle](task-lifecycle.md).
+The "run once", "pull once" and "build once" guarantees are in-memory and scoped to
+a **single invocation** — nothing persists between runs, so a `build_directory`
+container is rebuilt every time. Pulls and builds are memoized as shareable futures
+rather than plain sets, so two containers resolving the same image share one
+in-flight operation instead of racing. Dependency readiness, by contrast, is scoped
+to a single **task execution** and discarded when it finishes.
 
-Task execution is a mix of the two, matching Batect exactly: **prerequisites run
-sequentially** — one after another, to completion, even when they're independent of
-each other (Batect doesn't parallelize these either — see
-[task lifecycle](task-lifecycle.md#known-simplifications-relative-to-batect)) —
-while **a single task's own dependency startup is concurrent** (0.15.0): independent
-branches of one task's container dependency graph pull/build/start/wait-healthy at
-the same time, gated only by each container's own `dependencies` actually being
-ready — see [task lifecycle](task-lifecycle.md#dependency-resolution). Running
-independent prerequisites concurrently too remains a possible Rust-specific
-enhancement beyond Batect's own behavior — see the [roadmap](../ROADMAP.md#rust-enhancements).
+Concurrency follows Batect exactly: **prerequisites run sequentially**, one to
+completion after another, even when independent — while **one task's dependency
+startup is concurrent**, with independent branches of its graph pulling, building,
+starting and health-waiting at the same time, gated only on each container's own
+`dependencies` being ready. Running independent prerequisites concurrently too is
+a possible Rust-specific enhancement beyond Batect — see the
+[roadmap](../ROADMAP.md#rust-enhancements) — and
+[task lifecycle](task-lifecycle.md#dependency-resolution) has the detail.
 
 ### Testability
 
@@ -186,93 +145,42 @@ unit-tested with a fake implementation instead of a real Docker daemon.
 
 ## 4. Docker integration (`ratect-core/src/docker.rs`)
 
-`DockerClient` wraps [`bollard`](https://docs.rs/bollard), Ratect's async Docker API
-client, and implements `ContainerRuntime`:
+`DockerClient` wraps [`bollard`](https://docs.rs/bollard) and implements
+`ContainerRuntime`. What each method is *for*:
 
-- **`pull_image`**: streams `docker create-image` progress, forwarding each status
-  line as a progress event to the output layer (see
-  [Logging vs. output](#5-logging-vs-output) — what, if anything, a progress event
-  renders as is the selected output style's decision, not `docker.rs`'s).
-- **`build_image`**: builds an in-memory tar of the build directory (via the
-  `build_context_tar` free function, `.dockerignore`-aware — see the
-  [`dockerignore`](../dockerignore) crate — and unit-testable on its own, with no
-  Docker involved), then streams `docker build` progress the same way `pull_image`
-  does.
-- **`run_container`**: creates a container (attaching stdout/stderr, any resolved
-  volume binds, any resolved `environment` variables, its Docker `hostname` set to
-  its own container name, plus its `NetworkOptions` — `additional_hosts` as
-  `HostConfig.extra_hosts` via the pure `build_extra_hosts`, and already-expanded
-  port triples as `exposed_ports`/`port_bindings` via the pure `build_port_config`),
-  joins it to the task's own network (with `additional_hostnames` as extra aliases
-  beyond its name), starts it, and streams its output until it exits. It does *not*
-  remove the container: the engine's own cleanup stage removes everything a task
-  created, its own container included, so the `--no-cleanup-*` flags are honoured
-  in one place rather than two.
-  `cmd` is `command` tokenized into literal argv via `tokenize_command_line` (a
-  from-scratch port of Batect's own `Command.parse`) with `additional_args`
-  appended, no shell involved at all — same for `Config.entrypoint`, from
-  `ContainerOptions::entrypoint`. The rest of `ContainerOptions` maps onto
-  `HostConfig`/`Config` directly: `cap_add`/`cap_drop` (via `capability_names`),
-  `privileged`, `shm_size`, `devices` (via the pure `build_devices` — which fills in
-  Docker's `"rwm"` cgroup-permissions default itself, since the raw API, unlike the
-  `docker` CLI, applies none), and `init`.
-  `open_stdin`/`attach_stdin` on the container are set whenever `interactive`
-  (eligibility) is true, independent of whether a real TTY ends up being used; `tty`
-  itself is set only when `should_use_tty` (ANDing that same `interactive` eligibility
-  against whether Ratect's own stdin *and* stdout are real terminals — see [Interactive
-  mode](config-reference.md#interactive-mode)) is true. This gives three paths, not
-  two: the fully non-interactive path creates the container without stdin/a TTY and
-  streams `docker logs --follow`; the `interactive`-but-no-real-TTY path (piping input
-  into a task whose output isn't a real terminal) attaches for stdin only
-  (`docker.attach_container`, before starting, so nothing written early is lost),
-  pumps it into the container, and otherwise streams output the same way the plain
-  path does; the real-TTY path additionally attaches for stdout/stderr too instead of
-  using `logs`, puts the local terminal into raw mode for the session's duration
-  (restored via a guard's `Drop`, even on an error return), pumps stdin/stdout between
-  the local terminal and the container concurrently until the attach stream ends, and
-  keeps the container's TTY size in sync with the local terminal for the *whole*
-  session (not just once, at attach) via a `SIGWINCH` listener (`tokio::signal::unix`,
-  Unix-only — a plain OS signal, unlike a structured terminal-event API, which would
-  consume/interpret stdin bytes instead of passing them through raw). When
-  `user_mapping` is `Some` (see
-  [User mapping](config-reference.md#user-mapping)), any missing host-side
-  directory among the container's bind mounts is created first (a `local`
-  mount's host path, or a `cache` mount's own directory under
-  `--cache-type=directory` — never a bare Docker volume name, which
-  `CacheType::Volume` resolves to instead and which `ensure_host_volume_directories_exist`
-  explicitly skips), the container's `User` is set to the mapped
-  `uid:gid`, and — after creation, before starting — synthetic
-  `/etc/passwd`/`/etc/shadow`/`/etc/group` entries and the declared home directory are
-  uploaded into it (`docker.upload_to_container`, via the `build_user_mapping_tar`/
-  `build_home_directory_tar` free functions, both unit-testable on their own).
-- **`create_network` / `remove_network` / `network_exists`**: thin wrappers over
-  Docker's network API — create/remove for the per-task network every task execution
-  gets (see [task lifecycle](task-lifecycle.md)), and `network_exists` (backed by
-  `inspect_network`, treating a 404 as `false`) to validate `--use-network`'s target
-  up front with a clear error rather than an unrelated API failure later.
-- **`start_background_container` / `stop_and_remove_container`**: create+start (or
-  stop+remove) a container without streaming its logs or waiting for it to exit —
-  used for dependency/sidecar containers, which run alongside the task rather than
-  being the thing the task is waiting on. Applies `user_mapping`, `NetworkOptions`
-  (hostname, aliases, extra hosts, ports), and `ContainerOptions` the same way
-  `run_container` does (no `cmd` here, though — a dependency has no task `command` of
-  its own; its image's own `CMD`/`ENTRYPOINT` runs, unless `ContainerOptions::entrypoint`
-  overrides it), from that dependency's own config — independent of the task's own
-  container's settings.
+- **`pull_image`** and **`build_image`**: fetch or build the image a container
+  needs, streaming the daemon's progress to the output layer as events — what, if
+  anything, those render as is the selected output style's decision, not
+  `docker.rs`'s (see [Logging vs. output](#5-logging-vs-output)). `build_image`
+  first packs the build directory into an in-memory tar, honouring
+  `.dockerignore` via the [`dockerignore`](../dockerignore) crate.
+- **`run_container`**: creates, starts and streams the task's own container until
+  it exits. Three start/attach paths sit behind it — fully non-interactive,
+  stdin-forwarding, and a real TTY with raw mode and live resize — chosen by
+  whether the task is [interactive](config-reference.md#interactive-mode)-eligible
+  and whether Ratect's own stdin *and* stdout are terminals. It does **not** remove
+  the container: the engine's cleanup stage removes everything a task created, its
+  own container included, so `--no-cleanup-*` is interpreted in exactly one place.
+- **`create_network` / `remove_network` / `network_exists`**: the per-task network,
+  plus the up-front validation that makes `--use-network` fail with a clear error
+  rather than an unrelated API failure later.
+- **`start_background_container` / `stop_and_remove_container`**: the same, for a
+  dependency or sidecar — started and left running alongside the task rather than
+  waited on, so no logs are streamed and no task `command` applies.
 - **`wait_for_container_healthy` / `exec_in_container`**: the two halves of the
-  [dependency readiness gate](config-reference.md#dependency-readiness) the engine
-  runs after starting each dependency. The first inspects the container (no health
-  check at all means immediately healthy) and otherwise blocks on Docker's own event
-  stream — filtered to that container's `health_status`/`die` events, replayed from
-  the beginning of time so a verdict that arrived before the stream opened still
-  counts — turning an *unhealthy* verdict into an error carrying the last
-  health-check run's exit code and output (from `.State.Health.Log`). The second
-  runs one `setup_commands` entry inside the running container via Docker's `exec`
-  API (`sh -c`, the container's own environment and mapped user), returning the exit
-  code and combined output for the engine to judge. A container's `health_check`
-  config override itself is applied earlier, at creation time, by both
-  `run_container` and `start_background_container` (via the pure
-  `build_health_config`).
+  [dependency readiness gate](config-reference.md#dependency-readiness). The first
+  blocks on Docker's own event stream, replayed from the beginning so a verdict
+  that arrived before the stream opened still counts, and turns an *unhealthy*
+  verdict into an error carrying the last health check's exit code and output. The
+  second runs one `setup_commands` entry in the running container and returns its
+  exit code and output for the engine to judge.
+
+Nothing here depends on `config` types: `engine.rs` converts config into plain
+values first, which is why the same options struct serves both container methods.
+The module's own comment carries the gotchas — where each path calls Docker's
+`start` relative to attaching, why cleanup ownership is not to be split again, how
+`build_ssh` paths are classified — and is the thing to read before changing any of
+this.
 
 Container creation/start/removal events are logged at `debug` level via `tracing` (see
 below) — not shown by default, but useful with `RUST_LOG=debug`. This includes each
