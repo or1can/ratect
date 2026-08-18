@@ -38,7 +38,17 @@ Opt in per block, by putting a marker line directly above a fenced block:
     - build: Build the application
     ```
 
-The command runs from the repo root with `RATECT_*`/`NO_COLOR` normalised. Its
+The command runs from the repo root with `RATECT_*`/`NO_COLOR` normalised, and
+without a shell — `shlex.split`, so a marker is one program and its arguments
+and no metacharacter is expanded behind your back. **That is tidiness, not a
+sandbox.** A marker naming `sh -c ...` runs exactly what it says, verified by
+probe rather than assumed, and no parsing rule can prevent that: markers come
+out of files, and a file can name any program on the machine.
+
+So the boundary is trust, not syntax: running this on a branch is running that
+branch's code, the same bargain as `cargo test`. Do not run it over a pull
+request you would not build, and that is the reason it is not in CI, where it
+would meet every branch automatically. Its
 combined output is compared against the block with any leading `$ ...` command
 lines stripped, so the block keeps reading as a transcript. Both sides are
 compared with trailing whitespace removed and blank lines collapsed at the
@@ -55,6 +65,7 @@ finding out which ones aren't is half the value of running this.
 import difflib
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -116,8 +127,20 @@ def main(root: Path) -> int:
                 failures += 1
                 continue
             checked += 1
+            # `shlex.split` rather than `shell=True`: one named program and
+            # its arguments, with nothing expanded, chained or redirected
+            # behind the author's back. It is not a safety boundary — a marker
+            # is free to name `sh` — but a marker that needs a pipe is pinning
+            # something other than one command's own output, and this makes
+            # that obvious rather than easy.
+            try:
+                argv = shlex.split(command)
+            except ValueError as bad:
+                print(f"{rel}:{line_no}: cannot parse command ({bad})")
+                failures += 1
+                continue
             done = subprocess.run(
-                command, shell=True, cwd=root, capture_output=True, text=True, env=env
+                argv, cwd=root, capture_output=True, text=True, env=env
             )
             actual = trim((done.stdout + done.stderr).splitlines())
             want = trim([l for l in dedent(expected) if not PROMPT_RE.match(l)])
