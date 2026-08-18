@@ -375,7 +375,7 @@ for — note that in `TODO.md` instead.
 
       <!-- verify: python3 tools/stale-claims.py | head -1 -->
       ```
-      22 claims name code that changed after them. Churn, not wrongness — verify by executing the claim.
+      21 claims name code that changed after them. Churn, not wrongness — verify by executing the claim.
       ```
 
       It measures churn rather than wrongness, so expect false positives (a
