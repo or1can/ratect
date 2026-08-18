@@ -175,8 +175,8 @@ CHANGELOG sections, which are append-only.
 
 Reproduced verbatim (headings demoted to fit this document) from
 [andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills/blob/main/CLAUDE.md),
-MIT-licensed, so anyone working in this repo has them without installing
-anything. Unlike the numbered guidelines below, none of these was written after
+MIT-licensed — see [`NOTICE`](NOTICE) for the attribution — so anyone working in
+this repo has them without installing anything. Unlike the numbered guidelines below, none of these was written after
 something went wrong in Ratect — they are general habits, and where the two ever
 disagree the specific one wins. Two places they meet are noted after the
 principles; don't read either as an exception to them.

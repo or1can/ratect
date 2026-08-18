@@ -25,6 +25,33 @@ License, Version 2.0, and its own NOTICE file reads:
 
     See also https://www.apache.org/dev/crypto.html and/or seek legal counsel.
 
+The "Working principles" section of `AGENTS.md` is reproduced verbatim (headings
+demoted to fit that document) from the `CLAUDE.md` of
+github.com/multica-ai/andrej-karpathy-skills, which states its license as MIT in its
+README. That project publishes no LICENSE file and no copyright line, so no copyright
+holder can be quoted here; copyright is held by that project's authors. Its own
+README credits the underlying observations to Andrej Karpathy. The MIT permission
+notice, which that license requires be included with any substantial portion of the
+work:
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
 The test projects under `ratect-compat/tests/conformance/batect-journey/` are copied
 verbatim from Batect's own journey-test suite
 (`app/src/journeyTest/resources/` in github.com/batect/batect), and are used to
