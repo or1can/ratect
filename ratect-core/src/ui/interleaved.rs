@@ -52,7 +52,7 @@ pub struct InterleavedEventLogger {
 struct State {
     /// The current task's name — the prefix for task-level lines (white).
     task: Option<String>,
-    /// Deferred "Running <task>..." preamble: printed once the graph
+    /// Deferred `Running <task>...` preamble: printed once the graph
     /// arrives, so it aligns with the container prefixes (the padding width
     /// isn't known until then).
     preamble_pending: bool,

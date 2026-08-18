@@ -426,7 +426,9 @@ pub(crate) fn duration_schema(_: &mut SchemaGenerator) -> Schema {
 }
 
 /// `shm_size`: Batect's own size-string format, or a plain integer number of
-/// bytes — see [`crate::config::parse_byte_size`], the actual enforcement.
+/// bytes — see `config::parse_byte_size`, the actual enforcement (named
+/// rather than linked: it is private to that module, so rustdoc cannot
+/// resolve a path to it from here).
 pub(crate) fn byte_size_schema(_: &mut SchemaGenerator) -> Schema {
     json_schema!({
         "oneOf": [

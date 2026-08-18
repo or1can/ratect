@@ -2696,7 +2696,8 @@ impl Config {
     }
 
     /// The actual implementation behind [`resolve_expressions`](Self::resolve_expressions),
-    /// for callers that never need [`resolve_expressions_with_boundaries`]'s
+    /// for callers that never need
+    /// [`resolve_expressions_with_boundaries`](Self::resolve_expressions_with_boundaries)'s
     /// Git-containment checks (i.e. every caller except
     /// [`LoadedConfig::resolve_expressions`]) — a thin wrapper so their call
     /// sites don't have to pass an always-empty boundaries map.
