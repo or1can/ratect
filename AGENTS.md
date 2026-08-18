@@ -126,13 +126,23 @@ own yet.
 
 ## Tooling & CI
 
-- **Documentation checks** (`tools/`, neither in CI): `python3 tools/stale-claims.py`
+- **Documentation checks** (`tools/`, none in CI yet). `python3 tools/stale-claims.py`
   ranks prose by how much the code it names has moved since the claim was last
   touched, and `python3 tools/spliced-docs.py` finds doc comments that document a
   different item from the one they sit on. Both are candidate lists that exit 0 —
   they measure a proxy, not wrongness, so a hit means "re-read this" and a clean
   run means nothing was *detected*. Run them before a release; guidelines 15 and
   16 say what to do with what they find.
+
+  `python3 tools/verify-docs.py` is the one that decides something: it runs each
+  command marked `<!-- verify: ... -->` above a fenced block and diffs the real
+  output against what the block claims, exiting non-zero on any difference. Opt
+  in per block. It is the only check here that sees a claim falsified by a later
+  commit *on its own branch*, which is where most of this repo's wrong claims
+  have come from — both of the others rank by how much the code underneath has
+  moved, and score that case zero. Mark a block only when its output is
+  reproducible: most example blocks in `docs/` are illustrative, and no marker
+  makes `ratect resources list` print what some other machine had left over.
 - **Formatting/Linting**: `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` must pass; both are enforced in CI (`.github/workflows/ci.yml`).
 - **Dependency Audit**: `cargo audit` runs in CI against `Cargo.lock`, which is committed to the repo (binary crate convention, not gitignored). One shared lockfile covers the whole workspace. Accepted advisories live in [`.cargo/audit.toml`](.cargo/audit.toml) — currently one, RUSTSEC-2023-0071 (the Marvin timing attack in `rsa` 0.9.x, which has no fixed release). **Every entry there carries a written justification**: what the advisory covers, why it's accepted rather than fixed, what mitigates it meanwhile, and what would let it be removed — an ignore without that is indistinguishable from silencing the check, and `cargo audit` prints nothing about what it skipped. An advisory with a fixed release available never belongs there; upgrade instead.
 - **Tests**: `cargo test --workspace` runs in CI, covering unit tests per module (pattern matching in `dockerignore`, config parsing/resolution, expression interpolation, build-context tar construction, interactive-TTY eligibility, user-mapping generation, and task engine logic — dependency cycles, prerequisite dedup, sidecar/dependency resolution, dependency readiness (health-wait/setup-command ordering and failure paths), environment merging, image resolution — via a fake `ContainerRuntime`) and CLI argument/behavior tests in `ratect-compat/src/main.rs`/`ratect-compat/tests/cli.rs`. `ratect-compat/tests/cli.rs` also has end-to-end tests (`#[ignore]`d by default, run explicitly via `cargo test --workspace --test cli -- --ignored`) that exercise a real Docker daemon against the fixtures under `ratect-compat/tests/fixtures/` — one per feature (sidecars, dependency readiness, environment/config variables, image building, `.dockerignore`, interactive mode, user mapping, hostnames/ports, proxy, `--use-network`). These also run as their own `docker-integration` CI job (`--workspace --test cli` picks up `ratect`'s own `ratect/tests/cli.rs` too, against its own `ratect/tests/fixtures/`). See the fixture files themselves for what each one proves.
@@ -277,7 +287,18 @@ opposite. Neither is an exception:
 5.  **State Management**: In `ratect-core/src/engine.rs`, state (like executed tasks) is shared using `Mutex` to ensure thread safety across async tasks. Be mindful of locking logic.
 6.  **Verification**: After making changes, verify them by:
     -   Running `cargo build --workspace` to ensure compilation.
-    -   Executing `cargo run -p ratect-compat -- -f ratect-compat/tests/fixtures/smoke.yml --list-tasks` to check config parsing.
+    -   Executing `cargo run -p ratect-compat -- -f ratect-compat/tests/fixtures/smoke.yml --list-tasks` to check config parsing, which should print:
+
+        <!-- verify: cargo run -q -p ratect-compat -- -f ratect-compat/tests/fixtures/smoke.yml --list-tasks -->
+        ```
+        Tasks in ratect-test:
+        - list-volume-task
+        - prereq-task
+        - prerequisites-only-task
+        - shared-prereq
+        - test-task
+        ```
+
     -   Running a sample task (e.g., `cargo run -p ratect-compat -- -f ratect-compat/tests/fixtures/smoke.yml test-task`) to verify the execution engine and Docker integration. (The repository root's `batect.yml` is Ratect's *own* dev-task config — we build Ratect with Ratect, dogfooding the tool: `cargo run -p ratect-compat -- build`/`test`/`lint`/`fmt` run each in a pinned Rust container with the Cargo registry and build output as `cache` volumes. A root `ratect.toml` mirrors it in the native format, so the same tasks also run through the `ratect` binary (`cargo run -p ratect -- run build`), dogfooding *both* binaries and their two config formats; `ratect-core`'s `the_two_root_dev_configs_agree` test resolves both files and fails if they drift, so an edit to one must be mirrored in the other. That's precisely what the root path *should* hold — this project's own dev tasks — which is why test fixtures deliberately live under `tests/fixtures/` instead, never at the root, so the two are never confused.)
 7.  **Changelog Maintenance**: After completing a task that changes the project's features, dependencies, or structure, ensure that `CHANGELOG.md` is updated in the "Unreleased" section, following the "Keep a Changelog" standard.
 8.  **Version Lifecycle**: When cutting a release, it's not just a version bump — follow the full process documented in [ROADMAP.md](ROADMAP.md#versioning--releases): the `X.Y.Z-dev` → `X.Y.Z` bump commit, tagging it `<binary>/vX.Y.Z` (prefixed since `ratect` and `ratect-compat` are on independent version lines that would otherwise collide — bare `vX.Y.Z` tags are pre-split history), and publishing it as a GitHub Release (body = that release's `CHANGELOG.md` section). There's one shared `CHANGELOG.md`, whose release headings name every version in that release (`## [ratect-compat 0.21.1 · ratect 0.2.0]`) and whose entries name a binary only when they don't apply to both — see ROADMAP.md for why it isn't split per binary. Starting the next version's development is a separate, later commit that bumps every crate back to a `X.Y.Z-dev`. Neither bump is ever folded into a feature commit.
@@ -332,9 +353,15 @@ opposite. Neither is an exception:
 
       For *finding* which claims to re-read — as opposed to checking one you
       already suspect — `python3 tools/stale-claims.py` ranks prose by how
-      much the code it names has moved since the claim was last touched.
-      Roughly 30 candidates on this repo, so it is a skim, not a report. It
-      measures churn rather than wrongness, so expect false positives (a
+      much the code it names has moved since the claim was last touched. A
+      skim, not a report:
+
+      <!-- verify: python3 tools/stale-claims.py | head -1 -->
+      ```
+      25 claims name code that changed after them. Churn, not wrongness — verify by executing the claim.
+      ```
+
+      It measures churn rather than wrongness, so expect false positives (a
       claim about a hot file looks suspicious while staying true) and treat
       a hit as "re-read this", never as "this is wrong". Its motivating case
       is [0006](decisions/0006-code-and-documentation-locality.md), whose
