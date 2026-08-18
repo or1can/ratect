@@ -43,7 +43,13 @@ How it works, and why:
            `AGENTS.md`, which is where this repo discusses modules by name;
            in `docs/` the same words mean the Docker CLI, a config field or
            a JSON schema, and matching them there put six false positives
-           above the one real finding
+           above the one real finding. A stem shared by several crates
+           (`main`, `lib`) names no single file and is dropped entirely —
+           which also retires the bare-name match's worst false subject,
+           AGENTS.md's `main` meaning the git branch. The residual is
+           narrower but not gone: `cache`, `config`, `user` and `ui` are
+           ordinary English as well as module names, so a hit is still
+           "re-read this", never "this is wrong"
   score    the largest fraction of any subject's history that happened
            *after* the claim — normalised, so a claim predating 90% of a
            file's life outranks one predating 5% of a busier file's
@@ -73,9 +79,17 @@ def git(root, *args):
 
 
 def main(root: Path, top: int) -> int:
-    modules = {p.stem: str(p.relative_to(root)) for p in root.glob("*/src/*.rs")}
-    # A module's own tests live beside it and are not what a claim describes.
-    modules = {k: v for k, v in modules.items() if not k.endswith("_tests")}
+    # Bare module names are matched by stem, so a stem shared by more than one
+    # crate names no single file: `lib` and `main` each exist four times over,
+    # and keeping one would let `Path.glob` order decide which. Dropping them
+    # also retires the worst false subject the bare-name match had — AGENTS.md
+    # says `main` meaning the git branch, and `main.rs` is churned enough to
+    # dominate any section it lands in.
+    paths = [p for p in root.glob("*/src/*.rs") if not p.stem.endswith("_tests")]
+    ambiguous = {p.stem for p in paths if sum(q.stem == p.stem for q in paths) > 1}
+    modules = {
+        p.stem: str(p.relative_to(root)) for p in paths if p.stem not in ambiguous
+    }
 
     history: dict[str, list[int]] = {}
 
