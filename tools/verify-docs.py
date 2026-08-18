@@ -38,7 +38,11 @@ Opt in per block, by putting a marker line directly above a fenced block:
     - build: Build the application
     ```
 
-The command runs from the repo root with `RATECT_*`/`NO_COLOR` normalised, and
+The command runs from the repo root with `NO_COLOR`, `RUST_LOG` and `COLUMNS`
+pinned so colour, log level and terminal width cannot vary between machines —
+the rest of the environment is inherited, so a marker depending on anything else
+about yours will diff for everyone but you. Output is compared as stdout
+followed by stderr, each split into lines on its own. It runs
 without a shell — `shlex.split`, so a marker is one program and its arguments
 and no metacharacter is expanded behind your back. **That is tidiness, not a
 sandbox.** A marker naming `sh -c ...` runs exactly what it says, verified by
@@ -139,10 +143,21 @@ def main(root: Path) -> int:
                 print(f"{rel}:{line_no}: cannot parse command ({bad})")
                 failures += 1
                 continue
-            done = subprocess.run(
-                argv, cwd=root, capture_output=True, text=True, env=env
-            )
-            actual = trim((done.stdout + done.stderr).splitlines())
+            try:
+                done = subprocess.run(
+                    argv, cwd=root, capture_output=True, text=True, env=env
+                )
+            except OSError as bad:
+                # One unrunnable marker must not abandon the rest of the sweep:
+                # the summary line is what says the run happened at all, and a
+                # traceback would leave every later block silently unchecked.
+                print(f"{rel}:{line_no}: cannot run {argv[0]!r} ({bad.strerror})")
+                failures += 1
+                continue
+            # Kept apart. Concatenated, a stdout that does not end in a newline
+            # welds its last line onto stderr's first and reports the seam as
+            # drift.
+            actual = trim(done.stdout.splitlines() + done.stderr.splitlines())
             want = trim([l for l in dedent(expected) if not PROMPT_RE.match(l)])
             if actual == want:
                 continue
