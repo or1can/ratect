@@ -303,7 +303,8 @@ pub(crate) fn cache_key(remote: &str, git_ref: &str) -> String {
 /// without cloning, locking, or any network. For offline consumers (shell
 /// completion, [`crate::config::task_names_for_completion`]) that must never
 /// block a `<TAB>` on a fetch: an uncached include simply contributes nothing.
-/// `None` if it isn't cached or the home directory can't be resolved.
+/// Returns `None` if it isn't cached, or if the cache directory itself cannot
+/// be located.
 ///
 /// `root` is the cache directory to look in, `None` meaning the real
 /// `~/.ratect/incl` — the same seam `GitIncludeCache::for_test` has (named

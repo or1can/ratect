@@ -3093,6 +3093,16 @@ fn resolve_path(
         // without knowing anything about the machine — `<{batect
         // .project_directory}/../../../etc` — and the containment check it
         // then faces compares path components without interpreting `..`.
+        //
+        // Cleaning *every* absolute path rather than only a bundle's is what
+        // Batect does, so this is parity rather than a widening: its
+        // `PathResolver.resolve` runs one expression for all paths,
+        // `context.relativeTo.resolve(originalPath).normalize()
+        //  .toAbsolutePath()`, and `Path.resolve` returns an absolute
+        // argument unchanged — leaving `normalize()` to run on it. A `..`
+        // whose parent is a symlink therefore resolves the same way under
+        // both tools, which is the point. Flagged twice in review as a
+        // behaviour change; recorded here so it isn't a third time.
         PathBuf::from(&interpolated).clean()
     };
 

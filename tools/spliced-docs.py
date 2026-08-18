@@ -26,12 +26,12 @@ guideline 15 has a rule against it, written after four occurrences; a fifth
 untouched on `main` for long enough to be found by a reviewer rather than by
 the rule. A rule you can only follow by remembering it is worth a check.
 
-A candidate list, not a verdict — the same contract
-[`stale-claims.py`](stale-claims.py) sets. On this repo it reports four, of
-which two were real: `resize_tty`'s documentation stranded on
-`stream_logs_as_interleaved_events`, and `labels_for`'s on `network_labels`.
-The other two are a long doc whose paragraphs happen to start with a summary
-verb. Read each, and exit status stays 0 either way.
+A candidate list, not a verdict — the same contract stale-claims.py sets. It
+reported four here when it was written, of which two were real: `resize_tty`'s
+documentation stranded on `stream_logs_as_interleaved_events`, and
+`labels_for`'s on `network_labels`. Both are fixed, so the two that remain are
+long docs whose paragraphs happen to open with a summary verb. Read each, and
+exit status stays 0 either way.
 
 How it works, and why:
 

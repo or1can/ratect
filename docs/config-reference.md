@@ -197,9 +197,11 @@ allowed — and a grant on the loser would quietly do nothing. Entries in the ro
 configuration file are always reached before any bundle's own, so declaring the
 include yourself beats a bundle to it; between two entries in the same file, the
 earlier one wins. Where two entries reach the same file and the losing one
-carries a grant, Ratect refuses to load, names the repository and tells you
-which entry to move it to, rather than leaving you to wonder why the flag had no
-effect. It is the file that races, not the repository: two entries naming the
+carries a grant, Ratect refuses to load, names the repository and gives the
+ordering rule above, rather than leaving you to wonder why the flag had no
+effect. It cannot name the winning entry for you, and that entry is often inside
+a bundle you can't edit — in which case the move is to declare the include
+yourself, in your root file, where it gets there first. It is the file that races, not the repository: two entries naming the
 same repository with different `path`s pull in two different files, and each
 keeps the grant written on its own entry. Note the two outcomes are different: a grant written *inside* a bundle
 is **ignored** (accepted, worth nothing — see above), while one of your own that

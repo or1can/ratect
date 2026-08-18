@@ -61,7 +61,7 @@ Ratect is a **Cargo workspace** with four crates (the
   | --- | --- |
   | `config.rs` | Two text formats, one model: `batect.yml` (YAML) and `ratect.toml` (TOML), includes, expression/path resolution, `extends` |
   | `git_include.rs` | `type: git` includes — the `~/.ratect/incl` clone cache and its staleness sweep |
-  | `include_trust.rs` | What a Git-included bundle may do: the grant rule, its native-only gate, and every refusal that cites them |
+  | `include_trust.rs` | What a Git-included bundle may do: the grant rule, its native-only gate, and the refusals that cite them. Containment is `config.rs`'s `GitBoundary`, and so is the `allow_host_paths` refusal, which a boundary raises |
   | `cache.rs` | `volumes` `cache` mounts → a named volume or host directory, and `--clean`/`--clean-cache` |
   | `expressions.rs` | Batect's `$VAR`/`${VAR:-default}`/`<name` expression syntax |
   | `docker.rs` | All `bollard`/daemon interaction, behind the fakeable `ContainerRuntime` trait |
@@ -291,10 +291,12 @@ opposite. Neither is an exception:
       `python3 tools/spliced-docs.py` finds the ones that get through
       anyway — which is how `load_project`, `resize_tty` and `labels_for`
       turned out to have lost theirs, the first of them long enough for a
-      reviewer to find it on `main`. Four candidates on this repo and a
-      hand sweep over the same list missed two of them, so read all four
-      rather than trusting either. Not a gate: two are long docs whose
-      paragraphs open with a summary verb, and it exits 0 regardless.
+      reviewer to find it on `main`. It reports a handful of candidates
+      (two on this repo today, both benign — long docs whose paragraphs
+      open with a summary verb), so read each rather than assuming a
+      report means a defect. Not a gate; it exits 0 regardless. A hand
+      sweep over the same candidates cleared two real splices, which is
+      the argument for running the check rather than eyeballing it.
     - **Re-read every string you added, in its final control-flow position.** Log and error messages are correct when written and quietly become wrong as the code around them moves; nothing type-checks them. Two messages shipped claiming work that a flag had disabled, and naming a `ratect` verb from shared core that `ratect-compat` doesn't have. A
       related check for *errors* specifically: an error has to name something the
       user actually wrote. A lower layer speaks its own vocabulary — `docker.rs`
