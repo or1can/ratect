@@ -350,149 +350,82 @@ for — note that in `TODO.md` instead.
 12. **Commit Messages**: Use the Conventional Commits format (`type: summary`, e.g. `feat:`, `fix:`, `chore:`). Keep the summary concise; add a body only when it clarifies non-obvious motivation, and focus the body on *why* the change was made rather than restating the diff. Every commit is signed off (`git commit -s`) — the [DCO](https://developercertificate.org) attestation CONTRIBUTING.md describes and CI enforces on pull requests; direct commits to `main` follow the same convention for consistency.
 13. **Commit Packaging**: a release that's one theme (like most 0.x releases so far) lands as a single `feat:` commit. A release bundling several genuinely separable behaviors (e.g. 0.6.0's networking + proxy work) should instead split into one `feat:` commit per behavior, each with its own tests and doc updates — easier to review and to `git bisect`/`git revert` than one large commit. The version bump and any docs-only release summary stay separate commits either way (see 8).
 14. **Architecture Decision Records** ([`decisions/`](decisions/)): the home for a decision's rationale is decided by whether it's **cross-cutting or version-scoped**. A decision referenced from more than one place — the two-binary split, the labels namespace, the native config format — becomes an ADR (`decisions/NNNN-slug.md`, `Status`/`Context`/`Decision`/`Alternatives considered`/`Consequences`), and its ROADMAP.md entry shrinks to a summary plus a `decisions/NNNN` pointer. A decision that belongs to one release stays **inline** in that release's ROADMAP.md entry, using the existing "Scope, settled before building:" / "As built:" subsection pattern — don't extract it. Practical trigger: a decision earns an ADR the moment it's about to be referenced from a *second* place; most never cross that line. ADRs are append-only like the versioned lists — supersede and link forward, never delete. See [`decisions/README.md`](decisions/README.md) for the full convention.
-15. **Review before committing, not after.** Run a review pass over the working diff (`/code-review`) *before* each commit rather than over a run of commits afterwards. Adopted after 0.25.0's interrupt work, where a post-hoc review found six issues that all existed at commit time — one of them a behaviour bug, not a slip. Four checks earned their place there, each having actually missed something:
-    - **Anchor an inserted item on the preceding item's closing brace, never on the new one's attributes.** A Rust item's doc comment sits *above* its `#[test]`/`#[derive]` attributes, so anchoring an insertion there splices the new item into the previous one's documentation — silently, and the compiler is happy. This is how a new e2e test ended up wearing its neighbour's doc comment.
-
-      `python3 tools/spliced-docs.py` finds the ones that get through
-      anyway — which is how `load_project`, `resize_tty` and `labels_for`
-      turned out to have lost theirs, the first of them long enough for a
-      reviewer to find it on `main`. It reports a handful of candidates
-      (two on this repo today, both benign — long docs whose paragraphs
-      open with a summary verb), so read each rather than assuming a
-      report means a defect. Not a gate; it exits 0 regardless. A hand
-      sweep over the same candidates cleared two real splices, which is
-      the argument for running the check rather than eyeballing it.
-    - **Re-read every string you added, in its final control-flow position.** Log and error messages are correct when written and quietly become wrong as the code around them moves; nothing type-checks them. Two messages shipped claiming work that a flag had disabled, and naming a `ratect` verb from shared core that `ratect-compat` doesn't have. A
-      related check for *errors* specifically: an error has to name something the
+15. **Review before committing, not after.** Run a review pass over the working
+    diff (`/code-review`) *before* each commit, not over a run of commits
+    afterwards. The checks below have each caught something a review missed:
+    - **Anchor an inserted item on the preceding item's closing brace, never on
+      the new one's attributes.** A Rust item's doc comment sits *above* its
+      `#[test]`/`#[derive]` attributes, so anchoring there splices the new item
+      into the previous one's documentation — silently, and the compiler is
+      happy. `python3 tools/spliced-docs.py` finds the ones that get through; it
+      exits 0 regardless, so read each candidate rather than treating a report
+      as a defect.
+    - **Re-read every string you added, in its final control-flow position.**
+      Nothing type-checks a log or error message, so they stay as written while
+      the code around them moves. For errors specifically: name something the
       user actually wrote. A lower layer speaks its own vocabulary — `docker.rs`
       knows an ssh agent id, not which container declared it — so an error
-      crossing up from one needs the caller to attach that. `classify_ssh_agent_paths`
-      shipped naming only the agent, in a codebase where every other config error
-      names its container.
-    - **When a change alters observable behaviour, re-read that behaviour's whole
-      doc section and *run* each claim against the binary.** Not grep — execute.
-      Every claim: the example output, the flag descriptions, the "this does X"
-      sentences. Capture real output and `diff` it rather than editing what looks
-      wrong, since what looks wrong is exactly the set you already believe.
+      crossing up from one needs the caller to attach that.
+    - **When a change alters observable behaviour, re-read that behaviour's
+      whole doc section and *run* each claim against the binary.** Not grep —
+      execute. Every claim: the example output, the flag descriptions, the "this
+      does X" sentences. Capture real output and `diff` it rather than editing
+      what looks wrong, since what looks wrong is exactly the set you already
+      believe. Grep is the fallback for claims nothing can be run against (a
+      roadmap entry, a design note); it is not the check. An earlier version of
+      this rule *was* grep — for strings naming the old scope — and it reported
+      clean while missing three, so the sweep was recorded as done.
 
-      This is a rewrite of a check that said to *grep for strings naming the old
-      scope*, which failed on its first outing. `ratect caches list` widened from
-      a project's caches to the machine's shared ones as well, and the grep — for
-      "this project's caches" and friends — missed `"This project has no
-      caches."`, `--scope`'s "Listing shows both by default", and a paragraph
-      describing deduplication, because none of them contained the words expected.
-      Worse, it reported clean, so the sweep was recorded as done. Executing the
-      section's claims caught all three, and had already caught a stale example
-      block the grep also missed.
-
-      Grep is the fallback for claims nothing can be run against (a roadmap
-      entry, a design note). It is not the check.
-
-      For *finding* which claims to re-read — as opposed to checking one you
-      already suspect — `python3 tools/stale-claims.py` ranks prose by how
-      much the code it names has moved since the claim was last touched. A
-      couple of dozen candidates on this repo: a skim, not a report. Don't
-      write the exact number down anywhere. It was pinned here as a
-      `verify-docs` block for one afternoon and needed refreshing four times,
-      the last of those because three *source* files were touched — the count
-      tracks how much code has moved, so it rises on commits that fix nothing
-      and fall on ones that fix a doc. A number that moves for both reasons
-      measures neither.
-
-      It measures churn rather than wrongness, so expect false positives (a
-      claim about a hot file looks suspicious while staying true) and treat
-      a hit as "re-read this", never as "this is wrong". Its motivating case
-      is [0006](decisions/0006-code-and-documentation-locality.md), whose
-      empirical detector was true when written and was invalidated by the
-      ADR's own Rule 1 — nothing else in the repo looks for that shape.
-
-      The stakes are not cosmetic: a stale heading claiming shared caches were
-      "Caches for this project:" made a documented idiom
-      (`caches list -o quiet | xargs ratect caches clean`) delete another
-      project's cache. Across two rounds this one habit accounted for eight
-      findings.
-    - **Verify a claim before writing it, not after a reviewer questions it.**
-      "No name that worked before stops working" was written into a CHANGELOG
-      entry and two doc pages, and was false — the new validation had been
-      enforced by Docker for volume caches only, so directory caches silently
-      became a breaking change. Disabling the check and running it took a
-      minute. An unverified claim about past behaviour is a guess with a
-      citation's confidence.
+      To find which claims to re-read, `python3 tools/stale-claims.py` ranks
+      prose by how much the code it names has moved since the claim was last
+      touched. Treat a hit as "re-read this", never as "this is wrong" — it
+      measures churn, so a true claim about a hot file looks suspicious. Don't
+      record its candidate count anywhere: the number rises when code moves and
+      falls when a doc is fixed, so it measures neither.
+    - **Verify a claim before writing it, not after a reviewer questions it** —
+      the review-time half of the change loop's write-prose step.
     - **A behaviour that depends on which format/mode you're in needs one
-      derived value, not a guard per call site.** `allow_nested_git_includes`
-      got this wrong twice in one change: the gate was written unguarded (the
-      existing compat tests caught it), and then the *error redaction* beside
-      it was left unguarded too (review caught it, because its own tests were
-      all native). Each site guarded correctly in isolation; the invariant —
-      "these behaviours are native-only, together" — was stated nowhere. Deriving
-      `restricted: Option<&Bundle>` once (`include_trust::restricting`), and
-      having every site consume it, makes the divergence unrepresentable.
-      Guarding site-by-site means the next site added is unguarded by default.
-    - **Never spell config syntax in an error message — name the field.**
-      `set 'x' to true`, not `add 'x: true'` or `'x = true'`. `allow_host_paths`
-      shipped the YAML spelling in shared core, where `ratect.toml` readers hit
-      it, and the new nested-include gate repeated the mistake in TOML.
-
-      This started as a weaker rule — *"or prove the message fires in exactly
-      one format"* — which is what the gate's author (me) did, correctly, and
-      still got wrong: `ConfigFormat::Native` is the **project's** format, not
-      the **file's**. A native project can locally include a `.yml`, so the very
-      entry the message tells you to edit may be YAML. Any rule of the form
-      "prove which syntax the reader is using" fails on mixed-format includes,
-      which is why the rule is now unconditional. The first version of this rule
-      survived one review and was refuted by the next.
-    - **Watch for coverage shaped by the test harness rather than the behaviour.** If the fake can only express one ordering of something inherently timing-dependent, the untestable orderings are where the bug will be — extend the harness instead of concluding the cases are covered. Every interrupt test could only pre-record interrupts *before* a run, and the broken case was an interrupt arriving mid-cleanup.
-    - **A test that cleans up after itself has to be run twice.** A single run
-      passes whether or not the cleanup matched anything — the first run starts
-      clean by definition. Extracting `remove_cache_mount_volumes` into a
-      parameterised helper broke its match string, every conformance run leaked a
-      Docker volume, and the suite stayed green because a *sibling* test was
-      deleting the project's cache key and so handing each run a fresh volume
-      name. Two defects concealing each other, both invisible to one run. Run it
-      twice and assert the external state (`docker volume ls`), not just the exit
-      code.
+      derived value, not a guard per call site.** Derive it once
+      (`include_trust::restricting`, returning `Option<&Bundle>`) and have every
+      site consume it, so the divergence is unrepresentable. Guarding
+      site-by-site means the next site added is unguarded by default.
+    - **Never spell config syntax in an error message — name the field.** `set
+      'x' to true`, not `add 'x: true'` or `'x = true'`. Unconditional: the
+      earlier form allowed the syntax where the message fires in one format
+      only, and that was refuted — `ConfigFormat::Native` is the **project's**
+      format, not the **file's**, so a native project can locally include a
+      `.yml` and the entry the message names may be YAML.
+    - **Watch for coverage shaped by the test harness rather than the
+      behaviour.** If the fake can only express one ordering of something
+      inherently timing-dependent, the untestable orderings are where the bug
+      will be — extend the harness instead of concluding the cases are covered.
+    - **Run a self-cleaning test twice, asserting external state (`docker volume
+      ls`) rather than the exit code.** One run passes whether or not the
+      cleanup matched anything — the first run starts clean by definition.
     - **Two tests sharing a fixture directory need a lock, not luck.** `cargo
-      test` runs a binary's tests on several threads. `cache-mount` is driven by
-      two conformance cases; they contend for `.batect/caches/key` even though
-      they use different cache *types*, which surfaces as "the cache did not
-      persist" rather than as a race. A `static Mutex` around the shared project
-      is the cheap fix — see `CACHE_MOUNT_PROJECT`.
-    - **A real-daemon test can mask a missing unit test.** The `#[ignore]`d Docker tests don't run in the default suite, so a path they cover can be entirely unprotected in `cargo test --workspace`. Assert each effect separately — one assertion per thing removed, not one for "cleanup happened".
+      test` runs a binary's tests on several threads, and contention over a
+      shared fixture surfaces as a behaviour failure ("the cache did not
+      persist"), not as a race. A `static Mutex` around the project is the cheap
+      fix — see `CACHE_MOUNT_PROJECT`.
+    - **A real-daemon test can mask a missing unit test.** The `#[ignore]`d
+      Docker tests don't run in the default suite, so a path they cover can be
+      unprotected in `cargo test --workspace`. Assert each effect separately —
+      one assertion per thing removed, not one for "cleanup happened".
 
-16. **Fix the class, not the instance — and say what you swept.** A review finding
-    is a *sample*, not the defect. Before fixing it, ask what else in the codebase
-    has that shape and go and look; then report the sweep, including when it comes
-    back clean. A negative result is information, and it saves the next reviewer
-    re-deriving it.
-
-    The cost of skipping this is measured in review rounds. Error attribution took
-    two: one round found `classify_ssh_agent_paths` reporting an agent id with no
-    container, the fix added context at that one call site, and the next round
-    found `Keyring::start` beside it still bare. The structural fix — one wrapper
-    attributing everything the build can fail on — was available the first time
-    and would have made the second finding impossible. A review that only surfaces
-    siblings of something already fixed is **failure demand**: work created by not
-    having finished the job the first time.
-
-    Three corollaries, each with a scar behind it:
+16. **Fix the class, not the instance — and say what you swept.** A review
+    finding is a *sample*. Before fixing it, ask what else in the codebase has
+    that shape and go and look; then report the sweep, including when it comes
+    back clean — a negative result is information, and it saves the next
+    reviewer re-deriving it. A review that only surfaces siblings of something
+    already fixed is **failure demand**: work created by not having finished the
+    job the first time.
 
     - **Prefer the structural fix when the local one leaves the invariant
-      unstated.** 0.25.0's cleanup ownership is the precedent: three consecutive
-      rounds each found a *distinct* bug in the same split between `run_container`
-      and the engine, and retiring the split ended it — not a fourth correction.
-      When one area keeps producing findings, the design is the finding.
-    - **A repeated process error is a defect in the process, not in the attempt.**
-      Resolving to be more careful is not a fix. Three git-staging errors in one
-      day — `git add -A` merging two intended commits twice, then `commit --amend`
-      landing on the wrong one — so the method changes: **stage explicit paths,
-      never `-A`, whenever more than one commit is planned, and rebuild a
-      mis-split pair with `reset --soft` rather than reaching for `--amend` or an
-      interactive rebase.** (An earlier `rebase -i` fixup to correct one of these
-      squashed the two commits it was meant to separate.) Four doc-comment splices
-      produced the anchoring rule in 15. When something recurs, change the method,
-      then write it down here.
-    - **Not every finding is a class, and saying so is part of the job.** The
-      sweeps that came back clean this cycle — ROADMAP/CHANGELOG overlap at 2%,
-      appended module docs at 0–9%, exactly one stale "no such concept" claim in
-      `docs/` — were each worth the minutes it took to know rather than assume,
-      and worth reporting so nobody checks them again.
+      unstated.** When one area keeps producing findings, the design is the
+      finding.
+    - **A repeated process error is a defect in the process, not in the
+      attempt.** Resolving to be more careful is not a fix: change the method,
+      then write it down here. Standing method — **stage explicit paths, never
+      `-A`, whenever more than one commit is planned, and rebuild a mis-split
+      pair with `reset --soft` rather than `--amend` or an interactive rebase.**
+    - **Not every finding is a class, and saying so is part of the job.**
