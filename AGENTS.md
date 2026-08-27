@@ -195,8 +195,9 @@ Reproduced verbatim (headings demoted to fit this document) from
 MIT-licensed — see [`NOTICE`](NOTICE) for the attribution — so anyone working in
 this repo has them without installing anything. Unlike the numbered guidelines below, none of these was written after
 something went wrong in Ratect — they are general habits, and where the two ever
-disagree the specific one wins. Two places they meet are noted after the
-principles; don't read either as an exception to them.
+disagree the specific one wins. Everything after them is this repo's own — the
+change loop, and two places they meet a repo rule; don't read any of it as an
+exception to them.
 
 Behavioral guidelines to reduce common LLM coding mistakes. Merge with
 project-specific instructions as needed.
@@ -263,6 +264,25 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+#### The change loop
+
+**For any change:** specification → suite red → code → suite green → write
+prose.
+
+Derive the red **and** the code from the specification, independently. When the
+two disagree, the fault may be in the red, the code, or the specification.
+
+Specification first, because otherwise there is nothing to derive from
+independently — a red written from unstated intent is the code by another
+route. Usually one sentence, not a document; for parity work, cite Batect's
+source rather than write one.
+
+Write the prose from the specification and the code **as delivered** — re-read
+and re-run, not remembered; it is also how you reload both.
+
+Red is omitted only where the change alters no behaviour; say so out loud when
+it is.
 
 #### Where these meet Ratect's own rules
 
