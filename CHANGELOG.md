@@ -21,6 +21,14 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+## [ratect-compat 0.25.0 · ratect 0.4.0] - 2026-08-28
+
+**Interrupting a run now cleans up, and `build_ssh` reaches full parity.** Ctrl+C previously killed the process outright, leaving every container the task had started plus its network behind — Ratect had no signal handling in any crate. An interrupt now takes the same cleanup path as any other failure. `build_ssh` gains multiple named agents and, the half that matters most in CI, explicit private key files served by an ssh-agent Ratect runs in-process, with no agent on the host at all. Those were the last known feature gaps in [Batect parity](ROADMAP.md#batect-parity), and the conformance corpus now covers 28 of Batect's 29 journey projects.
+
+**`ratect` 0.4.0 takes the two include-trust pieces that need a config field `ratect-compat` can never have**: a `scope = "shared"` cache, which gives a bundle cross-project storage without granting it your home directory, and `allow_nested_git_includes`, which stops a Git-included bundle pulling in further remotes unasked. Expressions in `image` ride along — [batect#974](https://github.com/batect/batect/issues/974), Batect's highest-priority open suggestion, and a **breaking change** for `ratect-compat`, which rejects them.
+
+**Four security fixes, all reachable through a Git-included bundle**: a `..` inside an absolute path escaped containment (0.10.0 onward), a `cache` mount's `name` could be a path and have an arbitrary host directory mounted read-write (0.18.0 onward), shell completion walked past a bundle's boundary where loading stopped, and a bundle could pull in further remotes of its own unasked (`ratect` only). The containment check is still lexical, so one instance of that shape remains open — see [`SECURITY.md`](SECURITY.md).
+
 ### Added
 
 - **A cache can now be shared across projects** (`ratect` only): `scope = "shared"` on a `cache` mount drops the project key from its storage, so every project on the machine naming it gets the same cache — one Cargo registry or npm cache, populated once. What a bundle wanting this has had to do until now is spell it as a host path (`local = "~/.cache/cargo"`), which means granting that bundle access to your home directory; this says the same thing directly, grants no host filesystem access at all, and keeps the location under Ratect's control — [decisions/0004](decisions/0004-git-include-host-path-trust.md)'s "solve the underlying need properly" track. Stored as the Docker volume `ratect-shared-cache-<name>`, or `~/.ratect/caches/<name>` under `--cache-type=directory`, beside the Git-include clones. `batect.yml` has no equivalent, so `scope` is rejected there rather than ignored, like `extends`; a cache name gets one scope per project, checked when the file loads. See the [`ratect.toml` reference](docs/ratect-config-reference.md#shared-caches).
