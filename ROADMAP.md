@@ -896,7 +896,7 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     didn't. Skipped deliberately: Batect's Kotlin *unit* tests (internal
     implementation, JVM-bound) and its *completion* tests (shell completion, a
     feature `ratect-compat` doesn't ship).
-- **0.25.0** (planned) — **Cleanup on interrupt, `build_ssh` parity, and the next
+- **0.25.0** — **Cleanup on interrupt, `build_ssh` parity, and the next
   slice of the conformance corpus**. Three separable behaviours, so one `feat:`
   commit each, matching the repo's own commit-packaging convention:
   - ~~**Clean up when interrupted (Ctrl+C)** — Ratect currently has *no* signal
@@ -1239,7 +1239,7 @@ cycle (0.2.0, the first one not about `ratect-compat`):
   dynamically from the config, offline), and commands grouped by purpose in
   `--help`. Full design, alternatives, and consequences:
   [decisions/0003](decisions/0003-ratect-native-config-format.md).
-- **0.4.0** (planned) — **Include trust and sharing**: picks up where 0.24.0's
+- **0.4.0** — **Include trust and sharing**: picks up where 0.24.0's
   `allow_host_paths` left off, taking the two pieces that are `ratect`-only by
   nature — both need a new config field, which is exactly what `ratect-compat`
   can never have.
