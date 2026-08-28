@@ -1163,7 +1163,7 @@ cycle (0.2.0, the first one not about `ratect-compat`):
   0.1.0, since there was nothing in it to release. The crate went straight to
   `0.2.0-dev` when work on the subcommand skeleton below opened, right after
   `ratect-compat` 0.21.0 shipped.
-- **0.2.0** (in development) — **CLI subcommand skeleton**: `ratect run <task>` and
+- **0.2.0** — ~~**CLI subcommand skeleton**: `ratect run <task>` and
   `ratect tasks list` (replacing `ratect-compat`'s flat `<task-name>` positional
   and `--list-tasks`), settled as subcommands rather than a flat CLI so later verbs
   (`ratect doctor`, git-include cache management — see
@@ -1178,9 +1178,10 @@ cycle (0.2.0, the first one not about `ratect-compat`):
   same "mechanics before features" sequencing 0.20.0 used for the workspace split
   itself. Docker-connection flags and output-mode selection are reused as-is from
   `ratect-core`/`ui::create_event_sink` — `ratect-compat` already proved that
-  surface, nothing to reinvent.
+  surface, nothing to reinvent.~~ — **shipped**, with the interface decisions and
+  the `caches` verbs it grew recorded below.
 
-  Landed so far: both subcommands, on the shared glue lifted into `ratect-core`
+  As built: both subcommands, on the shared glue lifted into `ratect-core`
   for them (`config::load_project`, `engine::TaskEngineSettings`/`with_settings`
   — `ratect-compat` moved onto both in the same change, so the seam is proven
   rather than declared). Two interface decisions worth recording, since they're
