@@ -21,6 +21,12 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Security
+
+- **A Git-included bundle can no longer escape its containment with a symlink it commits** (both binaries; affects 0.10.0 onward, when per-bundle container boundaries were introduced). A bundle's containers may resolve `volumes` host paths and `build_directory` only within its own clone or your project directory, unless you grant [`allow_host_paths`](docs/config-reference.md#git-includes). That check was purely lexical, so a bundle committing a symlink `escape -> /` beside `local: escape` produced a path starting with its own clone directory while pointing anywhere on the host, and Docker dereferenced it when bind-mounting. This is the surviving half of the `..`-traversal escape fixed in 0.25.0 — the same class, of which only the lexical half was closed then.
+
+  The path is now compared by real location as well: its longest existing ancestor is resolved and the not-yet-created tail re-appended, so a `volumes` path that doesn't exist yet is still allowed, as Ratect or Docker creates it. Both allowed roots are resolved the same way, since a project or cache directory may itself sit under a symlink — `/tmp` does on macOS. Include targets were already checked this way; it is container paths that were not, because unlike an include they need not exist when the configuration is read.
+
 ## [ratect-compat 0.25.0 · ratect 0.4.0] - 2026-08-28
 
 **Interrupting a run now cleans up, and `build_ssh` reaches full parity.** Ctrl+C previously killed the process outright, leaving every container the task had started plus its network behind — Ratect had no signal handling in any crate. An interrupt now takes the same cleanup path as any other failure. `build_ssh` gains multiple named agents and, the half that matters most in CI, explicit private key files served by an ssh-agent Ratect runs in-process, with no agent on the host at all. Those were the last known feature gaps in [Batect parity](ROADMAP.md#batect-parity), and the conformance corpus now covers 28 of Batect's 29 journey projects.

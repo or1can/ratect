@@ -2073,30 +2073,51 @@ impl GitBoundary {
     /// caller's own project directory (e.g.
     /// `<{batect.project_directory}/output:/output`) — so `project_dir` is
     /// accepted as a second allowed root alongside the repository's own
-    /// clone directory. Purely lexical, like `check_contains`: a symlink
-    /// inside the clone that itself points back outside both allowed roots
-    /// isn't caught here, since unlike an `include` target (which must exist
-    /// and is read as a file), a `volumes`/`build_directory` path need not
-    /// exist yet at config-resolution time — Docker/`docker build` are the
-    /// ones that ultimately dereference it.
+    /// clone directory.
     ///
-    /// Normalizes `resolved` for the same reason
-    /// [`check_contains`](Self::check_contains) does — and here it was not
+    /// Checked twice, because either check alone has a hole the other closes.
+    /// Lexically first, on the normalized path — that rejects a written-out
+    /// escape without touching the filesystem where it points, and it was not
     /// merely theoretical: `<{batect.project_directory}/../../../etc` is an
-    /// absolute path a bundle can write without knowing anything about the
-    /// machine, and it starts with the project directory component-for-
-    /// component.
+    /// absolute path a bundle can write knowing nothing about the machine, and
+    /// it starts with the project directory component-for-component. Then
+    /// against the real locations, because a bundle can commit a *symlink*
+    /// inside its own clone, which is lexically within an allowed root while
+    /// its target is not — and Docker dereferences it at bind-mount time.
+    ///
+    /// The second check resolves as far as the path exists rather than
+    /// requiring it to, unlike
+    /// [`check_contains_canonical`](Self::check_contains_canonical): an
+    /// `include` target must already exist to be read, but a
+    /// `volumes`/`build_directory` path need not — Ratect or Docker creates
+    /// it. Both allowed roots are resolved too, since a project or cache
+    /// directory may itself sit under a symlink (`/tmp` does on macOS).
     fn check_path_allowed(&self, resolved: &Path, project_dir: &Path) -> Result<()> {
         let resolved = &resolved.clean();
-        if self.bundle.trust.host_paths
-            || resolved.starts_with(&self.repo_dir)
-            || resolved.starts_with(project_dir)
+        if self.bundle.trust.host_paths {
+            return Ok(());
+        }
+        if !(resolved.starts_with(&self.repo_dir) || resolved.starts_with(project_dir)) {
+            return Err(self.escapes_both_roots(resolved, project_dir, ""));
+        }
+        let real = real_path_as_far_as_it_exists(resolved);
+        if real.starts_with(real_path_as_far_as_it_exists(&self.repo_dir))
+            || real.starts_with(real_path_as_far_as_it_exists(project_dir))
         {
             return Ok(());
         }
-        anyhow::bail!(
+        Err(self.escapes_both_roots(resolved, project_dir, " (via a symlink)"))
+    }
+
+    /// The refusal both halves of [`check_path_allowed`](Self::check_path_allowed)
+    /// raise. `how` distinguishes them for the reader without splitting the
+    /// remedy — which is the same either way, and is the part that has to name
+    /// the field rather than spell its syntax, since the include entry it
+    /// points at may be in either format.
+    fn escapes_both_roots(&self, resolved: &Path, project_dir: &Path, how: &str) -> anyhow::Error {
+        anyhow::anyhow!(
             "Path '{}' escapes both the Git repository '{}' at '{}' it was included from and \
-             the project directory '{}' — a container reached through a Git include must \
+             the project directory '{}'{} — a container reached through a Git include must \
              resolve its 'volumes'/'build_directory' paths within one of the two. If you trust \
              this bundle to reach that path, set 'allow_host_paths' to true on the include entry \
              for '{}' in your own configuration.",
@@ -2104,8 +2125,40 @@ impl GitBoundary {
             self.bundle.id.remote,
             self.bundle.id.git_ref,
             project_dir.display(),
+            how,
             self.bundle.id.remote
-        );
+        )
+    }
+}
+
+/// `path` with every symlink in it resolved, as far as it exists: the longest
+/// existing ancestor canonicalized, with the not-yet-created tail re-appended.
+///
+/// A plain [`Path::canonicalize`] can't be used because the path may not exist
+/// yet — that is the whole reason
+/// [`GitBoundary::check_path_allowed`] can't simply reuse
+/// [`GitBoundary::check_contains_canonical`]. Falls back to `path` itself when
+/// nothing along it resolves, which leaves the caller's lexical check as the
+/// only one that applies — the behaviour before symlinks were considered at
+/// all, and still correct, since a path with no existing ancestor cannot be
+/// pointing anywhere yet.
+fn real_path_as_far_as_it_exists(path: &Path) -> PathBuf {
+    let mut missing_tail = Vec::new();
+    let mut existing = path;
+    loop {
+        if let Ok(canonical) = existing.canonicalize() {
+            return missing_tail
+                .iter()
+                .rev()
+                .fold(canonical, |real, part: &&std::ffi::OsStr| real.join(part));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing_tail.push(name);
+                existing = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
     }
 }
 

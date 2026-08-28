@@ -156,8 +156,8 @@ that's a fresh repository with its own boundary, not an escape from this one.
 The same containment applies to a `volumes` host path, `build_directory`, or
 `build_secrets` entry's `path` declared by a *container* defined inside a
 Git-included file: it must resolve to somewhere inside
-that repository's own clone, **or** inside your project directory — an absolute path
-or `../..` traversal escaping both is rejected the same way. The project directory is
+that repository's own clone, **or** inside your project directory — an absolute path,
+a `../..` traversal, or a symlink pointing back out of both is rejected the same way. The project directory is
 allowed as a second root (rather than requiring pure containment within the clone)
 because referencing it explicitly via
 [`batect.project_directory`](#built-in-config-variable-batectproject_directory) (e.g.

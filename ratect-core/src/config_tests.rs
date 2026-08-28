@@ -2077,8 +2077,14 @@ fn resolve_path_interpolates_expression_before_resolving() {
 /// [`crate::include_trust`] is where whether it was granted is decided and
 /// tested.
 fn ungranted_git_boundary() -> GitBoundary {
+    ungranted_git_boundary_at(PathBuf::from("/repo"))
+}
+
+/// The same, rooted at a real directory — for the checks below that need a
+/// filesystem to plant a symlink in.
+fn ungranted_git_boundary_at(repo_dir: PathBuf) -> GitBoundary {
     GitBoundary {
-        repo_dir: PathBuf::from("/repo"),
+        repo_dir,
         bundle: Bundle {
             id: BundleId {
                 remote: "https://example.com/bundle.git".to_string(),
@@ -2164,6 +2170,110 @@ fn resolve_path_rejects_a_git_included_containers_absolute_path_with_a_traversal
             "'{path}' must not reach outside both allowed roots: {result:?}"
         );
     }
+}
+
+/// The `..` escape above closed only the *lexical* half of the containment
+/// check. Its surviving sibling: a bundle commits a symlink inside its own
+/// clone, so the path is lexically within an allowed root while its real
+/// target is not, and Docker dereferences it at bind-mount time.
+#[cfg(unix)]
+#[test]
+fn resolve_path_rejects_a_symlink_inside_the_clone_that_points_outside_both_roots() {
+    let repo_dir = unique_temp_dir();
+    let outside = unique_temp_dir();
+    std::os::unix::fs::symlink(&outside, repo_dir.join("escape")).unwrap();
+    let project_dir = unique_temp_dir();
+    let boundary = ungranted_git_boundary_at(repo_dir.clone());
+
+    let result = resolve_path(
+        "escape",
+        &repo_dir,
+        &no_host_env,
+        &HashMap::new(),
+        Some((&boundary, &project_dir)),
+    );
+
+    assert!(
+        format!("{:?}", result).contains("escapes both the Git repository"),
+        "a symlink out of the clone must not pass containment: {result:?}"
+    );
+}
+
+/// The check above must not reject the ordinary case it sits in front of.
+#[cfg(unix)]
+#[test]
+fn resolve_path_allows_a_real_path_inside_the_clone() {
+    let repo_dir = unique_temp_dir();
+    std::fs::create_dir(repo_dir.join("data")).unwrap();
+    let project_dir = unique_temp_dir();
+    let boundary = ungranted_git_boundary_at(repo_dir.clone());
+
+    let resolved = resolve_path(
+        "data",
+        &repo_dir,
+        &no_host_env,
+        &HashMap::new(),
+        Some((&boundary, &project_dir)),
+    )
+    .unwrap();
+
+    assert!(
+        resolved.ends_with("data"),
+        "unexpected resolution: {resolved}"
+    );
+}
+
+/// A `volumes` host path need not exist when the config is resolved —
+/// Ratect or Docker creates it — so resolving symlinks must not turn a
+/// missing path into a rejection.
+#[cfg(unix)]
+#[test]
+fn resolve_path_allows_a_path_inside_the_clone_that_does_not_exist_yet() {
+    let repo_dir = unique_temp_dir();
+    let project_dir = unique_temp_dir();
+    let boundary = ungranted_git_boundary_at(repo_dir.clone());
+
+    let resolved = resolve_path(
+        "not-created-yet/output",
+        &repo_dir,
+        &no_host_env,
+        &HashMap::new(),
+        Some((&boundary, &project_dir)),
+    )
+    .unwrap();
+
+    assert!(
+        resolved.ends_with("not-created-yet/output"),
+        "unexpected resolution: {resolved}"
+    );
+}
+
+/// The allowed roots themselves may sit under a symlink — `/tmp` is one on
+/// macOS, and `std::env::temp_dir()` lands under it — so the comparison has
+/// to canonicalize both sides or every path under such a root is rejected.
+#[cfg(unix)]
+#[test]
+fn resolve_path_allows_a_project_directory_that_is_itself_reached_through_a_symlink() {
+    let real_project = unique_temp_dir();
+    let link_parent = unique_temp_dir();
+    let linked_project = link_parent.join("project");
+    std::os::unix::fs::symlink(&real_project, &linked_project).unwrap();
+    std::fs::create_dir(real_project.join("output")).unwrap();
+    let boundary = ungranted_git_boundary_at(unique_temp_dir());
+
+    let resolved = resolve_path(
+        "output",
+        &linked_project,
+        &no_host_env,
+        &HashMap::new(),
+        Some((&boundary, &linked_project)),
+    )
+    .unwrap();
+
+    assert!(
+        resolved.ends_with("output"),
+        "a project directory behind a symlink must stay usable: {resolved}"
+    );
 }
 
 /// The normalization above must not narrow what a bundle may legitimately

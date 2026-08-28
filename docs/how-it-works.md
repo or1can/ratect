@@ -67,9 +67,11 @@ aren't known at the first:
      The resolved path is then checked against `container_git_boundaries`: a
      container that came from a Git-included file may only reach inside its own
      clone or your project directory, unless that include was granted
-     [`allow_host_paths`](config-reference.md#git-includes). Both the check and
-     the path it validates are lexically normalized first, since the comparison
-     comes down to `Path::starts_with`, which does not interpret `..`.
+     [`allow_host_paths`](config-reference.md#git-includes). Checked twice: once
+     lexically, with both the check and the path normalized first, since
+     `Path::starts_with` does not interpret `..`; then against the real
+     locations, with symlinks resolved as far as the path exists, since a
+     bundle can commit one inside its own clone.
 
    See the [configuration reference](config-reference.md#expressions) for the full
    expression syntax, precedence, and error rules.

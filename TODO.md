@@ -62,32 +62,6 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
 
 ## Correctness
 
-0. **A symlink committed inside a bundle's clone defeats `volumes`/
-   `build_directory` containment** (`ratect-core/src/config.rs`,
-   `GitBoundary::check_path_allowed`) — CONFIRMED by probe, pre-dating
-   0.25.0. A Git-included bundle commits `escape -> /somewhere`, writes
-   `local: escape`, and the resolved `<clone>/escape` passes containment
-   because the check is purely lexical (`Path::starts_with`); Docker
-   dereferences the symlink when it bind-mounts. That is a bundle reading
-   and writing outside its clone without `allow_host_paths`, which
-   `SECURITY.md` states is a vulnerability and [decisions/0004](decisions/0004-git-include-host-path-trust.md) is meant
-   to prevent. The surviving sibling of the `..`-in-an-absolute-path
-   escape fixed in 0.25.0; the two are the same class, and only the
-   lexical half was closed.
-
-   Not a lexical fix. `check_contains_canonical` solves it for *include*
-   targets by canonicalizing, which it can do because an include must
-   already exist and be readable — a `volumes` host path need not exist
-   at config-resolution time (Ratect or Docker creates it), so the shape
-   is to canonicalize the longest existing ancestor, re-append the
-   missing tail, and canonicalize both allowed roots too, since a project
-   or cache directory may itself sit under a symlink (`/tmp` on macOS).
-   Wants its own tests: symlink inside a clone rejected, symlink-free
-   path unchanged, nonexistent path still allowed, project directory
-   under a symlink still allowed. Deliberately not squeezed into 0.25.0 —
-   a security-control behaviour change with real regression surface earns
-   its own release and its own review.
-
 1. **Fancy: terminal narrowing mid-run can desync the cursor-up count**
    (`ratect-core/src/ui/fancy.rs`) — PLAUSIBLE, depends on terminal
    emulator reflow behavior (confirmed on reflowing emulators like

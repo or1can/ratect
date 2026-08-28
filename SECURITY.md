@@ -25,11 +25,7 @@ existing hardening lives:
   are enforced (see the
   [config reference](docs/config-reference.md#git-includes)). Anything that lets a
   fetched bundle read or write outside its clone (or the project directory) is a
-  vulnerability. One instance is **already known and not yet fixed**: the
-  containment on a container's `volumes`/`build_directory` paths is purely
-  lexical, so a symlink committed inside a bundle's own clone still passes it
-  and is dereferenced by Docker at mount time. You don't need to report that
-  one; anything else in this shape, please do.
+  vulnerability.
 - **What a bundle is *granted***: widening a bundle's containment
   (`allow_host_paths`) or letting it pull in further remotes of its own
   (`allow_nested_git_includes`, `ratect.toml`) is deliberate and one level deep,
