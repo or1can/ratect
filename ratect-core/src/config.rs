@@ -2011,6 +2011,17 @@ struct GitBoundary {
     bundle: Bundle,
 }
 
+/// Which of [`GitBoundary::check_path_allowed`]'s two checks refused a path.
+/// Named rather than passed as a message fragment so a third check cannot be
+/// added by inventing a third string at one call site.
+#[derive(Debug, Clone, Copy)]
+enum Escape {
+    /// The path's spelling already leaves both allowed roots.
+    Lexical,
+    /// Its spelling stays inside, but what it really points at does not.
+    ViaSymlink,
+}
+
 impl GitBoundary {
     /// Purely lexical containment check — deliberately runs before
     /// `resolved` is confirmed to exist, so a `path` engineered to escape
@@ -2098,7 +2109,7 @@ impl GitBoundary {
             return Ok(());
         }
         if !(resolved.starts_with(&self.repo_dir) || resolved.starts_with(project_dir)) {
-            return Err(self.escapes_both_roots(resolved, project_dir, ""));
+            return Err(self.refuse_escape(resolved, project_dir, Escape::Lexical));
         }
         let real = self.real_path(resolved)?;
         if real.starts_with(self.real_path(&self.repo_dir)?)
@@ -2106,7 +2117,7 @@ impl GitBoundary {
         {
             return Ok(());
         }
-        Err(self.escapes_both_roots(resolved, project_dir, " (via a symlink)"))
+        Err(self.refuse_escape(resolved, project_dir, Escape::ViaSymlink))
     }
 
     /// [`real_path_as_far_as_it_exists`] with this bundle's name attached: the
@@ -2125,11 +2136,15 @@ impl GitBoundary {
     }
 
     /// The refusal both halves of [`check_path_allowed`](Self::check_path_allowed)
-    /// raise. `how` distinguishes them for the reader without splitting the
-    /// remedy — which is the same either way, and is the part that has to name
-    /// the field rather than spell its syntax, since the include entry it
-    /// points at may be in either format.
-    fn escapes_both_roots(&self, resolved: &Path, project_dir: &Path, how: &str) -> anyhow::Error {
+    /// raise. Which half it was changes only how the path is described; the
+    /// remedy is the same either way, and is the part that has to name the
+    /// field rather than spell its syntax, since the include entry it points
+    /// at may be in either format.
+    fn refuse_escape(&self, resolved: &Path, project_dir: &Path, escape: Escape) -> anyhow::Error {
+        let how = match escape {
+            Escape::Lexical => "",
+            Escape::ViaSymlink => " (via a symlink)",
+        };
         anyhow::anyhow!(
             "Path '{}' escapes both the Git repository '{}' at '{}' it was included from and \
              the project directory '{}'{} — a container reached through a Git include must \
