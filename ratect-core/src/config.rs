@@ -2100,13 +2100,28 @@ impl GitBoundary {
         if !(resolved.starts_with(&self.repo_dir) || resolved.starts_with(project_dir)) {
             return Err(self.escapes_both_roots(resolved, project_dir, ""));
         }
-        let real = real_path_as_far_as_it_exists(resolved);
-        if real.starts_with(real_path_as_far_as_it_exists(&self.repo_dir))
-            || real.starts_with(real_path_as_far_as_it_exists(project_dir))
+        let real = self.real_path(resolved)?;
+        if real.starts_with(self.real_path(&self.repo_dir)?)
+            || real.starts_with(self.real_path(project_dir)?)
         {
             return Ok(());
         }
         Err(self.escapes_both_roots(resolved, project_dir, " (via a symlink)"))
+    }
+
+    /// [`real_path_as_far_as_it_exists`] with this bundle's name attached: the
+    /// helper knows a path, not which include pulled it in, and a refusal has
+    /// to say.
+    fn real_path(&self, path: &Path) -> Result<PathBuf> {
+        real_path_as_far_as_it_exists(path).with_context(|| {
+            format!(
+                "Path '{}' cannot be checked against the containment for the Git repository \
+                 '{}' at '{}' — where it really points could not be determined.",
+                path.display(),
+                self.bundle.id.remote,
+                self.bundle.id.git_ref
+            )
+        })
     }
 
     /// The refusal both halves of [`check_path_allowed`](Self::check_path_allowed)
@@ -2137,27 +2152,37 @@ impl GitBoundary {
 /// A plain [`Path::canonicalize`] can't be used because the path may not exist
 /// yet — that is the whole reason
 /// [`GitBoundary::check_path_allowed`] can't simply reuse
-/// [`GitBoundary::check_contains_canonical`]. Falls back to `path` itself when
-/// nothing along it resolves, which leaves the caller's lexical check as the
-/// only one that applies — the behaviour before symlinks were considered at
-/// all, and still correct, since a path with no existing ancestor cannot be
-/// pointing anywhere yet.
-fn real_path_as_far_as_it_exists(path: &Path) -> PathBuf {
-    let mut missing_tail = Vec::new();
+/// [`GitBoundary::check_contains_canonical`]. A component that is merely
+/// *missing* is therefore expected, and resolution continues above it: a path
+/// with no existing ancestor cannot be pointing anywhere yet, so the caller's
+/// lexical check is the only one that can apply to it.
+///
+/// Any *other* failure is an error rather than a shrug. It means this process
+/// cannot see where the path leads — an ancestor it may not search, a symlink
+/// loop — while the Docker daemon that will dereference it runs as root and is
+/// under no such restriction. Treating that as "resolves to itself" would let
+/// a path be judged on its spelling by the one check that exists to look past
+/// spelling.
+fn real_path_as_far_as_it_exists(path: &Path) -> std::io::Result<PathBuf> {
+    let mut missing_tail: Vec<&std::ffi::OsStr> = Vec::new();
     let mut existing = path;
     loop {
-        if let Ok(canonical) = existing.canonicalize() {
-            return missing_tail
-                .iter()
-                .rev()
-                .fold(canonical, |real, part: &&std::ffi::OsStr| real.join(part));
+        match existing.canonicalize() {
+            Ok(canonical) => {
+                return Ok(missing_tail
+                    .iter()
+                    .rev()
+                    .fold(canonical, |real, part| real.join(part)));
+            }
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+            Err(_) => {}
         }
         match (existing.parent(), existing.file_name()) {
             (Some(parent), Some(name)) => {
                 missing_tail.push(name);
                 existing = parent;
             }
-            _ => return path.to_path_buf(),
+            _ => return Ok(path.to_path_buf()),
         }
     }
 }
