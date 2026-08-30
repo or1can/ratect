@@ -44,6 +44,22 @@ jobs:
       # with the config types it's generated from.
       - run: cargo test --workspace --all-targets --all-features
 
+  tools:
+    name: Tools Tests
+    runs-on: ubuntu-latest
+    steps:
+      # Full history, not the default shallow clone: two of these tests load
+      # `verify-docs.py` as it was *before* the defect they cover and assert
+      # they fail against it. With that revision unreachable they skip
+      # themselves, which passes — so a shallow clone would quietly retire the
+      # two cases that carry the file's value.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # `-v` so a skip is visible: skipping is how these stop protecting
+      # anything, and a skip is silent in the default output.
+      - run: python3 -m unittest discover -s tools -p 'test_*.py' -v
+
   docker-integration:
     name: Docker Integration Test
     runs-on: ubuntu-latest

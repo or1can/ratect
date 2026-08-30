@@ -126,7 +126,7 @@ own yet.
 
 ## Tooling & CI
 
-- **Documentation checks** (`tools/`, none in CI yet). `python3 tools/stale-claims.py`
+- **Documentation checks** (`tools/`; the checks themselves are not in CI — `verify-docs.py` runs the branch's own code — though their tests are). `python3 tools/stale-claims.py`
   ranks prose by how much the code it names has moved since the claim was last
   touched, and `python3 tools/spliced-docs.py` finds doc comments that document a
   different item from the one they sit on. Both are candidate lists that exit 0 —
