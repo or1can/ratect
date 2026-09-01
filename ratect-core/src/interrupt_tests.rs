@@ -75,14 +75,41 @@ fn recording_without_a_signal_means_an_interrupt() {
     assert_eq!(interrupt.last_signal(), TerminationSignal::Interrupt);
 }
 
-/// POSIX's own numbers, which both binaries add to 128 — so an interrupted
-/// run exits 130, a terminated one 143 and a hung-up one 129, matching the
-/// shell's convention for "killed by this signal".
+/// POSIX's own numbers, which the exit code below is built from.
 #[test]
 fn signal_numbers_are_the_posix_ones() {
     assert_eq!(TerminationSignal::Interrupt.number(), 2);
     assert_eq!(TerminationSignal::Terminate.number(), 15);
     assert_eq!(TerminationSignal::Hangup.number(), 1);
+}
+
+/// 128 + the number, the shell's convention for "killed by this signal", so
+/// an interrupted run exits 130, a terminated one 143 and a hung-up one 129.
+/// One contract shared by both binaries, which is why it lives here.
+#[test]
+fn the_exit_code_is_128_plus_the_signal() {
+    assert_eq!(TerminationSignal::Interrupt.exit_code(), 130);
+    assert_eq!(TerminationSignal::Terminate.exit_code(), 143);
+    assert_eq!(TerminationSignal::Hangup.exit_code(), 129);
+}
+
+/// The tracker stores a signal as its number and reads it back, so the
+/// round trip has to be exact for every signal — and a value that is no
+/// signal's number, which is what the atomic holds before anything arrives,
+/// has to read as an interrupt rather than panic.
+#[test]
+fn a_signal_survives_the_round_trip_through_its_number() {
+    for signal in TerminationSignal::ALL {
+        assert_eq!(
+            TerminationSignal::from_number(signal.number() as usize),
+            signal
+        );
+    }
+
+    assert_eq!(
+        TerminationSignal::from_number(0),
+        TerminationSignal::Interrupt
+    );
 }
 
 /// The failure a run ends with is printed to stderr in every output style,

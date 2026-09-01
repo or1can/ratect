@@ -1054,11 +1054,12 @@ static INTERRUPT_PROJECT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[ignore]
 #[cfg(unix)]
 fn interrupting_a_run_cleans_up_via_docker() {
-    signalling_a_run_cleans_up_via_docker("-INT", 130);
+    signalling_a_run_cleans_up_via_docker("SIGINT", 130);
 }
 
 /// The same for `SIGTERM`, which is what actually bit: `ratect-compat` run as
-/// an MCP server is terminated, not interrupted, when its editor closes — and
+/// a long-lived subprocess is terminated, not interrupted, when the editor or
+/// supervisor that started it closes — and
 /// until 0.26.0 that killed the process outright and leaked the container and
 /// network every time. Exits 143 (128 + `SIGTERM`), not 130: the two are
 /// different events and the exit code says which.
@@ -1066,7 +1067,7 @@ fn interrupting_a_run_cleans_up_via_docker() {
 #[ignore]
 #[cfg(unix)]
 fn terminating_a_run_cleans_up_via_docker() {
-    signalling_a_run_cleans_up_via_docker("-TERM", 143);
+    signalling_a_run_cleans_up_via_docker("SIGTERM", 143);
 }
 
 /// Signalling a real run against a real daemon leaves nothing behind.
@@ -1083,6 +1084,9 @@ fn terminating_a_run_cleans_up_via_docker() {
 /// since the mechanism, not just the environment, is what's unavailable.
 #[cfg(unix)]
 fn signalling_a_run_cleans_up_via_docker(signal: &str, expected_exit_code: i32) {
+    // `kill` names a signal without its `SIG` prefix; every message below
+    // names it the way the docs and the user do.
+    let kill_flag = format!("-{}", signal.trim_start_matches("SIG"));
     let _shared_project = INTERRUPT_PROJECT
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1156,7 +1160,7 @@ fn signalling_a_run_cleans_up_via_docker(signal: &str, expected_exit_code: i32) 
     }
 
     let signalled = Command::new("kill")
-        .args([signal, &child.id().to_string()])
+        .args([&kill_flag, &child.id().to_string()])
         .status()
         .expect("failed to run kill");
     assert!(signalled.success(), "could not send {signal} to ratect");

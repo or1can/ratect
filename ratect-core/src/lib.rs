@@ -34,6 +34,7 @@ pub mod cache;
 pub mod config;
 pub mod docker;
 pub mod engine;
+pub mod exit_code;
 pub mod expressions;
 pub mod git_include;
 // Deliberately un-documented here: an outer doc comment on a `mod` item is

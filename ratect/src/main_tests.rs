@@ -871,34 +871,3 @@ fn docker_options_belong_to_run_not_to_tasks_list() {
     ])
     .is_err());
 }
-
-/// A run ended by a signal exits 128 + that signal's own number, so a script
-/// or CI job can tell a cancelled run apart from a failed one *and* tell what
-/// cancelled it — Ctrl+C and the `SIGTERM` an editor or init system sends are
-/// not the same event, and 130 for both would say they were.
-#[test]
-fn a_signalled_run_exits_with_that_signals_code() {
-    use ratect_core::interrupt::{TaskInterrupted, TerminationSignal};
-
-    let code = |signal| exit_code_for(&anyhow::Error::new(TaskInterrupted::new(signal)));
-
-    assert_eq!(code(TerminationSignal::Interrupt), 130);
-    assert_eq!(code(TerminationSignal::Terminate), 143);
-    assert_eq!(code(TerminationSignal::Hangup), 129);
-}
-
-/// The other two buckets, unchanged by the signal work: a task command that
-/// exited non-zero propagates its own code, and anything else is 1.
-#[test]
-fn a_task_command_keeps_its_own_code_and_anything_else_exits_1() {
-    assert_eq!(
-        exit_code_for(&anyhow::Error::new(
-            ratect_core::docker::ContainerExitedNonZero { exit_code: 42 }
-        )),
-        42
-    );
-    assert_eq!(
-        exit_code_for(&anyhow::anyhow!("the config file is empty")),
-        1
-    );
-}

@@ -53,6 +53,21 @@ backwards.
 **File syntax** — whether a file is parsed as TOML or YAML. A property of a
 file, independent of its project's dialect.
 
+## Cancelling a run
+
+**Termination signal** — any signal Ratect traps so a run cleans up after
+itself: `SIGINT`, `SIGTERM` or `SIGHUP`. The engine treats all three alike.
+
+**Interrupt** — `SIGINT` specifically, the one a terminal raises from Ctrl+C.
+It is *one* termination signal, not the category.
+
+The distinction is worth writing down because the code says both words with
+one vocabulary: `Interrupt` (the tracker), `interrupted()` and `count()` mean
+any termination signal, while `TerminationSignal::Interrupt` and
+`Interrupt::record()` mean `SIGINT` alone. Reading either as the other gives
+the wrong answer about what a run exits with, and about what a second one
+during cleanup abandons.
+
 ## Caches
 
 **Project cache** — cache storage private to one project.

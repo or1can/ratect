@@ -36,8 +36,8 @@
 //!
 //! Batect traps `SIGINT` alone, and so did Ratect until 0.26.0 — which left
 //! the very leak the trap exists to prevent reachable by another route.
-//! `ratect-compat` run as an MCP server under an editor is stopped with
-//! `SIGTERM` when that editor closes or restarts it, and one developer
+//! `ratect-compat` run as a long-lived subprocess by an editor is stopped
+//! with `SIGTERM` when that editor closes or restarts it, and one developer
 //! machine reached 29 abandoned networks against Docker's default pool of
 //! roughly 31, at which point *every* Ratect run on it failed with `all
 //! predefined address pools have been fully subnetted`. Networks leak faster
@@ -47,7 +47,7 @@
 //! So [`TerminationSignal::ALL`] is trapped, all three down the one path —
 //! the engine's meaning of "the user wants out" doesn't depend on how they
 //! said it. What the signal *does* decide is the process's exit code
-//! (128 + [`TerminationSignal::number`], the shell's own convention) and how
+//! ([`TerminationSignal::exit_code`], the shell's own convention) and how
 //! the failure describes itself, since "interrupted" and "press Ctrl+C again"
 //! are both untrue of a process an init system stopped.
 //!
@@ -129,18 +129,33 @@ impl TerminationSignal {
     /// fourth is one edit rather than three.
     pub const ALL: [TerminationSignal; 3] = [Self::Interrupt, Self::Terminate, Self::Hangup];
 
-    /// The signal's own number, which both binaries add to 128 for their
-    /// exit code: 130 interrupted, 143 terminated, 129 hung up on.
+    /// The signal's own number.
     ///
     /// Written out rather than taken from `SignalKind::as_raw_value`, which
-    /// is Unix-only — the exit-code path is not, and these three numbers are
-    /// fixed by POSIX rather than varying by platform.
-    pub fn number(self) -> i32 {
+    /// is Unix-only — [`TerminationSignal::exit_code`] is not, and these
+    /// three numbers are fixed by POSIX rather than varying by platform.
+    ///
+    /// Private: what a caller outside this module wants is the exit code or
+    /// the name, and the raw number is only how those two are derived and
+    /// how [`Interrupt`] stores the last signal seen.
+    fn number(self) -> i32 {
         match self {
             Self::Interrupt => 2,
             Self::Terminate => 15,
             Self::Hangup => 1,
         }
+    }
+
+    /// The process exit code for a run this signal ended: 128 + its number,
+    /// the shell's own convention for "killed by this signal" — 130
+    /// interrupted, 143 terminated, 129 hung up on.
+    ///
+    /// This signal's half of the mapping in [`crate::exit_code`], which is
+    /// where the whole of it lives and why.
+    pub fn exit_code(self) -> u8 {
+        // Every signal here is numbered well below 128, so the sum is a
+        // valid exit code and the cast cannot truncate.
+        128 + self.number() as u8
     }
 
     /// The signal's name, for a message that has to say which one arrived.
@@ -167,10 +182,11 @@ impl TerminationSignal {
 
     /// How to ask a second time — the press or signal that abandons the
     /// cleanup as well as the run.
-    pub fn send_again(self) -> String {
+    pub fn send_again(self) -> &'static str {
         match self {
-            Self::Interrupt => "Press Ctrl+C again".to_string(),
-            other => format!("Send {} again", other.name()),
+            Self::Interrupt => "Press Ctrl+C again",
+            Self::Terminate => "Send SIGTERM again",
+            Self::Hangup => "Send SIGHUP again",
         }
     }
 
@@ -184,15 +200,21 @@ impl TerminationSignal {
         }
     }
 
-    /// Its position in [`TerminationSignal::ALL`], which is how
-    /// [`Interrupt`] stores the last one seen in a single atomic — and why
-    /// `Interrupt`'s [`Default`] (a zeroed counter) means `SIGINT`.
-    fn index(self) -> usize {
-        Self::ALL.iter().position(|s| *s == self).unwrap()
-    }
-
-    fn from_index(index: usize) -> Self {
-        Self::ALL[index]
+    /// The signal [`TerminationSignal::number`] names, or
+    /// [`TerminationSignal::Interrupt`] for anything else.
+    ///
+    /// [`Interrupt`] stores the last signal seen as its number in a single
+    /// atomic, and this reads it back. The "anything else" case is not
+    /// defensive padding: zero is what that atomic holds before any signal
+    /// arrives (it is [`Default`]'s), zero is not a signal number, and a run
+    /// that was never signalled is reported exactly as an interrupted one
+    /// would be. Total rather than fallible for that reason — there is no
+    /// caller that could act on the difference.
+    fn from_number(number: usize) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|signal| signal.number() as usize == number)
+            .unwrap_or(Self::Interrupt)
     }
 }
 
@@ -230,10 +252,11 @@ impl std::error::Error for TaskInterrupted {}
 #[derive(Debug, Default)]
 pub struct Interrupt {
     count: AtomicUsize,
-    /// The most recent signal's [`TerminationSignal::index`]. Zero — which
-    /// is what [`Default`] gives and what a run that was never signalled
-    /// keeps — is [`TerminationSignal::Interrupt`], so the exit-code path
-    /// can read this unconditionally.
+    /// The most recent signal's [`TerminationSignal::number`], read back
+    /// through [`TerminationSignal::from_number`]. Zero — which is what
+    /// [`Default`] gives and what a run that was never signalled keeps — is
+    /// no signal's number and reads as [`TerminationSignal::Interrupt`], so
+    /// the exit-code path can read this unconditionally.
     last_signal: AtomicUsize,
     notify: Notify,
 }
@@ -334,7 +357,8 @@ impl Interrupt {
     /// The signal is stored *before* the count is raised, so anything that
     /// sees the new count also sees what caused it.
     pub fn record_signal(&self, signal: TerminationSignal) {
-        self.last_signal.store(signal.index(), Ordering::SeqCst);
+        self.last_signal
+            .store(signal.number() as usize, Ordering::SeqCst);
         self.count.fetch_add(1, Ordering::SeqCst);
         self.notify.notify_waiters();
     }
@@ -343,7 +367,7 @@ impl Interrupt {
     /// when none has been, so a caller need not handle "no signal yet"
     /// separately from the case it would report identically anyway.
     pub fn last_signal(&self) -> TerminationSignal {
-        TerminationSignal::from_index(self.last_signal.load(Ordering::SeqCst))
+        TerminationSignal::from_number(self.last_signal.load(Ordering::SeqCst))
     }
 
     /// How many interrupts have been recorded so far.

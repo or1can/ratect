@@ -3311,9 +3311,9 @@ async fn an_interrupt_removes_the_tasks_own_container_too() {
     );
 }
 
-/// Arming the handler replaces the process's default `SIGINT` behaviour
-/// for the whole run, so an interrupt Ratect doesn't act on is one it has
-/// silently swallowed. The abandonment rule is therefore relative to the
+/// Arming the handler replaces the process's default behaviour for every
+/// trapped signal for the whole run, so a signal Ratect doesn't act on is
+/// one it has silently swallowed. The abandonment rule is therefore relative to the
 /// interrupts already seen when cleanup started — otherwise the first
 /// Ctrl+C during the cleanup of a run that finished normally would do
 /// nothing at all, which is the common case rather than an exotic one.

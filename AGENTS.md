@@ -70,6 +70,7 @@ Ratect is a **Cargo workspace** with four crates (the
   | `proxy.rs` | Proxy variable detection and propagation |
   | `interrupt.rs` | Termination-signal (Ctrl+C, `SIGTERM`, `SIGHUP`) tracking — the signal half only; the engine decides what it means |
   | `engine.rs` | Task lifecycle, prerequisites, dependency graph, cleanup |
+  | `exit_code.rs` | What a failed run exits with — the one mapping both binaries share, since `docs/ratect-cli.md` promises their codes are identical |
   | `labels.rs` | The `eu.orican.ratect.*` ownership labels, see [0002](decisions/0002-runtime-ownership-labels.md) |
   | `ui.rs` (+ `ui/`) | The output layer: typed events in, four output styles out |
   | `schema.rs` | The two committed JSON schemas (non-default `schema` feature) |

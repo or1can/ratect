@@ -616,7 +616,7 @@ async fn main() {
             // reasoning, and the same `{:?}` full-context-chain formatting,
             // as `ratect-compat`'s own top-level handler.
             eprintln!("Error: {error:?}");
-            exit_code_for(&error)
+            ratect_core::exit_code::for_error(&error)
         }
     };
 
@@ -626,22 +626,6 @@ async fn main() {
     // for the full explanation — everything needing to run on a clean exit
     // already has by the time `run` returns.
     std::process::exit(exit_code.into());
-}
-
-/// The process's exit code for a failed run: the task command's own code if
-/// it exited non-zero, 128 + the signal's number if one ended the run (130
-/// for Ctrl+C, 143 for `SIGTERM`, 129 for `SIGHUP`), and 1 otherwise. See
-/// `ratect-compat`'s own `exit_code_for` for why each of those is what it is
-/// — the mapping is each binary's own interface, so it is duplicated rather
-/// than shared, exactly as `OutputStyleArg` is.
-fn exit_code_for(error: &anyhow::Error) -> u8 {
-    match error.downcast_ref::<ratect_core::docker::ContainerExitedNonZero>() {
-        Some(failure) => failure.exit_code as u8,
-        None => match error.downcast_ref::<ratect_core::interrupt::TaskInterrupted>() {
-            Some(interrupted) => (128 + interrupted.signal.number()) as u8,
-            None => 1,
-        },
-    }
 }
 
 async fn run(cli: Cli) -> Result<()> {
