@@ -1208,11 +1208,33 @@ cycle (0.2.0, the first one not about `ratect-compat`):
   which is why `tests/fixtures/proxy-build/` exists — a unit test cannot reach
   that wire format.
 
+  A third thing the scope frames as Linux-only, which as built is not. The
+  scope's problem statement is entirely about Linux, but the gateway entry is
+  added on **every** platform once a URL is rewritten, macOS and Windows
+  included — so a Docker Desktop run now gets an `/etc/hosts` entry for a name
+  Desktop was already answering through its own DNS. Deliberate, and the
+  cheaper of the two options: the alternative is a second platform condition
+  that has to be kept in step with `docker_host_name`'s, and the entry resolves
+  to the same gateway Desktop would have named anyway. It is also what makes
+  the end-to-end assertion possible off Linux, since `/etc/hosts` contents
+  distinguish the two cases where name resolution does not.
+
   One thing the scope understated: it reads as though the decision belongs at
   the call sites. It doesn't — `proxy::ProxyEnvironment` carries the answer, and
   the three sites that inject proxy variables consume it rather than each
-  re-deriving "should I add a host". A per-site guard would have left the next
-  site added unguarded by default.
+  re-deriving "should I add a host". Two things make that stick: the decision
+  exists in one place, and both consumers (`NetworkOptions`'s field,
+  `build_image`'s parameter) are *required*, so a site added later cannot
+  quietly skip the question.
+
+  What it does **not** achieve is the standard `include_trust::restricting`
+  (`ratect-core/src/include_trust.rs`) sets, and the comparison shouldn't be
+  claimed. There, the restricted case is
+  unrepresentable. Here, `ProxyEnvironment::variables` is public and consumed
+  separately from `host_gateway()`, so injecting the variables *without* the
+  entry is still expressible — it is merely no longer the default. Closing that
+  would mean the container-start call taking the whole `ProxyEnvironment`, which
+  would hand `docker.rs` a map it has no use for. Recorded rather than done.
 
   Pairs with the two proxy-related checks on
   [`ratect doctor`'s](#ux--tooling) list — a proxy variable that isn't a URL or
