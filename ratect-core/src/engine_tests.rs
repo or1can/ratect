@@ -5987,6 +5987,105 @@ const HOST_GATEWAY: crate::proxy::HostGateway = crate::proxy::HostGateway {
     address: "host-gateway",
 };
 
+/// A `/proc/net/tcp` table listening on `port` at `address` — the same shape
+/// `proxy_tests.rs` builds, repeated here rather than shared because these
+/// tests are about what the *engine* concludes from it, and a helper reaching
+/// across module boundaries would tie the two to each other's fixtures.
+fn proc_net_tcp(address: &str, port: u16) -> String {
+    format!(
+        "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n\
+            0: {address}:{port:04X} 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 34567 1 0000000000000000 100 0 0 10 0\n"
+    )
+}
+
+/// A one-container project, since every test below differs only in the
+/// engine it builds around it.
+fn proxy_warning_config() -> Config {
+    let mut containers = HashMap::new();
+    containers.insert("app".to_string(), container("alpine:3.18", None));
+    let mut tasks = HashMap::new();
+    tasks.insert("run".to_string(), task("app", "echo hi"));
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+/// The half the scope called load-bearing: rewriting the URL cannot reach a
+/// proxy bound to `127.0.0.1`, so that case is diagnosed rather than left to
+/// surface as a connection refused from a package manager mid-build.
+///
+/// Asserted through `unreachable_proxy_ports` rather than by capturing the
+/// log line, so what's pinned is the decision — `ratect-core` has no
+/// `tracing-subscriber` to capture with, and the `warn!` it feeds is one
+/// statement over this result.
+#[test]
+fn a_rewritten_proxy_url_on_a_loopback_bound_port_is_reported() {
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(proxy_warning_config(), docker)
+        .with_host_env(|name| (name == "http_proxy").then(|| "http://localhost:3333".to_string()))
+        .with_proc_net_tcp(|| vec![proc_net_tcp("0100007F", 3333)]);
+
+    assert_eq!(
+        engine.unreachable_proxy_ports(),
+        std::collections::BTreeSet::from([3333])
+    );
+}
+
+#[test]
+fn a_proxy_reachable_beyond_loopback_is_not_reported() {
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(proxy_warning_config(), docker)
+        .with_host_env(|name| (name == "http_proxy").then(|| "http://localhost:3333".to_string()))
+        .with_proc_net_tcp(|| vec![proc_net_tcp("00000000", 3333)]);
+
+    assert!(engine.unreachable_proxy_ports().is_empty());
+}
+
+/// Only rewritten URLs are checked. A proxy already naming a routable host
+/// may well have a loopback-bound service on the same port number locally,
+/// and warning about that would be a false alarm about an unrelated socket.
+#[test]
+fn a_proxy_url_that_was_not_rewritten_is_never_reported() {
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(proxy_warning_config(), docker)
+        .with_host_env(|name| {
+            (name == "http_proxy").then(|| "http://proxy.example.com:3333".to_string())
+        })
+        .with_proc_net_tcp(|| vec![proc_net_tcp("0100007F", 3333)]);
+
+    assert!(engine.unreachable_proxy_ports().is_empty());
+}
+
+/// `--no-proxy-vars` is the documented escape hatch, so it has to silence
+/// the diagnostic about the propagation it just turned off.
+#[test]
+fn no_proxy_vars_silences_the_unreachable_proxy_warning() {
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(proxy_warning_config(), docker)
+        .with_host_env(|name| (name == "http_proxy").then(|| "http://localhost:3333".to_string()))
+        .with_proc_net_tcp(|| vec![proc_net_tcp("0100007F", 3333)])
+        .without_proxy_environment_variables();
+
+    assert!(engine.unreachable_proxy_ports().is_empty());
+}
+
+/// The platform default, and the reason the seam above exists: with no
+/// `/proc` to read there is nothing to conclude, and the run must say
+/// nothing rather than guess.
+#[test]
+fn a_host_with_no_proc_net_tcp_reports_nothing() {
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(proxy_warning_config(), docker)
+        .with_host_env(|name| (name == "http_proxy").then(|| "http://localhost:3333".to_string()))
+        .with_proc_net_tcp(Vec::new);
+
+    assert!(engine.unreachable_proxy_ports().is_empty());
+}
+
 /// Rewriting the URL to name the host is only useful if the name resolves,
 /// and on Linux nothing supplies it — so the run that rewrites must also
 /// add the entry, or it has swapped one unreachable URL for another.

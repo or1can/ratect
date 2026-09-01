@@ -92,6 +92,13 @@ use uuid::Uuid;
 /// boxed so the real `std::env::var`-backed closure and a fixed test
 /// closure share one field type.
 type HostEnv = Box<dyn Fn(&str) -> Option<String> + Send + Sync>;
+/// Where `unreachable_proxy_ports` gets the host's `/proc/net/tcp` tables —
+/// the real files in the real constructor, fixed text in tests, for the same
+/// reason `HostEnv` above is a field and not a direct `std::env::var` call.
+/// Without it the loopback warning would be unreachable on any machine
+/// without a `/proc`, which is every machine this suite runs on but the CI
+/// Linux job.
+type ProcNetTcp = Box<dyn Fn() -> Vec<String> + Send + Sync>;
 
 /// Merges the host's `TERM` (see `TaskEngine::term_environment_variable`),
 /// proxy-derived environment variables (see
@@ -570,6 +577,9 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     /// closure in tests (see `with_host_env`), same reason
     /// `config.rs::resolve_expressions_with` parameterizes over this.
     host_env: HostEnv,
+    /// The `/proc/net/tcp`/`tcp6` source `unreachable_proxy_ports` reads —
+    /// see `ProcNetTcp` and `with_proc_net_tcp`.
+    proc_net_tcp: ProcNetTcp,
     /// `true` when `--skip-prerequisites` was given: the top-level task's
     /// own `prerequisites` are never run. Matches Batect's flag of the same
     /// name — scoped to the named task only (never a prerequisite itself,
@@ -757,6 +767,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             publish_ports: true,
             propagate_proxy_environment_variables: true,
             host_env: Box::new(|name| std::env::var(name).ok()),
+            proc_net_tcp: Box::new(crate::proxy::proc_net_tcp_tables),
             event_sink: Arc::new(NullEventSink),
             skip_prerequisites: false,
             image_overrides: HashMap::new(),
@@ -1173,6 +1184,15 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         self
     }
 
+    #[cfg(test)]
+    fn with_proc_net_tcp(
+        mut self,
+        proc_net_tcp: impl Fn() -> Vec<String> + Send + Sync + 'static,
+    ) -> Self {
+        self.proc_net_tcp = Box::new(proc_net_tcp);
+        self
+    }
+
     /// The proxy configuration to apply to a container or build in this
     /// task, or `None` when propagation is disabled (`--no-proxy-vars`) or
     /// the host environment has none set — an empty map is normalized to
@@ -1195,6 +1215,21 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         (!proxy.variables.is_empty()).then_some(proxy)
     }
 
+    /// The ports of this run's rewritten proxy URLs that the host is
+    /// listening on through loopback only — everything
+    /// `warn_about_unreachable_proxies` decides, separated from the warning
+    /// itself so the decision is assertable without capturing log output.
+    ///
+    /// Empty when propagation is off (`--no-proxy-vars`), when no URL was
+    /// rewritten, and on any platform without `/proc/net/tcp` — see
+    /// `proxy::proc_net_tcp_tables`.
+    fn unreachable_proxy_ports(&self) -> std::collections::BTreeSet<u16> {
+        let Some(proxy) = self.proxy_environment(&std::collections::BTreeSet::new()) else {
+            return std::collections::BTreeSet::new();
+        };
+        crate::proxy::loopback_only_ports_in(&(self.proc_net_tcp)(), proxy.rewritten_ports())
+    }
+
     /// Warns, once per invocation, about every rewritten proxy URL whose
     /// port the host is listening on through loopback only.
     ///
@@ -1205,10 +1240,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     /// failure because a run may never use the proxy, and `--no-proxy-vars`
     /// already turns propagation off for one that shouldn't.
     fn warn_about_unreachable_proxies(&self) {
-        let Some(proxy) = self.proxy_environment(&std::collections::BTreeSet::new()) else {
-            return;
-        };
-        for port in crate::proxy::loopback_only_ports(proxy.rewritten_ports()) {
+        for port in self.unreachable_proxy_ports() {
             tracing::warn!(
                 "The proxy on port {port} is listening on loopback addresses only, so containers \
                  in this run cannot reach it even though its URL now names the host. Bind the \

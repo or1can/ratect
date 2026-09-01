@@ -28,10 +28,11 @@
 //!   must add so the rewritten name resolves, and it is `Some` only when a
 //!   URL was *actually* rewritten. Injecting it for a run with no proxy at
 //!   all would put a name into every container that nothing there asked for.
-//! - [`loopback_only_ports`] answers the case the rewrite cannot fix at all:
-//!   a proxy bound to `127.0.0.1` is unreachable from a container however
-//!   correct its URL is. The engine warns; it does not fail, since a run may
-//!   not need the proxy and `--no-proxy-vars` already turns propagation off.
+//! - [`loopback_only_ports_in`], over the tables [`proc_net_tcp_tables`]
+//!   reads, answers the case the rewrite cannot fix at all: a proxy bound to
+//!   `127.0.0.1` is unreachable from a container however correct its URL is.
+//!   The engine warns; it does not fail, since a run may not need the proxy
+//!   and `--no-proxy-vars` already turns propagation off.
 //!
 //! Batect has neither half — it leaves Linux unrewritten
 //! ([batect#10](https://github.com/batect/batect/issues/10), open for eight
@@ -94,7 +95,7 @@ pub fn docker_host_name() -> Option<&'static str> {
 
 /// What preprocessing one proxy variable produced: the value to propagate,
 /// and — only when the value was actually rewritten — the port it named on
-/// the host. The port is what [`loopback_only_ports`] needs, and its
+/// the host. The port is what [`loopback_only_ports_in`] needs, and its
 /// presence is what makes a run ask for a [`HostGateway`] at all.
 struct Preprocessed {
     value: String,
@@ -266,36 +267,26 @@ pub fn proxy_environment_variables(
     }
 }
 
-/// Which of `ports` the host is listening on through loopback addresses
-/// *only* — the case a rewritten URL cannot fix, since a [`HostGateway`]
-/// routes a container to the host's address on the container's own network
-/// and a socket bound to `127.0.0.1` never accepts a connection there.
+/// The host's `/proc/net/tcp` and `/proc/net/tcp6`, or nothing at all off
+/// Linux — the input [`loopback_only_ports_in`] answers from.
 ///
 /// Linux only, and deliberately so on both counts. It is the only platform
-/// where the rewrite depends on [`HostGateway`] at all — Docker Desktop
+/// where the rewrite depends on a [`HostGateway`] at all — Docker Desktop
 /// reaches a host loopback service through its own VM gateway, so there is
-/// nothing to warn about there — and it is the only one with the
-/// `/proc/net/tcp` files this reads. Everywhere else this is empty.
+/// nothing to warn about there — and it is the only one with these files.
 ///
-/// A port nothing is listening on is *not* reported: that is a proxy that
-/// isn't running, a different complaint from one that is running but bound
-/// too narrowly, and only the second is what this exists to catch.
+/// The platform difference lives here, in the *input*, rather than as a
+/// branch around the check: one code path then serves every platform, and
+/// "empty everywhere else" follows from having no tables to read.
 ///
 /// Errors reading `/proc` are swallowed rather than propagated — a
 /// diagnostic that cannot be produced must not fail a run that would
 /// otherwise have worked.
-pub fn loopback_only_ports(ports: &BTreeSet<u16>) -> BTreeSet<u16> {
-    loopback_only_ports_in(&proc_net_tcp_tables(), ports)
-}
-
-/// The host's `/proc/net/tcp` and `/proc/net/tcp6`, or nothing at all off
-/// Linux.
 ///
-/// The platform difference lives here, in the *input*, rather than as a
-/// second branch around the check: one code path then serves every platform,
-/// and "empty everywhere else" follows from having no tables to read rather
-/// than from a `cfg` that has to be kept in step with the one below it.
-fn proc_net_tcp_tables() -> Vec<String> {
+/// The engine reaches this through a field it can replace in tests rather
+/// than calling it directly, so the warning built on it is reachable on a
+/// machine with no `/proc` at all — see `TaskEngine::with_proc_net_tcp`.
+pub fn proc_net_tcp_tables() -> Vec<String> {
     #[cfg(target_os = "linux")]
     {
         ["/proc/net/tcp", "/proc/net/tcp6"]
@@ -309,10 +300,20 @@ fn proc_net_tcp_tables() -> Vec<String> {
     }
 }
 
-/// [`loopback_only_ports`] over already-read `/proc/net/tcp`-format
-/// `tables`, so the parsing is testable on every platform rather than only
-/// on the one that has the files.
-fn loopback_only_ports_in(tables: &[String], ports: &BTreeSet<u16>) -> BTreeSet<u16> {
+/// Which of `ports` the given `/proc/net/tcp`-format `tables` show listening
+/// on loopback addresses *only* — the case a rewritten URL cannot fix, since
+/// a [`HostGateway`] routes a container to the host's address on the
+/// container's own network and a socket bound to `127.0.0.1` never accepts a
+/// connection there.
+///
+/// Takes the tables rather than reading them, so both the parsing and the
+/// engine's warning built on it are testable on every platform, not only on
+/// the one that has the files.
+///
+/// A port nothing is listening on is *not* reported: that is a proxy that
+/// isn't running, a different complaint from one that is running but bound
+/// too narrowly, and only the second is what this exists to catch.
+pub fn loopback_only_ports_in(tables: &[String], ports: &BTreeSet<u16>) -> BTreeSet<u16> {
     let listening: Vec<(IpAddr, u16)> = tables
         .iter()
         .flat_map(|table| table.lines())
