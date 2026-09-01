@@ -166,26 +166,42 @@ Batect's full flag list, from its [CLI reference](https://github.com/batect/bate
 Batect behavior not implemented in task execution, beyond what's covered by the field
 tables above:
 
-- **Cleanup on interrupt (Ctrl+C)**: matches Batect — pressing Ctrl+C abandons the run
-  and then cleans up after it, rather than killing Ratect where it stands and leaving
-  every container and the task's network behind. As in Batect, an interrupt counts as a
-  task *failure*, so `--no-cleanup-after-failure` (and `--no-cleanup`) suppresses the
-  cleanup for it exactly as for a build or health-check failure, leaving everything in
-  place for investigation. Two deliberate differences: Ratect exits **130** (128 + SIGINT,
-  the shell's convention), where Batect returns `-1`/255 for every failure alike and so
-  says nothing about which it was; and a **Ctrl+C during the cleanup stops the cleanup
-  itself**, since cleanup talks to the daemon and a container ignoring `SIGTERM` waits out
-  Docker's full kill timeout. That means a second press after an interrupted run, or a
-  first press while a normally-finished run is still tidying up — the rule is about when
-  the press lands, not how many there have been. Batect ends up in the same place by a different route — a second
-  interrupt during its cleanup stage switches it to printing manual cleanup commands —
-  whereas Ratect just stops, because anything left carries the ownership labels above
-  and `ratect resources list`/`clean` finds it (see the
-  [`ratect` CLI reference](ratect-cli.md#managing-resources)). One case where the
-  keystroke deliberately doesn't reach Ratect at all: an
-  [interactive](config-reference.md#interactive-mode) task puts the terminal in raw mode,
-  where Ctrl+C isn't turned into a signal but forwarded to the container as a keystroke —
-  matching `docker run -it`, where it belongs to the program you're talking to.
+- **Cleanup on a termination signal (Ctrl+C, `SIGTERM`, `SIGHUP`)**: matches Batect for
+  Ctrl+C — it abandons the run and then cleans up after it, rather than killing Ratect
+  where it stands and leaving every container and the task's network behind. As in
+  Batect, this counts as a task *failure*, so `--no-cleanup-after-failure` (and
+  `--no-cleanup`) suppresses the cleanup for it exactly as for a build or health-check
+  failure, leaving everything in place for investigation. Three deliberate differences:
+
+  - **Batect traps `SIGINT` only; Ratect traps `SIGTERM` and `SIGHUP` too**, down the
+    same path. A task runner is stopped by more than a keystroke — an editor running
+    Ratect as a subprocess sends `SIGTERM` when it closes or restarts it, as do
+    `docker stop`, `systemd` and most CI cancel buttons — and every one of those used
+    to leak a container *and* a network. Networks leak faster than containers, because
+    a run that fails during startup leaks one too; a machine that reaches Docker's
+    default limit of roughly 31 networks then fails **every** Ratect run with `all
+    predefined address pools have been fully subnetted`, not just the ones that leaked.
+  - **The exit code names the signal**: 128 + the signal's own number, so **130** for
+    Ctrl+C, **143** for `SIGTERM` and **129** for `SIGHUP`. Batect returns `-1`/255 for
+    every failure alike and so says nothing about which it was.
+  - **A second signal during the cleanup stops the cleanup itself**, since cleanup talks
+    to the daemon and a container ignoring `SIGTERM` waits out Docker's full kill
+    timeout. That means a second press after an interrupted run, or a first press while
+    a normally-finished run is still tidying up — the rule is about when the signal
+    lands, not how many there have been. Batect ends up in the same place by a different
+    route — a second interrupt during its cleanup stage switches it to printing manual
+    cleanup commands — whereas Ratect just stops, because anything left carries the
+    ownership labels above and `ratect resources list`/`clean` finds it (see the
+    [`ratect` CLI reference](ratect-cli.md#managing-resources)).
+
+  Two cases a trap cannot cover. `SIGKILL` (`kill -9`, a container runtime's own
+  hard stop, the OOM killer) cannot be caught by any process, so it still leaks
+  everything the run had created — which is what `ratect resources clean`
+  (`ratect-compat --cleanup`) exists for, and why that remains the backstop rather
+  than a legacy command. And an [interactive](config-reference.md#interactive-mode)
+  task puts the terminal in raw mode, where Ctrl+C isn't turned into a signal at all
+  but forwarded to the container as a keystroke — matching `docker run -it`, where it
+  belongs to the program you're talking to. `SIGTERM` still reaches Ratect there.
 - **Ownership labels**: every container and network Ratect creates carries
   `eu.orican.ratect.*` labels recording the project, task, run, and (for a
   container) which configured container it is and whether it was the task's own or

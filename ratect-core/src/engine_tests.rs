@@ -3237,6 +3237,31 @@ async fn an_interrupt_abandons_the_run_and_still_cleans_up() {
     );
 }
 
+/// A `SIGTERM` takes the very same path as Ctrl+C — the run is abandoned
+/// and cleaned up — but the failure has to carry *which* signal ended it,
+/// since that is what both binaries turn into an exit code.
+#[tokio::test]
+async fn a_termination_signal_cleans_up_and_is_reported_as_itself() {
+    let (docker, engine, interrupt) = interrupted_engine(0);
+    interrupt.record_signal(crate::interrupt::TerminationSignal::Terminate);
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    let interrupted = error
+        .downcast_ref::<crate::interrupt::TaskInterrupted>()
+        .expect("a signalled run should fail with TaskInterrupted: {error:#}");
+    assert_eq!(
+        interrupted.signal,
+        crate::interrupt::TerminationSignal::Terminate
+    );
+
+    let events = docker.events();
+    assert!(
+        events.iter().any(|e| e.starts_with("network-remove:")),
+        "a terminated run must still remove its network: {events:?}"
+    );
+}
+
 /// The whole point of routing an interrupt through the ordinary failure
 /// path: `--no-cleanup-after-failure` governs it, exactly as it governs a
 /// build or health-check failure. Batect behaves identically — its

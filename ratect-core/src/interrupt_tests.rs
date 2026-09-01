@@ -36,6 +36,75 @@ fn counts_every_interrupt_rather_than_latching() {
     assert_eq!(interrupt.count(), 2);
 }
 
+/// Which signal ended the run decides the process's exit code (128 + the
+/// signal's own number), so the tracker has to say *which* one arrived, not
+/// only that one did.
+#[test]
+fn records_which_signal_arrived() {
+    let interrupt = Interrupt::new();
+
+    interrupt.record_signal(TerminationSignal::Terminate);
+
+    assert_eq!(interrupt.count(), 1);
+    assert_eq!(interrupt.last_signal(), TerminationSignal::Terminate);
+}
+
+/// A run interrupted and then hung up on is reported as hung up on: the
+/// signal that ended it is the last one, not the first.
+#[test]
+fn the_most_recent_signal_wins() {
+    let interrupt = Interrupt::new();
+
+    interrupt.record_signal(TerminationSignal::Interrupt);
+    interrupt.record_signal(TerminationSignal::Hangup);
+
+    assert_eq!(interrupt.count(), 2);
+    assert_eq!(interrupt.last_signal(), TerminationSignal::Hangup);
+}
+
+/// `record` is what the engine's own tests inject with and what a non-Unix
+/// Ctrl+C arrives as, so it has to mean `SIGINT` specifically — including
+/// before anything has been recorded at all, since the exit-code path reads
+/// it regardless.
+#[test]
+fn recording_without_a_signal_means_an_interrupt() {
+    let interrupt = Interrupt::new();
+    assert_eq!(interrupt.last_signal(), TerminationSignal::Interrupt);
+
+    interrupt.record();
+    assert_eq!(interrupt.last_signal(), TerminationSignal::Interrupt);
+}
+
+/// POSIX's own numbers, which both binaries add to 128 — so an interrupted
+/// run exits 130, a terminated one 143 and a hung-up one 129, matching the
+/// shell's convention for "killed by this signal".
+#[test]
+fn signal_numbers_are_the_posix_ones() {
+    assert_eq!(TerminationSignal::Interrupt.number(), 2);
+    assert_eq!(TerminationSignal::Terminate.number(), 15);
+    assert_eq!(TerminationSignal::Hangup.number(), 1);
+}
+
+/// The failure a run ends with is printed to stderr in every output style,
+/// so it has to name what actually happened: "interrupted" is wrong for a
+/// process an editor or an init system terminated, and nobody pressed
+/// anything.
+#[test]
+fn the_failure_names_the_signal_that_ended_the_run() {
+    assert_eq!(
+        TaskInterrupted::new(TerminationSignal::Interrupt).to_string(),
+        "Interrupted"
+    );
+    assert_eq!(
+        TaskInterrupted::new(TerminationSignal::Terminate).to_string(),
+        "Terminated by SIGTERM"
+    );
+    assert_eq!(
+        TaskInterrupted::new(TerminationSignal::Hangup).to_string(),
+        "Terminated by SIGHUP"
+    );
+}
+
 #[tokio::test]
 async fn interrupted_resolves_immediately_when_one_already_happened() {
     let interrupt = Interrupt::new();

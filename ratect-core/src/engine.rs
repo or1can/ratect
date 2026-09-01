@@ -1993,17 +1993,24 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     biased;
                     result = execution => (result, interrupt.count()),
                     () = interrupt.interrupted() => (
-                        Err(anyhow::Error::new(crate::interrupt::TaskInterrupted)),
+                        Err(anyhow::Error::new(crate::interrupt::TaskInterrupted::new(
+                            interrupt.last_signal(),
+                        ))),
                         interrupt.count(),
                     ),
                 }
             }
             None => (execution.await, 0),
         };
-        let interrupted = result
+        // `Some(signal)` is the "was it signalled" question and "which one"
+        // in the same read — the cleanup message below has to name the
+        // signal, and there is no second source for it once the failure is
+        // the only thing left.
+        let interrupted_by = result
             .as_ref()
             .err()
-            .is_some_and(|error| error.is::<crate::interrupt::TaskInterrupted>());
+            .and_then(|error| error.downcast_ref::<crate::interrupt::TaskInterrupted>())
+            .map(|interrupted| interrupted.signal);
         let task_container_id = task_container_id.into_inner().unwrap();
         let running_sidecars = running_sidecars.into_inner().unwrap();
         // `Some` only if network resolution inside the block above actually
@@ -2040,8 +2047,9 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         //
         // Measured against the count when the run *ended* (captured above),
         // not a fixed `>= 2`. Arming the handler replaces the process's
-        // default `SIGINT` behaviour for the whole run, so an interrupt
-        // Ratect doesn't act on is one it has silently swallowed — and a
+        // default behaviour for every trapped signal for the whole run, so
+        // a signal Ratect doesn't act on is one it has silently swallowed
+        // — and a
         // fixed threshold swallows the first Ctrl+C during the cleanup of a
         // run that was never interrupted (the common case: a task finished,
         // cleanup is slow, the user wants out). Relative to the baseline,
@@ -2057,10 +2065,17 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         let abandon_after = interrupts_before_cleanup;
 
         if should_cleanup {
-            if interrupted {
+            if let Some(signal) = interrupted_by {
+                // Named rather than fixed at "Interrupted"/"Press Ctrl+C":
+                // a run stopped with `SIGTERM` was not interrupted by
+                // anyone at a terminal, and telling whoever reads the log
+                // to press Ctrl+C would send them somewhere with no
+                // keyboard attached to this process at all.
                 tracing::warn!(
                     task = task_name,
-                    "Interrupted; cleaning up. Press Ctrl+C again to stop cleaning up."
+                    "{}; cleaning up. {} to stop cleaning up.",
+                    signal.ended_run(),
+                    signal.send_again(),
                 );
             }
             if !running_sidecars.is_empty() || owns_network || task_container_id.is_some() {

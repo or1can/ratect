@@ -1088,29 +1088,42 @@ cycle (0.2.0, the first one not about `ratect-compat`):
   point at the host on Linux**. Two separable behaviours, so one `feat:`/`fix:`
   commit each.
 
-  - **Clean up on `SIGTERM`, not only `SIGINT`.** 0.25.0 trapped Ctrl+C so an
+  - ~~**Clean up on `SIGTERM`, not only `SIGINT`.** 0.25.0 trapped Ctrl+C so an
     interrupted run takes the ordinary failure-cleanup path; `interrupt.rs`
     registers `SignalKind::interrupt()` and nothing else. Any other terminating
     signal still kills the process outright and leaks **both** the container and
     its network — the exact defect 0.25.0 set out to fix, reached by a different
-    route. Fixing the instance rather than the class is what left it.
+    route. Fixing the instance rather than the class is what left it.~~
 
-    Found in the field, not by reading: `ratect-compat` run as an MCP server
+    ~~Found in the field, not by reading: `ratect-compat` run as an MCP server
     under an editor is terminated with `SIGTERM` when the editor closes or
     restarts it, and on one developer machine that reached 29 leaked networks
-    against Docker's ~31-network default address pool — at which point *every*
+    against Docker's roughly-31-network default address pool — at which point *every*
     Ratect run on the machine failed with `all predefined address pools have
     been fully subnetted`, including the dogfooded `build`/`test` tasks. Networks
     leak worse than containers because a failed *startup* leaks one too, so the
-    rate is per process launch, not per session.
+    rate is per process launch, not per session.~~
 
-    Scope: `SIGTERM` and `SIGHUP` alongside `SIGINT`, sharing one path — the
+    ~~Scope: `SIGTERM` and `SIGHUP` alongside `SIGINT`, sharing one path — the
     module is already "the signal half only", so the engine's meaning of an
     interrupt doesn't change. `SIGKILL` cannot be trapped and is why
     `ratect resources clean`/`ratect-compat --cleanup` remain the backstop; say
     so in the docs rather than implying the leak is impossible. Batect traps
     `SIGINT` only, so this is a deliberate divergence, not a parity gap — record
-    it in [Differences from Batect](docs/differences-from-batect.md).
+    it in [Differences from Batect](docs/differences-from-batect.md).~~ — done,
+    to that scope: `TerminationSignal::ALL` is trapped, one spawned listener per
+    signal, all recording down the one path. `SIGQUIT` is deliberately *not*
+    trapped — its documented job is to dump core immediately, so trapping it to
+    spend seconds on cleanup would take away the one signal meant to skip
+    exactly that.
+
+    One thing the scope above understated: "sharing one path" is true of the
+    engine, and false of everything the run says on the way out. Exiting `130`
+    (128 + `SIGINT`) after a `SIGTERM` asserts something untrue in the one place
+    a CI job can read, and both the failure message ("Interrupted") and the
+    cleanup warning ("Press Ctrl+C again") describe a keystroke nobody made. So
+    the signal is carried on `TaskInterrupted` and each binary's exit code is
+    128 + its number — 130, 143, 129 — with the two messages naming it.
 
   - **Proxies that point at the host on Linux**. Closes
   [batect#10](https://github.com/batect/batect/issues/10), Batect's oldest open

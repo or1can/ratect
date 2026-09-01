@@ -296,12 +296,13 @@ actual behavior — it doesn't yet distinguish "nothing to do" from "success":
   suggested, e.g. `Did you mean 'build' or 'bulid'?` — Batect's own implementation
   can silently drop one of two equally-close suggestions (its sorting comparator
   doubles as its de-duplication key), which Ratect's deliberately doesn't replicate.
-- **Interrupting a run with Ctrl+C exits `130`** (128 + `SIGINT`, the shell's own
-  convention), so a script or CI job can tell an interrupted run apart from a failed
-  one. The run is abandoned and then cleaned up — see
+- **A run ended by a signal exits 128 + that signal's own number** — `130` for Ctrl+C
+  (`SIGINT`), `143` for `SIGTERM`, `129` for `SIGHUP` — the shell's own convention, so
+  a script or CI job can tell a cancelled run apart from a failed one *and* tell what
+  cancelled it. All three abandon the run and then clean it up — see
   [Differences from Batect](differences-from-batect.md#runtime-behavior-gaps) for the
   full behavior, including what `--no-cleanup-after-failure` does to it and what a
-  *second* Ctrl+C does.
+  *second* signal does.
 - **A failing command *inside* the container fails the `ratect` process too, with the
   same exit code.** Ratect waits for the container to exit and inspects its status —
   a task whose command is `exit 42` makes `ratect` itself exit `42`, matching

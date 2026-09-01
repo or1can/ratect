@@ -279,9 +279,9 @@ Remove them with: ratect resources clean
 
 Grouped by run, because that's the unit a leftover belongs to: a run that was killed
 outright, or crashed, leaves a network and every container it started, and they only
-make sense together. (An ordinary Ctrl+C isn't one of those cases any more — it cleans
-up after itself; see [Differences from
-Batect](differences-from-batect.md#runtime-behavior-gaps).)
+make sense together. (Ctrl+C, `SIGTERM` and `SIGHUP` aren't those cases any more — each
+cleans up after itself. `SIGKILL` can't be trapped by anything, so it still is; see
+[Differences from Batect](differences-from-batect.md#runtime-behavior-gaps).)
 A container is named as your configuration names it (`database`), not by the random
 words Docker assigns.
 
@@ -437,10 +437,11 @@ until the first real run caches it.
 ## Exit codes and diagnostics
 
 Identical to `ratect-compat`: a task's own container exit code becomes `ratect`'s exit
-code, an interrupted run (Ctrl+C) exits `130`, anything else that fails exits `1`, and
-the reason always reaches stderr — in every output style, including `quiet`. Ctrl+C
-abandons the run and then cleans up after it; a Ctrl+C *during* that cleanup stops the
-cleanup too, and `ratect resources list` finds whatever that leaves. `RUST_LOG` controls Ratect's own internal
+code, a run ended by a signal exits 128 + that signal's number (`130` for Ctrl+C, `143`
+for `SIGTERM`, `129` for `SIGHUP`), anything else that fails exits `1`, and the reason
+always reaches stderr — in every output style, including `quiet`. Any of those three
+signals abandons the run and then cleans up after it; a second one *during* that cleanup
+stops the cleanup too, and `ratect resources list` finds whatever that leaves. `RUST_LOG` controls Ratect's own internal
 logging (default `info`, on stderr). Unlike `ratect-compat` there's no `--log-file`;
 redirect stderr if you want one.
 

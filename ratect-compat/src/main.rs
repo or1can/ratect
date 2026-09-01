@@ -403,21 +403,7 @@ async fn main() {
             // below, for why it doesn't).
             eprintln!("Error: {:?}", err);
 
-            // If the task's own command exited non-zero, propagate that exact
-            // code as ratect's own exit code (matching `docker run`'s
-            // convention) rather than a generic failure code, so scripts can
-            // inspect what actually happened.
-            match err.downcast_ref::<ratect_core::docker::ContainerExitedNonZero>() {
-                Some(failure) => failure.exit_code as u8,
-                // 128 + SIGINT, the shell's own convention for "killed by
-                // this signal", so a script or CI job can tell an interrupted
-                // run apart from a failed one. A divergence from Batect,
-                // which returns -1 (255) for every failure alike and so says
-                // nothing about which it was — Ratect already diverges here
-                // by using 1 rather than 255 for an ordinary failure.
-                None if err.is::<ratect_core::interrupt::TaskInterrupted>() => 130,
-                None => 1,
-            }
+            exit_code_for(&err)
         }
     };
 
@@ -436,6 +422,29 @@ async fn main() {
     // has already completed via ordinary `Drop`/`?`-propagation well before
     // `run().await` returns here.
     std::process::exit(exit_code.into());
+}
+
+/// The process's exit code for a failed run.
+///
+/// If the task's own command exited non-zero, that exact code is propagated
+/// as ratect's own (matching `docker run`'s convention) rather than a generic
+/// failure code, so scripts can inspect what actually happened.
+///
+/// A run ended by a signal exits 128 + that signal's number — 130 for Ctrl+C,
+/// 143 for `SIGTERM`, 129 for `SIGHUP` — the shell's own convention for
+/// "killed by this signal", so a script or CI job can tell a cancelled run
+/// apart from a failed one *and* tell which cancelled it. A divergence from
+/// Batect, which returns -1 (255) for every failure alike and so says nothing
+/// about which it was; Ratect already diverges here by using 1 rather than
+/// 255 for an ordinary failure.
+fn exit_code_for(error: &anyhow::Error) -> u8 {
+    match error.downcast_ref::<ratect_core::docker::ContainerExitedNonZero>() {
+        Some(failure) => failure.exit_code as u8,
+        None => match error.downcast_ref::<ratect_core::interrupt::TaskInterrupted>() {
+            Some(interrupted) => (128 + interrupted.signal.number()) as u8,
+            None => 1,
+        },
+    }
 }
 
 /// Resolves which config-variables file to load. An explicit

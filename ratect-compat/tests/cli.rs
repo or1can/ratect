@@ -1041,22 +1041,51 @@ fn ownership_labels_reach_real_containers_and_networks_via_docker() {
     );
 }
 
-/// Interrupting a real run against a real daemon leaves nothing behind.
+/// Serializes the two signal tests below, which share one fixture and so one
+/// project label: their `docker ls --filter` queries and their force-cleanup
+/// cannot tell one run's containers from the other's, so running them
+/// concurrently would surface as "the run left containers behind" rather than
+/// as the contention it actually is.
+#[cfg(unix)]
+static INTERRUPT_PROJECT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Ctrl+C against a real daemon leaves nothing behind, and exits 130.
+#[test]
+#[ignore]
+#[cfg(unix)]
+fn interrupting_a_run_cleans_up_via_docker() {
+    signalling_a_run_cleans_up_via_docker("-INT", 130);
+}
+
+/// The same for `SIGTERM`, which is what actually bit: `ratect-compat` run as
+/// an MCP server is terminated, not interrupted, when its editor closes — and
+/// until 0.26.0 that killed the process outright and leaked the container and
+/// network every time. Exits 143 (128 + `SIGTERM`), not 130: the two are
+/// different events and the exit code says which.
+#[test]
+#[ignore]
+#[cfg(unix)]
+fn terminating_a_run_cleans_up_via_docker() {
+    signalling_a_run_cleans_up_via_docker("-TERM", 143);
+}
+
+/// Signalling a real run against a real daemon leaves nothing behind.
 ///
 /// `ratect-core`'s own unit tests prove the engine's *decisions* against a fake
-/// runtime — that an interrupt abandons the run, that cleanup still happens,
+/// runtime — that a signal abandons the run, that cleanup still happens,
 /// that `--no-cleanup-after-failure` suppresses it. What they can't prove is
-/// that a real `SIGINT`, delivered to a real process mid-run, actually reaches
+/// that a real signal, delivered to a real process mid-run, actually reaches
 /// the handler and that the daemon ends up clean: the fake can't diverge from
 /// reality because it *is* the reality under test. This closes that gap.
 ///
 /// Unix-only because it sends a signal. Ratect's own testing is Unix-only
 /// anyway (see `ratect-core/src/user.rs`), but this one is explicit about it
 /// since the mechanism, not just the environment, is what's unavailable.
-#[test]
-#[ignore]
 #[cfg(unix)]
-fn interrupting_a_run_cleans_up_via_docker() {
+fn signalling_a_run_cleans_up_via_docker(signal: &str, expected_exit_code: i32) {
+    let _shared_project = INTERRUPT_PROJECT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     // `tests/fixtures/interrupt.yml` has a project name of its own so these
     // filters can't match a concurrently-running test's containers.
     let project_filter = "label=eu.orican.ratect.project=ratect-interrupt-test";
@@ -1127,10 +1156,10 @@ fn interrupting_a_run_cleans_up_via_docker() {
     }
 
     let signalled = Command::new("kill")
-        .args(["-INT", &child.id().to_string()])
+        .args([signal, &child.id().to_string()])
         .status()
         .expect("failed to run kill");
-    assert!(signalled.success(), "could not send SIGINT to ratect");
+    assert!(signalled.success(), "could not send {signal} to ratect");
 
     // `try_wait` rather than `wait`, so a regression that hangs the process
     // fails this test instead of hanging CI until its own job timeout.
@@ -1143,7 +1172,7 @@ fn interrupting_a_run_cleans_up_via_docker() {
         let _ = child.kill();
         let _ = child.wait();
         force_cleanup();
-        panic!("ratect did not exit after SIGINT");
+        panic!("ratect did not exit after {signal}");
     }
     let status = status.expect("exited implies a status");
 
@@ -1165,12 +1194,13 @@ fn interrupting_a_run_cleans_up_via_docker() {
 
     assert_eq!(
         status.code(),
-        Some(130),
-        "an interrupted run should exit 130 (128 + SIGINT), not a generic failure code"
+        Some(expected_exit_code),
+        "a run ended by {signal} should exit {expected_exit_code} (128 + the signal), \
+         not a generic failure code"
     );
     assert!(
         cleaned,
-        "an interrupted run must remove its containers and network; left behind \
+        "a run ended by {signal} must remove its containers and network; left behind \
          containers {leftover_containers:?} and networks {leftover_networks:?}"
     );
 }

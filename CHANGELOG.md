@@ -21,6 +21,12 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A run stopped with `SIGTERM` or `SIGHUP` now cleans up after itself**, as Ctrl+C has since 0.25.0. Only `SIGINT` was trapped, so every other terminating signal killed Ratect where it stood and left the task's containers *and* its network behind — the exact leak 0.25.0 set out to close, reached by a different route. This is what actually bites in practice: `ratect-compat` run as a subprocess by an editor is sent `SIGTERM` when that editor closes or restarts it, and so are runs stopped by `docker stop`, `systemd`, or a CI cancel button. Networks leak faster than containers, because a run that fails during *startup* leaks one too — one developer machine reached 29 abandoned networks against Docker's default pool of roughly 31, at which point every Ratect run on it failed with `all predefined address pools have been fully subnetted`, including ones that had leaked nothing.
+
+  All three signals take the identical path — the run is abandoned, then cleaned up, and `--no-cleanup-after-failure` suppresses that exactly as for any other failure. What the signal decides is the **exit code**, which is now 128 + the signal's own number: `130` for Ctrl+C as before, `143` for `SIGTERM`, `129` for `SIGHUP`. A run's failure message and its cleanup warning name the signal too, since "interrupted" and "press Ctrl+C again" are both untrue of a process an init system stopped. Batect traps `SIGINT` alone, so this is a deliberate divergence rather than a parity gap. `SIGKILL` cannot be trapped by anything, so it still leaks — `ratect resources clean` (`ratect-compat --cleanup`) remains the backstop for that. See [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
+
 ### Security
 
 - **A Git-included bundle can no longer escape its containment with a symlink it commits** (both binaries; affects 0.10.0 onward, when per-bundle container boundaries were introduced). A bundle's containers may resolve `volumes` host paths and `build_directory` only within its own clone or your project directory, unless you grant [`allow_host_paths`](docs/config-reference.md#git-includes). That check was purely lexical, so a bundle committing a symlink `escape -> /` beside `local: escape` produced a path starting with its own clone directory while pointing anywhere on the host, and Docker dereferenced it when bind-mounting. This is the surviving half of the `..`-traversal escape fixed in 0.25.0 — the same class, of which only the lexical half was closed then.

@@ -68,7 +68,7 @@ Ratect is a **Cargo workspace** with four crates (the
   | `ssh_agent.rs` | `build_ssh`'s in-process ssh-agent (RFC 9987) — kept extractable, see [0005](decisions/0005-build-ssh-keyring-placement.md) |
   | `user.rs` | Host user lookup and the `/etc/passwd` generators for `run_as_current_user` |
   | `proxy.rs` | Proxy variable detection and propagation |
-  | `interrupt.rs` | Ctrl+C tracking — the signal half only; the engine decides what it means |
+  | `interrupt.rs` | Termination-signal (Ctrl+C, `SIGTERM`, `SIGHUP`) tracking — the signal half only; the engine decides what it means |
   | `engine.rs` | Task lifecycle, prerequisites, dependency graph, cleanup |
   | `labels.rs` | The `eu.orican.ratect.*` ownership labels, see [0002](decisions/0002-runtime-ownership-labels.md) |
   | `ui.rs` (+ `ui/`) | The output layer: typed events in, four output styles out |
