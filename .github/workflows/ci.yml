@@ -48,11 +48,11 @@ jobs:
     name: Tools Tests
     runs-on: ubuntu-latest
     steps:
-      # Full history, not the default shallow clone: two of these tests load
-      # `verify-docs.py` as it was *before* the defect they cover and assert
-      # they fail against it. With that revision unreachable they skip
-      # themselves, which passes — so a shallow clone would quietly retire the
-      # two cases that carry the file's value.
+      # Full history, not the default shallow clone: one of these tests loads
+      # `verify-docs.py` as it was *before* the two defects it covers and
+      # asserts it fails against both. With that revision unreachable it skips
+      # itself, which passes — so a shallow clone would quietly retire the one
+      # test that shows the file catches anything.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
