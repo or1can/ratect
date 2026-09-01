@@ -394,6 +394,23 @@ for — note that in `TODO.md` instead.
       falls when a doc is fixed, so it measures neither.
     - **Verify a claim before writing it, not after a reviewer questions it** —
       the review-time half of the change loop's write-prose step.
+    - **A claim copied from the handoff is unverified.** The handoff is a
+      *specification* — what to build, and why it is worth building. It is not
+      a source for what exists. So every name in it that you carry into a doc
+      comment, an error, or a page under `docs/` gets run first: a flag against
+      `--help`, a mode against the code that would implement it, a path against
+      the filesystem. This is the change loop's "the code includes whatever the
+      prose *names*", applied to the one input that most looks like it has
+      already been checked.
+
+      Twice in one release, 0.26.0's scope was transcribed verbatim and was
+      wrong both times: `ratect-compat --cleanup` is a flag that has never
+      existed (and the nearest-looking one, `--clean`, destroys caches), and
+      "run as an MCP server" names a mode neither binary has. Both were true of
+      the author's *intent* and false of the binary, which is exactly the gap a
+      specification cannot see. Correct the handoff where it is still live;
+      where it is already struck through, record the correction in its
+      done-summary rather than editing history.
     - **A behaviour that depends on which format/mode you're in needs one
       derived value, not a guard per call site.** Derive it once
       (`include_trust::restricting`, returning `Option<&Bundle>`) and have every
