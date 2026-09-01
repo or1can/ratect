@@ -52,9 +52,10 @@
 //! are both untrue of a process an init system stopped.
 //!
 //! `SIGKILL` cannot be trapped by anything, so the leak stays possible and
-//! [`crate::labels`] plus `ratect resources clean` (`ratect-compat
-//! --cleanup`) remain the backstop. The docs say so rather than implying a
-//! guarantee this can't make.
+//! [`crate::labels`] remain the backstop — read by `ratect resources clean`,
+//! which is a `ratect` verb with no `ratect-compat` equivalent, so from that
+//! binary the sweep is `docker` filtering on the same labels. The docs say so
+//! rather than implying a guarantee this can't make.
 //!
 //! # Counting rather than latching
 //!

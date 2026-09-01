@@ -1117,6 +1117,15 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     spend seconds on cleanup would take away the one signal meant to skip
     exactly that.
 
+    One correction to the scope above, since it was copied into the docs before
+    being run: **there is no `ratect-compat --cleanup`**. The backstop verb is
+    `ratect resources clean`, and it exists in the `ratect` binary only —
+    `ratect-compat` has no `resources` command at all, so from there the sweep
+    is `docker` filtering on the ownership labels. `--clean`/`--clean-cache` are
+    the only `clean*` flags it has, and they remove *cache volumes*, so pointing
+    a stranded user at the nearest-looking one would have destroyed their caches
+    without touching the leak.
+
     One thing the scope above understated: "sharing one path" is true of the
     engine, and false of everything the run says on the way out. Exiting `130`
     (128 + `SIGINT`) after a `SIGTERM` asserts something untrue in the one place

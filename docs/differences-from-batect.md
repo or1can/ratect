@@ -196,12 +196,18 @@ tables above:
 
   Two cases a trap cannot cover. `SIGKILL` (`kill -9`, a container runtime's own
   hard stop, the OOM killer) cannot be caught by any process, so it still leaks
-  everything the run had created — which is what `ratect resources clean`
-  (`ratect-compat --cleanup`) exists for, and why that remains the backstop rather
-  than a legacy command. And an [interactive](config-reference.md#interactive-mode)
-  task puts the terminal in raw mode, where Ctrl+C isn't turned into a signal at all
-  but forwarded to the container as a keystroke — matching `docker run -it`, where it
-  belongs to the program you're talking to. `SIGTERM` still reaches Ratect there.
+  everything the run had created — which is what the ownership labels below are
+  for: [`ratect resources clean`](ratect-cli.md#managing-resources) removes what
+  they identify. That verb lives in the `ratect` binary only; `ratect-compat` has
+  no equivalent, so from it the sweep is `docker` itself, filtering on the same
+  labels (`docker ps -a --filter label=eu.orican.ratect.project=<name>`, and
+  `docker network ls` likewise). And an
+  [interactive](config-reference.md#interactive-mode) task puts the terminal in raw
+  mode, where Ctrl+C isn't turned into a signal at all but forwarded to the
+  container as a keystroke — matching `docker run -it`, where it belongs to the
+  program you're talking to. That is a property of the terminal driver, not of this
+  trap: raw mode only stops `^C` becoming a `SIGINT`, so a signal sent by anything
+  other than the keyboard is delivered as usual.
 - **Ownership labels**: every container and network Ratect creates carries
   `eu.orican.ratect.*` labels recording the project, task, run, and (for a
   container) which configured container it is and whether it was the task's own or
