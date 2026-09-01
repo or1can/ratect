@@ -2276,38 +2276,32 @@ fn resolve_path_allows_a_project_directory_that_is_itself_reached_through_a_syml
     );
 }
 
-/// Resolving stops at the first component that exists, so an ancestor that
-/// exists but cannot be *searched* leaves everything below it unresolved. The
-/// path is then judged on its spelling alone — while the Docker daemon, which
-/// runs as root, is under no such restriction. A containment check that cannot
-/// see where a path points has to refuse it, not wave it through.
+/// Resolving stops at the first component that exists, so a component that
+/// exists but cannot be *resolved* leaves everything below it unresolved. The
+/// path would then be judged on its spelling alone — while the Docker daemon
+/// that dereferences it is under no such limit. A containment check that
+/// cannot see where a path points has to refuse it, not wave it through.
+///
+/// Uses a symlink loop rather than an unsearchable directory: `ELOOP` comes
+/// back at any privilege level, where a mode-`000` ancestor is walked straight
+/// through by root — which would quietly retire this test wherever the suite
+/// runs as one, as the dogfooded `batect.yml` tasks do.
 #[cfg(unix)]
 #[test]
 fn resolve_path_refuses_a_path_whose_real_location_cannot_be_determined() {
-    use std::os::unix::fs::PermissionsExt;
-
-    if nix::unistd::geteuid().is_root() {
-        // root ignores the directory mode this depends on.
-        return;
-    }
     let repo_dir = unique_temp_dir();
-    let blocked = repo_dir.join("blocked");
-    std::fs::create_dir(&blocked).unwrap();
-    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    std::os::unix::fs::symlink("loop", repo_dir.join("loop")).unwrap();
     let project_dir = unique_temp_dir();
     let boundary = ungranted_git_boundary_at(repo_dir.clone());
 
     let result = resolve_path(
-        "blocked/escape",
+        "loop",
         &repo_dir,
         &no_host_env,
         &HashMap::new(),
         Some((&boundary, &project_dir)),
     );
 
-    // Restore before asserting, so a failure doesn't leave an unremovable
-    // directory behind for the next run.
-    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(
         format!("{result:?}").contains("cannot be checked"),
         "an unresolvable path must be refused, not judged on its spelling: {result:?}"

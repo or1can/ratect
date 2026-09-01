@@ -2014,7 +2014,6 @@ struct GitBoundary {
 /// Which of [`GitBoundary::check_path_allowed`]'s two checks refused a path.
 /// Named rather than passed as a message fragment so a third check cannot be
 /// added by inventing a third string at one call site.
-#[derive(Debug, Clone, Copy)]
 enum Escape {
     /// The path's spelling already leaves both allowed roots.
     Lexical,
@@ -2122,12 +2121,14 @@ impl GitBoundary {
 
     /// [`real_path_as_far_as_it_exists`] with this bundle's name attached: the
     /// helper knows a path, not which include pulled it in, and a refusal has
-    /// to say.
+    /// to say. Worded to read correctly for all three paths it is called on —
+    /// the candidate and both allowed roots — since a root failing to resolve
+    /// is not the caller's path being at fault.
     fn real_path(&self, path: &Path) -> Result<PathBuf> {
         real_path_as_far_as_it_exists(path).with_context(|| {
             format!(
-                "Path '{}' cannot be checked against the containment for the Git repository \
-                 '{}' at '{}' — where it really points could not be determined.",
+                "Cannot determine where '{}' really points, so the containment for the \
+                 Git repository '{}' at '{}' cannot be checked.",
                 path.display(),
                 self.bundle.id.remote,
                 self.bundle.id.git_ref
