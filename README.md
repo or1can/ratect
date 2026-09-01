@@ -52,7 +52,8 @@ their existing `./batect` wrapper script to keep working symlinks or renames
 
 ### Prerequisites
 
-- [Docker](https://www.docker.com/)
+- [Docker](https://www.docker.com/) 20.10 or newer — see
+  [Prerequisites](docs/installation.md#prerequisites) for why
 - [Rust](https://www.rust-lang.org/) (stable)
 
 ### Building

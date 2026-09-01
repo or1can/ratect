@@ -6,9 +6,12 @@ release yet, so the only way to install it today is to build it from source.
 ## Prerequisites
 
 - [Rust](https://www.rust-lang.org/) (stable toolchain)
-- [Docker](https://www.docker.com/), running and reachable via the default local socket
-  (Ratect connects the same way the `docker` CLI does — no extra configuration needed
-  for a standard Docker install)
+- [Docker](https://www.docker.com/) **20.10 or newer** (December 2020), running and
+  reachable via the default local socket (Ratect connects the same way the `docker`
+  CLI does — no extra configuration needed for a standard Docker install). The floor
+  is the `host-gateway` sentinel that release added, which is how a container reaches
+  a [proxy running on the host](config-reference.md#proxy-environment-variables);
+  Ratect assumes it rather than querying the daemon's version.
 
 ## Build from source
 
