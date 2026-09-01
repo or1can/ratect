@@ -282,11 +282,13 @@ two disagree, the fault may be in the red, the code, or the specification.
 
 Specification first, because otherwise there is nothing to derive from
 independently — a red written from unstated intent is the code by another
-route. Usually one sentence, not a document; for parity work, cite Batect's
-source rather than write one.
+route. Usually one sentence, not a document; where the handoff or an ADR
+already settles it, cite that rather than restate it.
 
-Write the prose from the specification and the code **as delivered** — re-read
-and re-run, not remembered; it is also how you reload both.
+Write the prose from the specification and the code **as delivered** —
+re-read and re-run, not remembered; it is also how you reload both. "The code"
+includes whatever the prose *names*: a sentence about something is written with
+that thing open.
 
 Red is omitted only where the change alters no behaviour; say so out loud when
 it is.
