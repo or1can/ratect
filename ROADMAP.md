@@ -1084,7 +1084,35 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     "Batect's own scenario passes" into "our version of it passes".
     `config-with-include` was also picked up, which the entry above didn't name.
 
-- **0.26.0** (planned) — **Proxies that point at the host on Linux**. Closes
+- **0.26.0** (planned) — **Cleanup on any termination signal, and proxies that
+  point at the host on Linux**. Two separable behaviours, so one `feat:`/`fix:`
+  commit each.
+
+  - **Clean up on `SIGTERM`, not only `SIGINT`.** 0.25.0 trapped Ctrl+C so an
+    interrupted run takes the ordinary failure-cleanup path; `interrupt.rs`
+    registers `SignalKind::interrupt()` and nothing else. Any other terminating
+    signal still kills the process outright and leaks **both** the container and
+    its network — the exact defect 0.25.0 set out to fix, reached by a different
+    route. Fixing the instance rather than the class is what left it.
+
+    Found in the field, not by reading: `ratect-compat` run as an MCP server
+    under an editor is terminated with `SIGTERM` when the editor closes or
+    restarts it, and on one developer machine that reached 29 leaked networks
+    against Docker's ~31-network default address pool — at which point *every*
+    Ratect run on the machine failed with `all predefined address pools have
+    been fully subnetted`, including the dogfooded `build`/`test` tasks. Networks
+    leak worse than containers because a failed *startup* leaks one too, so the
+    rate is per process launch, not per session.
+
+    Scope: `SIGTERM` and `SIGHUP` alongside `SIGINT`, sharing one path — the
+    module is already "the signal half only", so the engine's meaning of an
+    interrupt doesn't change. `SIGKILL` cannot be trapped and is why
+    `ratect resources clean`/`ratect-compat --cleanup` remain the backstop; say
+    so in the docs rather than implying the leak is impossible. Batect traps
+    `SIGINT` only, so this is a deliberate divergence, not a parity gap — record
+    it in [Differences from Batect](docs/differences-from-batect.md).
+
+  - **Proxies that point at the host on Linux**. Closes
   [batect#10](https://github.com/batect/batect/issues/10), Batect's oldest open
   issue (8 years) and one it never fixed. Not a parity gap — Ratect already
   matches Batect here — but a case where **Batect's constraint has expired**:
