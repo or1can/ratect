@@ -32,6 +32,7 @@ type CapturedBuildKitOptions = Arc<Mutex<HashMap<String, Option<crate::docker::B
 /// The `force_pull` a prior `build_image` call for a given tag was
 /// given (see `force_pull_for`).
 type CapturedForcePull = Arc<Mutex<HashMap<String, bool>>>;
+type CapturedHostGateways = Arc<Mutex<HashMap<String, Option<crate::proxy::HostGateway>>>>;
 type CapturedImages = Arc<Mutex<HashMap<String, String>>>;
 /// The `command` a prior `start_background_container` call for a given
 /// container name was given (flattened, same convention as
@@ -129,6 +130,14 @@ struct FakeContainerRuntime {
     // The `network_options` a prior `run_container`/`start_background_container`
     // call for a given container name was given (see `network_options_for`).
     network_options: CapturedNetworkOptions,
+    // The `proxy_host_gateway` a prior `run_container`/
+    // `start_background_container` call for a given container name was
+    // given (see `host_gateway_for`) — kept out of `network_options` above
+    // so adding it doesn't rewrite every existing tuple assertion.
+    host_gateways: CapturedHostGateways,
+    // The `proxy_host_gateway` a prior `build_image` call for a given tag
+    // was given (see `build_host_gateway_for`).
+    build_host_gateways: CapturedHostGateways,
     // The `health_check` a prior `run_container`/`start_background_container`
     // call for a given container name was given (see `health_check_for`).
     health_checks: CapturedHealthChecks,
@@ -201,6 +210,8 @@ impl Default for FakeContainerRuntime {
             network_exists_result: Arc::new(Mutex::new(true)),
             network_labels: Default::default(),
             network_options: Default::default(),
+            host_gateways: Default::default(),
+            build_host_gateways: Default::default(),
             health_checks: Default::default(),
             container_options: Default::default(),
             execs: Default::default(),
@@ -435,6 +446,29 @@ impl FakeContainerRuntime {
         self.network_options.lock().unwrap().get(name).cloned()
     }
 
+    /// The `proxy_host_gateway` a prior `run_container`/
+    /// `start_background_container` call for `name` was given (flattened,
+    /// same convention as `environment_for`).
+    fn host_gateway_for(&self, name: &str) -> Option<crate::proxy::HostGateway> {
+        self.host_gateways
+            .lock()
+            .unwrap()
+            .get(name)
+            .copied()
+            .flatten()
+    }
+
+    /// The `proxy_host_gateway` a prior `build_image` call for `tag` was
+    /// given (flattened, same convention as `environment_for`).
+    fn build_host_gateway_for(&self, tag: &str) -> Option<crate::proxy::HostGateway> {
+        self.build_host_gateways
+            .lock()
+            .unwrap()
+            .get(tag)
+            .copied()
+            .flatten()
+    }
+
     /// The `health_check` a prior `run_container`/
     /// `start_background_container` call for `name` was given
     /// (flattened, same convention as `environment_for`).
@@ -606,7 +640,12 @@ impl ContainerRuntime for FakeContainerRuntime {
         buildkit: Option<&crate::docker::BuildKitOptions>,
         tag: &str,
         force_pull: bool,
+        proxy_host_gateway: Option<crate::proxy::HostGateway>,
     ) -> Result<String> {
+        self.build_host_gateways
+            .lock()
+            .unwrap()
+            .insert(tag.to_string(), proxy_host_gateway);
         self.build_args
             .lock()
             .unwrap()
@@ -704,6 +743,10 @@ impl ContainerRuntime for FakeContainerRuntime {
                 network_options.ports.cloned(),
             ),
         );
+        self.host_gateways
+            .lock()
+            .unwrap()
+            .insert(alias.to_string(), network_options.proxy_host_gateway);
         self.health_checks
             .lock()
             .unwrap()
@@ -882,6 +925,10 @@ impl ContainerRuntime for FakeContainerRuntime {
                 network_options.ports.cloned(),
             ),
         );
+        self.host_gateways
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), network_options.proxy_host_gateway);
         self.health_checks
             .lock()
             .unwrap()
@@ -5925,6 +5972,135 @@ async fn no_proxy_vars_flag_suppresses_propagation() {
         None,
         "--no-proxy-vars should suppress propagation entirely"
     );
+    assert_eq!(
+        docker.host_gateway_for("app"),
+        None,
+        "--no-proxy-vars should suppress the host-gateway entry with them"
+    );
+}
+
+/// The entry `proxy::ProxyEnvironment::host_gateway` produces, spelt out so
+/// these tests pin what reaches Docker rather than agreeing with whatever
+/// the code currently builds.
+const HOST_GATEWAY: crate::proxy::HostGateway = crate::proxy::HostGateway {
+    name: "host.docker.internal",
+    address: "host-gateway",
+};
+
+/// Rewriting the URL to name the host is only useful if the name resolves,
+/// and on Linux nothing supplies it — so the run that rewrites must also
+/// add the entry, or it has swapped one unreachable URL for another.
+#[tokio::test]
+async fn a_rewritten_proxy_url_adds_the_host_gateway_to_a_tasks_own_container() {
+    let mut containers = HashMap::new();
+    containers.insert("app".to_string(), container("alpine:3.18", None));
+    let mut tasks = HashMap::new();
+    tasks.insert("run".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(config, docker.clone())
+        .with_host_env(|name| (name == "http_proxy").then(|| "http://localhost:3333".to_string()));
+
+    engine.run_task("run", &[]).await.unwrap();
+
+    assert_eq!(
+        docker.environment_for("app").unwrap().get("http_proxy"),
+        Some(&"http://host.docker.internal:3333/".to_string())
+    );
+    assert_eq!(docker.host_gateway_for("app"), Some(HOST_GATEWAY));
+}
+
+/// A dependency's container is behind the same proxy as the task's own, and
+/// nothing about it makes the name resolve on its own.
+#[tokio::test]
+async fn a_rewritten_proxy_url_adds_the_host_gateway_to_a_dependencys_container() {
+    let mut containers = HashMap::new();
+    containers.insert(
+        "app".to_string(),
+        container("alpine:3.18", Some(vec!["database".to_string()])),
+    );
+    containers.insert("database".to_string(), container("postgres:16", None));
+    let mut tasks = HashMap::new();
+    tasks.insert("run".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(config, docker.clone())
+        .with_host_env(|name| (name == "http_proxy").then(|| "http://127.0.0.1:3333".to_string()));
+
+    engine.run_task("run", &[]).await.unwrap();
+
+    assert_eq!(docker.host_gateway_for("database"), Some(HOST_GATEWAY));
+}
+
+/// A `RUN` step reaches the proxy through the same rewritten URL the
+/// container will, so a build without the entry fails exactly where the
+/// image it produces would have worked.
+#[tokio::test]
+async fn a_rewritten_proxy_url_adds_the_host_gateway_to_an_image_build() {
+    let mut containers = HashMap::new();
+    containers.insert("app".to_string(), container_with_build_directory(".", None));
+    let mut tasks = HashMap::new();
+    tasks.insert("run".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(config, docker.clone())
+        .with_host_env(|name| (name == "http_proxy").then(|| "http://localhost:3333".to_string()));
+
+    engine.run_task("run", &[]).await.unwrap();
+
+    assert_eq!(
+        docker.build_host_gateway_for("demo-app"),
+        Some(HOST_GATEWAY)
+    );
+}
+
+/// A proxy that already names a routable host needs nothing added — the
+/// alternative, adding it whenever any proxy variable is set, would put a
+/// name into every container that nothing in the run asked for.
+#[tokio::test]
+async fn a_proxy_url_that_was_not_rewritten_adds_no_host_gateway() {
+    let mut containers = HashMap::new();
+    containers.insert("app".to_string(), container("alpine:3.18", None));
+    let mut tasks = HashMap::new();
+    tasks.insert("run".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(config, docker.clone()).with_host_env(|name| {
+        (name == "http_proxy").then(|| "http://proxy.example.com:8080".to_string())
+    });
+
+    engine.run_task("run", &[]).await.unwrap();
+
+    assert!(docker.environment_for("app").is_some());
+    assert_eq!(docker.host_gateway_for("app"), None);
 }
 
 #[tokio::test]

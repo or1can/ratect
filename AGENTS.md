@@ -67,7 +67,7 @@ Ratect is a **Cargo workspace** with four crates (the
   | `docker.rs` | All `bollard`/daemon interaction, behind the fakeable `ContainerRuntime` trait |
   | `ssh_agent.rs` | `build_ssh`'s in-process ssh-agent (RFC 9987) — kept extractable, see [0005](decisions/0005-build-ssh-keyring-placement.md) |
   | `user.rs` | Host user lookup and the `/etc/passwd` generators for `run_as_current_user` |
-  | `proxy.rs` | Proxy variable detection and propagation |
+  | `proxy.rs` | Proxy variable detection and propagation, the host-gateway entry a rewritten URL needs, and the loopback-bound proxy it can't fix |
   | `interrupt.rs` | Termination-signal (Ctrl+C, `SIGTERM`, `SIGHUP`) tracking — the signal half only; the engine decides what it means |
   | `engine.rs` | Task lifecycle, prerequisites, dependency graph, cleanup |
   | `exit_code.rs` | What a failed run exits with — the one mapping both binaries share, since `docs/ratect-cli.md` promises their codes are identical |

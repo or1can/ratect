@@ -237,19 +237,39 @@ tables above:
   and stdout to be real terminals — not changed as part of closing the other three gaps.
 - **Proxy support**: `http_proxy`/`https_proxy`/`ftp_proxy`/`no_proxy` are detected from
   the host environment and propagated into containers and builds automatically — see
-  [Proxy environment variables](config-reference.md#proxy-environment-variables). The
-  `localhost`-rewriting half of this only works on macOS/Windows (no automatic
-  Docker-reachable hostname on Linux), and there's no Docker-version-gated hostname
-  fallback chain the way Batect has for very old Docker installs. The fallback chain
-  stays an accepted gap — it isn't worth chasing for any actively-maintained Docker
-  daemon. The Linux half no longer is: a proxy pointing at `localhost` is currently
-  propagated into the container unchanged, where `localhost` means the container
-  itself, so it silently fails. Batect has the same gap (its own oldest open issue),
-  but Docker 20.10+ makes it fixable with `--add-host
-  host.docker.internal:host-gateway`, and that's scoped as a deliberate improvement
-  over Batect — see [ROADMAP.md](../ROADMAP.md#ratect-compat). Until then, set the
-  proxy variables to a host-reachable address yourself, or use `--no-proxy-vars` and
-  set them per container.
+  [Proxy environment variables](config-reference.md#proxy-environment-variables). Two
+  deliberate differences:
+
+  - **A `localhost` proxy is rewritten on Linux too, and Ratect makes the name
+    resolve.** Batect rewrites on macOS/Windows only, and on Linux propagates
+    `http_proxy=http://localhost:3333` into the container verbatim — where
+    `localhost` is the container itself, so it fails silently or reaches something
+    unrelated. This is [Batect's oldest open
+    issue](https://github.com/batect/batect/issues/10), eight years old, and its
+    own recipe for it (read the gateway address out of `docker network inspect`,
+    then add an `iptables` rule) predates the fix: Docker Engine 20.10 (December
+    2020) added `--add-host host.docker.internal:host-gateway`, which does the
+    same job as one documented flag. Ratect rewrites everywhere and adds that
+    entry to every container **and every image build** — but only when a URL was
+    actually rewritten, so a run whose proxy already names a routable host gets no
+    name it didn't ask for. Taking that flag as given means Ratect assumes Docker
+    20.10 or newer.
+  - **A proxy that's bound to loopback only is diagnosed, not left to fail.**
+    Rewriting the URL can't make such a proxy reachable — `cntlm` and friends
+    typically bind `127.0.0.1`, and a container connecting through the host
+    gateway never arrives there. On Linux, Ratect reads `/proc/net/tcp`/`tcp6`,
+    sees that the port is loopback-bound, and says so, naming the remedy
+    (rebinding to `0.0.0.0`) **and its security cost** — that doing so exposes the
+    proxy to everything else that can reach the machine. Batect's own roadmap
+    notes the same warning is needed and never shipped one. It's a warning rather
+    than a failure: a run may not need the proxy, and `--no-proxy-vars` already
+    turns propagation off. Host firewall rules are the one case left undiagnosed —
+    the bridge interface differs for every network Ratect creates, so there's
+    nothing reliable to check.
+
+  What stays an accepted gap is Batect's Docker-version-gated hostname fallback
+  chain, which reaches back to Docker 17.06. It isn't worth chasing for any
+  actively-maintained daemon.
 
 ## What Ratect *does* support today
 

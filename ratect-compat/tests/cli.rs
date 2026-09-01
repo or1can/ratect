@@ -3611,6 +3611,98 @@ fn no_proxy_vars_flag_disables_propagation() {
     );
 }
 
+/// Same real-Docker requirements as
+/// `proxy_environment_variables_are_propagated_into_the_container`.
+///
+/// Rewriting a `localhost` proxy URL to name the host is only useful if the
+/// name resolves, and on Linux nothing supplies it — so the run must add the
+/// entry itself. Asserted against `/etc/hosts` rather than by resolving the
+/// name, because Docker Desktop answers that name through its own DNS
+/// without writing the file: resolution would pass on macOS whether or not
+/// Ratect added anything, and the file contents wouldn't.
+#[test]
+#[ignore]
+fn a_rewritten_proxy_url_adds_the_host_gateway_to_the_container() {
+    let output = ratect_command()
+        .env("http_proxy", "http://localhost:3333")
+        .arg("-f")
+        .arg(proxy_config_path())
+        .arg("print-container-hosts")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("host.docker.internal"),
+        "a rewritten proxy URL should add the host-gateway entry: {stdout}"
+    );
+}
+
+/// Same real-Docker requirements as
+/// `proxy_environment_variables_are_propagated_into_the_container`.
+///
+/// The other half of the rule: a proxy already naming a routable host needs
+/// nothing added, and injecting the name regardless would put it into every
+/// container of every run that has any proxy variable set at all. Run
+/// against the same task as the test above so the two differ in exactly the
+/// one thing they are about.
+#[test]
+#[ignore]
+fn a_proxy_url_that_was_not_rewritten_adds_no_host_gateway_to_the_container() {
+    let output = ratect_command()
+        .env("http_proxy", "http://proxy.example.com:8080")
+        .arg("-f")
+        .arg(proxy_config_path())
+        .arg("print-container-hosts")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("host.docker.internal"),
+        "a proxy URL that was not rewritten should add no host-gateway entry: {stdout}"
+    );
+}
+
+/// Same real-Docker requirements as
+/// `proxy_environment_variables_are_propagated_into_the_container`, and
+/// builds `tests/fixtures/proxy-build/`.
+///
+/// A `RUN` step behind a rewritten proxy URL has to resolve the same name
+/// the container will, and the build reaches Docker through a different
+/// parameter on a different endpoint — so this is the only thing that
+/// exercises that wire format at all. The fixture's own `RUN` is the
+/// assertion (it greps `/etc/hosts`), leaving this to check the exit code.
+#[test]
+#[ignore]
+fn a_rewritten_proxy_url_adds_the_host_gateway_to_an_image_build() {
+    let output = ratect_command()
+        .env("http_proxy", "http://localhost:3333")
+        .arg("-f")
+        .arg(proxy_config_path())
+        .arg("build-behind-the-proxy")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "the build should see the host-gateway entry; stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
 /// Run explicitly with `cargo test -- --ignored`.
 ///

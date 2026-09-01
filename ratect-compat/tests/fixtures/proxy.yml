@@ -2,6 +2,13 @@
 # (`database`) plus the task's own container (`app`) sharing one network,
 # so the auto-appended `no_proxy` exemption (every container name in the
 # task) can be checked on both.
+#
+# It also exercises the other half of reaching a proxy on the host — the
+# `host.docker.internal:host-gateway` entry a rewritten proxy URL needs to
+# resolve. `print-container-hosts` shows what a container was given (the
+# entry must appear only when a URL was actually rewritten), and
+# `build-behind-the-proxy` proves the same entry reaches an image build,
+# which is a separate Docker parameter on a separate endpoint.
 project_name: ratect-proxy-test
 containers:
   database:
@@ -10,8 +17,18 @@ containers:
     image: alpine:3.18.2
     dependencies:
       - database
+  proxy-build:
+    build_directory: proxy-build
 tasks:
   print-proxy-vars:
     run:
       container: app
       command: sh -c "echo HTTP_PROXY=$http_proxy NO_PROXY=$no_proxy"
+  print-container-hosts:
+    run:
+      container: app
+      command: cat /etc/hosts
+  build-behind-the-proxy:
+    run:
+      container: proxy-build
+      command: echo built

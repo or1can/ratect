@@ -217,10 +217,13 @@ cycle (0.2.0, the first one not about `ratect-compat`):
   - No custom network driver support for a network Ratect creates itself — the only
     way to get a different driver is to pre-create the network yourself and point
     `--use-network` at it, same as Batect.
-  - The proxy `localhost`/`127.0.0.1`/`::1` rewrite (to `host.docker.internal`) only
-    works on macOS/Windows — no automatic Docker-reachable hostname on Linux, and no
-    Docker-version-gated hostname fallback chain the way Batect has for very old
-    Docker installs (not worth chasing for any actively-maintained daemon today).
+  - ~~The proxy `localhost`/`127.0.0.1`/`::1` rewrite (to `host.docker.internal`) only
+    works on macOS/Windows — no automatic Docker-reachable hostname on Linux~~ — closed
+    in 0.26.0 below, which rewrites on every platform and adds the
+    `host.docker.internal:host-gateway` entry that makes the name resolve. The other
+    half of this gap stands: there is still no Docker-version-gated hostname fallback
+    chain the way Batect has for very old Docker installs (not worth chasing for any
+    actively-maintained daemon today).
 - **0.7.0** — ~~**Includes**: local file includes, splitting one project's
   configuration across multiple files~~ — done: a config file's top-level `include`
   list (bare string path or expanded `{path, type: file}` form) is resolved relative to
@@ -1134,7 +1137,7 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     the signal is carried on `TaskInterrupted` and each binary's exit code is
     128 + its number — 130, 143, 129 — with the two messages naming it.
 
-  - **Proxies that point at the host on Linux**. Closes
+  - ~~**Proxies that point at the host on Linux**. Closes
   [batect#10](https://github.com/batect/batect/issues/10), Batect's oldest open
   issue (8 years) and one it never fixed. Not a parity gap — Ratect already
   matches Batect here — but a case where **Batect's constraint has expired**:
@@ -1143,55 +1146,73 @@ cycle (0.2.0, the first one not about `ratect-compat`):
   Docker Engine 20.10 (December 2020) added `--add-host
   host.docker.internal:host-gateway`, which does the same job as a single
   documented flag. Exactly the "re-check ported Batect behaviour against
-  Docker's current support" case.
+  Docker's current support" case.~~
 
-  **What's broken today**: `proxy.rs`'s `docker_host_name` returns
+  ~~**What's broken today**: `proxy.rs`'s `docker_host_name` returns
   `host.docker.internal` on macOS/Windows and `None` on Linux, so on Linux
   `http_proxy=http://localhost:3333` is propagated into the container verbatim —
   where `localhost` means the *container itself*. It fails silently, or worse,
   reaches something unrelated. So the change is strictly an improvement on a
-  behaviour that doesn't work now, not a trade against one that does.
+  behaviour that doesn't work now, not a trade against one that does.~~
 
-  **The fix**: rewrite the URL on Linux as on the other platforms, and inject
+  ~~**The fix**: rewrite the URL on Linux as on the other platforms, and inject
   `host.docker.internal:host-gateway` into the container's extra hosts — a small
   addition at an existing seam, since `docker.rs`'s `build_extra_hosts` already
-  maps `additional_hosts` onto `HostConfig.extra_hosts`.
+  maps `additional_hosts` onto `HostConfig.extra_hosts`.~~
 
-  **Warn where it still won't work — this is the load-bearing half.** The
+  ~~**Warn where it still won't work — this is the load-bearing half.** The
   rewrite makes the URL correct; it can't make the proxy reachable, and shipping
-  it without diagnostics would just replace one silent failure with another:
+  it without diagnostics would just replace one silent failure with another:~~
 
-  - **A proxy bound to loopback only** is what will actually bite — `cntlm` and
+  - ~~**A proxy bound to loopback only** is what will actually bite — `cntlm` and
     friends typically bind `127.0.0.1`, which `host-gateway` routing can't reach
     however correct the URL is. This is *precisely* detectable: Ratect runs on
     the host, so it can read `/proc/net/tcp`/`tcp6` and see whether that port is
     bound to loopback or `0.0.0.0`/`::`, and say so specifically. Worth the
     effort over a generic caveat, which users learn to ignore because it usually
-    doesn't apply.
-  - **The warning must state the security cost**, not just the remedy: the fix
+    doesn't apply.~~
+  - ~~**The warning must state the security cost**, not just the remedy: the fix
     is binding the proxy to `0.0.0.0`, which exposes it beyond the machine.
     Batect's own roadmap flags this ("need to warn users about this and about
     exposing them to the outside world"); prescribing the rebind without it
-    would nudge people into opening a proxy to their network.
-  - **Host firewall rules** (Batect's `iptables` note) aren't reliably
+    would nudge people into opening a proxy to their network.~~
+  - ~~**Host firewall rules** (Batect's `iptables` note) aren't reliably
     detectable — bridge interface names vary for the non-default networks Ratect
-    always creates — so that one is documentation, not a runtime check.
+    always creates — so that one is documentation, not a runtime check.~~
 
-  Warn rather than fail: a run may not need the proxy at all, and
+  ~~Warn rather than fail: a run may not need the proxy at all, and
   `--no-proxy-vars` is already the escape hatch. **Both binaries**, since it
   fixes broken behaviour rather than adding config surface, and documented in
   [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps)
   as a deliberate divergence — the Git-include containment check is the
-  precedent for `ratect-compat` diverging in the safer direction.
+  precedent for `ratect-compat` diverging in the safer direction.~~
 
-  One design cost to accept knowingly: `docker_host_name` is currently a pure
+  ~~One design cost to accept knowingly: `docker_host_name` is currently a pure
   `cfg!` function that never touches the daemon, and its doc comment gives that
   as the reason for not porting Batect's version-fallback chain. `host-gateway`
   needs Docker 20.10+, so this either adds a daemon version query (and the
   function stops being pure) or takes the 20.10+ floor unconditionally. Take the
   floor — that same comment's reasoning ("any actively-maintained Docker install
   today satisfies the modern case") argues for it, and December 2020 is a long
-  way back.
+  way back.~~ — done, to that scope. `docker_host_name` is now a constant
+  `Some("host.docker.internal")` on every platform, taking the 20.10 floor.
+
+  Two things the scope above didn't settle, both decided before building. The
+  gateway entry is added **only when a URL was actually rewritten**, not
+  whenever a proxy variable is set — otherwise every run with any proxy at all
+  gets a name in `/etc/hosts` that nothing asked for. And **image builds get it
+  too**, not containers alone: a `RUN` step reaches the proxy through the same
+  rewritten URL, so a build without it fails exactly where the image it produces
+  would have worked. That second one is a separate Docker parameter on a
+  separate endpoint (`/build`'s `extrahosts`, not `HostConfig.extra_hosts`),
+  which is why `tests/fixtures/proxy-build/` exists — a unit test cannot reach
+  that wire format.
+
+  One thing the scope understated: it reads as though the decision belongs at
+  the call sites. It doesn't — `proxy::ProxyEnvironment` carries the answer, and
+  the three sites that inject proxy variables consume it rather than each
+  re-deriving "should I add a host". A per-site guard would have left the next
+  site added unguarded by default.
 
   Pairs with the two proxy-related checks on
   [`ratect doctor`'s](#ux--tooling) list — a proxy variable that isn't a URL or

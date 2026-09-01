@@ -14,6 +14,14 @@
 
 use super::*;
 
+/// The entry `proxy::ProxyEnvironment::host_gateway` produces for a run that
+/// rewrote a proxy URL — spelt out here rather than called for, so these
+/// tests pin the string Docker actually receives.
+const HOST_GATEWAY: crate::proxy::HostGateway = crate::proxy::HostGateway {
+    name: "host.docker.internal",
+    address: "host-gateway",
+};
+
 /// A fresh, unique scratch directory — same pattern as
 /// `config.rs`'s `unique_temp_dir`. Caller cleans up.
 fn unique_temp_dir() -> PathBuf {
@@ -180,7 +188,7 @@ fn build_extra_hosts_formats_and_sorts_name_ip_pairs() {
     hosts.insert("alpha-service".to_string(), "10.0.0.1".to_string());
 
     assert_eq!(
-        build_extra_hosts(Some(&hosts)),
+        build_extra_hosts(Some(&hosts), None),
         Some(vec![
             "alpha-service:10.0.0.1".to_string(),
             "zeta-service:10.0.0.2".to_string(),
@@ -189,8 +197,47 @@ fn build_extra_hosts_formats_and_sorts_name_ip_pairs() {
 }
 
 #[test]
-fn build_extra_hosts_is_none_when_additional_hosts_is_absent() {
-    assert_eq!(build_extra_hosts(None), None);
+fn build_extra_hosts_is_none_when_there_is_nothing_to_add() {
+    assert_eq!(build_extra_hosts(None, None), None);
+}
+
+/// A run with a rewritten proxy URL but no `additional_hosts` at all still
+/// needs the entry — the `None` short-circuit is about having nothing to
+/// add, not about the config being silent.
+#[test]
+fn build_extra_hosts_adds_the_proxy_host_gateway_on_its_own() {
+    assert_eq!(
+        build_extra_hosts(None, Some(HOST_GATEWAY)),
+        Some(vec!["host.docker.internal:host-gateway".to_string()])
+    );
+}
+
+#[test]
+fn build_extra_hosts_merges_the_proxy_host_gateway_with_config_entries() {
+    let mut hosts = HashMap::new();
+    hosts.insert("alpha-service".to_string(), "10.0.0.1".to_string());
+
+    assert_eq!(
+        build_extra_hosts(Some(&hosts), Some(HOST_GATEWAY)),
+        Some(vec![
+            "alpha-service:10.0.0.1".to_string(),
+            "host.docker.internal:host-gateway".to_string(),
+        ])
+    );
+}
+
+/// The injection supplies a name nothing else provides, so where the project
+/// has already said what that name means, it means that — otherwise enabling
+/// a proxy would silently repoint a host the config deliberately pinned.
+#[test]
+fn a_config_entry_wins_over_the_injected_proxy_host_gateway() {
+    let mut hosts = HashMap::new();
+    hosts.insert("host.docker.internal".to_string(), "10.0.0.9".to_string());
+
+    assert_eq!(
+        build_extra_hosts(Some(&hosts), Some(HOST_GATEWAY)),
+        Some(vec!["host.docker.internal:10.0.0.9".to_string()])
+    );
 }
 
 #[test]

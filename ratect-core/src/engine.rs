@@ -1173,21 +1173,50 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         self
     }
 
-    /// The proxy environment variables to inject for a container in this
+    /// The proxy configuration to apply to a container or build in this
     /// task, or `None` when propagation is disabled (`--no-proxy-vars`) or
     /// the host environment has none set — an empty map is normalized to
     /// `None` here so `merged_environment`'s "`None` only when nothing at
     /// all is set" behavior isn't disturbed by an empty-but-`Some` map.
-    fn proxy_environment_variables(
+    ///
+    /// Carries the host-gateway decision along with the variables rather
+    /// than leaving each call site to infer it, since every site that
+    /// injects the variables must also add the entry that makes them work —
+    /// see `proxy::ProxyEnvironment`.
+    fn proxy_environment(
         &self,
         extra_no_proxy_entries: &std::collections::BTreeSet<String>,
-    ) -> Option<HashMap<String, String>> {
+    ) -> Option<crate::proxy::ProxyEnvironment> {
         if !self.propagate_proxy_environment_variables {
             return None;
         }
         let host_env = |name: &str| (self.host_env)(name);
-        let vars = crate::proxy::proxy_environment_variables(host_env, extra_no_proxy_entries);
-        (!vars.is_empty()).then_some(vars)
+        let proxy = crate::proxy::proxy_environment_variables(host_env, extra_no_proxy_entries);
+        (!proxy.variables.is_empty()).then_some(proxy)
+    }
+
+    /// Warns, once per invocation, about every rewritten proxy URL whose
+    /// port the host is listening on through loopback only.
+    ///
+    /// Rewriting the URL is all Ratect can do; a proxy bound to `127.0.0.1`
+    /// stays unreachable from a container whatever the URL says, and the
+    /// failure it produces mid-build ("connection refused" from a package
+    /// manager) points nowhere near the cause. This is a warning and not a
+    /// failure because a run may never use the proxy, and `--no-proxy-vars`
+    /// already turns propagation off for one that shouldn't.
+    fn warn_about_unreachable_proxies(&self) {
+        let Some(proxy) = self.proxy_environment(&std::collections::BTreeSet::new()) else {
+            return;
+        };
+        for port in crate::proxy::loopback_only_ports(proxy.rewritten_ports()) {
+            tracing::warn!(
+                "The proxy on port {port} is listening on loopback addresses only, so containers \
+                 in this run cannot reach it even though its URL now names the host. Bind the \
+                 proxy to 0.0.0.0 to make it reachable — which also exposes it to anything else \
+                 that can reach this machine, so do that only on a network you trust. Use \
+                 --no-proxy-vars if this run doesn't need the proxy."
+            );
+        }
     }
 
     /// The `TERM` to inject into a container's environment — the host's own
@@ -1378,11 +1407,10 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         // Batect, which never adds container names to
                         // `no_proxy` for a build (nothing's running yet to be
                         // exempted from proxying).
-                        let proxy_vars =
-                            self.proxy_environment_variables(&std::collections::BTreeSet::new());
+                        let proxy = self.proxy_environment(&std::collections::BTreeSet::new());
                         let build_args = merged_environment(
                             None,
-                            proxy_vars.as_ref(),
+                            proxy.as_ref().map(|proxy| &proxy.variables),
                             container_config.build_args.as_ref(),
                             None,
                         );
@@ -1413,6 +1441,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                                 buildkit.as_ref(),
                                 &tag,
                                 force_pull,
+                                proxy.as_ref().and_then(|proxy| proxy.host_gateway()),
                             )
                             .await?;
                         self.event_sink.post(TaskEvent::ImageBuildCompleted {
@@ -1524,6 +1553,10 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     /// once every task in the run has exited zero; any failure short-
     /// circuits before it's ever consulted, same as the early `?` here.
     pub async fn run_task(&self, task_name: &str, additional_args: &[String]) -> Result<()> {
+        // Once per invocation, not once per container: the answer is the
+        // same for every container in the run, and repeating it for each
+        // would bury the run's own output under it.
+        self.warn_about_unreachable_proxies();
         self.run_task_scoped(task_name, additional_args, true)
             .await?;
 
@@ -1835,11 +1868,11 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     .event_sink
                     .container_io_streaming()
                     .allows_interactive();
-            let proxy_vars = self.proxy_environment_variables(&no_proxy_entries);
+            let proxy = self.proxy_environment(&no_proxy_entries);
             let term_var = self.term_environment_variable(interactive);
             let environment = merged_environment(
                 term_var.as_ref(),
-                proxy_vars.as_ref(),
+                proxy.as_ref().map(|proxy| &proxy.variables),
                 container_config.environment.as_ref(),
                 run.environment.as_ref(),
             );
@@ -1848,6 +1881,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             let network_options = crate::docker::NetworkOptions {
                 additional_hostnames: container_config.additional_hostnames.as_ref(),
                 additional_hosts: container_config.additional_hosts.as_ref(),
+                proxy_host_gateway: proxy.as_ref().and_then(|proxy| proxy.host_gateway()),
                 ports: (self.publish_ports && !expanded_ports.is_empty())
                     .then_some(&expanded_ports),
             };
@@ -2279,14 +2313,14 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         container: name.to_string(),
                     });
                     let user_mapping = self.resolve_user_mapping(dependency_config).await?;
-                    let proxy_vars = self.proxy_environment_variables(no_proxy_entries);
+                    let proxy = self.proxy_environment(no_proxy_entries);
                     // A dependency is never interactive — see
                     // `term_environment_variable`'s own docs for the
                     // interleaved-policy override this still picks up.
                     let term_var = self.term_environment_variable(false);
                     let environment = merged_environment(
                         term_var.as_ref(),
-                        proxy_vars.as_ref(),
+                        proxy.as_ref().map(|proxy| &proxy.variables),
                         dependency_config.environment.as_ref(),
                         customisation.and_then(|c| c.environment.as_ref()),
                     );
@@ -2297,6 +2331,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     let network_options = crate::docker::NetworkOptions {
                         additional_hostnames: dependency_config.additional_hostnames.as_ref(),
                         additional_hosts: dependency_config.additional_hosts.as_ref(),
+                        proxy_host_gateway: proxy.as_ref().and_then(|proxy| proxy.host_gateway()),
                         ports: (self.publish_ports && !expanded_ports.is_empty())
                             .then_some(&expanded_ports),
                     };

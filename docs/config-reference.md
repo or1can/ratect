@@ -942,10 +942,34 @@ A few details worth knowing:
 - **`localhost` rewriting**: `http_proxy`/`https_proxy`/`ftp_proxy` values that point at
   `localhost`, `127.0.0.1`, or `::1` are rewritten to `host.docker.internal`, since
   `localhost` from *inside* a container refers to the container itself, not the host
-  machine running a proxy. Only rewritten on macOS and Windows (where Docker Desktop
-  provides `host.docker.internal` automatically) — left unchanged on Linux, where
-  there's no automatic equivalent. A value that isn't a `http`/`https` URL, or doesn't
-  refer to the local machine, is also left unchanged.
+  machine running a proxy. A value that isn't a `http`/`https` URL, or doesn't refer to
+  the local machine, is left unchanged.
+
+  On every platform, including Linux. Docker Desktop provides
+  `host.docker.internal` itself; on Linux nothing does, so a run that rewrote a
+  URL also adds `host.docker.internal:host-gateway` to every container it starts
+  and every image it builds — Docker's own `--add-host` mechanism, which the
+  daemon resolves to the machine running it. The entry is added **only** when a
+  URL was actually rewritten, and a container's own
+  [`additional_hosts`](#container) entry for that name always wins over it.
+
+  Rewriting the URL can't make an unreachable proxy reachable. A proxy bound only
+  to `127.0.0.1` — which is what `cntlm` and similar default to — still refuses a
+  connection from a container, so on Linux Ratect checks `/proc/net/tcp`/`tcp6`
+  and warns, once per run and naming the port:
+
+  > The proxy on port 3333 is listening on loopback addresses only, so containers
+  > in this run cannot reach it even though its URL now names the host. Bind the
+  > proxy to 0.0.0.0 to make it reachable — which also exposes it to anything else
+  > that can reach this machine, so do that only on a network you trust. Use
+  > `--no-proxy-vars` if this run doesn't need the proxy.
+
+  It's a warning, not a failure: the run may never use the proxy. Note the security
+  cost it names — binding a proxy to `0.0.0.0` opens it to everything that can reach
+  the machine, so weigh that rather than applying it reflexively. A host firewall can
+  block the container's traffic too, and that one Ratect can't detect: the bridge
+  interface differs for every network it creates, so if the warning doesn't fire and
+  the proxy still isn't reachable, check the firewall rules for Docker's bridges.
 - **`--no-proxy-vars`** disables all of this. See [CLI reference](cli-reference.md).
 
 See also: [`TERM` propagation](#term-propagation) — a similarly automatic,

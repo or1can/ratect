@@ -281,11 +281,32 @@ fn build_env(environment: Option<&HashMap<String, String>>) -> Option<Vec<String
 }
 
 /// Builds Docker's `HostConfig.extra_hosts` list (`"name:ip"` entries, its
-/// own `--add-host` mechanism) from a config `additional_hosts` map. Sorted
+/// own `--add-host` mechanism) from a config `additional_hosts` map, plus
+/// the proxy `host_gateway` entry when this run rewrote a proxy URL. Sorted
 /// by key for the same determinism reason as `build_env`.
-fn build_extra_hosts(additional_hosts: Option<&HashMap<String, String>>) -> Option<Vec<String>> {
-    let additional_hosts = additional_hosts?;
-    let mut pairs: Vec<String> = additional_hosts
+///
+/// A config entry for the gateway's own name wins over the injected one: the
+/// injection exists to supply a name nothing else provides, so where the
+/// project has already said what that name means, it means that.
+fn build_extra_hosts(
+    additional_hosts: Option<&HashMap<String, String>>,
+    host_gateway: Option<crate::proxy::HostGateway>,
+) -> Option<Vec<String>> {
+    if additional_hosts.is_none() && host_gateway.is_none() {
+        return None;
+    }
+    let mut hosts: HashMap<&str, &str> = host_gateway
+        .map(|gateway| (gateway.name, gateway.address))
+        .into_iter()
+        .collect();
+    if let Some(additional_hosts) = additional_hosts {
+        hosts.extend(
+            additional_hosts
+                .iter()
+                .map(|(name, address)| (name.as_str(), address.as_str())),
+        );
+    }
+    let mut pairs: Vec<String> = hosts
         .iter()
         .map(|(name, address)| format!("{name}:{address}"))
         .collect();
@@ -431,6 +452,11 @@ pub struct NetworkOptions<'a> {
     pub additional_hostnames: Option<&'a Vec<String>>,
     /// Extra `/etc/hosts` entries (hostname -> IP).
     pub additional_hosts: Option<&'a HashMap<String, String>>,
+    /// The `/etc/hosts` entry that makes a rewritten proxy URL resolve, when
+    /// this run rewrote one — see `proxy::ProxyEnvironment::host_gateway`.
+    /// Merged into `additional_hosts` by `build_extra_hosts`, where an
+    /// entry the config declares for the same name wins.
+    pub proxy_host_gateway: Option<crate::proxy::HostGateway>,
     /// Already-expanded `(local_port, container_port, protocol)` triples —
     /// a `config::PortMapping` range expands to more than one entry (see
     /// `PortMapping::expand`). Parsing/validation already happened at
@@ -749,6 +775,7 @@ async fn build_image_via_buildkit(
     buildkit: Option<&BuildKitOptions>,
     tag: &str,
     force_pull: bool,
+    proxy_host_gateway: Option<crate::proxy::HostGateway>,
 ) -> Result<String> {
     let build_directory = build_directory.to_path_buf();
     let dockerfile_owned = dockerfile.to_string();
@@ -772,6 +799,10 @@ async fn build_image_via_buildkit(
     }
     if force_pull {
         options_builder = options_builder.pull("true");
+    }
+    if let Some(gateway) = proxy_host_gateway {
+        options_builder =
+            options_builder.extrahosts(&format!("{}:{}", gateway.name, gateway.address));
     }
 
     let mut providers = bollard::grpc::build::ImageBuildSessionProviders::default();
@@ -1350,6 +1381,14 @@ pub trait ContainerRuntime {
     /// second use of `image_pull_policy: always` on a `build_directory`
     /// container (distinct from its already-supported use gating whether an
     /// `image` container's own image gets pulled).
+    ///
+    /// `proxy_host_gateway` is the same entry `NetworkOptions` carries, and
+    /// is here for the same reason: a `RUN` step behind a rewritten proxy URL
+    /// has to resolve that name too, and a build that couldn't would fail
+    /// exactly where the container it produces would have worked. Both
+    /// builders take it — the classic one as the `/build` endpoint's
+    /// `extrahosts` parameter, BuildKit through the same parameter, which the
+    /// daemon forwards to the frontend.
     #[allow(clippy::too_many_arguments)]
     async fn build_image(
         &self,
@@ -1360,6 +1399,7 @@ pub trait ContainerRuntime {
         buildkit: Option<&BuildKitOptions>,
         tag: &str,
         force_pull: bool,
+        proxy_host_gateway: Option<crate::proxy::HostGateway>,
     ) -> Result<String>;
 
     /// Tags `image_id` (the ID `build_image` returned) with each of `tags`,
@@ -2553,6 +2593,7 @@ impl ContainerRuntime for DockerClient {
         buildkit: Option<&BuildKitOptions>,
         tag: &str,
         force_pull: bool,
+        proxy_host_gateway: Option<crate::proxy::HostGateway>,
     ) -> Result<String> {
         match self.builder_version().await? {
             bollard::query_parameters::BuilderVersion::BuilderBuildKit => {
@@ -2566,6 +2607,7 @@ impl ContainerRuntime for DockerClient {
                     buildkit,
                     tag,
                     force_pull,
+                    proxy_host_gateway,
                 )
                 .await;
             }
@@ -2606,6 +2648,10 @@ impl ContainerRuntime for DockerClient {
         }
         if force_pull {
             options_builder = options_builder.pull("true");
+        }
+        if let Some(gateway) = proxy_host_gateway {
+            options_builder =
+                options_builder.extrahosts(&format!("{}:{}", gateway.name, gateway.address));
         }
         let options = options_builder.build();
 
@@ -2750,7 +2796,10 @@ impl ContainerRuntime for DockerClient {
 
         let host_config = HostConfig {
             binds: volumes.cloned(),
-            extra_hosts: build_extra_hosts(network_options.additional_hosts),
+            extra_hosts: build_extra_hosts(
+                network_options.additional_hosts,
+                network_options.proxy_host_gateway,
+            ),
             port_bindings: port_config.as_ref().map(|(_, bindings)| bindings.clone()),
             cap_add: container_options.capabilities_to_add.cloned(),
             cap_drop: container_options.capabilities_to_drop.cloned(),
@@ -3113,7 +3162,10 @@ impl ContainerRuntime for DockerClient {
 
         let host_config = HostConfig {
             binds: volumes.cloned(),
-            extra_hosts: build_extra_hosts(network_options.additional_hosts),
+            extra_hosts: build_extra_hosts(
+                network_options.additional_hosts,
+                network_options.proxy_host_gateway,
+            ),
             port_bindings: port_config.as_ref().map(|(_, bindings)| bindings.clone()),
             cap_add: container_options.capabilities_to_add.cloned(),
             cap_drop: container_options.capabilities_to_drop.cloned(),
