@@ -233,6 +233,19 @@ fn a_proxy_that_was_not_rewritten_asks_for_no_host_gateway() {
     assert!(proxy.rewritten_ports().is_empty());
 }
 
+/// The form Docker takes on both endpoints. Pinned here because the build
+/// paths that use it have no unit test of their own — only the end-to-end
+/// one, which needs a real daemon.
+#[test]
+fn a_host_gateway_spells_itself_the_way_docker_reads_it() {
+    let gateway = HostGateway {
+        name: "host.docker.internal",
+        address: "host-gateway",
+    };
+
+    assert_eq!(gateway.extra_host(), "host.docker.internal:host-gateway");
+}
+
 #[test]
 fn no_proxy_vars_at_all_ask_for_no_host_gateway() {
     let proxy = proxy_environment_variables(no_host_env, &BTreeSet::new());

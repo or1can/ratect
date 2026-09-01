@@ -69,6 +69,19 @@ pub struct HostGateway {
     pub address: &'static str,
 }
 
+impl HostGateway {
+    /// The entry as Docker spells it — `name:address`, the form both
+    /// `HostConfig.extra_hosts` and the `/build` endpoint's `extrahosts`
+    /// take.
+    ///
+    /// Here rather than at the two build call sites so the type owns its own
+    /// wire format: the pair travelling as one value is the point, and a
+    /// caller re-spelling the colon is the pair coming apart again.
+    pub fn extra_host(&self) -> String {
+        format!("{}:{}", self.name, self.address)
+    }
+}
+
 /// The hostname a container can reach the Docker host itself through — used
 /// to rewrite a proxy value that points at `localhost` (which, from *inside*
 /// a container, means the container itself, not the host running Docker) so

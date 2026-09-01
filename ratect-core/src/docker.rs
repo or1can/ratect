@@ -801,8 +801,7 @@ async fn build_image_via_buildkit(
         options_builder = options_builder.pull("true");
     }
     if let Some(gateway) = proxy_host_gateway {
-        options_builder =
-            options_builder.extrahosts(&format!("{}:{}", gateway.name, gateway.address));
+        options_builder = options_builder.extrahosts(&gateway.extra_host());
     }
 
     let mut providers = bollard::grpc::build::ImageBuildSessionProviders::default();
@@ -2650,8 +2649,7 @@ impl ContainerRuntime for DockerClient {
             options_builder = options_builder.pull("true");
         }
         if let Some(gateway) = proxy_host_gateway {
-            options_builder =
-                options_builder.extrahosts(&format!("{}:{}", gateway.name, gateway.address));
+            options_builder = options_builder.extrahosts(&gateway.extra_host());
         }
         let options = options_builder.build();
 
