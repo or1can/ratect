@@ -1468,6 +1468,17 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     forward-compatible, so waiting for evidence costs nothing. The shared cache
     above is also the better answer for any bundle that *can* migrate, which
     should shrink the evidence pool rather than grow it.
+- **0.5.0** (planned) — **nothing of its own; it ships
+  [0.26.0](#ratect-compat)'s two fixes**, both of which live in `ratect-core`
+  and so reach this binary unchanged: cleaning up on `SIGTERM` and `SIGHUP` as
+  well as Ctrl+C, and rewriting a `localhost` proxy URL on Linux with the
+  `host.docker.internal:host-gateway` entry that makes the name resolve. Listed
+  rather than left implicit because the two binaries are on independent version
+  lines, so a shared-core release still bumps both — an empty-looking entry here
+  is the honest record of a version that exists, not an oversight. Its exit
+  codes move with `ratect-compat`'s, which is the promise
+  [`docs/ratect-cli.md`](docs/ratect-cli.md) already makes about them being
+  identical.
 
 Its **1.0.0** means something different from `ratect-compat`'s: interface stability
 (the subcommand structure and config format won't break), not feature-completeness
