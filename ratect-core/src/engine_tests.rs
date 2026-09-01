@@ -5548,7 +5548,7 @@ fn with_settings_applies_every_setting() {
 
     assert!(
         engine.interrupt.is_some(),
-        "an interrupt tracker should reach the engine, or Ctrl+C won't clean up"
+        "an interrupt tracker should reach the engine, or no signal will clean up"
     );
 
     assert_eq!(engine.existing_network.as_deref(), Some("existing"));

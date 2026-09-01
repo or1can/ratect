@@ -544,9 +544,9 @@ async fn run(args: Args) -> Result<()> {
             // Built before the connection options consume `args` below.
             let settings = args.engine_settings(project_directory);
             // Armed here rather than in `engine_settings`, which is
-            // synchronous — see its own comment. From this point a Ctrl+C
-            // abandons the run and cleans up instead of killing the process
-            // where it stands.
+            // synchronous — see its own comment. From this point Ctrl+C,
+            // `SIGTERM` or `SIGHUP` abandons the run and cleans up instead
+            // of killing the process where it stands.
             if let Some(interrupt) = &settings.interrupt {
                 interrupt.listen();
             }

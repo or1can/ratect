@@ -280,8 +280,8 @@ fn each_flag_changes_only_its_own_setting() {
     }
 }
 
-/// An interrupt tracker must always reach the engine, or Ctrl+C stops
-/// cleaning up after itself — a regression the flag-mapping tests above
+/// An interrupt tracker must always reach the engine, or a signalled run
+/// stops cleaning up after itself — a regression the flag-mapping tests above
 /// deliberately can't see, since they only compare against the defaults
 /// and `interrupt` is excluded from that comparison. Until this existed,
 /// only the `#[ignore]`d Docker test covered the wiring at all.

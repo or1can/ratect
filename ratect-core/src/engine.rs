@@ -599,10 +599,11 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     /// `--tag-image`'s "did this container actually run" check once the
     /// whole invocation finishes (see `run_task`).
     containers_used: Mutex<HashSet<String>>,
-    /// Set by [`TaskEngine::with_interrupt`]: abandons the run when the user
-    /// interrupts it, so cleanup still happens. `None` (the default) means
-    /// interrupts aren't watched at all and a `SIGINT` kills the process
-    /// outright, which is every unit test and was every run before 0.25.0.
+    /// Set by [`TaskEngine::with_interrupt`]: abandons the run when a
+    /// termination signal arrives, so cleanup still happens. `None` (the
+    /// default) means no signal is watched at all and any of them kills the
+    /// process outright, which is every unit test — and was every run before
+    /// 0.25.0, and every run ended by anything but Ctrl+C before 0.26.0.
     interrupt: Option<Arc<crate::interrupt::Interrupt>>,
     /// `false` when `--no-cleanup`/`--no-cleanup-after-success` was given:
     /// the task's own container (regardless of exit code — see
@@ -718,9 +719,9 @@ pub struct TaskEngineSettings {
     /// own, since the core's version isn't what a user sees from
     /// `--version`.
     pub ratect_version: Option<String>,
-    /// Set by a binary that watches for Ctrl+C, so an interrupted run still
-    /// cleans up after itself — see [`TaskEngine::with_interrupt`]. `None`
-    /// leaves interrupts unwatched.
+    /// Set by a binary that watches for termination signals, so a cancelled
+    /// run still cleans up after itself — see
+    /// [`TaskEngine::with_interrupt`]. `None` leaves them unwatched.
     pub interrupt: Option<Arc<crate::interrupt::Interrupt>>,
 }
 
@@ -771,9 +772,10 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         }
     }
 
-    /// Makes this engine abandon a run when the user interrupts it (Ctrl+C),
-    /// cleaning up what it created rather than leaving it behind — see
-    /// [`crate::interrupt`] and `run_task_internal`.
+    /// Makes this engine abandon a run when a termination signal arrives
+    /// (Ctrl+C, `SIGTERM` or `SIGHUP`), cleaning up what it created rather
+    /// than leaving it behind — see [`crate::interrupt`] and
+    /// `run_task_internal`.
     ///
     /// Opt-in, like the other settings here, and left off by default so a
     /// unit test never picks up the process's real signals: only a binary
@@ -2039,18 +2041,18 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             self.cleanup_after_failure
         };
 
-        // A Ctrl+C during cleanup abandons the cleanup itself. Cleanup talks
-        // to the daemon and isn't instant — a container ignoring `SIGTERM`
-        // waits out Docker's full kill timeout — so "stop now" has to mean
-        // something. Batect lands in the same place: an interrupt during its
-        // cleanup stage switches it to `PostTaskManualCleanup.Required`.
+        // A second signal during cleanup abandons the cleanup itself.
+        // Cleanup talks to the daemon and isn't instant — a container
+        // ignoring `SIGTERM` waits out Docker's full kill timeout — so
+        // "stop now" has to mean something. Batect lands in the same place:
+        // an interrupt during its cleanup stage switches it to
+        // `PostTaskManualCleanup.Required`.
         //
         // Measured against the count when the run *ended* (captured above),
         // not a fixed `>= 2`. Arming the handler replaces the process's
-        // default behaviour for every trapped signal for the whole run, so
-        // a signal Ratect doesn't act on is one it has silently swallowed
-        // — and a
-        // fixed threshold swallows the first Ctrl+C during the cleanup of a
+        // default behaviour for every trapped signal for the whole run, so a
+        // signal Ratect doesn't act on is one it has silently swallowed — and
+        // a fixed threshold swallows the first Ctrl+C during the cleanup of a
         // run that was never interrupted (the common case: a task finished,
         // cleanup is slow, the user wants out). Relative to the baseline,
         // one press abandons cleanup after a normal run and a second does
