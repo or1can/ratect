@@ -31,6 +31,24 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+  # Every `[`item`]` in a doc comment has to resolve. This repo puts a lot of
+  # explanatory prose in doc comments deliberately (decisions/0006), and the
+  # cross-references in it are the part that rots: rename or delete an item and
+  # every link naming it breaks silently, because neither `cargo build` nor
+  # `cargo clippy` reads them. A review caught one by hand; a grep for it
+  # missed it, because the link text ends in a backtick before the bracket.
+  # This is the check that can't miss it.
+  docs:
+    name: Rustdoc
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --workspace --all-features --no-deps
+
   test:
     name: Build & Test
     runs-on: ubuntu-latest

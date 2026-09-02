@@ -129,11 +129,22 @@ own yet.
 
 - **Documentation checks** (`tools/`; the checks themselves are not in CI — `verify-docs.py` runs the branch's own code — though their tests are). `python3 tools/stale-claims.py`
   ranks prose by how much the code it names has moved since the claim was last
-  touched, and `python3 tools/spliced-docs.py` finds doc comments that document a
-  different item from the one they sit on. Both are candidate lists that exit 0 —
+  touched, `python3 tools/spliced-docs.py` finds doc comments that document a
+  different item from the one they sit on, and `python3 tools/echoed-claims.py`
+  finds prose you just corrected that some *other* file still asserts verbatim.
+  All three are candidate lists that exit 0 —
   they measure a proxy, not wrongness, so a hit means "re-read this" and a clean
   run means nothing was *detected*. Run them before a release; guidelines 15 and
   16 say what to do with what they find.
+
+  `echoed-claims.py` exists because this repo states one behaviour in five
+  places by design — `README.md` summarising `ROADMAP.md` summarising `docs/`,
+  plus `CHANGELOG.md` and a doc comment — and the other two tools rank by *code*
+  churn, which scores that case zero. It is the machine-doable half of guideline
+  16's sweep, and only that half: it matches the words you deleted, so it finds
+  verbatim duplication and misses restatement, which its own header measures
+  rather than assumes. Run it with a range (`'HEAD~3..HEAD'`) or bare against the
+  working tree.
 
   `python3 tools/verify-docs.py` is the one that decides something: it runs each
   command marked `<!-- verify: ... -->` above a fenced block and diffs the real
@@ -446,6 +457,15 @@ for — note that in `TODO.md` instead.
     reviewer re-deriving it. A review that only surfaces siblings of something
     already fixed is **failure demand**: work created by not having finished the
     job the first time.
+
+    For prose specifically, run `python3 tools/echoed-claims.py` before
+    committing rather than sweeping from memory: it lists what some other file
+    still says verbatim after you corrected it here. It is one pass, not the
+    sweep: of the two stale echoes that reached review in 0.26.0 it finds one
+    (the firewall sentence, quoted between two `docs/` pages) and misses the
+    other (a `ROADMAP.md` headline bullet, which paraphrased what it
+    summarised). Restatement is the commoner shape and the shape it is weakest
+    on, so a clean run buys you the verbatim case and nothing more.
 
     - **Prefer the structural fix when the local one leaves the invariant
       unstated.** When one area keeps producing findings, the design is the
