@@ -245,7 +245,7 @@ fn tokenize_command_line(input: &str) -> Result<Vec<String>> {
 /// Builds the Docker `cmd` array for a task's container, folding in any
 /// `-- ADDITIONAL_ARGS` from the CLI.
 ///
-/// `command` is tokenized via [`tokenize_command_line`] — the same literal,
+/// `command` is tokenized via `tokenize_command_line` — the same literal,
 /// no-shell-involved argv Batect itself would produce — with
 /// `additional_args` appended as further literal argv entries, matching
 /// Batect's own `ADDITIONAL_ARGS` handling exactly (no `sh -c`, no
@@ -477,7 +477,7 @@ pub struct ContainerOptions<'a> {
     /// Overrides the image's own `WORKDIR`. `None` inherits it.
     pub working_directory: Option<&'a str>,
     /// Overrides the image's own `ENTRYPOINT`. Tokenized into literal argv
-    /// via [`tokenize_command_line`] before reaching Docker — `None`
+    /// via `tokenize_command_line` before reaching Docker — `None`
     /// inherits the image's own.
     pub entrypoint: Option<&'a str>,
     /// Docker labels (`key: value`) applied to the container. `None`/empty
@@ -548,7 +548,7 @@ pub struct HealthCheckOptions {
 /// only when a container declares `build_secrets` and/or `build_ssh`,
 /// converted from config types the same way as `HealthCheckOptions` above.
 /// Independent of *which builder* runs the build (that's
-/// [`select_builder_version`]'s call, from the daemon's advertised default):
+/// `select_builder_version`'s call, from the daemon's advertised default):
 /// `None` just means no session providers to serve. The one interaction:
 /// `Some` requires the BuildKit builder — the classic builder has no session
 /// to serve these over, so `build_image` fails clearly if the classic
@@ -1433,7 +1433,7 @@ pub trait ContainerRuntime {
     /// `ports`, `customise` has no override for it (matching Batect's own
     /// `TaskContainerCustomisation`, which doesn't either), so this is always
     /// the container's own value, verbatim. Tokenized via
-    /// [`tokenize_command_line`] the same way `run_container`'s is — `None`
+    /// `tokenize_command_line` the same way `run_container`'s is — `None`
     /// runs the image's own default `CMD` instead. Unlike `run_container`,
     /// there's no `additional_args` here — a dependency never receives
     /// `-- ADDITIONAL_ARGS` (only the top-level requested task's own
@@ -1485,7 +1485,7 @@ pub trait ContainerRuntime {
 
     /// Runs `command` inside the already-running `container_id` — used for
     /// `setup_commands`. Tokenized into literal argv via
-    /// [`tokenize_command_line`], the same as `command`/`entrypoint` — no
+    /// `tokenize_command_line`, the same as `command`/`entrypoint` — no
     /// shell involved, matching Batect's own `SetupCommand.command` (typed
     /// `Command`, the same type as `Container.command`/`entrypoint`, and
     /// passed to Docker's exec API as already-parsed argv — confirmed by
@@ -1514,7 +1514,7 @@ pub trait ContainerRuntime {
     /// `network` is set); used for a task's own container.
     ///
     /// `additional_args` are appended as literal argv entries after
-    /// `command`'s own tokenized argv (see [`build_cmd`]) — matching
+    /// `command`'s own tokenized argv (see `build_cmd`) — matching
     /// Batect's own `ADDITIONAL_ARGS` mechanism exactly, never re-parsed as
     /// shell syntax regardless of what characters they contain. If `command`
     /// is `None`, `additional_args` (when non-empty) are passed directly as
@@ -1649,7 +1649,7 @@ pub struct DockerClient {
     docker: Docker,
     /// The builder every `build_image` call uses, resolved once per client
     /// (per `ratect` invocation, in practice) on first build — see
-    /// [`select_builder_version`] for the decision itself.
+    /// `select_builder_version` for the decision itself.
     builder_version: tokio::sync::OnceCell<bollard::query_parameters::BuilderVersion>,
     /// Where streamed pull/build progress detail goes for the user to see —
     /// `docker.rs` only ever posts the fine-grained progress variants (the
@@ -1674,7 +1674,7 @@ pub struct DockerClient {
     /// environment variable, so an explicit flag on the command line always
     /// wins over it. `false` (the default) defers to
     /// `DOCKER_BUILDKIT`/the daemon's own advertised default, unchanged. See
-    /// [`select_builder_version`] — there's no `--disable-buildkit`
+    /// `select_builder_version` — there's no `--disable-buildkit`
     /// counterpart, matching Batect exactly (forcing it *off* is only ever
     /// done via `DOCKER_BUILDKIT=0`).
     enable_buildkit: bool,
@@ -2141,7 +2141,7 @@ impl DockerClient {
 
     /// The builder this invocation's image builds use — resolved on first
     /// call (one `/_ping` round trip) and cached for the client's lifetime;
-    /// see [`select_builder_version`].
+    /// see `select_builder_version`.
     async fn builder_version(&self) -> Result<bollard::query_parameters::BuilderVersion> {
         self.builder_version
             .get_or_try_init(|| async {

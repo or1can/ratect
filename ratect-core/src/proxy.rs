@@ -28,7 +28,7 @@
 //!   must add so the rewritten name resolves, and it is `Some` only when a
 //!   URL was *actually* rewritten. Injecting it for a run with no proxy at
 //!   all would put a name into every container that nothing there asked for.
-//! - [`loopback_only_ports_in`], over the tables [`proc_net_tcp_tables`]
+//! - `loopback_only_ports_in`, over the tables `proc_net_tcp_tables`
 //!   reads, answers the case the rewrite cannot fix at all: a proxy bound to
 //!   `127.0.0.1` is unreachable from a container however correct its URL is.
 //!   The engine warns; it does not fail, since a run may not need the proxy
@@ -55,8 +55,8 @@ const NO_PROXY_VARIABLE_NAME: &str = "no_proxy";
 const HOST_GATEWAY_ADDRESS: &str = "host-gateway";
 
 /// The extra `/etc/hosts` entry that makes a rewritten proxy URL resolve
-/// from inside a container: the name [`preprocess_proxy_value`] rewrote to,
-/// mapped to Docker's [`HOST_GATEWAY_ADDRESS`] sentinel.
+/// from inside a container: the name `preprocess_proxy_value` rewrote to,
+/// mapped to Docker's `HOST_GATEWAY_ADDRESS` sentinel.
 ///
 /// Both fields are `'static` because both are constants — the type exists so
 /// the pair travels as one named thing from the decision that produces it
@@ -114,7 +114,7 @@ pub fn docker_host_name() -> Option<&'static str> {
 
 /// What preprocessing one proxy variable produced: the value to propagate,
 /// and — only when the value was actually rewritten — the port it named on
-/// the host. The port is what [`loopback_only_ports_in`] needs, and its
+/// the host. The port is what `loopback_only_ports_in` needs, and its
 /// presence is what makes a run ask for a [`HostGateway`] at all.
 struct Preprocessed {
     value: String,
@@ -216,7 +216,7 @@ impl ProxyEnvironment {
         })
     }
 
-    /// The rewritten URLs' host ports, for [`loopback_only_ports_in`].
+    /// The rewritten URLs' host ports, for `loopback_only_ports_in`.
     pub fn rewritten_ports(&self) -> &BTreeSet<u16> {
         &self.rewritten_ports
     }
@@ -287,7 +287,7 @@ pub fn proxy_environment_variables(
 }
 
 /// The host's `/proc/net/tcp` and `/proc/net/tcp6`, or nothing at all off
-/// Linux — the input [`loopback_only_ports_in`] answers from.
+/// Linux — the input `loopback_only_ports_in` answers from.
 ///
 /// Linux only, and deliberately so on both counts. It is the only platform
 /// where the rewrite depends on a [`HostGateway`] at all — Docker Desktop

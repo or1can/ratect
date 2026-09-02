@@ -30,7 +30,7 @@
 //!
 //! Two deliberate choices worth knowing:
 //!
-//! - It describes one *file*'s shape ([`crate::config::ConfigFile`] — including `include`,
+//! - It describes one *file*'s shape (`crate::config::ConfigFile` — including `include`,
 //!   which only exists per-file), not the merged [`Config`](crate::config::Config)
 //!   that several included files add up to. That's what an editor has open.
 //! - Draft-07, not schemars' own default (2020-12): that's what

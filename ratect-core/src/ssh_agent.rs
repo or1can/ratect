@@ -40,7 +40,7 @@
 //! the SSH agent protocol.
 //!
 //! Two implementation notes that are easy to undo by accident. The accept
-//! loop owns its connections in a [`tokio::task::JoinSet`] rather than
+//! loop owns its connections in a `tokio::task::JoinSet` rather than
 //! detaching them, so dropping the [`Keyring`] aborts the connections it is
 //! *already* serving and not merely the loop — an established client does
 //! not care that the socket file has been unlinked. That matches every other
@@ -111,7 +111,7 @@ const MAX_SOCKET_PATH_LENGTH: usize = 100;
 /// directory holding it is created with `0700` permissions and a name no
 /// other process can predict. Dropping this removes the socket and the
 /// directory, and aborts both the accept loop *and* every connection it is
-/// still serving (see [`serve`]) — so an agent lives exactly as long as the
+/// still serving (see `serve`) — so an agent lives exactly as long as the
 /// value representing it, with no window in which an already-connected
 /// client can still obtain signatures.
 #[derive(Debug)]
@@ -297,7 +297,7 @@ const ACCEPT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis
 /// Accepts connections until the task is dropped, serving each one
 /// concurrently.
 ///
-/// Connections are spawned into a [`tokio::task::JoinSet`] this task owns,
+/// Connections are spawned into a `tokio::task::JoinSet` this task owns,
 /// which is what makes the agent stop when [`Keyring`] is dropped: aborting
 /// this task drops the set, which aborts every connection still open. A
 /// detached `tokio::spawn` per connection would leave clients able to keep

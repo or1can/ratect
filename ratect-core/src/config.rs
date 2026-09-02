@@ -164,7 +164,7 @@ pub struct Container {
     /// why the rejection is stated there rather than here. `ratect.toml` does
     /// resolve expressions in this field, and `make_native` overrides the
     /// text to say so; the rejection itself is
-    /// [`reject_image_expressions_in_compat`].
+    /// `reject_image_expressions_in_compat`.
     pub image: Option<String>,
     /// Controls whether an `image` container's image is pulled fresh or
     /// only when missing locally — Docker's own pull semantics
@@ -318,7 +318,7 @@ pub struct Container {
     /// The size of `/dev/shm`, in bytes — Docker's `--shm-size`. Accepts
     /// Batect's own size-string format (`"128"`, `"128b"`, `"128k"`,
     /// `"128m"`, `"128g"` — a bare number means bytes; see
-    /// [`parse_byte_size`]) or a plain YAML integer (also bytes), already
+    /// `parse_byte_size`) or a plain YAML integer (also bytes), already
     /// converted to bytes here rather than deferred like `dockerfile`/
     /// `build_target`'s plain strings, since Docker's own API wants a byte
     /// count, not a string. `None` inherits Docker's own default (64 MiB).
@@ -809,7 +809,7 @@ fn parse_byte_size(value: &str) -> std::result::Result<i64, String> {
 }
 
 /// `serde` `deserialize_with` for [`Container::shm_size`] — accepts either
-/// a Batect-style size string ([`parse_byte_size`]) or a plain integer
+/// a Batect-style size string (`parse_byte_size`) or a plain integer
 /// (bytes). Only invoked when the field is actually present; `#[serde(default)]`
 /// handles the absent case.
 fn deserialize_shm_size<'de, D>(deserializer: D) -> std::result::Result<Option<i64>, D::Error>
@@ -2011,7 +2011,7 @@ struct GitBoundary {
     bundle: Bundle,
 }
 
-/// Which of [`GitBoundary::check_path_allowed`]'s two checks refused a path.
+/// Which of `GitBoundary::check_path_allowed`'s two checks refused a path.
 /// Named rather than passed as a message fragment so a third check cannot be
 /// added by inventing a third string at one call site.
 enum Escape {
@@ -2167,7 +2167,7 @@ impl GitBoundary {
 ///
 /// A plain [`Path::canonicalize`] can't be used because the path may not exist
 /// yet — that is the whole reason
-/// [`GitBoundary::check_path_allowed`] can't simply reuse
+/// `GitBoundary::check_path_allowed` can't simply reuse
 /// [`GitBoundary::check_contains_canonical`]. A component that is merely
 /// *missing* is therefore expected, and resolution continues above it: a path
 /// with no existing ancestor cannot be pointing anywhere yet, so the caller's
@@ -2262,13 +2262,13 @@ pub(crate) enum ConfigFormat {
     Native,
 }
 
-/// The parser a file's extension selects under [`ConfigFormat::Native`].
+/// The parser a file's extension selects under `ConfigFormat::Native`.
 enum FileFormat {
     Toml,
     Yaml,
 }
 
-/// Classifies a file by extension for [`ConfigFormat::Native`]. Deliberately
+/// Classifies a file by extension for `ConfigFormat::Native`. Deliberately
 /// strict — an unrecognized extension errors rather than being content-sniffed,
 /// since TOML and YAML are too easy to confuse for a simple document.
 fn config_file_format(path: &Path) -> Result<FileFormat> {
@@ -2414,7 +2414,7 @@ pub struct LoadedConfig {
     /// The Git boundary a container's `volumes`/`build_directory` paths must
     /// stay within, for every container whose origin file was reached
     /// (directly or via a nested local include) through a `type: git`
-    /// include — see [`GitBoundary::check_path_allowed`]. A container absent
+    /// include — see `GitBoundary::check_path_allowed`. A container absent
     /// from this map was declared entirely within the caller's own local
     /// project tree and has no such restriction, matching the trust model
     /// local includes already had.
@@ -2428,7 +2428,7 @@ impl LoadedConfig {
     /// `base_path`, and additionally confines a Git-included container's
     /// resolved `volumes`/`build_directory` paths to that repository's own
     /// clone directory or the project directory (see
-    /// [`GitBoundary::check_path_allowed`]). Identical behavior to
+    /// `GitBoundary::check_path_allowed`). Identical behavior to
     /// `Config::resolve_expressions` when no `include` was used (every
     /// container's origin is then the root file's own directory anyway, and
     /// `container_git_boundaries` is empty).
@@ -2462,7 +2462,7 @@ impl Config {
 
     /// Like [`load_from_file`](Self::load_from_file), but in `ratect`'s native
     /// mode: a TOML root file, with TOML/YAML includes chosen by extension —
-    /// see [`ConfigFormat::Native`].
+    /// see `ConfigFormat::Native`.
     pub async fn load_from_file_native(path: &Path) -> Result<LoadedConfig> {
         let git_cache = crate::git_include::GitIncludeCache::new();
         Self::load_from_file_native_with_git_cache(path, &git_cache).await
@@ -2820,7 +2820,7 @@ impl Config {
     /// (likewise empty outside `LoadedConfig::resolve_expressions`) confines
     /// a Git-included container's resolved `volumes`/`build_directory` paths
     /// to that repository's own clone directory *or* the project directory
-    /// — see [`GitBoundary::check_path_allowed`] for why the project
+    /// — see `GitBoundary::check_path_allowed` for why the project
     /// directory is a second allowed root rather than requiring pure
     /// containment within the clone.
     fn resolve_expressions_with_boundaries(
@@ -2894,7 +2894,7 @@ impl Config {
                     .map(|boundary| (boundary, project_directory_path.as_path()));
                 // Unconditional, though only `ratect.toml` can reach it with an
                 // expression in it: a `batect.yml` carrying one is refused at load
-                // (see [`reject_image_expressions_in_compat`]), and anything that
+                // (see `reject_image_expressions_in_compat`), and anything that
                 // survives that has nothing here to substitute. Keeping the
                 // *decision* at the rejection — where the format is already known —
                 // is what saves threading `ConfigFormat` through path resolution.
@@ -3251,7 +3251,7 @@ pub struct LoadedProject {
 }
 
 /// Serializes a merged, *unresolved* [`Config`] to native `ratect.toml` text —
-/// the rendering half of `ratect config convert`. Goes through [`toml::Value`]
+/// the rendering half of `ratect config convert`. Goes through `toml::Value`
 /// rather than serializing the struct directly, so scalar fields are emitted
 /// before table fields (raw struct serialization would produce a value after a
 /// `[table]` header — invalid TOML — because `Container` interleaves the two).
@@ -3283,17 +3283,17 @@ pub fn to_native_toml(config: &Config) -> Result<String> {
 /// extension) and collects task names, but resolves no expressions, reaches no
 /// Docker, and — the load-bearing part — **never touches the network**: local
 /// includes are followed, and a `type: git` include only if its repository is
-/// *already* cached (see [`crate::git_include::cached_working_copy`]), never
+/// *already* cached (see `crate::git_include::cached_working_copy`), never
 /// cloning. Any unreadable or half-written file contributes nothing rather than
 /// producing an error, which is the only sane behaviour on `<TAB>`.
 ///
 /// It therefore mirrors the loader's decisions about **which files are read**,
 /// and deliberately not its decisions about **whether to fail**. That is why
-/// both the nested-Git gate and a bundle's [`GitBoundary`] containment are
+/// both the nested-Git gate and a bundle's `GitBoundary` containment are
 /// honoured here — each stops a file being read at all, so ignoring either
 /// would offer tasks the loader never sees, and in containment's case would
 /// read a file outside the clone that the loader refuses outright — while
-/// [`include_trust::EffectiveGrants`]'s lost-grant refusal is not: it fires
+/// `include_trust::EffectiveGrants`'s lost-grant refusal is not: it fires
 /// only on an include whose target was *already* loaded by an earlier route,
 /// so it changes nothing about the set of files, only whether the load
 /// aborts. Honouring it would mean completing to nothing for a config whose
@@ -3448,7 +3448,7 @@ pub async fn load_project(
 
 /// Native-mode counterpart of [`load_project`] — `ratect`'s entry point. A
 /// TOML root file, TOML/YAML includes by extension (see
-/// [`ConfigFormat::Native`]).
+/// `ConfigFormat::Native`).
 pub async fn load_project_native(
     config_file: &Path,
     config_var_overrides: &HashMap<String, String>,

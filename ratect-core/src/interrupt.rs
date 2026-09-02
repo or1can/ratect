@@ -390,7 +390,7 @@ impl Interrupt {
     /// immediately if that many already have.
     ///
     /// The `notified()`-before-check ordering matters and isn't incidental:
-    /// [`Notify::notify_waiters`] wakes only the waiters that already exist,
+    /// `Notify::notify_waiters` wakes only the waiters that already exist,
     /// so registering interest *first* and checking the count *second* is
     /// what stops an interrupt arriving between the two from being missed
     /// and hanging the caller forever.

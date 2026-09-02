@@ -35,7 +35,7 @@
 //!
 //! The removal *decision* — which volumes or directories match this project,
 //! restricted to `--clean-cache`'s allowlist — lives in plain synchronous
-//! functions ([`matching_cache_volumes`]/[`matching_cache_directories`]),
+//! functions (`matching_cache_volumes`/`matching_cache_directories`),
 //! deliberately separate from the async I/O around them, so it is testable
 //! against plain `Vec<String>`/tempdir fixtures with no fake
 //! `ContainerRuntime`.
@@ -143,7 +143,7 @@ pub fn cache_volume_name(project_cache_key: &str, name: &str) -> String {
 /// The `ratect-` prefix is deliberate on two counts. Batect has no shared
 /// cache, so there is no naming convention to stay compatible with; and
 /// because it differs from [`cache_volume_name`]'s `batect-cache-` prefix,
-/// [`matching_cache_volumes`] cannot match a shared cache even by accident,
+/// `matching_cache_volumes` cannot match a shared cache even by accident,
 /// so a bare `--clean` can never discard storage other projects are using.
 pub fn shared_cache_volume_name(name: &str) -> String {
     format!("ratect-shared-cache-{name}")
@@ -200,7 +200,7 @@ pub fn resolve_cache_mount(
 
 /// Which shared cache volumes `only` names — the removal *decision*, kept
 /// synchronous and separate from the I/O around it, the same way
-/// [`matching_cache_volumes`] is.
+/// `matching_cache_volumes` is.
 ///
 /// **An empty `only` matches nothing**, the opposite of the project-scoped
 /// rule where empty means "all of this project's". A shared cache holds
@@ -371,7 +371,7 @@ pub async fn list_volume_caches(
 }
 
 /// The `CacheType::Directory` counterpart of [`list_volume_caches`] —
-/// already sorted, by [`matching_cache_directories`].
+/// already sorted, by `matching_cache_directories`.
 pub fn list_directory_caches(project_directory: &Path) -> Result<Vec<String>> {
     matching_cache_directories(&cache_directory(project_directory), &HashSet::new())
 }
@@ -399,7 +399,7 @@ pub async fn clean_volume_caches(
     Ok(matched)
 }
 
-/// The synchronous counterpart of [`matching_cache_volumes`] for
+/// The synchronous counterpart of `matching_cache_volumes` for
 /// `CacheType::Directory`: this project's own cache directories are exactly
 /// [`cache_directory`]'s own subdirectories (the `key` file living
 /// alongside them is a plain file, not a directory, so it's never matched

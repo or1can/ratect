@@ -48,6 +48,31 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --workspace --all-features --no-deps
+      # `cargo doc -D warnings` catches a link to a name that does not exist.
+      # It does *not* catch a link to a name that exists but is not public:
+      # rustdoc silently renders `[`x`]` as literal brackets and exits 0, so
+      # the reader sees punctuation where a link was meant. No lint covers it
+      # — `private_intra_doc_links` does not fire here — which is why this
+      # greps the rendered output for the symptom instead of asking the
+      # compiler. Restricted to link names this workspace actually writes, so
+      # a dependency's own dropped links (inlined into our pages through trait
+      # impls) don't fail our build.
+      - name: No doc link renders as literal brackets
+        run: |
+          grep -rhoE '\[`[A-Za-z_][A-Za-z0-9_:]*`\]' \
+            ratect-core/src ratect/src ratect-compat/src dockerignore/src \
+            | tr -d '[]`' | sort -u > /tmp/written-links
+          for crate in ratect_core ratect ratect_compat dockerignore; do
+            [ -d "target/doc/$crate" ] && \
+              grep -rho '\[<code>[^<]*</code>\]' "target/doc/$crate" || true
+          done | sed 's/\[<code>//; s|</code>\]||' | sort -u > /tmp/dropped-links
+          dropped=$(comm -12 /tmp/written-links /tmp/dropped-links)
+          if [ -n "$dropped" ]; then
+            echo "These doc links resolve to nothing public and render as literal brackets:"
+            echo "$dropped"
+            echo "Link a public path, or write it as a plain code span."
+            exit 1
+          fi
 
   test:
     name: Build & Test

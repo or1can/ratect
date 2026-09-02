@@ -516,7 +516,7 @@ impl<G: GitClient> GitIncludeCache<G> {
     }
 
     /// Removes any cached repo whose `last_used` is more than
-    /// [`STALE_AFTER`] old — matching Batect's own
+    /// `STALE_AFTER` old — matching Batect's own
     /// `GitRepositoryCacheCleanupTask`/`GitRepositoryCache.delete` exactly.
     /// Meant to be started unconditionally, once per invocation, as a
     /// detached background task (see `main.rs`) — never awaited, so a

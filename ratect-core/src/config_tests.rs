@@ -7283,7 +7283,7 @@ run = { container = "app" }
 /// `batect` resolves nothing in `image`, so a `batect.yml` using an
 /// expression would stop working under the tool this binary is a drop-in
 /// for. Rejected rather than silently resolved — see
-/// [`reject_image_expressions_in_compat`].
+/// `reject_image_expressions_in_compat`.
 #[tokio::test]
 async fn an_image_expression_is_rejected_in_a_batect_yml() {
     let dir = unique_temp_dir();
