@@ -273,6 +273,22 @@ tables above:
   What stays an accepted gap is Batect's Docker-version-gated hostname fallback
   chain, which reaches back to Docker 17.06. It isn't worth chasing for any
   actively-maintained daemon.
+- **Private registry credentials**: **not supported.** Batect reads your Docker
+  configuration (`~/.docker/config.json` by default, or `DOCKER_CONFIG`, or its
+  own `--docker-config-directory`), resolves the credential store or helper, and
+  sends those credentials when it pulls an image or builds one. Ratect does not:
+  it talks to the daemon directly and sends no registry credentials at all.
+
+  What that means in practice: with Batect, running `docker login` once was
+  enough, and every later run could pull from your private registry. With Ratect,
+  a container whose `image` lives in a private registry fails to pull, whether or
+  not you have logged in — unless that exact image is already in the daemon's
+  local store, in which case nothing needs pulling and it works, which makes the
+  failure look intermittent.
+
+  Workaround until this is closed: `docker pull` the image yourself before the
+  run, so the daemon already has it. Tracked in
+  [ROADMAP.md](../ROADMAP.md#batect-parity) and blocking 1.0.0.
 
 ## What Ratect *does* support today
 
