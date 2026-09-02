@@ -966,10 +966,19 @@ A few details worth knowing:
 
   It's a warning, not a failure: the run may never use the proxy. Note the security
   cost it names — binding a proxy to `0.0.0.0` opens it to everything that can reach
-  the machine, so weigh that rather than applying it reflexively. A host firewall can
-  block the container's traffic too, and that one Ratect can't detect: the bridge
-  interface differs for every network it creates, so if the warning doesn't fire and
-  the proxy still isn't reachable, check the firewall rules for Docker's bridges.
+  the machine, so weigh that rather than applying it reflexively. Some proxies offer
+  the same thing as a setting: `cntlm`, for instance, binds `127.0.0.1:3128` by
+  default and listens on every interface only under its `Gateway` option.
+
+  A host firewall can block the container's traffic even when the proxy is bound
+  wide enough, and that case Ratect can't detect — so if the warning doesn't fire
+  and the proxy still isn't reachable, check there next. What to look for: the
+  connection arrives on the bridge interface of the network Ratect created for that
+  task, so a rule written for Docker's **default** bridge (`docker0`) won't cover
+  it. Ratect never uses the default bridge — it creates a network per task, or uses
+  the one [`--use-network`](cli-reference.md) names — so an `INPUT` rule has to
+  accept from that network's own interface, or from the subnet Docker gave it
+  (`docker network inspect` reports both).
 - **`--no-proxy-vars`** disables all of this. See [CLI reference](cli-reference.md).
 
 See also: [`TERM` propagation](#term-propagation) — a similarly automatic,
