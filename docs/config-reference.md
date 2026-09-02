@@ -976,9 +976,10 @@ A few details worth knowing:
   connection arrives on the bridge interface of the network Ratect created for that
   task, so a rule written for Docker's **default** bridge (`docker0`) won't cover
   it. Ratect never uses the default bridge — it creates a network per task, or uses
-  the one [`--use-network`](cli-reference.md) names — so an `INPUT` rule has to
-  accept from that network's own interface, or from the subnet Docker gave it
-  (`docker network inspect` reports both).
+  the one [`--use-network`](cli-reference.md) names. Match on that network's subnet,
+  which `docker network inspect <network>` reports under `IPAM.Config`; its
+  interface name is *not* in that output, so a rule pinned to an interface is the
+  harder one to write and the easier one to get wrong.
 - **`--no-proxy-vars`** disables all of this. See [CLI reference](cli-reference.md).
 
 See also: [`TERM` propagation](#term-propagation) — a similarly automatic,
