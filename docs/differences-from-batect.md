@@ -252,8 +252,10 @@ tables above:
     same job as one documented flag. Ratect rewrites everywhere and adds that
     entry to every container **and every image build** — but only when a URL was
     actually rewritten, so a run whose proxy already names a routable host gets no
-    name it didn't ask for. Taking that flag as given means Ratect assumes Docker
-    20.10 or newer.
+    name it didn't ask for. Taking that flag as given means this feature needs
+    Docker 20.10 or newer — comfortably below the Engine API version Ratect
+    already requires of the daemon for everything else, so it constrains nobody
+    in practice; see [Prerequisites](installation.md#prerequisites).
   - **A proxy that's bound to loopback only is diagnosed, not left to fail.**
     Rewriting the URL can't make such a proxy reachable — `cntlm` and friends
     typically bind `127.0.0.1`, and a container connecting through the host
