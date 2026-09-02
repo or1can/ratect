@@ -70,14 +70,20 @@ pub struct HostGateway {
 }
 
 impl HostGateway {
-    /// The entry as Docker spells it — `name:address`, the form both
-    /// `HostConfig.extra_hosts` and the `/build` endpoint's `extrahosts`
-    /// take.
+    /// The entry as Docker spells it — `name:address`.
     ///
-    /// Here rather than at the two build call sites so the type owns its own
-    /// wire format: the pair travelling as one value is the point, and a
-    /// caller re-spelling the colon is the pair coming apart again.
-    pub fn extra_host(&self) -> String {
+    /// Used by the two image-build call sites, which pass one string to the
+    /// `/build` endpoint's `extrahosts`. The container path does *not* call
+    /// this: `docker::build_extra_hosts` merges the gateway into the
+    /// `additional_hosts` map first, so that a config entry for the same name
+    /// wins, and it needs the name and address apart to do that. Both
+    /// endpoints take the same `name:address` form; only one of them takes it
+    /// from here.
+    ///
+    /// On the type rather than at those call sites because the pair
+    /// travelling as one value is the point, and a caller re-spelling the
+    /// colon is the pair coming apart again.
+    pub(crate) fn extra_host(&self) -> String {
         format!("{}:{}", self.name, self.address)
     }
 }
@@ -210,7 +216,7 @@ impl ProxyEnvironment {
         })
     }
 
-    /// The rewritten URLs' host ports, for [`loopback_only_ports`].
+    /// The rewritten URLs' host ports, for [`loopback_only_ports_in`].
     pub fn rewritten_ports(&self) -> &BTreeSet<u16> {
         &self.rewritten_ports
     }
@@ -299,7 +305,7 @@ pub fn proxy_environment_variables(
 /// The engine reaches this through a field it can replace in tests rather
 /// than calling it directly, so the warning built on it is reachable on a
 /// machine with no `/proc` at all — see `TaskEngine::with_proc_net_tcp`.
-pub fn proc_net_tcp_tables() -> Vec<String> {
+pub(crate) fn proc_net_tcp_tables() -> Vec<String> {
     #[cfg(target_os = "linux")]
     {
         ["/proc/net/tcp", "/proc/net/tcp6"]
@@ -326,7 +332,7 @@ pub fn proc_net_tcp_tables() -> Vec<String> {
 /// A port nothing is listening on is *not* reported: that is a proxy that
 /// isn't running, a different complaint from one that is running but bound
 /// too narrowly, and only the second is what this exists to catch.
-pub fn loopback_only_ports_in(tables: &[String], ports: &BTreeSet<u16>) -> BTreeSet<u16> {
+pub(crate) fn loopback_only_ports_in(tables: &[String], ports: &BTreeSet<u16>) -> BTreeSet<u16> {
     let listening: Vec<(IpAddr, u16)> = tables
         .iter()
         .flat_map(|table| table.lines())

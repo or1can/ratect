@@ -5987,10 +5987,17 @@ const HOST_GATEWAY: crate::proxy::HostGateway = crate::proxy::HostGateway {
     address: "host-gateway",
 };
 
-/// A `/proc/net/tcp` table listening on `port` at `address` — the same shape
-/// `proxy_tests.rs` builds, repeated here rather than shared because these
-/// tests are about what the *engine* concludes from it, and a helper reaching
-/// across module boundaries would tie the two to each other's fixtures.
+/// A `/proc/net/tcp` table listening on `port` at `address`.
+///
+/// A cut-down twin of `proxy_tests.rs`'s helper: one listening row, where that
+/// one also carries an established connection on the same port to pin the
+/// `st == 0A` filter. That filter is the parser's business and is tested
+/// there; these tests are about what the *engine* concludes from a parsed
+/// result, so the row that exists only to be ignored would be noise here.
+///
+/// Duplicated rather than shared for that reason — the two fixtures answer to
+/// different tests, and tying them together would make either one's needs
+/// constrain the other.
 fn proc_net_tcp(address: &str, port: u16) -> String {
     format!(
         "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n\
