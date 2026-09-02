@@ -37,7 +37,11 @@ jobs:
   # every link naming it breaks silently, because neither `cargo build` nor
   # `cargo clippy` reads them. A review caught one by hand; a grep for it
   # missed it, because the link text ends in a backtick before the bracket.
-  # This is the check that can't miss it.
+  #
+  # Two checks, because one is not enough — an earlier version of this comment
+  # called `cargo doc` "the check that can't miss it" and a review then found
+  # the half it misses. See the second step, whose own first version was then
+  # found to have three holes of its own. Read it before trusting it.
   docs:
     name: Rustdoc
     runs-on: ubuntu-latest
@@ -47,6 +51,13 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Library crates first, then the rest. A cross-crate link (`ratect_core::x`
+      # from a binary) only resolves if the target crate's documentation already
+      # exists, and one `--workspace` pass documents in whatever order it likes,
+      # so seven such links flipped between renders. Two passes make the result
+      # the same every time — which the check below needs far more than it needs
+      # to be one command.
+      - run: cargo doc -p dockerignore -p ratect-core --all-features --no-deps
       - run: cargo doc --workspace --all-features --no-deps
       # `cargo doc -D warnings` catches a link to a name that does not exist.
       # It does *not* catch a link to a name that exists but is not public:
@@ -57,7 +68,28 @@ jobs:
       # compiler. Restricted to link names this workspace actually writes, so
       # a dependency's own dropped links (inlined into our pages through trait
       # impls) don't fail our build.
+      #
+      # Paths with `::` are included, not skipped. An earlier version excluded
+      # them, claiming the class was "always a bare name" — false:
+      # `GitBoundary::check_path_allowed` names a private struct in the same
+      # crate. The reason to exclude them was really the render
+      # nondeterminism, which the two passes above fix.
+      #
+      # What this still cannot see, measured by reintroducing one: a link in
+      # the doc comment of a *private* item. Those items get no page, so the
+      # link never renders and there is no symptom to grep for — which also
+      # means no reader of the published documentation ever meets it. Covering
+      # them would take `--document-private-items`, i.e. checking pages nobody
+      # publishes. Left uncovered on purpose.
+      #
+      # `shell: bash` for its `pipefail`: the default is `bash -e` without it,
+      # and the status of `grep ... | tr | sort` is `sort`'s. A grep matching
+      # nothing, or a renamed source directory, would write an empty file, find
+      # no overlap, and pass — a gate that silently stops gating. The non-empty
+      # assertion is the second half of that: this repo always has doc links, so
+      # finding none means the search broke, not that the code got tidy.
       - name: No doc link renders as literal brackets
+        shell: bash
         run: |
           grep -rhoE '\[`[A-Za-z_][A-Za-z0-9_:]*`\]' \
             ratect-core/src ratect/src ratect-compat/src dockerignore/src \
@@ -66,6 +98,10 @@ jobs:
             [ -d "target/doc/$crate" ] && \
               grep -rho '\[<code>[^<]*</code>\]' "target/doc/$crate" || true
           done | sed 's/\[<code>//; s|</code>\]||' | sort -u > /tmp/dropped-links
+          if [ ! -s /tmp/written-links ]; then
+            echo "No doc links found at all — this search is broken, not clean."
+            exit 1
+          fi
           dropped=$(comm -12 /tmp/written-links /tmp/dropped-links)
           if [ -n "$dropped" ]; then
             echo "These doc links resolve to nothing public and render as literal brackets:"
