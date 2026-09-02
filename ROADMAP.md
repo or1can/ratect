@@ -1091,6 +1091,14 @@ cycle (0.2.0, the first one not about `ratect-compat`):
   point at the host on Linux**. Two separable behaviours, so one `feat:`/`fix:`
   commit each.
 
+  A third thing ships alongside them and was never scoped here, because it
+  wasn't planned work: the **symlink-containment fix** for Git-included bundles
+  (see `CHANGELOG.md`), the surviving half of the `..`-traversal escape closed
+  in 0.25.0. Found by review rather than by this list, which is the normal route
+  for a security fix and the reason the release ships three changes against two
+  planned entries. Recorded so that anything counting this release's contents
+  from the roadmap counts them all.
+
   - ~~**Clean up on `SIGTERM`, not only `SIGINT`.** 0.25.0 trapped Ctrl+C so an
     interrupted run takes the ordinary failure-cleanup path; `interrupt.rs`
     registers `SignalKind::interrupt()` and nothing else. Any other terminating
@@ -1491,10 +1499,14 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     above is also the better answer for any bundle that *can* migrate, which
     should shrink the evidence pool rather than grow it.
 - **0.5.0** (planned) — **nothing of its own; it ships
-  [0.26.0](#ratect-compat)'s two fixes**, both of which live in `ratect-core`
+  [0.26.0](#ratect-compat)'s three changes**, all of which live in `ratect-core`
   and so reach this binary unchanged: cleaning up on `SIGTERM` and `SIGHUP` as
-  well as Ctrl+C, and rewriting a `localhost` proxy URL on Linux with the
-  `host.docker.internal:host-gateway` entry that makes the name resolve. Listed
+  well as Ctrl+C, rewriting a `localhost` proxy URL on Linux with the
+  `host.docker.internal:host-gateway` entry that makes the name resolve, and the
+  symlink-containment fix for Git-included bundles. Three, not the two the
+  roadmap plans, because the third was found by review rather than scoped —
+  which is exactly the miscount an entry written to be "the honest record of a
+  version" has to avoid, and did not on its first attempt. Listed
   rather than left implicit because the two binaries are on independent version
   lines, so a shared-core release still bumps both — an empty-looking entry here
   is the honest record of a version that exists, not an oversight. Its exit
