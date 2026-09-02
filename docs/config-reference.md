@@ -945,13 +945,19 @@ A few details worth knowing:
   machine running a proxy. A value that isn't a `http`/`https` URL, or doesn't refer to
   the local machine, is left unchanged.
 
-  On every platform, including Linux. Docker Desktop provides
-  `host.docker.internal` itself; on Linux nothing does, so a run that rewrote a
-  URL also adds `host.docker.internal:host-gateway` to every container it starts
-  and every image it builds — Docker's own `--add-host` mechanism, which the
-  daemon resolves to the machine running it. The entry is added **only** when a
-  URL was actually rewritten, and a container's own
-  [`additional_hosts`](#container) entry for that name always wins over it.
+  On every platform, including Linux — which is the part that used to be
+  missing, since Docker Desktop supplies `host.docker.internal` itself and on
+  Linux nothing does.
+
+  So a run that rewrote a URL also adds `host.docker.internal:host-gateway` to
+  every container it starts and every image it builds, using Docker's own
+  `--add-host` mechanism, which the daemon resolves to the machine running it.
+  That entry is added on **every** platform too, not only the one that needs it:
+  on macOS and Windows it names the same gateway Desktop would have answered
+  with, so it is a new `/etc/hosts` line rather than a change in what the
+  container can reach. What gates it is the rewrite, not the platform — no
+  rewrite, no entry — and a container's own [`additional_hosts`](#container)
+  entry for that name always wins over it.
 
   Rewriting the URL can't make an unreachable proxy reachable. A proxy bound only
   to `127.0.0.1` — which is what `cntlm` and similar default to — still refuses a
@@ -967,19 +973,30 @@ A few details worth knowing:
   It's a warning, not a failure: the run may never use the proxy. Note the security
   cost it names — binding a proxy to `0.0.0.0` opens it to everything that can reach
   the machine, so weigh that rather than applying it reflexively. Some proxies offer
-  the same thing as a setting: `cntlm`, for instance, binds `127.0.0.1:3128` by
-  default and listens on every interface only under its `Gateway` option.
+  the same thing as a narrower setting: [`cntlm`](https://manpages.debian.org/trixie/cntlm/cntlm.1.en.html),
+  for instance, binds `127.0.0.1:3128` by default and listens on every interface
+  only under its `Gateway` option.
 
   A host firewall can block the container's traffic even when the proxy is bound
   wide enough, and that case Ratect can't detect — so if the warning doesn't fire
-  and the proxy still isn't reachable, check there next. What to look for: the
-  connection arrives on the bridge interface of the network Ratect created for that
-  task, so a rule written for Docker's **default** bridge (`docker0`) won't cover
-  it. Ratect never uses the default bridge — it creates a network per task, or uses
-  the one [`--use-network`](cli-reference.md) names. Match on that network's subnet,
-  which `docker network inspect <network>` reports under `IPAM.Config`; its
-  interface name is *not* in that output, so a rule pinned to an interface is the
-  harder one to write and the easier one to get wrong.
+  and the proxy still isn't reachable, check there next.
+
+  What to look for: the connection arrives on the bridge interface of the
+  *user-defined* network the run is using, never Docker's default `docker0`
+  bridge, so a firewall rule written for `docker0` won't cover it. Ratect creates
+  a network per task, or uses the one
+  [`--use-network`](cli-reference.md#task-execution) names — and a run can't fall
+  back to the default bridge even if you point `--use-network` at it, because
+  Ratect gives every container a network-scoped alias and Docker only allows
+  those on user-defined networks (`docker run` refuses with `network-scoped
+  aliases are only supported for user-defined networks`).
+
+  Match the rule on that network's **subnet**, which `docker network inspect
+  <network>` reports under `IPAM.Config`. Its interface name is generally not in
+  that output — Docker only records one there when the network was created with
+  `com.docker.network.bridge.name`, which is how `docker0` itself gets its
+  name — so a rule pinned to an interface is both harder to write and easier to
+  get wrong.
 - **`--no-proxy-vars`** disables all of this. See [CLI reference](cli-reference.md).
 
 See also: [`TERM` propagation](#term-propagation) — a similarly automatic,

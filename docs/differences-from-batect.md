@@ -263,9 +263,12 @@ tables above:
     proxy to everything else that can reach the machine. Batect's own roadmap
     notes the same warning is needed and never shipped one. It's a warning rather
     than a failure: a run may not need the proxy, and `--no-proxy-vars` already
-    turns propagation off. Host firewall rules are the one case left undiagnosed —
-    the bridge interface differs for every network Ratect creates, so there's
-    nothing reliable to check.
+    turns propagation off. Host firewall rules are the one case left undiagnosed,
+    since there's no reliable interface to check for: Ratect's containers are
+    always on a user-defined network, whose bridge interface Docker doesn't name
+    in `docker network inspect`. What to do about that is documented rather than
+    detected — see [Proxy environment
+    variables](config-reference.md#proxy-environment-variables).
 
   What stays an accepted gap is Batect's Docker-version-gated hostname fallback
   chain, which reaches back to Docker 17.06. It isn't worth chasing for any
