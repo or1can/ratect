@@ -11,7 +11,10 @@ release yet, so the only way to install it today is to build it from source.
   CLI does — no extra configuration needed for a standard Docker install). The floor
   is the `host-gateway` sentinel that release added, which is how a container reaches
   a [proxy running on the host](config-reference.md#proxy-environment-variables);
-  Ratect assumes it rather than querying the daemon's version.
+  Ratect assumes it rather than querying the daemon's version. In practice only a
+  run that rewrites a proxy URL sends that sentinel, so an older daemon may well
+  work for you — it just isn't tested or supported, and nothing will warn you
+  before the request Docker rejects.
 
 ## Build from source
 
