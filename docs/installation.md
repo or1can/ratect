@@ -6,15 +6,21 @@ release yet, so the only way to install it today is to build it from source.
 ## Prerequisites
 
 - [Rust](https://www.rust-lang.org/) (stable toolchain)
-- [Docker](https://www.docker.com/) **20.10 or newer** (December 2020), running and
-  reachable via the default local socket (Ratect connects the same way the `docker`
-  CLI does — no extra configuration needed for a standard Docker install). The floor
-  is the `host-gateway` sentinel that release added, which is how a container reaches
-  a [proxy running on the host](config-reference.md#proxy-environment-variables);
-  Ratect assumes it rather than querying the daemon's version. In practice only a
-  run that rewrites a proxy URL sends that sentinel, so an older daemon may well
-  work for you — it just isn't tested or supported, and nothing will warn you
-  before the request Docker rejects.
+- [Docker](https://www.docker.com/), running and reachable via the default local
+  socket (Ratect connects the same way the `docker` CLI does — no extra
+  configuration needed for a standard Docker install).
+
+  **A recent one.** Ratect speaks the Docker Engine API at version **1.53** and
+  does not negotiate down to what your daemon offers, so a daemon older than that
+  rejects every request with a "client version is too new" error — not just the
+  newer features. For calibration, Docker Engine 29.4 reports API 1.54; check
+  yours with `docker version --format '{{.Server.APIVersion}}'`.
+
+  That floor is higher than Ratect actually needs, and is a consequence of not
+  negotiating rather than a deliberate requirement — see
+  [ROADMAP.md](../ROADMAP.md#batect-parity). The oldest release Ratect's *features*
+  require is 20.10 (December 2020), for the `host-gateway` sentinel behind
+  [proxy support](config-reference.md#proxy-environment-variables).
 
 ## Build from source
 
