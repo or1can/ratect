@@ -156,12 +156,21 @@ own yet.
   reproducible: most example blocks in `docs/` are illustrative, and no marker
   makes `ratect resources list` print what some other machine had left over.
 
-  It is also the only one here with tests — `python3 -m unittest discover -s
-  tools -p 'test_*.py'`, stdlib only. It has them because it is the one that
-  decides: a wrong answer blocks a release or passes a bad one, where a bad
-  ranking from the other two costs a skim. Two of its cases load the revision
-  *before* the defect they cover and assert they fail against it, so the file
-  proves it would have caught something rather than claiming so.
+  It has tests — `python3 -m unittest discover -s tools -p 'test_*.py'`, stdlib
+  only — because it is the one that decides: a wrong answer blocks a release or
+  passes a bad one, where a bad ranking costs a skim. Two of its cases load the
+  revision *before* the defect they cover and assert they fail against it, so
+  the file proves it would have caught something rather than claiming so.
+
+  `echoed-claims.py` is tested too, despite exiting 0 like the ranking tools,
+  because its failure mode isn't a bad ranking — it is **silence**. Reporting
+  nothing looks exactly like having nothing to report, so a defect in it gets
+  recorded as a clean sweep. It shipped with three such bugs inside an hour, the
+  worst printing "nothing" for a diff containing the stale sentence it was
+  written to find. `stale-claims.py` and `spliced-docs.py` still have none, and
+  that remains right: they rank, they are read, and a wrong order is visible to
+  whoever reads it. **The test is whether being wrong is noticeable, not whether
+  the exit code is zero.**
 - **Formatting/Linting**: `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` must pass; both are enforced in CI (`.github/workflows/ci.yml`).
 - **Dependency Audit**: `cargo audit` runs in CI against `Cargo.lock`, which is committed to the repo (binary crate convention, not gitignored). One shared lockfile covers the whole workspace. Accepted advisories live in [`.cargo/audit.toml`](.cargo/audit.toml) — currently one, RUSTSEC-2023-0071 (the Marvin timing attack in `rsa` 0.9.x, which has no fixed release). **Every entry there carries a written justification**: what the advisory covers, why it's accepted rather than fixed, what mitigates it meanwhile, and what would let it be removed — an ignore without that is indistinguishable from silencing the check, and `cargo audit` prints nothing about what it skipped. An advisory with a fixed release available never belongs there; upgrade instead.
 - **Tests**: `cargo test --workspace` runs in CI, covering unit tests per module (pattern matching in `dockerignore`, config parsing/resolution, expression interpolation, build-context tar construction, interactive-TTY eligibility, user-mapping generation, and task engine logic — dependency cycles, prerequisite dedup, sidecar/dependency resolution, dependency readiness (health-wait/setup-command ordering and failure paths), environment merging, image resolution — via a fake `ContainerRuntime`) and CLI argument/behavior tests in `ratect-compat/src/main.rs`/`ratect-compat/tests/cli.rs`. `ratect-compat/tests/cli.rs` also has end-to-end tests (`#[ignore]`d by default, run explicitly via `cargo test --workspace --test cli -- --ignored`) that exercise a real Docker daemon against the fixtures under `ratect-compat/tests/fixtures/` — one per feature (sidecars, dependency readiness, environment/config variables, image building, `.dockerignore`, interactive mode, user mapping, hostnames/ports, proxy, `--use-network`). These also run as their own `docker-integration` CI job (`--workspace --test cli` picks up `ratect`'s own `ratect/tests/cli.rs` too, against its own `ratect/tests/fixtures/`). See the fixture files themselves for what each one proves.
