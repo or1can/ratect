@@ -24,9 +24,9 @@ bad ranking — it is **silence**. Reporting nothing is indistinguishable from
 having nothing to report, so a defect in it looks exactly like a clean sweep
 and gets recorded as one.
 
-That is not hypothetical. Each of the three cases marked *regression* below is
-a bug this tool actually shipped with during the hour it was written, and the
-worst of them printed "Nothing you corrected is still said elsewhere" for a
+That is not hypothetical. Every case marked *regression* below is a bug this
+tool actually shipped with, most of them within the hour it was written, and
+the worst of them printed "Nothing you corrected is still said elsewhere" for a
 diff containing the very stale sentence the tool exists to find. All three were
 caught by running it against real history and none by reading it.
 """
@@ -217,6 +217,30 @@ class EchoedClaimsTests(unittest.TestCase):
             [(name, line) for _, name, line in repository.echoes()],
             [("b.md", 1)],
             "deleting a page still retracts what it said",
+        )
+
+    def test_a_rename_out_of_markdown_does_not_cancel_itself(self):
+        """Not a reproduced regression — a property pinned on the way past.
+
+        A review argued that judging a hunk by one side of its header let a
+        `.md` to `.txt` rename subtract its own additions from its own
+        removals. I could not reproduce it: git detects the rename and, for
+        identical content, emits no `+`/`-` lines at all, so there was nothing
+        to mis-count. The code now judges each side separately anyway, because
+        that is obviously right rather than because it fixed a demonstrated
+        bug, and this pins the behaviour either way."""
+        repository = self.repository()
+        claim = "the bridge interface differs for every network\n"
+        repository.write("a.md", claim)
+        repository.write("b.md", claim)
+        repository.commit()
+        (repository.path / "a.md").unlink()
+        repository.write("a.txt", claim)
+
+        self.assertEqual(
+            [(name, line) for _, name, line in repository.echoes()],
+            [("b.md", 1)],
+            "moving prose out of Markdown still retracts it from the docs",
         )
 
     def test_only_markdown_is_read(self):

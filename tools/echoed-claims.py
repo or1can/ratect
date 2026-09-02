@@ -144,6 +144,12 @@ def changed_markdown_lines(root, revision_range):
     and a claim does not respect the wrap: "the bridge interface differs for
     every network it creates" was split across two lines in the diff that
     removed it, so matching line-by-line found nothing at all.
+
+    Each side of the hunk header is judged separately. A file's two names
+    differ when it is created, deleted or renamed, and taking either one to
+    speak for both gets those wrong: a rename from `.md` to something else
+    would have let the new file's additions cancel the Markdown the old one
+    retracted, hiding a claim that had genuinely moved out of the docs.
     """
     # `HEAD`, not a bare `git diff`, which compares the working tree against
     # the *index* and so goes blind the moment anything is staged. AGENTS.md
@@ -160,17 +166,15 @@ def changed_markdown_lines(root, revision_range):
     # every line it removed — which is the case most worth reporting, since a
     # deleted page's claims are exactly the ones likely to survive elsewhere.
     from_markdown = False
-    markdown = False
+    to_markdown = False
     for line in (diff or "").splitlines():
         if line.startswith("--- "):
             from_markdown = line.endswith(".md")
         elif line.startswith("+++ "):
-            markdown = from_markdown or line.endswith(".md")
-        elif not markdown:
-            continue
-        elif line.startswith("-"):
+            to_markdown = line.endswith(".md")
+        elif line.startswith("-") and from_markdown:
             removed.extend(normalise(line[1:]))
-        elif line.startswith("+"):
+        elif line.startswith("+") and to_markdown:
             added.extend(normalise(line[1:]))
     return removed, added
 
