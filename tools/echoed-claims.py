@@ -57,13 +57,22 @@ what it summarises shares too few consecutive words to hit — and a summary
 paraphrases by nature, which makes the files most likely to hold a stale echo
 the ones this is weakest on.
 
-An earlier version of this section claimed to have measured that against a real
-case and found the tool blind to it. **That claim was itself unverified**: it
-was checked against the current checkout, where the sentence in question had
-already been fixed, so of course nothing matched. Run against the tree as it
-stood, the tool does report it. The lesson is the tool's own subject matter —
-a range diffs the past and searches the present, and reading that as a measured
-miss is precisely the mistake this exists to catch.
+The case that made this concrete, and it is worth following carefully because
+it has now been got wrong in both directions. A `ROADMAP.md` headline bullet
+kept saying the proxy rewrite was macOS/Windows-only throughout the change that
+made it work everywhere. This tool does **not** find that claim: the headline
+says "`localhost` rewriting only works on macOS/Windows" where the entry it
+summarises says "the proxy `localhost`/`127.0.0.1`/`::1` rewrite ... only works
+on macOS/Windows" — five words in common, then they diverge.
+
+What it *does* emit for that diff is a hit on `ROADMAP.md:28` — the right file
+and the right line — matching a different phrase on it, "no Docker-version-gated
+hostname fallback chain", which was true then and is still true now. A hit at
+the correct location for the wrong reason, which reads exactly like a catch and
+is not one.
+
+So: a clean run proves nothing, and a hit is a place to look rather than a claim
+to fix. Read the phrase it prints, not the line number.
 
 Treat it as one cheap pass that catches verbatim duplication, not as the sweep.
 The sweep is still yours.

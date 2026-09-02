@@ -474,12 +474,14 @@ for — note that in `TODO.md` instead.
     quotation and misses paraphrase, and a summary paraphrases what it
     summarises. A clean run buys you the verbatim case and nothing more.
 
-    Note what a range does: it changes what is *diffed*, never what is
-    *searched*, which is always the current checkout. So
+    Two things to hold on to. A range changes what is *diffed*, never what is
+    *searched*, which is always the current checkout — so
     `echoed-claims.py 'abc..def'` answers "did that correction leave anything
-    still asserted today", and reading its silence as "that correction left
-    nothing at the time" is wrong — the earlier version of this paragraph made
-    exactly that mistake about the tool's own coverage.
+    still asserted today". And **read the phrase it prints, not the line
+    number**: on the one case this was measured against it reports the right
+    file and line while matching a different, perfectly true phrase on it. A
+    hit at the correct location for the wrong reason looks exactly like a
+    catch.
 
     - **Prefer the structural fix when the local one leaves the invariant
       unstated.** When one area keeps producing findings, the design is the
