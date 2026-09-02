@@ -17,8 +17,15 @@
 
     python3 tools/echoed-claims.py [revision-range] [repo-root]
 
-With no range, reads the working tree against `HEAD`; with one (`main..HEAD`,
-`abc123...HEAD`) it reads that instead.
+With no range, reads the working tree against `HEAD` — staged *and* unstaged,
+since the workflow this is written for stages explicit paths. With a range
+(`main..HEAD`, `abc123...HEAD`) it reads that instead.
+
+**A range changes only what is diffed, never what is searched.** Surviving
+echoes are always looked for in the current checkout, so pointing this at an
+old range answers "did that correction leave anything still asserted *today*",
+not "what did it leave at the time". To ask the second question, check the tree
+out (a `git worktree`) and run it there.
 
 **A candidate list, not a verdict** — like `stale-claims.py` and
 `spliced-docs.py`, it exits 0 whatever it finds, and a hit means "you probably
@@ -43,16 +50,20 @@ Guideline 16 already says to fix the class rather than the instance; this is
 the part of that sweep a machine can do, because the query is not "what else is
 like this" — it is the exact words you just deleted.
 
-# What it does not catch, measured rather than assumed
+# What it does not catch
 
-Restatement, which is most of them. In the same release a `ROADMAP.md` headline
-bullet kept saying the proxy rewrite was macOS/Windows-only throughout the
-change that made it work everywhere — and this tool does not find it at
-`--words 6` or at 5, because the headline says "`localhost` rewriting only
-works on macOS/Windows" where the entry it summarises says "the proxy
-`localhost`/`127.0.0.1`/`::1` rewrite ... only works on macOS/Windows". Five
-words in common, then they diverge. A summary paraphrases by nature, so the
-files most likely to hold a stale echo are the ones this is weakest on.
+Restatement. It matches the words you deleted, so a file that *paraphrases*
+what it summarises shares too few consecutive words to hit — and a summary
+paraphrases by nature, which makes the files most likely to hold a stale echo
+the ones this is weakest on.
+
+An earlier version of this section claimed to have measured that against a real
+case and found the tool blind to it. **That claim was itself unverified**: it
+was checked against the current checkout, where the sentence in question had
+already been fixed, so of course nothing matched. Run against the tree as it
+stood, the tool does report it. The lesson is the tool's own subject matter —
+a range diffs the past and searches the present, and reading that as a measured
+miss is precisely the mistake this exists to catch.
 
 Treat it as one cheap pass that catches verbatim duplication, not as the sweep.
 The sweep is still yours.
@@ -125,19 +136,28 @@ def changed_markdown_lines(root, revision_range):
     every network it creates" was split across two lines in the diff that
     removed it, so matching line-by-line found nothing at all.
     """
-    command = ["git", "diff", "--unified=0"]
-    if revision_range:
-        command.append(revision_range)
+    # `HEAD`, not a bare `git diff`, which compares the working tree against
+    # the *index* and so goes blind the moment anything is staged. AGENTS.md
+    # says to run this before committing and to stage explicit paths, which
+    # together guaranteed the one failure mode this tool must not have.
+    command = ["git", "diff", "--unified=0", revision_range or "HEAD"]
     diff = subprocess.run(
         command, cwd=root, capture_output=True, text=True, check=True
     ).stdout
 
     removed, added = [], []
+    # Both halves of the file header decide whether a hunk is Markdown. A
+    # *deleted* file is `+++ /dev/null`, so testing the `+++` line alone drops
+    # every line it removed — which is the case most worth reporting, since a
+    # deleted page's claims are exactly the ones likely to survive elsewhere.
+    from_markdown = False
     markdown = False
     for line in (diff or "").splitlines():
-        if line.startswith("+++ "):
-            markdown = line.endswith(".md")
-        elif not markdown or line.startswith(("---", "+++")):
+        if line.startswith("--- "):
+            from_markdown = line.endswith(".md")
+        elif line.startswith("+++ "):
+            markdown = from_markdown or line.endswith(".md")
+        elif not markdown:
             continue
         elif line.startswith("-"):
             removed.extend(normalise(line[1:]))

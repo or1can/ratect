@@ -469,12 +469,17 @@ for — note that in `TODO.md` instead.
 
     For prose specifically, run `python3 tools/echoed-claims.py` before
     committing rather than sweeping from memory: it lists what some other file
-    still says verbatim after you corrected it here. It is one pass, not the
-    sweep: of the two stale echoes that reached review in 0.26.0 it finds one
-    (the firewall sentence, quoted between two `docs/` pages) and misses the
-    other (a `ROADMAP.md` headline bullet, which paraphrased what it
-    summarised). Restatement is the commoner shape and the shape it is weakest
-    on, so a clean run buys you the verbatim case and nothing more.
+    still says verbatim after you corrected it here — staged or not. It is one
+    pass, not the sweep: it matches the words you deleted, so it finds
+    quotation and misses paraphrase, and a summary paraphrases what it
+    summarises. A clean run buys you the verbatim case and nothing more.
+
+    Note what a range does: it changes what is *diffed*, never what is
+    *searched*, which is always the current checkout. So
+    `echoed-claims.py 'abc..def'` answers "did that correction leave anything
+    still asserted today", and reading its silence as "that correction left
+    nothing at the time" is wrong — the earlier version of this paragraph made
+    exactly that mistake about the tool's own coverage.
 
     - **Prefer the structural fix when the local one leaves the invariant
       unstated.** When one area keeps producing findings, the design is the

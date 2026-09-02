@@ -184,6 +184,41 @@ class EchoedClaimsTests(unittest.TestCase):
 
         self.assertTrue(repository.echoes())
 
+    def test_a_staged_correction_is_still_seen(self):
+        """Regression, and the worst one. A bare `git diff` compares the working
+        tree against the *index*, so staging the corrected file made the tool
+        report nothing — while AGENTS.md instructs running it before committing
+        and staging explicit paths. The documented workflow guaranteed silence."""
+        repository = self.repository()
+        repository.write("a.md", "The bridge interface differs for every network.\n")
+        repository.write("b.md", "The bridge interface differs for every network.\n")
+        repository.commit()
+        repository.write("a.md", "Ratect containers are never on the default bridge.\n")
+        repository._git("add", "a.md")
+
+        self.assertEqual(
+            [(name, line) for _, name, line in repository.echoes()],
+            [("b.md", 1)],
+            "staging the fix must not hide it",
+        )
+
+    def test_a_deleted_page_still_reports_its_surviving_claims(self):
+        """Regression. A deleted file's hunk header is `+++ /dev/null`, so
+        deciding Markdown-ness from that line alone dropped every line it
+        removed — the case most worth reporting, since a deleted page's claims
+        are the likeliest to live on somewhere else."""
+        repository = self.repository()
+        repository.write("a.md", "The bridge interface differs for every network.\n")
+        repository.write("b.md", "The bridge interface differs for every network.\n")
+        repository.commit()
+        (repository.path / "a.md").unlink()
+
+        self.assertEqual(
+            [(name, line) for _, name, line in repository.echoes()],
+            [("b.md", 1)],
+            "deleting a page still retracts what it said",
+        )
+
     def test_only_markdown_is_read(self):
         """A deleted line of source is not a retracted claim."""
         repository = self.repository()
