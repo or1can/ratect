@@ -21,6 +21,12 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+**Two leaks closed and a containment escape, all reachable without doing anything unusual.** A run stopped by anything other than Ctrl+C — an editor closing, `docker stop`, `systemd`, a CI cancel button — used to be killed outright, leaving the task's containers *and* its network behind; that was the exact defect 0.25.0 set out to fix, reached by a route it never trapped. All three terminating signals now take the same cleanup path, and the exit code says which one it was.
+
+**A proxy running on your own machine finally works on Linux**, closing [Batect's oldest open issue](https://github.com/batect/batect/issues/10) — eight years old, and one Batect never fixed because its recipe predated the mechanism that makes it a one-liner. Where the URL can be made correct but the proxy still isn't reachable, Ratect now says so and names the security cost of the remedy rather than leaving you to find out.
+
+**And the surviving half of 0.25.0's containment escape is closed**: a Git-included bundle could commit a symlink and mount anywhere on the host, because the check compared spellings rather than real locations.
+
 ### Fixed
 
 - **A proxy running on the host now works on Linux**, closing [Batect's oldest open issue](https://github.com/batect/batect/issues/10), untouched for eight years. `http_proxy=http://localhost:3333` was rewritten to `http://host.docker.internal:3333` on macOS and Windows and left alone on Linux — where `localhost`, read from inside a container, means the container itself, so the proxy silently wasn't used or something unrelated was reached. Ratect now rewrites on every platform and adds the `host.docker.internal:host-gateway` entry that makes the name resolve where nothing else supplies it, using Docker's own `--add-host` mechanism. Batect's own recipe for this predated that mechanism (Docker Engine 20.10, December 2020) and was never implemented; taking it means this feature needs Docker 20.10 or newer, which is well below the API version Ratect already requires of the daemon for everything else — see [Prerequisites](docs/installation.md#prerequisites).
