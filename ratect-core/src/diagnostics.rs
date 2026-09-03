@@ -27,7 +27,8 @@
 //! vocabulary, so it has no seam to cross here. [`leftover_finding`] is the
 //! one check downstream of a daemon connection that *is* here: it takes
 //! `Option<&D>` rather than requiring one, so a caller whose connection
-//! already failed can skip it without this module knowing that Docker exists.
+//! already failed can skip it without this module needing any opinion of its
+//! own on what "no connection" means or how that got decided.
 
 use crate::config::Config;
 use std::path::Path;
