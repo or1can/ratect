@@ -21,6 +21,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Changed
+
+- **(ratect only)** `ratect resources list`/`clean`'s leftover selection and removal, and `ratect doctor`/`config validate`'s findings, moved from `ratect/src/main.rs` into new `ratect-core` modules (`resources.rs`, `diagnostics.rs`), generic over `ContainerRuntime` rather than bound to the concrete Docker client. No behaviour change — same output, same flags, same exit codes. First two commits of a refactoring release scoped in [RELEASES.md](RELEASES.md#ratect); the point was testability, not surface: leftover selection, the containers-before-networks ordering rule, and partial-failure behaviour were previously provable only against a live daemon, and `doctor`'s leftover count now goes through the exact same selection `resources list` uses instead of its own separate query.
+
 ## [ratect-compat 0.26.0 · ratect 0.5.0] - 2026-09-03
 
 **Two leaks closed and a containment escape, all reachable without doing anything unusual.** A run stopped by anything other than Ctrl+C — an editor closing, `docker stop`, `systemd`, a CI cancel button — used to be killed outright, leaving the task's containers *and* its network behind; that was the exact defect 0.25.0 set out to fix, reached by a route it never trapped. All three terminating signals now take the same cleanup path, and the exit code says which one it was.
