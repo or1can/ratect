@@ -1166,6 +1166,24 @@ to live at, so links written before the split still resolve.
   doesn't use an `http`/`https` scheme, and the daemon's own proxy settings not
   matching the local environment's. Both are `ratect`-only (there's no `doctor`
   in `ratect-compat`), so they land on whatever `ratect` version ships alongside.
+- **0.27.0** — **nothing of its own beyond what a refactoring release reaches
+  it through `ratect-core`** — see [`ratect` 0.6.0](#ratect) for the scope and
+  the reasoning. Three of those six candidates touch this binary: the
+  `ContainerSpec` assembly every container start goes through, the `CacheStore`
+  that `--clean`/`--clean-cache` is rewired onto, and the split of Docker
+  connection handling out of `docker.rs`. Alongside them, one behaviour change
+  that is a genuine fix rather than a refactor: a TLS connection to the daemon
+  no longer fails outright when a single entry in the OS trust store cannot be
+  read (patched in the `bollard` fork and offered upstream — it discarded every
+  successfully-loaded certificate *and* the explicit `--docker-tls-ca-cert` on
+  any such error, where Docker's own CLI connects).
+
+  Its parity surface is unchanged by design, and one commit exists specifically
+  to keep it that way: `--clean-cache`'s Batect-verbatim output
+  (`Checking for cache volumes...`, `Deleting volume '<name>'...`,
+  `Done! Deleted N volumes.`) is asserted by nothing `cargo test` runs today, so
+  its printing is extracted and unit-tested *before* the storage underneath it
+  moves.
 - **1.0.0** — the [Batect Parity](ROADMAP.md#batect-parity) section above substantially checked
   off (all of the above, including 0.7.0–0.19.0, not just the items shipped through
   0.6.0), and verified against real Batect projects — the conformance corpus above
@@ -1430,6 +1448,156 @@ to live at, so links written before the split still resolve.
   codes move with `ratect-compat`'s, which is the promise
   [`docs/ratect-cli.md`](docs/ratect-cli.md) already makes about them being
   identical.
+- **0.6.0** — **A refactoring release: give four homeless concepts a module
+  that owns them, and buy back test coverage that does not exist at any price
+  today.** No user-visible behaviour changes — no flag, message or output
+  moves, and if one does, that is a defect in the change rather than a
+  documentation update. Not scoped from this list: it comes from an
+  architecture review of the workspace run after 0.26.0 shipped, graded into
+  six candidates, then grilled one at a time before anything was written. The
+  corrections that grilling produced are recorded at the end of this entry,
+  because a plan that quietly fixes its own source teaches nobody what the
+  source got wrong.
+
+  Ordered **2 → 3 → 4 → 1 → 5 → 6**, grouped by the file each one opens rather
+  than by strength: 2 and 3 both empty `ratect/src/main.rs`, so they run back to
+  back and that file is read once; 4 takes 310 lines out of `docker.rs` before 1
+  starts editing the same file's trait. Every candidate decomposes into
+  independently landable commits, so the release can be cut at any candidate
+  boundary — roughly 18 commits if all six land.
+
+  - **`ratect_core::resources` and `ratect_core::diagnostics`.** Leftover
+    selection, removal (including the containers-before-networks ordering rule
+    and the one-failure-doesn't-abandon-the-rest behaviour), and every
+    `doctor`/`config validate` finding move out of `ratect/src/main.rs` and
+    behind the `ContainerRuntime` seam, generic over it as `TaskEngine` already
+    is. `main.rs` keeps flag parsing and printing; `report_findings` stays there
+    too, so rendering and the "Docker first" finding order remain the binary's.
+    Removal progress reaches the printer through a callback rather than a return
+    value, so `resources clean` does not go quiet on a slow daemon.
+
+    This is the whole justification, and it is **testability alone**: six named
+    tests become writable — `--older-than` excludes a young leftover, a resource
+    without the project label is never a candidate however the daemon filtered,
+    `--all-projects` filters on key-existence and never on nothing, containers
+    are removed before networks, one failure does not abandon the rest, and
+    `doctor` counts leftovers through the same selection `resources list` uses.
+    The two that matter most are the ones whose failure mode is removing a
+    stranger's container, and they are proven by nothing at all today. Both
+    existing `#[ignore]`d Docker tests stay: a unit test proves we compute the
+    right filter, only the daemon proves Docker's label filter means what we
+    think it means.
+
+  - **`CacheStore` in `cache.rs`.** The same purchase as the entry above, for
+    caches: `CacheSelection` — already the right concept, in the wrong crate —
+    and the shared-cache refusal move into core, where the refusal becomes a
+    typed outcome whose *wording* (which names `--scope shared`, a flag one
+    binary has) is rendered by the binary. Volume-versus-directory becomes an
+    enum, so "a volume cache needs a daemon" stops being an `expect`; the shared
+    cache root is injected at construction, so the half of the rule that
+    protects other projects' storage is testable without writing into the
+    developer's home. `remove` returns both the cache name and its storage name,
+    which is what lets `ratect-compat` print Batect's wording from the same
+    call. About thirteen of `cache.rs`'s seventeen public items become private;
+    `resolve_cache_mount` deliberately does not move behind the store — "what
+    does this volume entry become at container-create time" is a different
+    question from "what storage exists and how do I remove it".
+
+  - **`docker/connection.rs`.** `DockerConnectionOptions` through `connect` —
+    context parsing, TLS and cert-directory resolution, the crypto-provider
+    install — become a submodule, re-exported so every public path stays
+    byte-identical and the existing tests move unchanged. The point is not the
+    move: it is that the module doc can then carry what three investigations
+    into the recurring `Could not load native certs` failure actually
+    established, including the refuted concurrency explanation, so a fourth one
+    starts where the third finished. The image/BuildKit helpers immediately
+    above the cut are the same class and are deliberately left, noted in
+    `TODO.md` rather than swept.
+
+  - **`ContainerSpec`.** The highest-leverage item and the one whose true size
+    is least knowable in advance. One owned value derived by one pure function
+    from the container, an overlay, role and the already-resolved
+    image/volumes/user mapping, crossing the `ContainerRuntime` seam in place of
+    a 14-parameter `run_container` and a 10-parameter
+    `start_background_container`. It lives in its own module because it is
+    shared vocabulary between `engine.rs` and `docker.rs` and owned by neither —
+    making it `docker/spec.rs` would answer "who owns a container's runtime
+    spec" with "the daemon adapter", which is the answer the finding rejects.
+
+    The two overlays are *not* interchangeable — `TaskRun` may override
+    `command`/`entrypoint`, a `TaskContainerCustomisation` may not, and Batect
+    parity requires that asymmetry — so the overlay is an enum whose arms
+    destructure their config struct exhaustively, making a newly-added config
+    field a compile error rather than a silently ignored one. Splitting the spec
+    into a `shared` part and the role-varying fields makes the equivalence
+    property (`a.shared == b.shared`) a comparison with no hand-maintained list
+    of exceptions to forget to update. The fake's fourteen `Captured*` maps
+    collapse into one ordered capture, which makes container start *ordering*
+    assertable for the first time; its twenty-six accessors survive as
+    projections over that, so a 7,300-line test file does not churn for a change
+    that alters no behaviour.
+
+    The one commit where the fake cannot vouch for itself — it is rewritten
+    alongside the code it checks — requires the real-daemon suite locally before
+    it lands. `build_image` carries the same `too_many_arguments` allow and is
+    explicitly **not** in scope: with one call site it shares the width but not
+    the duplication, and there is no divergence for it to buy back.
+
+  - **One trust gate, not one traversal.** `collect_completion_task_names` does
+    re-implement the loader's walk, but the divergence is neither silent nor
+    accidental: the walk's own doc comment specifies it — mirror the loader's
+    decisions about *which files are read*, deliberately not its decisions about
+    *whether to fail* — and names `EffectiveGrants`' lost-grant refusal as the
+    one exclusion, with reasons. What is unprotected is that this classification
+    is made by hand, in two bodies. So the fix is one derived value —
+    `include_trust::gate` returning `refuse_read` and `refuse_load`, with
+    boundary containment folded in — that both walkers consume, rather than
+    fusing a breadth-first loader carrying grant bookkeeping and network
+    cloning with a depth-first best-effort name scraper. The classification's
+    reasoning moves onto the gate, because that reasoning *is* the
+    classification. The loader's breadth-first order stays contract: it decides
+    which repository a lost-grant refusal names, which a user reads.
+
+    One test lands first and stands alone whatever else happens: completion has
+    no test for the nested-Git refusal. That gap exists today.
+
+  - **`TaskEngine` construction.** Six of the eight `with_*` builders duplicate
+    a `TaskEngineSettings` field and have no production caller — only
+    `engine_tests.rs` uses them — so they go, and tests use struct-update
+    syntax. `event_sink` and `interrupt` are promoted to constructor arguments
+    alongside `docker`: they are collaborators the engine *talks to*, not
+    settings it was *told*, and promoting `interrupt` deletes an `Option` that
+    both binaries and an existing test already treat as always-present.
+    `with_host_env` and `with_proc_net_tcp` stay exactly as they are — private,
+    test-only, with no settings counterpart, so they are not the duplication
+    being removed. This is the first candidate to drop if the release runs
+    short: it is the only one whose cost is paid entirely by people editing
+    tests and whose benefit is entirely tidiness.
+
+  **Corrections to the review this scope came from**, since it was graded before
+  it was checked:
+
+  - It claimed moving `resources`/`doctor` would let `ratect-compat` gain the
+    same verbs without a second copy. It cannot: that binary is a strict
+    flag-for-flag Batect replacement and `resources`/`doctor` are verbs Batect
+    never had. The benefit is testability, and only testability.
+  - It described roughly half of `ratect/src/main.rs`'s 1,968 lines as provable
+    only against a live daemon. The untestable set is about 110 lines — the
+    leftover selection pipeline and the removal loop. Every other `doctor`
+    finding, and `Leftover::describe`/`format_age`, are already unit-tested.
+  - It put the Docker connection block at `docker.rs:1690-2098`. It starts at
+    1788; the hundred lines before that are image and BuildKit helpers, a
+    different concern.
+  - It counted eleven `with_*` builders on `TaskEngine`. There are eight public
+    ones plus two private test seams, and it did not note that `event_sink` is
+    not a settings field — which is why "make settings the sole entry point" was
+    not reachable as stated.
+  - It described the two container-assembly sites as differing only in the
+    overlay source and two fields. They differ in six things, one of which
+    (whether the overlay may override `command`/`entrypoint`) is a parity
+    constraint that a naive unification would silently discard.
+  - It called candidate 5 a silent divergence. It is a specified one; the defect
+    is the hand-made classification, not the divergence.
 
 Its **1.0.0** means something different from `ratect-compat`'s: interface stability
 (the subcommand structure and config format won't break), not feature-completeness
