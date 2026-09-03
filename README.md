@@ -32,8 +32,8 @@ Ratect implements a substantial subset of Batect's features, including:
   automatic interactive TTY attachment.
 
 The itemized, per-field and per-flag status — including known divergences — lives in
-[Differences from Batect](docs/differences-from-batect.md), and the direction and
-release history in the [Roadmap](ROADMAP.md).
+[Differences from Batect](docs/differences-from-batect.md), the direction in the
+[Roadmap](ROADMAP.md), and the release history in [Releases](RELEASES.md).
 
 The workspace is
 [two binaries sharing one core](ROADMAP.md#two-binaries-ratect-and-ratect-compat):
