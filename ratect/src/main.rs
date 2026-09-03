@@ -28,7 +28,10 @@
 use anyhow::{Context, Result};
 use clap::{Args as ClapArgs, CommandFactory, Parser, Subcommand};
 use ratect_core::config::{format_task_list, format_task_list_quiet, load_project_native, Config};
-use ratect_core::docker::{ContainerRuntime, DockerClient, DockerConnectionOptions};
+use ratect_core::diagnostics::{
+    config_findings, leftover_finding, wrapper_script_findings, Finding,
+};
+use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
 use ratect_core::resources::Leftover;
 use ratect_core::ui::{create_event_sink, select_output_style, OutputStyle};
@@ -1320,28 +1323,6 @@ async fn remove_leftovers(docker: &DockerClient, leftovers: &[Leftover], quiet: 
     }
 }
 
-/// One thing `doctor` looked at.
-#[derive(Debug, PartialEq, Eq)]
-enum Finding {
-    /// Checked, nothing wrong.
-    Fine(String),
-    /// Works, but is likely to bite — a reproducibility hazard, or a
-    /// readiness gate that isn't really gating anything.
-    Warning(String),
-    /// Will fail a run, or already has.
-    Problem(String),
-}
-
-impl Finding {
-    fn render(&self) -> String {
-        match self {
-            Finding::Fine(message) => format!("  ok      {message}"),
-            Finding::Warning(message) => format!("  warning {message}"),
-            Finding::Problem(message) => format!("  problem {message}"),
-        }
-    }
-}
-
 /// `ratect doctor` — what's wrong with this project, or this machine,
 /// without running a task to find out.
 ///
@@ -1399,24 +1380,14 @@ async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> 
             )));
             findings.extend(config_findings(&project.config));
 
-            // Leftovers are worth reporting unasked — the whole reason
-            // `resources` exists is that nobody thinks to look.
-            if let Some(docker) = &docker {
-                let filters = [(
-                    ratect_core::labels::PROJECT,
-                    Some(project.config.project_name.as_str()),
-                )];
-                let mut left = docker.list_containers(&filters).await.unwrap_or_default();
-                left.extend(docker.list_networks(&filters).await.unwrap_or_default());
-                if left.is_empty() {
-                    findings.push(Finding::Fine("no leftovers from previous runs".to_string()));
-                } else {
-                    findings.push(Finding::Warning(format!(
-                        "{} resource(s) left over from previous runs — see `ratect resources list`",
-                        left.len()
-                    )));
-                }
-            }
+            // Now's the current time; leftover age isn't part of this
+            // check, only whether any exist.
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_secs() as i64)
+                .unwrap_or_default();
+            findings
+                .extend(leftover_finding(docker.as_ref(), &project.config.project_name, now).await);
         }
         Err(error) => findings.push(Finding::Problem(format!(
             "{} does not load: {error:#}",
@@ -1601,153 +1572,6 @@ fn write_generated_config(output: &Path, document: &str, force: bool) -> Result<
     std::fs::rename(&temp, output)
         .with_context(|| format!("Failed to replace {}", output.display()))?;
     Ok(())
-}
-
-/// The checks that need only the configuration — pure, so they're testable
-/// without a daemon or a project on disk.
-fn config_findings(config: &ratect_core::config::Config) -> Vec<Finding> {
-    let mut findings = Vec::new();
-
-    // A floating tag defeats the entire point of pinning a task's
-    // environment: the same config gives a different image next week.
-    let mut floating: Vec<&str> = config
-        .containers
-        .iter()
-        .filter(|(_, container)| container.image.as_deref().is_some_and(floating_image_tag))
-        .map(|(name, _)| name.as_str())
-        .collect();
-    floating.sort_unstable();
-    for name in floating {
-        findings.push(Finding::Warning(format!(
-            "container '{name}' uses a floating image tag — pin it, or the same \
-             configuration will run a different image later"
-        )));
-    }
-
-    // A dependency with no health check counts as ready the moment it
-    // starts, which is where "connection refused" on the first run comes
-    // from. Ratect can't see whether the *image* defines one, so this is
-    // phrased as something to check rather than something wrong.
-    let mut unguarded: Vec<&str> = dependency_names(config)
-        .into_iter()
-        .filter(|name| {
-            config
-                .containers
-                .get(*name)
-                .is_some_and(|container| container.health_check.is_none())
-        })
-        .collect();
-    unguarded.sort_unstable();
-    for name in unguarded {
-        findings.push(Finding::Warning(format!(
-            "dependency '{name}' has no health_check — unless its image defines one, \
-             it counts as ready the moment it starts"
-        )));
-    }
-
-    // Already resolved to an absolute path by `load_project`, so this is
-    // the path Ratect will actually hand to Docker.
-    let mut missing: Vec<String> = Vec::new();
-    for (name, container) in &config.containers {
-        let Some(directory) = &container.build_directory else {
-            continue;
-        };
-        let directory = Path::new(directory);
-        if !directory.is_dir() {
-            missing.push(format!(
-                "container '{name}' has build_directory '{}', which doesn't exist",
-                directory.display()
-            ));
-            continue;
-        }
-        let dockerfile = directory.join(container.dockerfile.as_deref().unwrap_or("Dockerfile"));
-        if !dockerfile.is_file() {
-            missing.push(format!(
-                "container '{name}' has no '{}' in its build_directory",
-                dockerfile.display()
-            ));
-        }
-    }
-    missing.sort();
-    findings.extend(missing.into_iter().map(Finding::Problem));
-
-    findings
-}
-
-/// Batect's own wrapper scripts (`batect`/`batect.cmd`) left in a project
-/// that's moved to Ratect. Not inert: `./batect` still downloads and runs
-/// the unmaintained JVM binary, so during a migration you can believe
-/// you've switched over while `./batect` quietly still runs the old tool.
-///
-/// Only flags a script that *still runs Batect* — matched by content, not
-/// name, so a `batect` file that no longer does (deleted and replaced, or a
-/// hand-written shim that execs `ratect-compat`) is correctly left alone.
-/// The recommended migration is to delete the wrapper and run Ratect from
-/// the PATH, since Ratect is an ordinary installed binary rather than a
-/// downloaded-on-demand wrapper the way Batect was — see docs/ratect-cli.md.
-fn wrapper_script_findings(project_directory: &Path) -> Vec<Finding> {
-    ["batect", "batect.cmd"]
-        .iter()
-        .filter_map(|name| {
-            let path = project_directory.join(name);
-            // Small scripts (~200 lines); the marker is on line 2, so a
-            // partial read would do, but reading the whole thing is
-            // simpler and the file is tiny.
-            let content = std::fs::read(&path).ok()?;
-            is_batect_wrapper(&String::from_utf8_lossy(&content)).then(|| {
-                Finding::Warning(format!(
-                    "'{name}' is a Batect wrapper script and still runs Batect, not Ratect — \
-                     delete it and run ratect (or ratect-compat) from your PATH"
-                ))
-            })
-        })
-        .collect()
-}
-
-/// Whether `content` is one of Batect's own wrapper scripts, by the notice
-/// line its authors put near the top of both the Unix and Windows forms —
-/// a deliberate, stable marker (`# This file is part of Batect.` /
-/// `rem This file is part of Batect.`). Matched as a substring so the
-/// comment character doesn't matter. A script repointed at Ratect won't
-/// carry it, which is the whole point.
-fn is_batect_wrapper(content: &str) -> bool {
-    content.contains("This file is part of Batect.")
-}
-
-/// `image` with no tag at all, or an explicitly floating one. Docker treats
-/// a missing tag as `latest`, so both are the same hazard.
-fn floating_image_tag(image: &str) -> bool {
-    // A colon before the last slash is a registry port, not a tag —
-    // `registry:5000/app` is untagged.
-    let tag = match image.rsplit_once('/') {
-        Some((_, last)) => last.rsplit_once(':').map(|(_, tag)| tag),
-        None => image.rsplit_once(':').map(|(_, tag)| tag),
-    };
-    match tag {
-        None => true,
-        Some(tag) => tag == "latest",
-    }
-}
-
-/// Every container named as a dependency, by another container or by a
-/// task — the ones whose readiness actually gates something.
-fn dependency_names(config: &ratect_core::config::Config) -> Vec<&str> {
-    let mut names: Vec<&str> = config
-        .containers
-        .values()
-        .filter_map(|container| container.dependencies.as_ref())
-        .chain(
-            config
-                .tasks
-                .values()
-                .filter_map(|task| task.dependencies.as_ref()),
-        )
-        .flatten()
-        .map(String::as_str)
-        .collect();
-    names.sort_unstable();
-    names.dedup();
-    names
 }
 
 /// `ratect includes list`/`clean`/`refresh` — the Git include cache under

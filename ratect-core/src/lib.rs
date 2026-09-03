@@ -32,6 +32,7 @@
 
 pub mod cache;
 pub mod config;
+pub mod diagnostics;
 pub mod docker;
 pub mod engine;
 pub mod exit_code;
