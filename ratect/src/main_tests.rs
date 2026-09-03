@@ -451,62 +451,6 @@ fn an_age_reads_as_a_single_rounded_unit() {
     assert_eq!(format_age(-5), "0 seconds");
 }
 
-fn resource(
-    id: &str,
-    name: &str,
-    labels: &[(&str, &str)],
-    state: Option<&str>,
-) -> ratect_core::docker::LabelledResource {
-    ratect_core::docker::LabelledResource {
-        id: id.to_string(),
-        name: name.to_string(),
-        labels: labels
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect(),
-        created: Some(1_000),
-        state: state.map(str::to_string),
-    }
-}
-
-/// A container is described by its *configured* name, not Docker's
-/// randomly generated one, which is the whole reason the label exists.
-#[test]
-fn a_leftover_is_described_in_the_terms_the_config_uses() {
-    let container = Leftover::new(
-        resource(
-            "abc",
-            "nostalgic_hopper",
-            &[
-                (ratect_core::labels::CONTAINER, "database"),
-                (ratect_core::labels::TASK, "check"),
-            ],
-            Some("exited"),
-        ),
-        2_000,
-    );
-    assert_eq!(container.describe(), "container database (exited)");
-    assert_eq!(container.task, "check");
-    assert_eq!(container.age_seconds, 1_000);
-    assert!(!container.is_network);
-
-    let network = Leftover::new(resource("def", "ratect-xyz", &[], None), 2_000);
-    assert_eq!(network.describe(), "network ratect-xyz");
-    assert!(network.is_network);
-}
-
-/// A resource from a Ratect old enough not to have set every label
-/// should still be listable — reporting is exactly when you don't want
-/// a panic.
-#[test]
-fn a_leftover_missing_labels_reads_as_unknown_rather_than_failing() {
-    let leftover = Leftover::new(resource("abc", "some_name", &[], Some("running")), 2_000);
-    assert_eq!(leftover.task, "unknown");
-    assert_eq!(leftover.run, "unknown");
-    // Falls back to Docker's own name when there's no container label.
-    assert_eq!(leftover.describe(), "container some_name (running)");
-}
-
 #[test]
 fn doctor_is_its_own_verb_and_reaches_a_daemon() {
     assert!(matches!(

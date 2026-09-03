@@ -30,6 +30,7 @@ use clap::{Args as ClapArgs, CommandFactory, Parser, Subcommand};
 use ratect_core::config::{format_task_list, format_task_list_quiet, load_project_native, Config};
 use ratect_core::docker::{ContainerRuntime, DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
+use ratect_core::resources::Leftover;
 use ratect_core::ui::{create_event_sink, select_output_style, OutputStyle};
 use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
@@ -1215,30 +1216,14 @@ async fn manage_resources(
                 .project_name,
         )
     };
-    let filters = [(ratect_core::labels::PROJECT, project.as_deref())];
-
     let docker = DockerClient::new(&args.docker.into())?;
-    let mut found = docker.list_containers(&filters).await?;
-    found.extend(docker.list_networks(&filters).await?);
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|since| since.as_secs() as i64)
         .unwrap_or_default();
-    let leftovers: Vec<Leftover> = found
-        .into_iter()
-        // Belt and braces over the daemon-side filter above. Everything
-        // here is a removal candidate, and the cost of a wrong one is
-        // someone else's container: nothing without Ratect's own project
-        // label is ever a leftover of ours, however the listing was
-        // filtered.
-        .filter(|resource| resource.labels.contains_key(ratect_core::labels::PROJECT))
-        .map(|resource| Leftover::new(resource, now))
-        .filter(|leftover| match args.older_than {
-            Some(older_than) => leftover.age_seconds >= older_than.as_secs() as i64,
-            None => true,
-        })
-        .collect();
+    let leftovers =
+        ratect_core::resources::find(&docker, project.as_deref(), args.older_than, now).await?;
 
     if leftovers.is_empty() {
         if !quiet {
@@ -1254,61 +1239,11 @@ async fn manage_resources(
     }
 
     if removing {
-        remove_leftovers(&docker, &leftovers, quiet).await
+        remove_leftovers(&docker, &leftovers, quiet).await;
     } else {
         report_leftovers(&leftovers, quiet);
-        Ok(())
     }
-}
-
-/// One leftover, with the labels already pulled out of the map — the
-/// reporting below reads them several times each, and a resource missing
-/// one (not Ratect's, or from a version that didn't set it) should read as
-/// unknown rather than panic.
-struct Leftover {
-    resource: ratect_core::docker::LabelledResource,
-    task: String,
-    run: String,
-    age_seconds: i64,
-    is_network: bool,
-}
-
-impl Leftover {
-    fn new(resource: ratect_core::docker::LabelledResource, now: i64) -> Self {
-        let label = |key: &str| {
-            resource
-                .labels
-                .get(key)
-                .cloned()
-                .unwrap_or_else(|| "unknown".to_string())
-        };
-        Self {
-            task: label(ratect_core::labels::TASK),
-            run: label(ratect_core::labels::RUN),
-            age_seconds: resource.created.map(|created| now - created).unwrap_or(0),
-            // Only a container has a state; see `LabelledResource`.
-            is_network: resource.state.is_none(),
-            resource,
-        }
-    }
-
-    /// What this is, in the terms the configuration uses — a container's
-    /// own Docker name is random words, which is no use for recognizing it.
-    fn describe(&self) -> String {
-        if self.is_network {
-            return format!("network {}", self.resource.name);
-        }
-        let container = self
-            .resource
-            .labels
-            .get(ratect_core::labels::CONTAINER)
-            .cloned()
-            .unwrap_or_else(|| self.resource.name.clone());
-        match self.resource.state.as_deref() {
-            Some(state) => format!("container {container} ({state})"),
-            None => format!("container {container}"),
-        }
-    }
+    Ok(())
 }
 
 /// Rounded to one unit — "3 days" is what makes a leftover recognizable as
@@ -1362,43 +1297,27 @@ fn report_leftovers(leftovers: &[Leftover], quiet: bool) {
     println!("\nRemove them with: ratect resources clean");
 }
 
-async fn remove_leftovers(
-    docker: &DockerClient,
-    leftovers: &[Leftover],
-    quiet: bool,
-) -> Result<()> {
-    // Containers first: a network still holding an endpoint can't be
-    // removed, so the reverse order fails on every task that had one.
-    let (networks, containers): (Vec<&Leftover>, Vec<&Leftover>) =
-        leftovers.iter().partition(|leftover| leftover.is_network);
-
-    let mut removed = 0;
-    for leftover in containers.iter().chain(networks.iter()) {
-        let result = if leftover.is_network {
-            docker.remove_network(&leftover.resource.id).await
-        } else {
-            docker
-                .stop_and_remove_container(&leftover.resource.id)
-                .await
-        };
-        match result {
+/// Reports each removal as it happens rather than after the sweep, so a slow
+/// daemon doesn't leave `resources clean` looking hung. The ordering rule and
+/// the don't-abandon-the-rest behaviour belong to
+/// [`ratect_core::resources::remove`]; what's here is only how the outcomes
+/// read. Nothing here can fail — a removal that does is reported and counted,
+/// not propagated — so there is no `Result` to return.
+async fn remove_leftovers(docker: &DockerClient, leftovers: &[Leftover], quiet: bool) {
+    let removed =
+        ratect_core::resources::remove(docker, leftovers, |leftover, result| match result {
             Ok(()) => {
-                removed += 1;
                 if !quiet {
                     println!("Removed {}.", leftover.describe());
                 }
             }
-            // One failure doesn't abandon the rest: a resource someone else
-            // removed in the meantime, or one still in use, shouldn't leave
-            // the remaining leftovers behind too.
             Err(error) => tracing::warn!("Failed to remove {}: {error:#}", leftover.describe()),
-        }
-    }
+        })
+        .await;
 
     if !quiet {
         println!("Removed {removed} of {}.", leftovers.len());
     }
-    Ok(())
 }
 
 /// One thing `doctor` looked at.
