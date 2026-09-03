@@ -19,7 +19,7 @@ one changelog is the honest shape for that. Two conventions follow from it:
 Headings before the two-binary split (0.21.0 and earlier) are `ratect-compat`'s own
 history, from when it was the only binary.
 
-## [Unreleased]
+## [ratect-compat 0.26.0 · ratect 0.5.0] - 2026-09-03
 
 **Two leaks closed and a containment escape, all reachable without doing anything unusual.** A run stopped by anything other than Ctrl+C — an editor closing, `docker stop`, `systemd`, a CI cancel button — used to be killed outright, leaving the task's containers *and* its network behind; that was the exact defect 0.25.0 set out to fix, reached by a route it never trapped. All three terminating signals now take the same cleanup path, and the exit code says which one it was.
 

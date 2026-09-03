@@ -1130,7 +1130,7 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     "Batect's own scenario passes" into "our version of it passes".
     `config-with-include` was also picked up, which the entry above didn't name.
 
-- **0.26.0** (planned) — **Cleanup on any termination signal, and proxies that
+- **0.26.0** — **Cleanup on any termination signal, and proxies that
   point at the host on Linux**. Two separable behaviours, so one `feat:`/`fix:`
   commit each.
 
@@ -1541,7 +1541,7 @@ cycle (0.2.0, the first one not about `ratect-compat`):
     forward-compatible, so waiting for evidence costs nothing. The shared cache
     above is also the better answer for any bundle that *can* migrate, which
     should shrink the evidence pool rather than grow it.
-- **0.5.0** (planned) — **nothing of its own; it ships
+- **0.5.0** — **nothing of its own; it ships
   [0.26.0](#ratect-compat)'s three changes**, all of which live in `ratect-core`
   and so reach this binary unchanged: cleaning up on `SIGTERM` and `SIGHUP` as
   well as Ctrl+C, rewriting a `localhost` proxy URL on Linux with the
