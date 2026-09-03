@@ -571,10 +571,6 @@ async fn clean_caches(args: &Args) -> Result<()> {
     let project_directory = ratect_core::config::project_directory_path(base_path)?;
     let only: HashSet<String> = args.clean_cache.iter().cloned().collect();
     let cache_type: ratect_core::cache::CacheType = args.cache_type.into();
-    let (singular, plural) = match cache_type {
-        ratect_core::cache::CacheType::Volume => ("volume", "volumes"),
-        ratect_core::cache::CacheType::Directory => ("directory", "directories"),
-    };
 
     let removed = match cache_type {
         ratect_core::cache::CacheType::Volume => {
@@ -595,7 +591,7 @@ async fn clean_caches(args: &Args) -> Result<()> {
             let removed =
                 ratect_core::cache::clean_volume_caches(&docker, &project_cache_key, &only).await?;
             for name in &removed {
-                println!("Deleting volume '{name}'...");
+                println!("{}", deleting_line(cache_type, name));
             }
             removed
         }
@@ -607,16 +603,47 @@ async fn clean_caches(args: &Args) -> Result<()> {
             );
             let removed = ratect_core::cache::clean_directory_caches(&project_directory, &only)?;
             for name in &removed {
-                println!("Deleting '{}'...", cache_directory.join(name).display());
+                println!(
+                    "{}",
+                    deleting_line(
+                        cache_type,
+                        &cache_directory.join(name).display().to_string()
+                    )
+                );
             }
             removed
         }
     };
 
-    let noun = if removed.len() == 1 { singular } else { plural };
-    println!("Done! Deleted {} {noun}.", removed.len());
+    println!("{}", done_line(cache_type, removed.len()));
 
     Ok(())
+}
+
+/// The line printed for each cache actually removed — Batect's own
+/// `CleanupCachesCommand` wording, kept byte-for-byte since replacing it
+/// without divergence is this binary's entire job. `storage` is the full
+/// identifier Batect itself prints: a Docker volume name under
+/// `CacheType::Volume`, a full host path under `CacheType::Directory` —
+/// never the bare cache name a `cache` mount declares.
+fn deleting_line(cache_type: ratect_core::cache::CacheType, storage: &str) -> String {
+    match cache_type {
+        ratect_core::cache::CacheType::Volume => format!("Deleting volume '{storage}'..."),
+        ratect_core::cache::CacheType::Directory => format!("Deleting '{storage}'..."),
+    }
+}
+
+/// The summary line, singular/plural matched to what was actually removed —
+/// the same Batect wording, pinned for the same reason as [`deleting_line`].
+fn done_line(cache_type: ratect_core::cache::CacheType, removed: usize) -> String {
+    let (singular, plural) = match cache_type {
+        ratect_core::cache::CacheType::Volume => ("volume", "volumes"),
+        ratect_core::cache::CacheType::Directory => ("directory", "directories"),
+    };
+    format!(
+        "Done! Deleted {removed} {}.",
+        if removed == 1 { singular } else { plural }
+    )
 }
 
 #[cfg(test)]

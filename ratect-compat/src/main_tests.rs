@@ -607,6 +607,52 @@ fn defaults_clean_cache_to_empty() {
     assert!(args.clean_cache.is_empty());
 }
 
+/// `--clean`/`--clean-cache`'s per-item progress line, pinned exactly as
+/// Batect's own `CleanupCachesCommand` prints it — nothing else in this
+/// suite runs the Docker-backed half of `clean_caches`, so this wording is
+/// otherwise proven by nothing `cargo test` executes.
+#[test]
+fn a_cache_removal_is_reported_in_batects_own_wording() {
+    assert_eq!(
+        deleting_line(
+            ratect_core::cache::CacheType::Volume,
+            "batect-cache-abc123-gradle-cache"
+        ),
+        "Deleting volume 'batect-cache-abc123-gradle-cache'..."
+    );
+    assert_eq!(
+        deleting_line(
+            ratect_core::cache::CacheType::Directory,
+            "/project/.batect/caches/gradle-cache"
+        ),
+        "Deleting '/project/.batect/caches/gradle-cache'..."
+    );
+}
+
+#[test]
+fn a_cache_removal_summary_uses_the_singular_for_exactly_one() {
+    assert_eq!(
+        done_line(ratect_core::cache::CacheType::Volume, 0),
+        "Done! Deleted 0 volumes."
+    );
+    assert_eq!(
+        done_line(ratect_core::cache::CacheType::Volume, 1),
+        "Done! Deleted 1 volume."
+    );
+    assert_eq!(
+        done_line(ratect_core::cache::CacheType::Volume, 2),
+        "Done! Deleted 2 volumes."
+    );
+    assert_eq!(
+        done_line(ratect_core::cache::CacheType::Directory, 1),
+        "Done! Deleted 1 directory."
+    );
+    assert_eq!(
+        done_line(ratect_core::cache::CacheType::Directory, 2),
+        "Done! Deleted 2 directories."
+    );
+}
+
 #[tokio::test]
 async fn clean_cache_type_directory_short_circuits_before_touching_the_config_file() {
     // `--cache-type directory` makes no Docker connection at all, so
