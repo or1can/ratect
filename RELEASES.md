@@ -1466,7 +1466,7 @@ to live at, so links written before the split still resolve.
   independently landable commits, so the release can be cut at any candidate
   boundary — roughly 18 commits if all six land.
 
-  - **`ratect_core::resources` and `ratect_core::diagnostics`.** Leftover
+  - ~~**`ratect_core::resources` and `ratect_core::diagnostics`.** Leftover
     selection, removal (including the containers-before-networks ordering rule
     and the one-failure-doesn't-abandon-the-rest behaviour), and every
     `doctor`/`config validate` finding move out of `ratect/src/main.rs` and
@@ -1474,9 +1474,9 @@ to live at, so links written before the split still resolve.
     is. `main.rs` keeps flag parsing and printing; `report_findings` stays there
     too, so rendering and the "Docker first" finding order remain the binary's.
     Removal progress reaches the printer through a callback rather than a return
-    value, so `resources clean` does not go quiet on a slow daemon.
+    value, so `resources clean` does not go quiet on a slow daemon.~~
 
-    This is the whole justification, and it is **testability alone**: six named
+    ~~This is the whole justification, and it is **testability alone**: six named
     tests become writable — `--older-than` excludes a young leftover, a resource
     without the project label is never a candidate however the daemon filtered,
     `--all-projects` filters on key-existence and never on nothing, containers
@@ -1486,7 +1486,19 @@ to live at, so links written before the split still resolve.
     stranger's container, and they are proven by nothing at all today. Both
     existing `#[ignore]`d Docker tests stay: a unit test proves we compute the
     right filter, only the daemon proves Docker's label filter means what we
-    think it means.
+    think it means.~~ — done, to that scope: both modules landed as built above,
+    all six named tests exist and pass (`ratect-core/src/resources_tests.rs`,
+    `ratect-core/src/diagnostics_tests.rs`), and both `#[ignore]`d Docker tests
+    stayed untouched.
+
+    Landed as **two** commits rather than the three sketched above:
+    `resources` on its own (5d74bea), then `diagnostics` combined with wiring
+    `doctor`'s leftover count through `resources::find` (cf1ddd4) — splitting
+    those two apart would have been artificial, since the sixth acceptance test
+    needs both at once. Two review rounds over the pair found a false claim in
+    `diagnostics.rs`'s own module doc and a missing CHANGELOG/AGENTS.md entry;
+    both were fixed in their own commits (4cbe2d5, 5536b70) rather than folded
+    back in, matching this project's own rule for review-found fixes.
 
   - **`CacheStore` in `cache.rs`.** The same purchase as the entry above, for
     caches: `CacheSelection` — already the right concept, in the wrong crate —
