@@ -8,7 +8,7 @@ one.
 
 > **Status.** From 0.3.0 `ratect` reads its own **native TOML configuration**
 > (`ratect.toml` by default) rather than sharing `ratect-compat`'s `batect.yml` —
-> see the [Roadmap](../ROADMAP.md#ratect) and
+> see [Releases](../RELEASES.md#ratect) and
 > [decisions/0003](../decisions/0003-ratect-native-config-format.md). Its full
 > schema is the [`ratect.toml` reference](ratect-config-reference.md); it's the
 > same schema [Configuration Reference](config-reference.md) documents for
