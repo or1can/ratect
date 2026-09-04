@@ -53,9 +53,12 @@ use crate::labels::{ContainerRole, RunLabels};
 use crate::proxy::ProxyEnvironment;
 
 /// Per-container network-facing options shared by `run_container` and
-/// `start_background_container` — bundled together (rather than three more
-/// flat parameters) since both methods were already at
-/// `#[allow(clippy::too_many_arguments)]` before this.
+/// `start_background_container`, nested inside `SharedContainerSpec` as a
+/// named sub-struct rather than four more flat fields there — grouping that
+/// predates `ContainerSpec` itself, from when these were bundled to keep the
+/// two methods' own parameter lists from growing past
+/// `#[allow(clippy::too_many_arguments)]`; both now take one `ContainerSpec`
+/// instead; the struct boundary stayed for the same organizational reason.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NetworkOptions {
     /// Extra network aliases beyond the container's own name.
@@ -78,12 +81,12 @@ pub struct NetworkOptions {
 }
 
 /// Per-container runtime options shared by `run_container` and
-/// `start_background_container` — bundled together (following the same
-/// reasoning as `NetworkOptions` above), rather than a growing list of flat
-/// parameters, since Batect has several more of these container-level
-/// fields still to land (see `ROADMAP.md`'s 0.13.0 entry). Labels live on
-/// [`ContainerSpec`] itself, not here — see this module's own doc comment
-/// for why.
+/// `start_background_container`, nested the same way and for the same
+/// reason as `NetworkOptions` above — as its own sub-struct rather than a
+/// growing list of flat fields, since Batect has several more of these
+/// container-level options still to land (see `ROADMAP.md`'s 0.13.0 entry).
+/// Labels live on [`ContainerSpec`] itself, not here — see this module's
+/// own doc comment for why.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ContainerOptions {
     /// Overrides the image's own `WORKDIR`. `None` inherits it.
