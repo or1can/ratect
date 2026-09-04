@@ -1555,7 +1555,7 @@ to live at, so links written before the split still resolve.
     (verified against the real Docker suite); the cost is latency on an
     infrequently-run command, accepted rather than special-cased.
 
-  - **`docker/connection.rs`.** `DockerConnectionOptions` through `connect` —
+  - ~~**`docker/connection.rs`.** `DockerConnectionOptions` through `connect` —
     context parsing, TLS and cert-directory resolution, the crypto-provider
     install — become a submodule, re-exported so every public path stays
     byte-identical and the existing tests move unchanged. The point is not the
@@ -1564,7 +1564,32 @@ to live at, so links written before the split still resolve.
     established, including the refuted concurrency explanation, so a fourth one
     starts where the third finished. The image/BuildKit helpers immediately
     above the cut are the same class and are deliberately left, noted in
-    `TODO.md` rather than swept.
+    `TODO.md` rather than swept.~~ — done, and further than scoped: the
+    diagnosis in the module doc turned into an actual fix. `bollard`'s
+    `connect_with_ssl` discarded every certificate that loaded whenever the OS
+    trust store had even one unreadable entry — patched in the fork this crate
+    pins, verified with five clean runs of the real-daemon TLS test both before
+    and after pushing (a local path override first, so nothing was pushed
+    unverified) and a full green `cargo test --workspace --all-targets
+    --all-features` (764/764) afterward. Not proof the flake itself is gone —
+    it already passed at least once earlier in this same candidate, before any
+    fix existed, exactly the false-positive its own module doc warns a single
+    green run can be — but it is proof this specific, independently-confirmed
+    defect no longer exists in what's pinned.
+
+    One thing found doing it that wasn't scoped at all: pushing needed
+    reconciling with the fork's remote state first — the local checkout was
+    stale, and `feat/ssh-named-agents`'s own feature (named-agent sshforward
+    dispatch) turned out to already be merged upstream as
+    [fussybeaver/bollard#770](https://github.com/fussybeaver/bollard/pull/770)
+    on 2026-08-21, which the patch's own `Cargo.toml` comment still called
+    unlanded. Corrected in the same commit, since it was being edited anyway;
+    rebasing the branch past the merge and dropping the now-redundant commit is
+    left for its own change, not folded into an unrelated fix.
+
+    Landed as the three commits settled during grilling: the pure move
+    (a8337f8), the diagnosis (1b337d6), and the fix once it existed to point at
+    (0b03330).
 
   - **`ContainerSpec`.** The highest-leverage item and the one whose true size
     is least knowable in advance. One owned value derived by one pure function
