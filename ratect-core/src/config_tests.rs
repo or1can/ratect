@@ -4274,6 +4274,59 @@ fn completion_will_not_follow_a_bundle_include_out_of_its_clone() {
     std::fs::remove_dir_all(&project).ok();
 }
 
+/// Completion excludes a nested Git include the loader would also refuse —
+/// a `<TAB>` must not offer a task belonging to a bundle `ratect run` would
+/// then fail on. `collect_completion_task_names` already called
+/// `include_trust::refusing_nested_git` before this test existed; nothing
+/// asserted it (see RELEASES.md's `ContainerSpec`-adjacent candidate on
+/// unifying this walk with the loader's).
+#[test]
+fn completion_excludes_a_nested_git_include_the_bundle_was_not_granted() {
+    let scratch = unique_temp_dir();
+    let cache_root = scratch.join("incl");
+    let outer_remote = "https://example.com/outer.git";
+    let inner_remote = "https://example.com/inner.git";
+    let outer_clone = cache_root.join(crate::git_include::cache_key(outer_remote, "v1"));
+    let inner_clone = cache_root.join(crate::git_include::cache_key(inner_remote, "v1"));
+    std::fs::create_dir_all(&outer_clone).unwrap();
+    std::fs::create_dir_all(&inner_clone).unwrap();
+
+    // The outer bundle declares a nested Git include of its own, without
+    // `allow_nested_git_includes` — refused, so its tasks must never appear.
+    std::fs::write(
+        outer_clone.join("ratect-bundle.toml"),
+        format!(
+            "include = [{{ type = \"git\", repo = \"{inner_remote}\", ref = \"v1\" }}]\n\
+             [tasks.outer-task]\nrun = {{ container = \"a\" }}\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        inner_clone.join("ratect-bundle.toml"),
+        "[tasks.inner-task]\nrun = { container = \"a\" }\n",
+    )
+    .unwrap();
+
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("ratect.toml"),
+        format!(
+            "project_name = \"demo\"\n\
+             include = [{{ type = \"git\", repo = \"{outer_remote}\", ref = \"v1\" }}]\n"
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        task_names_for_completion_in(&project.join("ratect.toml"), Some(&cache_root)),
+        vec!["outer-task".to_string()],
+        "the outer bundle's own task is offered; the nested bundle it was not granted is not"
+    );
+
+    std::fs::remove_dir_all(&scratch).ok();
+    std::fs::remove_dir_all(&project).ok();
+}
+
 /// `to_native_toml` renders a config (here one with the interleaved scalar
 /// and table fields that trip naive TOML serialization, plus the custom
 /// `volumes`/`ports` (de)serializers) and its own round-trip check passes,
