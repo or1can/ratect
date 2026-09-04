@@ -321,7 +321,7 @@ dependencies = [
 [[package]]
 name = "bollard"
 version = "0.22.0"
-source = "git+https://github.com/or1can/bollard.git?branch=feat%2Fssh-named-agents#a01cd2753abb6b4868de50a22cc7920623c503d2"
+source = "git+https://github.com/or1can/bollard.git?branch=feat%2Fssh-named-agents#459432dbc3cc1100acc821875a3d974f3d2c081d"
 dependencies = [
  "async-stream",
  "base64 0.23.1",

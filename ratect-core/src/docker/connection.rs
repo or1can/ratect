@@ -45,7 +45,7 @@
 //! with a correct `--docker-tls-ca-cert`, on a machine where Docker's own
 //! CLI connects fine. User-reachable, not just a test artifact — see
 //! `CHANGELOG.md` for the fix, patched into the `bollard` fork this crate's
-//! `[patch.crates-io]` pins and offered upstream. This module's own
+//! `[patch.crates-io]` pins; not yet offered upstream. This module's own
 //! connection failures (`connect`'s `with_context` calls) were never
 //! affected — the defect was entirely inside `connect_with_ssl`'s
 //! cert-loading, one layer below anything here.

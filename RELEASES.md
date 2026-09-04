@@ -1174,7 +1174,7 @@ to live at, so links written before the split still resolve.
   connection handling out of `docker.rs`. Alongside them, one behaviour change
   that is a genuine fix rather than a refactor: a TLS connection to the daemon
   no longer fails outright when a single entry in the OS trust store cannot be
-  read (patched in the `bollard` fork and offered upstream — it discarded every
+  read (patched in the `bollard` fork, not yet offered upstream — it discarded every
   successfully-loaded certificate *and* the explicit `--docker-tls-ca-cert` on
   any such error, where Docker's own CLI connects).
 
