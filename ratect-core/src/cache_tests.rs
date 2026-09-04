@@ -323,6 +323,371 @@ fn a_shared_cache_directory_lives_beside_the_git_include_cache() {
     assert_eq!(root.parent().unwrap(), home.join(".ratect"));
 }
 
+/// A minimal `ContainerRuntime` implementing only what `CacheStore`'s
+/// `Volume` variant actually calls. Scoped to this module rather than shared
+/// with `resources_tests.rs`'s own fake, or `diagnostics_tests.rs`'s: each is
+/// scoped to what its own module calls, and all three are checked against
+/// the same compiler-enforced trait, so none can silently drift from
+/// `ContainerRuntime`'s real shape.
+#[derive(Default)]
+struct FakeRuntime {
+    volumes: Vec<String>,
+    removed: std::sync::Mutex<Vec<String>>,
+}
+
+#[async_trait::async_trait]
+impl crate::docker::ContainerRuntime for FakeRuntime {
+    async fn list_volumes(&self) -> Result<Vec<String>> {
+        Ok(self.volumes.clone())
+    }
+
+    async fn remove_volume(&self, name: &str) -> Result<()> {
+        self.removed.lock().unwrap().push(name.to_string());
+        Ok(())
+    }
+
+    async fn pull_image(&self, _image: &str) -> Result<()> {
+        unimplemented!("CacheStore never pulls an image")
+    }
+    async fn image_exists_locally(&self, _image: &str) -> Result<bool> {
+        unimplemented!("CacheStore never inspects an image")
+    }
+    async fn build_image(
+        &self,
+        _build_directory: &Path,
+        _dockerfile: &str,
+        _build_args: Option<&std::collections::HashMap<String, String>>,
+        _target: Option<&str>,
+        _buildkit: Option<&crate::docker::BuildKitOptions>,
+        _tag: &str,
+        _force_pull: bool,
+        _proxy_host_gateway: Option<crate::proxy::HostGateway>,
+    ) -> Result<String> {
+        unimplemented!("CacheStore never builds an image")
+    }
+    async fn tag_image(&self, _image_id: &str, _tags: &[String]) -> Result<()> {
+        unimplemented!("CacheStore never tags an image")
+    }
+    async fn create_network(
+        &self,
+        _name: &str,
+        _labels: &std::collections::HashMap<String, String>,
+    ) -> Result<()> {
+        unimplemented!("CacheStore never creates a network")
+    }
+    async fn remove_network(&self, _name: &str) -> Result<()> {
+        unimplemented!("CacheStore never removes a network")
+    }
+    async fn network_exists(&self, _name: &str) -> Result<bool> {
+        unimplemented!("CacheStore never checks for a network")
+    }
+    async fn start_background_container(
+        &self,
+        _alias: &str,
+        _image: &str,
+        _command: Option<&str>,
+        _volumes: Option<&Vec<String>>,
+        _environment: Option<&std::collections::HashMap<String, String>>,
+        _network: &str,
+        _user_mapping: Option<&crate::docker::UserMapping>,
+        _network_options: &crate::docker::NetworkOptions,
+        _health_check: Option<&crate::docker::HealthCheckOptions>,
+        _container_options: &crate::docker::ContainerOptions,
+    ) -> Result<String> {
+        unimplemented!("CacheStore never starts a container")
+    }
+    async fn wait_for_container_healthy(&self, _container_id: &str) -> Result<()> {
+        unimplemented!("CacheStore never waits on a container")
+    }
+    async fn exec_in_container(
+        &self,
+        _container_id: &str,
+        _command: &str,
+        _working_directory: Option<&str>,
+        _environment: Option<&std::collections::HashMap<String, String>>,
+        _user_mapping: Option<&crate::docker::UserMapping>,
+    ) -> Result<crate::docker::ExecResult> {
+        unimplemented!("CacheStore never execs in a container")
+    }
+    async fn stop_and_remove_container(&self, _container_id: &str) -> Result<()> {
+        unimplemented!("CacheStore never removes a container")
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn run_container(
+        &self,
+        _name: &str,
+        _image: &str,
+        _command: Option<&str>,
+        _additional_args: &[String],
+        _volumes: Option<&Vec<String>>,
+        _environment: Option<&std::collections::HashMap<String, String>>,
+        _network: &str,
+        _interactive: bool,
+        _user_mapping: Option<&crate::docker::UserMapping>,
+        _network_options: &crate::docker::NetworkOptions,
+        _health_check: Option<&crate::docker::HealthCheckOptions>,
+        _container_options: &crate::docker::ContainerOptions,
+        _created: Option<tokio::sync::oneshot::Sender<String>>,
+        _started: Option<tokio::sync::oneshot::Sender<()>>,
+    ) -> Result<()> {
+        unimplemented!("CacheStore never runs a container")
+    }
+    async fn list_containers(
+        &self,
+        _labels: &[(&str, Option<&str>)],
+    ) -> Result<Vec<crate::docker::LabelledResource>> {
+        unimplemented!("CacheStore never lists containers")
+    }
+    async fn list_networks(
+        &self,
+        _labels: &[(&str, Option<&str>)],
+    ) -> Result<Vec<crate::docker::LabelledResource>> {
+        unimplemented!("CacheStore never lists networks")
+    }
+}
+
+/// A `Directory`-type store over `project_dir`/`shared_root` — `Volume`'s
+/// generic parameter is only ever instantiated as `FakeRuntime` in this
+/// module, but a `Directory` value doesn't hold one, so it still needs a
+/// concrete type to satisfy the compiler.
+fn directory_store(
+    project_dir: &Path,
+    shared_root: Option<PathBuf>,
+) -> CacheStore<'static, FakeRuntime> {
+    CacheStore::new(
+        CacheType::Directory,
+        None,
+        project_dir.to_path_buf(),
+        shared_root,
+    )
+    .unwrap()
+}
+
+fn touch_cache(root: &Path, name: &str) {
+    fs::create_dir_all(root.join(name)).unwrap();
+}
+
+/// Acceptance test 1/7: a name that's shared (and not this project's) is
+/// refused without `--scope shared`.
+#[tokio::test]
+async fn a_shared_only_name_is_refused_without_scope_shared() {
+    let project_dir = unique_temp_dir();
+    let shared_dir = unique_temp_dir();
+    touch_cache(&shared_dir, "registry");
+    let store = directory_store(&project_dir, Some(shared_dir.clone()));
+
+    let found = store.list(None).await.unwrap();
+    let only = HashSet::from(["registry".to_string()]);
+    let refusal = store.remove(&found, &only).await.unwrap().unwrap_err();
+
+    assert!(matches!(refusal, CacheRefusal::SharedNotNamed(name) if name == "registry"));
+
+    fs::remove_dir_all(&project_dir).unwrap();
+    fs::remove_dir_all(&shared_dir).unwrap();
+}
+
+/// Acceptance test 2/7: a name that's both this project's *and* shared is
+/// refused the same way — ambiguity is not a special case.
+#[tokio::test]
+async fn a_name_in_both_scopes_is_refused_without_scope_shared() {
+    let project_dir = unique_temp_dir();
+    let shared_dir = unique_temp_dir();
+    touch_cache(&cache_directory(&project_dir), "clash");
+    touch_cache(&shared_dir, "clash");
+    let store = directory_store(&project_dir, Some(shared_dir.clone()));
+
+    let found = store.list(None).await.unwrap();
+    let only = HashSet::from(["clash".to_string()]);
+    let refusal = store.remove(&found, &only).await.unwrap().unwrap_err();
+
+    assert!(matches!(refusal, CacheRefusal::SharedNotNamed(name) if name == "clash"));
+    // The project's own cache must survive — only the shared one was refused.
+    assert!(cache_directory(&project_dir).join("clash").is_dir());
+
+    fs::remove_dir_all(&project_dir).unwrap();
+    fs::remove_dir_all(&shared_dir).unwrap();
+}
+
+/// Acceptance test 3/7: `--scope shared` with nothing named is refused — a
+/// shared cache is only ever removed by name, never swept.
+#[tokio::test]
+async fn scope_shared_with_no_names_is_refused() {
+    let project_dir = unique_temp_dir();
+    let shared_dir = unique_temp_dir();
+    touch_cache(&shared_dir, "registry");
+    let store = directory_store(&project_dir, Some(shared_dir.clone()));
+
+    let found = store.list(Some(CacheScope::Shared)).await.unwrap();
+    let refusal = store
+        .remove(&found, &HashSet::new())
+        .await
+        .unwrap()
+        .unwrap_err();
+
+    assert!(matches!(refusal, CacheRefusal::SharedSweepNotNamed));
+
+    fs::remove_dir_all(&project_dir).unwrap();
+    fs::remove_dir_all(&shared_dir).unwrap();
+}
+
+/// Acceptance test 4/7: a bare `clean` (no names, no `--scope`) removes this
+/// project's own caches and never touches a shared one.
+#[tokio::test]
+async fn a_bare_clean_removes_owned_and_never_shared() {
+    let project_dir = unique_temp_dir();
+    let shared_dir = unique_temp_dir();
+    touch_cache(&cache_directory(&project_dir), "gradle-cache");
+    touch_cache(&shared_dir, "registry");
+    let store = directory_store(&project_dir, Some(shared_dir.clone()));
+
+    let found = store.list(None).await.unwrap();
+    let removed = store
+        .remove(&found, &HashSet::new())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].name, "gradle-cache");
+    assert!(!cache_directory(&project_dir).join("gradle-cache").exists());
+    assert!(
+        shared_dir.join("registry").is_dir(),
+        "a bare clean must never remove a shared cache"
+    );
+
+    fs::remove_dir_all(&project_dir).unwrap();
+    fs::remove_dir_all(&shared_dir).unwrap();
+}
+
+/// Acceptance test 5/7: `actionable()` — what `-o quiet` prints — is, under
+/// every `--scope` value, exactly what a `clean` carrying the same flags
+/// would act on. A property, not three separate cases, since that is
+/// precisely what `actionable`'s own doc comment promises.
+#[tokio::test]
+async fn actionable_always_equals_what_remove_would_act_on() {
+    for scope in [None, Some(CacheScope::Project), Some(CacheScope::Shared)] {
+        let project_dir = unique_temp_dir();
+        let shared_dir = unique_temp_dir();
+        touch_cache(&cache_directory(&project_dir), "owned-one");
+        touch_cache(&cache_directory(&project_dir), "owned-two");
+        touch_cache(&shared_dir, "shared-one");
+        let store = directory_store(&project_dir, Some(shared_dir.clone()));
+
+        let found = store.list(scope).await.unwrap();
+        let actionable: HashSet<String> = found.actionable().iter().cloned().collect();
+        // A bare `clean` under this same scope: empty `only` means "every
+        // one of this project's own" under Project/None, and is refused
+        // outright under Shared — a shared cache is never swept, only
+        // removable by naming exactly what `actionable()` already listed.
+        let acted_on: HashSet<String> = match store.remove(&found, &HashSet::new()).await.unwrap() {
+            Ok(removed) => removed.into_iter().map(|cache| cache.name).collect(),
+            Err(CacheRefusal::SharedSweepNotNamed) => {
+                // The refused case: naming exactly `actionable()` must
+                // succeed and remove exactly that set — proving `actionable`
+                // is still "what a clean with these flags would act on",
+                // just requiring the names to be supplied explicitly.
+                store
+                    .remove(&found, &actionable)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .into_iter()
+                    .map(|cache| cache.name)
+                    .collect()
+            }
+            Err(other) => panic!("unexpected refusal under scope {scope:?}: {other:?}"),
+        };
+
+        assert_eq!(
+            actionable, acted_on,
+            "actionable() and remove() disagreed under scope {scope:?}"
+        );
+
+        fs::remove_dir_all(&project_dir).unwrap();
+        fs::remove_dir_all(&shared_dir).unwrap();
+    }
+}
+
+/// Acceptance test 7/7: `remove` reports both the cache name and where it
+/// actually lived — `ratect` prints the former, `ratect-compat` the latter,
+/// and both must survive the same removal.
+#[tokio::test]
+async fn removed_caches_carry_both_the_name_and_the_storage() {
+    let project_dir = unique_temp_dir();
+    touch_cache(&cache_directory(&project_dir), "gradle-cache");
+    let store = directory_store(&project_dir, None);
+
+    let found = store.list(None).await.unwrap();
+    let removed = store
+        .remove(&found, &HashSet::new())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].name, "gradle-cache");
+    assert_eq!(
+        removed[0].storage,
+        cache_directory(&project_dir)
+            .join("gradle-cache")
+            .display()
+            .to_string()
+    );
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}
+
+/// The `Volume` half of test 7/7: the storage is the full Docker volume
+/// name, not the bare cache name a `volumes` entry declares.
+#[tokio::test]
+async fn a_removed_volume_cache_reports_its_full_volume_name_as_storage() {
+    let project_dir = unique_temp_dir();
+    // Pinned rather than generated, so the fake's volume name is predictable.
+    fs::create_dir_all(cache_directory(&project_dir)).unwrap();
+    fs::write(cache_directory(&project_dir).join("key"), "abc123\n").unwrap();
+    let runtime = FakeRuntime {
+        volumes: vec!["batect-cache-abc123-gradle-cache".to_string()],
+        ..Default::default()
+    };
+    let store =
+        CacheStore::new(CacheType::Volume, Some(&runtime), project_dir.clone(), None).unwrap();
+
+    let found = store.list(None).await.unwrap();
+    let removed = store
+        .remove(&found, &HashSet::new())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].name, "gradle-cache");
+    assert_eq!(removed[0].storage, "batect-cache-abc123-gradle-cache");
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}
+
+/// A host with no home directory has no shared caches — an absent
+/// `shared_root` reads as empty, not as a failure, matching what
+/// `list_shared_directory_caches`/`clean_shared_directory_caches` used to
+/// tolerate on every call.
+#[tokio::test]
+async fn a_missing_shared_root_reads_as_no_shared_caches() {
+    let project_dir = unique_temp_dir();
+    touch_cache(&cache_directory(&project_dir), "gradle-cache");
+    let store = directory_store(&project_dir, None);
+
+    let found = store.list(None).await.unwrap();
+
+    assert!(found.shared.is_empty());
+    // A name that would be shared under a real root is simply unknown here,
+    // not refused — there is nothing to be ambiguous with.
+    let only = HashSet::from(["registry".to_string()]);
+    let removed = store.remove(&found, &only).await.unwrap().unwrap();
+    assert!(removed.is_empty());
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}
+
 /// A bare `caches clean` passes an empty name set, which for a *project*
 /// cache means "all of them". For a shared one it has to mean "none" —
 /// otherwise one project's routine cleanup discards storage every other

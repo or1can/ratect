@@ -902,7 +902,13 @@ async fn manage_caches(
         ratect_core::cache::CacheType::Volume => Some(DockerClient::new(&args.docker.into())?),
         ratect_core::cache::CacheType::Directory => None,
     };
-    let found = find_caches(docker.as_ref(), cache_type, &project_directory, wanted).await?;
+    let store = ratect_core::cache::CacheStore::new(
+        cache_type,
+        docker.as_ref(),
+        project_directory,
+        ratect_core::cache::shared_cache_root().ok(),
+    )?;
+    let found = store.list(wanted).await?;
 
     let Some(names) = names else {
         if quiet {
@@ -944,91 +950,44 @@ async fn manage_caches(
 
     let only: HashSet<String> = names.into_iter().collect();
 
-    // `--scope shared` with nothing named would silently do nothing, since
-    // shared caches are only ever removed by name. Say so instead.
-    if only.is_empty() && wanted == Some(ratect_core::config::CacheScope::Shared) {
-        anyhow::bail!(
-            "Name the shared caches to remove. A shared cache holds storage other \
-             projects are still using, so it is never swept without being named — \
-             'ratect caches list --scope shared' shows what is there."
-        );
-    }
-
-    // **Removing a shared cache always takes `--scope shared`.** Not "when
-    // named", not "when unambiguous" — always.
-    //
-    // This is the one rule, replacing three special cases that each had to
-    // be discovered separately: a bare `clean` sweeping every shared cache,
-    // `-o quiet` feeding machine-wide names into a pipe, and naming a cache
-    // this project has never had and silently removing someone else's. All
-    // three were the same invariant — an unqualified operation touches only
-    // what this project owns — being violated somewhere new.
-    //
-    // The refusal names the flag, so a shared cache stays removable by name;
-    // it just cannot happen by accident.
-    if wanted != Some(ratect_core::config::CacheScope::Shared) {
-        if let Some(name) = found.shared_only(&only).first() {
+    let removed = match store.remove(&found, &only).await? {
+        // `--scope shared` with nothing named would silently do nothing,
+        // since shared caches are only ever removed by name. Say so instead.
+        Err(ratect_core::cache::CacheRefusal::SharedSweepNotNamed) => {
+            anyhow::bail!(
+                "Name the shared caches to remove. A shared cache holds storage other \
+                 projects are still using, so it is never swept without being named — \
+                 'ratect caches list --scope shared' shows what is there."
+            );
+        }
+        // The refusal names the flag, so a shared cache stays removable by
+        // name; it just cannot happen by accident.
+        Err(ratect_core::cache::CacheRefusal::SharedNotNamed(name)) => {
             anyhow::bail!(
                 "'{name}' is a shared cache, used by every project on this machine. \
                  Re-run with '--scope shared' to remove it."
             );
         }
-    }
-
-    // Reported by *cache* name whichever storage was used — a volume's own
-    // Docker name carries a prefix, which is an implementation detail of
-    // where it's kept, not what the user called it.
-    let mut removed: Vec<String> = Vec::new();
-    if found.covers(ratect_core::config::CacheScope::Project) {
-        removed.extend(match cache_type {
-            ratect_core::cache::CacheType::Volume => {
-                let docker = docker
-                    .as_ref()
-                    .expect("a volume cache needs a Docker client");
-                let key = ratect_core::cache::project_cache_key(&project_directory)?;
-                let prefix = ratect_core::cache::cache_volume_name(&key, "");
-                ratect_core::cache::clean_volume_caches(docker, &key, &only)
-                    .await?
-                    .into_iter()
-                    .map(|volume| {
-                        volume
-                            .strip_prefix(&prefix)
-                            .unwrap_or(volume.as_str())
-                            .to_string()
-                    })
-                    .collect::<Vec<_>>()
-            }
-            ratect_core::cache::CacheType::Directory => {
-                ratect_core::cache::clean_directory_caches(&project_directory, &only)?
-            }
-        });
-    }
-    // Shared caches are only ever removed by name — a bare `caches clean`
-    // sweeps this project's, and `only` is non-empty by construction here.
-    if found.covers(ratect_core::config::CacheScope::Shared) {
-        removed.extend(match cache_type {
-            ratect_core::cache::CacheType::Volume => {
-                let docker = docker
-                    .as_ref()
-                    .expect("a volume cache needs a Docker client");
-                ratect_core::cache::clean_shared_volume_caches(docker, &only).await?
-            }
-            ratect_core::cache::CacheType::Directory => {
-                ratect_core::cache::clean_shared_directory_caches(&only)?
-            }
-        });
-    }
+        Ok(removed) => removed,
+    };
 
     if !quiet {
-        for name in &removed {
-            println!("Removed cache '{name}'.");
+        // Reported by *cache* name whichever storage was used — a volume's
+        // own Docker name carries a prefix, which is an implementation
+        // detail of where it's kept, not what the user called it.
+        for cache in &removed {
+            println!("Removed cache '{}'.", cache.name);
         }
         println!("Removed {} cache(s).", removed.len());
     }
 
     // A name that matched nothing is worth saying out loud: the likeliest
     // cause is a typo, and silence there reads exactly like success.
-    for name in only.iter().filter(|name| !removed.contains(name)) {
+    let removed_names: HashSet<&str> = removed.iter().map(|cache| cache.name.as_str()).collect();
+    for name in only
+        .iter()
+        .filter(|name| !removed_names.contains(name.as_str()))
+    {
         // Named after what was actually searched: under `--scope shared`
         // "for this project" points at the wrong storage entirely.
         match wanted {
@@ -1045,127 +1004,6 @@ async fn manage_caches(
     }
 
     Ok(())
-}
-
-/// The caches one `ratect caches` invocation is working with: what this
-/// project can see, split by whether the project *owns* them.
-///
-/// The split is the point. Before shared caches, `caches` rested on an
-/// unstated invariant — everything it showed you belonged to this project,
-/// so anything it showed you, you could delete. That is why the heading
-/// could say "this project's", why an empty name set could mean "all of
-/// them", and why `-o quiet` was safe to pipe into `clean`.
-///
-/// Shared caches invalidated it. Carrying scope as a bare tag alongside each
-/// name meant every site re-derived what it implied — the heading, the quiet
-/// filter, the ambiguity check, the removal gate — and each could be wrong
-/// on its own. Every defect in this area was one of them being wrong
-/// separately. This answers the question once instead.
-struct CacheSelection {
-    /// This project's own caches — what a bare `clean` sweeps.
-    owned: Vec<String>,
-    /// Caches shared with every project on the machine: visible from here,
-    /// but not this project's, and removed only when named.
-    shared: Vec<String>,
-    /// The `--scope` this invocation was given, which narrows both.
-    scope: Option<ratect_core::config::CacheScope>,
-}
-
-impl CacheSelection {
-    fn is_empty(&self) -> bool {
-        self.owned.is_empty() && self.shared.is_empty()
-    }
-
-    /// What `-o quiet` prints — and, by construction, exactly what a `clean`
-    /// carrying the same flags would act on.
-    ///
-    /// Holding those two together is what makes the machine-readable listing
-    /// safe to pipe straight back: everything it emits, the matching `clean`
-    /// may remove. Deriving them separately is how a bare listing came to
-    /// emit every shared cache on the machine into a command that deletes.
-    fn actionable(&self) -> &[String] {
-        match self.scope {
-            Some(ratect_core::config::CacheScope::Shared) => &self.shared,
-            _ => &self.owned,
-        }
-    }
-
-    /// Which of `wanted` name a shared cache and *not* one of this
-    /// project's — the names a `clean` without `--scope shared` must refuse.
-    ///
-    /// Covers both the case where the name is only shared and the case where
-    /// it is both: in either, removing the shared storage is something the
-    /// caller has to ask for explicitly. That is one rule where there were
-    /// previously two, and the second (ambiguity) only ever fired on
-    /// collision — which is why naming a cache this project had never
-    /// created removed another project's without a word.
-    fn shared_only<'a>(&'a self, wanted: &'a HashSet<String>) -> Vec<&'a String> {
-        let mut names: Vec<&String> = self
-            .shared
-            .iter()
-            .filter(|name| wanted.contains(*name))
-            .collect();
-        names.sort();
-        names
-    }
-
-    /// Whether this invocation may remove caches of `scope` at all.
-    fn covers(&self, scope: ratect_core::config::CacheScope) -> bool {
-        self.scope.is_none_or(|wanted| wanted == scope)
-    }
-}
-
-/// Every cache this project can see, split by ownership and narrowed by
-/// `--scope`.
-///
-/// Both halves are read from *storage*, never from the configuration file —
-/// see [`CachesArgs`] for why that matters. A project cache is found by its
-/// `batect-cache-<key>-` prefix, a shared one by `ratect-shared-cache-`.
-async fn find_caches(
-    docker: Option<&DockerClient>,
-    cache_type: ratect_core::cache::CacheType,
-    project_directory: &std::path::Path,
-    scope: Option<ratect_core::config::CacheScope>,
-) -> anyhow::Result<CacheSelection> {
-    use ratect_core::config::CacheScope;
-
-    let (mut owned, mut shared) = (Vec::new(), Vec::new());
-    match cache_type {
-        ratect_core::cache::CacheType::Volume => {
-            let docker = docker.expect("a volume cache needs a Docker client");
-            let key = ratect_core::cache::project_cache_key(project_directory)?;
-            // One listing for both — see `list_all_volume_caches`.
-            for (name, found_scope) in
-                ratect_core::cache::list_all_volume_caches(docker, &key).await?
-            {
-                match found_scope {
-                    CacheScope::Project => owned.push(name),
-                    CacheScope::Shared => shared.push(name),
-                }
-            }
-        }
-        ratect_core::cache::CacheType::Directory => {
-            owned = ratect_core::cache::list_directory_caches(project_directory)?;
-            shared = ratect_core::cache::list_shared_directory_caches()?;
-        }
-    }
-
-    // `--scope` narrows what the invocation is working with, so every
-    // question below is answered against the narrowed set rather than each
-    // site remembering to re-apply it.
-    if scope == Some(CacheScope::Shared) {
-        owned.clear();
-    }
-    if scope == Some(CacheScope::Project) {
-        shared.clear();
-    }
-    owned.sort();
-    shared.sort();
-    Ok(CacheSelection {
-        owned,
-        shared,
-        scope,
-    })
 }
 
 /// `ratect resources list` / `ratect resources clean` — the containers and

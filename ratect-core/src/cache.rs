@@ -15,16 +15,23 @@
 //! Resolves `cache` volume mounts ([`crate::config::CacheVolumeMount`]) to an
 //! actual Docker bind-mount string — a named volume that persists between
 //! separate `ratect` invocations ([`CacheType::Volume`], the default) or a
-//! host directory ([`CacheType::Directory`], `--cache-type=directory`) — and
-//! implements `--clean`/`--clean-cache`
-//! ([`clean_volume_caches`]/[`clean_directory_caches`]), which remove them.
+//! host directory ([`CacheType::Directory`], `--cache-type=directory`) via
+//! [`resolve_cache_mount`] — and, through [`CacheStore`], the concept behind
+//! `ratect caches`/`ratect-compat --clean`/`--clean-cache`: what cache
+//! storage exists, and how to list or remove it.
+//!
+//! These are two different questions answered by one module, on purpose:
+//! *what does this `cache` mount become at container-create time* and *what
+//! storage exists and how do I remove it* don't share a caller, and folding
+//! them into one type would make that type answer both again.
 //!
 //! Ported from Batect's own `CacheManager`/`VolumeMountResolver`/`CacheType`/
 //! `CleanupCachesCommand`, and kept byte-for-byte compatible with its
 //! `.batect/caches/` location and `batect-cache-<project key>-<name>` volume
 //! naming *on purpose*: this is `ratect-compat`'s territory, so a project
 //! migrating from real `batect` finds its existing caches reused rather than
-//! orphaned.
+//! orphaned. Batect has no *shared* cache — [`CacheStore`]'s scope handling
+//! is `ratect`-only.
 //!
 //! One deliberate divergence: a freshly generated [`project_cache_key`] is a
 //! full `uuid::Uuid::new_v4()`, not Batect's 6-character `a-z0-9` id, whose
@@ -40,7 +47,8 @@
 //! against plain `Vec<String>`/tempdir fixtures with no fake
 //! `ContainerRuntime`.
 
-use crate::config::CacheVolumeMount;
+use crate::config::{CacheScope, CacheVolumeMount};
+use crate::docker::ContainerRuntime;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::fs;
@@ -219,15 +227,11 @@ fn matching_shared_cache_volumes<'a>(
 }
 
 /// Every cache volume this project can see, with the scope each one's name
-/// implies — one `list_volumes` call covering both, rather than
-/// [`list_volume_caches`] listing the daemon once per scope for the same
-/// answer.
-pub async fn list_all_volume_caches(
-    runtime: &impl crate::docker::ContainerRuntime,
+/// implies — one `list_volumes` call covering both scopes.
+async fn list_all_volume_caches(
+    runtime: &impl ContainerRuntime,
     project_cache_key: &str,
-) -> Result<Vec<(String, crate::config::CacheScope)>> {
-    use crate::config::CacheScope;
-
+) -> Result<Vec<(String, CacheScope)>> {
     let existing = runtime.list_volumes().await?;
     let project_prefix = cache_volume_name(project_cache_key, "");
     let shared_prefix = shared_cache_volume_name("");
@@ -258,8 +262,8 @@ pub async fn list_all_volume_caches(
 /// precondition on the caller was not enough: it read as satisfied and
 /// wasn't, so a bare `caches clean` removed every shared cache on the
 /// machine. The rule lives here now, where it cannot be forgotten.
-pub async fn clean_shared_volume_caches(
-    runtime: &impl crate::docker::ContainerRuntime,
+async fn clean_shared_volume_caches(
+    runtime: &impl ContainerRuntime,
     only: &HashSet<String>,
 ) -> Result<Vec<String>> {
     let existing = runtime.list_volumes().await?;
@@ -279,34 +283,20 @@ pub async fn clean_shared_volume_caches(
         .collect())
 }
 
-/// Every **shared** cache directory, by name — the counterpart to
-/// [`list_directory_caches`] under `CacheType::Directory`.
-pub fn list_shared_directory_caches() -> Result<Vec<String>> {
-    // A host with no passwd entry for the current uid has no home, and so
-    // no shared caches — that is an empty list, not a failure. `caches
-    // --cache-type directory` worked on such a host before shared caches
-    // existed, and has no reason to stop.
-    let Ok(root) = shared_cache_root() else {
-        return Ok(Vec::new());
-    };
-    matching_cache_directories(&root, &HashSet::new())
-}
-
-/// Removes the named shared cache directories, returning those removed.
+/// Removes the named shared cache directories under `root`, returning those
+/// removed.
 ///
-/// An empty `only` removes nothing — see
-/// [`clean_shared_volume_caches`] for why that is the opposite of the
-/// project-scoped rule.
-pub fn clean_shared_directory_caches(only: &HashSet<String>) -> Result<Vec<String>> {
+/// **An empty `only` removes nothing** — see [`clean_shared_volume_caches`]
+/// for why that is the opposite of the project-scoped rule. `root` is a
+/// parameter rather than resolved here (as it once was, via
+/// `shared_cache_root()`): [`CacheStore`] resolves it once, tolerating a host
+/// with no home directory by treating "no root" as "no shared caches",
+/// rather than this function silently swallowing that failure on every call.
+fn clean_shared_directory_caches(root: &Path, only: &HashSet<String>) -> Result<Vec<String>> {
     if only.is_empty() {
         return Ok(Vec::new());
     }
-    // Same tolerance as [`list_shared_directory_caches`]: no home means no
-    // shared caches to remove.
-    let Ok(root) = shared_cache_root() else {
-        return Ok(Vec::new());
-    };
-    let matched = matching_cache_directories(&root, only)?;
+    let matched = matching_cache_directories(root, only)?;
     for name in &matched {
         let dir = root.join(name);
         fs::remove_dir_all(&dir).with_context(|| format!("Failed to remove {dir:?}"))?;
@@ -343,45 +333,26 @@ fn matching_cache_volumes<'a>(
         .collect()
 }
 
-/// This project's own existing cache volumes, by their *cache* name (what
-/// a `volumes` entry calls them) rather than the prefixed Docker volume
-/// name — for `ratect caches list`, which has no equivalent in
-/// `ratect-compat`/Batect (both only ever offered removal).
-///
-/// Knowing what's there is the prerequisite for removing one by name, so
-/// this is a deliberate addition rather than a parity gap. Sorted, so
-/// repeated invocations agree with each other; Docker's own volume listing
-/// order isn't specified.
-pub async fn list_volume_caches(
-    runtime: &impl crate::docker::ContainerRuntime,
-    project_cache_key: &str,
-) -> Result<Vec<String>> {
-    let existing = runtime.list_volumes().await?;
-    let prefix = cache_volume_name(project_cache_key, "");
-    let mut names: Vec<String> = matching_cache_volumes(
-        &existing,
-        &cache_volume_name(project_cache_key, ""),
-        &HashSet::new(),
-    )
-    .into_iter()
-    .map(|volume| volume.strip_prefix(&prefix).unwrap_or(volume).to_string())
-    .collect();
-    names.sort();
-    Ok(names)
-}
-
-/// The `CacheType::Directory` counterpart of [`list_volume_caches`] —
-/// already sorted, by `matching_cache_directories`.
-pub fn list_directory_caches(project_directory: &Path) -> Result<Vec<String>> {
+/// The `CacheType::Directory` counterpart of [`matching_cache_volumes`]'s
+/// listing use — already sorted, by `matching_cache_directories`.
+fn list_directory_caches(project_directory: &Path) -> Result<Vec<String>> {
     matching_cache_directories(&cache_directory(project_directory), &HashSet::new())
 }
 
 /// Removes this project's own cache volumes (or, with `only` non-empty,
 /// just the named ones) — `--clean`/`--clean-cache` under
 /// `CacheType::Volume`. Mirrors Batect's own `CleanupCachesCommand.runForVolumes`.
-/// Returns the names actually removed.
+/// Returns the full volume names actually removed.
+///
+/// **Still `pub`, unlike this module's other removal functions**: `ratect-compat`
+/// calls it directly, printing exactly what it returns — Batect's own wording
+/// names the volume, never the bare cache name a `cache` mount declares. Once
+/// `ratect-compat` moves onto [`CacheStore`] too, this goes private and its
+/// contract normalizes to match [`clean_shared_volume_caches`]'s (bare cache
+/// names) — deferred rather than done here so that change lands in the same
+/// commit as the caller it would otherwise silently break.
 pub async fn clean_volume_caches(
-    runtime: &impl crate::docker::ContainerRuntime,
+    runtime: &impl ContainerRuntime,
     project_cache_key: &str,
     only: &HashSet<String>,
 ) -> Result<Vec<String>> {
@@ -434,6 +405,10 @@ fn matching_cache_directories(cache_dir: &Path, only: &HashSet<String>) -> Resul
 /// `CacheType::Directory`. Mirrors Batect's own
 /// `CleanupCachesCommand.runForDirectories`. Returns the names actually
 /// removed.
+///
+/// **Still `pub`**, for the same reason and on the same schedule as
+/// [`clean_volume_caches`]: `ratect-compat` calls it directly until it too
+/// moves onto [`CacheStore`].
 pub fn clean_directory_caches(
     project_directory: &Path,
     only: &HashSet<String>,
@@ -447,6 +422,313 @@ pub fn clean_directory_caches(
     }
 
     Ok(matched)
+}
+
+/// The caches one `ratect caches`/`ratect-compat --clean` invocation is
+/// working with: what this project can see, split by whether the project
+/// *owns* them.
+///
+/// The split is the point. Before shared caches, `caches` rested on an
+/// unstated invariant — everything it showed you belonged to this project,
+/// so anything it showed you, you could delete. That is why the heading
+/// could say "this project's", why an empty name set could mean "all of
+/// them", and why `-o quiet` was safe to pipe into `clean`.
+///
+/// Shared caches invalidated it. Carrying scope as a bare tag alongside each
+/// name meant every site re-derived what it implied — the heading, the quiet
+/// filter, the ambiguity check, the removal gate — and each could be wrong
+/// on its own. Every defect in this area was one of them being wrong
+/// separately. This answers the question once instead.
+pub struct CacheSelection {
+    /// This project's own caches — what a bare `clean` sweeps.
+    pub owned: Vec<String>,
+    /// Caches shared with every project on the machine: visible from here,
+    /// but not this project's, and removed only when named.
+    pub shared: Vec<String>,
+    /// The `--scope` this invocation was given, which narrows both.
+    pub scope: Option<CacheScope>,
+}
+
+impl CacheSelection {
+    pub fn is_empty(&self) -> bool {
+        self.owned.is_empty() && self.shared.is_empty()
+    }
+
+    /// What `-o quiet` prints — and, by construction, exactly what a `clean`
+    /// carrying the same flags would act on.
+    ///
+    /// Holding those two together is what makes the machine-readable listing
+    /// safe to pipe straight back: everything it emits, the matching `clean`
+    /// may remove. Deriving them separately is how a bare listing came to
+    /// emit every shared cache on the machine into a command that deletes.
+    pub fn actionable(&self) -> &[String] {
+        match self.scope {
+            Some(CacheScope::Shared) => &self.shared,
+            _ => &self.owned,
+        }
+    }
+
+    /// Which of `wanted` name a shared cache and *not* one of this
+    /// project's — the names a `clean` without `--scope shared` must refuse.
+    ///
+    /// Covers both the case where the name is only shared and the case where
+    /// it is both: in either, removing the shared storage is something the
+    /// caller has to ask for explicitly. That is one rule where there were
+    /// previously two, and the second (ambiguity) only ever fired on
+    /// collision — which is why naming a cache this project had never
+    /// created removed another project's without a word.
+    pub fn shared_only<'a>(&'a self, wanted: &'a HashSet<String>) -> Vec<&'a String> {
+        let mut names: Vec<&String> = self
+            .shared
+            .iter()
+            .filter(|name| wanted.contains(*name))
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Whether this invocation may remove caches of `scope` at all.
+    pub fn covers(&self, scope: CacheScope) -> bool {
+        self.scope.is_none_or(|wanted| wanted == scope)
+    }
+}
+
+/// One cache [`CacheStore::remove`] actually removed.
+#[derive(Debug, PartialEq, Eq)]
+pub struct RemovedCache {
+    /// What a `volumes` entry calls this cache — what `ratect` reports.
+    pub name: String,
+    /// Where it actually lived: a Docker volume name, or a full host path —
+    /// what `ratect-compat` reports, matching Batect's own wording, which
+    /// never spoke in terms of cache names at all.
+    pub storage: String,
+}
+
+/// Why [`CacheStore::remove`] declined to remove a *shared* cache — returned
+/// rather than turned into an error message here, since the flag it names
+/// (`--scope shared`) belongs to `ratect`'s CLI, not to this crate.
+///
+/// **Removing a shared cache always takes `--scope shared`.** Not "when
+/// named", not "when unambiguous" — always. That is the one rule, replacing
+/// three special cases that each had to be discovered separately: a bare
+/// `clean` sweeping every shared cache, `-o quiet` feeding machine-wide names
+/// into a pipe, and naming a cache this project has never had and silently
+/// removing someone else's. All three were the same invariant — an
+/// unqualified operation touches only what this project owns — being
+/// violated somewhere new.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CacheRefusal {
+    /// `only` names a cache that's shared (or shared and this project's
+    /// both), but `scope` wasn't `Shared`.
+    SharedNotNamed(String),
+    /// `scope` was `Shared`, but `only` is empty — a shared cache is only
+    /// ever removed by name.
+    SharedSweepNotNamed,
+}
+
+/// Where a project's caches live and how to reach them — one value per
+/// `ratect caches`/`ratect-compat --clean` invocation, hiding the
+/// volume-or-directory × project-or-shared matrix `list`/`remove` used to
+/// leave every caller to reassemble.
+///
+/// `Volume` needs a `ContainerRuntime`, because Docker holds the caches;
+/// `Directory` needs none, because the filesystem does. Representing that as
+/// one struct with an `Option<&D>` field left "a volume cache needs a
+/// daemon" as a runtime `.expect()` no caller could see coming from the
+/// type — this enum makes the missing case unrepresentable instead.
+pub enum CacheStore<'a, D: ContainerRuntime + Send + Sync> {
+    Volume {
+        docker: &'a D,
+        project_cache_key: String,
+    },
+    Directory {
+        project_directory: PathBuf,
+        /// Where every shared cache directory lives, resolved once by the
+        /// caller — `None` when this host has no home directory to resolve
+        /// it against, which `list`/`remove` then treat as "no shared
+        /// caches" rather than a failure. Injected rather than resolved
+        /// here so a test can point it at a fixture directory instead of
+        /// the real `~/.ratect/caches`.
+        shared_root: Option<PathBuf>,
+    },
+}
+
+impl<'a, D: ContainerRuntime + Send + Sync> CacheStore<'a, D> {
+    /// `docker` is required for `CacheType::Volume` and ignored for
+    /// `CacheType::Directory` — a caller that never opened a Docker
+    /// connection for a directory-type invocation can simply pass `None`.
+    ///
+    /// Resolves (and, the first time, persists) the project's cache key
+    /// immediately for `CacheType::Volume`, rather than on first use: it was
+    /// previously read once for listing and again for removal, two file
+    /// reads doing the same job in one invocation.
+    pub fn new(
+        cache_type: CacheType,
+        docker: Option<&'a D>,
+        project_directory: PathBuf,
+        shared_root: Option<PathBuf>,
+    ) -> Result<Self> {
+        Ok(match cache_type {
+            CacheType::Volume => Self::Volume {
+                docker: docker.expect("a volume cache store needs a Docker client"),
+                project_cache_key: project_cache_key(&project_directory)?,
+            },
+            CacheType::Directory => Self::Directory {
+                project_directory,
+                shared_root,
+            },
+        })
+    }
+
+    /// Every cache this project can see, split by ownership and narrowed by
+    /// `scope`.
+    ///
+    /// Both halves are read from *storage*, never from a configuration
+    /// file — a cache belongs to the project *directory*, so this works on a
+    /// project whose config doesn't parse, or isn't there at all. A project
+    /// cache is found by its `batect-cache-<key>-` prefix, a shared one by
+    /// `ratect-shared-cache-`.
+    pub async fn list(&self, scope: Option<CacheScope>) -> Result<CacheSelection> {
+        let (mut owned, mut shared) = (Vec::new(), Vec::new());
+        match self {
+            Self::Volume {
+                docker,
+                project_cache_key,
+            } => {
+                for (name, found_scope) in
+                    list_all_volume_caches(*docker, project_cache_key).await?
+                {
+                    match found_scope {
+                        CacheScope::Project => owned.push(name),
+                        CacheScope::Shared => shared.push(name),
+                    }
+                }
+            }
+            Self::Directory {
+                project_directory,
+                shared_root,
+            } => {
+                owned = list_directory_caches(project_directory)?;
+                shared = match shared_root {
+                    Some(root) => matching_cache_directories(root, &HashSet::new())?,
+                    None => Vec::new(),
+                };
+            }
+        }
+
+        // `scope` narrows what the invocation is working with, so every
+        // question below is answered against the narrowed set rather than
+        // each site remembering to re-apply it.
+        if scope == Some(CacheScope::Shared) {
+            owned.clear();
+        }
+        if scope == Some(CacheScope::Project) {
+            shared.clear();
+        }
+        owned.sort();
+        shared.sort();
+        Ok(CacheSelection {
+            owned,
+            shared,
+            scope,
+        })
+    }
+
+    /// Removes the caches `only` names (or, if empty, every one of this
+    /// project's own) from `found` — the [`CacheSelection`] a prior
+    /// [`list`](Self::list) call with the same scope already produced, so
+    /// this never re-lists what the caller already has.
+    ///
+    /// Refuses (rather than removing) a shared cache reached without
+    /// `--scope shared` — see [`CacheRefusal`] — checked against `found`
+    /// exactly as narrowed: an explicit `--scope project` clears `found`'s
+    /// shared half, so a same-named shared cache is correctly not flagged as
+    /// ambiguous when the caller has already said which one they mean.
+    pub async fn remove(
+        &self,
+        found: &CacheSelection,
+        only: &HashSet<String>,
+    ) -> Result<Result<Vec<RemovedCache>, CacheRefusal>> {
+        if only.is_empty() && found.scope == Some(CacheScope::Shared) {
+            return Ok(Err(CacheRefusal::SharedSweepNotNamed));
+        }
+        if found.scope != Some(CacheScope::Shared) {
+            if let Some(name) = found.shared_only(only).first() {
+                return Ok(Err(CacheRefusal::SharedNotNamed((*name).clone())));
+            }
+        }
+
+        let mut removed = Vec::new();
+        if found.covers(CacheScope::Project) {
+            removed.extend(self.remove_project(only).await?);
+        }
+        if found.covers(CacheScope::Shared) {
+            removed.extend(self.remove_shared(only).await?);
+        }
+        Ok(Ok(removed))
+    }
+
+    async fn remove_project(&self, only: &HashSet<String>) -> Result<Vec<RemovedCache>> {
+        Ok(match self {
+            Self::Volume {
+                docker,
+                project_cache_key,
+            } => {
+                // `clean_volume_caches` still returns the full volume name,
+                // not the bare cache name — see its own doc comment for why
+                // that's deferred rather than normalized here.
+                let prefix = cache_volume_name(project_cache_key, "");
+                clean_volume_caches(*docker, project_cache_key, only)
+                    .await?
+                    .into_iter()
+                    .map(|storage| {
+                        let name = storage
+                            .strip_prefix(&prefix)
+                            .unwrap_or(&storage)
+                            .to_string();
+                        RemovedCache { name, storage }
+                    })
+                    .collect()
+            }
+            Self::Directory {
+                project_directory, ..
+            } => clean_directory_caches(project_directory, only)?
+                .into_iter()
+                .map(|name| {
+                    let storage = cache_directory(project_directory)
+                        .join(&name)
+                        .display()
+                        .to_string();
+                    RemovedCache { name, storage }
+                })
+                .collect(),
+        })
+    }
+
+    async fn remove_shared(&self, only: &HashSet<String>) -> Result<Vec<RemovedCache>> {
+        Ok(match self {
+            Self::Volume { docker, .. } => clean_shared_volume_caches(*docker, only)
+                .await?
+                .into_iter()
+                .map(|name| {
+                    let storage = shared_cache_volume_name(&name);
+                    RemovedCache { name, storage }
+                })
+                .collect(),
+            Self::Directory { shared_root, .. } => {
+                let Some(root) = shared_root else {
+                    return Ok(Vec::new());
+                };
+                clean_shared_directory_caches(root, only)?
+                    .into_iter()
+                    .map(|name| {
+                        let storage = root.join(&name).display().to_string();
+                        RemovedCache { name, storage }
+                    })
+                    .collect()
+            }
+        })
+    }
 }
 
 #[cfg(test)]
