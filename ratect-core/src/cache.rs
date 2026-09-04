@@ -342,32 +342,30 @@ fn list_directory_caches(project_directory: &Path) -> Result<Vec<String>> {
 /// Removes this project's own cache volumes (or, with `only` non-empty,
 /// just the named ones) — `--clean`/`--clean-cache` under
 /// `CacheType::Volume`. Mirrors Batect's own `CleanupCachesCommand.runForVolumes`.
-/// Returns the full volume names actually removed.
-///
-/// **Still `pub`, unlike this module's other removal functions**: `ratect-compat`
-/// calls it directly, printing exactly what it returns — Batect's own wording
-/// names the volume, never the bare cache name a `cache` mount declares. Once
-/// `ratect-compat` moves onto [`CacheStore`] too, this goes private and its
-/// contract normalizes to match [`clean_shared_volume_caches`]'s (bare cache
-/// names) — deferred rather than done here so that change lands in the same
-/// commit as the caller it would otherwise silently break.
-pub async fn clean_volume_caches(
+/// Returns the *cache* names actually removed (the prefix stripped), matching
+/// [`clean_shared_volume_caches`]'s convention — [`CacheStore`] reconstructs
+/// the full volume name from a cache name whenever it needs to, so the two
+/// removal functions it sits beside can agree on one contract.
+async fn clean_volume_caches(
     runtime: &impl ContainerRuntime,
     project_cache_key: &str,
     only: &HashSet<String>,
 ) -> Result<Vec<String>> {
     let existing = runtime.list_volumes().await?;
-    let matched: Vec<String> =
-        matching_cache_volumes(&existing, &cache_volume_name(project_cache_key, ""), only)
-            .into_iter()
-            .map(str::to_string)
-            .collect();
+    let prefix = cache_volume_name(project_cache_key, "");
+    let matched: Vec<String> = matching_cache_volumes(&existing, &prefix, only)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
 
     for name in &matched {
         runtime.remove_volume(name).await?;
     }
 
-    Ok(matched)
+    Ok(matched
+        .iter()
+        .map(|name| name.strip_prefix(&prefix).unwrap_or(name).to_string())
+        .collect())
 }
 
 /// The synchronous counterpart of `matching_cache_volumes` for
@@ -405,14 +403,7 @@ fn matching_cache_directories(cache_dir: &Path, only: &HashSet<String>) -> Resul
 /// `CacheType::Directory`. Mirrors Batect's own
 /// `CleanupCachesCommand.runForDirectories`. Returns the names actually
 /// removed.
-///
-/// **Still `pub`**, for the same reason and on the same schedule as
-/// [`clean_volume_caches`]: `ratect-compat` calls it directly until it too
-/// moves onto [`CacheStore`].
-pub fn clean_directory_caches(
-    project_directory: &Path,
-    only: &HashSet<String>,
-) -> Result<Vec<String>> {
+fn clean_directory_caches(project_directory: &Path, only: &HashSet<String>) -> Result<Vec<String>> {
     let cache_dir = cache_directory(project_directory);
     let matched = matching_cache_directories(&cache_dir, only)?;
 
@@ -673,23 +664,14 @@ impl<'a, D: ContainerRuntime + Send + Sync> CacheStore<'a, D> {
             Self::Volume {
                 docker,
                 project_cache_key,
-            } => {
-                // `clean_volume_caches` still returns the full volume name,
-                // not the bare cache name — see its own doc comment for why
-                // that's deferred rather than normalized here.
-                let prefix = cache_volume_name(project_cache_key, "");
-                clean_volume_caches(*docker, project_cache_key, only)
-                    .await?
-                    .into_iter()
-                    .map(|storage| {
-                        let name = storage
-                            .strip_prefix(&prefix)
-                            .unwrap_or(&storage)
-                            .to_string();
-                        RemovedCache { name, storage }
-                    })
-                    .collect()
-            }
+            } => clean_volume_caches(*docker, project_cache_key, only)
+                .await?
+                .into_iter()
+                .map(|name| {
+                    let storage = cache_volume_name(project_cache_key, &name);
+                    RemovedCache { name, storage }
+                })
+                .collect(),
             Self::Directory {
                 project_directory, ..
             } => clean_directory_caches(project_directory, only)?

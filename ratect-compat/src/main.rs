@@ -572,7 +572,7 @@ async fn clean_caches(args: &Args) -> Result<()> {
     let only: HashSet<String> = args.clean_cache.iter().cloned().collect();
     let cache_type: ratect_core::cache::CacheType = args.cache_type.into();
 
-    let removed = match cache_type {
+    let docker = match cache_type {
         ratect_core::cache::CacheType::Volume => {
             println!("Checking for cache volumes...");
             let docker_connection = DockerConnectionOptions {
@@ -586,35 +586,33 @@ async fn clean_caches(args: &Args) -> Result<()> {
                 tls_cert: args.docker_tls_cert.clone(),
                 tls_key: args.docker_tls_key.clone(),
             };
-            let docker = DockerClient::new(&docker_connection)?;
-            let project_cache_key = ratect_core::cache::project_cache_key(&project_directory)?;
-            let removed =
-                ratect_core::cache::clean_volume_caches(&docker, &project_cache_key, &only).await?;
-            for name in &removed {
-                println!("{}", deleting_line(cache_type, name));
-            }
-            removed
+            Some(DockerClient::new(&docker_connection)?)
         }
         ratect_core::cache::CacheType::Directory => {
-            let cache_directory = ratect_core::cache::cache_directory(&project_directory);
             println!(
                 "Checking for cache directories in '{}'...",
-                cache_directory.display()
+                ratect_core::cache::cache_directory(&project_directory).display()
             );
-            let removed = ratect_core::cache::clean_directory_caches(&project_directory, &only)?;
-            for name in &removed {
-                println!(
-                    "{}",
-                    deleting_line(
-                        cache_type,
-                        &cache_directory.join(name).display().to_string()
-                    )
-                );
-            }
-            removed
+            None
         }
     };
 
+    // `ratect-compat` never has a `--scope` of its own — Batect has no
+    // shared cache — so this always asks `CacheStore` for `Project` and
+    // never resolves a shared root at all.
+    let store =
+        ratect_core::cache::CacheStore::new(cache_type, docker.as_ref(), project_directory, None)?;
+    let found = store
+        .list(Some(ratect_core::config::CacheScope::Project))
+        .await?;
+    let removed = store
+        .remove(&found, &only)
+        .await?
+        .expect("a Project-scoped selection can never trigger CacheStore's shared-cache refusal");
+
+    for cache in &removed {
+        println!("{}", deleting_line(cache_type, &cache.storage));
+    }
     println!("{}", done_line(cache_type, removed.len()));
 
     Ok(())
