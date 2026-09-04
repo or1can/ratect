@@ -549,3 +549,7 @@ fn tmpfs_mounts(
         Some(mounts)
     }
 }
+
+#[cfg(test)]
+#[path = "container_spec_tests.rs"]
+mod tests;
