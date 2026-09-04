@@ -1514,20 +1514,46 @@ to live at, so links written before the split still resolve.
     `resolve_cache_mount` deliberately does not move behind the store — "what
     does this volume entry become at container-create time" is a different
     question from "what storage exists and how do I remove it".~~ — done, to
-    that scope, in four commits rather than the sketched three: protecting
-    `ratect-compat`'s Batect-verbatim wording landed first as its own commit
-    (f4e674f); `CacheStore` itself, folding the typed refusal in rather than
-    landing it separately, since `remove`'s signature made no sense without it
-    (d6d379f); a pre-existing test race hit while verifying against the real
-    Docker suite, fixed on its own (8034b24) — three `#[ignore]`d tests shared
-    a pid+nanosecond scratch-path scheme with no counter, so two running
-    concurrently could collide and corrupt each other's fixture; and
-    `ratect-compat`'s own switch (271a927), which is what let
-    `clean_volume_caches`/`clean_directory_caches` finally go private. Five
-    items stayed public, not one: `CacheStore`, `resolve_cache_mount`,
-    `CacheType`, `CacheOptions`, and `project_cache_key`, which `engine.rs`
-    calls directly for runtime mount resolution — a caller this candidate
-    never touches.
+    that scope, in four code commits: protecting `ratect-compat`'s
+    Batect-verbatim wording landed first as its own commit (f4e674f);
+    `CacheStore` itself, folding the typed refusal in rather than landing it
+    separately as originally sketched, since `remove`'s signature made no
+    sense without it (d6d379f); a pre-existing test race hit while verifying
+    against the real Docker suite, fixed on its own (8034b24) — nine
+    `#[ignore]`d tests (two sharing a fixture helper, two more sharing a key
+    helper) derived their scratch path or Docker tag from pid and a
+    nanosecond `SystemTime` read with no counter, so two running concurrently
+    could land on the same nanosecond and collide, corrupting one test's
+    fixture or colliding two tags on the one shared daemon. Caught in two
+    passes: three tests during the change itself, the other six found by a
+    review round's class sweep afterward — the fix commit's own message
+    undercounted at "three real-daemon tests", which guideline 16 calls out
+    as exactly the mistake to avoid; and `ratect-compat`'s own switch
+    (271a927), which is what let `clean_volume_caches`/`clean_directory_caches`
+    finally go private.
+
+    Eleven of the original seventeen public items are now private or deleted
+    outright (`list_volume_caches` had no caller left after `find_caches`
+    stopped using it, well before this candidate — dead code, removed here
+    rather than moved); six survive (`CacheType`, `CacheOptions`,
+    `cache_directory`, `project_cache_key` — `engine.rs` calls it directly for
+    runtime mount resolution, a caller this candidate never touches —
+    `shared_cache_root`, `resolve_cache_mount`); and `CacheStore` itself plus
+    the three types its own methods return (`CacheSelection`, `RemovedCache`,
+    `CacheRefusal`) are newly public. Ten items total, not five — the
+    original "about thirteen become private" estimate undercounted by three
+    (`cache_volume_name`, `shared_cache_volume_name`, `shared_cache_directory`
+    were missed in the first pass and caught by a later review round) and the
+    first version of this summary compounded the error by omitting
+    `shared_cache_root` from its own "stayed public" list while still using
+    it two paragraphs above.
+
+    One judgement call worth recording: `ratect-compat`'s `clean_caches` now
+    calls `CacheStore::list` before `remove`, where it previously called
+    `clean_volume_caches`/`clean_directory_caches` directly — one extra
+    `list_volumes`/directory-read per invocation. Output is unchanged
+    (verified against the real Docker suite); the cost is latency on an
+    infrequently-run command, accepted rather than special-cased.
 
   - **`docker/connection.rs`.** `DockerConnectionOptions` through `connect` —
     context parsing, TLS and cert-directory resolution, the crypto-provider
