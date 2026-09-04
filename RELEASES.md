@@ -1593,7 +1593,7 @@ to live at, so links written before the split still resolve.
     (a8337f8), the diagnosis (1b337d6), and the fix once it existed to point at
     (0b03330).
 
-  - **`ContainerSpec`.** The highest-leverage item and the one whose true size
+  - ~~**`ContainerSpec`.** The highest-leverage item and the one whose true size
     is least knowable in advance. One owned value derived by one pure function
     from the container, an overlay, role and the already-resolved
     image/volumes/user mapping, crossing the `ContainerRuntime` seam in place of
@@ -1601,9 +1601,9 @@ to live at, so links written before the split still resolve.
     `start_background_container`. It lives in its own module because it is
     shared vocabulary between `engine.rs` and `docker.rs` and owned by neither —
     making it `docker/spec.rs` would answer "who owns a container's runtime
-    spec" with "the daemon adapter", which is the answer the finding rejects.
+    spec" with "the daemon adapter", which is the answer the finding rejects.~~
 
-    The two overlays are *not* interchangeable — `TaskRun` may override
+    ~~The two overlays are *not* interchangeable — `TaskRun` may override
     `command`/`entrypoint`, a `TaskContainerCustomisation` may not, and Batect
     parity requires that asymmetry — so the overlay is an enum whose arms
     destructure their config struct exhaustively, making a newly-added config
@@ -1614,13 +1614,42 @@ to live at, so links written before the split still resolve.
     collapse into one ordered capture, which makes container start *ordering*
     assertable for the first time; its twenty-six accessors survive as
     projections over that, so a 7,300-line test file does not churn for a change
-    that alters no behaviour.
+    that alters no behaviour.~~
 
-    The one commit where the fake cannot vouch for itself — it is rewritten
+    ~~The one commit where the fake cannot vouch for itself — it is rewritten
     alongside the code it checks — requires the real-daemon suite locally before
     it lands. `build_image` carries the same `too_many_arguments` allow and is
     explicitly **not** in scope: with one call site it shares the width but not
-    the duplication, and there is no divergence for it to buy back.
+    the duplication, and there is no divergence for it to buy back.~~ — done, to
+    that scope, with two corrections a review round made against the paragraphs
+    above rather than against the code: "assertable for the first time" is
+    false — `nested_dependencies_start_in_order_on_same_network` and
+    `deeply_nested_dependencies_all_start_in_order` already asserted container
+    start ordering, via the fake's `events()` log, before this candidate ever
+    touched the fake; a genuinely new ordering test was drafted, checked against
+    those two first, found redundant, and deliberately not added — see
+    container_spec_tests.rs's own commit message. And "fourteen `Captured*`
+    maps" overcounted: the file has fourteen `Captured*` type aliases in total,
+    but only nine of them (`environments`/`images`/`commands`/`interactive`/
+    `user_mapping`/`network_options`/`host_gateways`/`health_checks`/
+    `container_options`) fed `run_container`/`start_background_container` and so
+    collapsed into the new `CapturedSpecs`; the other five plus
+    `build_host_gateways` serve `build_image`/`exec_in_container`, explicitly
+    out of scope, and stayed untouched. Twenty-six accessors surviving as
+    projections was accurate as written.
+
+    Landed as the three commits settled during grilling: the pure move
+    (4da715e), `ContainerSpec`/`derive_spec`/both call sites/the fake rewrite
+    (b8d827e), and the equivalence/overlay-precedence tests (7788687) — plus a
+    fourth, review-found fix (ca9e2be) for two `NetworkOptions`/
+    `ContainerOptions` doc comments that had carried their
+    `too_many_arguments`-avoidance rationale verbatim from the first commit
+    into the second, which is exactly what made it false: that commit is what
+    removed the allow they were still citing. `build_image` was confirmed
+    untouched, carrying its own `too_many_arguments` allow unchanged, as
+    scoped. The real-daemon suite (`cargo test --workspace --test cli --
+    --ignored`, 76 passed) was run locally before the second commit landed, per
+    its own requirement above.
 
   - **One trust gate, not one traversal.** `collect_completion_task_names` does
     re-implement the loader's walk, but the divergence is neither silent nor
