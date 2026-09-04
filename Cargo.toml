@@ -2,13 +2,21 @@
 members = ["ratect", "ratect-compat", "ratect-core", "dockerignore"]
 resolver = "2"
 
-# Upstream `master` plus one commit of ours that hasn't landed yet: sshforward
-# dispatch to *named* ssh agents, which `build_ssh`'s multi-agent and `paths`
-# support is built on (decisions/0005). Master already carries the two changes
-# this patch originally existed for — session providers on `build_image`
-# (https://github.com/fussybeaver/bollard/pull/731) and `ping_info`
-# (https://github.com/fussybeaver/bollard/pull/732) — both merged, but the latest
-# crates.io release is still 0.21.0. See ROADMAP.md's 0.12.0 entry.
+# Upstream `master` plus one small fix of ours that hasn't landed yet:
+# `connect_with_ssl` no longer discards every certificate that loaded from the
+# OS trust store just because *some* entry in it errored — see `docker/
+# connection.rs`'s own module doc for the user-facing failure this caused.
+# Sshforward dispatch to *named* ssh agents (which `build_ssh`'s multi-agent
+# and `paths` support is built on, decisions/0005) is *also* on this branch,
+# but no longer unlanded: it merged upstream as
+# https://github.com/fussybeaver/bollard/pull/770 on 2026-08-21 (confirmed —
+# `git log origin/master` carries it as `c5d3aa9`). Session providers on
+# `build_image` (https://github.com/fussybeaver/bollard/pull/731) and
+# `ping_info` (https://github.com/fussybeaver/bollard/pull/732) merged earlier
+# still. The one thing keeping this patch in place either way: the latest
+# crates.io release is still 0.21.1 (checked via `cargo search bollard`), so
+# none of upstream's merges are reachable from a plain version dependency yet.
+# See ROADMAP.md's 0.12.0 entry.
 #
 # The branch is cut fresh from upstream `master`, not from the old
 # `feat/build-image-session-providers` PR branch: upstream squash-merged that PR
@@ -16,10 +24,12 @@ resolver = "2"
 # feature as different commits touching the same lines. Comparing them conflicts,
 # which makes that branch unable to raise a PR and unable to pick up later
 # upstream fixes. Keep this pin on a branch that is `master` + our own unlanded
-# commits, and rebase it rather than merging master into it.
+# commits, and rebase it rather than merging master into it. It last rebased
+# onto a `master` a handful of commits behind current tip — worth catching up
+# next time this file is touched, along with dropping the now-landed
+# named-agent commit, rather than in the same change as an unrelated fix.
 #
 # Cargo.lock pins the exact commit, so builds stay reproducible. Dropping this
-# patch needs *both* bollard 0.22 published and the named-agent change landed
-# upstream — 0.22 alone isn't enough, since it won't carry `set_ssh_agent`.
+# patch entirely still needs a new crates.io release with today's `master`.
 [patch.crates-io]
 bollard = { git = "https://github.com/or1can/bollard.git", branch = "feat/ssh-named-agents" }

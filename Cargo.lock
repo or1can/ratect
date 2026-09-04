@@ -321,7 +321,7 @@ dependencies = [
 [[package]]
 name = "bollard"
 version = "0.22.0"
-source = "git+https://github.com/or1can/bollard.git?branch=feat%2Fssh-named-agents#4c25ff5a81053e7f08cdf2181f3e91673645f667"
+source = "git+https://github.com/or1can/bollard.git?branch=feat%2Fssh-named-agents#a01cd2753abb6b4868de50a22cc7920623c503d2"
 dependencies = [
  "async-stream",
  "base64 0.23.1",
@@ -907,7 +907,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2484,7 +2484,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
