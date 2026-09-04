@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use std::time::Duration;
 
 /// The entry `proxy::ProxyEnvironment::host_gateway` produces for a run that
 /// rewrote a proxy URL — spelt out here rather than called for, so these
