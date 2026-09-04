@@ -175,16 +175,7 @@ impl ContainerRuntime for FakeRuntime {
 
     async fn start_background_container(
         &self,
-        _alias: &str,
-        _image: &str,
-        _command: Option<&str>,
-        _volumes: Option<&Vec<String>>,
-        _environment: Option<&HashMap<String, String>>,
-        _network: &str,
-        _user_mapping: Option<&crate::docker::UserMapping>,
-        _network_options: &crate::docker::NetworkOptions,
-        _health_check: Option<&crate::docker::HealthCheckOptions>,
-        _container_options: &crate::docker::ContainerOptions,
+        _spec: &crate::container_spec::ContainerSpec,
     ) -> Result<String> {
         unimplemented!("resources never starts a container")
     }
@@ -204,21 +195,9 @@ impl ContainerRuntime for FakeRuntime {
         unimplemented!("resources never execs in a container")
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn run_container(
         &self,
-        _name: &str,
-        _image: &str,
-        _command: Option<&str>,
-        _additional_args: &[String],
-        _volumes: Option<&Vec<String>>,
-        _environment: Option<&HashMap<String, String>>,
-        _network: &str,
-        _interactive: bool,
-        _user_mapping: Option<&crate::docker::UserMapping>,
-        _network_options: &crate::docker::NetworkOptions,
-        _health_check: Option<&crate::docker::HealthCheckOptions>,
-        _container_options: &crate::docker::ContainerOptions,
+        _spec: &crate::container_spec::ContainerSpec,
         _created: Option<tokio::sync::oneshot::Sender<String>>,
         _started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<()> {

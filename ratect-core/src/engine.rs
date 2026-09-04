@@ -75,9 +75,9 @@
 //! `build_tmpfs_mounts`.
 
 use crate::config::{
-    container_names_in_task, BuildSecret, Config, Container, PortMapping, Task,
-    TaskContainerCustomisation,
+    container_names_in_task, BuildSecret, Config, Container, Task, TaskContainerCustomisation,
 };
+use crate::container_spec::merged_environment;
 use crate::docker::ContainerRuntime;
 use crate::ui::{EventSink, NullEventSink, TaskEvent};
 use anyhow::{Context, Result};
@@ -100,145 +100,12 @@ type HostEnv = Box<dyn Fn(&str) -> Option<String> + Send + Sync>;
 /// Linux job.
 type ProcNetTcp = Box<dyn Fn() -> Vec<String> + Send + Sync>;
 
-/// Merges the host's `TERM` (see `TaskEngine::term_environment_variable`),
-/// proxy-derived environment variables (see
-/// `TaskEngine::proxy_environment_variables`), a container's `environment`,
-/// and a task's `run.environment`, each overriding the last on key
-/// collision — `TERM` and proxy vars are the lowest-precedence base,
-/// matching Batect (`terminalEnvironmentVariablesFor + proxyEnvironmentVariables +
-/// substituteEnvironmentVariables`, later entries winning); the
-/// container's `environment` overrides both, and `run.environment`
-/// overrides all three. `None` only when none of the four are set.
-fn merged_environment(
-    term_var: Option<&HashMap<String, String>>,
-    proxy_vars: Option<&HashMap<String, String>>,
-    container_env: Option<&HashMap<String, String>>,
-    run_env: Option<&HashMap<String, String>>,
-) -> Option<HashMap<String, String>> {
-    if term_var.is_none() && proxy_vars.is_none() && container_env.is_none() && run_env.is_none() {
-        return None;
-    }
-    let mut merged = term_var.cloned().unwrap_or_default();
-    if let Some(proxy_vars) = proxy_vars {
-        merged.extend(proxy_vars.clone());
-    }
-    if let Some(container_env) = container_env {
-        merged.extend(container_env.clone());
-    }
-    if let Some(run_env) = run_env {
-        merged.extend(run_env.clone());
-    }
-    Some(merged)
-}
-
 /// The `TERM=dumb` every container gets under the interleaved I/O policy
 /// (the `all` output mode) — a full-screen program shouldn't try terminal
 /// control sequences when its output is being line-buffered and prefixed,
 /// matching Batect's `InterleavedContainerIOStreamingOptions`.
 fn dumb_term_environment() -> HashMap<String, String> {
     HashMap::from([("TERM".to_string(), "dumb".to_string())])
-}
-
-/// Expands and concatenates a container's own `ports` with a task run's
-/// *additional* `ports` — a union, not an override (matching Batect, which
-/// combines these as a `Set`, so there's no concept of one entry replacing
-/// another by container port; `run_ports` is `None` for a dependency, which
-/// has no task `run` to add anything from). Each `PortMapping` is expanded
-/// (a range becomes more than one triple — see `PortMapping::expand`)
-/// before docker.rs ever sees it, so `NetworkOptions::ports` only ever
-/// carries already-resolved `(local_port, container_port, protocol)`
-/// triples, never a `PortMapping` needing further interpretation.
-fn merged_ports(
-    container_ports: Option<&Vec<PortMapping>>,
-    run_ports: Option<&Vec<PortMapping>>,
-) -> Vec<(u16, u16, String)> {
-    container_ports
-        .into_iter()
-        .flatten()
-        .chain(run_ports.into_iter().flatten())
-        .flat_map(PortMapping::expand)
-        .collect()
-}
-
-/// Converts a container's parsed `health_check` config into the docker-side
-/// [`crate::docker::HealthCheckOptions`] — `docker.rs` deliberately doesn't
-/// depend on config types (same conversion boundary as `merged_ports`'
-/// expanded tuples above).
-fn health_check_options(container: &Container) -> Option<crate::docker::HealthCheckOptions> {
-    container
-        .health_check
-        .as_ref()
-        .map(|health_check| crate::docker::HealthCheckOptions {
-            command: health_check.command.clone(),
-            interval: health_check.interval,
-            retries: health_check.retries,
-            start_period: health_check.start_period,
-            timeout: health_check.timeout,
-        })
-}
-
-/// Converts a `capabilities_to_add`/`capabilities_to_drop` set of
-/// `config::Capability` into the plain Docker capability name strings
-/// `docker.rs`'s `ContainerOptions` expects — `docker.rs` deliberately
-/// doesn't depend on config types (same conversion boundary as
-/// `health_check_options` above). `None` when the set itself is `None`.
-fn capability_names(
-    capabilities: Option<&HashSet<crate::config::Capability>>,
-) -> Option<Vec<String>> {
-    Some(
-        capabilities?
-            .iter()
-            .map(|capability| capability.as_str().to_string())
-            .collect(),
-    )
-}
-
-/// Converts a `devices` list of `config::DeviceMapping` into the plain
-/// `(local, container, options)` triples `docker.rs`'s `ContainerOptions`
-/// expects — `docker.rs` deliberately doesn't depend on config types (same
-/// conversion boundary as `capability_names` above).
-fn device_triples(
-    devices: Option<&Vec<crate::config::DeviceMapping>>,
-) -> Option<Vec<(String, String, Option<String>)>> {
-    Some(
-        devices?
-            .iter()
-            .map(|device| {
-                (
-                    device.local.clone(),
-                    device.container.clone(),
-                    device.options.clone(),
-                )
-            })
-            .collect(),
-    )
-}
-
-/// Converts a `volumes` list's `tmpfs` entries into the plain
-/// `(container, options)` pairs `docker.rs`'s `ContainerOptions` expects —
-/// same conversion boundary as `capability_names`/`device_triples` above.
-/// `Local`/`Cache` entries are skipped here — they're resolved separately, by
-/// `TaskEngine::resolve_volumes`, into Docker bind-mount strings instead. A
-/// missing `options` is normalized to `""`, matching Batect's own
-/// `VolumeMountResolver` (`TmpfsMount(it.containerPath, it.options ?: "")`).
-fn tmpfs_mounts(
-    volumes: Option<&Vec<crate::config::VolumeMount>>,
-) -> Option<Vec<(String, String)>> {
-    let mounts: Vec<(String, String)> = volumes?
-        .iter()
-        .filter_map(|volume| match volume {
-            crate::config::VolumeMount::Tmpfs(tmpfs) => Some((
-                tmpfs.container.clone(),
-                tmpfs.options.clone().unwrap_or_default(),
-            )),
-            crate::config::VolumeMount::Local(_) | crate::config::VolumeMount::Cache(_) => None,
-        })
-        .collect();
-    if mounts.is_empty() {
-        None
-    } else {
-        Some(mounts)
-    }
 }
 
 /// Converts a container's parsed `build_secrets`/`build_ssh` config into the
@@ -1902,21 +1769,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     .allows_interactive();
             let proxy = self.proxy_environment(&no_proxy_entries);
             let term_var = self.term_environment_variable(interactive);
-            let environment = merged_environment(
-                term_var.as_ref(),
-                proxy.as_ref().map(|proxy| &proxy.variables),
-                container_config.environment.as_ref(),
-                run.environment.as_ref(),
-            );
             let user_mapping = self.resolve_user_mapping(container_config).await?;
-            let expanded_ports = merged_ports(container_config.ports.as_ref(), run.ports.as_ref());
-            let network_options = crate::docker::NetworkOptions {
-                additional_hostnames: container_config.additional_hostnames.as_ref(),
-                additional_hosts: container_config.additional_hosts.as_ref(),
-                proxy_host_gateway: proxy.as_ref().and_then(|proxy| proxy.host_gateway()),
-                ports: (self.publish_ports && !expanded_ports.is_empty())
-                    .then_some(&expanded_ports),
-            };
             // The task's own container goes through the same readiness
             // gate as any dependency (health-check wait, then
             // `setup_commands`, in order) — matching Batect, which runs
@@ -1925,44 +1778,10 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             // container's own readiness, so this runs *concurrently* with
             // its main command instead of gating anything — see
             // `run_task_container_readiness`'s own doc comment.
-            let health_check = health_check_options(container_config);
             let command = run
                 .command
                 .as_deref()
                 .or(container_config.command.as_deref());
-            let working_directory = run
-                .working_directory
-                .as_deref()
-                .or(container_config.working_directory.as_deref());
-            let entrypoint = run
-                .entrypoint
-                .as_deref()
-                .or(container_config.entrypoint.as_deref());
-            let capabilities_to_add =
-                capability_names(container_config.capabilities_to_add.as_ref());
-            let capabilities_to_drop =
-                capability_names(container_config.capabilities_to_drop.as_ref());
-            let devices = device_triples(container_config.devices.as_ref());
-            let tmpfs = tmpfs_mounts(container_config.volumes.as_ref());
-            let labels = run_labels.for_container(
-                &run.container,
-                crate::labels::ContainerRole::Task,
-                container_config.labels.as_ref(),
-            );
-            let container_options = crate::docker::ContainerOptions {
-                working_directory,
-                entrypoint,
-                labels: Some(&labels),
-                capabilities_to_add: capabilities_to_add.as_ref(),
-                capabilities_to_drop: capabilities_to_drop.as_ref(),
-                privileged: container_config.privileged,
-                shm_size: container_config.shm_size,
-                devices: devices.as_ref(),
-                enable_init_process: container_config.enable_init_process,
-                log_driver: container_config.log_driver.as_deref(),
-                log_options: container_config.log_options.as_ref(),
-                tmpfs: tmpfs.as_ref(),
-            };
             self.event_sink.post(TaskEvent::RunningTaskContainer {
                 container: run.container.clone(),
                 command: command.map(str::to_string),
@@ -1970,24 +1789,28 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             let volumes = self
                 .resolve_volumes(container_config.volumes.as_ref())
                 .await?;
+            let spec =
+                crate::container_spec::derive_spec(crate::container_spec::ContainerSpecInputs {
+                    name: &run.container,
+                    container_config,
+                    overlay: crate::container_spec::Overlay::Run(run),
+                    image: &image,
+                    network: &network_name,
+                    interactive,
+                    additional_args,
+                    user_mapping: user_mapping.as_ref(),
+                    volumes: volumes.as_ref(),
+                    term_var: term_var.as_ref(),
+                    proxy: proxy.as_ref(),
+                    publish_ports: self.publish_ports,
+                    role: crate::labels::ContainerRole::Task,
+                    run_labels: &run_labels,
+                });
             let (created_tx, created_rx) = tokio::sync::oneshot::channel();
             let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-            let run_future = self.docker.run_container(
-                &run.container,
-                &image,
-                command,
-                additional_args,
-                volumes.as_ref(),
-                environment.as_ref(),
-                &network_name,
-                interactive,
-                user_mapping.as_ref(),
-                &network_options,
-                health_check.as_ref(),
-                &container_options,
-                Some(created_tx),
-                Some(started_tx),
-            );
+            let run_future = self
+                .docker
+                .run_container(&spec, Some(created_tx), Some(started_tx));
             // Two jobs, in order: take ownership of the container as soon as
             // it exists, then gate on its readiness once it's actually
             // running. `tokio::join!` below is what drives this concurrently
@@ -2018,8 +1841,8 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     &container_id,
                     &run.container,
                     container_config,
-                    environment.as_ref(),
-                    user_mapping.as_ref(),
+                    spec.shared.environment.as_ref(),
+                    spec.shared.user_mapping.as_ref(),
                 )
                 .await
             };
@@ -2350,58 +2173,11 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     // `term_environment_variable`'s own docs for the
                     // interleaved-policy override this still picks up.
                     let term_var = self.term_environment_variable(false);
-                    let environment = merged_environment(
-                        term_var.as_ref(),
-                        proxy.as_ref().map(|proxy| &proxy.variables),
-                        dependency_config.environment.as_ref(),
-                        customisation.and_then(|c| c.environment.as_ref()),
-                    );
-                    let expanded_ports = merged_ports(
-                        dependency_config.ports.as_ref(),
-                        customisation.and_then(|c| c.ports.as_ref()),
-                    );
-                    let network_options = crate::docker::NetworkOptions {
-                        additional_hostnames: dependency_config.additional_hostnames.as_ref(),
-                        additional_hosts: dependency_config.additional_hosts.as_ref(),
-                        proxy_host_gateway: proxy.as_ref().and_then(|proxy| proxy.host_gateway()),
-                        ports: (self.publish_ports && !expanded_ports.is_empty())
-                            .then_some(&expanded_ports),
-                    };
-
-                    let health_check = health_check_options(dependency_config);
-                    let capabilities_to_add =
-                        capability_names(dependency_config.capabilities_to_add.as_ref());
-                    let capabilities_to_drop =
-                        capability_names(dependency_config.capabilities_to_drop.as_ref());
-                    let devices = device_triples(dependency_config.devices.as_ref());
-                    let tmpfs = tmpfs_mounts(dependency_config.volumes.as_ref());
-                    let working_directory = customisation
-                        .and_then(|c| c.working_directory.as_deref())
-                        .or(dependency_config.working_directory.as_deref());
-                    let labels = run_labels.for_container(
-                        name,
-                        crate::labels::ContainerRole::Dependency,
-                        dependency_config.labels.as_ref(),
-                    );
-                    let container_options = crate::docker::ContainerOptions {
-                        working_directory,
-                        entrypoint: dependency_config.entrypoint.as_deref(),
-                        labels: Some(&labels),
-                        capabilities_to_add: capabilities_to_add.as_ref(),
-                        capabilities_to_drop: capabilities_to_drop.as_ref(),
-                        privileged: dependency_config.privileged,
-                        shm_size: dependency_config.shm_size,
-                        devices: devices.as_ref(),
-                        enable_init_process: dependency_config.enable_init_process,
-                        log_driver: dependency_config.log_driver.as_deref(),
-                        log_options: dependency_config.log_options.as_ref(),
-                        tmpfs: tmpfs.as_ref(),
-                    };
 
                     self.event_sink.post(TaskEvent::DependencyStarting {
                         container: name.to_string(),
                     });
-                    let container_id = {
+                    let (container_id, spec) = {
                         // Held only around the actual create+start call —
                         // matching `resolve_image`'s own placement, not the
                         // health-check wait or the readiness bookkeeping
@@ -2412,20 +2188,26 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         let volumes = self
                             .resolve_volumes(dependency_config.volumes.as_ref())
                             .await?;
-                        self.docker
-                            .start_background_container(
+                        let spec = crate::container_spec::derive_spec(
+                            crate::container_spec::ContainerSpecInputs {
                                 name,
-                                &image,
-                                dependency_config.command.as_deref(),
-                                volumes.as_ref(),
-                                environment.as_ref(),
+                                container_config: dependency_config,
+                                overlay: crate::container_spec::Overlay::Customise(customisation),
+                                image: &image,
                                 network,
-                                user_mapping.as_ref(),
-                                &network_options,
-                                health_check.as_ref(),
-                                &container_options,
-                            )
-                            .await?
+                                interactive: false,
+                                additional_args: &[],
+                                user_mapping: user_mapping.as_ref(),
+                                volumes: volumes.as_ref(),
+                                term_var: term_var.as_ref(),
+                                proxy: proxy.as_ref(),
+                                publish_ports: self.publish_ports,
+                                role: crate::labels::ContainerRole::Dependency,
+                                run_labels,
+                            },
+                        );
+                        let container_id = self.docker.start_background_container(&spec).await?;
+                        (container_id, spec)
                     };
                     self.event_sink.post(TaskEvent::DependencyStarted {
                         container: name.to_string(),
@@ -2484,11 +2266,12 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                                 .exec_in_container(
                                     &container_id,
                                     &setup_command.command,
-                                    setup_command
+                                    setup_command.working_directory.as_deref().or(spec
+                                        .shared
+                                        .options
                                         .working_directory
-                                        .as_deref()
-                                        .or(working_directory),
-                                    environment.as_ref(),
+                                        .as_deref()),
+                                    spec.shared.environment.as_ref(),
                                     user_mapping.as_ref(),
                                 )
                                 .await

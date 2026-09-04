@@ -442,7 +442,9 @@ pub struct LabelledResource {
     pub state: Option<String>,
 }
 
-pub use crate::container_spec::{ContainerOptions, HealthCheckOptions, NetworkOptions};
+pub use crate::container_spec::{
+    ContainerOptions, ContainerSpec, HealthCheckOptions, NetworkOptions,
+};
 
 /// Configures BuildKit-only build features — `build_image` receives one
 /// only when a container declares `build_secrets` and/or `build_ssh`,
@@ -1075,7 +1077,9 @@ fn collect_build_context_entries(
 }
 
 /// The host user a container should run as, when its `run_as_current_user`
-/// config is enabled — see `TaskEngine::resolve_user_mapping`.
+/// config is enabled — see `TaskEngine::resolve_user_mapping`. Derives
+/// `PartialEq`/`Eq` so it can nest inside `ContainerSpec`, which does.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserMapping {
     pub user: crate::user::CurrentUser,
     pub home_directory: String,
@@ -1323,48 +1327,17 @@ pub trait ContainerRuntime {
     async fn network_exists(&self, name: &str) -> Result<bool>;
 
     /// Starts a container in the background (does not wait for it to exit),
-    /// joined to `network` with a network alias of `alias` so other
-    /// containers on the same network can reach it by that name. Returns the
-    /// container id, used later to stop/remove it. Used for sidecar/dependency
-    /// containers. `environment` is that container's own `environment` field
-    /// (a dependency has no task `run`, so nothing to layer on top of it).
-    ///
-    /// `command` is this container's own `command` — unlike `working_directory`/
-    /// `ports`, `customise` has no override for it (matching Batect's own
-    /// `TaskContainerCustomisation`, which doesn't either), so this is always
-    /// the container's own value, verbatim. Tokenized via
-    /// `tokenize_command_line` the same way `run_container`'s is — `None`
-    /// runs the image's own default `CMD` instead. Unlike `run_container`,
-    /// there's no `additional_args` here — a dependency never receives
-    /// `-- ADDITIONAL_ARGS` (only the top-level requested task's own
-    /// container can).
-    ///
-    /// `user_mapping` is `Some` when this container's own `run_as_current_user`
-    /// is enabled (independent of whether the task's own container has it
-    /// enabled — see `TaskEngine::resolve_user_mapping`) — see `run_container`'s
-    /// doc comment for what applying it actually does.
-    ///
-    /// `network_options` carries this container's own `additional_hostnames`/
-    /// `additional_hosts` — see `run_container`'s doc comment.
-    ///
-    /// `health_check` overrides the image's own `HEALTHCHECK` configuration
-    /// at creation — see [`HealthCheckOptions`]. Applying it here is what
-    /// makes [`wait_for_container_healthy`](Self::wait_for_container_healthy)
-    /// meaningful for images with no health check of their own.
-    #[allow(clippy::too_many_arguments)]
-    async fn start_background_container(
-        &self,
-        alias: &str,
-        image: &str,
-        command: Option<&str>,
-        volumes: Option<&Vec<String>>,
-        environment: Option<&HashMap<String, String>>,
-        network: &str,
-        user_mapping: Option<&UserMapping>,
-        network_options: &NetworkOptions,
-        health_check: Option<&HealthCheckOptions>,
-        container_options: &ContainerOptions,
-    ) -> Result<String>;
+    /// joined to `spec.shared.network` with a network alias of
+    /// `spec.shared.name` so other containers on the same network can reach
+    /// it by that name. Returns the container id, used later to stop/remove
+    /// it. Used for sidecar/dependency containers — see [`ContainerSpec`]'s
+    /// own field docs for what each part of the spec means; `spec.role` is
+    /// always [`crate::labels::ContainerRole::Dependency`] here,
+    /// `spec.interactive` always `false`, and `spec.additional_args` always
+    /// empty (only the top-level requested task's own container can receive
+    /// `-- ADDITIONAL_ARGS`, via [`run_container`](Self::run_container)
+    /// instead).
+    async fn start_background_container(&self, spec: &ContainerSpec) -> Result<String>;
 
     /// Blocks until `container_id` — already started — reports healthy.
     /// Ported from Batect's `WaitForContainerToBecomeHealthyStepRunner`:
@@ -1410,47 +1383,13 @@ pub trait ContainerRuntime {
     async fn stop_and_remove_container(&self, container_id: &str) -> Result<()>;
 
     /// Runs a container to completion, streaming its logs to stdout, then
-    /// removes it. `name` is this container's own network alias (used when
-    /// `network` is set); used for a task's own container.
-    ///
-    /// `additional_args` are appended as literal argv entries after
-    /// `command`'s own tokenized argv (see `build_cmd`) — matching
-    /// Batect's own `ADDITIONAL_ARGS` mechanism exactly, never re-parsed as
-    /// shell syntax regardless of what characters they contain. If `command`
-    /// is `None`, `additional_args` (when non-empty) are passed directly as
-    /// the container's argv, letting the image's own entrypoint receive them.
-    /// `environment` is the container's own `environment` merged with the
-    /// task's `run.environment` (which wins on key collision). `network` is
-    /// this task execution's own isolated network — every task gets one,
-    /// regardless of whether it has dependencies.
-    ///
-    /// `interactive` is *eligibility*, not a guarantee — only ever `true` for
-    /// the top-level requested task's own container (never a prerequisite's,
-    /// a dependency's, or a sidecar's — see `TaskEngine::run_task_internal`).
-    /// Whether a real Docker TTY actually gets allocated additionally
-    /// depends on the local process's own stdin/stdout genuinely being
-    /// terminals; when they're not (piped output, CI, a redirected
-    /// non-terminal), this container runs exactly as if `interactive` were
-    /// `false`.
-    ///
-    /// `user_mapping` is `Some` when this container's `run_as_current_user`
-    /// is enabled. When present: any of `volumes`' host paths that don't
-    /// exist yet are created first (as the current host user, so Docker's
-    /// daemon doesn't auto-create them as `root:root`); the container's
-    /// `User` is set to the mapped `uid:gid`; and, after creation but before
-    /// starting, minimal `/etc/passwd`/`/etc/shadow`/`/etc/group` entries and
-    /// the declared home directory (owned by that `uid:gid`) are uploaded
-    /// into it — an arbitrary host uid/gid otherwise has no corresponding
-    /// entry in the image's own passwd/group, which many programs need to
-    /// function at all.
-    ///
-    /// `network_options` bundles this container's own `additional_hostnames`
-    /// (extra network aliases, beyond `name`, other containers can reach it
-    /// by) and `additional_hosts` (extra `/etc/hosts` entries) — grouped into
-    /// one struct rather than two more flat parameters, since both of these
-    /// methods were already at `#[allow(clippy::too_many_arguments)]` before
-    /// this. The container's Docker `hostname` is always set to `name`
-    /// (matching Batect), independent of `network_options`.
+    /// removes it — used for a task's own container. See [`ContainerSpec`]'s
+    /// own field docs for what each part of `spec` means; unlike
+    /// [`start_background_container`](Self::start_background_container),
+    /// `spec.role` is always [`crate::labels::ContainerRole::Task`], and
+    /// `spec.interactive`/`spec.additional_args` may be set. The container's
+    /// Docker `hostname` is always set to `spec.shared.name` (matching
+    /// Batect), independent of `spec.shared.network_options`.
     ///
     /// **This never removes the container it creates.** Everything Ratect
     /// creates is removed by `engine.rs`'s own cleanup stage, under one
@@ -1481,21 +1420,9 @@ pub trait ContainerRuntime {
     /// (task container included) through the same per-container steps,
     /// concurrently with that container's own command. Carries no id, unlike
     /// `created`: by the time it fires the caller already has one.
-    #[allow(clippy::too_many_arguments)]
     async fn run_container(
         &self,
-        name: &str,
-        image: &str,
-        command: Option<&str>,
-        additional_args: &[String],
-        volumes: Option<&Vec<String>>,
-        environment: Option<&HashMap<String, String>>,
-        network: &str,
-        interactive: bool,
-        user_mapping: Option<&UserMapping>,
-        network_options: &NetworkOptions,
-        health_check: Option<&HealthCheckOptions>,
-        container_options: &ContainerOptions,
+        spec: &ContainerSpec,
         created: Option<tokio::sync::oneshot::Sender<String>>,
         started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<()>;
@@ -2334,61 +2261,55 @@ impl ContainerRuntime for DockerClient {
         }
     }
 
-    async fn start_background_container(
-        &self,
-        alias: &str,
-        image: &str,
-        command: Option<&str>,
-        volumes: Option<&Vec<String>>,
-        environment: Option<&HashMap<String, String>>,
-        network: &str,
-        user_mapping: Option<&UserMapping>,
-        network_options: &NetworkOptions,
-        health_check: Option<&HealthCheckOptions>,
-        container_options: &ContainerOptions,
-    ) -> Result<String> {
-        if user_mapping.is_some() {
-            ensure_host_volume_directories_exist(volumes)?;
+    async fn start_background_container(&self, spec: &ContainerSpec) -> Result<String> {
+        let shared = &spec.shared;
+        let options = &shared.options;
+        if shared.user_mapping.is_some() {
+            ensure_host_volume_directories_exist(shared.volumes.as_ref())?;
         }
-        let entrypoint = container_options
+        let entrypoint = options
             .entrypoint
+            .as_deref()
             .map(tokenize_command_line)
             .transpose()?;
-        let cmd = build_cmd(command, &[])?;
-        let port_config = build_port_config(network_options.ports);
+        let cmd = build_cmd(shared.command.as_deref(), &[])?;
+        let port_config = build_port_config(shared.network_options.ports.as_ref());
 
         let host_config = HostConfig {
-            binds: volumes.cloned(),
+            binds: shared.volumes.clone(),
             extra_hosts: build_extra_hosts(
-                network_options.additional_hosts,
-                network_options.proxy_host_gateway,
+                shared.network_options.additional_hosts.as_ref(),
+                shared.network_options.proxy_host_gateway,
             ),
             port_bindings: port_config.as_ref().map(|(_, bindings)| bindings.clone()),
-            cap_add: container_options.capabilities_to_add.cloned(),
-            cap_drop: container_options.capabilities_to_drop.cloned(),
-            privileged: container_options.privileged,
-            shm_size: container_options.shm_size,
-            devices: build_devices(container_options.devices),
-            init: container_options.enable_init_process,
+            cap_add: options.capabilities_to_add.clone(),
+            cap_drop: options.capabilities_to_drop.clone(),
+            privileged: options.privileged,
+            shm_size: options.shm_size,
+            devices: build_devices(options.devices.as_ref()),
+            init: options.enable_init_process,
             log_config: build_log_config(
-                container_options.log_driver,
-                container_options.log_options,
+                options.log_driver.as_deref(),
+                options.log_options.as_ref(),
             ),
-            tmpfs: build_tmpfs_mounts(container_options.tmpfs),
+            tmpfs: build_tmpfs_mounts(options.tmpfs.as_ref()),
             ..Default::default()
         };
 
         let config = Config {
-            hostname: Some(alias.to_string()),
-            image: Some(image.to_string()),
+            hostname: Some(shared.name.clone()),
+            image: Some(shared.image.clone()),
             cmd,
             entrypoint,
-            env: build_env(environment),
+            env: build_env(shared.environment.as_ref()),
             exposed_ports: port_config.as_ref().map(|(exposed, _)| exposed.clone()),
-            user: user_mapping.map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
-            healthcheck: build_health_config(health_check),
-            working_dir: container_options.working_directory.map(str::to_string),
-            labels: container_options.labels.cloned(),
+            user: shared
+                .user_mapping
+                .as_ref()
+                .map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
+            healthcheck: build_health_config(shared.health_check.as_ref()),
+            working_dir: options.working_directory.clone(),
+            labels: Some(spec.labels.clone()),
             host_config: Some(host_config),
             ..Default::default()
         };
@@ -2397,26 +2318,26 @@ impl ContainerRuntime for DockerClient {
             .docker
             .create_container(None, config)
             .await
-            .with_context(|| format!("Failed to create sidecar container '{}'", alias))?;
-        tracing::debug!(container_id = %container.id, alias, image, "created sidecar container");
+            .with_context(|| format!("Failed to create sidecar container '{}'", shared.name))?;
+        tracing::debug!(container_id = %container.id, alias = shared.name.as_str(), image = shared.image.as_str(), "created sidecar container");
 
-        if let Some(mapping) = user_mapping {
+        if let Some(mapping) = &shared.user_mapping {
             self.apply_user_mapping(&container.id, mapping).await?;
         }
 
         self.join_network(
             &container.id,
-            network,
-            alias,
-            network_options.additional_hostnames,
+            &shared.network,
+            &shared.name,
+            shared.network_options.additional_hostnames.as_ref(),
         )
         .await?;
 
         self.docker
             .start_container(&container.id, None)
             .await
-            .with_context(|| format!("Failed to start sidecar container '{}'", alias))?;
-        tracing::debug!(container_id = %container.id, alias, "started sidecar container");
+            .with_context(|| format!("Failed to start sidecar container '{}'", shared.name))?;
+        tracing::debug!(container_id = %container.id, alias = shared.name.as_str(), "started sidecar container");
 
         // Under the interleaved policy (the `all` output mode — the only
         // mode that shows dependency output at all), follow this
@@ -2429,7 +2350,7 @@ impl ContainerRuntime for DockerClient {
         if self.event_sink.container_io_streaming() == ContainerIoStreaming::Interleaved {
             let docker = self.docker.clone();
             let event_sink = std::sync::Arc::clone(&self.event_sink);
-            let container_name = alias.to_string();
+            let container_name = shared.name.clone();
             let container_id = container.id.clone();
             let handle = tokio::spawn(async move {
                 if let Err(e) = stream_logs_as_interleaved_events(
@@ -2682,27 +2603,18 @@ impl ContainerRuntime for DockerClient {
 
     async fn run_container(
         &self,
-        name: &str,
-        image: &str,
-        command: Option<&str>,
-        additional_args: &[String],
-        volumes: Option<&Vec<String>>,
-        environment: Option<&HashMap<String, String>>,
-        network: &str,
-        interactive: bool,
-        user_mapping: Option<&UserMapping>,
-        network_options: &NetworkOptions,
-        health_check: Option<&HealthCheckOptions>,
-        container_options: &ContainerOptions,
+        spec: &ContainerSpec,
         created: Option<tokio::sync::oneshot::Sender<String>>,
         started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<()> {
+        let shared = &spec.shared;
+        let options = &shared.options;
         // Independently re-enforces the same policy `engine.rs` already
-        // gated `interactive` on before calling here — see
+        // gated `spec.interactive` on before calling here — see
         // `ContainerIoStreaming::allows_interactive`'s own docs for why
         // both sites call the one method rather than each hand-rolling a
         // comparison against a specific variant.
-        let interactive = interactive
+        let interactive = spec.interactive
             && self
                 .event_sink
                 .container_io_streaming()
@@ -2713,43 +2625,44 @@ impl ContainerRuntime for DockerClient {
             std::io::stdout().is_terminal(),
         );
 
-        if user_mapping.is_some() {
-            ensure_host_volume_directories_exist(volumes)?;
+        if shared.user_mapping.is_some() {
+            ensure_host_volume_directories_exist(shared.volumes.as_ref())?;
         }
-        let cmd = build_cmd(command, additional_args)?;
-        let entrypoint = container_options
+        let cmd = build_cmd(shared.command.as_deref(), &spec.additional_args)?;
+        let entrypoint = options
             .entrypoint
+            .as_deref()
             .map(tokenize_command_line)
             .transpose()?;
-        let port_config = build_port_config(network_options.ports);
+        let port_config = build_port_config(shared.network_options.ports.as_ref());
 
         let host_config = HostConfig {
-            binds: volumes.cloned(),
+            binds: shared.volumes.clone(),
             extra_hosts: build_extra_hosts(
-                network_options.additional_hosts,
-                network_options.proxy_host_gateway,
+                shared.network_options.additional_hosts.as_ref(),
+                shared.network_options.proxy_host_gateway,
             ),
             port_bindings: port_config.as_ref().map(|(_, bindings)| bindings.clone()),
-            cap_add: container_options.capabilities_to_add.cloned(),
-            cap_drop: container_options.capabilities_to_drop.cloned(),
-            privileged: container_options.privileged,
-            shm_size: container_options.shm_size,
-            devices: build_devices(container_options.devices),
-            init: container_options.enable_init_process,
+            cap_add: options.capabilities_to_add.clone(),
+            cap_drop: options.capabilities_to_drop.clone(),
+            privileged: options.privileged,
+            shm_size: options.shm_size,
+            devices: build_devices(options.devices.as_ref()),
+            init: options.enable_init_process,
             log_config: build_log_config(
-                container_options.log_driver,
-                container_options.log_options,
+                options.log_driver.as_deref(),
+                options.log_options.as_ref(),
             ),
-            tmpfs: build_tmpfs_mounts(container_options.tmpfs),
+            tmpfs: build_tmpfs_mounts(options.tmpfs.as_ref()),
             ..Default::default()
         };
 
         let config = Config {
-            hostname: Some(name.to_string()),
-            image: Some(image.to_string()),
+            hostname: Some(shared.name.clone()),
+            image: Some(shared.image.clone()),
             cmd,
             entrypoint,
-            env: build_env(environment),
+            env: build_env(shared.environment.as_ref()),
             exposed_ports: port_config.as_ref().map(|(exposed, _)| exposed.clone()),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
@@ -2765,16 +2678,19 @@ impl ContainerRuntime for DockerClient {
             open_stdin: interactive.then_some(true),
             attach_stdin: interactive.then_some(true),
             stdin_once: use_tty.then_some(true),
-            user: user_mapping.map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
-            healthcheck: build_health_config(health_check),
-            working_dir: container_options.working_directory.map(str::to_string),
-            labels: container_options.labels.cloned(),
+            user: shared
+                .user_mapping
+                .as_ref()
+                .map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
+            healthcheck: build_health_config(shared.health_check.as_ref()),
+            working_dir: options.working_directory.clone(),
+            labels: Some(spec.labels.clone()),
             host_config: Some(host_config),
             ..Default::default()
         };
 
         let container = self.docker.create_container(None, config).await?;
-        tracing::debug!(container_id = %container.id, image, "created container");
+        tracing::debug!(container_id = %container.id, image = shared.image.as_str(), "created container");
         // Handed over the moment the container exists — before it is started,
         // and before anything below can fail. From here the caller owns
         // removing it, so every `?` in the rest of this function is safe: the
@@ -2783,15 +2699,15 @@ impl ContainerRuntime for DockerClient {
             let _ = created.send(container.id.clone());
         }
 
-        if let Some(mapping) = user_mapping {
+        if let Some(mapping) = &shared.user_mapping {
             self.apply_user_mapping(&container.id, mapping).await?;
         }
 
         self.join_network(
             &container.id,
-            network,
-            name,
-            network_options.additional_hostnames,
+            &shared.network,
+            &shared.name,
+            shared.network_options.additional_hostnames.as_ref(),
         )
         .await?;
 
@@ -2799,10 +2715,10 @@ impl ContainerRuntime for DockerClient {
             self.run_container_interactively(&container.id, started)
                 .await
         } else if interactive {
-            self.run_container_forwarding_stdin(name, &container.id, started)
+            self.run_container_forwarding_stdin(&shared.name, &container.id, started)
                 .await
         } else {
-            self.start_and_stream_logs(name, &container.id, started)
+            self.start_and_stream_logs(&shared.name, &container.id, started)
                 .await
         };
 

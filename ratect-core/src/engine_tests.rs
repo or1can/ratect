@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::config::{Container, Task, TaskRun};
+use crate::config::{Container, PortMapping, Task, TaskRun};
 use crate::docker::DockerClient;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,7 +22,6 @@ use std::sync::Arc;
 /// Docker, so tests can assert on dedup, cleanup, and ordering behavior
 /// (including across pull/network/sidecar/run calls) quickly and
 /// deterministically.
-type CapturedEnvironments = Arc<Mutex<HashMap<String, Option<HashMap<String, String>>>>>;
 type CapturedBuildArgs = Arc<Mutex<HashMap<String, Option<HashMap<String, String>>>>>;
 /// `(dockerfile, target)`, keyed by the tag `build_image` was called with.
 type CapturedBuildOptions = Arc<Mutex<HashMap<String, (String, Option<String>)>>>;
@@ -33,50 +32,21 @@ type CapturedBuildKitOptions = Arc<Mutex<HashMap<String, Option<crate::docker::B
 /// given (see `force_pull_for`).
 type CapturedForcePull = Arc<Mutex<HashMap<String, bool>>>;
 type CapturedHostGateways = Arc<Mutex<HashMap<String, Option<crate::proxy::HostGateway>>>>;
-type CapturedImages = Arc<Mutex<HashMap<String, String>>>;
-/// The `command` a prior `start_background_container` call for a given
-/// container name was given (flattened, same convention as
-/// `environment_for`) — `run_container`'s own `command` is instead baked
-/// into the `events()` string (see `run_container`'s own push), since
-/// existing tests already assert against that; this is a separate,
-/// smaller map specifically for dependency containers, which have no
-/// such event.
-type CapturedCommands = Arc<Mutex<HashMap<String, Option<String>>>>;
-type CapturedInteractive = Arc<Mutex<HashMap<String, bool>>>;
-/// `(uid, gid, home_directory)`, keyed by container name.
-type CapturedUserMapping = Arc<Mutex<HashMap<String, Option<(u32, u32, String, Vec<String>)>>>>;
 /// `(additional_hostnames, additional_hosts, ports)`.
 type NetworkOptionsValue = (
     Option<Vec<String>>,
     Option<HashMap<String, String>>,
     Option<Vec<(u16, u16, String)>>,
 );
-/// Keyed by container name.
-type CapturedNetworkOptions = Arc<Mutex<HashMap<String, NetworkOptionsValue>>>;
-/// Keyed by container name.
-type CapturedHealthChecks = Arc<Mutex<HashMap<String, Option<crate::docker::HealthCheckOptions>>>>;
-/// The `ContainerOptions` a prior `run_container`/
-/// `start_background_container` call for a given container name was
-/// given (see `working_directory_for`/`entrypoint_for`/`labels_for`/
-/// `capabilities_to_add_for`/`capabilities_to_drop_for`). A named struct
-/// (not a positional tuple) since `ContainerOptions` keeps growing —
-/// see `ROADMAP.md`'s 0.13.0 entry.
-#[derive(Debug, Clone, Default)]
-struct ContainerOptionsValue {
-    working_directory: Option<String>,
-    entrypoint: Option<String>,
-    labels: Option<HashMap<String, String>>,
-    capabilities_to_add: Option<Vec<String>>,
-    capabilities_to_drop: Option<Vec<String>>,
-    privileged: Option<bool>,
-    shm_size: Option<i64>,
-    devices: Option<Vec<(String, String, Option<String>)>>,
-    enable_init_process: Option<bool>,
-    log_driver: Option<String>,
-    log_options: Option<HashMap<String, String>>,
-    tmpfs: Option<Vec<(String, String)>>,
-}
-type CapturedContainerOptions = Arc<Mutex<HashMap<String, ContainerOptionsValue>>>;
+/// Every `run_container`/`start_background_container` call, in the order
+/// they happened — one [`crate::container_spec::ContainerSpec`] per call,
+/// rather than a `Captured*` map per field, so the fake captures whatever
+/// `ContainerSpec` grows without a matching new map each time. The `_for`
+/// accessors below (`environment_for`/`command_for`/`network_options_for`/
+/// etc.) each project one part of the *last* entry for a given container
+/// name out of this, preserving every existing call site's shape —
+/// `spec_for` is the one place that does the actual lookup.
+type CapturedSpecs = Arc<Mutex<Vec<(String, crate::container_spec::ContainerSpec)>>>;
 /// `(working_directory, environment, (uid, gid))`, keyed by the exec'd
 /// command string.
 type ExecValue = (
@@ -90,10 +60,9 @@ type CapturedExecs = Arc<Mutex<HashMap<String, ExecValue>>>;
 struct FakeContainerRuntime {
     events: Arc<Mutex<Vec<String>>>,
     fail_run: Arc<Mutex<bool>>,
-    // Captured separately from `events` (rather than folded into its
-    // strings) so the many existing exact-string event assertions don't
-    // have to change shape just because environment support was added.
-    environments: CapturedEnvironments,
+    // Every `run_container`/`start_background_container` call, in order —
+    // see `CapturedSpecs`'s own doc comment.
+    specs: CapturedSpecs,
     // Keyed by the tag `build_image` was called with.
     build_args: CapturedBuildArgs,
     // `(dockerfile, target)` a prior `build_image` call for a given tag
@@ -105,45 +74,15 @@ struct FakeContainerRuntime {
     // The `force_pull` a prior `build_image` call for a given tag was
     // given (see `force_pull_for`).
     force_pull: CapturedForcePull,
-    // The `image` a `run_container`/`start_background_container` call
-    // for a given container name actually used — lets tests prove a
-    // built tag (not just a pulled image) reached the run, without
-    // changing the existing exact-string `events()` assertions.
-    images: CapturedImages,
-    // The `command` a prior `start_background_container` call for a
-    // given container name was given (see `command_for`).
-    commands: CapturedCommands,
-    // The `interactive` a prior `run_container` call for a given
-    // container name was given — lets tests prove interactive
-    // eligibility is scoped to only the top-level requested task's own
-    // container (see `interactive_for`).
-    interactive: CapturedInteractive,
-    // The `user_mapping` a prior `run_container`/`start_background_container`
-    // call for a given container name was given (see `user_mapping_for`).
-    user_mapping: CapturedUserMapping,
     // What `network_exists` reports — defaults to `true` so tests that
     // don't care about `--use-network` aren't affected.
     network_exists_result: Arc<Mutex<bool>>,
     // The labels a prior `create_network` call was given (see
     // `network_labels`).
     network_labels: Arc<Mutex<Option<HashMap<String, String>>>>,
-    // The `network_options` a prior `run_container`/`start_background_container`
-    // call for a given container name was given (see `network_options_for`).
-    network_options: CapturedNetworkOptions,
-    // The `proxy_host_gateway` a prior `run_container`/
-    // `start_background_container` call for a given container name was
-    // given (see `host_gateway_for`) — kept out of `network_options` above
-    // so adding it doesn't rewrite every existing tuple assertion.
-    host_gateways: CapturedHostGateways,
     // The `proxy_host_gateway` a prior `build_image` call for a given tag
     // was given (see `build_host_gateway_for`).
     build_host_gateways: CapturedHostGateways,
-    // The `health_check` a prior `run_container`/`start_background_container`
-    // call for a given container name was given (see `health_check_for`).
-    health_checks: CapturedHealthChecks,
-    // The `container_options` a prior `run_container`/`start_background_container`
-    // call for a given container name was given (see `container_options_for`).
-    container_options: CapturedContainerOptions,
     // The options a prior `exec_in_container` call for a given command
     // was given (see `exec_for`).
     execs: CapturedExecs,
@@ -198,22 +137,14 @@ impl Default for FakeContainerRuntime {
         Self {
             events: Default::default(),
             fail_run: Default::default(),
-            environments: Default::default(),
+            specs: Default::default(),
             build_args: Default::default(),
             build_options: Default::default(),
             buildkit_options: Default::default(),
             force_pull: Default::default(),
-            images: Default::default(),
-            commands: Default::default(),
-            interactive: Default::default(),
-            user_mapping: Default::default(),
             network_exists_result: Arc::new(Mutex::new(true)),
             network_labels: Default::default(),
-            network_options: Default::default(),
-            host_gateways: Default::default(),
             build_host_gateways: Default::default(),
-            health_checks: Default::default(),
-            container_options: Default::default(),
             execs: Default::default(),
             unhealthy_container: Default::default(),
             failing_setup_command: Default::default(),
@@ -368,16 +299,25 @@ impl FakeContainerRuntime {
         self
     }
 
+    /// The [`crate::container_spec::ContainerSpec`] a prior `run_container`/
+    /// `start_background_container` call for `name` was given — the last
+    /// one, if called more than once. Every `_for` accessor below projects
+    /// one part of this out; see `CapturedSpecs`'s own doc comment.
+    fn spec_for(&self, name: &str) -> Option<crate::container_spec::ContainerSpec> {
+        self.specs
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(n, _)| n == name)
+            .map(|(_, spec)| spec.clone())
+    }
+
     /// The `environment` a prior `run_container`/`start_background_container`
     /// call for `name` was given (flattened: `None` covers both "never
     /// called" and "called with no environment").
     fn environment_for(&self, name: &str) -> Option<HashMap<String, String>> {
-        self.environments
-            .lock()
-            .unwrap()
-            .get(name)
-            .cloned()
-            .flatten()
+        self.spec_for(name).and_then(|spec| spec.shared.environment)
     }
 
     /// The `build_args` a prior `build_image` call for `tag` was given
@@ -411,51 +351,57 @@ impl FakeContainerRuntime {
     /// The `image` a prior `run_container`/`start_background_container`
     /// call for `name` was given.
     fn image_for(&self, name: &str) -> Option<String> {
-        self.images.lock().unwrap().get(name).cloned()
+        self.spec_for(name).map(|spec| spec.shared.image)
     }
 
     /// The `command` a prior `start_background_container` call for
     /// `name` was given (flattened, same convention as
     /// `environment_for`).
     fn command_for(&self, name: &str) -> Option<String> {
-        self.commands.lock().unwrap().get(name).cloned().flatten()
+        self.spec_for(name).and_then(|spec| spec.shared.command)
     }
 
     /// The `interactive` a prior `run_container` call for `name` was
     /// given.
     fn interactive_for(&self, name: &str) -> Option<bool> {
-        self.interactive.lock().unwrap().get(name).copied()
+        self.spec_for(name).map(|spec| spec.interactive)
     }
 
     /// The `(uid, gid, home_directory, cache_directories)` a prior
     /// `run_container`/`start_background_container` call for `name` was
     /// given (flattened, same convention as `environment_for`).
     fn user_mapping_for(&self, name: &str) -> Option<(u32, u32, String, Vec<String>)> {
-        self.user_mapping
-            .lock()
-            .unwrap()
-            .get(name)
-            .cloned()
-            .flatten()
+        self.spec_for(name)
+            .and_then(|spec| spec.shared.user_mapping)
+            .map(|m| {
+                (
+                    m.user.uid,
+                    m.user.gid,
+                    m.home_directory,
+                    m.cache_directories,
+                )
+            })
     }
 
     /// The `(additional_hostnames, additional_hosts)` a prior
     /// `run_container`/`start_background_container` call for `name` was
     /// given.
     fn network_options_for(&self, name: &str) -> Option<NetworkOptionsValue> {
-        self.network_options.lock().unwrap().get(name).cloned()
+        self.spec_for(name).map(|spec| {
+            (
+                spec.shared.network_options.additional_hostnames,
+                spec.shared.network_options.additional_hosts,
+                spec.shared.network_options.ports,
+            )
+        })
     }
 
     /// The `proxy_host_gateway` a prior `run_container`/
     /// `start_background_container` call for `name` was given (flattened,
     /// same convention as `environment_for`).
     fn host_gateway_for(&self, name: &str) -> Option<crate::proxy::HostGateway> {
-        self.host_gateways
-            .lock()
-            .unwrap()
-            .get(name)
-            .copied()
-            .flatten()
+        self.spec_for(name)
+            .and_then(|spec| spec.shared.network_options.proxy_host_gateway)
     }
 
     /// The `proxy_host_gateway` a prior `build_image` call for `tag` was
@@ -473,12 +419,8 @@ impl FakeContainerRuntime {
     /// `start_background_container` call for `name` was given
     /// (flattened, same convention as `environment_for`).
     fn health_check_for(&self, name: &str) -> Option<crate::docker::HealthCheckOptions> {
-        self.health_checks
-            .lock()
-            .unwrap()
-            .get(name)
-            .cloned()
-            .flatten()
+        self.spec_for(name)
+            .and_then(|spec| spec.shared.health_check)
     }
 
     /// The `(working_directory, environment, (uid, gid))` a prior
@@ -487,24 +429,18 @@ impl FakeContainerRuntime {
         self.execs.lock().unwrap().get(command).cloned()
     }
 
-    /// The `container_options.working_directory` a prior `run_container`/
+    /// The `options.working_directory` a prior `run_container`/
     /// `start_background_container` call for `name` was given.
     fn working_directory_for(&self, name: &str) -> Option<String> {
-        self.container_options
-            .lock()
-            .unwrap()
-            .get(name)
-            .and_then(|options| options.working_directory.clone())
+        self.spec_for(name)
+            .and_then(|spec| spec.shared.options.working_directory)
     }
 
-    /// The `container_options.entrypoint` a prior `run_container`/
+    /// The `options.entrypoint` a prior `run_container`/
     /// `start_background_container` call for `name` was given.
     fn entrypoint_for(&self, name: &str) -> Option<String> {
-        self.container_options
-            .lock()
-            .unwrap()
-            .get(name)
-            .and_then(|options| options.entrypoint.clone())
+        self.spec_for(name)
+            .and_then(|spec| spec.shared.options.entrypoint)
     }
 
     /// The labels a prior `create_network` call was given.
@@ -512,107 +448,76 @@ impl FakeContainerRuntime {
         self.network_labels.lock().unwrap().clone()
     }
 
-    /// The `container_options.labels` a prior `run_container`/
-    /// `start_background_container` call for `name` was given.
+    /// The `labels` a prior `run_container`/`start_background_container`
+    /// call for `name` was given.
     fn labels_for(&self, name: &str) -> Option<HashMap<String, String>> {
-        self.container_options
-            .lock()
-            .unwrap()
-            .get(name)
-            .and_then(|options| options.labels.clone())
+        self.spec_for(name).map(|spec| spec.labels)
     }
 
-    /// The `container_options.capabilities_to_add` a prior
+    /// The `options.capabilities_to_add` a prior
     /// `run_container`/`start_background_container` call for `name` was
     /// given.
     fn capabilities_to_add_for(&self, name: &str) -> Option<Vec<String>> {
-        self.container_options
-            .lock()
-            .unwrap()
-            .get(name)
-            .and_then(|options| options.capabilities_to_add.clone())
+        self.spec_for(name)
+            .and_then(|spec| spec.shared.options.capabilities_to_add)
     }
 
-    /// The `container_options.capabilities_to_drop` a prior
+    /// The `options.capabilities_to_drop` a prior
     /// `run_container`/`start_background_container` call for `name` was
     /// given.
     fn capabilities_to_drop_for(&self, name: &str) -> Option<Vec<String>> {
-        self.container_options
-            .lock()
-            .unwrap()
-            .get(name)
-            .and_then(|options| options.capabilities_to_drop.clone())
+        self.spec_for(name)
+            .and_then(|spec| spec.shared.options.capabilities_to_drop)
     }
 
-    /// The `container_options.privileged` a prior `run_container`/
+    /// The `options.privileged` a prior `run_container`/
     /// `start_background_container` call for `name` was given.
     fn privileged_for(&self, name: &str) -> Option<bool> {
-        self.container_options
-            .lock()
-            .unwrap()
-            .get(name)
-            .and_then(|options| options.privileged)
+        self.spec_for(name)
+            .and_then(|spec| spec.shared.options.privileged)
     }
 
-    /// The `container_options.shm_size` a prior `run_container`/
+    /// The `options.shm_size` a prior `run_container`/
     /// `start_background_container` call for `name` was given.
     fn shm_size_for(&self, name: &str) -> Option<i64> {
-        self.container_options
-            .lock()
-            .unwrap()
-            .get(name)
-            .and_then(|options| options.shm_size)
+        self.spec_for(name)
+            .and_then(|spec| spec.shared.options.shm_size)
     }
 
-    /// The `container_options.devices` a prior `run_container`/
+    /// The `options.devices` a prior `run_container`/
     /// `start_background_container` call for `name` was given.
     fn devices_for(&self, name: &str) -> Option<Vec<(String, String, Option<String>)>> {
-        self.container_options
-            .lock()
-            .unwrap()
-            .get(name)
-            .and_then(|options| options.devices.clone())
+        self.spec_for(name)
+            .and_then(|spec| spec.shared.options.devices)
     }
 
-    /// The `container_options.enable_init_process` a prior
+    /// The `options.enable_init_process` a prior
     /// `run_container`/`start_background_container` call for `name`
     /// was given.
     fn enable_init_process_for(&self, name: &str) -> Option<bool> {
-        self.container_options
-            .lock()
-            .unwrap()
-            .get(name)
-            .and_then(|options| options.enable_init_process)
+        self.spec_for(name)
+            .and_then(|spec| spec.shared.options.enable_init_process)
     }
 
-    /// The `container_options.log_driver` a prior `run_container`/
+    /// The `options.log_driver` a prior `run_container`/
     /// `start_background_container` call for `name` was given.
     fn log_driver_for(&self, name: &str) -> Option<String> {
-        self.container_options
-            .lock()
-            .unwrap()
-            .get(name)
-            .and_then(|options| options.log_driver.clone())
+        self.spec_for(name)
+            .and_then(|spec| spec.shared.options.log_driver)
     }
 
-    /// The `container_options.log_options` a prior `run_container`/
+    /// The `options.log_options` a prior `run_container`/
     /// `start_background_container` call for `name` was given.
     fn log_options_for(&self, name: &str) -> Option<HashMap<String, String>> {
-        self.container_options
-            .lock()
-            .unwrap()
-            .get(name)
-            .and_then(|options| options.log_options.clone())
+        self.spec_for(name)
+            .and_then(|spec| spec.shared.options.log_options)
     }
 
-    /// The `container_options.tmpfs` a prior `run_container`/
+    /// The `options.tmpfs` a prior `run_container`/
     /// `start_background_container` call for `name` was given.
     fn tmpfs_for(&self, name: &str) -> Option<Vec<(String, String)>> {
-        self.container_options
-            .lock()
-            .unwrap()
-            .get(name)
-            .and_then(|options| options.tmpfs.clone())
+        self.spec_for(name)
+            .and_then(|spec| spec.shared.options.tmpfs)
     }
 }
 
@@ -697,78 +602,18 @@ impl ContainerRuntime for FakeContainerRuntime {
 
     async fn start_background_container(
         &self,
-        alias: &str,
-        image: &str,
-        command: Option<&str>,
-        _volumes: Option<&Vec<String>>,
-        environment: Option<&HashMap<String, String>>,
-        network: &str,
-        user_mapping: Option<&crate::docker::UserMapping>,
-        network_options: &crate::docker::NetworkOptions,
-        health_check: Option<&crate::docker::HealthCheckOptions>,
-        container_options: &crate::docker::ContainerOptions,
+        spec: &crate::container_spec::ContainerSpec,
     ) -> Result<String> {
+        let alias = &spec.shared.name;
         let delay = self.start_delays.lock().unwrap().get(alias).copied();
         if let Some(delay) = delay {
             tokio::time::sleep(delay).await;
         }
-        self.commands
+        self.specs
             .lock()
             .unwrap()
-            .insert(alias.to_string(), command.map(str::to_string));
-        self.environments
-            .lock()
-            .unwrap()
-            .insert(alias.to_string(), environment.cloned());
-        self.images
-            .lock()
-            .unwrap()
-            .insert(alias.to_string(), image.to_string());
-        self.user_mapping.lock().unwrap().insert(
-            alias.to_string(),
-            user_mapping.map(|m| {
-                (
-                    m.user.uid,
-                    m.user.gid,
-                    m.home_directory.clone(),
-                    m.cache_directories.clone(),
-                )
-            }),
-        );
-        self.network_options.lock().unwrap().insert(
-            alias.to_string(),
-            (
-                network_options.additional_hostnames.cloned(),
-                network_options.additional_hosts.cloned(),
-                network_options.ports.cloned(),
-            ),
-        );
-        self.host_gateways
-            .lock()
-            .unwrap()
-            .insert(alias.to_string(), network_options.proxy_host_gateway);
-        self.health_checks
-            .lock()
-            .unwrap()
-            .insert(alias.to_string(), health_check.cloned());
-        self.container_options.lock().unwrap().insert(
-            alias.to_string(),
-            ContainerOptionsValue {
-                working_directory: container_options.working_directory.map(str::to_string),
-                entrypoint: container_options.entrypoint.map(str::to_string),
-                labels: container_options.labels.cloned(),
-                capabilities_to_add: container_options.capabilities_to_add.cloned(),
-                capabilities_to_drop: container_options.capabilities_to_drop.cloned(),
-                privileged: container_options.privileged,
-                shm_size: container_options.shm_size,
-                devices: container_options.devices.cloned(),
-                enable_init_process: container_options.enable_init_process,
-                log_driver: container_options.log_driver.map(str::to_string),
-                log_options: container_options.log_options.cloned(),
-                tmpfs: container_options.tmpfs.cloned(),
-            },
-        );
-        self.push(format!("sidecar-start:{alias}:{network}"));
+            .push((alias.clone(), spec.clone()));
+        self.push(format!("sidecar-start:{alias}:{}", spec.shared.network));
         Ok(format!("sidecar-id-{alias}"))
     }
 
@@ -872,21 +717,11 @@ impl ContainerRuntime for FakeContainerRuntime {
 
     async fn run_container(
         &self,
-        name: &str,
-        image: &str,
-        command: Option<&str>,
-        additional_args: &[String],
-        _volumes: Option<&Vec<String>>,
-        environment: Option<&HashMap<String, String>>,
-        network: &str,
-        interactive: bool,
-        user_mapping: Option<&crate::docker::UserMapping>,
-        network_options: &crate::docker::NetworkOptions,
-        health_check: Option<&crate::docker::HealthCheckOptions>,
-        container_options: &crate::docker::ContainerOptions,
+        spec: &crate::container_spec::ContainerSpec,
         created: Option<tokio::sync::oneshot::Sender<String>>,
         started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<()> {
+        let name = &spec.shared.name;
         // Before anything is recorded, and before either channel is
         // sent — both senders drop here (see
         // `failing_container_creation`).
@@ -894,67 +729,15 @@ impl ContainerRuntime for FakeContainerRuntime {
             self.push(format!("run-create-failed:{name}"));
             anyhow::bail!("Failed to create container '{name}'");
         }
-        self.environments
+        self.specs
             .lock()
             .unwrap()
-            .insert(name.to_string(), environment.cloned());
-        self.images
-            .lock()
-            .unwrap()
-            .insert(name.to_string(), image.to_string());
-        self.interactive
-            .lock()
-            .unwrap()
-            .insert(name.to_string(), interactive);
-        self.user_mapping.lock().unwrap().insert(
-            name.to_string(),
-            user_mapping.map(|m| {
-                (
-                    m.user.uid,
-                    m.user.gid,
-                    m.home_directory.clone(),
-                    m.cache_directories.clone(),
-                )
-            }),
-        );
-        self.network_options.lock().unwrap().insert(
-            name.to_string(),
-            (
-                network_options.additional_hostnames.cloned(),
-                network_options.additional_hosts.cloned(),
-                network_options.ports.cloned(),
-            ),
-        );
-        self.host_gateways
-            .lock()
-            .unwrap()
-            .insert(name.to_string(), network_options.proxy_host_gateway);
-        self.health_checks
-            .lock()
-            .unwrap()
-            .insert(name.to_string(), health_check.cloned());
-        self.container_options.lock().unwrap().insert(
-            name.to_string(),
-            ContainerOptionsValue {
-                working_directory: container_options.working_directory.map(str::to_string),
-                entrypoint: container_options.entrypoint.map(str::to_string),
-                labels: container_options.labels.cloned(),
-                capabilities_to_add: container_options.capabilities_to_add.cloned(),
-                capabilities_to_drop: container_options.capabilities_to_drop.cloned(),
-                privileged: container_options.privileged,
-                shm_size: container_options.shm_size,
-                devices: container_options.devices.cloned(),
-                enable_init_process: container_options.enable_init_process,
-                log_driver: container_options.log_driver.map(str::to_string),
-                log_options: container_options.log_options.cloned(),
-                tmpfs: container_options.tmpfs.cloned(),
-            },
-        );
+            .push((name.clone(), spec.clone()));
         self.push(format!(
             "run:{name}:{}:args=[{}]:{}",
-            command.unwrap_or_default(),
-            additional_args.join(","),
-            network
+            spec.shared.command.as_deref().unwrap_or_default(),
+            spec.additional_args.join(","),
+            spec.shared.network
         ));
         // Same id convention `start_background_container` uses, so
         // `with_unhealthy_container`/exec-based assertions work
