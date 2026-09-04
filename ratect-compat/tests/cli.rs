@@ -1291,13 +1291,19 @@ fn customise_overrides_a_dependencys_config_via_docker() {
 #[test]
 #[ignore]
 fn dependency_health_check_and_setup_commands_gate_the_task_via_docker() {
+    // The counter (not just pid+nanos) is load-bearing: two `--ignored`
+    // tests race to read `SystemTime::now()` under `cargo test`'s default
+    // parallelism, and on a coarse enough clock two threads can read the
+    // same nanosecond — colliding on this test's own scratch path.
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let test_id = format!(
-        "{}-{}",
+        "{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
     let scratch_dir = std::env::temp_dir().join(format!("ratect-readiness-test-{test_id}"));
     std::fs::create_dir_all(&scratch_dir).unwrap();
@@ -2987,13 +2993,17 @@ fn piped_stdin_reaches_a_non_tty_task_container() {
 #[test]
 #[ignore]
 fn run_as_current_user_maps_the_container_onto_the_host_user() {
+    // See `dependency_health_check_and_setup_commands_gate_the_task_via_docker`
+    // for why the counter is load-bearing, not decorative.
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let test_id = format!(
-        "{}-{}",
+        "{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
     let scratch_dir = std::env::temp_dir().join(format!("ratect-user-mapping-test-{test_id}"));
     if scratch_dir.exists() {
@@ -3170,13 +3180,20 @@ fn cache_mount_persists_and_clean_cache_removes_it(
     assert_storage_gone: impl Fn(&Path, &str),
     verify_fresh_restart: bool,
 ) {
+    // Called by both #[ignore]d tests below, which `cargo test`'s default
+    // parallelism can run concurrently — see
+    // `dependency_health_check_and_setup_commands_gate_the_task_via_docker`
+    // for why the counter, not just pid+nanos, is what makes the resulting
+    // path actually unique.
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let test_id = format!(
-        "{}-{}",
+        "{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
     let project_dir = std::env::temp_dir().join(format!("ratect-cache-test-{test_id}"));
     std::fs::create_dir_all(&project_dir).expect("failed to create scratch project directory");
