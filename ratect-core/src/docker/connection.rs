@@ -22,6 +22,33 @@
 //! `docker.rs` (`pub use`), so every existing `ratect_core::docker::
 //! DockerConnectionOptions` path is unaffected; everything else here is
 //! private, reached only through [`connect`].
+//!
+//! **The recurring `Could not load native certs` failure**, for whoever
+//! reaches for `connect_over_tls_completes_a_real_handshake_against_a_valid_certificate`'s
+//! `serial_tls` lock next: don't. That lock was added on the theory that
+//! concurrent access to macOS's Security framework was the cause (fixed as a
+//! concurrency flake once, widened once), and the theory is refuted — the
+//! test has failed alone, three consecutive times, with the sandbox
+//! disabled, so nothing else could have been contending for anything. A
+//! standalone probe using the same `rustls-native-certs` version returned
+//! every certificate with zero errors on the same machine, minutes after the
+//! test failed in-process. The trigger is still unidentified; treat that as
+//! the open question, not "is this flaky".
+//!
+//! **A real, independent defect was found investigating it**: `bollard`'s
+//! `connect_with_ssl` (which [`connect`] calls for `--docker-tls`/`-verify`)
+//! used to treat *any* error from the OS trust-store loader as fatal,
+//! discarding every certificate that loaded successfully *and* the explicit
+//! `ssl_ca` this module hands it on the very next line. So one unreadable
+//! entry anywhere in the OS trust store — nothing to do with Docker,
+//! nothing the user did wrong — could make a TLS connection impossible even
+//! with a correct `--docker-tls-ca-cert`, on a machine where Docker's own
+//! CLI connects fine. User-reachable, not just a test artifact — see
+//! `CHANGELOG.md` for the fix, patched into the `bollard` fork this crate's
+//! `[patch.crates-io]` pins and offered upstream. This module's own
+//! connection failures (`connect`'s `with_context` calls) were never
+//! affected — the defect was entirely inside `connect_with_ssl`'s
+//! cert-loading, one layer below anything here.
 
 use anyhow::{Context, Result};
 use bollard::Docker;

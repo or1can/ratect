@@ -215,3 +215,18 @@ six test-coverage gaps below:
 One thing the last pass turned up beyond the list: task `description` is a
 plain string and is *not* interpolated (matching Batect's own typing), so a
 code comment claiming otherwise was corrected.
+
+---
+
+# ratect-core/src/docker.rs: a second wide-positional-seam cluster
+
+`docker.rs`'s image/BuildKit helpers immediately above the connection block
+that became `docker/connection.rs` in 0.6.0 (`split_image_reference`,
+`docker_buildkit_env_value`, `select_builder_version`) are the same shape of
+finding the architecture review that motivated that split named — a
+self-contained concept sharing a module with container lifecycle by history,
+not by relationship. Deliberately not swept into that same change: they have
+one call site each (`resolve_image`, `build_image`), so there's no
+duplication to buy back, only call-site readability — a different, weaker
+class than the one the split was justified by. Worth a look if `docker.rs`'s
+size becomes a problem on its own terms, not before.

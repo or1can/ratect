@@ -457,6 +457,11 @@ async fn serve_one_tls_connection(
 /// only TLS `connect` callers in one test binary. A new one belongs here
 /// too. (`connect` calls that fail *before* the TLS branch — the
 /// context-conflict tests — don't need it, and take no lock.)
+///
+/// See this module's own doc comment for why this lock doesn't fully
+/// explain the failure this test still sees from time to time — it's kept
+/// because it's still correct given the theory it *was* meant to guard
+/// against, not because it's known to be sufficient.
 static TLS_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn serial_tls() -> std::sync::MutexGuard<'static, ()> {
