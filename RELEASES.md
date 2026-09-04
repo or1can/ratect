@@ -1640,14 +1640,18 @@ to live at, so links written before the split still resolve.
 
     Landed as the three commits settled during grilling: the pure move
     (4da715e), `ContainerSpec`/`derive_spec`/both call sites/the fake rewrite
-    (b8d827e), and the equivalence/overlay-precedence tests (7788687) — plus a
-    fourth, review-found fix (ca9e2be) for two `NetworkOptions`/
-    `ContainerOptions` doc comments that had carried their
+    (b8d827e), and the equivalence/overlay-precedence tests (7788687) — plus
+    two further, doc-only fixes: a review-found one (ca9e2be) for two
+    `NetworkOptions`/`ContainerOptions` doc comments that had carried their
     `too_many_arguments`-avoidance rationale verbatim from the first commit
     into the second, which is exactly what made it false: that commit is what
-    removed the allow they were still citing. `build_image` was confirmed
-    untouched, carrying its own `too_many_arguments` allow unchanged, as
-    scoped. The real-daemon suite (`cargo test --workspace --test cli --
+    removed the allow they were still citing; and a self-found one (cf4374e)
+    for `engine.rs`'s own module doc and `resolve_volumes`' doc comment,
+    which still described `tmpfs_mounts`/`capability_names`/`device_triples`
+    as engine.rs's own helpers after the second commit had moved them into
+    `container_spec.rs`. `build_image` was confirmed untouched, carrying its
+    own `too_many_arguments` allow unchanged, as scoped. The real-daemon
+    suite (`cargo test --workspace --test cli --
     --ignored`, 76 passed) was run locally before the second commit landed, per
     its own requirement above.
 
