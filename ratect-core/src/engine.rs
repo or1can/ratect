@@ -69,10 +69,10 @@
 //! settings above. `Tmpfs` mounts are deliberately *not* resolved by
 //! `resolve_volumes` at all (0.21.0) — a tmpfs mount can't be expressed as a
 //! bind string, and needs no async cache-key lookup either, so a separate,
-//! synchronous `tmpfs_mounts` helper (alongside `capability_names`/
-//! `device_triples`) pulls them out into a new `ContainerOptions.tmpfs` field
-//! instead, mapped onto Docker's own `HostConfig.Tmpfs` map by `docker.rs`'s
-//! `build_tmpfs_mounts`.
+//! synchronous `container_spec::tmpfs_mounts` helper (alongside
+//! `capability_names`/`device_triples` there) pulls them out into a
+//! `ContainerOptions.tmpfs` field instead, mapped onto Docker's own
+//! `HostConfig.Tmpfs` map by `docker.rs`'s `build_tmpfs_mounts`.
 
 use crate::config::{
     container_names_in_task, BuildSecret, Config, Container, Task, TaskContainerCustomisation,
@@ -853,7 +853,8 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     /// a config with none never touches the filesystem for this at all.
     /// `Tmpfs` mounts are skipped entirely here — they can't be expressed as
     /// a bind string at all, and need no async resolution, so they're pulled
-    /// out separately (and synchronously) by `tmpfs_mounts` instead.
+    /// out separately (and synchronously) by `container_spec::tmpfs_mounts`
+    /// instead.
     async fn resolve_volumes(
         &self,
         volumes: Option<&Vec<crate::config::VolumeMount>>,
