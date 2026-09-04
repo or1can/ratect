@@ -62,7 +62,7 @@ Ratect is a **Cargo workspace** with four crates (the
   | `config.rs` | Two text formats, one model: `batect.yml` (YAML) and `ratect.toml` (TOML), includes, expression/path resolution, `extends` |
   | `git_include.rs` | `type: git` includes — the `~/.ratect/incl` clone cache and its staleness sweep |
   | `include_trust.rs` | What a Git-included bundle may do: the grant rule, its native-only gate, and the refusals that cite them. Containment is `config.rs`'s `GitBoundary`, and so is the `allow_host_paths` refusal, which a boundary raises |
-  | `cache.rs` | `volumes` `cache` mounts → a named volume or host directory, and `--clean`/`--clean-cache` |
+  | `cache.rs` | `volumes` `cache` mounts → a named volume or host directory (`resolve_cache_mount`), and — a separate concept, same module — the `CacheStore` behind `ratect caches`/`ratect-compat --clean`/`--clean-cache`: what cache storage exists, its project/shared scope rule, and how to list or remove it |
   | `expressions.rs` | Batect's `$VAR`/`${VAR:-default}`/`<name` expression syntax |
   | `docker.rs` | All `bollard`/daemon interaction, behind the fakeable `ContainerRuntime` trait |
   | `ssh_agent.rs` | `build_ssh`'s in-process ssh-agent (RFC 9987) — kept extractable, see [0005](decisions/0005-build-ssh-keyring-placement.md) |

@@ -1500,7 +1500,7 @@ to live at, so links written before the split still resolve.
     both were fixed in their own commits (4cbe2d5, 5536b70) rather than folded
     back in, matching this project's own rule for review-found fixes.
 
-  - **`CacheStore` in `cache.rs`.** The same purchase as the entry above, for
+  - ~~**`CacheStore` in `cache.rs`.** The same purchase as the entry above, for
     caches: `CacheSelection` — already the right concept, in the wrong crate —
     and the shared-cache refusal move into core, where the refusal becomes a
     typed outcome whose *wording* (which names `--scope shared`, a flag one
@@ -1513,7 +1513,21 @@ to live at, so links written before the split still resolve.
     call. About thirteen of `cache.rs`'s seventeen public items become private;
     `resolve_cache_mount` deliberately does not move behind the store — "what
     does this volume entry become at container-create time" is a different
-    question from "what storage exists and how do I remove it".
+    question from "what storage exists and how do I remove it".~~ — done, to
+    that scope, in four commits rather than the sketched three: protecting
+    `ratect-compat`'s Batect-verbatim wording landed first as its own commit
+    (f4e674f); `CacheStore` itself, folding the typed refusal in rather than
+    landing it separately, since `remove`'s signature made no sense without it
+    (d6d379f); a pre-existing test race hit while verifying against the real
+    Docker suite, fixed on its own (8034b24) — three `#[ignore]`d tests shared
+    a pid+nanosecond scratch-path scheme with no counter, so two running
+    concurrently could collide and corrupt each other's fixture; and
+    `ratect-compat`'s own switch (271a927), which is what let
+    `clean_volume_caches`/`clean_directory_caches` finally go private. Five
+    items stayed public, not one: `CacheStore`, `resolve_cache_mount`,
+    `CacheType`, `CacheOptions`, and `project_cache_key`, which `engine.rs`
+    calls directly for runtime mount resolution — a caller this candidate
+    never touches.
 
   - **`docker/connection.rs`.** `DockerConnectionOptions` through `connect` —
     context parsing, TLS and cert-directory resolution, the crypto-provider
