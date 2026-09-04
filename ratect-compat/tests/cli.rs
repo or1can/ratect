@@ -2131,13 +2131,18 @@ struct ScratchSshKey {
 
 impl ScratchSshKey {
     fn generate() -> Self {
+        // See `dependency_health_check_and_setup_commands_gate_the_task_via_docker`
+        // for why the counter, not just pid+nanos, is what makes the
+        // resulting path actually unique under concurrent #[ignore]d tests.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let directory = std::env::temp_dir().join(format!(
-            "ratect-build-ssh-test-{}-{}",
+            "ratect-build-ssh-test-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&directory).unwrap();
         let comment = "ratect-build-ssh-test-key".to_string();
@@ -2246,13 +2251,17 @@ impl Drop for ScratchSshAgent {
 fn build_ssh_forwards_a_real_ssh_agent_into_the_build() {
     let agent = ScratchSshAgent::spawn();
 
+    // See `dependency_health_check_and_setup_commands_gate_the_task_via_docker`
+    // for why the counter, not just pid+nanos, makes this actually unique.
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let cache_bust = format!(
-        "{}-{}",
+        "{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
     let output = ratect_command()
         .arg("-f")
@@ -2299,13 +2308,17 @@ fn build_ssh_forwards_a_real_ssh_agent_into_the_build() {
 fn build_ssh_serves_explicit_key_files_to_a_named_agent() {
     let key = ScratchSshKey::generate();
 
+    // See `dependency_health_check_and_setup_commands_gate_the_task_via_docker`
+    // for why the counter, not just pid+nanos, makes this actually unique.
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let cache_bust = format!(
-        "{}-{}",
+        "{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
     let output = ratect_command()
         .arg("-f")
@@ -3378,13 +3391,17 @@ fn cache_directory_type_persists_and_clean_cache_removes_it() {
 #[test]
 #[ignore]
 fn use_network_reuses_an_existing_docker_network() {
+    // See `dependency_health_check_and_setup_commands_gate_the_task_via_docker`
+    // for why the counter, not just pid+nanos, makes this actually unique.
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let network_name = format!(
-        "ratect-use-network-test-{}-{}",
+        "ratect-use-network-test-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
 
     let create = Command::new("docker")
@@ -3731,13 +3748,19 @@ fn a_rewritten_proxy_url_adds_the_host_gateway_to_an_image_build() {
 #[test]
 #[ignore]
 fn image_pull_policy_controls_whether_a_real_pull_is_attempted() {
+    // See `dependency_health_check_and_setup_commands_gate_the_task_via_docker`
+    // for why the counter, not just pid+nanos, makes this actually unique —
+    // load-bearing here since a colliding tag would be pushed by two
+    // concurrently-running #[ignore]d tests onto the one shared daemon.
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let tag = format!(
-        "ratect-image-pull-policy-test-{}-{}:local",
+        "ratect-image-pull-policy-test-{}-{}-{}:local",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
 
     let pull = Command::new("docker")
@@ -3832,13 +3855,17 @@ tasks:
 #[test]
 #[ignore]
 fn image_pull_policy_always_force_pulls_a_build_directorys_base_image() {
+    // See `dependency_health_check_and_setup_commands_gate_the_task_via_docker`
+    // for why the counter, not just pid+nanos, makes this actually unique.
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let tag = format!(
-        "ratect-build-force-pull-test-{}-{}:local",
+        "ratect-build-force-pull-test-{}-{}-{}:local",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
 
     let pull = Command::new("docker")
