@@ -140,7 +140,7 @@ pub fn project_cache_key(project_directory: &Path) -> Result<String> {
 /// `CacheType::Volume` — `batect-cache-<project_cache_key>-<name>`, Batect's
 /// own literal prefix (see the module's own doc comment for why it isn't
 /// `ratect-cache-`).
-pub fn cache_volume_name(project_cache_key: &str, name: &str) -> String {
+fn cache_volume_name(project_cache_key: &str, name: &str) -> String {
     format!("batect-cache-{project_cache_key}-{name}")
 }
 
@@ -153,7 +153,7 @@ pub fn cache_volume_name(project_cache_key: &str, name: &str) -> String {
 /// because it differs from [`cache_volume_name`]'s `batect-cache-` prefix,
 /// `matching_cache_volumes` cannot match a shared cache even by accident,
 /// so a bare `--clean` can never discard storage other projects are using.
-pub fn shared_cache_volume_name(name: &str) -> String {
+fn shared_cache_volume_name(name: &str) -> String {
     format!("ratect-shared-cache-{name}")
 }
 
@@ -161,7 +161,7 @@ pub fn shared_cache_volume_name(name: &str) -> String {
 /// `CacheType::Directory` — `~/.ratect/caches/<name>`, beside
 /// `~/.ratect/incl`'s Git-include clones, for the same reason: it belongs to
 /// the user's machine rather than to any one project.
-pub fn shared_cache_directory(name: &str) -> Result<PathBuf> {
+fn shared_cache_directory(name: &str) -> Result<PathBuf> {
     Ok(shared_cache_root()?.join(name))
 }
 
