@@ -1686,7 +1686,11 @@ to live at, so links written before the split still resolve.
 
     Landed as two commits: the standalone completion test (6b032a6, proving
     today's gap and passing unchanged against pre-refactor code), then the
-    unification itself (87f8b56). A review round found one further
+    unification itself (87f8b56) — which also rewrote
+    `include_trust_tests.rs`'s equivalence test into one that shows
+    `refuse_read`/`refuse_load` reading a single `gate()` call cannot
+    disagree (previously it compared two separately-called functions), and
+    added two tests for `gate`'s own contract. A review round found one further
     inaccuracy, this time in 87f8b56's own commit message rather than in this
     plan: it claimed completion "previously only ran `check_contains`, once,
     inline" before the loader's `check_contains_canonical` also started
@@ -1698,9 +1702,14 @@ to live at, so links written before the split still resolve.
     `resolve_include_target` already ran it once per candidate — verified
     idempotent on an unchanged path, not a behaviour change. Git commit
     messages are not amended once made; this is the correction for the
-    record. Verified: `cargo test --workspace --all-targets --all-features`
-    (770 passed, up from 768), `cargo clippy --workspace --all-targets
-    --all-features -- -D warnings`, `cargo fmt --all -- --check`, all clean.
+    record — including a third one found in the same review round, in this
+    paragraph's own first draft: it echoed 87f8b56's own "up from 768"
+    rather than the candidate's actual starting count, 767 (768 was the
+    count right after 6b032a6 alone, one commit into the candidate, not
+    before it). Verified: `cargo test --workspace --all-targets
+    --all-features` (770 passed, up from 767), `cargo clippy --workspace
+    --all-targets --all-features -- -D warnings`, `cargo fmt --all --
+    --check`, all clean.
 
   - **`TaskEngine` construction.** Six of the eight `with_*` builders duplicate
     a `TaskEngineSettings` field and have no production caller — only
