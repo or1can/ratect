@@ -268,14 +268,6 @@ impl Args {
             // Stamped onto every resource this run creates, so it can be
             // identified later — see `ratect_core::labels`.
             ratect_version: Some(env!("CARGO_PKG_VERSION").to_string()),
-            // Created here rather than in `ratect-core`, because a library
-            // shouldn't take over a process's signal handling on its own
-            // initiative. It isn't listening yet, though: `listen` spawns,
-            // so it panics outside a runtime, and this function is
-            // deliberately synchronous so the flag-mapping tests can call it
-            // directly. The async path that actually runs a task arms it,
-            // right after calling this.
-            interrupt: Some(ratect_core::interrupt::Interrupt::new()),
         }
     }
 }
@@ -520,13 +512,15 @@ async fn run(args: Args) -> Result<()> {
             )?;
             // Built before the connection options consume `args` below.
             let settings = args.engine_settings(project_directory);
-            // Armed here rather than in `engine_settings`, which is
-            // synchronous — see its own comment. From this point Ctrl+C,
-            // `SIGTERM` or `SIGHUP` abandons the run and cleans up instead
-            // of killing the process where it stands.
-            if let Some(interrupt) = &settings.interrupt {
-                interrupt.listen();
-            }
+            // Constructed here rather than inside `ratect-core` — a library
+            // shouldn't take over a process's signal handling on its own
+            // initiative — and armed immediately, since (unlike
+            // `engine_settings`, kept synchronous so the flag-mapping tests
+            // can call it directly) this whole function already is async.
+            // From this point Ctrl+C, `SIGTERM` or `SIGHUP` abandons the run
+            // and cleans up instead of killing the process where it stands.
+            let interrupt = ratect_core::interrupt::Interrupt::new();
+            interrupt.listen();
             let docker_connection = DockerConnectionOptions {
                 host: args.docker_host,
                 context: args.docker_context,
@@ -541,9 +535,8 @@ async fn run(args: Args) -> Result<()> {
             let docker = DockerClient::new(&docker_connection)?
                 .with_event_sink(Arc::clone(&event_sink))
                 .with_enable_buildkit(args.enable_buildkit);
-            let engine = TaskEngine::new(config, docker)
-                .with_event_sink(event_sink)
-                .with_settings(settings)?;
+            let engine =
+                TaskEngine::new(config, docker, event_sink, interrupt).with_settings(settings)?;
             engine.run_task(task_name, &args.additional_args).await?;
         }
         None => {

@@ -808,20 +808,21 @@ async fn run_task(
 
     // Built before the connection options are consumed below.
     let settings = args.engine_settings(project.project_directory);
-    // Armed here rather than in `engine_settings`, which is synchronous —
-    // see its own comment. From this point Ctrl+C, `SIGTERM` or `SIGHUP`
-    // abandons the run and cleans up instead of killing the process where
-    // it stands.
-    if let Some(interrupt) = &settings.interrupt {
-        interrupt.listen();
-    }
+    // Constructed here rather than inside `ratect-core` — a library
+    // shouldn't take over a process's signal handling on its own initiative
+    // — and armed immediately, since (unlike `engine_settings`, kept
+    // synchronous so the flag-mapping tests can call it directly) this
+    // whole function already is async. From this point Ctrl+C, `SIGTERM` or
+    // `SIGHUP` abandons the run and cleans up instead of killing the
+    // process where it stands.
+    let interrupt = ratect_core::interrupt::Interrupt::new();
+    interrupt.listen();
     let docker = DockerClient::new(&args.docker.into())?
         .with_event_sink(Arc::clone(&event_sink))
         .with_enable_buildkit(args.enable_buildkit);
 
-    let engine = TaskEngine::new(project.config, docker)
-        .with_event_sink(event_sink)
-        .with_settings(settings)?;
+    let engine =
+        TaskEngine::new(project.config, docker, event_sink, interrupt).with_settings(settings)?;
     engine.run_task(&args.task, &args.args).await
 }
 
@@ -860,9 +861,6 @@ impl RunArgs {
             // Stamped onto every resource this run creates, so it can be
             // identified later — see `ratect_core::labels`.
             ratect_version: Some(env!("CARGO_PKG_VERSION").to_string()),
-            // Created here but *not* yet listening — see `ratect-compat`'s
-            // own settings for both halves of the reasoning.
-            interrupt: Some(ratect_core::interrupt::Interrupt::new()),
         }
     }
 }

@@ -223,10 +223,10 @@ const FLAG_TO_SETTING: &[(&[&str], &str)] = &[
 ];
 
 /// Which settings differ from the engine's own defaults — the basis of
-/// the per-flag test below. `cache`/`ratect_version`/`interrupt` are
-/// excluded: all three are always supplied, so they always differ. That
-/// they *are* always supplied is asserted separately below, since nothing
-/// here would notice one going missing.
+/// the per-flag test below. `cache`/`ratect_version` are excluded: both are
+/// always supplied, so they always differ. That they *are* always supplied
+/// is asserted separately below, since nothing here would notice one going
+/// missing.
 fn changed_from_default(settings: &TaskEngineSettings) -> Vec<&'static str> {
     let defaults = TaskEngineSettings::default();
     let mut changed = Vec::new();
@@ -278,21 +278,6 @@ fn each_flag_changes_only_its_own_setting() {
             "{flag:?} should change exactly `{expected}`"
         );
     }
-}
-
-/// An interrupt tracker must always reach the engine, or a signalled run
-/// stops cleaning up after itself — a regression the flag-mapping tests above
-/// deliberately can't see, since they only compare against the defaults
-/// and `interrupt` is excluded from that comparison. Until this existed,
-/// only the `#[ignore]`d Docker test covered the wiring at all.
-#[test]
-fn an_interrupt_tracker_is_always_supplied_to_the_engine() {
-    let settings = run_args(&["ratect", "run", "build"]).engine_settings(PathBuf::from("/p"));
-
-    assert!(
-        settings.interrupt.is_some(),
-        "every run must carry an interrupt tracker"
-    );
 }
 
 /// With nothing asked for, the engine must be left exactly as it would

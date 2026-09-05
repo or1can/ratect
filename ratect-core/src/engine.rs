@@ -63,11 +63,11 @@
 //! `Cache` mount goes through `cache::resolve_cache_mount`, memoizing the
 //! project's own cache key in a `tokio::sync::OnceCell` field (computed at
 //! most once per invocation, and only if a `cache` mount is actually
-//! resolved — never eagerly). `with_cache_options` (`--cache-type` + the
-//! project directory) is `main.rs`'s own builder call, always made in
-//! practice despite being optional here, same convention as the other opt-in
-//! settings above. `Tmpfs` mounts are deliberately *not* resolved by
-//! `resolve_volumes` at all (0.21.0) — a tmpfs mount can't be expressed as a
+//! resolved — never eagerly). `--cache-type` + the project directory reach
+//! `TaskEngineSettings::cache` via `main.rs`'s own `with_settings` call,
+//! always made in practice despite being optional here. `Tmpfs` mounts are
+//! deliberately *not* resolved by `resolve_volumes` at all (0.21.0) — a
+//! tmpfs mount can't be expressed as a
 //! bind string, and needs no async cache-key lookup either, so a separate,
 //! synchronous `container_spec::tmpfs_mounts` helper (alongside
 //! `capability_names`/`device_triples` there) pulls them out into a
@@ -79,7 +79,7 @@ use crate::config::{
 };
 use crate::container_spec::merged_environment;
 use crate::docker::ContainerRuntime;
-use crate::ui::{EventSink, NullEventSink, TaskEvent};
+use crate::ui::{EventSink, TaskEvent};
 use anyhow::{Context, Result};
 use async_recursion::async_recursion;
 use std::collections::{HashMap, HashSet};
@@ -456,7 +456,7 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     /// Set via `--override-image <container>=<image>` (repeatable):
     /// container name -> the image to pull instead of whatever that
     /// container actually configures. Validated against `config.containers`
-    /// up front (see `with_image_overrides`) rather than left to fail lazily
+    /// up front (see `with_settings`) rather than left to fail lazily
     /// the first time an overridden container is reached. See
     /// `resolve_image`.
     image_overrides: HashMap<String, String>,
@@ -476,12 +476,17 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     /// `--tag-image`'s "did this container actually run" check once the
     /// whole invocation finishes (see `run_task`).
     containers_used: Mutex<HashSet<String>>,
-    /// Set by [`TaskEngine::with_interrupt`]: abandons the run when a
-    /// termination signal arrives, so cleanup still happens. `None` (the
-    /// default) means no signal is watched at all and any of them kills the
-    /// process outright, which is every unit test — and was every run before
-    /// 0.25.0, and every run ended by anything but Ctrl+C before 0.26.0.
-    interrupt: Option<Arc<crate::interrupt::Interrupt>>,
+    /// A constructor argument (alongside `docker`), not a setting: this is a
+    /// collaborator the engine talks to, not something it was told, and
+    /// every caller has one to give it (a binary always constructs one,
+    /// even if [`crate::interrupt::Interrupt::listen`] is only called on it
+    /// afterward; a test that doesn't care passes a fresh, never-recorded
+    /// one). No `Option` — an `Interrupt` nothing has recorded on behaves
+    /// exactly like "no tracker" did: `wait_for`/`interrupted` never
+    /// resolve, so the `biased` `tokio::select!`s below always take the
+    /// non-interrupt branch, same as the `None` arm they replace. That was
+    /// every unit test before this, and every run before 0.25.0.
+    interrupt: Arc<crate::interrupt::Interrupt>,
     /// `false` when `--no-cleanup`/`--no-cleanup-after-success` was given:
     /// the task's own container (regardless of exit code — see
     /// `docker::ContainerRuntime::run_container`'s own doc comment for why
@@ -528,11 +533,14 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
     /// shared semaphore (rather than one per image/container) is what makes
     /// this an invocation-wide cap rather than a per-resource one.
     max_parallelism: Option<Arc<tokio::sync::Semaphore>>,
-    /// Where task-execution milestones go for the user to see —
-    /// [`NullEventSink`] (silent) by default, a real output-mode logger via
-    /// `with_event_sink`. See `crate::ui`.
+    /// Where task-execution milestones go for the user to see — a
+    /// constructor argument alongside `docker`/`interrupt`, since this too
+    /// is a collaborator the engine talks to rather than a setting it was
+    /// told. [`crate::ui::NullEventSink`] (silent) is what tests that don't
+    /// care pass.
+    /// See `crate::ui`.
     event_sink: Arc<dyn EventSink>,
-    /// Set via `with_cache_options` (always called by `main.rs`, unset only
+    /// Set via `with_settings` (always called by `main.rs`, unset only
     /// in tests that don't exercise `cache` volumes): `--cache-type` and the
     /// project's own root directory, needed to resolve a `cache` volume
     /// mount into an actual Docker bind string — see
@@ -596,10 +604,6 @@ pub struct TaskEngineSettings {
     /// own, since the core's version isn't what a user sees from
     /// `--version`.
     pub ratect_version: Option<String>,
-    /// Set by a binary that watches for termination signals, so a cancelled
-    /// run still cleans up after itself — see
-    /// [`TaskEngine::with_interrupt`]. `None` leaves them unwatched.
-    pub interrupt: Option<Arc<crate::interrupt::Interrupt>>,
 }
 
 impl Default for TaskEngineSettings {
@@ -616,13 +620,25 @@ impl Default for TaskEngineSettings {
             max_parallelism: None,
             cache: None,
             ratect_version: None,
-            interrupt: None,
         }
     }
 }
 
 impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
-    pub fn new(config: Config, docker: D) -> Self {
+    /// `event_sink`/`interrupt` are constructor arguments, not opt-in
+    /// settings, like `docker` itself — see their own field doc comments
+    /// for why. Everything else opt-in still goes through [`with_settings`]
+    /// (this module's own tests use struct-update syntax on
+    /// [`TaskEngineSettings`] directly, naming only the one setting under
+    /// test).
+    ///
+    /// [`with_settings`]: Self::with_settings
+    pub fn new(
+        config: Config,
+        docker: D,
+        event_sink: Arc<dyn EventSink>,
+        interrupt: Arc<crate::interrupt::Interrupt>,
+    ) -> Self {
         Self {
             config,
             docker,
@@ -635,7 +651,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             propagate_proxy_environment_variables: true,
             host_env: Box::new(|name| std::env::var(name).ok()),
             proc_net_tcp: Box::new(crate::proxy::proc_net_tcp_tables),
-            event_sink: Arc::new(NullEventSink),
+            event_sink,
             skip_prerequisites: false,
             image_overrides: HashMap::new(),
             image_tags: HashMap::new(),
@@ -646,30 +662,8 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             cache_options: None,
             ratect_version: None,
             cache_key: OnceCell::new(),
-            interrupt: None,
+            interrupt,
         }
-    }
-
-    /// Makes this engine abandon a run when a termination signal arrives
-    /// (Ctrl+C, `SIGTERM` or `SIGHUP`), cleaning up what it created rather
-    /// than leaving it behind — see [`crate::interrupt`] and
-    /// `run_task_internal`.
-    ///
-    /// Opt-in, like the other settings here, and left off by default so a
-    /// unit test never picks up the process's real signals: only a binary
-    /// that has actually called [`crate::interrupt::Interrupt::listen`]
-    /// wants this.
-    pub fn with_interrupt(mut self, interrupt: Arc<crate::interrupt::Interrupt>) -> Self {
-        self.interrupt = Some(interrupt);
-        self
-    }
-
-    /// Injects the output-mode logger task-execution milestones render
-    /// through. Without this, the engine is silent (aside from `tracing`
-    /// diagnostics) — the default every unit test relies on.
-    pub fn with_event_sink(mut self, event_sink: Arc<dyn EventSink>) -> Self {
-        self.event_sink = event_sink;
-        self
     }
 
     /// Whether the selected output mode owns container I/O line by line
@@ -678,117 +672,16 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         self.event_sink.container_io_streaming() == crate::ui::ContainerIoStreaming::Interleaved
     }
 
-    /// Opts into `--use-network`: `network` is validated to exist (and
-    /// reused, never torn down) for every task run through this engine,
-    /// instead of each task getting a fresh network created and removed
-    /// around it. See `run_task_internal`.
-    pub fn with_existing_network(mut self, network: String) -> Self {
-        self.existing_network = Some(network);
-        self
-    }
-
-    /// Opts into `--disable-ports`: no container's `ports` are ever
-    /// published, regardless of config.
-    pub fn without_port_publishing(mut self) -> Self {
-        self.publish_ports = false;
-        self
-    }
-
-    /// Opts into `--no-proxy-vars`: proxy environment variables are never
-    /// propagated into a container's environment or a build's `build_args`,
-    /// regardless of what's set in the host environment.
-    pub fn without_proxy_environment_variables(mut self) -> Self {
-        self.propagate_proxy_environment_variables = false;
-        self
-    }
-
-    /// Opts into `--skip-prerequisites`: the named task's own `prerequisites`
-    /// are never run. See `run_task_internal`.
-    pub fn without_prerequisites(mut self) -> Self {
-        self.skip_prerequisites = true;
-        self
-    }
-
-    /// Opts into `--override-image <container>=<image>`: every entry's
-    /// container name is validated to exist up front — matching Batect's own
-    /// eager validation and error wording exactly — rather than only failing
-    /// the first time (if ever) that container is actually reached during a
-    /// task run. See `resolve_image`.
-    pub fn with_image_overrides(mut self, overrides: HashMap<String, String>) -> Result<Self> {
-        for name in overrides.keys() {
-            if !self.config.containers.contains_key(name) {
-                anyhow::bail!(
-                    "Cannot override image for container '{name}' because there is no \
-                     container named '{name}' defined."
-                );
-            }
-        }
-        self.image_overrides = overrides;
-        Ok(self)
-    }
-
-    /// Opts into `--tag-image <container>=<tag>`: extra tags applied to a
-    /// container's *built* image once it's actually resolved (see
-    /// `resolve_image`) — never validated up front, matching Batect (a
-    /// container name that's never reached, or that ends up using a pulled
-    /// image, is only ever an error once that's actually known).
-    pub fn with_image_tags(
-        mut self,
-        tags: HashMap<String, std::collections::HashSet<String>>,
-    ) -> Self {
-        self.image_tags = tags;
-        self
-    }
-
-    /// Opts into `--no-cleanup-after-success` (also set by `--no-cleanup`):
-    /// see `cleanup_after_success`'s own doc comment.
-    pub fn without_cleanup_after_success(mut self) -> Self {
-        self.cleanup_after_success = false;
-        self
-    }
-
-    /// Opts into `--no-cleanup-after-failure` (also set by `--no-cleanup`):
-    /// see `cleanup_after_failure`'s own doc comment.
-    pub fn without_cleanup_after_failure(mut self) -> Self {
-        self.cleanup_after_failure = false;
-        self
-    }
-
-    /// Opts into `--max-parallelism <N>`: see `max_parallelism`'s own doc
-    /// comment for exactly what it caps.
-    pub fn with_max_parallelism(mut self, max: usize) -> Self {
-        self.max_parallelism = Some(Arc::new(tokio::sync::Semaphore::new(max)));
-        self
-    }
-
-    /// Supplies `--cache-type` and the project's own root directory, needed
-    /// to resolve any `cache` volume mount a container declares (see
-    /// `resolve_volumes`). `main.rs` always calls this — it's a builder
-    /// method rather than a `TaskEngine::new` parameter only to match this
-    /// struct's existing convention for opt-in settings, not because it's
-    /// actually optional in practice.
-    pub fn with_cache_options(
-        mut self,
-        cache_type: crate::cache::CacheType,
-        project_directory: PathBuf,
-    ) -> Self {
-        self.cache_options = Some(crate::cache::CacheOptions {
-            cache_type,
-            project_directory,
-        });
-        self
-    }
-
-    /// Applies a whole [`TaskEngineSettings`] at once — every builder method
-    /// above, driven by plain data instead of a chain of `if flag { engine =
-    /// engine.without_x() }` at a call site.
+    /// Applies a whole [`TaskEngineSettings`] at once, driven by plain data
+    /// instead of a chain of `if flag { engine.field = ... }` at a call
+    /// site.
     ///
     /// This exists for the binaries, which all have the same ~10 knobs
-    /// behind differently-named flags; the builders stay the interface for
-    /// everything else (notably this module's own tests, where naming the
-    /// one setting under test reads better than a mostly-default struct).
-    /// Anything added here needs adding to [`TaskEngineSettings`] too, or a
-    /// binary has no way to reach it.
+    /// behind differently-named flags; this module's own tests construct
+    /// [`TaskEngineSettings`] with struct-update syntax instead (naming only
+    /// the one setting under test) rather than calling this with a
+    /// mostly-default struct. Anything added to [`TaskEngineSettings`] needs
+    /// assigning here too, or a binary has no way to reach it.
     pub fn with_settings(mut self, settings: TaskEngineSettings) -> Result<Self> {
         let TaskEngineSettings {
             existing_network,
@@ -802,42 +695,37 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             max_parallelism,
             cache,
             ratect_version,
-            interrupt,
         } = settings;
+        // Validated up front — matching Batect's own eager validation and
+        // error wording exactly — rather than only failing the first time
+        // (if ever) an overridden container is actually reached. See
+        // `resolve_image`.
+        for name in image_overrides.keys() {
+            if !self.config.containers.contains_key(name) {
+                anyhow::bail!(
+                    "Cannot override image for container '{name}' because there is no \
+                     container named '{name}' defined."
+                );
+            }
+        }
+        self.existing_network = existing_network;
+        self.publish_ports = publish_ports;
+        self.propagate_proxy_environment_variables = propagate_proxy_environment_variables;
+        self.skip_prerequisites = !run_prerequisites;
+        self.image_overrides = image_overrides;
+        self.image_tags = image_tags;
+        self.cleanup_after_success = cleanup_after_success;
+        self.cleanup_after_failure = cleanup_after_failure;
+        self.max_parallelism =
+            max_parallelism.map(|max| Arc::new(tokio::sync::Semaphore::new(max)));
+        self.cache_options =
+            cache.map(
+                |(cache_type, project_directory)| crate::cache::CacheOptions {
+                    cache_type,
+                    project_directory,
+                },
+            );
         self.ratect_version = ratect_version;
-        if let Some(interrupt) = interrupt {
-            self = self.with_interrupt(interrupt);
-        }
-        if let Some(network) = existing_network {
-            self = self.with_existing_network(network);
-        }
-        if !publish_ports {
-            self = self.without_port_publishing();
-        }
-        if !propagate_proxy_environment_variables {
-            self = self.without_proxy_environment_variables();
-        }
-        if !run_prerequisites {
-            self = self.without_prerequisites();
-        }
-        if !image_overrides.is_empty() {
-            self = self.with_image_overrides(image_overrides)?;
-        }
-        if !image_tags.is_empty() {
-            self = self.with_image_tags(image_tags);
-        }
-        if !cleanup_after_success {
-            self = self.without_cleanup_after_success();
-        }
-        if !cleanup_after_failure {
-            self = self.without_cleanup_after_failure();
-        }
-        if let Some(max) = max_parallelism {
-            self = self.with_max_parallelism(max);
-        }
-        if let Some((cache_type, project_directory)) = cache {
-            self = self.with_cache_options(cache_type, project_directory);
-        }
         Ok(self)
     }
 
@@ -847,7 +735,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     /// absolute, interpolated) by `Config::resolve_expressions` — nothing
     /// left to do here but reassemble the `"local:container[:options]"`
     /// string. `Cache` mounts are resolved here instead, since that needs
-    /// `--cache-type` (`with_cache_options`) and the project's own cache
+    /// `--cache-type` (see `with_settings`) and the project's own cache
     /// key, neither available to `config.rs`. `cache_key` is only ever
     /// computed the first time this actually encounters a `Cache` mount —
     /// a config with none never touches the filesystem for this at all.
@@ -876,8 +764,8 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                 }
                 crate::config::VolumeMount::Cache(cache) => {
                     let cache_options = self.cache_options.as_ref().expect(
-                        "a config with a 'cache' volume mount requires with_cache_options to \
-                         have been called first",
+                        "a config with a 'cache' volume mount requires with_settings to have \
+                         been called with `cache: Some(..)` first",
                     );
                     let cache_key = self
                         .cache_key
@@ -909,25 +797,19 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     /// count that was already reached when the run ended, so only a *further*
     /// press counts (see `run_task_internal`).
     ///
-    /// With no interrupt tracker the step simply runs, which is every unit
-    /// test that doesn't opt in and both binaries before 0.25.0.
+    /// An interrupt nothing has recorded on behaves as though there were no
+    /// tracker at all — `wait_for` never resolves, so `step` always wins —
+    /// which is every unit test that doesn't deliberately record one, and
+    /// both binaries before 0.25.0.
     async fn until_interrupted(
         &self,
         after: usize,
         step: impl std::future::Future<Output = ()>,
     ) -> bool {
-        match &self.interrupt {
-            Some(interrupt) => {
-                tokio::select! {
-                    biased;
-                    () = step => true,
-                    () = interrupt.wait_for(after + 1) => false,
-                }
-            }
-            None => {
-                step.await;
-                true
-            }
+        tokio::select! {
+            biased;
+            () = step => true,
+            () = self.interrupt.wait_for(after + 1) => false,
         }
     }
 
@@ -1879,20 +1761,15 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         // should react to, and reading the count later would fold anything
         // arriving in between into the baseline and swallow it. The window
         // is small either way, but it is the window that matters.
-        let (result, interrupts_before_cleanup): (Result<()>, usize) = match &self.interrupt {
-            Some(interrupt) => {
-                tokio::select! {
-                    biased;
-                    result = execution => (result, interrupt.count()),
-                    () = interrupt.interrupted() => (
-                        Err(anyhow::Error::new(crate::interrupt::TaskInterrupted::new(
-                            interrupt.last_signal(),
-                        ))),
-                        interrupt.count(),
-                    ),
-                }
-            }
-            None => (execution.await, 0),
+        let (result, interrupts_before_cleanup): (Result<()>, usize) = tokio::select! {
+            biased;
+            result = execution => (result, self.interrupt.count()),
+            () = self.interrupt.interrupted() => (
+                Err(anyhow::Error::new(crate::interrupt::TaskInterrupted::new(
+                    self.interrupt.last_signal(),
+                ))),
+                self.interrupt.count(),
+            ),
         };
         // `Some(signal)` is the "was it signalled" question and "which one"
         // in the same read — the cleanup message below has to name the

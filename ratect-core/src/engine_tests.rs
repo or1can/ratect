@@ -15,6 +15,7 @@
 use super::*;
 use crate::config::{Container, PortMapping, Task, TaskRun};
 use crate::docker::DockerClient;
+use crate::ui::NullEventSink;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -999,10 +1000,26 @@ fn config_with_shared_prerequisite() -> Config {
     }
 }
 
+/// [`TaskEngine::new`] with the two defaults almost every test here wants —
+/// a silent event sink, and an interrupt tracker nothing will ever record
+/// on (behaviourally identical to "no tracker", see `TaskEngine::interrupt`'s
+/// own doc comment). A test that cares about either constructs a
+/// `TaskEngine::new` directly instead, same as it would have called
+/// `with_event_sink`/`with_interrupt` before those became constructor
+/// arguments.
+fn engine<D: ContainerRuntime + Send + Sync>(config: Config, docker: D) -> TaskEngine<D> {
+    TaskEngine::new(
+        config,
+        docker,
+        Arc::new(NullEventSink),
+        crate::interrupt::Interrupt::new(),
+    )
+}
+
 #[tokio::test]
 async fn shared_prerequisite_runs_once_and_image_pulled_once() {
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config_with_shared_prerequisite(), docker.clone());
+    let engine = engine(config_with_shared_prerequisite(), docker.clone());
 
     engine.run_task("test-task", &[]).await.unwrap();
 
@@ -1075,7 +1092,7 @@ fn config_with_wildcard_prerequisite_tasks() -> Config {
 #[tokio::test]
 async fn wildcard_prerequisite_expands_to_matching_tasks_in_alphabetical_order() {
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config_with_wildcard_prerequisite_tasks(), docker.clone());
+    let engine = engine(config_with_wildcard_prerequisite_tasks(), docker.clone());
 
     engine.run_task("ci", &[]).await.unwrap();
 
@@ -1111,7 +1128,7 @@ async fn wildcard_prerequisite_matching_no_tasks_is_not_an_error() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("ci", &[]).await.unwrap();
 
@@ -1142,7 +1159,7 @@ async fn explicit_prerequisite_and_overlapping_wildcard_only_runs_once() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("ci", &[]).await.unwrap();
 
@@ -1174,7 +1191,7 @@ async fn nonexistent_literal_prerequisite_still_errors() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     let err = engine.run_task("ci", &[]).await.unwrap_err();
     assert!(err.to_string().contains("Task 'does-not-exist' not found"));
@@ -1209,7 +1226,7 @@ async fn wildcard_pattern_with_multiple_asterisks_matches() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("ci", &[]).await.unwrap();
 
@@ -1256,7 +1273,7 @@ async fn a_task_with_only_prerequisites_and_no_run_still_runs_its_prerequisites(
     let docker = FakeContainerRuntime::default();
     let mut config = config_with_shared_prerequisite();
     config.tasks.get_mut("test-task").unwrap().run = None;
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test-task", &[]).await.unwrap();
 
@@ -1286,7 +1303,7 @@ async fn a_task_with_only_prerequisites_and_no_run_still_runs_its_prerequisites(
 #[tokio::test]
 async fn additional_args_reach_only_the_requested_task_not_its_prerequisites() {
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config_with_shared_prerequisite(), docker.clone());
+    let engine = engine(config_with_shared_prerequisite(), docker.clone());
 
     let extra_args = vec!["--verbose".to_string(), "arg with spaces".to_string()];
     engine.run_task("test-task", &extra_args).await.unwrap();
@@ -1314,8 +1331,12 @@ async fn additional_args_reach_only_the_requested_task_not_its_prerequisites() {
 #[tokio::test]
 async fn without_prerequisites_skips_the_named_tasks_own_prerequisites() {
     let docker = FakeContainerRuntime::default();
-    let engine =
-        TaskEngine::new(config_with_shared_prerequisite(), docker.clone()).without_prerequisites();
+    let engine = engine(config_with_shared_prerequisite(), docker.clone())
+        .with_settings(TaskEngineSettings {
+            run_prerequisites: false,
+            ..Default::default()
+        })
+        .unwrap();
 
     engine.run_task("test-task", &[]).await.unwrap();
 
@@ -1333,8 +1354,12 @@ async fn without_prerequisites_scopes_to_whichever_task_is_named_as_top_level() 
     // top-level task this time, so *its* own prerequisite
     // ("shared-prereq") is what gets skipped.
     let docker = FakeContainerRuntime::default();
-    let engine =
-        TaskEngine::new(config_with_shared_prerequisite(), docker.clone()).without_prerequisites();
+    let engine = engine(config_with_shared_prerequisite(), docker.clone())
+        .with_settings(TaskEngineSettings {
+            run_prerequisites: false,
+            ..Default::default()
+        })
+        .unwrap();
 
     engine.run_task("prereq-task", &[]).await.unwrap();
 
@@ -1359,7 +1384,7 @@ async fn only_the_top_level_tasks_own_container_run_is_interactive_eligible() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("run", &[]).await.unwrap();
 
@@ -1404,7 +1429,7 @@ async fn prerequisite_tasks_own_container_is_never_interactive() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("run", &[]).await.unwrap();
 
@@ -1510,8 +1535,12 @@ async fn cache_mounts_are_owned_by_the_mapped_user() {
     // cache key under `.batect/`.
     let project = std::env::temp_dir().join(format!("ratect-cache-owner-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&project).unwrap();
-    let engine = TaskEngine::new(config, docker.clone())
-        .with_cache_options(crate::cache::CacheType::Volume, project.clone());
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            cache: Some((crate::cache::CacheType::Volume, project.clone())),
+            ..Default::default()
+        })
+        .unwrap();
     engine.run_task("run", &[]).await.unwrap();
 
     let (_, _, _, cache_directories) = docker
@@ -1571,8 +1600,12 @@ async fn a_read_only_cache_mount_is_not_owned_by_the_mapped_user() {
     let project = std::env::temp_dir().join(format!("ratect-ro-cache-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&project).unwrap();
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone())
-        .with_cache_options(crate::cache::CacheType::Volume, project.clone());
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            cache: Some((crate::cache::CacheType::Volume, project.clone())),
+            ..Default::default()
+        })
+        .unwrap();
     engine.run_task("run", &[]).await.unwrap();
     std::fs::remove_dir_all(&project).ok();
 
@@ -1600,7 +1633,7 @@ async fn run_as_current_user_reaches_the_container() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("run", &[]).await.unwrap();
 
@@ -1638,7 +1671,7 @@ async fn a_dependencys_run_as_current_user_is_independent_of_its_own_containers(
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -1675,7 +1708,7 @@ async fn container_without_run_as_current_user_reaches_the_container_with_no_map
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("run", &[]).await.unwrap();
 
@@ -1721,7 +1754,7 @@ async fn additional_hostnames_and_hosts_reach_a_tasks_own_container() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("run", &[]).await.unwrap();
 
@@ -1765,7 +1798,7 @@ async fn additional_hostnames_and_hosts_reach_a_dependency_independently() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("run", &[]).await.unwrap();
 
@@ -1819,7 +1852,7 @@ async fn ports_reach_the_container() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("run", &[]).await.unwrap();
 
@@ -1847,7 +1880,7 @@ async fn task_run_ports_are_added_to_the_containers_own_ports() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("run", &[]).await.unwrap();
 
@@ -1875,7 +1908,12 @@ async fn disable_port_publishing_suppresses_configured_ports() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone()).without_port_publishing();
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            publish_ports: false,
+            ..Default::default()
+        })
+        .unwrap();
 
     engine.run_task("run", &[]).await.unwrap();
 
@@ -1938,7 +1976,7 @@ async fn run_as_current_user_explicitly_disabled_reaches_the_container_with_no_m
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("run", &[]).await.unwrap();
 
@@ -2005,7 +2043,7 @@ async fn build_directory_container_builds_then_runs_the_built_image() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("build", &[]).await.unwrap();
 
@@ -2050,7 +2088,7 @@ async fn build_directory_container_does_not_force_pull_by_default() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("build", &[]).await.unwrap();
 
@@ -2078,7 +2116,7 @@ async fn build_directory_container_with_always_policy_force_pulls_the_base_image
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("build", &[]).await.unwrap();
 
@@ -2107,7 +2145,7 @@ async fn build_directory_container_passes_dockerfile_and_target_through() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("build", &[]).await.unwrap();
 
@@ -2137,7 +2175,7 @@ async fn build_directory_container_defaults_dockerfile_when_unset() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("build", &[]).await.unwrap();
 
@@ -2166,7 +2204,7 @@ async fn build_directory_container_without_secrets_or_ssh_skips_buildkit() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("build", &[]).await.unwrap();
 
@@ -2207,7 +2245,7 @@ async fn build_directory_container_passes_secrets_and_ssh_through_as_buildkit_op
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("build", &[]).await.unwrap();
 
@@ -2270,7 +2308,7 @@ async fn build_ssh_key_paths_reach_docker_as_a_named_key_source() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("build", &[]).await.unwrap();
 
@@ -2326,7 +2364,7 @@ async fn an_invalid_build_ssh_entry_names_the_container_it_came_from() {
         forbid_telemetry: None,
     };
 
-    let engine = TaskEngine::new(config, FakeContainerRuntime::default());
+    let engine = engine(config, FakeContainerRuntime::default());
     let err = engine.run_task("build", &[]).await.unwrap_err();
 
     let message = format!("{err:#}");
@@ -2365,7 +2403,7 @@ async fn a_failed_build_names_the_container_whatever_layer_failed() {
         forbid_telemetry: None,
     };
 
-    let engine = TaskEngine::new(
+    let engine = engine(
         config,
         FakeContainerRuntime::default().failing_image_build(),
     );
@@ -2400,7 +2438,7 @@ async fn built_image_is_tagged_with_project_and_container_name() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("build", &[]).await.unwrap();
 
@@ -2450,7 +2488,7 @@ async fn build_directory_is_only_built_once_when_reused_across_tasks() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("second", &[]).await.unwrap();
 
@@ -2483,7 +2521,7 @@ async fn build_args_reach_the_build() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("build", &[]).await.unwrap();
 
@@ -2519,7 +2557,7 @@ async fn dependency_container_with_build_directory_is_built_and_started() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -2601,7 +2639,7 @@ async fn container_without_image_or_build_directory_errors() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     let err = engine.run_task("build", &[]).await.unwrap_err();
     assert!(err
@@ -2630,7 +2668,7 @@ async fn dependency_less_task_still_gets_its_own_network() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("build", &[]).await.unwrap();
 
@@ -2674,8 +2712,12 @@ async fn use_network_reuses_an_existing_network_instead_of_creating_one() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine =
-        TaskEngine::new(config, docker.clone()).with_existing_network("my-network".to_string());
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            existing_network: Some("my-network".to_string()),
+            ..Default::default()
+        })
+        .unwrap();
 
     engine.run_task("build", &[]).await.unwrap();
 
@@ -2710,8 +2752,12 @@ async fn use_network_errors_clearly_when_the_network_does_not_exist() {
     };
 
     let docker = FakeContainerRuntime::default().without_existing_network();
-    let engine =
-        TaskEngine::new(config, docker.clone()).with_existing_network("missing".to_string());
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            existing_network: Some("missing".to_string()),
+            ..Default::default()
+        })
+        .unwrap();
 
     let result = engine.run_task("build", &[]).await;
 
@@ -2746,9 +2792,17 @@ async fn a_missing_network_still_posts_task_failed() {
 
     let sink = RecordingEventSink::default();
     let docker = FakeContainerRuntime::default().without_existing_network();
-    let engine = TaskEngine::new(config, docker)
-        .with_existing_network("missing".to_string())
-        .with_event_sink(Arc::new(sink.clone()));
+    let engine = TaskEngine::new(
+        config,
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        existing_network: Some("missing".to_string()),
+        ..Default::default()
+    })
+    .unwrap();
 
     assert!(engine.run_task("build", &[]).await.is_err());
 
@@ -2784,7 +2838,7 @@ async fn dependency_starts_before_main_container_and_is_cleaned_up() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -2871,7 +2925,7 @@ async fn dependency_becomes_healthy_and_runs_setup_commands_before_the_task_star
     });
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -2932,7 +2986,7 @@ async fn setup_commands_run_with_the_containers_own_environment() {
     });
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -2957,7 +3011,7 @@ async fn setup_command_falls_back_to_the_containers_own_working_directory() {
     });
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -2976,7 +3030,7 @@ async fn setup_commands_own_working_directory_overrides_the_containers() {
     });
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -2997,7 +3051,7 @@ async fn unhealthy_dependency_fails_the_task_and_still_cleans_up() {
     });
 
     let docker = FakeContainerRuntime::default().with_unhealthy_container("database");
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     let result = engine.run_task("start", &[]).await;
 
@@ -3041,7 +3095,12 @@ fn interrupted_engine(
     for _ in 0..interrupts {
         interrupt.record();
     }
-    let engine = TaskEngine::new(config, docker.clone()).with_interrupt(Arc::clone(&interrupt));
+    let engine = TaskEngine::new(
+        config,
+        docker.clone(),
+        Arc::new(NullEventSink),
+        Arc::clone(&interrupt),
+    );
     (docker, engine, interrupt)
 }
 
@@ -3100,7 +3159,12 @@ async fn a_termination_signal_cleans_up_and_is_reported_as_itself() {
 #[tokio::test]
 async fn an_interrupt_leaves_everything_alone_with_cleanup_after_failure_disabled() {
     let (docker, engine, _interrupt) = interrupted_engine(1);
-    let engine = engine.without_cleanup_after_failure();
+    let engine = engine
+        .with_settings(TaskEngineSettings {
+            cleanup_after_failure: false,
+            ..Default::default()
+        })
+        .unwrap();
 
     let error = engine.run_task("start", &[]).await.unwrap_err();
     assert!(error.is::<crate::interrupt::TaskInterrupted>());
@@ -3154,7 +3218,12 @@ async fn an_interrupt_during_cleanup_abandons_it_even_when_the_run_was_not_inter
     // Fires as cleanup removes its first container, so the run itself
     // completes entirely uninterrupted.
     let docker = FakeContainerRuntime::default().interrupting_on_stop(&interrupt);
-    let engine = TaskEngine::new(config, docker.clone()).with_interrupt(Arc::clone(&interrupt));
+    let engine = TaskEngine::new(
+        config,
+        docker.clone(),
+        Arc::new(NullEventSink),
+        Arc::clone(&interrupt),
+    );
 
     engine
         .run_task("start", &[])
@@ -3191,7 +3260,12 @@ async fn a_second_interrupt_during_cleanup_abandons_it() {
     let docker = FakeContainerRuntime::default()
         .with_run_delay("app", std::time::Duration::from_secs(60))
         .interrupting_on_stop(&interrupt);
-    let engine = TaskEngine::new(config, docker.clone()).with_interrupt(Arc::clone(&interrupt));
+    let engine = TaskEngine::new(
+        config,
+        docker.clone(),
+        Arc::new(NullEventSink),
+        Arc::clone(&interrupt),
+    );
 
     let error = engine.run_task("start", &[]).await.unwrap_err();
     assert!(error.is::<crate::interrupt::TaskInterrupted>());
@@ -3222,7 +3296,7 @@ async fn a_second_interrupt_during_cleanup_abandons_it() {
 async fn a_run_with_no_interrupt_tracker_is_unaffected() {
     let config = config_with_database_dependency(|_| {});
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine
         .run_task("start", &[])
@@ -3252,7 +3326,7 @@ async fn failing_setup_command_fails_the_task_and_still_cleans_up() {
     });
 
     let docker = FakeContainerRuntime::default().with_failing_setup_command("./seed-data.sh");
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     let result = engine.run_task("start", &[]).await;
 
@@ -3305,7 +3379,7 @@ async fn task_containers_own_health_check_reaches_docker_and_is_waited_on() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -3350,7 +3424,7 @@ async fn unhealthy_task_container_fails_the_task() {
     };
 
     let docker = FakeContainerRuntime::default().with_unhealthy_container("app");
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     let result = engine.run_task("start", &[]).await;
 
@@ -3381,7 +3455,7 @@ async fn task_containers_own_setup_commands_run() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -3414,7 +3488,7 @@ async fn failing_setup_command_on_the_tasks_own_container_fails_the_task() {
     };
 
     let docker = FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh");
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     let result = engine.run_task("start", &[]).await;
 
@@ -3436,7 +3510,12 @@ async fn failing_setup_command_on_the_tasks_own_container_fails_the_task() {
 async fn a_readiness_failure_on_the_tasks_own_container_honours_no_cleanup_after_failure() {
     let config = config_with_failing_task_container_setup_command();
     let docker = FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh");
-    let engine = TaskEngine::new(config, docker.clone()).without_cleanup_after_failure();
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            cleanup_after_failure: false,
+            ..Default::default()
+        })
+        .unwrap();
 
     engine.run_task("start", &[]).await.unwrap_err();
 
@@ -3453,7 +3532,7 @@ async fn a_readiness_failure_on_the_tasks_own_container_honours_no_cleanup_after
 async fn a_readiness_failure_on_the_tasks_own_container_still_removes_it_by_default() {
     let config = config_with_failing_task_container_setup_command();
     let docker = FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh");
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap_err();
 
@@ -3472,7 +3551,12 @@ async fn a_readiness_failure_on_the_tasks_own_container_still_removes_it_by_defa
 async fn a_readiness_failure_is_unaffected_by_no_cleanup_after_success() {
     let config = config_with_failing_task_container_setup_command();
     let docker = FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh");
-    let engine = TaskEngine::new(config, docker.clone()).without_cleanup_after_success();
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            cleanup_after_success: false,
+            ..Default::default()
+        })
+        .unwrap();
 
     engine.run_task("start", &[]).await.unwrap_err();
 
@@ -3496,7 +3580,7 @@ async fn a_readiness_failure_is_unaffected_by_no_cleanup_after_success() {
 async fn a_run_container_failure_before_creation_reports_rather_than_hanging() {
     let config = config_with_database_dependency(|_| {});
     let docker = FakeContainerRuntime::default().failing_container_creation();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -3581,7 +3665,7 @@ async fn task_containers_own_setup_commands_run_concurrently_with_its_main_comma
     let docker = FakeContainerRuntime::default()
         .with_run_delay("app", delay)
         .with_exec_delay("./migrate.sh", delay);
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     let start = tokio::time::Instant::now();
     engine.run_task("start", &[]).await.unwrap();
@@ -3613,7 +3697,7 @@ async fn task_fails_when_container_exits_nonzero_but_dependencies_are_still_clea
     };
 
     let docker = FakeContainerRuntime::default().failing_run();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     let err = engine.run_task("start", &[]).await.unwrap_err();
     assert!(err.to_string().contains("exited with code"));
@@ -3638,7 +3722,12 @@ async fn without_cleanup_after_success_leaves_everything_in_place_on_a_nonzero_e
     // "failure" here (see `cleanup_after_success`'s own doc comment).
     let config = config_with_database_dependency(|_| {});
     let docker = FakeContainerRuntime::default().failing_run();
-    let engine = TaskEngine::new(config, docker.clone()).without_cleanup_after_success();
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            cleanup_after_success: false,
+            ..Default::default()
+        })
+        .unwrap();
 
     let err = engine.run_task("start", &[]).await.unwrap_err();
     assert!(err.to_string().contains("exited with code"));
@@ -3670,7 +3759,12 @@ async fn without_cleanup_after_success_has_no_effect_on_an_infrastructure_failur
         });
     });
     let docker = FakeContainerRuntime::default().with_unhealthy_container("database");
-    let engine = TaskEngine::new(config, docker.clone()).without_cleanup_after_success();
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            cleanup_after_success: false,
+            ..Default::default()
+        })
+        .unwrap();
 
     engine.run_task("start", &[]).await.unwrap_err();
 
@@ -3699,7 +3793,12 @@ async fn without_cleanup_after_failure_leaves_everything_in_place_on_an_infrastr
         });
     });
     let docker = FakeContainerRuntime::default().with_unhealthy_container("database");
-    let engine = TaskEngine::new(config, docker.clone()).without_cleanup_after_failure();
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            cleanup_after_failure: false,
+            ..Default::default()
+        })
+        .unwrap();
 
     engine.run_task("start", &[]).await.unwrap_err();
 
@@ -3719,7 +3818,12 @@ async fn without_cleanup_after_failure_leaves_everything_in_place_on_an_infrastr
 async fn without_cleanup_after_failure_has_no_effect_on_a_successful_run() {
     let config = config_with_database_dependency(|_| {});
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone()).without_cleanup_after_failure();
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            cleanup_after_failure: false,
+            ..Default::default()
+        })
+        .unwrap();
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -3763,7 +3867,7 @@ async fn nested_dependencies_start_in_order_on_same_network() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -3822,7 +3926,7 @@ async fn independent_dependencies_start_concurrently_not_sequentially() {
     let docker = FakeContainerRuntime::default()
         .with_start_delay("dep-a", delay)
         .with_start_delay("dep-b", delay);
-    let engine = TaskEngine::new(config, docker);
+    let engine = engine(config, docker);
 
     let start = tokio::time::Instant::now();
     engine.run_task("start", &[]).await.unwrap();
@@ -3863,7 +3967,7 @@ async fn concurrent_dependencies_sharing_an_image_only_pull_it_once() {
 
     let docker = FakeContainerRuntime::default()
         .with_pull_delay("shared-image:1", std::time::Duration::from_millis(50));
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -3913,8 +4017,12 @@ async fn max_parallelism_of_one_serializes_independent_image_pulls() {
     let docker = FakeContainerRuntime::default()
         .with_pull_delay("image-a:1", delay)
         .with_pull_delay("image-b:1", delay);
-    let engine =
-        TaskEngine::new(config_with_two_independent_image_pulls(), docker).with_max_parallelism(1);
+    let engine = engine(config_with_two_independent_image_pulls(), docker)
+        .with_settings(TaskEngineSettings {
+            max_parallelism: Some(1),
+            ..Default::default()
+        })
+        .unwrap();
 
     let start = tokio::time::Instant::now();
     engine.run_task("start", &[]).await.unwrap();
@@ -3933,8 +4041,12 @@ async fn max_parallelism_of_two_still_lets_two_independent_pulls_overlap() {
     let docker = FakeContainerRuntime::default()
         .with_pull_delay("image-a:1", delay)
         .with_pull_delay("image-b:1", delay);
-    let engine =
-        TaskEngine::new(config_with_two_independent_image_pulls(), docker).with_max_parallelism(2);
+    let engine = engine(config_with_two_independent_image_pulls(), docker)
+        .with_settings(TaskEngineSettings {
+            max_parallelism: Some(2),
+            ..Default::default()
+        })
+        .unwrap();
 
     let start = tokio::time::Instant::now();
     engine.run_task("start", &[]).await.unwrap();
@@ -3953,7 +4065,7 @@ async fn default_unbounded_parallelism_still_lets_independent_pulls_overlap() {
     let docker = FakeContainerRuntime::default()
         .with_pull_delay("image-a:1", delay)
         .with_pull_delay("image-b:1", delay);
-    let engine = TaskEngine::new(config_with_two_independent_image_pulls(), docker);
+    let engine = engine(config_with_two_independent_image_pulls(), docker);
 
     let start = tokio::time::Instant::now();
     engine.run_task("start", &[]).await.unwrap();
@@ -3999,8 +4111,12 @@ async fn max_parallelism_of_one_serializes_independent_container_starts() {
     let docker = FakeContainerRuntime::default()
         .with_start_delay("dep-a", delay)
         .with_start_delay("dep-b", delay);
-    let engine =
-        TaskEngine::new(config_with_two_independent_dependencies(), docker).with_max_parallelism(1);
+    let engine = engine(config_with_two_independent_dependencies(), docker)
+        .with_settings(TaskEngineSettings {
+            max_parallelism: Some(1),
+            ..Default::default()
+        })
+        .unwrap();
 
     let start = tokio::time::Instant::now();
     engine.run_task("start", &[]).await.unwrap();
@@ -4031,7 +4147,12 @@ async fn max_parallelism_of_one_serializes_independent_setup_command_execution()
     let docker = FakeContainerRuntime::default()
         .with_exec_delay("setup-a", delay)
         .with_exec_delay("setup-b", delay);
-    let engine = TaskEngine::new(config, docker).with_max_parallelism(1);
+    let engine = engine(config, docker)
+        .with_settings(TaskEngineSettings {
+            max_parallelism: Some(1),
+            ..Default::default()
+        })
+        .unwrap();
 
     let start = tokio::time::Instant::now();
     engine.run_task("start", &[]).await.unwrap();
@@ -4055,8 +4176,12 @@ async fn max_parallelism_does_not_gate_health_check_waits() {
     let docker = FakeContainerRuntime::default()
         .with_health_check_delay("dep-a", delay)
         .with_health_check_delay("dep-b", delay);
-    let engine =
-        TaskEngine::new(config_with_two_independent_dependencies(), docker).with_max_parallelism(1);
+    let engine = engine(config_with_two_independent_dependencies(), docker)
+        .with_settings(TaskEngineSettings {
+            max_parallelism: Some(1),
+            ..Default::default()
+        })
+        .unwrap();
 
     let start = tokio::time::Instant::now();
     engine.run_task("start", &[]).await.unwrap();
@@ -4099,7 +4224,7 @@ async fn shared_nested_dependency_started_once_per_task() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -4150,7 +4275,7 @@ async fn task_level_dependency_starts_alongside_container_level_ones() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -4194,7 +4319,7 @@ async fn task_level_dependency_shared_with_a_container_level_one_only_starts_onc
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -4239,7 +4364,7 @@ async fn deeply_nested_dependencies_all_start_in_order() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -4305,7 +4430,7 @@ async fn separate_tasks_each_get_their_own_dependency_instance() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -4384,7 +4509,7 @@ async fn dependency_without_image_or_build_directory_errors() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker);
+    let engine = engine(config, docker);
 
     let err = engine.run_task("start", &[]).await.unwrap_err();
     assert!(err
@@ -4418,7 +4543,7 @@ async fn detects_circular_container_dependency() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker);
+    let engine = engine(config, docker);
 
     let err = engine.run_task("start", &[]).await.unwrap_err();
     assert!(err
@@ -4433,7 +4558,7 @@ async fn detects_dependency_cycle() {
     // without needing Docker to actually be running.
     let docker = DockerClient::new(&Default::default())
         .expect("constructing a Docker client is infallible here");
-    let engine = TaskEngine::new(config_with_cycle(), docker);
+    let engine = engine(config_with_cycle(), docker);
 
     let err = engine.run_task("a", &[]).await.unwrap_err();
     assert!(err.to_string().contains("Dependency cycle detected"));
@@ -4443,7 +4568,7 @@ async fn detects_dependency_cycle() {
 async fn missing_task_returns_error() {
     let docker = DockerClient::new(&Default::default())
         .expect("constructing a Docker client is infallible here");
-    let engine = TaskEngine::new(empty_config(), docker);
+    let engine = engine(empty_config(), docker);
 
     let err = engine.run_task("does-not-exist", &[]).await.unwrap_err();
     assert!(err.to_string().contains("Task 'does-not-exist' not found"));
@@ -4453,7 +4578,7 @@ async fn missing_task_returns_error() {
 async fn a_slightly_misspelled_task_name_suggests_the_real_one() {
     let docker = DockerClient::new(&Default::default())
         .expect("constructing a Docker client is infallible here");
-    let engine = TaskEngine::new(config_with_shared_prerequisite(), docker);
+    let engine = engine(config_with_shared_prerequisite(), docker);
 
     let err = engine.run_task("tst-task", &[]).await.unwrap_err();
     assert!(
@@ -4466,7 +4591,7 @@ async fn a_slightly_misspelled_task_name_suggests_the_real_one() {
 async fn a_wildly_misspelled_task_name_suggests_nothing() {
     let docker = DockerClient::new(&Default::default())
         .expect("constructing a Docker client is infallible here");
-    let engine = TaskEngine::new(config_with_shared_prerequisite(), docker);
+    let engine = engine(config_with_shared_prerequisite(), docker);
 
     let err = engine
         .run_task("completely-unrelated-name", &[])
@@ -4546,7 +4671,7 @@ async fn task_run_environment_reaches_the_container() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -4585,7 +4710,7 @@ async fn task_run_environment_overrides_container_environment_on_key_collision()
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -4612,7 +4737,7 @@ async fn container_working_directory_reaches_the_container() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -4643,7 +4768,7 @@ async fn task_run_working_directory_overrides_container_working_directory() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -4693,7 +4818,7 @@ async fn container_command_reaches_the_container_when_run_command_is_unset() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -4725,7 +4850,7 @@ async fn container_entrypoint_reaches_the_container() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -4757,7 +4882,7 @@ async fn container_labels_reach_the_container() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -4793,7 +4918,7 @@ async fn every_resource_a_run_creates_is_labelled_with_that_run() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone())
+    let engine = engine(config, docker.clone())
         .with_settings(TaskEngineSettings {
             ratect_version: Some("1.2.3".to_string()),
             ..TaskEngineSettings::default()
@@ -4853,8 +4978,12 @@ async fn containers_share_a_run_id_even_with_an_existing_network() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone())
-        .with_existing_network("someone-elses-network".to_string());
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            existing_network: Some("someone-elses-network".to_string()),
+            ..Default::default()
+        })
+        .unwrap();
     engine.run_task("check", &[]).await.unwrap();
 
     assert!(
@@ -4890,7 +5019,7 @@ async fn container_capabilities_reach_the_container() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -4923,7 +5052,7 @@ async fn container_privileged_reaches_the_container() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -4949,7 +5078,7 @@ async fn container_shm_size_reaches_the_container() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -4979,7 +5108,7 @@ async fn container_devices_reach_the_container() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -5012,7 +5141,7 @@ async fn container_enable_init_process_reaches_the_container() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -5040,7 +5169,7 @@ async fn container_log_driver_and_log_options_reach_the_container() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -5083,7 +5212,7 @@ async fn container_tmpfs_mounts_reach_the_container() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -5121,7 +5250,7 @@ async fn container_tmpfs_mount_without_options_defaults_to_an_empty_string() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -5147,7 +5276,7 @@ async fn if_not_present_policy_pulls_when_the_image_is_missing_locally() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -5171,7 +5300,7 @@ async fn if_not_present_policy_skips_the_pull_when_the_image_already_exists_loca
     };
 
     let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -5195,7 +5324,7 @@ async fn always_policy_pulls_even_when_the_image_already_exists_locally() {
     };
 
     let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -5218,8 +5347,11 @@ async fn image_override_pulls_the_override_instead_of_the_configured_image() {
 
     let docker = FakeContainerRuntime::default();
     let overrides = HashMap::from([("build-env".to_string(), "ubuntu:22.04".to_string())]);
-    let engine = TaskEngine::new(config, docker.clone())
-        .with_image_overrides(overrides)
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            image_overrides: overrides,
+            ..Default::default()
+        })
         .unwrap();
 
     engine.run_task("test", &[]).await.unwrap();
@@ -5257,8 +5389,11 @@ async fn image_override_ignores_the_containers_configured_pull_policy() {
 
     let docker = FakeContainerRuntime::default().with_local_image("ubuntu:22.04");
     let overrides = HashMap::from([("build-env".to_string(), "ubuntu:22.04".to_string())]);
-    let engine = TaskEngine::new(config, docker.clone())
-        .with_image_overrides(overrides)
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            image_overrides: overrides,
+            ..Default::default()
+        })
         .unwrap();
 
     engine.run_task("test", &[]).await.unwrap();
@@ -5290,8 +5425,11 @@ async fn image_override_replaces_a_build_directory_container_with_a_pull_instead
 
     let docker = FakeContainerRuntime::default();
     let overrides = HashMap::from([("build-env".to_string(), "ubuntu:22.04".to_string())]);
-    let engine = TaskEngine::new(config, docker.clone())
-        .with_image_overrides(overrides)
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            image_overrides: overrides,
+            ..Default::default()
+        })
         .unwrap();
 
     engine.run_task("test", &[]).await.unwrap();
@@ -5308,7 +5446,7 @@ async fn image_override_replaces_a_build_directory_container_with_a_pull_instead
 }
 
 #[test]
-fn with_image_overrides_rejects_an_unknown_container_name() {
+fn with_settings_rejects_an_unknown_image_override_container_name() {
     let mut containers = HashMap::new();
     containers.insert("build-env".to_string(), container("alpine:3.18", None));
     let mut tasks = HashMap::new();
@@ -5323,8 +5461,11 @@ fn with_image_overrides_rejects_an_unknown_container_name() {
 
     let docker = FakeContainerRuntime::default();
     let overrides = HashMap::from([("no-such-container".to_string(), "ubuntu:22.04".to_string())]);
-    let err = match TaskEngine::new(config, docker).with_image_overrides(overrides) {
-        Ok(_) => panic!("expected with_image_overrides to reject an unknown container name"),
+    let err = match engine(config, docker).with_settings(TaskEngineSettings {
+        image_overrides: overrides,
+        ..Default::default()
+    }) {
+        Ok(_) => panic!("expected with_settings to reject an unknown container name"),
         Err(err) => err,
     };
 
@@ -5370,16 +5511,10 @@ fn with_settings_applies_every_setting() {
             PathBuf::from("/projects/demo"),
         )),
         ratect_version: Some("1.2.3".to_string()),
-        interrupt: Some(crate::interrupt::Interrupt::new()),
     };
-    let engine = TaskEngine::new(config, FakeContainerRuntime::default())
+    let engine = engine(config, FakeContainerRuntime::default())
         .with_settings(settings)
         .expect("settings naming a real container should apply");
-
-    assert!(
-        engine.interrupt.is_some(),
-        "an interrupt tracker should reach the engine, or no signal will clean up"
-    );
 
     assert_eq!(engine.existing_network.as_deref(), Some("existing"));
     assert!(!engine.publish_ports);
@@ -5417,7 +5552,7 @@ fn default_settings_leave_an_engine_in_its_no_flags_state() {
         config_variables: None,
         forbid_telemetry: None,
     };
-    let engine = TaskEngine::new(config, FakeContainerRuntime::default())
+    let engine = engine(config, FakeContainerRuntime::default())
         .with_settings(TaskEngineSettings::default())
         .expect("the default settings never fail to apply");
 
@@ -5452,11 +5587,10 @@ fn with_settings_still_rejects_an_unknown_image_override() {
         )]),
         ..TaskEngineSettings::default()
     };
-    let error =
-        match TaskEngine::new(config, FakeContainerRuntime::default()).with_settings(settings) {
-            Ok(_) => panic!("an override naming an unknown container should be rejected"),
-            Err(error) => error,
-        };
+    let error = match engine(config, FakeContainerRuntime::default()).with_settings(settings) {
+        Ok(_) => panic!("an override naming an unknown container should be rejected"),
+        Err(error) => error,
+    };
     assert_eq!(
         error.to_string(),
         "Cannot override image for container 'no-such-container' because there is no \
@@ -5486,7 +5620,12 @@ async fn tag_image_tags_a_built_image_in_addition_to_the_default_tag() {
         "build-env".to_string(),
         HashSet::from(["my.registry/build-env:v1".to_string()]),
     )]);
-    let engine = TaskEngine::new(config, docker.clone()).with_image_tags(tags);
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            image_tags: tags,
+            ..Default::default()
+        })
+        .unwrap();
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -5516,7 +5655,12 @@ async fn tag_image_errors_immediately_when_the_container_uses_a_pulled_image() {
         "build-env".to_string(),
         HashSet::from(["my.registry/build-env:v1".to_string()]),
     )]);
-    let engine = TaskEngine::new(config, docker).with_image_tags(tags);
+    let engine = engine(config, docker)
+        .with_settings(TaskEngineSettings {
+            image_tags: tags,
+            ..Default::default()
+        })
+        .unwrap();
 
     let err = engine.run_task("test", &[]).await.unwrap_err();
 
@@ -5550,10 +5694,13 @@ async fn tag_image_errors_immediately_when_an_override_image_replaces_a_build_wi
         "build-env".to_string(),
         HashSet::from(["my.registry/build-env:v1".to_string()]),
     )]);
-    let engine = TaskEngine::new(config, docker)
-        .with_image_overrides(overrides)
-        .unwrap()
-        .with_image_tags(tags);
+    let engine = engine(config, docker)
+        .with_settings(TaskEngineSettings {
+            image_overrides: overrides,
+            image_tags: tags,
+            ..Default::default()
+        })
+        .unwrap();
 
     let err = engine.run_task("test", &[]).await.unwrap_err();
 
@@ -5586,7 +5733,12 @@ async fn tag_image_errors_once_the_task_finishes_if_the_tagged_container_never_r
         "no-such-container".to_string(),
         HashSet::from(["my.registry/foo:v1".to_string()]),
     )]);
-    let engine = TaskEngine::new(config, docker).with_image_tags(tags);
+    let engine = engine(config, docker)
+        .with_settings(TaskEngineSettings {
+            image_tags: tags,
+            ..Default::default()
+        })
+        .unwrap();
 
     let err = engine.run_task("test", &[]).await.unwrap_err();
 
@@ -5617,7 +5769,7 @@ async fn task_run_command_overrides_container_command() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -5651,7 +5803,7 @@ async fn task_run_entrypoint_overrides_container_entrypoint() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -5676,7 +5828,7 @@ async fn proxy_environment_variables_reach_a_tasks_own_container() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone()).with_host_env(|name| {
+    let engine = engine(config, docker.clone()).with_host_env(|name| {
         (name == "http_proxy").then(|| "http://proxy.example.com".to_string())
     });
 
@@ -5713,7 +5865,7 @@ async fn explicit_environment_overrides_a_proxy_derived_value_on_collision() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone()).with_host_env(|name| {
+    let engine = engine(config, docker.clone()).with_host_env(|name| {
         (name == "http_proxy").then(|| "http://proxy.example.com".to_string())
     });
 
@@ -5742,11 +5894,15 @@ async fn no_proxy_vars_flag_suppresses_propagation() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone())
+    let engine = engine(config, docker.clone())
         .with_host_env(|name| {
             (name == "http_proxy").then(|| "http://proxy.example.com".to_string())
         })
-        .without_proxy_environment_variables();
+        .with_settings(TaskEngineSettings {
+            propagate_proxy_environment_variables: false,
+            ..Default::default()
+        })
+        .unwrap();
 
     engine.run_task("run", &[]).await.unwrap();
 
@@ -5815,7 +5971,7 @@ fn proxy_warning_config() -> Config {
 #[test]
 fn a_rewritten_proxy_url_on_a_loopback_bound_port_is_reported() {
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(proxy_warning_config(), docker)
+    let engine = engine(proxy_warning_config(), docker)
         .with_host_env(|name| (name == "http_proxy").then(|| "http://localhost:3333".to_string()))
         .with_proc_net_tcp(|| vec![proc_net_tcp("0100007F", 3333)]);
 
@@ -5828,7 +5984,7 @@ fn a_rewritten_proxy_url_on_a_loopback_bound_port_is_reported() {
 #[test]
 fn a_proxy_reachable_beyond_loopback_is_not_reported() {
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(proxy_warning_config(), docker)
+    let engine = engine(proxy_warning_config(), docker)
         .with_host_env(|name| (name == "http_proxy").then(|| "http://localhost:3333".to_string()))
         .with_proc_net_tcp(|| vec![proc_net_tcp("00000000", 3333)]);
 
@@ -5841,7 +5997,7 @@ fn a_proxy_reachable_beyond_loopback_is_not_reported() {
 #[test]
 fn a_proxy_url_that_was_not_rewritten_is_never_reported() {
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(proxy_warning_config(), docker)
+    let engine = engine(proxy_warning_config(), docker)
         .with_host_env(|name| {
             (name == "http_proxy").then(|| "http://proxy.example.com:3333".to_string())
         })
@@ -5855,10 +6011,14 @@ fn a_proxy_url_that_was_not_rewritten_is_never_reported() {
 #[test]
 fn no_proxy_vars_silences_the_unreachable_proxy_warning() {
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(proxy_warning_config(), docker)
+    let engine = engine(proxy_warning_config(), docker)
         .with_host_env(|name| (name == "http_proxy").then(|| "http://localhost:3333".to_string()))
         .with_proc_net_tcp(|| vec![proc_net_tcp("0100007F", 3333)])
-        .without_proxy_environment_variables();
+        .with_settings(TaskEngineSettings {
+            propagate_proxy_environment_variables: false,
+            ..Default::default()
+        })
+        .unwrap();
 
     assert!(engine.unreachable_proxy_ports().is_empty());
 }
@@ -5869,7 +6029,7 @@ fn no_proxy_vars_silences_the_unreachable_proxy_warning() {
 #[test]
 fn a_host_with_no_proc_net_tcp_reports_nothing() {
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(proxy_warning_config(), docker)
+    let engine = engine(proxy_warning_config(), docker)
         .with_host_env(|name| (name == "http_proxy").then(|| "http://localhost:3333".to_string()))
         .with_proc_net_tcp(Vec::new);
 
@@ -5894,7 +6054,7 @@ async fn a_rewritten_proxy_url_adds_the_host_gateway_to_a_tasks_own_container() 
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone())
+    let engine = engine(config, docker.clone())
         .with_host_env(|name| (name == "http_proxy").then(|| "http://localhost:3333".to_string()));
 
     engine.run_task("run", &[]).await.unwrap();
@@ -5927,7 +6087,7 @@ async fn a_rewritten_proxy_url_adds_the_host_gateway_to_a_dependencys_container(
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone())
+    let engine = engine(config, docker.clone())
         .with_host_env(|name| (name == "http_proxy").then(|| "http://127.0.0.1:3333".to_string()));
 
     engine.run_task("run", &[]).await.unwrap();
@@ -5953,7 +6113,7 @@ async fn a_rewritten_proxy_url_adds_the_host_gateway_to_an_image_build() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone())
+    let engine = engine(config, docker.clone())
         .with_host_env(|name| (name == "http_proxy").then(|| "http://localhost:3333".to_string()));
 
     engine.run_task("run", &[]).await.unwrap();
@@ -5982,7 +6142,7 @@ async fn a_proxy_url_that_was_not_rewritten_adds_no_host_gateway() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone()).with_host_env(|name| {
+    let engine = engine(config, docker.clone()).with_host_env(|name| {
         (name == "http_proxy").then(|| "http://proxy.example.com:8080".to_string())
     });
 
@@ -6011,7 +6171,7 @@ async fn a_dependencys_name_is_exempted_from_the_tasks_own_no_proxy() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone()).with_host_env(|name| {
+    let engine = engine(config, docker.clone()).with_host_env(|name| {
         (name == "http_proxy").then(|| "http://proxy.example.com".to_string())
     });
 
@@ -6048,7 +6208,7 @@ async fn a_task_level_dependencys_name_is_exempted_from_the_tasks_own_no_proxy()
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone()).with_host_env(|name| {
+    let engine = engine(config, docker.clone()).with_host_env(|name| {
         (name == "http_proxy").then(|| "http://proxy.example.com".to_string())
     });
 
@@ -6093,7 +6253,7 @@ async fn customise_overrides_a_dependencys_working_directory_environment_and_por
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("run", &[]).await.unwrap();
 
@@ -6128,7 +6288,7 @@ async fn term_env_var_reaches_a_tasks_own_container_when_interactive() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone())
+    let engine = engine(config, docker.clone())
         .with_host_env(|name| (name == "TERM").then(|| "xterm-256color".to_string()));
 
     engine.run_task("run", &[]).await.unwrap();
@@ -6152,7 +6312,7 @@ async fn term_env_var_is_absent_when_host_has_no_term_set() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone()).with_host_env(|_| None);
+    let engine = engine(config, docker.clone()).with_host_env(|_| None);
 
     engine.run_task("run", &[]).await.unwrap();
 
@@ -6182,7 +6342,7 @@ async fn term_env_var_does_not_reach_a_dependency_container() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone())
+    let engine = engine(config, docker.clone())
         .with_host_env(|name| (name == "TERM").then(|| "xterm".to_string()));
 
     engine.run_task("run", &[]).await.unwrap();
@@ -6214,7 +6374,7 @@ async fn explicit_environment_overrides_term_on_collision() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone())
+    let engine = engine(config, docker.clone())
         .with_host_env(|name| (name == "TERM").then(|| "xterm-256color".to_string()));
 
     engine.run_task("run", &[]).await.unwrap();
@@ -6261,7 +6421,7 @@ async fn term_env_var_is_absent_for_a_prerequisite_tasks_own_container() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone())
+    let engine = engine(config, docker.clone())
         .with_host_env(|name| (name == "TERM").then(|| "xterm".to_string()));
 
     engine.run_task("run", &[]).await.unwrap();
@@ -6303,7 +6463,7 @@ async fn build_args_get_proxy_vars_merged_with_explicit_build_args_winning() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone()).with_host_env(|name| match name {
+    let engine = engine(config, docker.clone()).with_host_env(|name| match name {
         "http_proxy" => Some("http://proxy.example.com".to_string()),
         "no_proxy" => Some("existing.example.com".to_string()),
         _ => None,
@@ -6355,7 +6515,7 @@ async fn dependency_container_environment_reaches_the_sidecar() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -6387,7 +6547,7 @@ async fn dependency_container_working_directory_reaches_the_sidecar() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -6418,7 +6578,7 @@ async fn dependency_container_entrypoint_reaches_the_sidecar() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -6454,7 +6614,7 @@ async fn dependency_container_command_reaches_the_sidecar() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -6488,7 +6648,7 @@ async fn dependency_container_labels_reach_the_sidecar() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -6518,7 +6678,7 @@ async fn dependency_container_capabilities_reach_the_sidecar() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -6549,7 +6709,7 @@ async fn dependency_container_privileged_reaches_the_sidecar() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -6577,7 +6737,7 @@ async fn dependency_container_shm_size_reaches_the_sidecar() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -6609,7 +6769,7 @@ async fn dependency_container_devices_reach_the_sidecar() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -6649,7 +6809,7 @@ async fn dependency_container_tmpfs_mounts_reach_the_sidecar() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -6680,7 +6840,7 @@ async fn dependency_container_enable_init_process_reaches_the_sidecar() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -6708,7 +6868,7 @@ async fn dependency_container_log_driver_reaches_the_sidecar() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone());
+    let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
 
@@ -6763,7 +6923,12 @@ async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
 
     let sink = RecordingEventSink::default();
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker).with_event_sink(Arc::new(sink.clone()));
+    let engine = TaskEngine::new(
+        config,
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
 
     engine.run_task("test", &[]).await.unwrap();
 
@@ -6902,7 +7067,12 @@ async fn posts_pull_events_only_when_a_pull_actually_happens() {
     // Image not local in the fake -> the pull happens and posts events.
     let sink = RecordingEventSink::default();
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config(), docker).with_event_sink(Arc::new(sink.clone()));
+    let engine = TaskEngine::new(
+        config(),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
     engine.run_task("test", &[]).await.unwrap();
     let events = sink.events();
     assert!(events.contains(&TaskEvent::ImagePullStarting {
@@ -6916,7 +7086,12 @@ async fn posts_pull_events_only_when_a_pull_actually_happens() {
     // pull, and no pull events post.
     let sink = RecordingEventSink::default();
     let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
-    let engine = TaskEngine::new(config(), docker).with_event_sink(Arc::new(sink.clone()));
+    let engine = TaskEngine::new(
+        config(),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
     engine.run_task("test", &[]).await.unwrap();
     let events = sink.events();
     assert!(
@@ -6951,7 +7126,12 @@ async fn image_resolved_posts_even_when_no_pull_or_build_happens() {
 
     let sink = RecordingEventSink::default();
     let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
-    let engine = TaskEngine::new(config, docker).with_event_sink(Arc::new(sink.clone()));
+    let engine = TaskEngine::new(
+        config,
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
     engine.run_task("test", &[]).await.unwrap();
 
     let events = sink.events();
@@ -7009,7 +7189,12 @@ async fn setup_command_output_only_posts_when_the_sink_wants_progress_detail() {
     });
     let docker = FakeContainerRuntime::default().with_failing_setup_command("./seed-data.sh");
     let sink = RecordingEventSink::default();
-    let engine = TaskEngine::new(config, docker).with_event_sink(Arc::new(sink.clone()));
+    let engine = TaskEngine::new(
+        config,
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
     engine.run_task("start", &[]).await.unwrap_err();
     assert!(
         !sink
@@ -7029,7 +7214,12 @@ async fn setup_command_output_only_posts_when_the_sink_wants_progress_detail() {
     });
     let docker = FakeContainerRuntime::default().with_failing_setup_command("./seed-data.sh");
     let sink = InterleavedRecordingSink::default();
-    let engine = TaskEngine::new(config, docker).with_event_sink(Arc::new(sink.clone()));
+    let engine = TaskEngine::new(
+        config,
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
     engine.run_task("start", &[]).await.unwrap_err();
     assert!(
         sink.inner
@@ -7064,11 +7254,15 @@ async fn interleaved_policy_disables_interactive_and_sets_dumb_term_everywhere()
 
     let sink = InterleavedRecordingSink::default();
     let docker = FakeContainerRuntime::default();
-    let engine = TaskEngine::new(config, docker.clone())
-        .with_event_sink(Arc::new(sink.clone()))
-        // A host TERM that must *not* reach the containers — the
-        // interleaved policy forces `dumb` instead.
-        .with_host_env(|name| (name == "TERM").then(|| "xterm-256color".to_string()));
+    let engine = TaskEngine::new(
+        config,
+        docker.clone(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    // A host TERM that must *not* reach the containers — the
+    // interleaved policy forces `dumb` instead.
+    .with_host_env(|name| (name == "TERM").then(|| "xterm-256color".to_string()));
 
     engine.run_task("test", &[]).await.unwrap();
 
