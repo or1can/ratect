@@ -40,6 +40,15 @@
 //! that wasn't. Deriving the rule once, here, is what makes the divergence
 //! unrepresentable rather than remembered.
 //!
+//! The same shape of defect was still possible one level up: both walkers
+//! called [`restricting`]/[`refusing_nested_git`] the same way, but each
+//! then decided *whether a file may be read at all* by hand-combining that
+//! answer with its own containment check, in its own words. [`gate`] is
+//! that combined decision, made once; [`refuse_read`] (completion: decline,
+//! no error to raise) and [`refuse_load`] (the loader: the error to raise)
+//! are the only two ways its answer is read, so neither walker can
+//! recombine the two checks differently or in a different order.
+//!
 //! # The rule
 //!
 //! A grant counts only when the file *declaring* the include is one the
@@ -235,6 +244,46 @@ pub(crate) fn check_may_declare_git(restricted: Option<&Bundle>, repo: &str) -> 
         declaring.id.remote,
         declaring.id.git_ref
     );
+}
+
+/// Whether an include may be read at all — [`check_may_declare_git`]'s
+/// nested-Git refusal, and, once a candidate target is known, the
+/// containment escape [`contained`] reports — folded into one value so a
+/// walker consumes exactly one answer instead of checking the two by hand,
+/// in whatever order or combination it chooses. [`refuse_read`]/
+/// [`refuse_load`] are the only two ways that answer is read, matched to
+/// what each walker does when it fires: silently skip, or raise the error.
+///
+/// `contained` is deferred — called only once the nested-Git check passes —
+/// so a refused bundle's target is never even examined. That is also what
+/// makes calling this twice per Git include correct rather than redundant:
+/// once before anything about the target is resolved (nested-Git only,
+/// `contained` a trivial `|| Ok(())`, matching `check_may_declare_git`'s own
+/// "before the clone" requirement), and once after, with `restricted` then
+/// `None` — the nested-Git question was already answered by the first call,
+/// against the bundle *declaring* this include, which is not the bundle a
+/// second answer here would be about. Same function either time, so the two
+/// calls can never drift into checking different things or in a different
+/// order.
+pub(crate) fn gate(
+    restricted: Option<&Bundle>,
+    repo: &str,
+    contained: impl FnOnce() -> Result<()>,
+) -> Option<anyhow::Error> {
+    check_may_declare_git(restricted, repo)
+        .err()
+        .or_else(|| contained().err())
+}
+
+/// [`gate`]'s answer, for completion: no error to raise, just whether
+/// something refused this file.
+pub(crate) fn refuse_read(refusal: Option<anyhow::Error>) -> bool {
+    refusal.is_some()
+}
+
+/// [`gate`]'s answer, for the loader: the error to raise, if any.
+pub(crate) fn refuse_load(refusal: Option<anyhow::Error>) -> Result<()> {
+    refusal.map_or(Ok(()), Err)
 }
 
 /// Attributes a failed Git-include clone, keeping `git`'s own stderr only

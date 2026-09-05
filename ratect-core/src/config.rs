@@ -2162,6 +2162,23 @@ impl GitBoundary {
     }
 }
 
+/// Whether `resolved` — an include's already-resolved target — stays inside
+/// `boundary`'s repository, checked both ways for the same reason
+/// [`GitBoundary::check_path_allowed`] is: lexically first
+/// ([`GitBoundary::check_contains`]), then against the symlink-resolved form
+/// ([`GitBoundary::check_contains_canonical`]), since either alone has a gap
+/// the other closes. `None` means no boundary applies at all — an owned
+/// file, contained by nothing — so nothing is checked. The one containment
+/// decision [`include_trust::gate`] folds in, so the loader and completion
+/// call this and nothing else to make it.
+fn boundary_contains(boundary: Option<&GitBoundary>, resolved: &Path) -> Result<()> {
+    let Some(boundary) = boundary else {
+        return Ok(());
+    };
+    boundary.check_contains(resolved)?;
+    boundary.check_contains_canonical(resolved)
+}
+
 /// `path` with every symlink in it resolved, as far as it exists: the longest
 /// existing ancestor canonicalized, with the not-yet-created tail re-appended.
 ///
@@ -2568,11 +2585,14 @@ impl Config {
                     let declaring = boundary.as_ref().map(|boundary| &boundary.bundle);
                     include_trust::check_dialect(asked, declaring, repo, format)?;
                     // The single value every native-only behaviour below keys
-                    // off, derived once so the gate and the clone-detail
-                    // redaction can never disagree about which includes are a
-                    // bundle's own.
+                    // off, derived once so the nested-Git permission and the
+                    // clone-detail redaction can never disagree about which
+                    // includes are a bundle's own.
                     let restricted = include_trust::restricting(declaring, format);
-                    include_trust::check_may_declare_git(restricted, repo)?;
+                    // Before anything about this include's target is
+                    // resolved — in particular, before any clone — so a
+                    // refused bundle's remote is never even reached.
+                    include_trust::refuse_load(include_trust::gate(restricted, repo, || Ok(())))?;
                     let key = (repo.clone(), git_ref.clone());
                     let repo_dir =
                         match git_repo_paths.get(&key) {
@@ -2614,9 +2634,13 @@ impl Config {
             };
             let resolved = resolve_include_target(&base_dir, &candidates, boundary.as_ref())?;
 
-            if let Some(boundary) = &boundary {
-                boundary.check_contains_canonical(&resolved)?;
-            }
+            // The nested-Git question was already answered above (for a
+            // `type: git` include) or does not apply at all (a local one),
+            // so `restricted` is `None` here — see `include_trust::gate`'s
+            // own doc comment for why that is correct rather than a gap.
+            include_trust::refuse_load(include_trust::gate(None, "", || {
+                boundary_contains(boundary.as_ref(), &resolved)
+            }))?;
             // `None` where there is no boundary — an owned file, contained
             // by nothing. Kept distinct from a boundary granting nothing all
             // the way into `EffectiveGrants`, since the two are opposites.
@@ -3361,7 +3385,7 @@ fn collect_completion_task_names(
                 // complete a `ratect run` that then fails. Completion is
                 // native-only, which is the format that has the gate at all.
                 let restricted = include_trust::restricting(bundle, ConfigFormat::Native);
-                if include_trust::refusing_nested_git(restricted).is_some() {
+                if include_trust::refuse_read(include_trust::gate(restricted, &repo, || Ok(()))) {
                     continue;
                 }
                 // Completion never clones — only an already-cached repo counts.
@@ -3411,15 +3435,14 @@ fn collect_completion_task_names(
         let Ok(next_file) = absolute_path(&next_file) else {
             continue;
         };
-        // The second half of the loader's containment check, against the
-        // symlink-resolved forms. A boundary declines rather than errors here,
-        // like every other fallible step on this walk.
-        if let Some(boundary) = &declaring {
-            if boundary.check_contains(&next_file).is_err()
-                || boundary.check_contains_canonical(&next_file).is_err()
-            {
-                continue;
-            }
+        // The same containment gate the loader applies — declines rather
+        // than errors, like every other fallible step on this walk.
+        // `restricted` is `None`: the nested-Git question was already
+        // answered above, or does not apply to a local include at all.
+        if include_trust::refuse_read(include_trust::gate(None, "", || {
+            boundary_contains(declaring.as_ref(), &next_file)
+        })) {
+            continue;
         }
         collect_completion_task_names(&next_file, names, visited, declaring, cache_root);
     }
