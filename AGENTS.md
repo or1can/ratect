@@ -61,7 +61,7 @@ Ratect is a **Cargo workspace** with four crates (the
   | --- | --- |
   | `config.rs` | Two text formats, one model: `batect.yml` (YAML) and `ratect.toml` (TOML), includes, expression/path resolution, `extends` |
   | `git_include.rs` | `type: git` includes — the `~/.ratect/incl` clone cache and its staleness sweep |
-  | `include_trust.rs` | What a Git-included bundle may do: the grant rule, its native-only gate, and the refusals that cite them. Containment is `config.rs`'s `GitBoundary`, and so is the `allow_host_paths` refusal, which a boundary raises |
+  | `include_trust.rs` | What a Git-included bundle may do: the grant rule, its native-only gate, and the refusals that cite them — including `gate`, the one "may this include's target be read at all" decision the loader and shell completion both call, so neither hand-combines the nested-Git and containment checks itself. Containment is `config.rs`'s `GitBoundary`, and so is the `allow_host_paths` refusal, which a boundary raises |
   | `cache.rs` | `volumes` `cache` mounts → a named volume or host directory (`resolve_cache_mount`), and — a separate concept, same module — the `CacheStore` behind `ratect caches`/`ratect-compat --clean`/`--clean-cache`: what cache storage exists, its project/shared scope rule, and how to list or remove it |
   | `expressions.rs` | Batect's `$VAR`/`${VAR:-default}`/`<name` expression syntax |
   | `container_spec.rs` | What a container's runtime spec is — `ContainerSpec`, assembled by the pure `derive_spec` from a container's config plus a task's `run`/dependency's `customise` overlay — shared vocabulary between `engine.rs` and `docker.rs`, owned by neither |

@@ -1655,7 +1655,7 @@ to live at, so links written before the split still resolve.
     --ignored`, 76 passed) was run locally before the second commit landed, per
     its own requirement above.
 
-  - **One trust gate, not one traversal.** `collect_completion_task_names` does
+  - ~~**One trust gate, not one traversal.** `collect_completion_task_names` does
     re-implement the loader's walk, but the divergence is neither silent nor
     accidental: the walk's own doc comment specifies it — mirror the loader's
     decisions about *which files are read*, deliberately not its decisions about
@@ -1668,10 +1668,39 @@ to live at, so links written before the split still resolve.
     cloning with a depth-first best-effort name scraper. The classification's
     reasoning moves onto the gate, because that reasoning *is* the
     classification. The loader's breadth-first order stays contract: it decides
-    which repository a lost-grant refusal names, which a user reads.
+    which repository a lost-grant refusal names, which a user reads.~~
 
-    One test lands first and stands alone whatever else happens: completion has
-    no test for the nested-Git refusal. That gap exists today.
+    ~~One test lands first and stands alone whatever else happens: completion has
+    no test for the nested-Git refusal. That gap exists today.~~ — done, to that
+    scope, with one correction to the paragraph above: "the classification's
+    reasoning moves onto the gate" overstated it for containment specifically.
+    Only the nested-Git refusal's reasoning (`check_may_declare_git`) and the
+    *sequencing* of the two checks moved into `include_trust::gate` — a
+    containment escape's own message stays exactly where it was, built by
+    `GitBoundary::check_contains`/`check_contains_canonical` in `config.rs`,
+    which `gate` calls through a caller-supplied closure rather than
+    reimplementing. `include_trust.rs`'s own "containment lives in
+    `crate::config`" is therefore still true; what moved is which function
+    decides *whether* to call it and in combination with what, not the check
+    itself.
+
+    Landed as two commits: the standalone completion test (6b032a6, proving
+    today's gap and passing unchanged against pre-refactor code), then the
+    unification itself (87f8b56). A review round found one further
+    inaccuracy, this time in 87f8b56's own commit message rather than in this
+    plan: it claimed completion "previously only ran `check_contains`, once,
+    inline" before the loader's `check_contains_canonical` also started
+    reaching it — false. Completion already ran both checks pre-refactor, as
+    a hand-written `check_contains(...).is_err() || check_contains_canonical(...).is_err()`;
+    what changed is that call becoming the shared `boundary_contains` helper,
+    not which checks ran. The loader does pick up one genuinely new (if
+    harmless) redundant `check_contains` call post-refactor, since
+    `resolve_include_target` already ran it once per candidate — verified
+    idempotent on an unchanged path, not a behaviour change. Git commit
+    messages are not amended once made; this is the correction for the
+    record. Verified: `cargo test --workspace --all-targets --all-features`
+    (770 passed, up from 768), `cargo clippy --workspace --all-targets
+    --all-features -- -D warnings`, `cargo fmt --all -- --check`, all clean.
 
   - **`TaskEngine` construction.** Six of the eight `with_*` builders duplicate
     a `TaskEngineSettings` field and have no production caller — only
