@@ -1711,7 +1711,7 @@ to live at, so links written before the split still resolve.
     --all-targets --all-features -- -D warnings`, `cargo fmt --all --
     --check`, all clean.
 
-  - **`TaskEngine` construction.** Six of the eight `with_*` builders duplicate
+  - ~~**`TaskEngine` construction.** Six of the eight `with_*` builders duplicate
     a `TaskEngineSettings` field and have no production caller — only
     `engine_tests.rs` uses them — so they go, and tests use struct-update
     syntax. `event_sink` and `interrupt` are promoted to constructor arguments
@@ -1722,7 +1722,41 @@ to live at, so links written before the split still resolve.
     test-only, with no settings counterpart, so they are not the duplication
     being removed. This is the first candidate to drop if the release runs
     short: it is the only one whose cost is paid entirely by people editing
-    tests and whose benefit is entirely tidiness.
+    tests and whose benefit is entirely tidiness.~~ — done, with one correction
+    settled before writing any code rather than found after: "six of the eight
+    `with_*` builders" only ever counted the literally `with_*`-prefixed ones.
+    The five `without_*` builders
+    (`without_port_publishing`/`without_proxy_environment_variables`/
+    `without_prerequisites`/`without_cleanup_after_success`/
+    `without_cleanup_after_failure`) duplicate a `TaskEngineSettings` field and
+    have no direct production caller in exactly the same way, and were left out
+    of the original count by an accident of naming, not a reasoned exclusion —
+    confirmed by asking rather than assuming, since the plan text alone
+    couldn't settle it. Ten builders went in total, not six; `with_settings`
+    itself, and the two private test seams, are the only ones left.
+
+    `interrupt`'s `Option` removal was verified, not assumed: an `Interrupt`
+    nothing has recorded on behaves exactly like `None` did, because
+    `Interrupt::wait_for`/`interrupted` never resolve without a `record()` —
+    confirmed by reading their own implementations before relying on it, since
+    the two `biased tokio::select!`s that read `self.interrupt` would have
+    picked the wrong branch silently if that reasoning were wrong. Both
+    binaries construct their own `Interrupt` directly where they used to call
+    `.listen()` on the one `engine_settings()` built; `TaskEngineSettings`
+    drops the field entirely.
+
+    Landed as a single commit (e6c0a9b) — the promotion and the ten-builder
+    removal are too interdependent to split usefully (`with_settings` has to
+    be rewritten for both at once). About 130 of `engine_tests.rs`'s
+    `TaskEngine::new` call sites now go through a small private `engine()`
+    test helper supplying the two constructor defaults, rather than repeating
+    them; both binaries' `main_tests.rs` lose
+    `an_interrupt_tracker_is_always_supplied_to_the_engine`, since the
+    invariant it guarded is now a compile error to violate, not a runtime
+    regression a test could still fail to catch. Verified: the full suite
+    (770 passed in `ratect-core`, unchanged counts in both binaries), the
+    real-daemon suite for both binaries (76 passed), `cargo fmt`/`clippy`,
+    all clean.
 
   **Corrections to the review this scope came from**, since it was graded before
   it was checked:
