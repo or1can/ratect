@@ -3289,11 +3289,12 @@ async fn a_second_interrupt_during_cleanup_abandons_it() {
     );
 }
 
-/// Without an interrupt tracker at all — every unit test, and both
-/// binaries before 0.25.0 — the run is awaited directly and nothing
-/// about its behaviour changes.
+/// With an interrupt tracker nothing has recorded on — every unit test
+/// that doesn't deliberately record one, and both binaries before 0.25.0's
+/// tracker existed at all — the run behaves exactly as if there were no
+/// tracker: see `TaskEngine::interrupt`'s own doc comment for why.
 #[tokio::test]
-async fn a_run_with_no_interrupt_tracker_is_unaffected() {
+async fn an_interrupt_tracker_nothing_has_recorded_on_leaves_a_run_unaffected() {
     let config = config_with_database_dependency(|_| {});
     let docker = FakeContainerRuntime::default();
     let engine = engine(config, docker.clone());
