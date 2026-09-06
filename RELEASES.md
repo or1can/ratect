@@ -1747,16 +1747,27 @@ to live at, so links written before the split still resolve.
 
     Landed as a single commit (e6c0a9b) — the promotion and the ten-builder
     removal are too interdependent to split usefully (`with_settings` has to
-    be rewritten for both at once). About 130 of `engine_tests.rs`'s
+    be rewritten for both at once). 149 of `engine_tests.rs`'s
     `TaskEngine::new` call sites now go through a small private `engine()`
     test helper supplying the two constructor defaults, rather than repeating
-    them; both binaries' `main_tests.rs` lose
+    them — e6c0a9b's own message undercounted this at "about 130"; both
+    binaries' `main_tests.rs` lose
     `an_interrupt_tracker_is_always_supplied_to_the_engine`, since the
-    invariant it guarded is now a compile error to violate, not a runtime
-    regression a test could still fail to catch. Verified: the full suite
-    (770 passed in `ratect-core`, unchanged counts in both binaries), the
-    real-daemon suite for both binaries (76 passed), `cargo fmt`/`clippy`,
-    all clean.
+    invariant it guarded (some tracker reaches the engine, not that it's
+    wired to real signals — that test never checked the latter either) is
+    now a compile error to violate, not a runtime regression a test could
+    still fail to catch. One string did change as a side effect —
+    `resolve_volumes`'s internal-invariant `.expect()` panic message now
+    says `with_settings` rather than the removed `with_cache_options` — but
+    it fires only when a `cache` volume is resolved without cache options
+    ever having been set, which neither binary's own flow can reach, so it
+    doesn't contradict "no flag, message or output moves" for anything a
+    user can trigger. A stale doc link elsewhere, found by the same review
+    round (`config.rs`'s `LoadedProject::project_directory`, which still
+    named `with_cache_options`), was fixed alongside it. Verified: the full
+    suite (770 passed in `ratect-core`, unchanged counts in both binaries),
+    the real-daemon suite for both binaries (76 passed), `cargo fmt`/
+    `clippy`, all clean.
 
   **Corrections to the review this scope came from**, since it was graded before
   it was checked:

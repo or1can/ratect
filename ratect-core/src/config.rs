@@ -3270,7 +3270,7 @@ pub struct LoadedProject {
     pub config: Config,
     /// The project's own root directory — see [`project_directory_path`].
     /// Needed separately from `config` for cache resolution
-    /// ([`crate::engine::TaskEngine::with_cache_options`]).
+    /// ([`crate::engine::TaskEngine::with_settings`]).
     pub project_directory: PathBuf,
 }
 
