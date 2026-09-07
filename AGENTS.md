@@ -495,3 +495,22 @@ for — note that in `TODO.md` instead.
       `-A`, whenever more than one commit is planned, and rebuild a mis-split
       pair with `reset --soft` rather than `--amend` or an interactive rebase.**
     - **Not every finding is a class, and saying so is part of the job.**
+
+## Agent skills
+
+Contributor/agent-process reference docs (not user-facing, so not under
+`docs/` — see [decisions/0007](decisions/0007-where-agent-process-docs-live.md))
+live in [`agents/`](agents/).
+
+### Issue tracker
+
+GitHub Issues (via `gh`), on or1can/ratect. See `agents/issue-tracker.md`.
+
+### Triage labels
+
+Default canonical label strings, unchanged. See `agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` at the repo root; ADRs in `decisions/` (this
+repo's own established location, not `docs/adr/`). See `agents/domain.md`.
