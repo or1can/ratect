@@ -114,57 +114,17 @@ fn a_restricted_bundle_may_declare_a_git_include_only_when_granted() {
     assert!(check_may_declare_git(None, "inner").is_ok());
 }
 
-/// The property that used to need asserting between two separately-computed
-/// answers is now structural: [`refuse_read`] and [`refuse_load`] both read
-/// [`gate`]'s one value, so completion and the loader cannot answer
-/// differently about whether a nested-Git refusal fired.
+/// [`refuse_read`] mirrors whichever `Result<()>` it's given — the same
+/// property the loader gets for free by raising that `Result` with `?`
+/// instead, so completion and the loader can never answer differently about
+/// whether a check refused.
 #[test]
-fn completion_and_the_loader_read_one_gate() {
-    let ungranted = Bundle::granted(None, id("outer"), asks(false, None));
-    let granted = Bundle::granted(None, id("outer"), asks(false, Some(true)));
-
-    for restricted in [Some(&ungranted), Some(&granted), None] {
-        assert_eq!(
-            refuse_read(gate(restricted, "inner", || Ok(()))),
-            refuse_load(gate(restricted, "inner", || Ok(()))).is_err(),
-            "completion declines exactly when the loader refuses"
-        );
-    }
-}
-
-/// [`gate`]'s own two-part contract: the nested-Git check runs first, and a
-/// refusal there means the containment closure is never even called — a
-/// refused bundle's target is never examined at all. Only once nested-Git
-/// passes does the containment closure get to decide.
-#[test]
-fn gate_never_examines_the_target_once_nested_git_has_already_refused() {
-    let ungranted = Bundle::granted(None, id("outer"), asks(false, None));
-
-    let mut examined = false;
-    let refusal = gate(Some(&ungranted), "inner", || {
-        examined = true;
-        Ok(())
-    });
-    assert!(refusal.is_some(), "nested-Git refuses this one");
-    assert!(
-        !examined,
-        "the containment closure must not run once nested-Git already refused"
-    );
-}
-
-/// [`gate`] surfaces a containment escape exactly as given, once nested-Git
-/// has nothing to say about it (`restricted: None`, matching both walkers'
-/// second call per include — see `gate`'s own doc comment).
-#[test]
-fn gate_surfaces_a_containment_refusal_once_nested_git_is_silent() {
-    let refusal = gate(None, "inner", || anyhow::bail!("escapes the repository"));
-    let message = format!("{:#}", refusal.expect("the containment closure refused"));
-    assert!(message.contains("escapes the repository"));
-
-    assert!(
-        gate(None, "inner", || Ok(())).is_none(),
-        "a containment closure that permits the target must not be overruled"
-    );
+fn refuse_read_declines_exactly_when_the_check_it_is_given_errs() {
+    assert!(!refuse_read(Ok(())));
+    assert!(refuse_read(check_may_declare_git(
+        Some(&Bundle::granted(None, id("outer"), asks(false, None))),
+        "inner"
+    )));
 }
 
 #[test]

@@ -10,7 +10,7 @@ A container defined inside a Git-included bundle must resolve its `volumes`
 host paths, `build_directory`, and `build_secrets` `path` to somewhere inside
 either **that bundle's own clone directory** or **the project directory**.
 Anything else is rejected. This containment shipped in 0.10.0
-(`container_git_boundaries`) and is a **deliberate divergence** — Batect has no
+(`container_boundaries`) and is a **deliberate divergence** — Batect has no
 equivalent check, and the divergence is documented in
 [Differences from Batect](../docs/differences-from-batect.md) and
 [the config reference](../docs/config-reference.md#git-includes).

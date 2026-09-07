@@ -38,7 +38,7 @@ aren't known at the first:
 
    The result is a `LoadedConfig`: the merged `Config`, plus two maps step 2
    needs — `container_base_paths`, recording which directory each container came
-   from, and `container_git_boundaries`, recording the clone each container
+   from, and `container_boundaries`, recording the clone each container
    reached through a Git include must resolve its host paths within.
 2. **`LoadedConfig::resolve_expressions`**: called once, after
    `--config-var`/`--config-vars-file` have been parsed and merged into an overrides
@@ -64,7 +64,7 @@ aren't known at the first:
      via `engine.rs`'s `resolve_volumes`), once `--cache-type` and the project's own
      cache key are known — neither available at this stage.
 
-     The resolved path is then checked against `container_git_boundaries`: a
+     The resolved path is then checked against `container_boundaries`: a
      container that came from a Git-included file may only reach inside its own
      clone or your project directory, unless that include was granted
      [`allow_host_paths`](config-reference.md#git-includes). Checked twice: once

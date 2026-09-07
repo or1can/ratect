@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! What a bundle a project pulls in over Git is allowed to do — the *grants*
-//! half of CONTEXT.md's **Boundary**. The containment half (which directory a
-//! bundle's includes and container paths must stay inside) lives with the
-//! paths it checks, in [`crate::config`].
+//! CONTEXT.md's whole **Boundary** — what a bundle a project pulls in over
+//! Git is contained within, together with what it's allowed to do.
+//! [`Boundary`] carries both halves: the containment (which directory its
+//! includes and container paths must stay inside) and the grants (`Bundle`'s
+//! `trust`), together, since every containment failure and every grants
+//! decision has to name the same bundle.
 //!
 //! Crate-internal, so `cargo doc` renders this only with
 //! `--document-private-items`: a binary picks a trust policy by choosing a
@@ -43,11 +45,13 @@
 //! The same shape of defect was still possible one level up: both walkers
 //! called [`restricting`]/[`refusing_nested_git`] the same way, but each
 //! then decided *whether a file may be read at all* by hand-combining that
-//! answer with its own containment check, in its own words. [`gate`] is
-//! that combined decision, made once; [`refuse_read`] (completion: decline,
-//! no error to raise) and [`refuse_load`] (the loader: the error to raise)
-//! are the only two ways its answer is read, so neither walker can
-//! recombine the two checks differently or in a different order.
+//! answer with its own containment check, in its own words. [`check_may_declare_git`]
+//! and [`boundary_contains`] are the two checks that decision needs — nested-Git
+//! first, before anything about the target is resolved, then containment once a
+//! candidate path exists — and each already returns `Result<()>` on its own, so
+//! neither walker recombines them differently or in a different order: the
+//! loader raises whichever fails with `?`, and completion turns either into a
+//! decline through [`refuse_read`].
 //!
 //! # The rule
 //!
@@ -85,7 +89,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use path_clean::PathClean;
 
 use crate::config::ConfigFormat;
 
@@ -162,6 +167,238 @@ impl Bundle {
                 host_paths: asked.host_paths && owner_declared,
                 nested_git: asked.nested_git.unwrap_or(false) && owner_declared,
             },
+        }
+    }
+}
+
+/// The Git-clone boundary a file's own further `include` entries must stay
+/// within, once traversal has crossed from the caller's own local project
+/// tree into a Git-included bundle's content — see the security note on
+/// [`crate::config::Config::load_from_file_with_git_cache`]. Propagated
+/// through that function's traversal queue: a local file include inherits
+/// its declaring file's own boundary unchanged; a `type: git` include always
+/// establishes a fresh one, rooted at its own newly (or previously) cloned
+/// repository, regardless of the declaring file's own boundary.
+///
+/// CONTEXT.md's whole **Boundary**: `repo_dir` is the containment half,
+/// `bundle` the grants half, carried together since every containment
+/// failure has to name the bundle the path came from.
+#[derive(Debug, Clone)]
+pub(crate) struct Boundary {
+    pub repo_dir: PathBuf,
+    /// A grant deliberately does *not* relax the include-`path` containment
+    /// ([`check_contains`](Self::check_contains)): that stops a bundle pulling
+    /// an arbitrary host *file* into the configuration, which is a separate
+    /// concern from where its containers may mount.
+    pub bundle: Bundle,
+}
+
+/// Which of `Boundary::check_path_allowed`'s two checks refused a path.
+/// Named rather than passed as a message fragment so a third check cannot be
+/// added by inventing a third string at one call site.
+enum Escape {
+    /// The path's spelling already leaves both allowed roots.
+    Lexical,
+    /// Its spelling stays inside, but what it really points at does not.
+    ViaSymlink,
+}
+
+impl Boundary {
+    /// Purely lexical containment check — deliberately runs before
+    /// `resolved` is confirmed to exist, so a `path` engineered to escape
+    /// (an absolute path, or a `../..` traversal) is rejected without ever
+    /// touching the filesystem at the escaped location.
+    ///
+    /// Normalizes `resolved` itself rather than trusting the caller to. The
+    /// comparison is [`Path::starts_with`], which matches components without
+    /// interpreting any of them, so `<repo_dir>/../../elsewhere` starts with
+    /// `<repo_dir>` and passes — the check is inert on exactly the input it
+    /// exists to reject. Two call sites got this wrong (completion's walk, and
+    /// [`crate::config::resolve_path`]'s absolute branch), which is one more
+    /// than a convention survives; cleaning here makes the mistake
+    /// unrepresentable.
+    pub(crate) fn check_contains(&self, resolved: &Path) -> Result<()> {
+        let resolved = &resolved.clean();
+        if resolved.starts_with(&self.repo_dir) {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "Included file '{}' escapes the Git repository '{}' at '{}' it was included from \
+             — includes reached through a Git include must resolve within that repository.",
+            resolved.display(),
+            self.bundle.id.remote,
+            self.bundle.id.git_ref
+        );
+    }
+
+    /// A second check against the *canonicalized* (symlink-resolved) form
+    /// of both paths, once `resolved` is confirmed to exist — closes the
+    /// gap `check_contains` alone can't: a malicious repository planting a
+    /// symlink inside its own clone that itself points back outside it
+    /// would still lexically "start with" `repo_dir`.
+    fn check_contains_canonical(&self, resolved: &Path) -> Result<()> {
+        let canonical_resolved = resolved
+            .canonicalize()
+            .with_context(|| format!("Failed to resolve {resolved:?}"))?;
+        let canonical_root = self
+            .repo_dir
+            .canonicalize()
+            .with_context(|| format!("Failed to resolve {:?}", self.repo_dir))?;
+        if canonical_resolved.starts_with(&canonical_root) {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "Included file '{}' escapes the Git repository '{}' at '{}' it was included from \
+             (via a symlink) — includes reached through a Git include must resolve within that \
+             repository.",
+            resolved.display(),
+            self.bundle.id.remote,
+            self.bundle.id.git_ref
+        );
+    }
+
+    /// Containment check for a Git-included container's path-bearing fields
+    /// (`volumes` host paths, `build_directory`) — see the security note on
+    /// [`crate::config::Config::resolve_expressions_with_boundaries`]. Unlike
+    /// `check_contains`/`check_contains_canonical` above (used only for
+    /// further `include` resolution, which must stay entirely within the
+    /// repository), a shared bundle may reasonably want to reference the
+    /// caller's own project directory (e.g.
+    /// `<{batect.project_directory}/output:/output`) — so `project_dir` is
+    /// accepted as a second allowed root alongside the repository's own
+    /// clone directory.
+    ///
+    /// Checked twice, because either check alone has a hole the other closes.
+    /// Lexically first, on the normalized path — that rejects a written-out
+    /// escape without touching the filesystem where it points, and it was not
+    /// merely theoretical: `<{batect.project_directory}/../../../etc` is an
+    /// absolute path a bundle can write knowing nothing about the machine, and
+    /// it starts with the project directory component-for-component. Then
+    /// against the real locations, because a bundle can commit a *symlink*
+    /// inside its own clone, which is lexically within an allowed root while
+    /// its target is not — and Docker dereferences it at bind-mount time.
+    ///
+    /// The second check resolves as far as the path exists rather than
+    /// requiring it to, unlike
+    /// [`check_contains_canonical`](Self::check_contains_canonical): an
+    /// `include` target must already exist to be read, but a
+    /// `volumes`/`build_directory` path need not — Ratect or Docker creates
+    /// it. Both allowed roots are resolved too, since a project or cache
+    /// directory may itself sit under a symlink (`/tmp` does on macOS).
+    pub(crate) fn check_path_allowed(&self, resolved: &Path, project_dir: &Path) -> Result<()> {
+        let resolved = &resolved.clean();
+        if self.bundle.trust.host_paths {
+            return Ok(());
+        }
+        if !(resolved.starts_with(&self.repo_dir) || resolved.starts_with(project_dir)) {
+            return Err(self.refuse_escape(resolved, project_dir, Escape::Lexical));
+        }
+        let real = self.real_path(resolved)?;
+        if real.starts_with(self.real_path(&self.repo_dir)?)
+            || real.starts_with(self.real_path(project_dir)?)
+        {
+            return Ok(());
+        }
+        Err(self.refuse_escape(resolved, project_dir, Escape::ViaSymlink))
+    }
+
+    /// [`real_path_as_far_as_it_exists`] with this bundle's name attached: the
+    /// helper knows a path, not which include pulled it in, and a refusal has
+    /// to say. Worded to read correctly for all three paths it is called on —
+    /// the candidate and both allowed roots — since a root failing to resolve
+    /// is not the caller's path being at fault.
+    fn real_path(&self, path: &Path) -> Result<PathBuf> {
+        real_path_as_far_as_it_exists(path).with_context(|| {
+            format!(
+                "Cannot determine where '{}' really points, so the containment for the \
+                 Git repository '{}' at '{}' cannot be checked.",
+                path.display(),
+                self.bundle.id.remote,
+                self.bundle.id.git_ref
+            )
+        })
+    }
+
+    /// The refusal both halves of [`check_path_allowed`](Self::check_path_allowed)
+    /// raise. Which half it was changes only how the path is described; the
+    /// remedy is the same either way, and is the part that has to name the
+    /// field rather than spell its syntax, since the include entry it points
+    /// at may be in either format.
+    fn refuse_escape(&self, resolved: &Path, project_dir: &Path, escape: Escape) -> anyhow::Error {
+        let how = match escape {
+            Escape::Lexical => "",
+            Escape::ViaSymlink => " (via a symlink)",
+        };
+        anyhow::anyhow!(
+            "Path '{}' escapes both the Git repository '{}' at '{}' it was included from and \
+             the project directory '{}'{} — a container reached through a Git include must \
+             resolve its 'volumes'/'build_directory' paths within one of the two. If you trust \
+             this bundle to reach that path, set 'allow_host_paths' to true on the include entry \
+             for '{}' in your own configuration.",
+            resolved.display(),
+            self.bundle.id.remote,
+            self.bundle.id.git_ref,
+            project_dir.display(),
+            how,
+            self.bundle.id.remote
+        )
+    }
+}
+
+/// Whether `resolved` — an include's already-resolved target — stays inside
+/// `boundary`'s repository, checked both ways for the same reason
+/// [`Boundary::check_path_allowed`] is: lexically first
+/// ([`Boundary::check_contains`]), then against the symlink-resolved form
+/// ([`Boundary::check_contains_canonical`]), since either alone has a gap
+/// the other closes. `None` means no boundary applies at all — an owned
+/// file, contained by nothing — so nothing is checked. The two checks the
+/// loader and completion each call directly, alongside
+/// [`check_may_declare_git`], to decide whether a file may be read at all.
+pub(crate) fn boundary_contains(boundary: Option<&Boundary>, resolved: &Path) -> Result<()> {
+    let Some(boundary) = boundary else {
+        return Ok(());
+    };
+    boundary.check_contains(resolved)?;
+    boundary.check_contains_canonical(resolved)
+}
+
+/// `path` with every symlink in it resolved, as far as it exists: the longest
+/// existing ancestor canonicalized, with the not-yet-created tail re-appended.
+///
+/// A plain [`Path::canonicalize`] can't be used because the path may not exist
+/// yet — that is the whole reason
+/// `Boundary::check_path_allowed` can't simply reuse
+/// [`Boundary::check_contains_canonical`]. A component that is merely
+/// *missing* is therefore expected, and resolution continues above it: a path
+/// with no existing ancestor cannot be pointing anywhere yet, so the caller's
+/// lexical check is the only one that can apply to it.
+///
+/// Any *other* failure is an error rather than a shrug. It means this process
+/// cannot see where the path leads — an ancestor it may not search, a symlink
+/// loop — while the Docker daemon that will dereference it runs as root and is
+/// under no such restriction. Treating that as "resolves to itself" would let
+/// a path be judged on its spelling by the one check that exists to look past
+/// spelling.
+fn real_path_as_far_as_it_exists(path: &Path) -> std::io::Result<PathBuf> {
+    let mut missing_tail: Vec<&std::ffi::OsStr> = Vec::new();
+    let mut existing = path;
+    loop {
+        match existing.canonicalize() {
+            Ok(canonical) => {
+                return Ok(missing_tail
+                    .iter()
+                    .rev()
+                    .fold(canonical, |real, part| real.join(part)));
+            }
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+            Err(_) => {}
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing_tail.push(name);
+                existing = parent;
+            }
+            _ => return Ok(path.to_path_buf()),
         }
     }
 }
@@ -246,44 +483,15 @@ pub(crate) fn check_may_declare_git(restricted: Option<&Bundle>, repo: &str) -> 
     );
 }
 
-/// Whether an include may be read at all — [`check_may_declare_git`]'s
-/// nested-Git refusal, and, once a candidate target is known, the
-/// containment escape [`contained`] reports — folded into one value so a
-/// walker consumes exactly one answer instead of checking the two by hand,
-/// in whatever order or combination it chooses. [`refuse_read`]/
-/// [`refuse_load`] are the only two ways that answer is read, matched to
-/// what each walker does when it fires: silently skip, or raise the error.
-///
-/// `contained` is deferred — called only once the nested-Git check passes —
-/// so a refused bundle's target is never even examined. That is also what
-/// makes calling this twice per Git include correct rather than redundant:
-/// once before anything about the target is resolved (nested-Git only,
-/// `contained` a trivial `|| Ok(())`, matching `check_may_declare_git`'s own
-/// "before the clone" requirement), and once after, with `restricted` then
-/// `None` — the nested-Git question was already answered by the first call,
-/// against the bundle *declaring* this include, which is not the bundle a
-/// second answer here would be about. Same function either time, so the two
-/// calls can never drift into checking different things or in a different
-/// order.
-pub(crate) fn gate(
-    restricted: Option<&Bundle>,
-    repo: &str,
-    contained: impl FnOnce() -> Result<()>,
-) -> Option<anyhow::Error> {
-    check_may_declare_git(restricted, repo)
-        .err()
-        .or_else(|| contained().err())
-}
-
-/// [`gate`]'s answer, for completion: no error to raise, just whether
-/// something refused this file.
-pub(crate) fn refuse_read(refusal: Option<anyhow::Error>) -> bool {
-    refusal.is_some()
-}
-
-/// [`gate`]'s answer, for the loader: the error to raise, if any.
-pub(crate) fn refuse_load(refusal: Option<anyhow::Error>) -> Result<()> {
-    refusal.map_or(Ok(()), Err)
+/// Turns a refusal into completion's decline: no error to raise, just
+/// whether something refused this file. Shared by both checks completion
+/// makes — [`check_may_declare_git`]'s nested-Git refusal, and, once a
+/// candidate target is known, [`boundary_contains`]'s containment escape —
+/// so completion reads either the same way it reads the other, and the
+/// loader (which raises the same `Result<()>` with `?` instead) can never
+/// drift into treating one differently from the other.
+pub(crate) fn refuse_read(check: Result<()>) -> bool {
+    check.is_err()
 }
 
 /// Attributes a failed Git-include clone, keeping `git`'s own stderr only

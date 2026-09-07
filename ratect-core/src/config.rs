@@ -114,7 +114,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use crate::include_trust::{self, Bundle, BundleId, EffectiveGrants, Grants};
+use crate::include_trust::{self, Boundary, Bundle, BundleId, EffectiveGrants, Grants};
 
 /// Batect's one built-in config variable, resolvable via `<batect.project_directory`/
 /// `<{batect.project_directory}` without being declared in `config_variables` — always
@@ -1987,239 +1987,6 @@ fn include_repo(include: &IncludeEntry) -> Option<&str> {
     }
 }
 
-/// The Git-clone boundary a file's own further `include` entries must stay
-/// within, once traversal has crossed from the caller's own local project
-/// tree into a Git-included bundle's content — see the security note on
-/// [`Config::load_from_file_with_git_cache`]. Propagated through
-/// [`Config::load_from_file_with_git_cache`]'s traversal queue: a local file
-/// include inherits its declaring file's own boundary unchanged; a `type:
-/// git` include always establishes a fresh one, rooted at its own newly (or
-/// previously) cloned repository, regardless of the declaring file's own
-/// boundary.
-#[derive(Debug, Clone)]
-struct GitBoundary {
-    repo_dir: PathBuf,
-    /// Which bundle this is, and what it was granted. The grants half is
-    /// [`crate::include_trust`]'s: this type is the *containment* half, and
-    /// carries the bundle so the two travel together, since every containment
-    /// failure has to name the bundle the path came from.
-    ///
-    /// A grant deliberately does *not* relax the include-`path` containment
-    /// ([`check_contains`](Self::check_contains)): that stops a bundle pulling
-    /// an arbitrary host *file* into the configuration, which is a separate
-    /// concern from where its containers may mount.
-    bundle: Bundle,
-}
-
-/// Which of `GitBoundary::check_path_allowed`'s two checks refused a path.
-/// Named rather than passed as a message fragment so a third check cannot be
-/// added by inventing a third string at one call site.
-enum Escape {
-    /// The path's spelling already leaves both allowed roots.
-    Lexical,
-    /// Its spelling stays inside, but what it really points at does not.
-    ViaSymlink,
-}
-
-impl GitBoundary {
-    /// Purely lexical containment check — deliberately runs before
-    /// `resolved` is confirmed to exist, so a `path` engineered to escape
-    /// (an absolute path, or a `../..` traversal) is rejected without ever
-    /// touching the filesystem at the escaped location.
-    ///
-    /// Normalizes `resolved` itself rather than trusting the caller to. The
-    /// comparison is [`Path::starts_with`], which matches components without
-    /// interpreting any of them, so `<repo_dir>/../../elsewhere` starts with
-    /// `<repo_dir>` and passes — the check is inert on exactly the input it
-    /// exists to reject. Two call sites got this wrong (completion's walk, and
-    /// [`resolve_path`]'s absolute branch below), which is one more than a
-    /// convention survives; cleaning here makes the mistake unrepresentable.
-    fn check_contains(&self, resolved: &Path) -> Result<()> {
-        let resolved = &resolved.clean();
-        if resolved.starts_with(&self.repo_dir) {
-            return Ok(());
-        }
-        anyhow::bail!(
-            "Included file '{}' escapes the Git repository '{}' at '{}' it was included from \
-             — includes reached through a Git include must resolve within that repository.",
-            resolved.display(),
-            self.bundle.id.remote,
-            self.bundle.id.git_ref
-        );
-    }
-
-    /// A second check against the *canonicalized* (symlink-resolved) form
-    /// of both paths, once `resolved` is confirmed to exist — closes the
-    /// gap `check_contains` alone can't: a malicious repository planting a
-    /// symlink inside its own clone that itself points back outside it
-    /// would still lexically "start with" `repo_dir`.
-    fn check_contains_canonical(&self, resolved: &Path) -> Result<()> {
-        let canonical_resolved = resolved
-            .canonicalize()
-            .with_context(|| format!("Failed to resolve {resolved:?}"))?;
-        let canonical_root = self
-            .repo_dir
-            .canonicalize()
-            .with_context(|| format!("Failed to resolve {:?}", self.repo_dir))?;
-        if canonical_resolved.starts_with(&canonical_root) {
-            return Ok(());
-        }
-        anyhow::bail!(
-            "Included file '{}' escapes the Git repository '{}' at '{}' it was included from \
-             (via a symlink) — includes reached through a Git include must resolve within that \
-             repository.",
-            resolved.display(),
-            self.bundle.id.remote,
-            self.bundle.id.git_ref
-        );
-    }
-
-    /// Containment check for a Git-included container's path-bearing fields
-    /// (`volumes` host paths, `build_directory`) — see the security note on
-    /// [`Config::resolve_expressions_with_boundaries`]. Unlike
-    /// `check_contains`/`check_contains_canonical` above (used only for
-    /// further `include` resolution, which must stay entirely within the
-    /// repository), a shared bundle may reasonably want to reference the
-    /// caller's own project directory (e.g.
-    /// `<{batect.project_directory}/output:/output`) — so `project_dir` is
-    /// accepted as a second allowed root alongside the repository's own
-    /// clone directory.
-    ///
-    /// Checked twice, because either check alone has a hole the other closes.
-    /// Lexically first, on the normalized path — that rejects a written-out
-    /// escape without touching the filesystem where it points, and it was not
-    /// merely theoretical: `<{batect.project_directory}/../../../etc` is an
-    /// absolute path a bundle can write knowing nothing about the machine, and
-    /// it starts with the project directory component-for-component. Then
-    /// against the real locations, because a bundle can commit a *symlink*
-    /// inside its own clone, which is lexically within an allowed root while
-    /// its target is not — and Docker dereferences it at bind-mount time.
-    ///
-    /// The second check resolves as far as the path exists rather than
-    /// requiring it to, unlike
-    /// [`check_contains_canonical`](Self::check_contains_canonical): an
-    /// `include` target must already exist to be read, but a
-    /// `volumes`/`build_directory` path need not — Ratect or Docker creates
-    /// it. Both allowed roots are resolved too, since a project or cache
-    /// directory may itself sit under a symlink (`/tmp` does on macOS).
-    fn check_path_allowed(&self, resolved: &Path, project_dir: &Path) -> Result<()> {
-        let resolved = &resolved.clean();
-        if self.bundle.trust.host_paths {
-            return Ok(());
-        }
-        if !(resolved.starts_with(&self.repo_dir) || resolved.starts_with(project_dir)) {
-            return Err(self.refuse_escape(resolved, project_dir, Escape::Lexical));
-        }
-        let real = self.real_path(resolved)?;
-        if real.starts_with(self.real_path(&self.repo_dir)?)
-            || real.starts_with(self.real_path(project_dir)?)
-        {
-            return Ok(());
-        }
-        Err(self.refuse_escape(resolved, project_dir, Escape::ViaSymlink))
-    }
-
-    /// [`real_path_as_far_as_it_exists`] with this bundle's name attached: the
-    /// helper knows a path, not which include pulled it in, and a refusal has
-    /// to say. Worded to read correctly for all three paths it is called on —
-    /// the candidate and both allowed roots — since a root failing to resolve
-    /// is not the caller's path being at fault.
-    fn real_path(&self, path: &Path) -> Result<PathBuf> {
-        real_path_as_far_as_it_exists(path).with_context(|| {
-            format!(
-                "Cannot determine where '{}' really points, so the containment for the \
-                 Git repository '{}' at '{}' cannot be checked.",
-                path.display(),
-                self.bundle.id.remote,
-                self.bundle.id.git_ref
-            )
-        })
-    }
-
-    /// The refusal both halves of [`check_path_allowed`](Self::check_path_allowed)
-    /// raise. Which half it was changes only how the path is described; the
-    /// remedy is the same either way, and is the part that has to name the
-    /// field rather than spell its syntax, since the include entry it points
-    /// at may be in either format.
-    fn refuse_escape(&self, resolved: &Path, project_dir: &Path, escape: Escape) -> anyhow::Error {
-        let how = match escape {
-            Escape::Lexical => "",
-            Escape::ViaSymlink => " (via a symlink)",
-        };
-        anyhow::anyhow!(
-            "Path '{}' escapes both the Git repository '{}' at '{}' it was included from and \
-             the project directory '{}'{} — a container reached through a Git include must \
-             resolve its 'volumes'/'build_directory' paths within one of the two. If you trust \
-             this bundle to reach that path, set 'allow_host_paths' to true on the include entry \
-             for '{}' in your own configuration.",
-            resolved.display(),
-            self.bundle.id.remote,
-            self.bundle.id.git_ref,
-            project_dir.display(),
-            how,
-            self.bundle.id.remote
-        )
-    }
-}
-
-/// Whether `resolved` — an include's already-resolved target — stays inside
-/// `boundary`'s repository, checked both ways for the same reason
-/// [`GitBoundary::check_path_allowed`] is: lexically first
-/// ([`GitBoundary::check_contains`]), then against the symlink-resolved form
-/// ([`GitBoundary::check_contains_canonical`]), since either alone has a gap
-/// the other closes. `None` means no boundary applies at all — an owned
-/// file, contained by nothing — so nothing is checked. The one containment
-/// decision [`include_trust::gate`] folds in, so the loader and completion
-/// call this and nothing else to make it.
-fn boundary_contains(boundary: Option<&GitBoundary>, resolved: &Path) -> Result<()> {
-    let Some(boundary) = boundary else {
-        return Ok(());
-    };
-    boundary.check_contains(resolved)?;
-    boundary.check_contains_canonical(resolved)
-}
-
-/// `path` with every symlink in it resolved, as far as it exists: the longest
-/// existing ancestor canonicalized, with the not-yet-created tail re-appended.
-///
-/// A plain [`Path::canonicalize`] can't be used because the path may not exist
-/// yet — that is the whole reason
-/// `GitBoundary::check_path_allowed` can't simply reuse
-/// [`GitBoundary::check_contains_canonical`]. A component that is merely
-/// *missing* is therefore expected, and resolution continues above it: a path
-/// with no existing ancestor cannot be pointing anywhere yet, so the caller's
-/// lexical check is the only one that can apply to it.
-///
-/// Any *other* failure is an error rather than a shrug. It means this process
-/// cannot see where the path leads — an ancestor it may not search, a symlink
-/// loop — while the Docker daemon that will dereference it runs as root and is
-/// under no such restriction. Treating that as "resolves to itself" would let
-/// a path be judged on its spelling by the one check that exists to look past
-/// spelling.
-fn real_path_as_far_as_it_exists(path: &Path) -> std::io::Result<PathBuf> {
-    let mut missing_tail: Vec<&std::ffi::OsStr> = Vec::new();
-    let mut existing = path;
-    loop {
-        match existing.canonicalize() {
-            Ok(canonical) => {
-                return Ok(missing_tail
-                    .iter()
-                    .rev()
-                    .fold(canonical, |real, part| real.join(part)));
-            }
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
-            Err(_) => {}
-        }
-        match (existing.parent(), existing.file_name()) {
-            (Some(parent), Some(name)) => {
-                missing_tail.push(name);
-                existing = parent;
-            }
-            _ => return Ok(path.to_path_buf()),
-        }
-    }
-}
-
 /// One parsed YAML document, before include resolution/merging —
 /// [`Config::load_from_file`]'s traversal over `include` produces one of
 /// these per file (the root file and every included file, however deeply
@@ -2387,7 +2154,7 @@ fn absolute_path(path: &Path) -> Result<PathBuf> {
 fn resolve_include_target(
     base_dir: &Path,
     candidates: &[String],
-    boundary: Option<&GitBoundary>,
+    boundary: Option<&Boundary>,
 ) -> Result<PathBuf> {
     if let [only] = candidates {
         let resolved = absolute_path(&base_dir.join(only))?;
@@ -2431,11 +2198,11 @@ pub struct LoadedConfig {
     /// The Git boundary a container's `volumes`/`build_directory` paths must
     /// stay within, for every container whose origin file was reached
     /// (directly or via a nested local include) through a `type: git`
-    /// include — see `GitBoundary::check_path_allowed`. A container absent
+    /// include — see `Boundary::check_path_allowed`. A container absent
     /// from this map was declared entirely within the caller's own local
     /// project tree and has no such restriction, matching the trust model
     /// local includes already had.
-    container_git_boundaries: HashMap<String, GitBoundary>,
+    container_boundaries: HashMap<String, Boundary>,
 }
 
 impl LoadedConfig {
@@ -2445,10 +2212,10 @@ impl LoadedConfig {
     /// `base_path`, and additionally confines a Git-included container's
     /// resolved `volumes`/`build_directory` paths to that repository's own
     /// clone directory or the project directory (see
-    /// `GitBoundary::check_path_allowed`). Identical behavior to
+    /// `Boundary::check_path_allowed`). Identical behavior to
     /// `Config::resolve_expressions` when no `include` was used (every
     /// container's origin is then the root file's own directory anyway, and
-    /// `container_git_boundaries` is empty).
+    /// `container_boundaries` is empty).
     pub fn resolve_expressions(
         &mut self,
         base_path: &Path,
@@ -2457,7 +2224,7 @@ impl LoadedConfig {
         self.config.resolve_expressions_with_boundaries(
             base_path,
             &self.container_base_paths,
-            &self.container_git_boundaries,
+            &self.container_boundaries,
             config_var_overrides,
             |name| std::env::var(name).ok(),
         )
@@ -2558,14 +2325,14 @@ impl Config {
 
         let mut git_repo_paths: HashMap<(String, String), PathBuf> = HashMap::new();
 
-        let mut queue: VecDeque<(PathBuf, Option<GitBoundary>, IncludeEntry)> = root_file
+        let mut queue: VecDeque<(PathBuf, Option<Boundary>, IncludeEntry)> = root_file
             .include
             .iter()
             .cloned()
             .map(|include| (root_dir.clone(), None, include))
             .collect();
 
-        let mut loaded: Vec<(PathBuf, PathBuf, ConfigFile, Option<GitBoundary>)> =
+        let mut loaded: Vec<(PathBuf, PathBuf, ConfigFile, Option<Boundary>)> =
             vec![(root_path, root_dir, root_file, None)];
 
         while let Some((containing_dir, boundary, include)) = queue.pop_front() {
@@ -2592,7 +2359,7 @@ impl Config {
                     // Before anything about this include's target is
                     // resolved — in particular, before any clone — so a
                     // refused bundle's remote is never even reached.
-                    include_trust::refuse_load(include_trust::gate(restricted, repo, || Ok(())))?;
+                    include_trust::check_may_declare_git(restricted, repo)?;
                     let key = (repo.clone(), git_ref.clone());
                     let repo_dir =
                         match git_repo_paths.get(&key) {
@@ -2609,7 +2376,7 @@ impl Config {
                                 dir
                             }
                         };
-                    let boundary = GitBoundary {
+                    let boundary = Boundary {
                         repo_dir: repo_dir.clone(),
                         bundle: Bundle::granted(
                             declaring,
@@ -2635,12 +2402,9 @@ impl Config {
             let resolved = resolve_include_target(&base_dir, &candidates, boundary.as_ref())?;
 
             // The nested-Git question was already answered above (for a
-            // `type: git` include) or does not apply at all (a local one),
-            // so `restricted` is `None` here — see `include_trust::gate`'s
-            // own doc comment for why that is correct rather than a gap.
-            include_trust::refuse_load(include_trust::gate(None, "", || {
-                boundary_contains(boundary.as_ref(), &resolved)
-            }))?;
+            // `type: git` include) or does not apply at all (a local one) —
+            // only containment remains to check here.
+            include_trust::boundary_contains(boundary.as_ref(), &resolved)?;
             // `None` where there is no boundary — an owned file, contained
             // by nothing. Kept distinct from a boundary granting nothing all
             // the way into `EffectiveGrants`, since the two are opposites.
@@ -2695,7 +2459,7 @@ impl Config {
 
         let mut containers = HashMap::new();
         let mut container_base_paths = HashMap::new();
-        let mut container_git_boundaries: HashMap<String, GitBoundary> = HashMap::new();
+        let mut container_boundaries: HashMap<String, Boundary> = HashMap::new();
         let mut container_origins: HashMap<String, PathBuf> = HashMap::new();
         let mut tasks = HashMap::new();
         let mut task_origins: HashMap<String, PathBuf> = HashMap::new();
@@ -2713,7 +2477,7 @@ impl Config {
                 }
                 container_base_paths.insert(name.clone(), file_dir.clone());
                 if let Some(boundary) = &boundary {
-                    container_git_boundaries.insert(name.clone(), boundary.clone());
+                    container_boundaries.insert(name.clone(), boundary.clone());
                 }
                 containers.insert(name, container);
             }
@@ -2755,7 +2519,7 @@ impl Config {
                 forbid_telemetry,
             },
             container_base_paths,
-            container_git_boundaries,
+            container_boundaries,
         })
     }
 
@@ -2840,18 +2604,18 @@ impl Config {
     /// environment lookup so tests don't have to touch the real process
     /// environment. `container_base_paths` (empty when called from
     /// `Config::resolve_expressions` directly) overrides `base_path` on a
-    /// per-container basis — see [`LoadedConfig`]. `container_git_boundaries`
+    /// per-container basis — see [`LoadedConfig`]. `container_boundaries`
     /// (likewise empty outside `LoadedConfig::resolve_expressions`) confines
     /// a Git-included container's resolved `volumes`/`build_directory` paths
     /// to that repository's own clone directory *or* the project directory
-    /// — see `GitBoundary::check_path_allowed` for why the project
+    /// — see `Boundary::check_path_allowed` for why the project
     /// directory is a second allowed root rather than requiring pure
     /// containment within the clone.
     fn resolve_expressions_with_boundaries(
         &mut self,
         base_path: &Path,
         container_base_paths: &HashMap<String, PathBuf>,
-        container_git_boundaries: &HashMap<String, GitBoundary>,
+        container_boundaries: &HashMap<String, Boundary>,
         config_var_overrides: &HashMap<String, String>,
         host_env: impl Fn(&str) -> Option<String>,
     ) -> Result<()> {
@@ -2913,7 +2677,7 @@ impl Config {
                     .get(container_name)
                     .map(PathBuf::as_path)
                     .unwrap_or(base_path);
-                let container_boundary = container_git_boundaries
+                let container_boundary = container_boundaries
                     .get(container_name)
                     .map(|boundary| (boundary, project_directory_path.as_path()));
                 // Unconditional, though only `ratect.toml` can reach it with an
@@ -3196,7 +2960,7 @@ fn resolve_path(
     base_path: &Path,
     host_env: &impl Fn(&str) -> Option<String>,
     config_vars: &HashMap<String, Option<String>>,
-    container_boundary: Option<(&GitBoundary, &Path)>,
+    container_boundary: Option<(&Boundary, &Path)>,
 ) -> Result<String> {
     let interpolated = crate::expressions::interpolate(path, host_env, config_vars)?;
     let resolved = if let Some(home_relative) = expand_home_directory(&interpolated)? {
@@ -3313,7 +3077,7 @@ pub fn to_native_toml(config: &Config) -> Result<String> {
 ///
 /// It therefore mirrors the loader's decisions about **which files are read**,
 /// and deliberately not its decisions about **whether to fail**. That is why
-/// both the nested-Git gate and a bundle's `GitBoundary` containment are
+/// both the nested-Git gate and a bundle's `Boundary` containment are
 /// honoured here — each stops a file being read at all, so ignoring either
 /// would offer tasks the loader never sees, and in containment's case would
 /// read a file outside the clone that the loader refuses outright — while
@@ -3347,7 +3111,7 @@ fn collect_completion_task_names(
     config_file: &Path,
     names: &mut std::collections::BTreeSet<String>,
     visited: &mut HashSet<PathBuf>,
-    declaring: Option<GitBoundary>,
+    declaring: Option<Boundary>,
     cache_root: Option<&Path>,
 ) {
     let Ok(absolute) = absolute_path(config_file) else {
@@ -3385,7 +3149,9 @@ fn collect_completion_task_names(
                 // complete a `ratect run` that then fails. Completion is
                 // native-only, which is the format that has the gate at all.
                 let restricted = include_trust::restricting(bundle, ConfigFormat::Native);
-                if include_trust::refuse_read(include_trust::gate(restricted, &repo, || Ok(()))) {
+                if include_trust::refuse_read(include_trust::check_may_declare_git(
+                    restricted, &repo,
+                )) {
                     continue;
                 }
                 // Completion never clones — only an already-cached repo counts.
@@ -3401,7 +3167,7 @@ fn collect_completion_task_names(
                         .map(|name| name.to_string())
                         .collect(),
                 };
-                let boundary = GitBoundary {
+                let boundary = Boundary {
                     repo_dir: repo_dir.clone(),
                     bundle: Bundle::granted(
                         bundle,
@@ -3435,13 +3201,14 @@ fn collect_completion_task_names(
         let Ok(next_file) = absolute_path(&next_file) else {
             continue;
         };
-        // The same containment gate the loader applies — declines rather
-        // than errors, like every other fallible step on this walk.
-        // `restricted` is `None`: the nested-Git question was already
-        // answered above, or does not apply to a local include at all.
-        if include_trust::refuse_read(include_trust::gate(None, "", || {
-            boundary_contains(declaring.as_ref(), &next_file)
-        })) {
+        // The same containment check the loader applies — declines rather
+        // than errors, like every other fallible step on this walk. The
+        // nested-Git question was already answered above, or does not apply
+        // to a local include at all.
+        if include_trust::refuse_read(include_trust::boundary_contains(
+            declaring.as_ref(),
+            &next_file,
+        )) {
             continue;
         }
         collect_completion_task_names(&next_file, names, visited, declaring, cache_root);

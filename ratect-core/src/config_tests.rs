@@ -2076,14 +2076,14 @@ fn resolve_path_interpolates_expression_before_resolving() {
 /// interesting case, since `allow_host_paths` waives them outright and
 /// [`crate::include_trust`] is where whether it was granted is decided and
 /// tested.
-fn ungranted_git_boundary() -> GitBoundary {
+fn ungranted_git_boundary() -> Boundary {
     ungranted_git_boundary_at(PathBuf::from("/repo"))
 }
 
 /// The same, rooted at a real directory — for the checks below that need a
 /// filesystem to plant a symlink in.
-fn ungranted_git_boundary_at(repo_dir: PathBuf) -> GitBoundary {
-    GitBoundary {
+fn ungranted_git_boundary_at(repo_dir: PathBuf) -> Boundary {
+    Boundary {
         repo_dir,
         bundle: Bundle {
             id: BundleId {
