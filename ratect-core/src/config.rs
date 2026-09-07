@@ -18,7 +18,7 @@
 //! siblings (`ratect`'s `ratect.toml`, TOML via `toml`, with `.yml`/`.yaml`
 //! includes still parsed as YAML *by extension*). A binary picks a format by
 //! *which function it calls*, so the private `ConfigFormat` policy enum never
-//! leaks into the public API; `parse_config_file` is the single dispatch point,
+//! leaks into the public API; `ConfigFormat::parse` is the single dispatch point,
 //! and both parsers feed the same `ConfigFile`, so nothing downstream knows which
 //! format a file came from. Several things ride on that policy — the native-only
 //! `extends` pass, the nested-git-include gate and its error redaction, expressions
@@ -1815,25 +1815,12 @@ pub struct ConfigVariable {
     pub description: Option<String>,
 }
 
-/// The bundle file names a pathless `type: git` include looks for, in order.
-/// `Compat` is Batect's single default; `Native` prefers its own TOML bundle
-/// but falls back to the Batect one — so an unmigrated bundle still works from
-/// a native project, and a bundle author can ship both files and support both
-/// tools at once (native takes the TOML, Batect/`ratect-compat` the YAML). See
-/// [decisions/0003](../../decisions/0003-ratect-native-config-format.md).
-fn git_bundle_candidates(format: ConfigFormat) -> &'static [&'static str] {
-    match format {
-        ConfigFormat::Compat => &["batect-bundle.yml"],
-        ConfigFormat::Native => &["ratect-bundle.toml", "batect-bundle.yml"],
-    }
-}
-
 /// One entry in a config file's top-level `include` list — either a local
 /// file (a bare string path, or the expanded `{type: file, path: ...}`
 /// object form, mirroring [`PortMapping`]'s string-or-object handling
 /// above), or a Git bundle (`{type: git, repo, ref, path}`). A Git entry's
 /// `path` is optional: when omitted, the bundle file is discovered by
-/// [`git_bundle_candidates`] (format-dependent), so the default isn't baked in
+/// [`ConfigFormat::bundle_candidates`] (format-dependent), so the default isn't baked in
 /// here — the load doesn't yet know whether it's running in native or compat
 /// mode.
 #[derive(Debug, Clone)]
@@ -2046,6 +2033,67 @@ pub(crate) enum ConfigFormat {
     Native,
 }
 
+impl ConfigFormat {
+    /// The bundle file names a pathless `type: git` include looks for, in
+    /// order. `Compat` is Batect's single default; `Native` prefers its own
+    /// TOML bundle but falls back to the Batect one — so an unmigrated
+    /// bundle still works from a native project, and a bundle author can
+    /// ship both files and support both tools at once (native takes the
+    /// TOML, Batect/`ratect-compat` the YAML). See
+    /// [decisions/0003](../../decisions/0003-ratect-native-config-format.md).
+    fn bundle_candidates(&self) -> &'static [&'static str] {
+        match self {
+            ConfigFormat::Compat => &["batect-bundle.yml"],
+            ConfigFormat::Native => &["ratect-bundle.toml", "batect-bundle.yml"],
+        }
+    }
+
+    /// Parses one config file (the root, or an included one) only — no
+    /// include resolution, path resolution, or expression interpolation.
+    /// `Compat` is always YAML; `Native` picks TOML or YAML by extension.
+    /// Both feed the same [`ConfigFile`], so nothing downstream depends on
+    /// which format a file was written in.
+    fn parse(&self, path: &Path) -> Result<ConfigFile> {
+        match self {
+            ConfigFormat::Compat => parse_yaml_config_file(path),
+            ConfigFormat::Native => match config_file_format(path)? {
+                FileFormat::Toml => parse_toml_config_file(path),
+                FileFormat::Yaml => parse_yaml_config_file(path),
+            },
+        }
+    }
+
+    /// Whether `extends` (`ratect`-native inheritance) is available at all —
+    /// see [`resolve_extends`], called after expression resolution per
+    /// decisions/0003, so this stays a predicate rather than folding
+    /// `resolve_extends` itself in here.
+    fn allows_extends(&self) -> bool {
+        matches!(self, ConfigFormat::Native)
+    }
+
+    /// The full set of fields a `batect.yml` may not use — every
+    /// `ratect`-native addition Batect itself has no equivalent for. Called
+    /// unconditionally from [`load_project_impl`], before expression
+    /// resolution — load-bearing for [`reject_image_expressions_in_compat`],
+    /// which inspects an `image`'s literal text and must judge what was
+    /// written rather than what an expression resolved to; the other three
+    /// checks presence/shape of fields expression resolution never touches,
+    /// so the ordering is inert for them but still correct. `Native` has
+    /// nothing to reject here: every field below is native's own.
+    fn reject_incompatible_fields(&self, config: &Config) -> Result<()> {
+        match self {
+            ConfigFormat::Compat => {
+                reject_extends_in_compat(config)?;
+                reject_shared_caches_in_compat(config)?;
+                validate_image_sources_in_compat(&config.containers)?;
+                reject_image_expressions_in_compat(config)?;
+                Ok(())
+            }
+            ConfigFormat::Native => Ok(()),
+        }
+    }
+}
+
 /// The parser a file's extension selects under `ConfigFormat::Native`.
 enum FileFormat {
     Toml,
@@ -2065,21 +2113,6 @@ fn config_file_format(path: &Path) -> Result<FileFormat> {
             "Unrecognized config file extension for {:?}; expected .toml, .yml, or .yaml",
             path
         ),
-    }
-}
-
-/// Parses one config file (the root, or an included one) only — no include
-/// resolution, path resolution, or expression interpolation. The `format`
-/// decides which parser handles it: `Compat` is always YAML; `Native` picks
-/// TOML or YAML by extension. Both feed the same [`ConfigFile`], so nothing
-/// downstream depends on which format a file was written in.
-fn parse_config_file(path: &Path, format: ConfigFormat) -> Result<ConfigFile> {
-    match format {
-        ConfigFormat::Compat => parse_yaml_config_file(path),
-        ConfigFormat::Native => match config_file_format(path)? {
-            FileFormat::Toml => parse_toml_config_file(path),
-            FileFormat::Yaml => parse_yaml_config_file(path),
-        },
     }
 }
 
@@ -2146,7 +2179,7 @@ fn absolute_path(path: &Path) -> Result<PathBuf> {
 /// Resolves an include entry to its actual file. A single candidate — a local
 /// file, or a Git bundle with an explicit `path` — keeps the precise
 /// exists/not-a-file messages the loop has always given. Multiple candidates —
-/// a pathless Git bundle probing [`git_bundle_candidates`] — are tried in
+/// a pathless Git bundle probing [`ConfigFormat::bundle_candidates`] — are tried in
 /// order, and the first that exists wins, since a bundle may ship only one of
 /// them. Each candidate's *lexical* containment within a Git boundary is
 /// checked before it's touched; the caller re-checks the chosen one
@@ -2315,7 +2348,7 @@ impl Config {
         format: ConfigFormat,
     ) -> Result<LoadedConfig> {
         let root_path = absolute_path(path)?;
-        let root_file = parse_config_file(path, format)?;
+        let root_file = format.parse(path)?;
         let root_dir = root_path.parent().unwrap_or(Path::new("")).to_path_buf();
 
         let mut seen: HashSet<PathBuf> = HashSet::new();
@@ -2391,7 +2424,8 @@ impl Config {
                     // bundle probes the format's default names in order.
                     let candidates = match path {
                         Some(path) => vec![path.clone()],
-                        None => git_bundle_candidates(format)
+                        None => format
+                            .bundle_candidates()
                             .iter()
                             .map(|name| name.to_string())
                             .collect(),
@@ -2433,7 +2467,7 @@ impl Config {
             }
             effective_grants.record(resolved.clone(), effective);
 
-            let file = parse_config_file(&resolved, format)?;
+            let file = format.parse(&resolved)?;
             if file.project_name.is_some() {
                 anyhow::bail!(
                     "Included file '{}' declares 'project_name', but only the root \
@@ -3120,7 +3154,7 @@ fn collect_completion_task_names(
     if !visited.insert(absolute.clone()) {
         return;
     }
-    let Ok(file) = parse_config_file(&absolute, ConfigFormat::Native) else {
+    let Ok(file) = ConfigFormat::Native.parse(&absolute) else {
         return;
     };
     names.extend(file.tasks.into_keys());
@@ -3162,7 +3196,8 @@ fn collect_completion_task_names(
                 };
                 let candidates: Vec<String> = match path {
                     Some(path) => vec![path],
-                    None => git_bundle_candidates(ConfigFormat::Native)
+                    None => ConfigFormat::Native
+                        .bundle_candidates()
                         .iter()
                         .map(|name| name.to_string())
                         .collect(),
@@ -3258,14 +3293,9 @@ async fn load_project_impl(
         ConfigFormat::Compat => Config::load_from_file(config_file).await?,
         ConfigFormat::Native => Config::load_from_file_native(config_file).await?,
     };
-    if format == ConfigFormat::Compat {
-        reject_extends_in_compat(&loaded.config)?;
-        reject_shared_caches_in_compat(&loaded.config)?;
-        validate_image_sources_in_compat(&loaded.config.containers)?;
-        // Before `resolve_expressions` below, so it judges what was written
-        // rather than what an expression resolved to.
-        reject_image_expressions_in_compat(&loaded.config)?;
-    }
+    // Before `resolve_expressions` below — see
+    // `ConfigFormat::reject_incompatible_fields`'s own doc comment for why.
+    format.reject_incompatible_fields(&loaded.config)?;
     let base_path = base_path_for(config_file);
     let project_directory = project_directory_path(base_path)?;
     loaded.resolve_expressions(base_path, config_var_overrides)?;
@@ -3273,7 +3303,7 @@ async fn load_project_impl(
     // Resolved *after* expression/path resolution, so an inherited relative
     // path is already absolute and stays anchored to its parent's own file —
     // see [`Container::extends`] and decisions/0003.
-    if format == ConfigFormat::Native {
+    if format.allows_extends() {
         resolve_extends(&mut config.containers)?;
     }
     // After `extends`, so an inherited cache mount is judged on the scope
@@ -3511,6 +3541,12 @@ fn reject_shared_caches_in_compat(config: &Config) -> Result<()> {
 /// `ratect caches clean cargo` could not say which was meant. Checked across
 /// the whole project rather than per container, because two *containers*
 /// naming the same cache is the ordinary way to share one between them.
+///
+/// Unconditional — a cross-dialect invariant, not a per-dialect rule that
+/// happens to sit outside [`ConfigFormat::reject_incompatible_fields`]'s
+/// `Compat` arm. It is also provably inert for `Compat` today, since
+/// `reject_shared_caches_in_compat` already rejects the only field
+/// (`scope`) that could ever produce a conflict there.
 fn reject_conflicting_cache_scopes(config: &Config) -> Result<()> {
     let mut seen: std::collections::BTreeMap<&str, CacheScope> = std::collections::BTreeMap::new();
     // Sorted, so a project with more than one conflict always reports the

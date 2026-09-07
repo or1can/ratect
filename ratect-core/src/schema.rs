@@ -201,7 +201,7 @@ fn make_native(json: &mut serde_json::Value) {
 
     if let Some(definition) = definitions.get_mut("Include") {
         // Corrects, rather than adds: the shared description names compat's
-        // only candidate, but `git_bundle_candidates` probes
+        // only candidate, but `ConfigFormat::bundle_candidates` probes
         // `ratect-bundle.toml` first here. Overwriting the property is how
         // `add_native_property` already behaves, so one helper covers both.
         add_native_property(
