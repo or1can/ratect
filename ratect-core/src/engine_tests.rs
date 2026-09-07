@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::cache::VolumeStore;
-use crate::config::{Container, PortMapping, Task, TaskRun};
+use crate::config::{BuildSecret, Container, PortMapping, Task, TaskRun};
 use crate::docker::DockerClient;
 use crate::resources::ResourceInventory;
 use crate::ui::NullEventSink;
@@ -25,16 +25,10 @@ use std::sync::Arc;
 /// Docker, so tests can assert on dedup, cleanup, and ordering behavior
 /// (including across pull/network/sidecar/run calls) quickly and
 /// deterministically.
-type CapturedBuildArgs = Arc<Mutex<HashMap<String, Option<HashMap<String, String>>>>>;
-/// `(dockerfile, target)`, keyed by the tag `build_image` was called with.
-type CapturedBuildOptions = Arc<Mutex<HashMap<String, (String, Option<String>)>>>;
-/// The `buildkit` a prior `build_image` call for a given tag was given
-/// (flattened, same convention as `environment_for`).
-type CapturedBuildKitOptions = Arc<Mutex<HashMap<String, Option<crate::docker::BuildKitOptions>>>>;
-/// The `force_pull` a prior `build_image` call for a given tag was
-/// given (see `force_pull_for`).
-type CapturedForcePull = Arc<Mutex<HashMap<String, bool>>>;
-type CapturedHostGateways = Arc<Mutex<HashMap<String, Option<crate::proxy::HostGateway>>>>;
+/// Every `build_image` call, keyed by the tag it was given — one
+/// `BuildSpec` per call, rather than a `Captured*` map per field, the same
+/// reason `CapturedSpecs` captures a whole `ContainerSpec` instead of one.
+type CapturedBuildSpecs = Arc<Mutex<HashMap<String, crate::container_spec::BuildSpec>>>;
 /// `(additional_hostnames, additional_hosts, ports)`.
 type NetworkOptionsValue = (
     Option<Vec<String>>,
@@ -66,26 +60,15 @@ struct FakeContainerRuntime {
     // Every `run_container`/`start_background_container` call, in order —
     // see `CapturedSpecs`'s own doc comment.
     specs: CapturedSpecs,
-    // Keyed by the tag `build_image` was called with.
-    build_args: CapturedBuildArgs,
-    // `(dockerfile, target)` a prior `build_image` call for a given tag
-    // was given (see `build_options_for`).
-    build_options: CapturedBuildOptions,
-    // The `buildkit` a prior `build_image` call for a given tag was
-    // given (see `buildkit_options_for`).
-    buildkit_options: CapturedBuildKitOptions,
-    // The `force_pull` a prior `build_image` call for a given tag was
-    // given (see `force_pull_for`).
-    force_pull: CapturedForcePull,
+    // Every `build_image` call, keyed by tag — see `CapturedBuildSpecs`'s
+    // own doc comment.
+    build_specs: CapturedBuildSpecs,
     // What `network_exists` reports — defaults to `true` so tests that
     // don't care about `--use-network` aren't affected.
     network_exists_result: Arc<Mutex<bool>>,
     // The labels a prior `create_network` call was given (see
     // `network_labels`).
     network_labels: Arc<Mutex<Option<HashMap<String, String>>>>,
-    // The `proxy_host_gateway` a prior `build_image` call for a given tag
-    // was given (see `build_host_gateway_for`).
-    build_host_gateways: CapturedHostGateways,
     // The options a prior `exec_in_container` call for a given command
     // was given (see `exec_for`).
     execs: CapturedExecs,
@@ -141,13 +124,9 @@ impl Default for FakeContainerRuntime {
             events: Default::default(),
             fail_run: Default::default(),
             specs: Default::default(),
-            build_args: Default::default(),
-            build_options: Default::default(),
-            buildkit_options: Default::default(),
-            force_pull: Default::default(),
+            build_specs: Default::default(),
             network_exists_result: Arc::new(Mutex::new(true)),
             network_labels: Default::default(),
-            build_host_gateways: Default::default(),
             execs: Default::default(),
             unhealthy_container: Default::default(),
             failing_setup_command: Default::default(),
@@ -323,32 +302,37 @@ impl FakeContainerRuntime {
         self.spec_for(name).and_then(|spec| spec.shared.environment)
     }
 
+    /// The [`crate::container_spec::BuildSpec`] a prior `build_image` call
+    /// for `tag` was given. Every `_for` accessor below projects one part
+    /// of this out, the same way `spec_for` does for `run_container`/
+    /// `start_background_container` — see `CapturedBuildSpecs`'s own doc
+    /// comment.
+    fn build_spec_for(&self, tag: &str) -> Option<crate::container_spec::BuildSpec> {
+        self.build_specs.lock().unwrap().get(tag).cloned()
+    }
+
     /// The `build_args` a prior `build_image` call for `tag` was given
     /// (flattened, same convention as `environment_for`).
     fn build_args_for(&self, tag: &str) -> Option<HashMap<String, String>> {
-        self.build_args.lock().unwrap().get(tag).cloned().flatten()
+        self.build_spec_for(tag).and_then(|spec| spec.build_args)
     }
 
     /// The `(dockerfile, target)` a prior `build_image` call for `tag`
     /// was given.
     fn build_options_for(&self, tag: &str) -> Option<(String, Option<String>)> {
-        self.build_options.lock().unwrap().get(tag).cloned()
+        self.build_spec_for(tag)
+            .map(|spec| (spec.dockerfile, spec.target))
     }
 
     /// The `buildkit` a prior `build_image` call for `tag` was given
     /// (flattened, same convention as `environment_for`).
     fn buildkit_options_for(&self, tag: &str) -> Option<crate::docker::BuildKitOptions> {
-        self.buildkit_options
-            .lock()
-            .unwrap()
-            .get(tag)
-            .cloned()
-            .flatten()
+        self.build_spec_for(tag).and_then(|spec| spec.buildkit)
     }
 
     /// The `force_pull` a prior `build_image` call for `tag` was given.
     fn force_pull_for(&self, tag: &str) -> Option<bool> {
-        self.force_pull.lock().unwrap().get(tag).copied()
+        self.build_spec_for(tag).map(|spec| spec.force_pull)
     }
 
     /// The `image` a prior `run_container`/`start_background_container`
@@ -410,12 +394,8 @@ impl FakeContainerRuntime {
     /// The `proxy_host_gateway` a prior `build_image` call for `tag` was
     /// given (flattened, same convention as `environment_for`).
     fn build_host_gateway_for(&self, tag: &str) -> Option<crate::proxy::HostGateway> {
-        self.build_host_gateways
-            .lock()
-            .unwrap()
-            .get(tag)
-            .copied()
-            .flatten()
+        self.build_spec_for(tag)
+            .and_then(|spec| spec.proxy_host_gateway)
     }
 
     /// The `health_check` a prior `run_container`/
@@ -539,45 +519,23 @@ impl ContainerRuntime for FakeContainerRuntime {
         Ok(self.locally_present_images.lock().unwrap().contains(image))
     }
 
-    async fn build_image(
-        &self,
-        build_directory: &Path,
-        dockerfile: &str,
-        build_args: Option<&HashMap<String, String>>,
-        target: Option<&str>,
-        buildkit: Option<&crate::docker::BuildKitOptions>,
-        tag: &str,
-        force_pull: bool,
-        proxy_host_gateway: Option<crate::proxy::HostGateway>,
-    ) -> Result<String> {
-        self.build_host_gateways
+    async fn build_image(&self, spec: &crate::container_spec::BuildSpec) -> Result<String> {
+        self.build_specs
             .lock()
             .unwrap()
-            .insert(tag.to_string(), proxy_host_gateway);
-        self.build_args
-            .lock()
-            .unwrap()
-            .insert(tag.to_string(), build_args.cloned());
-        self.build_options.lock().unwrap().insert(
-            tag.to_string(),
-            (dockerfile.to_string(), target.map(|t| t.to_string())),
-        );
-        self.buildkit_options
-            .lock()
-            .unwrap()
-            .insert(tag.to_string(), buildkit.cloned());
-        self.force_pull
-            .lock()
-            .unwrap()
-            .insert(tag.to_string(), force_pull);
-        self.push(format!("build:{tag}:{}", build_directory.display()));
+            .insert(spec.tag.clone(), spec.clone());
+        self.push(format!(
+            "build:{}:{}",
+            spec.tag,
+            spec.build_directory.display()
+        ));
         if *self.fail_image_build.lock().unwrap() {
             anyhow::bail!("the daemon said no");
         }
         // Real Docker returns an image ID distinct from the tag; the fake
         // has no such concept, so it just echoes the tag back — tests
         // that assert `image_for(name) == tag` still hold either way.
-        Ok(tag.to_string())
+        Ok(spec.tag.clone())
     }
 
     async fn tag_image(&self, image_id: &str, tags: &[String]) -> Result<()> {

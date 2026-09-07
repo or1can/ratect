@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! What a container's runtime spec is — shared vocabulary between
-//! `engine.rs` (which knows the configuration) and `docker.rs` (which knows
-//! bollard), owned by neither.
+//! What a container's runtime spec is, and what a build's is — shared
+//! vocabulary between `engine.rs` (which knows the configuration) and
+//! `docker.rs` (which knows bollard), owned by neither.
 //!
 //! [`ContainerSpec`] is the one owned value [`derive_spec`] assembles, from
 //! either a task's own `run` overlay or a dependency's `customise` overlay —
@@ -39,15 +39,25 @@
 //! by construction, for every real pair of specs, regardless of whether the
 //! two call sites actually agree on everything else.
 //!
+//! [`BuildSpec`] is the same idea for `ContainerRuntime::build_image`'s own
+//! call, one owned value [`derive_build_spec`] assembles instead of the 8
+//! positional parameters that call used to take. It has no overlay of its
+//! own to reconcile — a build has exactly one call site (`resolve_image`'s
+//! build branch) — so `derive_build_spec` is a plain function rather than
+//! taking an `Inputs`-wrapped struct the way `derive_spec` does.
+//!
 //! [`NetworkOptions`]/[`ContainerOptions`]/[`HealthCheckOptions`] are
 //! re-exported from `docker.rs` (`pub use`), so every existing
 //! `ratect_core::docker::NetworkOptions`-shaped path is unaffected by this
 //! module's existence.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::config::{Container, TaskContainerCustomisation, TaskRun};
+use anyhow::Result;
+
+use crate::config::{BuildSecret, Container, TaskContainerCustomisation, TaskRun};
 use crate::docker::UserMapping;
 use crate::labels::{ContainerRole, RunLabels};
 use crate::proxy::ProxyEnvironment;
@@ -245,6 +255,39 @@ pub struct ContainerSpec {
     pub additional_args: Vec<String>,
 }
 
+/// One `build_directory` container's complete, owned build specification —
+/// the argument `ContainerRuntime::build_image` takes instead of its old 8
+/// positional parameters. Owned throughout, matching [`ContainerSpec`]'s own
+/// rationale: a fake `ContainerRuntime` can capture it wholesale instead of
+/// copying each field into its own captured-parameter maps.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BuildSpec {
+    /// Already resolved to an absolute path.
+    pub build_directory: PathBuf,
+    /// Relative to `build_directory`'s own root — `"Dockerfile"` for the
+    /// default case.
+    pub dockerfile: String,
+    /// Merged with proxy-derived build args, the container's own winning on
+    /// collision — see `merged_environment`.
+    pub build_args: Option<HashMap<String, String>>,
+    /// The build stage to stop at, for a multi-stage Dockerfile.
+    pub target: Option<String>,
+    /// `Some` switches the build to a BuildKit gRPC session instead of
+    /// Docker's classic build API — see [`crate::docker::BuildKitOptions`].
+    pub buildkit: Option<crate::docker::BuildKitOptions>,
+    /// Not guaranteed unique across overlapping invocations — see
+    /// `TaskEngine::resolve_image`'s own doc comment for why the built
+    /// image's *ID*, not this, is what a caller must use afterward.
+    pub tag: String,
+    /// Batect's second use of `image_pull_policy`: forces a fresh pull of
+    /// the build's own base image before building, even if an image with
+    /// that name/tag already exists locally.
+    pub force_pull: bool,
+    /// The same entry `NetworkOptions` carries, for the same reason: a `RUN`
+    /// step behind a rewritten proxy URL has to resolve that name too.
+    pub proxy_host_gateway: Option<crate::proxy::HostGateway>,
+}
+
 /// The task-`run`/dependency-`customise` overlay a container's own config is
 /// laid under — matched exactly once, inside [`derive_spec`], each arm
 /// destructured exhaustively by name so a field added to either config
@@ -412,6 +455,44 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
     }
 }
 
+/// Assembles one `build_directory` container's [`BuildSpec`] — the one place
+/// `resolve_image`'s build branch is read, replacing what used to be 8
+/// values assembled inline at that one call site. Unlike [`derive_spec`],
+/// takes its inputs as plain parameters rather than an `Inputs`-wrapped
+/// struct: a build has one call site, not two independently-assembled ones
+/// to keep in step, so there's nothing here for a wrapper to earn its keep
+/// against.
+///
+/// Fallible only because `buildkit_options` is — see its own doc comment
+/// for what can fail.
+pub fn derive_build_spec(
+    container_config: &Container,
+    build_directory: &str,
+    tag: &str,
+    proxy: Option<&crate::proxy::ProxyEnvironment>,
+) -> Result<BuildSpec> {
+    let proxy_vars = proxy.map(|proxy| &proxy.variables);
+    // No `term_var`/`overlay_env` — matches today's call, which merges only
+    // proxy vars with the container's own `build_args`.
+    let build_args =
+        merged_environment(None, proxy_vars, container_config.build_args.as_ref(), None);
+    let dockerfile = container_config
+        .dockerfile
+        .as_deref()
+        .unwrap_or("Dockerfile");
+    Ok(BuildSpec {
+        build_directory: PathBuf::from(build_directory),
+        dockerfile: dockerfile.to_string(),
+        build_args,
+        target: container_config.build_target.clone(),
+        buildkit: buildkit_options(container_config)?,
+        tag: tag.to_string(),
+        force_pull: container_config.image_pull_policy.unwrap_or_default()
+            == crate::config::ImagePullPolicy::Always,
+        proxy_host_gateway: proxy.and_then(|proxy| proxy.host_gateway()),
+    })
+}
+
 /// Merges the host's `TERM` (see `TaskEngine::term_environment_variable`),
 /// proxy-derived environment variables (see `TaskEngine::proxy_environment`),
 /// a container's `environment`, and an overlay's own `environment`, each
@@ -551,6 +632,60 @@ fn tmpfs_mounts(
     } else {
         Some(mounts)
     }
+}
+
+/// Converts a container's parsed `build_secrets`/`build_ssh` config into the
+/// docker-side [`crate::docker::BuildKitOptions`] — `None` when neither is
+/// set (no session providers to serve; which *builder* runs the build is
+/// decided separately, by the `DockerClient` itself, from the daemon's
+/// advertised default).
+///
+/// Each `build_ssh` entry's already-resolved `paths` are classified into a
+/// source here — see [`crate::docker::classify_ssh_agent_paths`], which is
+/// what makes this fallible. Ids are unique by the time this runs, checked
+/// by [`crate::config::Config::resolve_expressions_with`].
+///
+/// Failures here name an agent id rather than a container, deliberately:
+/// `TaskEngine::resolve_image` attributes every way one container's build
+/// can fail, in a single place, so nothing along the path carries the name
+/// itself.
+fn buildkit_options(container: &Container) -> Result<Option<crate::docker::BuildKitOptions>> {
+    let secrets = container.build_secrets.as_ref();
+    let ssh = container.build_ssh.as_ref();
+    if secrets.is_none() && ssh.is_none() {
+        return Ok(None);
+    }
+
+    let mut ssh_agents = HashMap::new();
+    for agent in ssh.into_iter().flatten() {
+        let paths: Vec<PathBuf> = agent.paths.iter().map(PathBuf::from).collect();
+        ssh_agents.insert(
+            agent.id.clone(),
+            crate::docker::classify_ssh_agent_paths(&agent.id, &paths)?,
+        );
+    }
+
+    Ok(Some(crate::docker::BuildKitOptions {
+        secrets: secrets
+            .map(|secrets| {
+                secrets
+                    .iter()
+                    .map(|(id, secret)| {
+                        let source = match secret {
+                            BuildSecret::Environment(name) => {
+                                crate::docker::BuildSecretSource::Environment(name.clone())
+                            }
+                            BuildSecret::Path(path) => {
+                                crate::docker::BuildSecretSource::File(PathBuf::from(path))
+                            }
+                        };
+                        (id.clone(), source)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        ssh_agents,
+    }))
 }
 
 #[cfg(test)]

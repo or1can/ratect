@@ -74,16 +74,14 @@
 //! `ContainerOptions.tmpfs` field instead, mapped onto Docker's own
 //! `HostConfig.Tmpfs` map by `docker.rs`'s `build_tmpfs_mounts`.
 
-use crate::config::{
-    container_names_in_task, BuildSecret, Config, Container, Task, TaskContainerCustomisation,
-};
-use crate::container_spec::merged_environment;
+use crate::config::{container_names_in_task, Config, Container, Task, TaskContainerCustomisation};
+use crate::container_spec::derive_build_spec;
 use crate::docker::ContainerRuntime;
 use crate::ui::{EventSink, TaskEvent};
 use anyhow::{Context, Result};
 use async_recursion::async_recursion;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::OnceCell;
 use uuid::Uuid;
@@ -108,21 +106,6 @@ fn dumb_term_environment() -> HashMap<String, String> {
     HashMap::from([("TERM".to_string(), "dumb".to_string())])
 }
 
-/// Converts a container's parsed `build_secrets`/`build_ssh` config into the
-/// docker-side [`crate::docker::BuildKitOptions`] — `None` when neither is
-/// set (no session providers to serve; which *builder* runs the build is
-/// decided separately, by the `DockerClient` itself, from the daemon's
-/// advertised default).
-///
-/// Each `build_ssh` entry's already-resolved `paths` are classified into a
-/// source here — see [`crate::docker::classify_ssh_agent_paths`], which is
-/// what makes this fallible. Ids are unique by the time this runs, checked
-/// by [`crate::config::Config::resolve_expressions_with`].
-///
-/// Failures here name an agent id rather than a container, deliberately:
-/// [`TaskEngine::resolve_image`] attributes every way one container's build
-/// can fail, in a single place, so nothing along the path carries the name
-/// itself.
 /// Whether a mount's Docker options mark it read-only — the `ro` flag in the
 /// comma-separated list Docker itself parses. `rw` is the default and needs
 /// no special casing.
@@ -130,45 +113,6 @@ fn is_read_only(options: &Option<String>) -> bool {
     options
         .as_deref()
         .is_some_and(|o| o.split(',').any(|flag| flag.trim() == "ro"))
-}
-
-fn buildkit_options(container: &Container) -> Result<Option<crate::docker::BuildKitOptions>> {
-    let secrets = container.build_secrets.as_ref();
-    let ssh = container.build_ssh.as_ref();
-    if secrets.is_none() && ssh.is_none() {
-        return Ok(None);
-    }
-
-    let mut ssh_agents = HashMap::new();
-    for agent in ssh.into_iter().flatten() {
-        let paths: Vec<PathBuf> = agent.paths.iter().map(PathBuf::from).collect();
-        ssh_agents.insert(
-            agent.id.clone(),
-            crate::docker::classify_ssh_agent_paths(&agent.id, &paths)?,
-        );
-    }
-
-    Ok(Some(crate::docker::BuildKitOptions {
-        secrets: secrets
-            .map(|secrets| {
-                secrets
-                    .iter()
-                    .map(|(id, secret)| {
-                        let source = match secret {
-                            BuildSecret::Environment(name) => {
-                                crate::docker::BuildSecretSource::Environment(name.clone())
-                            }
-                            BuildSecret::Path(path) => {
-                                crate::docker::BuildSecretSource::File(PathBuf::from(path))
-                            }
-                        };
-                        (id.clone(), source)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
-        ssh_agents,
-    }))
 }
 
 /// The outcome of a memoized async operation (an image pull/build, or a
@@ -1190,42 +1134,17 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                         // `no_proxy` for a build (nothing's running yet to be
                         // exempted from proxying).
                         let proxy = self.proxy_environment(&std::collections::BTreeSet::new());
-                        let build_args = merged_environment(
-                            None,
-                            proxy.as_ref().map(|proxy| &proxy.variables),
-                            container_config.build_args.as_ref(),
-                            None,
-                        );
-                        let dockerfile = container_config
-                            .dockerfile
-                            .as_deref()
-                            .unwrap_or("Dockerfile");
-                        let buildkit = buildkit_options(container_config)?;
-                        // Batect's second use of `image_pull_policy`: on a
-                        // `build_directory` container, `always` force-pulls
-                        // the build's own base image before building
-                        // (`docker build --pull`), distinct from its other
-                        // use gating whether an `image` container's own
-                        // image gets pulled (`resolve_pulled_image` above).
-                        let force_pull = container_config.image_pull_policy.unwrap_or_default()
-                            == crate::config::ImagePullPolicy::Always;
+                        let spec = derive_build_spec(
+                            container_config,
+                            build_directory,
+                            &tag,
+                            proxy.as_ref(),
+                        )?;
                         self.event_sink.post(TaskEvent::ImageBuildStarting {
                             container: container_name.to_string(),
                         });
                         let _permit = self.acquire_parallelism_permit().await;
-                        let image_id = self
-                            .docker
-                            .build_image(
-                                Path::new(build_directory),
-                                dockerfile,
-                                build_args.as_ref(),
-                                container_config.build_target.as_deref(),
-                                buildkit.as_ref(),
-                                &tag,
-                                force_pull,
-                                proxy.as_ref().and_then(|proxy| proxy.host_gateway()),
-                            )
-                            .await?;
+                        let image_id = self.docker.build_image(&spec).await?;
                         self.event_sink.post(TaskEvent::ImageBuildCompleted {
                             container: container_name.to_string(),
                         });

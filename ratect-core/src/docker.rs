@@ -1270,48 +1270,15 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// Mirrors `network_exists`'s own 404-as-false convention.
     async fn image_exists_locally(&self, image: &str) -> Result<bool>;
 
-    /// Builds an image from `build_directory` (already resolved to an
-    /// absolute path), tagging it as `tag`. `dockerfile` is the Dockerfile
-    /// to build, as a path relative to `build_directory`'s own root
-    /// (`"Dockerfile"` for the default case). `build_args` are passed
-    /// through as Docker's own `--build-arg` mechanism; `target`, when
-    /// `Some`, as `--target` (the build stage to stop at, for a multi-stage
-    /// Dockerfile). `buildkit`, when `Some`, switches the build to a
-    /// BuildKit gRPC session instead of Docker's classic build API — see
-    /// [`BuildKitOptions`].
+    /// Builds an image per `spec` — see [`crate::container_spec::BuildSpec`]'s
+    /// own field docs for what each one means and where it comes from.
     ///
-    /// Returns the built image's ID (e.g. `sha256:...`), not `tag` — `tag` is
-    /// applied so the image is identifiable in `docker images`, but isn't
-    /// guaranteed unique (see `TaskEngine::resolve_image`), so callers must
-    /// use the returned ID, not `tag`, to reliably reference the image this
-    /// call just built.
-    ///
-    /// `force_pull`, when `true`, forces a fresh pull of the build's own
-    /// base image (Docker's `docker build --pull`) before building, even if
-    /// an image with that name/tag already exists locally — Batect's own
-    /// second use of `image_pull_policy: always` on a `build_directory`
-    /// container (distinct from its already-supported use gating whether an
-    /// `image` container's own image gets pulled).
-    ///
-    /// `proxy_host_gateway` is the same entry `NetworkOptions` carries, and
-    /// is here for the same reason: a `RUN` step behind a rewritten proxy URL
-    /// has to resolve that name too, and a build that couldn't would fail
-    /// exactly where the container it produces would have worked. Both
-    /// builders take it — the classic one as the `/build` endpoint's
-    /// `extrahosts` parameter, BuildKit through the same parameter, which the
-    /// daemon forwards to the frontend.
-    #[allow(clippy::too_many_arguments)]
-    async fn build_image(
-        &self,
-        build_directory: &Path,
-        dockerfile: &str,
-        build_args: Option<&HashMap<String, String>>,
-        target: Option<&str>,
-        buildkit: Option<&BuildKitOptions>,
-        tag: &str,
-        force_pull: bool,
-        proxy_host_gateway: Option<crate::proxy::HostGateway>,
-    ) -> Result<String>;
+    /// Returns the built image's ID (e.g. `sha256:...`), not `spec.tag` —
+    /// the tag is applied so the image is identifiable in `docker images`,
+    /// but isn't guaranteed unique (see `TaskEngine::resolve_image`), so
+    /// callers must use the returned ID, not the tag, to reliably reference
+    /// the image this call just built.
+    async fn build_image(&self, spec: &crate::container_spec::BuildSpec) -> Result<String>;
 
     /// Tags `image_id` (the ID `build_image` returned) with each of `tags`,
     /// in addition to `build_image`'s own `tag` — used by `--tag-image`.
@@ -2034,17 +2001,16 @@ impl ContainerRuntime for DockerClient {
         }
     }
 
-    async fn build_image(
-        &self,
-        build_directory: &Path,
-        dockerfile: &str,
-        build_args: Option<&HashMap<String, String>>,
-        target: Option<&str>,
-        buildkit: Option<&BuildKitOptions>,
-        tag: &str,
-        force_pull: bool,
-        proxy_host_gateway: Option<crate::proxy::HostGateway>,
-    ) -> Result<String> {
+    async fn build_image(&self, spec: &crate::container_spec::BuildSpec) -> Result<String> {
+        let build_directory = spec.build_directory.as_path();
+        let dockerfile = spec.dockerfile.as_str();
+        let build_args = spec.build_args.as_ref();
+        let target = spec.target.as_deref();
+        let buildkit = spec.buildkit.as_ref();
+        let tag = spec.tag.as_str();
+        let force_pull = spec.force_pull;
+        let proxy_host_gateway = spec.proxy_host_gateway;
+
         match self.builder_version().await? {
             bollard::query_parameters::BuilderVersion::BuilderBuildKit => {
                 return build_image_via_buildkit(

@@ -234,3 +234,107 @@ fn a_customise_overlay_has_no_command_or_entrypoint_override() {
     assert_eq!(spec.shared.command, container_config.command);
     assert_eq!(spec.shared.options.entrypoint, container_config.entrypoint);
 }
+
+/// A build's own `dockerfile`/`build_target` pass straight through, and a
+/// missing `dockerfile` defaults to `"Dockerfile"` — matching the default
+/// case documented on `ContainerRuntime::build_image` before this candidate.
+#[test]
+fn derive_build_spec_maps_dockerfile_target_and_defaults() {
+    let mut container_config = sample_container();
+    container_config.dockerfile = Some("Dockerfile.build".to_string());
+    container_config.build_target = Some("builder".to_string());
+
+    let spec = derive_build_spec(&container_config, "/project/docker", "demo-app", None).unwrap();
+
+    assert_eq!(spec.build_directory, PathBuf::from("/project/docker"));
+    assert_eq!(spec.dockerfile, "Dockerfile.build");
+    assert_eq!(spec.target, Some("builder".to_string()));
+    assert_eq!(spec.tag, "demo-app");
+
+    let mut no_dockerfile = sample_container();
+    no_dockerfile.dockerfile = None;
+    let spec = derive_build_spec(&no_dockerfile, "/project/docker", "demo-app", None).unwrap();
+    assert_eq!(spec.dockerfile, "Dockerfile");
+}
+
+/// Batect's second use of `image_pull_policy`: only `Always` force-pulls a
+/// build's own base image; the default (`IfNotPresent`, including an unset
+/// policy) does not.
+#[test]
+fn derive_build_spec_force_pulls_only_under_the_always_policy() {
+    let mut container_config = sample_container();
+    container_config.image_pull_policy = Some(crate::config::ImagePullPolicy::Always);
+    let spec = derive_build_spec(&container_config, "/project", "tag", None).unwrap();
+    assert!(spec.force_pull);
+
+    let mut container_config = sample_container();
+    container_config.image_pull_policy = Some(crate::config::ImagePullPolicy::IfNotPresent);
+    let spec = derive_build_spec(&container_config, "/project", "tag", None).unwrap();
+    assert!(!spec.force_pull);
+
+    let mut container_config = sample_container();
+    container_config.image_pull_policy = None;
+    let spec = derive_build_spec(&container_config, "/project", "tag", None).unwrap();
+    assert!(!spec.force_pull);
+}
+
+/// `buildkit` is `None` when neither `build_secrets` nor `build_ssh` is
+/// set, and `Some` — carrying the classified secret sources — when either
+/// is.
+#[test]
+fn derive_build_spec_includes_buildkit_only_when_secrets_or_ssh_are_set() {
+    let container_config = sample_container();
+    let spec = derive_build_spec(&container_config, "/project", "tag", None).unwrap();
+    assert_eq!(spec.buildkit, None);
+
+    let mut with_secrets = sample_container();
+    with_secrets.build_secrets = Some(HashMap::from([(
+        "token".to_string(),
+        crate::config::BuildSecret::Environment("TOKEN".to_string()),
+    )]));
+    let spec = derive_build_spec(&with_secrets, "/project", "tag", None).unwrap();
+    let buildkit = spec.buildkit.expect("build_secrets requires BuildKit");
+    assert_eq!(
+        buildkit.secrets.get("token"),
+        Some(&crate::docker::BuildSecretSource::Environment(
+            "TOKEN".to_string()
+        ))
+    );
+    assert!(buildkit.ssh_agents.is_empty());
+}
+
+/// `build_args` merges proxy-derived variables with the container's own
+/// (matching today's call, `term_var`/`overlay_env` both absent), and
+/// `proxy_host_gateway` carries the same rewritten-URL entry `NetworkOptions`
+/// does — both derived from the same `proxy` argument.
+#[test]
+fn derive_build_spec_merges_proxy_vars_and_carries_the_host_gateway() {
+    let mut container_config = sample_container();
+    container_config.build_args = Some(HashMap::from([(
+        "VERSION".to_string(),
+        "1.2.3".to_string(),
+    )]));
+
+    let proxy = crate::proxy::proxy_environment_variables(
+        |name| (name == "http_proxy").then(|| "http://localhost:3333".to_string()),
+        &std::collections::BTreeSet::new(),
+    );
+
+    let spec = derive_build_spec(&container_config, "/project", "tag", Some(&proxy)).unwrap();
+
+    let build_args = spec
+        .build_args
+        .expect("proxy and config build_args are both set");
+    assert_eq!(build_args.get("VERSION"), Some(&"1.2.3".to_string()));
+    assert_eq!(
+        build_args.get("http_proxy"),
+        Some(&"http://host.docker.internal:3333/".to_string())
+    );
+    assert_eq!(
+        spec.proxy_host_gateway,
+        Some(crate::proxy::HostGateway {
+            name: "host.docker.internal",
+            address: "host-gateway",
+        })
+    );
+}
