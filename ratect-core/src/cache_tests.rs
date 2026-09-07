@@ -134,7 +134,7 @@ fn resolve_cache_mount_creates_and_uses_a_host_directory_for_directory_type() {
 
 // `clean_volume_caches`'s own async glue (list, filter, remove each) is
 // thin enough to be covered by the real end-to-end Docker test in
-// `tests/cli.rs` instead of a dedicated fake `ContainerRuntime` here —
+// `tests/cli.rs` instead of a dedicated fake `VolumeStore` here —
 // the interesting decision logic is `matching_cache_volumes`, a plain
 // synchronous function these tests exercise directly.
 
@@ -323,12 +323,12 @@ fn a_shared_cache_directory_lives_beside_the_git_include_cache() {
     assert_eq!(root.parent().unwrap(), home.join(".ratect"));
 }
 
-/// A minimal `ContainerRuntime` implementing only what `CacheStore`'s
-/// `Volume` variant actually calls. Scoped to this module rather than shared
-/// with `resources_tests.rs`'s own fake, or `diagnostics_tests.rs`'s: each is
-/// scoped to what its own module calls, and all three are checked against
-/// the same compiler-enforced trait, so none can silently drift from
-/// `ContainerRuntime`'s real shape.
+/// A minimal `VolumeStore` implementing only what `CacheStore`'s `Volume`
+/// variant actually calls. Scoped to this module rather than shared with
+/// `resources_tests.rs`'s own fake, or `diagnostics_tests.rs`'s: each is
+/// scoped to what its own module calls, and each pair (this one and
+/// `resources_tests.rs`'s) is checked against a compiler-enforced trait, so
+/// neither can silently drift from `VolumeStore`'s real shape.
 #[derive(Default)]
 struct FakeRuntime {
     volumes: Vec<String>,
@@ -336,7 +336,7 @@ struct FakeRuntime {
 }
 
 #[async_trait::async_trait]
-impl crate::docker::ContainerRuntime for FakeRuntime {
+impl VolumeStore for FakeRuntime {
     async fn list_volumes(&self) -> Result<Vec<String>> {
         Ok(self.volumes.clone())
     }
@@ -344,84 +344,6 @@ impl crate::docker::ContainerRuntime for FakeRuntime {
     async fn remove_volume(&self, name: &str) -> Result<()> {
         self.removed.lock().unwrap().push(name.to_string());
         Ok(())
-    }
-
-    async fn pull_image(&self, _image: &str) -> Result<()> {
-        unimplemented!("CacheStore never pulls an image")
-    }
-    async fn image_exists_locally(&self, _image: &str) -> Result<bool> {
-        unimplemented!("CacheStore never inspects an image")
-    }
-    async fn build_image(
-        &self,
-        _build_directory: &Path,
-        _dockerfile: &str,
-        _build_args: Option<&std::collections::HashMap<String, String>>,
-        _target: Option<&str>,
-        _buildkit: Option<&crate::docker::BuildKitOptions>,
-        _tag: &str,
-        _force_pull: bool,
-        _proxy_host_gateway: Option<crate::proxy::HostGateway>,
-    ) -> Result<String> {
-        unimplemented!("CacheStore never builds an image")
-    }
-    async fn tag_image(&self, _image_id: &str, _tags: &[String]) -> Result<()> {
-        unimplemented!("CacheStore never tags an image")
-    }
-    async fn create_network(
-        &self,
-        _name: &str,
-        _labels: &std::collections::HashMap<String, String>,
-    ) -> Result<()> {
-        unimplemented!("CacheStore never creates a network")
-    }
-    async fn remove_network(&self, _name: &str) -> Result<()> {
-        unimplemented!("CacheStore never removes a network")
-    }
-    async fn network_exists(&self, _name: &str) -> Result<bool> {
-        unimplemented!("CacheStore never checks for a network")
-    }
-    async fn start_background_container(
-        &self,
-        _spec: &crate::container_spec::ContainerSpec,
-    ) -> Result<String> {
-        unimplemented!("CacheStore never starts a container")
-    }
-    async fn wait_for_container_healthy(&self, _container_id: &str) -> Result<()> {
-        unimplemented!("CacheStore never waits on a container")
-    }
-    async fn exec_in_container(
-        &self,
-        _container_id: &str,
-        _command: &str,
-        _working_directory: Option<&str>,
-        _environment: Option<&std::collections::HashMap<String, String>>,
-        _user_mapping: Option<&crate::docker::UserMapping>,
-    ) -> Result<crate::docker::ExecResult> {
-        unimplemented!("CacheStore never execs in a container")
-    }
-    async fn stop_and_remove_container(&self, _container_id: &str) -> Result<()> {
-        unimplemented!("CacheStore never removes a container")
-    }
-    async fn run_container(
-        &self,
-        _spec: &crate::container_spec::ContainerSpec,
-        _created: Option<tokio::sync::oneshot::Sender<String>>,
-        _started: Option<tokio::sync::oneshot::Sender<()>>,
-    ) -> Result<()> {
-        unimplemented!("CacheStore never runs a container")
-    }
-    async fn list_containers(
-        &self,
-        _labels: &[(&str, Option<&str>)],
-    ) -> Result<Vec<crate::docker::LabelledResource>> {
-        unimplemented!("CacheStore never lists containers")
-    }
-    async fn list_networks(
-        &self,
-        _labels: &[(&str, Option<&str>)],
-    ) -> Result<Vec<crate::docker::LabelledResource>> {
-        unimplemented!("CacheStore never lists networks")
     }
 }
 

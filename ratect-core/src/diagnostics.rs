@@ -23,8 +23,8 @@
 //! findings (`Docker connection options are unusable`, `Docker daemon
 //! (not )?reachable`). That last pair needs `DockerClient::server_version`,
 //! which answers "what does the daemon call itself" — a property of *this*
-//! connection, not of [`crate::docker::ContainerRuntime`]'s container/network
-//! vocabulary, so it has no seam to cross here. [`leftover_finding`] is the
+//! connection, not of [`crate::resources::ResourceInventory`]'s container/
+//! network vocabulary, so it has no seam to cross here. [`leftover_finding`] is the
 //! one check downstream of a daemon connection that *is* here: it takes
 //! `Option<&D>` rather than requiring one, so a caller whose connection
 //! already failed can skip it without this module needing any opinion of its
@@ -214,7 +214,7 @@ fn dependency_names(config: &Config) -> Vec<&str> {
 /// A listing failure reads as "no leftovers", matching this check's own
 /// unasked, best-effort nature: it should never be the reason `doctor`
 /// itself fails.
-pub async fn leftover_finding<D: crate::docker::ContainerRuntime + Send + Sync>(
+pub async fn leftover_finding<D: crate::resources::ResourceInventory + Send + Sync>(
     docker: Option<&D>,
     project: &str,
     now: i64,

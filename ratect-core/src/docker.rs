@@ -99,6 +99,8 @@
 //! either. `list_containers` passes `all: true` deliberately: a leftover has
 //! usually exited, and Docker's default lists only running containers.
 
+use crate::cache::VolumeStore;
+use crate::resources::ResourceInventory;
 use crate::ui::{ContainerIoStreaming, EventSink, NullEventSink, TaskEvent};
 use anyhow::{Context, Result};
 use bollard::container::AttachContainerResults;
@@ -344,7 +346,7 @@ fn build_devices(
 /// `(container_path, options)` pairs — pure, unit-testable without a daemon.
 /// `None` when `tmpfs` itself is `None`. A repeated `container_path` last-one-
 /// Docker's own label filter form, for
-/// [`ContainerRuntime::list_containers`]/[`list_networks`](ContainerRuntime::list_networks):
+/// [`ResourceInventory::list_containers`]/[`list_networks`](ResourceInventory::list_networks):
 /// `key=value` for an exact match, or a bare `key` for "has this label at
 /// all". Docker ANDs the values under one filter name, so several entries
 /// mean all of them must match.
@@ -1252,8 +1254,14 @@ fn ensure_host_volume_directories_exist(volumes: Option<&Vec<String>>) -> Result
 
 /// Abstracts the container operations the task engine needs, so tests can
 /// inject a fake implementation instead of talking to a real Docker daemon.
+/// Requires [`ResourceInventory`] and [`VolumeStore`] as supertraits rather
+/// than declaring their methods again here — those are the narrower
+/// contracts `resources.rs`/`cache.rs` actually depend on, so a caller that
+/// only needs one of them bounds on it directly instead of the whole
+/// surface; `engine.rs`, which genuinely needs everything, keeps bounding on
+/// `ContainerRuntime` and gets both for free.
 #[async_trait::async_trait]
-pub trait ContainerRuntime {
+pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     async fn pull_image(&self, image: &str) -> Result<()>;
 
     /// `true` if `image` already exists in the local Docker image cache —
@@ -1318,8 +1326,6 @@ pub trait ContainerRuntime {
     /// labels of its own, so this is the whole set.
     async fn create_network(&self, name: &str, labels: &HashMap<String, String>) -> Result<()>;
 
-    async fn remove_network(&self, name: &str) -> Result<()>;
-
     /// `true` if a network named (or IDed) `name` already exists — used to
     /// validate `--use-network` up front, with a clear error, rather than
     /// letting an unrelated Docker API failure surface later when trying to
@@ -1379,9 +1385,6 @@ pub trait ContainerRuntime {
         user_mapping: Option<&UserMapping>,
     ) -> Result<ExecResult>;
 
-    /// Stops and removes a container started with [`start_background_container`](Self::start_background_container).
-    async fn stop_and_remove_container(&self, container_id: &str) -> Result<()>;
-
     /// Runs a container to completion, streaming its logs to stdout, then
     /// removes it — used for a task's own container. See [`ContainerSpec`]'s
     /// own field docs for what each part of `spec` means; unlike
@@ -1426,50 +1429,6 @@ pub trait ContainerRuntime {
         created: Option<tokio::sync::oneshot::Sender<String>>,
         started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<()>;
-
-    /// Lists every Docker volume's name on the daemon — used by
-    /// `--clean`/`--clean-cache` (see `crate::cache::clean_volume_caches`)
-    /// to find this project's own `batect-cache-<key>-*` volumes among
-    /// them. No filtering here; the caller matches the prefix itself, the
-    /// same way Batect's own `CleanupCachesCommand` does.
-    async fn list_volumes(&self) -> Result<Vec<String>>;
-
-    /// Containers carrying every one of `labels`, whether running or not —
-    /// a leftover has usually exited, so listing only running ones would
-    /// miss most of what's being looked for.
-    ///
-    /// Each entry is a key and an optional value: `Some` matches that exact
-    /// value, `None` matches merely *having* the key, which is Docker's own
-    /// `label=key` filter form. The `None` form is what "every project"
-    /// means — every project *Ratect* created, not every container on the
-    /// machine.
-    ///
-    /// An empty slice therefore means no filter at all, i.e. everything on
-    /// the daemon. That is almost never what a caller wants; anything that
-    /// might remove what it finds should pass at least a key-existence
-    /// filter.
-    ///
-    /// Filtering happens daemon-side rather than by listing everything and
-    /// matching here: on a machine with thousands of containers that's the
-    /// difference between one cheap query and a large response, and Docker
-    /// implements exactly this filter natively.
-    async fn list_containers(
-        &self,
-        labels: &[(&str, Option<&str>)],
-    ) -> Result<Vec<LabelledResource>>;
-
-    /// Networks carrying every one of `labels` — the counterpart of
-    /// [`list_containers`](Self::list_containers), with the same warning
-    /// about an empty slice. Docker's own built-in `bridge`/`host`/`none`
-    /// networks carry no labels at all, so any key-existence filter
-    /// excludes them; an unfiltered call does not.
-    async fn list_networks(&self, labels: &[(&str, Option<&str>)])
-        -> Result<Vec<LabelledResource>>;
-
-    /// Removes the named Docker volume — used by
-    /// `--clean`/`--clean-cache` once `list_volumes` has identified it as
-    /// one of this project's own cache volumes.
-    async fn remove_volume(&self, name: &str) -> Result<()>;
 }
 
 pub struct DockerClient {
@@ -2240,15 +2199,6 @@ impl ContainerRuntime for DockerClient {
         Ok(())
     }
 
-    async fn remove_network(&self, name: &str) -> Result<()> {
-        self.docker
-            .remove_network(name)
-            .await
-            .with_context(|| format!("Failed to remove network '{}'", name))?;
-        tracing::debug!(network = name, "removed network");
-        Ok(())
-    }
-
     async fn network_exists(&self, name: &str) -> Result<bool> {
         match self.docker.inspect_network(name, None).await {
             Ok(_) => Ok(true),
@@ -2500,107 +2450,6 @@ impl ContainerRuntime for DockerClient {
         Ok(ExecResult { exit_code, output })
     }
 
-    async fn stop_and_remove_container(&self, container_id: &str) -> Result<()> {
-        self.docker
-            .stop_container(container_id, None)
-            .await
-            .with_context(|| format!("Failed to stop container '{}'", container_id))?;
-        self.docker
-            .remove_container(container_id, Some(remove_container_options()))
-            .await
-            .with_context(|| format!("Failed to remove container '{}'", container_id))?;
-        tracing::debug!(container_id, "stopped and removed container");
-
-        // The caller (`engine.rs`) posts `TaskEvent::ContainerRemoved`
-        // right after this returns — interleaved output must never arrive
-        // after that event, so wait for any background log follower to
-        // actually finish flushing first. See `await_log_follower`/
-        // `log_followers`' own doc comments.
-        self.await_log_follower(container_id).await;
-
-        Ok(())
-    }
-
-    async fn list_containers(
-        &self,
-        labels: &[(&str, Option<&str>)],
-    ) -> Result<Vec<LabelledResource>> {
-        let options = bollard::query_parameters::ListContainersOptions {
-            // Leftovers have usually exited; without this they'd be
-            // invisible, which is most of the point.
-            all: true,
-            filters: Some(label_filters(labels)),
-            ..Default::default()
-        };
-        let containers = self
-            .docker
-            .list_containers(Some(options))
-            .await
-            .context("Failed to list Docker containers")?;
-        Ok(containers
-            .into_iter()
-            .map(|container| LabelledResource {
-                id: container.id.unwrap_or_default(),
-                name: container
-                    .names
-                    .and_then(|names| names.into_iter().next())
-                    // Docker reports container names with a leading slash.
-                    .map(|name| name.trim_start_matches('/').to_string())
-                    .unwrap_or_default(),
-                labels: container.labels.unwrap_or_default(),
-                created: container.created,
-                state: container.state.map(|state| state.to_string()),
-            })
-            .collect())
-    }
-
-    async fn list_networks(
-        &self,
-        labels: &[(&str, Option<&str>)],
-    ) -> Result<Vec<LabelledResource>> {
-        let options = bollard::query_parameters::ListNetworksOptions {
-            filters: Some(label_filters(labels)),
-        };
-        let networks = self
-            .docker
-            .list_networks(Some(options))
-            .await
-            .context("Failed to list Docker networks")?;
-        Ok(networks
-            .into_iter()
-            .map(|network| LabelledResource {
-                id: network.id.unwrap_or_default(),
-                name: network.name.unwrap_or_default(),
-                labels: network.labels.unwrap_or_default(),
-                created: network.created.map(|created| created.timestamp()),
-                state: None,
-            })
-            .collect())
-    }
-
-    async fn list_volumes(&self) -> Result<Vec<String>> {
-        let response = self
-            .docker
-            .list_volumes(None::<bollard::query_parameters::ListVolumesOptions>)
-            .await
-            .context("Failed to list Docker volumes")?;
-        Ok(response
-            .volumes
-            .unwrap_or_default()
-            .into_iter()
-            .map(|volume| volume.name)
-            .collect())
-    }
-
-    async fn remove_volume(&self, name: &str) -> Result<()> {
-        self.docker
-            .remove_volume(name, None::<bollard::query_parameters::RemoveVolumeOptions>)
-            .await
-            .with_context(|| format!("Failed to remove volume '{}'", name))?;
-
-        Ok(())
-    }
-
     async fn run_container(
         &self,
         spec: &ContainerSpec,
@@ -2727,6 +2576,122 @@ impl ContainerRuntime for DockerClient {
         if exit_code != 0 {
             return Err(ContainerExitedNonZero { exit_code }.into());
         }
+
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl ResourceInventory for DockerClient {
+    async fn list_containers(
+        &self,
+        labels: &[(&str, Option<&str>)],
+    ) -> Result<Vec<LabelledResource>> {
+        let options = bollard::query_parameters::ListContainersOptions {
+            // Leftovers have usually exited; without this they'd be
+            // invisible, which is most of the point.
+            all: true,
+            filters: Some(label_filters(labels)),
+            ..Default::default()
+        };
+        let containers = self
+            .docker
+            .list_containers(Some(options))
+            .await
+            .context("Failed to list Docker containers")?;
+        Ok(containers
+            .into_iter()
+            .map(|container| LabelledResource {
+                id: container.id.unwrap_or_default(),
+                name: container
+                    .names
+                    .and_then(|names| names.into_iter().next())
+                    // Docker reports container names with a leading slash.
+                    .map(|name| name.trim_start_matches('/').to_string())
+                    .unwrap_or_default(),
+                labels: container.labels.unwrap_or_default(),
+                created: container.created,
+                state: container.state.map(|state| state.to_string()),
+            })
+            .collect())
+    }
+
+    async fn list_networks(
+        &self,
+        labels: &[(&str, Option<&str>)],
+    ) -> Result<Vec<LabelledResource>> {
+        let options = bollard::query_parameters::ListNetworksOptions {
+            filters: Some(label_filters(labels)),
+        };
+        let networks = self
+            .docker
+            .list_networks(Some(options))
+            .await
+            .context("Failed to list Docker networks")?;
+        Ok(networks
+            .into_iter()
+            .map(|network| LabelledResource {
+                id: network.id.unwrap_or_default(),
+                name: network.name.unwrap_or_default(),
+                labels: network.labels.unwrap_or_default(),
+                created: network.created.map(|created| created.timestamp()),
+                state: None,
+            })
+            .collect())
+    }
+
+    async fn remove_network(&self, name: &str) -> Result<()> {
+        self.docker
+            .remove_network(name)
+            .await
+            .with_context(|| format!("Failed to remove network '{}'", name))?;
+        tracing::debug!(network = name, "removed network");
+        Ok(())
+    }
+
+    async fn stop_and_remove_container(&self, container_id: &str) -> Result<()> {
+        self.docker
+            .stop_container(container_id, None)
+            .await
+            .with_context(|| format!("Failed to stop container '{}'", container_id))?;
+        self.docker
+            .remove_container(container_id, Some(remove_container_options()))
+            .await
+            .with_context(|| format!("Failed to remove container '{}'", container_id))?;
+        tracing::debug!(container_id, "stopped and removed container");
+
+        // The caller (`engine.rs`) posts `TaskEvent::ContainerRemoved`
+        // right after this returns — interleaved output must never arrive
+        // after that event, so wait for any background log follower to
+        // actually finish flushing first. See `await_log_follower`/
+        // `log_followers`' own doc comments.
+        self.await_log_follower(container_id).await;
+
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl VolumeStore for DockerClient {
+    async fn list_volumes(&self) -> Result<Vec<String>> {
+        let response = self
+            .docker
+            .list_volumes(None::<bollard::query_parameters::ListVolumesOptions>)
+            .await
+            .context("Failed to list Docker volumes")?;
+        Ok(response
+            .volumes
+            .unwrap_or_default()
+            .into_iter()
+            .map(|volume| volume.name)
+            .collect())
+    }
+
+    async fn remove_volume(&self, name: &str) -> Result<()> {
+        self.docker
+            .remove_volume(name, None::<bollard::query_parameters::RemoveVolumeOptions>)
+            .await
+            .with_context(|| format!("Failed to remove volume '{}'", name))?;
 
         Ok(())
     }

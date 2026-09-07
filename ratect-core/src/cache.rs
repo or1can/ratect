@@ -45,14 +45,33 @@
 //! functions (`matching_cache_volumes`/`matching_cache_directories`),
 //! deliberately separate from the async I/O around them, so it is testable
 //! against plain `Vec<String>`/tempdir fixtures with no fake
-//! `ContainerRuntime`.
+//! `VolumeStore`.
 
 use crate::config::{CacheScope, CacheVolumeMount};
-use crate::docker::ContainerRuntime;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// The volume operations [`CacheStore`] needs — a narrower contract than
+/// [`crate::docker::ContainerRuntime`]'s full 16 methods, which this module
+/// doesn't otherwise touch. `ContainerRuntime` requires this as a
+/// supertrait, so `DockerClient` implements both without restating either
+/// method.
+#[async_trait::async_trait]
+pub trait VolumeStore {
+    /// Lists every Docker volume's name on the daemon — used by
+    /// `--clean`/`--clean-cache` (see [`clean_volume_caches`]) to find this
+    /// project's own `batect-cache-<key>-*` volumes among them. No
+    /// filtering here; the caller matches the prefix itself, the same way
+    /// Batect's own `CleanupCachesCommand` does.
+    async fn list_volumes(&self) -> Result<Vec<String>>;
+
+    /// Removes the named Docker volume — used by
+    /// `--clean`/`--clean-cache` once `list_volumes` has identified it as
+    /// one of this project's own cache volumes.
+    async fn remove_volume(&self, name: &str) -> Result<()>;
+}
 
 /// Where a `cache` mount's contents actually live. Selected by `--cache-type`
 /// (default `Volume`), matching Batect's own `CacheType` — except Batect
@@ -229,7 +248,7 @@ fn matching_shared_cache_volumes<'a>(
 /// Every cache volume this project can see, with the scope each one's name
 /// implies — one `list_volumes` call covering both scopes.
 async fn list_all_volume_caches(
-    runtime: &impl ContainerRuntime,
+    runtime: &impl VolumeStore,
     project_cache_key: &str,
 ) -> Result<Vec<(String, CacheScope)>> {
     let existing = runtime.list_volumes().await?;
@@ -263,7 +282,7 @@ async fn list_all_volume_caches(
 /// wasn't, so a bare `caches clean` removed every shared cache on the
 /// machine. The rule lives here now, where it cannot be forgotten.
 async fn clean_shared_volume_caches(
-    runtime: &impl ContainerRuntime,
+    runtime: &impl VolumeStore,
     only: &HashSet<String>,
 ) -> Result<Vec<String>> {
     let existing = runtime.list_volumes().await?;
@@ -304,7 +323,7 @@ fn clean_shared_directory_caches(root: &Path, only: &HashSet<String>) -> Result<
     Ok(matched)
 }
 
-/// Filters `existing_volumes` (from [`crate::docker::ContainerRuntime::list_volumes`])
+/// Filters `existing_volumes` (from [`VolumeStore::list_volumes`])
 /// down to those whose name starts with `prefix`, further restricted to
 /// `only` when non-empty (the `--clean-cache <name>` allowlist; empty means
 /// "everything under this prefix").
@@ -318,7 +337,7 @@ fn clean_shared_directory_caches(root: &Path, only: &HashSet<String>) -> Result<
 ///
 /// A pure, synchronous decision function deliberately kept separate from
 /// the I/O in [`clean_volume_caches`], so it's unit-testable against plain
-/// `Vec<String>` fixtures without needing a fake `ContainerRuntime`.
+/// `Vec<String>` fixtures without needing a fake `VolumeStore`.
 fn matching_cache_volumes<'a>(
     existing_volumes: &'a [String],
     prefix: &str,
@@ -347,7 +366,7 @@ fn list_directory_caches(project_directory: &Path) -> Result<Vec<String>> {
 /// the full volume name from a cache name whenever it needs to, so the two
 /// removal functions it sits beside can agree on one contract.
 async fn clean_volume_caches(
-    runtime: &impl ContainerRuntime,
+    runtime: &impl VolumeStore,
     project_cache_key: &str,
     only: &HashSet<String>,
 ) -> Result<Vec<String>> {
@@ -522,12 +541,12 @@ pub enum CacheRefusal {
 /// volume-or-directory × project-or-shared matrix `list`/`remove` used to
 /// leave every caller to reassemble.
 ///
-/// `Volume` needs a `ContainerRuntime`, because Docker holds the caches;
+/// `Volume` needs a `VolumeStore`, because Docker holds the caches;
 /// `Directory` needs none, because the filesystem does. Representing that as
 /// one struct with an `Option<&D>` field left "a volume cache needs a
 /// daemon" as a runtime `.expect()` no caller could see coming from the
 /// type — this enum makes the missing case unrepresentable instead.
-pub enum CacheStore<'a, D: ContainerRuntime + Send + Sync> {
+pub enum CacheStore<'a, D: VolumeStore + Send + Sync> {
     Volume {
         docker: &'a D,
         project_cache_key: String,
@@ -544,7 +563,7 @@ pub enum CacheStore<'a, D: ContainerRuntime + Send + Sync> {
     },
 }
 
-impl<'a, D: ContainerRuntime + Send + Sync> CacheStore<'a, D> {
+impl<'a, D: VolumeStore + Send + Sync> CacheStore<'a, D> {
     /// `docker` is required for `CacheType::Volume` and ignored for
     /// `CacheType::Directory` — a caller that never opened a Docker
     /// connection for a directory-type invocation can simply pass `None`.

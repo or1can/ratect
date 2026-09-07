@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use super::*;
-use crate::docker::{ContainerRuntime, LabelledResource};
+use crate::docker::LabelledResource;
+use crate::resources::ResourceInventory;
 use std::collections::HashMap;
 
 /// Builds a `Config` the way a real invocation does — through
@@ -252,8 +253,11 @@ tasks:
 /// Implements only what `leftover_finding` reaches through
 /// `resources::find` — a fake scoped to this module, not shared with
 /// `resources_tests.rs`'s: each test module's fake answers only what that
-/// module calls, and both implement the same compiler-checked trait, so
-/// neither can silently drift from `ContainerRuntime`'s real shape.
+/// module calls, and both implement the same compiler-checked
+/// `ResourceInventory` trait, so neither can silently drift from its real
+/// shape. `stop_and_remove_container`/`remove_network` stay stubbed —
+/// `leftover_finding` only ever lists, never removes — but the trait's
+/// other two methods are what this fake exists to answer for real.
 #[derive(Default)]
 struct FakeRuntime {
     containers: Vec<LabelledResource>,
@@ -261,7 +265,7 @@ struct FakeRuntime {
 }
 
 #[async_trait::async_trait]
-impl ContainerRuntime for FakeRuntime {
+impl ResourceInventory for FakeRuntime {
     async fn list_containers(
         &self,
         _labels: &[(&str, Option<&str>)],
@@ -282,83 +286,6 @@ impl ContainerRuntime for FakeRuntime {
 
     async fn remove_network(&self, _name: &str) -> anyhow::Result<()> {
         unimplemented!("doctor never removes a network")
-    }
-
-    async fn pull_image(&self, _image: &str) -> anyhow::Result<()> {
-        unimplemented!("doctor never pulls an image")
-    }
-
-    async fn image_exists_locally(&self, _image: &str) -> anyhow::Result<bool> {
-        unimplemented!("doctor never inspects an image")
-    }
-
-    async fn build_image(
-        &self,
-        _build_directory: &std::path::Path,
-        _dockerfile: &str,
-        _build_args: Option<&HashMap<String, String>>,
-        _target: Option<&str>,
-        _buildkit: Option<&crate::docker::BuildKitOptions>,
-        _tag: &str,
-        _force_pull: bool,
-        _proxy_host_gateway: Option<crate::proxy::HostGateway>,
-    ) -> anyhow::Result<String> {
-        unimplemented!("doctor never builds an image")
-    }
-
-    async fn tag_image(&self, _image_id: &str, _tags: &[String]) -> anyhow::Result<()> {
-        unimplemented!("doctor never tags an image")
-    }
-
-    async fn create_network(
-        &self,
-        _name: &str,
-        _labels: &HashMap<String, String>,
-    ) -> anyhow::Result<()> {
-        unimplemented!("doctor never creates a network")
-    }
-
-    async fn network_exists(&self, _name: &str) -> anyhow::Result<bool> {
-        unimplemented!("doctor never checks for a network")
-    }
-
-    async fn start_background_container(
-        &self,
-        _spec: &crate::container_spec::ContainerSpec,
-    ) -> anyhow::Result<String> {
-        unimplemented!("doctor never starts a container")
-    }
-
-    async fn wait_for_container_healthy(&self, _container_id: &str) -> anyhow::Result<()> {
-        unimplemented!("doctor never waits on a container")
-    }
-
-    async fn exec_in_container(
-        &self,
-        _container_id: &str,
-        _command: &str,
-        _working_directory: Option<&str>,
-        _environment: Option<&HashMap<String, String>>,
-        _user_mapping: Option<&crate::docker::UserMapping>,
-    ) -> anyhow::Result<crate::docker::ExecResult> {
-        unimplemented!("doctor never execs in a container")
-    }
-
-    async fn run_container(
-        &self,
-        _spec: &crate::container_spec::ContainerSpec,
-        _created: Option<tokio::sync::oneshot::Sender<String>>,
-        _started: Option<tokio::sync::oneshot::Sender<()>>,
-    ) -> anyhow::Result<()> {
-        unimplemented!("doctor never runs a container")
-    }
-
-    async fn list_volumes(&self) -> anyhow::Result<Vec<String>> {
-        unimplemented!("doctor never lists volumes")
-    }
-
-    async fn remove_volume(&self, _name: &str) -> anyhow::Result<()> {
-        unimplemented!("doctor never removes a volume")
     }
 }
 

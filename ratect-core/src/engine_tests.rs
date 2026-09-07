@@ -13,8 +13,10 @@
 // limitations under the License.
 
 use super::*;
+use crate::cache::VolumeStore;
 use crate::config::{Container, PortMapping, Task, TaskRun};
 use crate::docker::DockerClient;
+use crate::resources::ResourceInventory;
 use crate::ui::NullEventSink;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -591,11 +593,6 @@ impl ContainerRuntime for FakeContainerRuntime {
         Ok(())
     }
 
-    async fn remove_network(&self, name: &str) -> Result<()> {
-        self.push(format!("network-remove:{name}"));
-        Ok(())
-    }
-
     async fn network_exists(&self, name: &str) -> Result<bool> {
         self.push(format!("network-exists:{name}"));
         Ok(*self.network_exists_result.lock().unwrap())
@@ -670,52 +667,6 @@ impl ContainerRuntime for FakeContainerRuntime {
         })
     }
 
-    async fn stop_and_remove_container(&self, container_id: &str) -> Result<()> {
-        let interrupt = self.interrupt_on_stop.lock().unwrap().clone();
-        if let Some(interrupt) = interrupt {
-            interrupt.record();
-            // Yields so this removal is genuinely *in flight* when the
-            // engine's race next polls — a real `stop_and_remove` waits
-            // on the daemon (up to Docker's whole kill timeout for a
-            // container ignoring `SIGTERM`), which is the case the race
-            // exists for. Returning `Ready` immediately would instead
-            // test the one situation that can't happen.
-            tokio::task::yield_now().await;
-        }
-        self.push(format!("sidecar-stop:{container_id}"));
-        Ok(())
-    }
-
-    // Neither is ever reached through `TaskEngine` (only `--clean`/
-    // `--clean-cache` in `main.rs` call these, directly against a real
-    // `DockerClient`) — trivial stubs only to satisfy the trait.
-    // `crate::cache`'s own tests cover the actual cleanup logic against
-    // plain `Vec<String>` fixtures instead, not this fake.
-    async fn list_volumes(&self) -> Result<Vec<String>> {
-        Ok(Vec::new())
-    }
-
-    // The engine never lists containers or networks — that's the
-    // `resources` verb's business, driven from a binary — so these stay
-    // empty here rather than growing capture state no engine test uses.
-    async fn list_containers(
-        &self,
-        _labels: &[(&str, Option<&str>)],
-    ) -> Result<Vec<crate::docker::LabelledResource>> {
-        Ok(Vec::new())
-    }
-
-    async fn list_networks(
-        &self,
-        _labels: &[(&str, Option<&str>)],
-    ) -> Result<Vec<crate::docker::LabelledResource>> {
-        Ok(Vec::new())
-    }
-
-    async fn remove_volume(&self, _name: &str) -> Result<()> {
-        Ok(())
-    }
-
     async fn run_container(
         &self,
         spec: &crate::container_spec::ContainerSpec,
@@ -762,6 +713,63 @@ impl ContainerRuntime for FakeContainerRuntime {
         if *self.fail_run.lock().unwrap() {
             return Err(crate::docker::ContainerExitedNonZero { exit_code: 1 }.into());
         }
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl ResourceInventory for FakeContainerRuntime {
+    // The engine never lists containers or networks — that's the
+    // `resources` verb's business, driven from a binary — so these stay
+    // empty here rather than growing capture state no engine test uses.
+    async fn list_containers(
+        &self,
+        _labels: &[(&str, Option<&str>)],
+    ) -> Result<Vec<crate::docker::LabelledResource>> {
+        Ok(Vec::new())
+    }
+
+    async fn list_networks(
+        &self,
+        _labels: &[(&str, Option<&str>)],
+    ) -> Result<Vec<crate::docker::LabelledResource>> {
+        Ok(Vec::new())
+    }
+
+    async fn remove_network(&self, name: &str) -> Result<()> {
+        self.push(format!("network-remove:{name}"));
+        Ok(())
+    }
+
+    async fn stop_and_remove_container(&self, container_id: &str) -> Result<()> {
+        let interrupt = self.interrupt_on_stop.lock().unwrap().clone();
+        if let Some(interrupt) = interrupt {
+            interrupt.record();
+            // Yields so this removal is genuinely *in flight* when the
+            // engine's race next polls — a real `stop_and_remove` waits
+            // on the daemon (up to Docker's whole kill timeout for a
+            // container ignoring `SIGTERM`), which is the case the race
+            // exists for. Returning `Ready` immediately would instead
+            // test the one situation that can't happen.
+            tokio::task::yield_now().await;
+        }
+        self.push(format!("sidecar-stop:{container_id}"));
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl VolumeStore for FakeContainerRuntime {
+    // Neither is ever reached through `TaskEngine` (only `--clean`/
+    // `--clean-cache` in `main.rs` call these, directly against a real
+    // `DockerClient`) — trivial stubs only to satisfy the trait.
+    // `crate::cache`'s own tests cover the actual cleanup logic against
+    // plain `Vec<String>` fixtures instead, not this fake.
+    async fn list_volumes(&self) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
+    async fn remove_volume(&self, _name: &str) -> Result<()> {
         Ok(())
     }
 }

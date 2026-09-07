@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::docker::LabelledResource;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Mutex;
 
 fn resource(
@@ -114,7 +114,7 @@ impl FakeRuntime {
 }
 
 #[async_trait::async_trait]
-impl ContainerRuntime for FakeRuntime {
+impl ResourceInventory for FakeRuntime {
     async fn list_containers(
         &self,
         labels: &[(&str, Option<&str>)],
@@ -137,79 +137,6 @@ impl ContainerRuntime for FakeRuntime {
 
     async fn remove_network(&self, name: &str) -> Result<()> {
         self.remove(name)
-    }
-
-    async fn pull_image(&self, _image: &str) -> Result<()> {
-        unimplemented!("resources never pulls an image")
-    }
-
-    async fn image_exists_locally(&self, _image: &str) -> Result<bool> {
-        unimplemented!("resources never inspects an image")
-    }
-
-    async fn build_image(
-        &self,
-        _build_directory: &std::path::Path,
-        _dockerfile: &str,
-        _build_args: Option<&HashMap<String, String>>,
-        _target: Option<&str>,
-        _buildkit: Option<&crate::docker::BuildKitOptions>,
-        _tag: &str,
-        _force_pull: bool,
-        _proxy_host_gateway: Option<crate::proxy::HostGateway>,
-    ) -> Result<String> {
-        unimplemented!("resources never builds an image")
-    }
-
-    async fn tag_image(&self, _image_id: &str, _tags: &[String]) -> Result<()> {
-        unimplemented!("resources never tags an image")
-    }
-
-    async fn create_network(&self, _name: &str, _labels: &HashMap<String, String>) -> Result<()> {
-        unimplemented!("resources never creates a network")
-    }
-
-    async fn network_exists(&self, _name: &str) -> Result<bool> {
-        unimplemented!("resources never checks for a network")
-    }
-
-    async fn start_background_container(
-        &self,
-        _spec: &crate::container_spec::ContainerSpec,
-    ) -> Result<String> {
-        unimplemented!("resources never starts a container")
-    }
-
-    async fn wait_for_container_healthy(&self, _container_id: &str) -> Result<()> {
-        unimplemented!("resources never waits on a container")
-    }
-
-    async fn exec_in_container(
-        &self,
-        _container_id: &str,
-        _command: &str,
-        _working_directory: Option<&str>,
-        _environment: Option<&HashMap<String, String>>,
-        _user_mapping: Option<&crate::docker::UserMapping>,
-    ) -> Result<crate::docker::ExecResult> {
-        unimplemented!("resources never execs in a container")
-    }
-
-    async fn run_container(
-        &self,
-        _spec: &crate::container_spec::ContainerSpec,
-        _created: Option<tokio::sync::oneshot::Sender<String>>,
-        _started: Option<tokio::sync::oneshot::Sender<()>>,
-    ) -> Result<()> {
-        unimplemented!("resources never runs a container")
-    }
-
-    async fn list_volumes(&self) -> Result<Vec<String>> {
-        unimplemented!("resources never lists volumes")
-    }
-
-    async fn remove_volume(&self, _name: &str) -> Result<()> {
-        unimplemented!("resources never removes a volume — that is `cache`")
     }
 }
 

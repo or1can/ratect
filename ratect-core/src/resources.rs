@@ -26,7 +26,7 @@
 //!
 //! **This module is where the rules live; it prints nothing.** It was in
 //! `ratect/src/main.rs` until 0.6.0, bound to the concrete `DockerClient`
-//! even though every call it makes is a [`ContainerRuntime`] method — so
+//! even though every call it makes is a [`ResourceInventory`] method — so
 //! leftover selection, the containers-before-networks ordering rule and
 //! partial-failure behaviour were provable only against a live daemon. The
 //! seam existed and was simply not used. Three things follow from that
@@ -42,8 +42,53 @@
 //!   daemon filtered. That check is deliberately duplicated on this side —
 //!   see [`find`].
 
-use crate::docker::{ContainerRuntime, LabelledResource};
+use crate::docker::LabelledResource;
 use anyhow::Result;
+
+/// The container/network inventory operations `find`/`remove` need — a
+/// narrower contract than [`crate::docker::ContainerRuntime`]'s full 16
+/// methods, which this module doesn't otherwise touch. `ContainerRuntime`
+/// requires this as a supertrait, so `DockerClient` implements both without
+/// restating any method.
+#[async_trait::async_trait]
+pub trait ResourceInventory {
+    /// Containers carrying every one of `labels`, whether running or not —
+    /// a leftover has usually exited, so listing only running ones would
+    /// miss most of what's being looked for.
+    ///
+    /// Each entry is a key and an optional value: `Some` matches that exact
+    /// value, `None` matches merely *having* the key, which is Docker's own
+    /// `label=key` filter form. The `None` form is what "every project"
+    /// means — every project *Ratect* created, not every container on the
+    /// machine.
+    ///
+    /// An empty slice therefore means no filter at all, i.e. everything on
+    /// the daemon. That is almost never what a caller wants; anything that
+    /// might remove what it finds should pass at least a key-existence
+    /// filter.
+    ///
+    /// Filtering happens daemon-side rather than by listing everything and
+    /// matching here: on a machine with thousands of containers that's the
+    /// difference between one cheap query and a large response, and Docker
+    /// implements exactly this filter natively.
+    async fn list_containers(
+        &self,
+        labels: &[(&str, Option<&str>)],
+    ) -> Result<Vec<LabelledResource>>;
+
+    /// Networks carrying every one of `labels` — the counterpart of
+    /// [`list_containers`](Self::list_containers), with the same warning
+    /// about an empty slice. Docker's own built-in `bridge`/`host`/`none`
+    /// networks carry no labels at all, so any key-existence filter
+    /// excludes them; an unfiltered call does not.
+    async fn list_networks(&self, labels: &[(&str, Option<&str>)])
+        -> Result<Vec<LabelledResource>>;
+
+    async fn remove_network(&self, name: &str) -> Result<()>;
+
+    /// Stops and removes a container started with `start_background_container`.
+    async fn stop_and_remove_container(&self, container_id: &str) -> Result<()>;
+}
 
 /// One leftover, with the labels already pulled out of the map — reporting
 /// reads them several times each, and a resource missing one (not Ratect's, or
@@ -115,7 +160,7 @@ impl Leftover {
 ///
 /// `now` is seconds since the Unix epoch; `older_than` is compared against it,
 /// so a caller that wants "everything" passes `None` rather than a zero age.
-pub async fn find<D: ContainerRuntime + Send + Sync>(
+pub async fn find<D: ResourceInventory + Send + Sync>(
     docker: &D,
     project: Option<&str>,
     older_than: Option<std::time::Duration>,
@@ -151,7 +196,7 @@ pub async fn find<D: ContainerRuntime + Send + Sync>(
 /// and the count of what actually went is the only summary this can give.
 pub async fn remove<D, F>(docker: &D, leftovers: &[Leftover], mut progress: F) -> usize
 where
-    D: ContainerRuntime + Send + Sync,
+    D: ResourceInventory + Send + Sync,
     F: FnMut(&Leftover, &Result<()>),
 {
     let (networks, containers): (Vec<&Leftover>, Vec<&Leftover>) =
