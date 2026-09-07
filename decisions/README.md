@@ -17,11 +17,16 @@ The line is **cross-cutting vs. version-scoped**:
   the docs domain all touch it), the native config format (config + includes +
   the migration verb). Filing these under one version's bullet buries them; a
   linkable record doesn't.
-- **Version-scoped → stays inline in `ROADMAP.md`.** A decision that belongs to
-  one release reads fine in that release's entry, using the roadmap's existing
-  **"Scope, settled before building:" / "As built:"** subsection pattern (see the
-  git-includes and orphaned-resource entries). Don't extract these — it buys
-  nothing and scatters the reasoning away from the plan it explains.
+- **Version-scoped → stays inline in that release's own GitHub issue** (its
+  "Implementation Decisions" section — see
+  [decisions/0008](0008-tracking-release-scope-with-github-issues.md)). Don't
+  extract these — it buys nothing and scatters the reasoning away from the
+  work it explains. Before [0008](0008-tracking-release-scope-with-github-issues.md),
+  this lived inline in `RELEASES.md`'s own per-version entry instead, using
+  the **"Scope, settled before building:" / "As built:"** subsection pattern
+  (see the git-includes and orphaned-resource entries, both predating that
+  decision) — retired alongside the live scope-then-strikethrough convention
+  it was written for.
 
 Practical trigger: a decision earns an ADR the moment it's about to be
 referenced from a *second* place. Most decisions never cross that line.
@@ -59,3 +64,5 @@ never delete one (same append-only spirit as the roadmap's versioned lists).
 | [0004](0004-git-include-host-path-trust.md) | Trusting a Git include's host paths (`allow_host_paths`) | Accepted — implemented |
 | [0005](0005-build-ssh-keyring-placement.md) | Where `build_ssh`'s ssh-agent keyring lives | Accepted — implemented (ratect-compat 0.25.0) |
 | [0006](0006-code-and-documentation-locality.md) | Where code and its documentation live | Accepted — adopted incrementally |
+| [0007](0007-where-agent-process-docs-live.md) | Where contributor/agent-process docs live | Accepted — adopted immediately |
+| [0008](0008-tracking-release-scope-with-github-issues.md) | Tracking release scope with GitHub Issues, not RELEASES.md | Accepted — adopted immediately |

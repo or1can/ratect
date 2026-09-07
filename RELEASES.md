@@ -1,17 +1,21 @@
 # Ratect releases
 
-The **append-only** record of what each release scoped and what actually
-shipped, one section per binary. Split out of [`ROADMAP.md`](ROADMAP.md) so
-that file can be what its name says — where Ratect is *going*, not where it
-has been.
+The **append-only** record of what each release was, one section per binary.
+Split out of [`ROADMAP.md`](ROADMAP.md) so that file can be what its name
+says — where Ratect is *going*, not where it has been.
 
 Three files divide this work, and the split is by audience and direction:
 
 - [`ROADMAP.md`](ROADMAP.md) — forward-looking, contributor-facing: what is
   planned, and the rules the project runs by.
-- **This file** — backward-looking, contributor-facing: the scope each version
-  was given before it was built, and a done-summary of what it turned into.
-  Entries are never deleted; completed scope is struck through and summarised.
+- **This file** — backward-looking, contributor-facing: one short paragraph
+  per version, naming its theme and linking to its closed GitHub Milestone
+  (which lists every issue that shipped in it). Entries are never deleted, and
+  since [decisions/0008](decisions/0008-tracking-release-scope-with-github-issues.md)
+  are written once, retrospectively, after the release ships — not a live
+  scope-then-strikethrough document. Earlier entries (everything before that
+  decision) keep their original `~~strikethrough~~`-plus-done-summary form;
+  see `AGENTS.md` guideline 9 for both conventions.
 - [`CHANGELOG.md`](CHANGELOG.md) — backward-looking, *user*-facing: what
   changed, in the terms someone upgrading cares about.
 
