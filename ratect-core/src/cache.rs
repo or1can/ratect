@@ -61,7 +61,7 @@ use std::path::{Path, PathBuf};
 #[async_trait::async_trait]
 pub trait VolumeStore {
     /// Lists every Docker volume's name on the daemon — used by
-    /// `--clean`/`--clean-cache` (see [`clean_volume_caches`]) to find this
+    /// `--clean`/`--clean-cache` (see `clean_volume_caches`) to find this
     /// project's own `batect-cache-<key>-*` volumes among them. No
     /// filtering here; the caller matches the prefix itself, the same way
     /// Batect's own `CleanupCachesCommand` does.
