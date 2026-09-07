@@ -33,6 +33,14 @@ Create a GitHub issue.
 
 Run `gh issue view <number> --comments`.
 
+## When a ticket declares a Parent
+
+Use the real GitHub sub-issue relationship instead of `/to-tickets`' default plain-text `## Parent` section — the native link is queryable (`gh issue view <n> --json parent`, returning number/title/state/url), shown in GitHub's own UI, and puts a live "N of M sub-issues done" progress bar on the spec itself; the prose adds nothing on top of that, so omit that section from the ticket body entirely rather than keep both.
+
+Fold it into ticket creation itself: `gh issue create --parent <spec> --title "..." --body "..."` — one command, plain issue numbers, no separate linking step and no database-id lookup (contrast the `dependencies/blocked_by` API below, which does need one). If a ticket already exists without the link, `gh issue edit <parent> --add-sub-issue <ticket>` adds it after the fact.
+
+This isn't modifying the parent in the sense `/to-tickets`' "do not close or modify any parent issue" warns against — that's about the parent's own content/state; declaring a sub-issue relationship from the child side doesn't touch either.
+
 ## Wayfinding operations
 
 Used by `/wayfinder`. The **map** is a single issue with **child** issues as tickets.
