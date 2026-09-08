@@ -302,6 +302,36 @@ pub enum OutputStyle {
     All,
 }
 
+/// The terminal facts every output decision is made from, read once per
+/// invocation — [`select_output_style`] and [`create_event_sink`] both want
+/// them, and querying twice risks answering differently. `pub` so both
+/// binaries construct their own via [`TerminalFacts::gather`] rather than
+/// each duplicating the fields and the reasoning above by hand.
+#[derive(Debug, Clone)]
+pub struct TerminalFacts {
+    /// The `TERM` environment variable, unparsed — `None` when unset, and
+    /// distinct from `Some("dumb")`; see [`supports_interactivity`].
+    pub term: Option<String>,
+    /// Whether stdout is a real terminal, not piped/redirected.
+    pub stdout_is_terminal: bool,
+    /// Whether the terminal's dimensions are actually queryable — see
+    /// [`console_dimensions_available`].
+    pub console_dimensions_available: bool,
+}
+
+impl TerminalFacts {
+    /// Collects the three signals below — independent, already-existing
+    /// facts about this process's own environment, not an inference about
+    /// what they mean (that's [`supports_interactivity`]'s job).
+    pub fn gather() -> Self {
+        Self {
+            term: std::env::var("TERM").ok(),
+            stdout_is_terminal: std::io::stdout().is_terminal(),
+            console_dimensions_available: console_dimensions_available(),
+        }
+    }
+}
+
 /// Picks the output style when `--output` wasn't given — a port of Batect's
 /// `EventLoggerProvider`/`ConsoleInfo.supportsInteractivity` rule: `Fancy`
 /// on a console that can actually support it (stdout is a real terminal,
@@ -318,18 +348,16 @@ pub enum OutputStyle {
 /// doesn't allocate a TTY, so the terminal check already covers it.
 ///
 /// Pure (every input injected) so the whole decision table is
-/// unit-testable; `main.rs` feeds it the real terminal facts.
+/// unit-testable; `main.rs` feeds it the real [`TerminalFacts`].
 pub fn select_output_style(
     requested: Option<OutputStyle>,
     no_color: bool,
-    stdout_is_terminal: bool,
-    term: Option<&str>,
-    console_dimensions_available: bool,
+    terminal: &TerminalFacts,
 ) -> OutputStyle {
     if let Some(style) = requested {
         return style;
     }
-    if supports_interactivity(stdout_is_terminal, term, console_dimensions_available) && !no_color {
+    if supports_interactivity(terminal) && !no_color {
         OutputStyle::Fancy
     } else {
         OutputStyle::Simple
@@ -342,12 +370,10 @@ pub fn select_output_style(
 /// instead of Batect's behavior of accepting it and crashing on the first
 /// repaint. Deliberately excludes `--no-color`: that only influences the
 /// *default*, since colorless fancy works fine (see [`Console`]).
-pub fn supports_interactivity(
-    stdout_is_terminal: bool,
-    term: Option<&str>,
-    console_dimensions_available: bool,
-) -> bool {
-    stdout_is_terminal && term.is_some_and(|term| term != "dumb") && console_dimensions_available
+pub fn supports_interactivity(terminal: &TerminalFacts) -> bool {
+    terminal.stdout_is_terminal
+        && terminal.term.as_deref().is_some_and(|term| term != "dumb")
+        && terminal.console_dimensions_available
 }
 
 /// Whether the terminal's dimensions are actually queryable — the
@@ -363,12 +389,11 @@ pub fn console_dimensions_available() -> bool {
 /// then builds — and, for an explicit `fancy`, validates — the concrete
 /// logger for it. The one place this selection-plus-construction logic
 /// lives, so a second CLI binary (see ROADMAP.md's two-binaries section)
-/// gets it for free instead of reimplementing the match; callers pass
-/// `stdout_is_terminal`/`term`/`console_dimensions_available` in once
-/// (typically already gathered for their own `select_output_style` call,
-/// e.g. for a `--list-tasks` quiet-format decision that has no logger to
-/// construct) rather than this function querying them again on top of
-/// that.
+/// gets it for free instead of reimplementing the match; callers pass a
+/// [`TerminalFacts`] in once (typically already gathered for their own
+/// `select_output_style` call, e.g. for a `--list-tasks` quiet-format
+/// decision that has no logger to construct) rather than this function
+/// gathering them again on top of that.
 ///
 /// Errors only for an explicit `fancy` on a console that can't support live
 /// repainting — Batect instead accepts it and crashes on the first repaint
@@ -378,17 +403,9 @@ pub fn console_dimensions_available() -> bool {
 pub fn create_event_sink(
     requested: Option<OutputStyle>,
     no_color: bool,
-    stdout_is_terminal: bool,
-    term: Option<&str>,
-    console_dimensions_available: bool,
+    terminal: &TerminalFacts,
 ) -> anyhow::Result<Arc<dyn EventSink>> {
-    let style = select_output_style(
-        requested,
-        no_color,
-        stdout_is_terminal,
-        term,
-        console_dimensions_available,
-    );
+    let style = select_output_style(requested, no_color, terminal);
     Ok(match style {
         OutputStyle::Simple => Arc::new(simple::SimpleEventLogger::stdout(no_color)),
         // Batect's quiet logger renders only task-failure events; Ratect
@@ -397,7 +414,7 @@ pub fn create_event_sink(
         // milestone — is exactly the null sink.
         OutputStyle::Quiet => Arc::new(NullEventSink),
         OutputStyle::Fancy => {
-            if !supports_interactivity(stdout_is_terminal, term, console_dimensions_available) {
+            if !supports_interactivity(terminal) {
                 anyhow::bail!(
                     "Fancy output requires an interactive console (stdout isn't a \
                      terminal, TERM is unset or 'dumb', or the terminal size can't \

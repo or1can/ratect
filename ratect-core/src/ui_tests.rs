@@ -72,15 +72,25 @@ fn format_task_summary_colors_exit_code_by_outcome() {
     );
 }
 
-/// `select_output_style(requested, no_color, stdout_is_terminal, term,
-/// console_dimensions_available)` shorthand for the decision-table
-/// tests below.
+/// `select_output_style(requested, no_color, &TerminalFacts { term,
+/// stdout_is_terminal: tty, console_dimensions_available: dimensions })`
+/// shorthand for the decision-table tests below.
 fn auto(no_color: bool, tty: bool, term: Option<&str>, dimensions: bool) -> OutputStyle {
-    select_output_style(None, no_color, tty, term, dimensions)
+    let terminal = TerminalFacts {
+        term: term.map(str::to_string),
+        stdout_is_terminal: tty,
+        console_dimensions_available: dimensions,
+    };
+    select_output_style(None, no_color, &terminal)
 }
 
 #[test]
 fn an_explicit_request_always_wins() {
+    let terminal = TerminalFacts {
+        term: None,
+        stdout_is_terminal: false,
+        console_dimensions_available: false,
+    };
     // Even on a console that couldn't support it — an explicitly
     // requested style is never second-guessed here (fancy's own
     // interactive-console requirement is enforced at wiring time, with
@@ -91,10 +101,7 @@ fn an_explicit_request_always_wins() {
         OutputStyle::Quiet,
         OutputStyle::All,
     ] {
-        assert_eq!(
-            select_output_style(Some(style), true, false, None, false),
-            style
-        );
+        assert_eq!(select_output_style(Some(style), true, &terminal), style);
     }
 }
 

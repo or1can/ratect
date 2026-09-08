@@ -34,9 +34,8 @@ use ratect_core::diagnostics::{
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
 use ratect_core::resources::Leftover;
-use ratect_core::ui::{create_event_sink, select_output_style, OutputStyle};
+use ratect_core::ui::{create_event_sink, select_output_style, OutputStyle, TerminalFacts};
 use std::collections::{HashMap, HashSet};
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
@@ -640,13 +639,7 @@ async fn run(cli: Cli) -> Result<()> {
     // querying stdout/TERM/console dimensions separately.
     let terminal = TerminalFacts::gather();
     let requested_style = global.output.map(OutputStyle::from);
-    let style = select_output_style(
-        requested_style,
-        global.no_color,
-        terminal.stdout_is_terminal,
-        terminal.term.as_deref(),
-        terminal.console_dimensions_available,
-    );
+    let style = select_output_style(requested_style, global.no_color, &terminal);
 
     // Arms follow the `Command` enum's own order (see there).
     match command {
@@ -798,13 +791,7 @@ async fn run_task(
     // One logger, shared by the Docker client (pull/build progress) and the
     // engine (lifecycle milestones), so it sees the whole event stream in
     // order.
-    let event_sink = create_event_sink(
-        requested_style,
-        no_color,
-        terminal.stdout_is_terminal,
-        terminal.term.as_deref(),
-        terminal.console_dimensions_available,
-    )?;
+    let event_sink = create_event_sink(requested_style, no_color, &terminal)?;
 
     // Built before the connection options are consumed below.
     let settings = args.engine_settings(project.project_directory);
@@ -1520,25 +1507,6 @@ fn format_size(bytes: u64) -> String {
         b if b >= MIB => format!("{:.1} MiB", b as f64 / MIB as f64),
         b if b >= KIB => format!("{:.1} KiB", b as f64 / KIB as f64),
         b => format!("{b} B"),
-    }
-}
-
-/// The terminal facts every output decision is made from, read once per
-/// invocation — `select_output_style` and `create_event_sink` both want
-/// them, and querying twice risks answering differently.
-struct TerminalFacts {
-    term: Option<String>,
-    stdout_is_terminal: bool,
-    console_dimensions_available: bool,
-}
-
-impl TerminalFacts {
-    fn gather() -> Self {
-        Self {
-            term: std::env::var("TERM").ok(),
-            stdout_is_terminal: std::io::stdout().is_terminal(),
-            console_dimensions_available: ratect_core::ui::console_dimensions_available(),
-        }
     }
 }
 

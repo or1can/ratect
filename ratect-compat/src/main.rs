@@ -20,9 +20,8 @@ use ratect_core::config::{
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
 use ratect_core::git_include::GitIncludeCache;
-use ratect_core::ui::{create_event_sink, select_output_style, OutputStyle};
+use ratect_core::ui::{create_event_sink, select_output_style, OutputStyle, TerminalFacts};
 use std::collections::{HashMap, HashSet};
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
@@ -459,17 +458,9 @@ async fn run(args: Args) -> Result<()> {
     // format decision below and (inside `create_event_sink`) the real
     // logger construction — rather than each querying stdout/TERM/console
     // dimensions again on top of the other.
-    let term = std::env::var("TERM").ok();
-    let stdout_is_terminal = std::io::stdout().is_terminal();
-    let console_dimensions_available = ratect_core::ui::console_dimensions_available();
+    let terminal = TerminalFacts::gather();
     let requested_style = args.output.map(OutputStyle::from);
-    let output_style = select_output_style(
-        requested_style,
-        args.no_color,
-        stdout_is_terminal,
-        term.as_deref(),
-        console_dimensions_available,
-    );
+    let output_style = select_output_style(requested_style, args.no_color, &terminal);
 
     if args.list_tasks {
         let listing = match output_style {
@@ -503,13 +494,7 @@ async fn run(args: Args) -> Result<()> {
             // validation all live in `create_event_sink` — see its own docs
             // for why, and for the fancy-on-a-non-interactive-console error
             // it can return.
-            let event_sink = create_event_sink(
-                requested_style,
-                args.no_color,
-                stdout_is_terminal,
-                term.as_deref(),
-                console_dimensions_available,
-            )?;
+            let event_sink = create_event_sink(requested_style, args.no_color, &terminal)?;
             // Built before the connection options consume `args` below.
             let settings = args.engine_settings(project_directory);
             // Constructed here rather than inside `ratect-core` — a library
