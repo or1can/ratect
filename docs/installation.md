@@ -10,17 +10,16 @@ release yet, so the only way to install it today is to build it from source.
   socket (Ratect connects the same way the `docker` CLI does — no extra
   configuration needed for a standard Docker install).
 
-  **A recent one.** Ratect speaks the Docker Engine API at version **1.53** and
-  does not negotiate down to what your daemon offers, so a daemon older than that
-  rejects every request with a "client version is too new" error — not just the
-  newer features. For calibration, Docker Engine 29.4 reports API 1.54; check
-  yours with `docker version --format '{{.Server.APIVersion}}'`.
-
-  That floor is higher than Ratect actually needs, and is a consequence of not
-  negotiating rather than a deliberate requirement — see
-  [ROADMAP.md](../ROADMAP.md#batect-parity). The oldest release Ratect's *features*
-  require is 20.10 (December 2020), for the `host-gateway` sentinel behind
-  [proxy support](config-reference.md#proxy-environment-variables).
+  **Docker 20.10 or newer.** Ratect negotiates the Docker Engine API version
+  against your daemon at connection time, downgrading to whatever it offers, so
+  any recent Docker install works with no extra configuration. 20.10 (December
+  2020) is Ratect's own floor below that negotiation — the oldest release its
+  *features* actually require, for the `host-gateway` sentinel behind [proxy
+  support](config-reference.md#proxy-environment-variables) — and a daemon
+  older than that is refused with a clear error naming both its version and
+  the one required, rather than some later request failing for an unexplained
+  reason. Check yours with `docker version --format '{{.Server.APIVersion}}'`
+  (API 1.41 corresponds to Docker 20.10).
 
 ## Build from source
 

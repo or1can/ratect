@@ -119,6 +119,7 @@ use bollard::query_parameters::ResizeContainerTTYOptionsBuilder;
 use bollard::query_parameters::UploadToContainerOptionsBuilder;
 use bollard::query_parameters::WaitContainerOptions;
 use bollard::service::HostConfig;
+use bollard::ClientVersion;
 use bollard::Docker;
 use futures::StreamExt;
 use std::collections::HashMap;
@@ -1542,15 +1543,44 @@ fn select_builder_version(
     })
 }
 
+/// The oldest Docker Engine API version Ratect's own features actually
+/// need — API 1.41 (Docker 20.10, December 2020), the release that added the
+/// `host-gateway` special address Ratect's proxy support depends on. Not
+/// `bollard`'s own default peg (`DockerClient::new` negotiates down from
+/// that): a floor Ratect chose, kept here as the one place it's spelled out.
+const MINIMUM_API_VERSION: ClientVersion = ClientVersion {
+    major_version: 1,
+    minor_version: 41,
+};
+
+/// Checks a negotiated API version against [`MINIMUM_API_VERSION`], naming
+/// both the daemon's own version and the floor Ratect requires on failure —
+/// a clear, upfront reason rather than some later, arbitrary request failing
+/// with a message that doesn't explain why. Pure (the version is injected)
+/// so every scenario — well above the floor, exactly at it, below it — is
+/// unit-testable without a real daemon of that exact version;
+/// `DockerClient::new` feeds it the real negotiated version.
+fn check_api_version_floor(negotiated: ClientVersion) -> Result<()> {
+    if negotiated < MINIMUM_API_VERSION {
+        return Err(anyhow::anyhow!(
+            "Ratect requires Docker 20.10 or newer, but the daemon only supports API version \
+             {negotiated} (Ratect requires at least {MINIMUM_API_VERSION}) — upgrade Docker to \
+             use Ratect."
+        ));
+    }
+    Ok(())
+}
+
 mod connection;
 pub use connection::DockerConnectionOptions;
 
 impl DockerClient {
     /// The daemon's own version string, and — the actual point — proof
-    /// that it can be reached at all. `DockerClient::new` only builds a
-    /// client; nothing talks to the daemon until the first real call, so
-    /// this is how `ratect doctor` distinguishes "unreachable" from
-    /// "reachable, and here's what it is" without running a task.
+    /// that it can be reached at all. `DockerClient::new` already
+    /// negotiated the API version (a `/version` call of its own) before
+    /// this method exists to be called, so this is a second, deliberate
+    /// round trip — this is how `ratect doctor` distinguishes "unreachable"
+    /// from "reachable, and here's what it is" without running a task.
     pub async fn server_version(&self) -> Result<String> {
         let version = self
             .docker
@@ -1562,8 +1592,12 @@ impl DockerClient {
             .unwrap_or_else(|| "unknown version".to_string()))
     }
 
-    pub fn new(connection: &DockerConnectionOptions) -> Result<Self> {
-        let docker = connection::connect(connection)?;
+    pub async fn new(connection: &DockerConnectionOptions) -> Result<Self> {
+        let docker = connection::connect(connection)?
+            .negotiate_version()
+            .await
+            .context("Failed to negotiate the Docker API version with the daemon")?;
+        check_api_version_floor(docker.client_version())?;
         Ok(Self {
             docker,
             builder_version: tokio::sync::OnceCell::new(),

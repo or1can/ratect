@@ -26,16 +26,6 @@ The primary goal is to support the core features of Batect to ensure a seamless 
 - **Full CLI Options Parity**: Support for all standard Batect CLI flags and options (e.g., `--config-file`, `--override-image`, cleanup control flags, etc.). See [Differences from Batect](docs/differences-from-batect.md#cli-flags) for the itemized current status of every flag.
 - **User Mapping**: A container can run as the host's own user/group (`run_as_current_user`) instead of the image's default, so files it writes to a mounted volume aren't root-owned (0.5.0) — see [User mapping](docs/config-reference.md#user-mapping). Host-side uid/gid lookup is Unix-only — see [Differences from Batect](docs/differences-from-batect.md#container-fields).
 - **Proxy Support**: `http_proxy`/`https_proxy`/`ftp_proxy`/`no_proxy` are detected from the host environment and propagated into containers and image builds automatically, `--no-proxy-vars` to disable (0.6.0) — see [Proxy environment variables](docs/config-reference.md#proxy-environment-variables). A proxy on the host is reached on every platform, including Linux, where the `localhost` rewrite is paired with the `host.docker.internal:host-gateway` entry that makes the name resolve and a warning for a proxy bound to loopback only ([0.26.0](RELEASES.md#ratect-compat)) — a deliberate improvement on Batect, which never closed its own oldest issue here. There's still no Docker-version-gated hostname fallback chain, an accepted gap — see [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
-- **Docker API version negotiation** — **not implemented, and it costs
-  compatibility.** `bollard`'s `API_DEFAULT_VERSION` is pinned at **1.53** and
-  nothing in the workspace calls `negotiate_version`, so every request goes out
-  at 1.53 and any older daemon refuses all of them with "client version is too
-  new". Nothing Ratect does needs an API that recent — the newest feature it
-  relies on is Docker 20.10's `host-gateway` — so the effective floor is set by
-  a default nobody chose. Batect negotiates, via the Docker CLI's own Go client.
-  One call at connection time closes it; the reason to think before making it is
-  that negotiating down means some requests may then hit a daemon that doesn't
-  support them, which wants a clear error rather than a confusing one.
 - **Registry credentials** — **not implemented, and a parity gap rather than a new
   feature.** Ratect passes `None` where `bollard` takes registry credentials —
   `create_image` for a pull, both `build_image` paths for a build — so an `image`

@@ -15,7 +15,6 @@
 use super::*;
 use crate::cache::VolumeStore;
 use crate::config::{BuildSecret, Container, PortMapping, Task, TaskRun};
-use crate::docker::DockerClient;
 use crate::resources::ResourceInventory;
 use crate::ui::NullEventSink;
 use std::collections::HashMap;
@@ -4520,11 +4519,7 @@ async fn detects_circular_container_dependency() {
 
 #[tokio::test]
 async fn detects_dependency_cycle() {
-    // DockerClient::new() never contacts a daemon (bollard builds the
-    // client lazily), so this exercises the cycle-detection guard
-    // without needing Docker to actually be running.
-    let docker = DockerClient::new(&Default::default())
-        .expect("constructing a Docker client is infallible here");
+    let docker = FakeContainerRuntime::default();
     let engine = engine(config_with_cycle(), docker);
 
     let err = engine.run_task("a", &[]).await.unwrap_err();
@@ -4533,8 +4528,7 @@ async fn detects_dependency_cycle() {
 
 #[tokio::test]
 async fn missing_task_returns_error() {
-    let docker = DockerClient::new(&Default::default())
-        .expect("constructing a Docker client is infallible here");
+    let docker = FakeContainerRuntime::default();
     let engine = engine(empty_config(), docker);
 
     let err = engine.run_task("does-not-exist", &[]).await.unwrap_err();
@@ -4543,8 +4537,7 @@ async fn missing_task_returns_error() {
 
 #[tokio::test]
 async fn a_slightly_misspelled_task_name_suggests_the_real_one() {
-    let docker = DockerClient::new(&Default::default())
-        .expect("constructing a Docker client is infallible here");
+    let docker = FakeContainerRuntime::default();
     let engine = engine(config_with_shared_prerequisite(), docker);
 
     let err = engine.run_task("tst-task", &[]).await.unwrap_err();
@@ -4556,8 +4549,7 @@ async fn a_slightly_misspelled_task_name_suggests_the_real_one() {
 
 #[tokio::test]
 async fn a_wildly_misspelled_task_name_suggests_nothing() {
-    let docker = DockerClient::new(&Default::default())
-        .expect("constructing a Docker client is infallible here");
+    let docker = FakeContainerRuntime::default();
     let engine = engine(config_with_shared_prerequisite(), docker);
 
     let err = engine

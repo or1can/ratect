@@ -804,7 +804,8 @@ async fn run_task(
     // process where it stands.
     let interrupt = ratect_core::interrupt::Interrupt::new();
     interrupt.listen();
-    let docker = DockerClient::new(&args.docker.into())?
+    let docker = DockerClient::new(&args.docker.into())
+        .await?
         .with_event_sink(Arc::clone(&event_sink))
         .with_enable_buildkit(args.enable_buildkit);
 
@@ -884,7 +885,9 @@ async fn manage_caches(
     // removal after it need the same daemon, and each `DockerClient::new`
     // opens its own.
     let docker = match cache_type {
-        ratect_core::cache::CacheType::Volume => Some(DockerClient::new(&args.docker.into())?),
+        ratect_core::cache::CacheType::Volume => {
+            Some(DockerClient::new(&args.docker.into()).await?)
+        }
         ratect_core::cache::CacheType::Directory => None,
     };
     let store = ratect_core::cache::CacheStore::new(
@@ -1042,7 +1045,7 @@ async fn manage_resources(
                 .project_name,
         )
     };
-    let docker = DockerClient::new(&args.docker.into())?;
+    let docker = DockerClient::new(&args.docker.into()).await?;
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1162,7 +1165,7 @@ async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> 
 
     // Docker first: nothing else about a task can work without it, so it's
     // the most likely single answer to "why did that fail?".
-    let docker = DockerClient::new(&args.docker.into());
+    let docker = DockerClient::new(&args.docker.into()).await;
     let docker = match docker {
         Ok(docker) => match docker.server_version().await {
             Ok(version) => {

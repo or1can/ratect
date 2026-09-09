@@ -875,6 +875,34 @@ fn enable_buildkit_flag_off_defers_to_the_real_env_var() {
 }
 
 #[test]
+fn check_api_version_floor_accepts_a_version_above_the_floor() {
+    check_api_version_floor(ClientVersion {
+        major_version: 1,
+        minor_version: 53,
+    })
+    .expect("a daemon well above the floor should pass");
+}
+
+#[test]
+fn check_api_version_floor_accepts_the_floor_exactly() {
+    check_api_version_floor(MINIMUM_API_VERSION).expect("the floor itself should pass");
+}
+
+#[test]
+fn check_api_version_floor_rejects_a_version_below_the_floor() {
+    let err = check_api_version_floor(ClientVersion {
+        major_version: 1,
+        minor_version: 40,
+    })
+    .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Ratect requires Docker 20.10 or newer, but the daemon only supports API version 1.40 \
+         (Ratect requires at least 1.41) — upgrade Docker to use Ratect."
+    );
+}
+
+#[test]
 fn should_use_tty_requires_both_stdin_and_stdout_to_be_real_terminals() {
     assert!(should_use_tty(true, true, true));
 }

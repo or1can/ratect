@@ -517,7 +517,8 @@ async fn run(args: Args) -> Result<()> {
                 tls_cert: args.docker_tls_cert,
                 tls_key: args.docker_tls_key,
             };
-            let docker = DockerClient::new(&docker_connection)?
+            let docker = DockerClient::new(&docker_connection)
+                .await?
                 .with_event_sink(Arc::clone(&event_sink))
                 .with_enable_buildkit(args.enable_buildkit);
             let engine =
@@ -564,7 +565,7 @@ async fn clean_caches(args: &Args) -> Result<()> {
                 tls_cert: args.docker_tls_cert.clone(),
                 tls_key: args.docker_tls_key.clone(),
             };
-            Some(DockerClient::new(&docker_connection)?)
+            Some(DockerClient::new(&docker_connection).await?)
         }
         ratect_core::cache::CacheType::Directory => {
             println!(

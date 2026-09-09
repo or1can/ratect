@@ -54,8 +54,8 @@ their existing `./batect` wrapper script to keep working symlinks or renames
 
 ### Prerequisites
 
-- [Docker](https://www.docker.com/), a recent release — Ratect talks Engine API
-  1.53 and doesn't negotiate down, so an older daemon refuses everything; see
+- [Docker](https://www.docker.com/), 20.10 or newer — Ratect negotiates the
+  Engine API version at connection time; see
   [Prerequisites](docs/installation.md#prerequisites)
 - [Rust](https://www.rust-lang.org/) (stable)
 
