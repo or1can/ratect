@@ -73,6 +73,7 @@ Ratect is a **Cargo workspace** with four crates (the
   | `engine.rs` | Task lifecycle, prerequisites, dependency graph, cleanup |
   | `exit_code.rs` | What a failed run exits with — the one mapping both binaries share, since `docs/ratect-cli.md` promises their codes are identical |
   | `labels.rs` | The `eu.orican.ratect.*` ownership labels, see [0002](decisions/0002-runtime-ownership-labels.md) |
+  | `registry_auth.rs` | Resolving private registry credentials for pull and build via real Docker credential helpers — a filesystem-and-subprocess concern kept out of `docker.rs`. Currently just the registry-hostname extraction pull's credential resolution will need; the resolver itself is a later addition |
   | `resources.rs` | What previous runs left behind and how it's removed — `ratect resources list`/`clean`'s selection and removal, generic over its own `ResourceInventory` (the container/network inventory slice of `ContainerRuntime`, which requires it as a supertrait) |
   | `diagnostics.rs` | `Finding` and every producer of one that needs no daemon connection of its own — `ratect doctor`/`config validate`'s shared checks |
   | `ui.rs` (+ `ui/`) | The output layer: typed events in, four output styles out |

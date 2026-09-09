@@ -46,6 +46,7 @@ pub(crate) mod include_trust;
 pub mod interrupt;
 pub mod labels;
 pub mod proxy;
+pub mod registry_auth;
 pub mod resources;
 #[cfg(feature = "schema")]
 pub mod schema;
