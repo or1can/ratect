@@ -190,8 +190,8 @@ fn connect_via_an_explicit_context_uses_that_contexts_stored_host() {
     let config_directory = unique_temp_dir();
     // A `tcp://` address (unlike `unix://`) only builds a
     // lazily-connecting client (no handshake, no eager socket-existence
-    // check) — see `await_log_follower_waits_for_the_spawned_task_to_finish`'s
-    // own comment for the same property.
+    // check) — nothing talks to the daemon until the first real call, so
+    // this succeeds against a context whose host is unreachable.
     write_docker_context_meta(&config_directory, "my-context", "tcp://1.2.3.4:2375");
 
     let options = DockerConnectionOptions {

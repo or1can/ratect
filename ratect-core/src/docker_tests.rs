@@ -92,43 +92,35 @@ async fn drain_interleaved_log_stream_flushes_a_buffered_partial_line_before_a_s
 
 #[tokio::test]
 async fn await_log_follower_waits_for_the_spawned_task_to_finish() {
-    // `DockerClient::new` only builds a lazily-connecting client (no
-    // handshake), so this doesn't need a live daemon.
-    let client = DockerClient::new(&Default::default())
-        .expect("DockerClient::new should not require a live daemon");
+    let followers = LogFollowers::default();
     let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let finished_in_task = std::sync::Arc::clone(&finished);
     let handle = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(50)).await;
         finished_in_task.store(true, std::sync::atomic::Ordering::SeqCst);
     });
-    client
-        .log_followers
-        .lock()
-        .unwrap()
-        .insert("container-1".to_string(), handle);
+    followers.insert("container-1".to_string(), handle);
 
-    client.await_log_follower("container-1").await;
+    followers.await_and_remove("container-1").await;
 
     assert!(
         finished.load(std::sync::atomic::Ordering::SeqCst),
-        "await_log_follower should not return before the spawned task finishes — this is \
+        "await_and_remove should not return before the spawned task finishes — this is \
              the exact race the fix closes: ContainerRemoved posting before a follower's final \
              flush"
     );
     assert!(
-        client.log_followers.lock().unwrap().is_empty(),
+        followers.handles.lock().unwrap().is_empty(),
         "the entry should be removed once awaited, so a later call for the same id is a no-op"
     );
 }
 
 #[tokio::test]
 async fn await_log_follower_is_a_no_op_for_a_container_with_no_follower() {
-    let client = DockerClient::new(&Default::default())
-        .expect("DockerClient::new should not require a live daemon");
+    let followers = LogFollowers::default();
     // Every non-interleaved run (and the task's own container, always)
     // never inserts an entry at all — must return immediately, not hang.
-    client.await_log_follower("no-such-container").await;
+    followers.await_and_remove("no-such-container").await;
 }
 
 #[test]
