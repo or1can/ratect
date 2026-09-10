@@ -15,11 +15,12 @@
 //! Resolving private registry credentials via real Docker credential
 //! helpers — [`RegistryCredentialResolver`] and its
 //! [`DockerCredentialHelperResolver`] production implementation, plus
-//! [`registry_hostname`] for extracting which registry an image reference
-//! names. A filesystem-and-subprocess concern of its own, kept out of
+//! [`registry_hostname`] (pull's own registry) and
+//! [`configured_registries`] (build's — every registry `config.json`
+//! declares, since neither Batect nor Ratect parses Dockerfile `FROM`
+//! lines). A filesystem-and-subprocess concern of its own, kept out of
 //! `docker.rs` (which stays focused on bollard/daemon interaction and wires
-//! this module's resolver into `pull_image`). Build-time resolution is a
-//! later addition.
+//! this module into `pull_image`/`build_image`).
 
 use anyhow::Context;
 
@@ -61,6 +62,41 @@ pub fn registry_hostname(image_reference: &str) -> String {
     } else {
         DOCKER_IO.to_string()
     }
+}
+
+/// The union of registry keys `config_json` (raw `config.json` contents)
+/// declares under `auths` and `credHelpers` — every registry Ratect's own
+/// Docker config knows about. Parses just those two fields itself rather
+/// than replicating `docker_credential`'s own fuller config parsing, since
+/// that crate has no way to enumerate configured registries through its
+/// public API (only look up one already-known server name at a time — see
+/// [`RegistryCredentialResolver`]). Used for build, which — since neither
+/// Batect nor Ratect parses Dockerfile `FROM` lines to scope this more
+/// precisely — resolves every registry Ratect's config declares rather than
+/// just the one image field pull can single out.
+///
+/// Empty for missing/malformed JSON or a config declaring neither field —
+/// silent, not an error, matching a fresh machine's absent `config.json`
+/// being "nothing configured" rather than a problem worth surfacing.
+/// Sorted and deduplicated so callers (and tests) get a stable order.
+pub fn configured_registries(config_json: &str) -> Vec<String> {
+    #[derive(serde::Deserialize, Default)]
+    struct ConfigRegistries {
+        #[serde(default)]
+        auths: std::collections::HashMap<String, serde::de::IgnoredAny>,
+        #[serde(default, rename = "credHelpers")]
+        cred_helpers: std::collections::HashMap<String, serde::de::IgnoredAny>,
+    }
+
+    let config: ConfigRegistries = serde_json::from_str(config_json).unwrap_or_default();
+    let mut registries: Vec<String> = config
+        .auths
+        .into_keys()
+        .chain(config.cred_helpers.into_keys())
+        .collect();
+    registries.sort();
+    registries.dedup();
+    registries
 }
 
 /// Resolves the credential configured for a registry — the seam pull (and,

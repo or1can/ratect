@@ -66,6 +66,50 @@ fn any_uppercase_character_in_the_first_segment_makes_it_a_domain() {
 }
 
 #[test]
+fn configured_registries_unions_auths_and_cred_helpers_keys() {
+    let config = r#"{
+        "auths": {
+            "myregistry.example.com": { "auth": "dGVzdDp0ZXN0" }
+        },
+        "credHelpers": {
+            "123456789.dkr.ecr.us-east-1.amazonaws.com": "ecr-login"
+        }
+    }"#;
+    assert_eq!(
+        configured_registries(config),
+        vec![
+            "123456789.dkr.ecr.us-east-1.amazonaws.com".to_string(),
+            "myregistry.example.com".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn configured_registries_deduplicates_a_registry_in_both_maps() {
+    let config = r#"{
+        "auths": { "myregistry.example.com": { "auth": "dGVzdDp0ZXN0" } },
+        "credHelpers": { "myregistry.example.com": "some-helper" }
+    }"#;
+    assert_eq!(
+        configured_registries(config),
+        vec!["myregistry.example.com".to_string()]
+    );
+}
+
+#[test]
+fn configured_registries_is_empty_for_a_config_with_neither_field() {
+    assert_eq!(configured_registries("{}"), Vec::<String>::new());
+}
+
+#[test]
+fn configured_registries_is_empty_for_malformed_json() {
+    assert_eq!(
+        configured_registries("not json at all"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
 fn username_password_maps_to_the_matching_bollard_fields() {
     let credential = to_bollard_credentials(docker_credential::DockerCredential::UsernamePassword(
         "alice".to_string(),

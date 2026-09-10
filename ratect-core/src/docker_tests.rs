@@ -986,6 +986,158 @@ async fn resolve_pull_credential_warns_and_proceeds_without_credentials_on_failu
     );
 }
 
+/// A [`RegistryCredentialResolver`] with a different, pre-arranged answer
+/// per registry — `FakeCredentialResolver`'s single fixed answer isn't
+/// enough for testing wiring that resolves more than one registry per call
+/// (build's credential resolution). Each registry is expected to be
+/// resolved at most once, matching production usage.
+struct FakeMultiCredentialResolver {
+    answers:
+        std::sync::Mutex<HashMap<String, anyhow::Result<Option<bollard::auth::DockerCredentials>>>>,
+}
+
+impl FakeMultiCredentialResolver {
+    fn new(
+        answers: HashMap<String, anyhow::Result<Option<bollard::auth::DockerCredentials>>>,
+    ) -> Self {
+        Self {
+            answers: std::sync::Mutex::new(answers),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::registry_auth::RegistryCredentialResolver for FakeMultiCredentialResolver {
+    async fn resolve(
+        &self,
+        registry: &str,
+    ) -> anyhow::Result<Option<bollard::auth::DockerCredentials>> {
+        self.answers
+            .lock()
+            .unwrap()
+            .remove(registry)
+            .unwrap_or_else(|| {
+                panic!("resolve() called for unexpected or already-resolved registry '{registry}'")
+            })
+    }
+}
+
+#[tokio::test]
+async fn resolve_build_credentials_resolves_every_registry() {
+    let alice = bollard::auth::DockerCredentials {
+        username: Some("alice".to_string()),
+        password: Some("hunter2".to_string()),
+        ..Default::default()
+    };
+    let bob = bollard::auth::DockerCredentials {
+        username: Some("bob".to_string()),
+        password: Some("swordfish".to_string()),
+        ..Default::default()
+    };
+    let resolver = FakeMultiCredentialResolver::new(HashMap::from([
+        (
+            "registry-a.example.com".to_string(),
+            Ok(Some(alice.clone())),
+        ),
+        ("registry-b.example.com".to_string(), Ok(Some(bob.clone()))),
+    ]));
+    let registries = vec![
+        "registry-a.example.com".to_string(),
+        "registry-b.example.com".to_string(),
+    ];
+
+    let (credentials, warnings) = resolve_build_credentials(&resolver, &registries).await;
+
+    assert_eq!(
+        credentials,
+        HashMap::from([
+            ("registry-a.example.com".to_string(), alice),
+            ("registry-b.example.com".to_string(), bob),
+        ])
+    );
+    assert!(warnings.is_empty());
+}
+
+#[tokio::test]
+async fn resolve_build_credentials_is_empty_with_no_registries_configured() {
+    let resolver = FakeMultiCredentialResolver::new(HashMap::new());
+
+    let (credentials, warnings) = resolve_build_credentials(&resolver, &[]).await;
+
+    assert!(credentials.is_empty());
+    assert!(
+        warnings.is_empty(),
+        "no configured registries should mean no behaviour change and no warning"
+    );
+}
+
+#[tokio::test]
+async fn resolve_build_credentials_skips_a_failed_registry_without_aborting_the_others() {
+    let bob = bollard::auth::DockerCredentials {
+        username: Some("bob".to_string()),
+        password: Some("swordfish".to_string()),
+        ..Default::default()
+    };
+    let resolver = FakeMultiCredentialResolver::new(HashMap::from([
+        (
+            "broken.example.com".to_string(),
+            Err(anyhow::anyhow!("helper exploded")),
+        ),
+        ("registry-b.example.com".to_string(), Ok(Some(bob.clone()))),
+        ("registry-c.example.com".to_string(), Ok(None)),
+    ]));
+    let registries = vec![
+        "broken.example.com".to_string(),
+        "registry-b.example.com".to_string(),
+        "registry-c.example.com".to_string(),
+    ];
+
+    let (credentials, warnings) = resolve_build_credentials(&resolver, &registries).await;
+
+    assert_eq!(
+        credentials,
+        HashMap::from([("registry-b.example.com".to_string(), bob)]),
+        "the other registries must still resolve despite one failing"
+    );
+    assert_eq!(
+        warnings.len(),
+        1,
+        "exactly one warning, for the one registry that failed: {warnings:?}"
+    );
+    assert!(
+        warnings[0].contains("broken.example.com"),
+        "the warning should name the registry that failed: {}",
+        warnings[0]
+    );
+}
+
+#[tokio::test]
+async fn read_configured_registries_is_empty_for_a_missing_config_file() {
+    let config_directory = unique_temp_dir();
+    let config_path = config_directory.join("config.json");
+
+    let registries = read_configured_registries(&config_path).await;
+    fs::remove_dir_all(&config_directory).ok();
+
+    assert_eq!(registries, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn read_configured_registries_parses_an_existing_config_file() {
+    let config_directory = unique_temp_dir();
+    let config_path = config_directory.join("config.json");
+    fs::write(
+        &config_path,
+        r#"{"auths": {"myregistry.example.com": {"auth": "dGVzdDp0ZXN0"}}}"#,
+    )
+    .unwrap();
+
+    let registries = read_configured_registries(&config_path).await;
+    fs::remove_dir_all(&config_directory).ok();
+
+    assert_eq!(registries, vec!["myregistry.example.com".to_string()]);
+}
+
 #[test]
 fn should_use_tty_requires_both_stdin_and_stdout_to_be_real_terminals() {
     assert!(should_use_tty(true, true, true));

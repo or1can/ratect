@@ -26,37 +26,16 @@ The primary goal is to support the core features of Batect to ensure a seamless 
 - **Full CLI Options Parity**: Support for all standard Batect CLI flags and options (e.g., `--config-file`, `--override-image`, cleanup control flags, etc.). See [Differences from Batect](docs/differences-from-batect.md#cli-flags) for the itemized current status of every flag.
 - **User Mapping**: A container can run as the host's own user/group (`run_as_current_user`) instead of the image's default, so files it writes to a mounted volume aren't root-owned (0.5.0) — see [User mapping](docs/config-reference.md#user-mapping). Host-side uid/gid lookup is Unix-only — see [Differences from Batect](docs/differences-from-batect.md#container-fields).
 - **Proxy Support**: `http_proxy`/`https_proxy`/`ftp_proxy`/`no_proxy` are detected from the host environment and propagated into containers and image builds automatically, `--no-proxy-vars` to disable (0.6.0) — see [Proxy environment variables](docs/config-reference.md#proxy-environment-variables). A proxy on the host is reached on every platform, including Linux, where the `localhost` rewrite is paired with the `host.docker.internal:host-gateway` entry that makes the name resolve and a warning for a proxy bound to loopback only ([0.26.0](RELEASES.md#ratect-compat)) — a deliberate improvement on Batect, which never closed its own oldest issue here. There's still no Docker-version-gated hostname fallback chain, an accepted gap — see [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
-- **Registry credentials** — **half closed.** Pull now resolves the image's own
-  registry via `~/.docker/config.json`'s `auths`/`credsStore`/`credHelpers`,
-  exactly as the real `docker` CLI does (`ratect-core/src/registry_auth.rs`).
-  Build still passes `None` on both `build_image` paths, so a Dockerfile `FROM`
-  a private registry still fails to build unless something else has already put
-  the image in the daemon's local store — closing that half is a follow-up
-  change.
-
-  Batect does support this, through its own `docker-client`: the Go wrapper calls
-  `credentials.DetectDefaultStore(configFile.CredentialsStore)` and sends
-  `RegistryAuth` on every `ImagePull`. Its two build paths differ, and Ratect's
-  two will need to differ the same way — the classic builder reads
-  `GetAllCredentials()` (`images_build_legacy.go`), while BuildKit hands the
-  config file to `authprovider.NewDockerAuthProvider` and serves auth over the
-  build session (`images_build_buildkit.go`).
-
-  Easy to miss from the outside, because a developer who has run `docker login`
-  sees it work and has no reason to attribute that to the task runner. It is also
-  the reason a credential-helper prompt can appear during an otherwise ordinary
-  build.
-
-  Worth deciding deliberately rather than porting on sight, since closing it means
-  reading a credential store and putting registry tokens into `X-Registry-Auth`
-  headers: prefer delegating to Docker's own config semantics (store detection,
-  per-registry `credHelpers`, `DOCKER_CONFIG`) over reimplementing helper
-  invocation, and settle what happens when a helper fails — Docker's CLI ignores
-  those errors, which is a choice to make on purpose rather than inherit. Must be
-  closed before [1.0.0](RELEASES.md#ratect-compat), which claims parity substantially checked
-  off against real Batect projects; a private registry is common enough in the
-  corporate setting Batect was built for that the conformance corpus wouldn't
-  necessarily catch it.
+- **Registry credentials**: both pull and build resolve credentials from
+  `~/.docker/config.json`'s `auths`/`credsStore`/`credHelpers`, exactly as the
+  real `docker` CLI does (`ratect-core/src/registry_auth.rs`) — `docker login`
+  once beforehand is enough, including a keychain-backed store (Docker
+  Desktop/OrbStack's default) or a cloud registry's credential helper
+  (ECR/GCR). Bollard's own `build_image` API takes the same credentials map for
+  both the classic and BuildKit builders, so — unlike Batect's own two
+  differing build paths — Ratect needed no split at its call site. A
+  credential-helper failure never fails the pull/build itself, only a warning
+  naming the registry.
 
 ## Two Binaries: `ratect` and `ratect-compat`
 

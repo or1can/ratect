@@ -681,6 +681,7 @@ async fn build_image_via_buildkit(
     tag: &str,
     force_pull: bool,
     proxy_host_gateway: Option<crate::proxy::HostGateway>,
+    credentials: Option<HashMap<String, bollard::auth::DockerCredentials>>,
 ) -> Result<String> {
     let build_directory = build_directory.to_path_buf();
     let dockerfile_owned = dockerfile.to_string();
@@ -764,7 +765,7 @@ async fn build_image_via_buildkit(
 
     let mut stream = docker.build_image_with_session_providers(
         options,
-        None,
+        credentials,
         Some(bollard::body_full(tar_bytes.into())),
         providers,
     );
@@ -1469,6 +1470,14 @@ pub struct DockerClient {
     /// without a live daemon. The real
     /// `registry_auth::DockerCredentialHelperResolver` by default.
     credential_resolver: std::sync::Arc<dyn crate::registry_auth::RegistryCredentialResolver>,
+    /// `<docker config directory>/config.json` — read fresh on every
+    /// `build_image` call (not cached) via `read_configured_registries`, to
+    /// enumerate every registry it declares under `auths`/`credHelpers` for
+    /// build's own credential resolution. Kept as a plain path rather than
+    /// through `credential_resolver` itself, since a fake resolver used in
+    /// tests has no file of its own — enumeration and per-registry
+    /// resolution are deliberately separate concerns.
+    docker_config_path: std::path::PathBuf,
 }
 
 /// Splits a full image reference (as given to `--tag-image`, e.g.
@@ -1595,14 +1604,67 @@ async fn resolve_pull_credential(
     let registry = crate::registry_auth::registry_hostname(image);
     match resolver.resolve(&registry).await {
         Ok(credential) => (credential, None),
-        Err(error) => (
-            None,
-            Some(format!(
-                "Could not resolve credentials for registry '{registry}': {error:#} — proceeding \
-                 without them."
-            )),
-        ),
+        Err(error) => (None, Some(credential_resolution_warning(&registry, &error))),
     }
+}
+
+/// The one warning message both `resolve_pull_credential` and
+/// `resolve_build_credentials` log for a registry that failed to resolve —
+/// factored out so the wording only needs to stay consistent in one place.
+fn credential_resolution_warning(registry: &str, error: &anyhow::Error) -> String {
+    format!(
+        "Could not resolve credentials for registry '{registry}': {error:#} — proceeding \
+         without them."
+    )
+}
+
+/// Reads and parses `config_path`'s registry keys via
+/// [`crate::registry_auth::configured_registries`] — silently empty if the
+/// file doesn't exist or can't be parsed, matching
+/// [`crate::registry_auth::RegistryCredentialResolver`]'s own missing-config
+/// behavior for pull, rather than turning a fresh machine's absent
+/// `config.json` into a warning. Read fresh on every call, not cached:
+/// `DockerClient` is long-lived across a whole invocation's builds, and
+/// nothing says `config.json` can't change between them (a `docker login`
+/// mid-run, however unlikely).
+async fn read_configured_registries(config_path: &std::path::Path) -> Vec<String> {
+    match tokio::fs::read_to_string(config_path).await {
+        Ok(text) => crate::registry_auth::configured_registries(&text),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Resolves credentials for every registry in `registries`, via `resolver` —
+/// build covers every registry Ratect's own Docker config knows about,
+/// since neither Batect nor Ratect parses Dockerfile `FROM` lines to scope
+/// this more precisely. Pulled out of `build_image` itself so this decision
+/// is unit-testable via a fake resolver, without `DockerClient` or a live
+/// daemon — mirrors [`resolve_pull_credential`]'s own separation.
+///
+/// A registry that fails to resolve is omitted from the returned map —
+/// never aborting the rest — and contributes one warning naming it, for
+/// `build_image` to emit; see
+/// [`crate::registry_auth::RegistryCredentialResolver`]'s own doc comment
+/// for why a resolution failure is never fatal.
+async fn resolve_build_credentials(
+    resolver: &dyn crate::registry_auth::RegistryCredentialResolver,
+    registries: &[String],
+) -> (
+    HashMap<String, bollard::auth::DockerCredentials>,
+    Vec<String>,
+) {
+    let mut credentials = HashMap::new();
+    let mut warnings = Vec::new();
+    for registry in registries {
+        match resolver.resolve(registry).await {
+            Ok(Some(credential)) => {
+                credentials.insert(registry.clone(), credential);
+            }
+            Ok(None) => {}
+            Err(error) => warnings.push(credential_resolution_warning(registry, &error)),
+        }
+    }
+    (credentials, warnings)
 }
 
 mod connection;
@@ -1640,8 +1702,9 @@ impl DockerClient {
             log_followers: LogFollowers::default(),
             enable_buildkit: false,
             credential_resolver: std::sync::Arc::new(
-                crate::registry_auth::DockerCredentialHelperResolver::new(config_directory),
+                crate::registry_auth::DockerCredentialHelperResolver::new(config_directory.clone()),
             ),
+            docker_config_path: config_directory.join("config.json"),
         })
     }
 
@@ -2099,6 +2162,18 @@ impl ContainerRuntime for DockerClient {
         let force_pull = spec.force_pull;
         let proxy_host_gateway = spec.proxy_host_gateway;
 
+        let registries = read_configured_registries(&self.docker_config_path).await;
+        let (credentials, warnings) =
+            resolve_build_credentials(self.credential_resolver.as_ref(), &registries).await;
+        for warning in &warnings {
+            tracing::warn!("{warning}");
+        }
+        // `None` (not `Some(HashMap::new())`) when nothing resolved, so a
+        // build with no registries configured sends exactly the request it
+        // always has — no `X-Registry-Config` header at all, not one
+        // carrying an empty JSON object.
+        let credentials = (!credentials.is_empty()).then_some(credentials);
+
         match self.builder_version().await? {
             bollard::query_parameters::BuilderVersion::BuilderBuildKit => {
                 return build_image_via_buildkit(
@@ -2112,6 +2187,7 @@ impl ContainerRuntime for DockerClient {
                     tag,
                     force_pull,
                     proxy_host_gateway,
+                    credentials,
                 )
                 .await;
             }
@@ -2158,9 +2234,11 @@ impl ContainerRuntime for DockerClient {
         }
         let options = options_builder.build();
 
-        let mut stream =
-            self.docker
-                .build_image(options, None, Some(bollard::body_full(tar_bytes.into())));
+        let mut stream = self.docker.build_image(
+            options,
+            credentials,
+            Some(bollard::body_full(tar_bytes.into())),
+        );
 
         let mut image_id = None;
         // The full build transcript, so a failure's error carries everything
