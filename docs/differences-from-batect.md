@@ -275,24 +275,28 @@ tables above:
   What stays an accepted gap is Batect's Docker-version-gated hostname fallback
   chain, which reaches back to Docker 17.06. It isn't worth chasing for any
   actively-maintained daemon.
-- **Private registry credentials**: **not supported.** Batect reads your Docker
-  configuration (`~/.docker/config.json` by default, or `DOCKER_CONFIG`, or its
-  own `--docker-config`), resolves the credential store or helper, and sends
-  those credentials when it pulls an image or builds one. Ratect reads that same
-  file — it has a `--docker-config` of its own, with the same defaults — but only
-  for the Docker context; it ignores the credential sections and sends no
-  registry credentials at all.
+- **Private registry credentials**: **supported for pulling an image; not yet
+  for building one.** Batect reads your Docker configuration
+  (`~/.docker/config.json` by default, or `DOCKER_CONFIG`, or its own
+  `--docker-config`), resolves the credential store or helper, and sends those
+  credentials when it pulls an image or builds one. Ratect reads that same
+  file — it has a `--docker-config` of its own, with the same defaults — and, for
+  a pull, now resolves the image's own registry credential the same way: running
+  `docker login` once beforehand is enough, including a keychain-backed store
+  (the Docker Desktop/OrbStack default) or a cloud registry's credential helper
+  (ECR/GCR).
 
-  What that means in practice: with Batect, running `docker login` once was
-  enough, and every later run could pull from your private registry. With Ratect,
-  a container whose `image` lives in a private registry fails to pull, whether or
-  not you have logged in — unless that exact image is already in the daemon's
-  local store, in which case nothing needs pulling and it works, which makes the
-  failure look intermittent.
+  A build's Dockerfile `FROM`-ing a private base image is the remaining gap: a
+  container whose `image` lives in a private registry now pulls correctly, but
+  an image *built* from one still fails unless that base image is already in the
+  daemon's local store, in which case nothing needs pulling and it works, which
+  makes the failure look intermittent. A credential-helper failure never fails
+  the pull itself — only a warning naming the registry, since a run that never
+  needed that registry shouldn't be blocked by a problem with it.
 
-  Workaround until this is closed: `docker pull` the image yourself before the
-  run, so the daemon already has it — your existing `docker login` applies, since
-  that pull is the Docker CLI's, not Ratect's. Tracked in
+  Workaround for a build until this closes: `docker pull` the base image
+  yourself first, so the daemon already has it — your existing `docker login`
+  applies, since that pull is the Docker CLI's, not Ratect's. Tracked in
   [ROADMAP.md](../ROADMAP.md#batect-parity) and blocking 1.0.0.
 
 ## What Ratect *does* support today

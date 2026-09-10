@@ -177,7 +177,11 @@ fn active_docker_context(config_directory: &Path) -> Option<String> {
 
 /// `--docker-config`, else `DOCKER_CONFIG`, else `~/.docker` — the
 /// directory the Docker CLI's own context store and `config.json` live in.
-fn docker_config_directory(options: &DockerConnectionOptions) -> Result<PathBuf> {
+/// Visible to `docker.rs` (like `connect`, below) so `DockerClient::new` can
+/// resolve the same directory a second time to hand to its credential
+/// resolver, honoring `--docker-config`/`DOCKER_CONFIG` exactly as
+/// everywhere else Ratect reads Docker's own config.
+pub(super) fn docker_config_directory(options: &DockerConnectionOptions) -> Result<PathBuf> {
     if let Some(dir) = &options.config_directory {
         return Ok(dir.clone());
     }

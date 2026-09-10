@@ -12,12 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Currently just [`registry_hostname`], the extraction pull's credential
-//! resolution will need. This module is the intended home for resolving
-//! private registry credentials for pull and build via real Docker
-//! credential helpers, too — a filesystem-and-subprocess concern of its own,
-//! kept out of `docker.rs` (which stays focused on bollard/daemon
-//! interaction) — but the resolver itself lands in a later change.
+//! Resolving private registry credentials via real Docker credential
+//! helpers — [`RegistryCredentialResolver`] and its
+//! [`DockerCredentialHelperResolver`] production implementation, plus
+//! [`registry_hostname`] for extracting which registry an image reference
+//! names. A filesystem-and-subprocess concern of its own, kept out of
+//! `docker.rs` (which stays focused on bollard/daemon interaction and wires
+//! this module's resolver into `pull_image`). Build-time resolution is a
+//! later addition.
+
+use anyhow::Context;
+
+const DOCKER_IO: &str = "docker.io";
 
 /// The registry hostname an image reference names — `"docker.io"` when the
 /// reference has no explicit registry. Matches the real `docker` CLI's own
@@ -36,8 +42,6 @@
 /// `index.docker.io`/uppercase cases entirely — a real correctness gap on a
 /// common form (a local dev/CI registry), not a theoretical one. This rule
 /// needs no regex, so it's hand-written instead.
-const DOCKER_IO: &str = "docker.io";
-
 pub fn registry_hostname(image_reference: &str) -> String {
     let Some((first_segment, _rest)) = image_reference.split_once('/') else {
         return DOCKER_IO.to_string();
@@ -56,6 +60,144 @@ pub fn registry_hostname(image_reference: &str) -> String {
         first_segment.to_string()
     } else {
         DOCKER_IO.to_string()
+    }
+}
+
+/// Resolves the credential configured for a registry — the seam pull (and,
+/// later, build) credential wiring depends on, so tests can inject a fake
+/// instead of invoking a real credential helper.
+///
+/// `Ok(None)` means nothing is configured for `registry` — the common,
+/// anonymous case, and not a failure. `Err` means resolution itself failed
+/// (a broken helper, a timeout, a malformed response, ...); callers treat
+/// that as non-fatal to the run — see `docker.rs`'s pull-credential wiring —
+/// but do surface it as a warning naming the registry, since a pull that
+/// then fails three layers down for an unrelated-looking reason is exactly
+/// the confusing-failure shape this project avoids elsewhere.
+#[async_trait::async_trait]
+pub trait RegistryCredentialResolver: Send + Sync {
+    async fn resolve(
+        &self,
+        registry: &str,
+    ) -> anyhow::Result<Option<bollard::auth::DockerCredentials>>;
+}
+
+/// How long a credential-helper subprocess gets before its resolution
+/// attempt is treated as failed. Neither Batect nor the real `docker` CLI
+/// impose one (verified directly against Batect's own helper-invocation
+/// call path) — a deliberate divergence: a hung, misconfigured helper (one
+/// that unexpectedly tries to prompt interactively, say) failing just the
+/// registry it belongs to is a far better outcome than it hanging the
+/// entire task run. `docker_credential` gives no handle to kill the
+/// subprocess itself once spawned, so this timeout stops Ratect from
+/// *waiting* on it, not the process from running.
+const CREDENTIAL_HELPER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Resolves via `~/.docker/config.json`'s `auths`/`credsStore`/
+/// `credHelpers`, exactly as the real `docker` CLI does — invoking the
+/// configured `docker-credential-<name>` helper binary where one applies.
+/// Reads Ratect's own resolved config path
+/// (`docker::connection::docker_config_directory`), not `docker_credential`'s
+/// own internal path resolution, so `--docker-config`/`DOCKER_CONFIG` are
+/// honored here exactly as everywhere else Ratect reads Docker's config.
+pub struct DockerCredentialHelperResolver {
+    config_path: std::path::PathBuf,
+}
+
+impl DockerCredentialHelperResolver {
+    /// `config_directory` is the directory `config.json` lives in (e.g.
+    /// `~/.docker`) — not necessarily where it exists yet: a missing file
+    /// resolves like an empty one (nothing configured), matching the real
+    /// `docker` CLI's own behavior on a fresh machine.
+    pub fn new(config_directory: std::path::PathBuf) -> Self {
+        Self {
+            config_path: config_directory.join("config.json"),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl RegistryCredentialResolver for DockerCredentialHelperResolver {
+    async fn resolve(
+        &self,
+        registry: &str,
+    ) -> anyhow::Result<Option<bollard::auth::DockerCredentials>> {
+        let config_path = self.config_path.clone();
+        let registry = registry.to_string();
+
+        let attempt = tokio::task::spawn_blocking(move || {
+            let file = match std::fs::File::open(&config_path) {
+                Ok(file) => file,
+                Err(_) => return Ok(None),
+            };
+            match docker_credential::get_credential_from_reader(file, &registry) {
+                Ok(credential) => Ok(Some(to_bollard_credentials(credential))),
+                Err(
+                    docker_credential::CredentialRetrievalError::NoCredentialConfigured
+                    | docker_credential::CredentialRetrievalError::ConfigNotFound,
+                ) => Ok(None),
+                Err(docker_credential::CredentialRetrievalError::HelperFailure {
+                    stdout,
+                    stderr,
+                    ..
+                }) if is_credentials_not_found(&stdout) || is_credentials_not_found(&stderr) => {
+                    Ok(None)
+                }
+                Err(error) => Err(anyhow::Error::from(error)),
+            }
+        });
+
+        match tokio::time::timeout(CREDENTIAL_HELPER_TIMEOUT, attempt).await {
+            Ok(join_result) => join_result.context("The credential-resolution task panicked")?,
+            Err(_elapsed) => Err(anyhow::anyhow!(
+                "Timed out after {CREDENTIAL_HELPER_TIMEOUT:?} waiting for the credential helper"
+            )),
+        }
+    }
+}
+
+/// Whether a credential helper's failure output is really just "nothing is
+/// stored for this server" rather than a genuine problem with the helper.
+///
+/// A globally-configured `credsStore` (the Docker Desktop/OrbStack default,
+/// present even if `docker login` has never been run) makes
+/// `docker_credential` invoke the helper for *every* registry, including
+/// ones with nothing stored — the overwhelmingly common case for an
+/// ordinary, already-public pull. Real helpers (`osxkeychain`, `wincred`,
+/// `secretservice`, `pass`, and third-party ones like `ecr-login`/`gcloud`
+/// that import the same shared library for exactly this compatibility) all
+/// write that case's error as the literal string `"credentials not found in
+/// native keychain"` to stdout and exit non-zero — verified directly against
+/// `docker-credential-helpers`'s own `credentials/error.go`
+/// (`NewErrCredentialsNotFound`) and `credentials/credentials.go`'s `Serve`
+/// function. `docker_credential` (this crate) surfaces that as a generic
+/// `HelperFailure` with no distinction from a real one, so this recognizes
+/// the sentinel itself — the same way the real `docker` CLI's own
+/// `IsErrCredentialsNotFound` does — to avoid warning on every anonymous
+/// pull on any machine with a `credsStore` configured. Checked against both
+/// `stdout` and `stderr` since nothing requires a conformant helper to use
+/// exactly one.
+fn is_credentials_not_found(output: &str) -> bool {
+    output.contains("credentials not found in native keychain")
+}
+
+fn to_bollard_credentials(
+    credential: docker_credential::DockerCredential,
+) -> bollard::auth::DockerCredentials {
+    match credential {
+        docker_credential::DockerCredential::UsernamePassword(username, password) => {
+            bollard::auth::DockerCredentials {
+                username: Some(username),
+                password: Some(password),
+                ..Default::default()
+            }
+        }
+        docker_credential::DockerCredential::IdentityToken(token) => {
+            bollard::auth::DockerCredentials {
+                identitytoken: Some(token),
+                ..Default::default()
+            }
+        }
     }
 }
 

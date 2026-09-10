@@ -56,6 +56,17 @@ noyalib = { version = "0.0.15", features = ["compat-serde-yaml"] }
 bollard = { version = "0.22", features = ["buildkit_providerless", "chrono", "ssl"] }
 # **`anyhow`**: Simplified error handling with context.
 anyhow = "1.0"
+# **`docker_credential`**: implements the real Docker credential-helper
+# protocol (`get_credential`/`get_credential_from_reader`, the
+# `auths`/`credsStore`/`credHelpers` precedence chain a `docker-credential-<name>`
+# helper binary answers) for `ratect-core/src/registry_auth.rs`'s pull/build
+# credential resolution. Actively maintained, and already depended on in
+# production by `testcontainers-rs`. Its own config-path resolution only
+# reads `DOCKER_CONFIG`/the home directory with no override parameter, so
+# `--docker-config` is honored by feeding `get_credential_from_reader` a
+# reader opened from Ratect's own resolved path rather than calling
+# `get_credential` (which would silently ignore it).
+docker_credential = "1.4"
 futures = "0.3"
 # **`tracing` / `tracing-subscriber`**: Structured, leveled logging. The
 # subscriber is initialized in `main.rs`, filtered via `RUST_LOG` (defaults

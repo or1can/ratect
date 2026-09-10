@@ -1463,6 +1463,12 @@ pub struct DockerClient {
     /// counterpart, matching Batect exactly (forcing it *off* is only ever
     /// done via `DOCKER_BUILDKIT=0`).
     enable_buildkit: bool,
+    /// Resolves a registry's configured credential for `pull_image` — see
+    /// `resolve_pull_credential`, which owns the actual decision (what to
+    /// pass, whether to warn) so it stays unit-testable via a fake resolver
+    /// without a live daemon. The real
+    /// `registry_auth::DockerCredentialHelperResolver` by default.
+    credential_resolver: std::sync::Arc<dyn crate::registry_auth::RegistryCredentialResolver>,
 }
 
 /// Splits a full image reference (as given to `--tag-image`, e.g.
@@ -1571,6 +1577,34 @@ fn check_api_version_floor(negotiated: ClientVersion) -> Result<()> {
     Ok(())
 }
 
+/// Resolves the credential to pull `image` with, via `resolver` — the
+/// image's own registry (via [`crate::registry_auth::registry_hostname`]) is
+/// the only one pull ever needs. Pulled out of `pull_image` itself so this
+/// decision — what credential to pass, whether to warn — is unit-testable
+/// via a fake resolver, without `DockerClient` or a live daemon.
+///
+/// A resolution failure is never fatal here — see
+/// [`crate::registry_auth::RegistryCredentialResolver`]'s own doc comment —
+/// so the second return value is the one warning to log naming the failed
+/// registry, for `pull_image` to emit; it's `None` whenever resolution
+/// itself succeeded, whether or not a credential was actually configured.
+async fn resolve_pull_credential(
+    resolver: &dyn crate::registry_auth::RegistryCredentialResolver,
+    image: &str,
+) -> (Option<bollard::auth::DockerCredentials>, Option<String>) {
+    let registry = crate::registry_auth::registry_hostname(image);
+    match resolver.resolve(&registry).await {
+        Ok(credential) => (credential, None),
+        Err(error) => (
+            None,
+            Some(format!(
+                "Could not resolve credentials for registry '{registry}': {error:#} — proceeding \
+                 without them."
+            )),
+        ),
+    }
+}
+
 mod connection;
 pub use connection::DockerConnectionOptions;
 
@@ -1598,12 +1632,16 @@ impl DockerClient {
             .await
             .context("Failed to negotiate the Docker API version with the daemon")?;
         check_api_version_floor(docker.client_version())?;
+        let config_directory = connection::docker_config_directory(connection)?;
         Ok(Self {
             docker,
             builder_version: tokio::sync::OnceCell::new(),
             event_sink: std::sync::Arc::new(NullEventSink),
             log_followers: LogFollowers::default(),
             enable_buildkit: false,
+            credential_resolver: std::sync::Arc::new(
+                crate::registry_auth::DockerCredentialHelperResolver::new(config_directory),
+            ),
         })
     }
 
@@ -2000,12 +2038,18 @@ impl DockerClient {
 #[async_trait::async_trait]
 impl ContainerRuntime for DockerClient {
     async fn pull_image(&self, image: &str) -> Result<()> {
+        let (credentials, warning) =
+            resolve_pull_credential(self.credential_resolver.as_ref(), image).await;
+        if let Some(message) = warning {
+            tracing::warn!("{message}");
+        }
+
         let options = CreateImageOptions {
             from_image: Some(image.to_string()),
             ..Default::default()
         };
 
-        let mut stream = self.docker.create_image(Some(options), None, None);
+        let mut stream = self.docker.create_image(Some(options), None, credentials);
 
         // Skipped entirely (not just discarded downstream) when the active
         // logger doesn't render it — see `EventSink::wants_progress_detail`

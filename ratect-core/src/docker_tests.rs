@@ -24,7 +24,7 @@ const HOST_GATEWAY: crate::proxy::HostGateway = crate::proxy::HostGateway {
 };
 
 /// A fresh, unique scratch directory — same pattern as
-/// `config.rs`'s `unique_temp_dir`. Caller cleans up.
+/// `config_tests.rs`'s `unique_temp_dir`. Caller cleans up.
 fn unique_temp_dir() -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -899,6 +899,90 @@ fn check_api_version_floor_rejects_a_version_below_the_floor() {
         err.to_string(),
         "Ratect requires Docker 20.10 or newer, but the daemon only supports API version 1.40 \
          (Ratect requires at least 1.41) — upgrade Docker to use Ratect."
+    );
+}
+
+/// A [`RegistryCredentialResolver`] returning a fixed, pre-arranged answer
+/// for every registry — no subprocess, no filesystem, no daemon — so
+/// `resolve_pull_credential`'s own decision (what credential to pass,
+/// whether to warn) is testable in isolation.
+struct FakeCredentialResolver {
+    result: std::sync::Mutex<Option<anyhow::Result<Option<bollard::auth::DockerCredentials>>>>,
+}
+
+impl FakeCredentialResolver {
+    fn returning(result: anyhow::Result<Option<bollard::auth::DockerCredentials>>) -> Self {
+        Self {
+            result: std::sync::Mutex::new(Some(result)),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::registry_auth::RegistryCredentialResolver for FakeCredentialResolver {
+    async fn resolve(
+        &self,
+        _registry: &str,
+    ) -> anyhow::Result<Option<bollard::auth::DockerCredentials>> {
+        self.result
+            .lock()
+            .unwrap()
+            .take()
+            .expect("resolve() called more than once on this fake")
+    }
+}
+
+#[tokio::test]
+async fn resolve_pull_credential_passes_through_a_successful_resolution() {
+    let credential = bollard::auth::DockerCredentials {
+        username: Some("alice".to_string()),
+        password: Some("hunter2".to_string()),
+        ..Default::default()
+    };
+    let resolver = FakeCredentialResolver::returning(Ok(Some(credential.clone())));
+
+    let (credentials, warning) =
+        resolve_pull_credential(&resolver, "myregistry.example.com/foo").await;
+
+    assert_eq!(credentials, Some(credential));
+    assert!(
+        warning.is_none(),
+        "a successful resolution should never warn"
+    );
+}
+
+#[tokio::test]
+async fn resolve_pull_credential_is_silent_when_nothing_is_configured() {
+    let resolver = FakeCredentialResolver::returning(Ok(None));
+
+    let (credentials, warning) = resolve_pull_credential(&resolver, "nginx").await;
+
+    assert_eq!(credentials, None);
+    assert!(
+        warning.is_none(),
+        "no configured registries should mean no behaviour change and no warning"
+    );
+}
+
+#[tokio::test]
+async fn resolve_pull_credential_warns_and_proceeds_without_credentials_on_failure() {
+    let resolver = FakeCredentialResolver::returning(Err(anyhow::anyhow!("helper exploded")));
+
+    let (credentials, warning) =
+        resolve_pull_credential(&resolver, "myregistry.example.com/foo").await;
+
+    assert_eq!(
+        credentials, None,
+        "a resolution failure must not abort the pull — it proceeds with no credentials"
+    );
+    let warning = warning.expect("a resolution failure should produce exactly one warning");
+    assert!(
+        warning.contains("myregistry.example.com"),
+        "the warning should name the registry that failed: {warning}"
+    );
+    assert!(
+        warning.contains("helper exploded"),
+        "the warning should include the underlying reason: {warning}"
     );
 }
 

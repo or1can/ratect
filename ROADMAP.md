@@ -26,15 +26,13 @@ The primary goal is to support the core features of Batect to ensure a seamless 
 - **Full CLI Options Parity**: Support for all standard Batect CLI flags and options (e.g., `--config-file`, `--override-image`, cleanup control flags, etc.). See [Differences from Batect](docs/differences-from-batect.md#cli-flags) for the itemized current status of every flag.
 - **User Mapping**: A container can run as the host's own user/group (`run_as_current_user`) instead of the image's default, so files it writes to a mounted volume aren't root-owned (0.5.0) — see [User mapping](docs/config-reference.md#user-mapping). Host-side uid/gid lookup is Unix-only — see [Differences from Batect](docs/differences-from-batect.md#container-fields).
 - **Proxy Support**: `http_proxy`/`https_proxy`/`ftp_proxy`/`no_proxy` are detected from the host environment and propagated into containers and image builds automatically, `--no-proxy-vars` to disable (0.6.0) — see [Proxy environment variables](docs/config-reference.md#proxy-environment-variables). A proxy on the host is reached on every platform, including Linux, where the `localhost` rewrite is paired with the `host.docker.internal:host-gateway` entry that makes the name resolve and a warning for a proxy bound to loopback only ([0.26.0](RELEASES.md#ratect-compat)) — a deliberate improvement on Batect, which never closed its own oldest issue here. There's still no Docker-version-gated hostname fallback chain, an accepted gap — see [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
-- **Registry credentials** — **not implemented, and a parity gap rather than a new
-  feature.** Ratect passes `None` where `bollard` takes registry credentials —
-  `create_image` for a pull, both `build_image` paths for a build — so an `image`
-  from a private registry fails to pull unless something else has already put it
-  in the daemon's local store. It *does* read `~/.docker/config.json`, for the
-  `currentContext` field only (`docker.rs`), and `--docker-config` already points
-  at that directory with `DOCKER_CONFIG` then `~/.docker` as its defaults. So the
-  gap is narrower than "doesn't read the Docker config": the file is read and its
-  credential sections are ignored.
+- **Registry credentials** — **half closed.** Pull now resolves the image's own
+  registry via `~/.docker/config.json`'s `auths`/`credsStore`/`credHelpers`,
+  exactly as the real `docker` CLI does (`ratect-core/src/registry_auth.rs`).
+  Build still passes `None` on both `build_image` paths, so a Dockerfile `FROM`
+  a private registry still fails to build unless something else has already put
+  the image in the daemon's local store — closing that half is a follow-up
+  change.
 
   Batect does support this, through its own `docker-client`: the Go wrapper calls
   `credentials.DetectDefaultStore(configFile.CredentialsStore)` and sends

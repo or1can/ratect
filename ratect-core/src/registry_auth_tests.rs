@@ -64,3 +64,101 @@ fn index_docker_io_canonicalizes_to_docker_io() {
 fn any_uppercase_character_in_the_first_segment_makes_it_a_domain() {
     assert_eq!(registry_hostname("MyRegistry/foo/bar"), "MyRegistry");
 }
+
+#[test]
+fn username_password_maps_to_the_matching_bollard_fields() {
+    let credential = to_bollard_credentials(docker_credential::DockerCredential::UsernamePassword(
+        "alice".to_string(),
+        "hunter2".to_string(),
+    ));
+    assert_eq!(
+        credential,
+        bollard::auth::DockerCredentials {
+            username: Some("alice".to_string()),
+            password: Some("hunter2".to_string()),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn identity_token_maps_to_the_identitytoken_field() {
+    let credential = to_bollard_credentials(docker_credential::DockerCredential::IdentityToken(
+        "some-token".to_string(),
+    ));
+    assert_eq!(
+        credential,
+        bollard::auth::DockerCredentials {
+            identitytoken: Some("some-token".to_string()),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn recognizes_the_real_credential_helpers_not_found_sentinel() {
+    assert!(is_credentials_not_found(
+        "credentials not found in native keychain"
+    ));
+    // Real output isn't necessarily trimmed to exactly the sentinel.
+    assert!(is_credentials_not_found(
+        "error getting credentials - credentials not found in native keychain\n"
+    ));
+}
+
+#[test]
+fn does_not_treat_an_unrelated_helper_failure_as_not_found() {
+    assert!(!is_credentials_not_found(""));
+    assert!(!is_credentials_not_found(
+        "exec: \"docker-credential-nonexistent\": executable file not found in $PATH"
+    ));
+}
+
+/// A fresh, unique scratch directory — same pattern as `config_tests.rs`'s
+/// `unique_temp_dir`. Caller cleans up.
+fn unique_temp_dir() -> std::path::PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+    let dir = std::env::temp_dir().join(format!(
+        "ratect-registry-auth-test-{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        count
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[tokio::test]
+async fn a_missing_config_file_resolves_as_nothing_configured() {
+    let config_directory = unique_temp_dir();
+    let resolver = DockerCredentialHelperResolver::new(config_directory.clone());
+
+    // Cleanup runs before either fallible step below is unwrapped, so a
+    // regression that makes `resolve()` return `Err` can't leak the temp
+    // directory alongside the test failure it should also produce.
+    let result = resolver.resolve("myregistry.example.com").await;
+    std::fs::remove_dir_all(config_directory).ok();
+
+    assert_eq!(
+        result.unwrap(),
+        None,
+        "a fresh machine with no config.json at all should resolve like an empty one"
+    );
+}
+
+#[tokio::test]
+async fn an_empty_config_file_resolves_as_nothing_configured() {
+    let config_directory = unique_temp_dir();
+    std::fs::write(config_directory.join("config.json"), "{}").unwrap();
+    let resolver = DockerCredentialHelperResolver::new(config_directory.clone());
+
+    let result = resolver.resolve("myregistry.example.com").await;
+    std::fs::remove_dir_all(config_directory).ok();
+
+    assert_eq!(result.unwrap(), None);
+}
