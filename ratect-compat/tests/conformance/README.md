@@ -20,6 +20,16 @@ network or submodule dependency. Attribution is recorded in the repository's
 
 ## Deviations from the vendored originals
 
+Dependency and base-image versions inside this corpus are in scope for the
+repo's scheduled Renovate run (`.github/workflows/renovate.yml`) — a pinned
+version going stale is a real way for these tests to break, as
+`container-with-dependency`'s did below. A version bump on its own doesn't
+change what a fixture tests, so it isn't a deviation in the sense the rest of
+this section means; reviewing one of Renovate's PRs against this corpus still
+means confirming the bump doesn't change the test's observable intent (what
+it asserts, not just whether it currently passes) before merging, the same
+scrutiny the nginx bump below got by hand.
+
 Two projects are **not** verbatim, and each says so in the file itself:
 `run-as-current-user` and `run-as-current-user-with-mount` bind `/output` to
 `../../../../build/test-results/journey-tests/<name>` upstream — a path inside

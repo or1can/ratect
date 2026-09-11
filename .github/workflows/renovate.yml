@@ -1,0 +1,48 @@
+name: Renovate
+
+# Weekly rather than daily/on-push: small, frequent dependency bumps keep the
+# behavioral change per PR small (see the nginx:1.25.0 fixture — the longer a
+# pin sits, the more its eventual bump carries). `workflow_dispatch` lets a
+# run be triggered manually without waiting for the next scheduled tick.
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  renovate:
+    name: Renovate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Uses RENOVATE_TOKEN (a personal access token, Contents + Pull
+      # requests only, no Workflows), not the default GITHUB_TOKEN: whether
+      # GITHUB_TOKEN can open a pull request at all is gated by this repo's
+      # own "Allow GitHub Actions to create and approve pull requests"
+      # setting, and the docs don't cleanly resolve what that setting does
+      # and doesn't gate — not worth the ambiguity when the actual backstop
+      # here is `main`'s own ruleset (requires a PR and passing CI for
+      # everyone, no bypass — see AGENTS.md's Commit Messages guideline),
+      # not the token's own permission surface.
+      #
+      # The PAT is deliberately scoped to exclude Workflows: a branch
+      # pushed into this same repo (not a fork) runs pull_request CI with
+      # full secrets access using the workflow file *as that branch
+      # defines it*, so a token able to rewrite .github/workflows/*.yml
+      # could exfiltrate secrets or drop checks the moment CI runs on its
+      # own PR — before any human reviews or merges anything. The cost:
+      # the github-actions manager's bumps (pinned action versions in this
+      # very file) can't be auto-PR'd, so RENOVATE_ENABLED_MANAGERS
+      # excludes it here — an env-var override scoped to this run only,
+      # leaving renovate.json untouched so a local `renovate
+      # --platform=local` run still surfaces those bumps for manual review
+      # and an ordinary hand-written commit.
+      - uses: renovatebot/github-action@v46.3.0
+        env:
+          RENOVATE_ENABLED_MANAGERS: "cargo,dockerfile,batect"
+        with:
+          configurationFile: renovate.json
+          token: "${{ secrets.RENOVATE_TOKEN }}"

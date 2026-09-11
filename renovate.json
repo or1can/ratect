@@ -1,0 +1,15 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":gitSignOff"
+  ],
+  "packageRules": [
+    {
+      "description": "nginx's stable releases use even minor versions (1.28.x, 1.30.x); odd ones (1.27.x, 1.29.x, 1.31.x) are mainline/development builds — stay on the stable line rather than the newest tag available.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["nginx"],
+      "allowedVersions": "/^\\d+\\.\\d*[02468]\\.\\d+$/"
+    }
+  ]
+}
