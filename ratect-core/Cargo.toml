@@ -177,7 +177,7 @@ rustls = { version = "0.23", default-features = false }
 # remote `$ref`). Ratect's first optional dependencies — every other entry
 # above is unconditional.
 schemars = { version = "1.2", optional = true }
-jsonschema = { version = "0.48", optional = true, default-features = false }
+jsonschema = { version = "0.56", optional = true, default-features = false }
 # **`ssh-key`** (`default-features = false`, features
 # `std`/`ed25519`/`rsa`/`p256`/`p384`/`p521`/`getrandom`), plus
 # **`ssh-encoding`**, **`signature`** and **`rsa`**: parse OpenSSH private
