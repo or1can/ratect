@@ -43,6 +43,13 @@ jobs:
       - uses: renovatebot/github-action@v46.3.0
         env:
           RENOVATE_ENABLED_MANAGERS: "cargo,dockerfile,batect"
+          # Without this, Renovate does nothing and warns "No repositories
+          # found" — it does not infer the current repo from GitHub Actions'
+          # own ambient context, contrary to what the action's own minimal
+          # example implies (verified by actually running it: first live
+          # run against this repo hit exactly that warning and exited
+          # having found nothing).
+          RENOVATE_REPOSITORIES: "${{ github.repository }}"
         with:
           configurationFile: renovate.json
           token: "${{ secrets.RENOVATE_TOKEN }}"
