@@ -37,6 +37,24 @@ fixture turns "Batect's own scenario passes" into "our version of it passes".
 clones a bundle from GitHub, then reuses `~/.ratect/incl`. It is the only case
 here that reaches outside Docker.
 
+`container-with-dependency`'s and `container-with-multiple-dependencies`'s
+Dockerfiles (`http-server`, `server-1`, `server-2`) bump their base image from
+`nginx:1.25.0` to `nginx:1.30.4` — nginx's stable line uses even minor
+versions (`1.30.x`), odd ones (`1.25.x`, `1.27.x`) are mainline/development.
+The original pin's Debian bullseye is now
+past its own upstream security-support window, so its `apt update` step
+started failing — first on an expired Release file, then (once that's
+bypassed) on packages the live mirror has already rotated out from under a
+freshly-fetched index. Neither the health check nor the test's assertions
+depend on the nginx version at all — it's a static HTML page behind a plain
+`curl http://localhost` — so this is a maintenance bump, not a behavioral
+change; a workaround that kept the EOL image alive (pointing `apt` at a frozen
+`snapshot.debian.org` mirror) was considered and rejected as solving the wrong
+problem. `task-with-unhealthy-dependency`'s Dockerfile and
+`dependency-container-with-setup-command`'s config also pin `nginx:1.25.0` but
+run no `apt` step, so neither is actually broken — left untouched rather than
+bumped pre-emptively.
+
 ## What is (and isn't) asserted
 
 Batect's own assertions are Kotlin and often check Batect's *exact* output
