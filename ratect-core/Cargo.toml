@@ -270,4 +270,9 @@ time = "0.3"
 # `nix`/`url`/`bytes` above. RSA test keys are *not* generated this way: a
 # 2048-bit keygen takes tens of seconds in an unoptimized test build, so
 # those tests use a throwaway key embedded in the test module instead.
+# Pinned to 0.3: `ChaCha20Rng` from 0.10 doesn't implement the trait
+# generation `ssh_key::PrivateKey::random` requires, which comes from
+# `signature` 2.x — transitively hard-pinned by `ssh-key` 0.6.7's own
+# manifest. Bumping this alone fails to compile (`CryptoRngCore` not
+# satisfied); see `renovate.json`'s matching `allowedVersions` rule.
 rand_chacha = "0.3"
