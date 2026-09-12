@@ -1,0 +1,38 @@
+name: MSRV Floor Check
+
+# Verifies dev-env/Dockerfile's pinned Rust version can still compile the
+# workspace — the other CI jobs build against `stable` (newest), which
+# drifts ahead of this pin over time, so nothing else catches a dependency
+# quietly raising its MSRV above it. Kept out of ci.yml and off the PR-
+# blocking path deliberately: a full compile against a second toolchain on
+# every PR is exactly the slow-feedback cost dev-env's own smoke test job
+# (ci.yml's "Dev-env CLI smoke test") was rewritten to avoid. Runs instead
+# when the pin itself changes, and weekly to catch a dependency creeping
+# past it even when the pin hasn't moved.
+
+on:
+  pull_request:
+    paths:
+      - dev-env/Dockerfile
+  schedule:
+    - cron: "37 4 * * 1"
+  workflow_dispatch:
+
+jobs:
+  msrv-floor:
+    name: MSRV Floor Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Single source of truth: read the pin from dev-env/Dockerfile rather
+      # than duplicating the literal, so the two can't drift apart.
+      - name: Read the pinned Rust version from dev-env/Dockerfile
+        id: rust
+        run: |
+          version="$(grep -oE 'rust:[0-9]+(\.[0-9]+)*' dev-env/Dockerfile | head -1 | cut -d: -f2)"
+          echo "version=${version:?could not read a version from dev-env/Dockerfile}" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets --all-features

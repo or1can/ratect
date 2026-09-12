@@ -7,10 +7,11 @@
 #
 # This version is the floor the dogfood build actually runs on, so it must
 # stay high enough to build the current dependency tree — some deps (e.g.
-# `home`) already require a recent rustc. CI's `dev-env` job reads this exact
-# version and runs `cargo build`/`test` on it, so a dependency raising its
-# MSRV above this pin fails CI rather than silently breaking the dogfood
-# build; when that happens, bump this line. There's no separate MSRV promise
-# — this just tracks a recent stable.
+# `home`) already require a recent rustc. `.github/workflows/msrv-floor.yml`
+# reads this exact version and runs `cargo check` on it (on a change to this
+# file, and weekly), so a dependency raising its MSRV above this pin fails
+# that check rather than silently breaking the dogfood build; when that
+# happens, bump this line. There's no separate MSRV promise — this just
+# tracks a recent stable.
 FROM rust:1.98-bookworm
 RUN rustup component add rustfmt clippy
