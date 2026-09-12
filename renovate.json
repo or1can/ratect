@@ -11,6 +11,21 @@
       "matchDatasources": ["docker"],
       "matchPackageNames": ["nginx"],
       "allowedVersions": "/^\\d+\\.\\d*[02468]\\.\\d+$/"
+    },
+    {
+      "description": "signature is hard-pinned by ssh-key 0.6.7's own manifest (^2) — allow patch/minor churn within 2.x, block the 3.x jump.",
+      "matchPackageNames": ["signature"],
+      "allowedVersions": "<3.0.0"
+    },
+    {
+      "description": "ssh-encoding is hard-pinned by ssh-key 0.6.7's own manifest (^0.2) — a 0.x minor bump is semver-breaking, so only allow 0.2.x patches.",
+      "matchPackageNames": ["ssh-encoding"],
+      "allowedVersions": "<0.3.0"
+    },
+    {
+      "description": "rand_chacha 0.10's ChaCha20Rng doesn't implement the trait generation ssh_key::PrivateKey::random requires (that bound comes from signature 2.x, transitively pinned by ssh-key 0.6.7) — only allow 0.3.x patches, not the breaking 0.x minor bump to 0.10. ssh-key's only newer line is an unreleased 0.7.0 release-candidate chain (still RC as of this check) — revisit once it ships stable.",
+      "matchPackageNames": ["rand_chacha"],
+      "allowedVersions": "<0.4.0"
     }
   ]
 }

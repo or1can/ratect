@@ -19,7 +19,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # **`noyalib`**: Safe, pure-Rust YAML parser (used as a modern alternative
 # to `serde_yaml`).
-noyalib = { version = "0.0.15", features = ["compat-serde-yaml"] }
+noyalib = { version = "0.0.43", features = ["compat-serde-yaml"] }
 # **`bollard`** (`features = ["buildkit_providerless", "chrono", "ssl"]`,
 # **consumed via a `[patch.crates-io]` fork** — see the root `Cargo.toml`):
 # Asynchronous Docker API client. The fork (`or1can/bollard`, branch
@@ -177,7 +177,7 @@ rustls = { version = "0.23", default-features = false }
 # remote `$ref`). Ratect's first optional dependencies — every other entry
 # above is unconditional.
 schemars = { version = "1.2", optional = true }
-jsonschema = { version = "0.48", optional = true, default-features = false }
+jsonschema = { version = "0.56", optional = true, default-features = false }
 # **`ssh-key`** (`default-features = false`, features
 # `std`/`ed25519`/`rsa`/`p256`/`p384`/`p521`/`getrandom`), plus
 # **`ssh-encoding`**, **`signature`** and **`rsa`**: parse OpenSSH private
@@ -270,4 +270,9 @@ time = "0.3"
 # `nix`/`url`/`bytes` above. RSA test keys are *not* generated this way: a
 # 2048-bit keygen takes tens of seconds in an unoptimized test build, so
 # those tests use a throwaway key embedded in the test module instead.
+# Pinned to 0.3: `ChaCha20Rng` from 0.10 doesn't implement the trait
+# generation `ssh_key::PrivateKey::random` requires, which comes from
+# `signature` 2.x — transitively hard-pinned by `ssh-key` 0.6.7's own
+# manifest. Bumping this alone fails to compile (`CryptoRngCore` not
+# satisfied); see `renovate.json`'s matching `allowedVersions` rule.
 rand_chacha = "0.3"
