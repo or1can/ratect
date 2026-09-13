@@ -1170,26 +1170,24 @@ to live at, so links written before the split still resolve.
   doesn't use an `http`/`https` scheme, and the daemon's own proxy settings not
   matching the local environment's. Both are `ratect`-only (there's no `doctor`
   in `ratect-compat`), so they land on whatever `ratect` version ships alongside.
-- **0.27.0** — **nothing of its own beyond what a refactoring release reaches
-  it through `ratect-core`** — see [`ratect` 0.6.0](#ratect) for the scope and
-  the reasoning. Three of those six candidates touch this binary: the
-  `ContainerSpec` assembly every container start goes through, the `CacheStore`
-  that `--clean`/`--clean-cache` is rewired onto, and the split of Docker
-  connection handling out of `docker.rs`. Alongside them, one behaviour change
-  that is a genuine fix rather than a refactor: a TLS connection to the daemon
-  no longer fails outright when a single entry in the OS trust store cannot be
-  read (patched in the `bollard` fork, offered upstream as
-  [fussybeaver/bollard#796](https://github.com/fussybeaver/bollard/pull/796) —
-  it discarded every
-  successfully-loaded certificate *and* the explicit `--docker-tls-ca-cert` on
-  any such error, where Docker's own CLI connects).
+- **0.27.0** — Beyond what the refactoring release below (see [`ratect`
+  0.6.0](#ratect)) reaches it through `ratect-core` — none of which changes
+  this binary's own surface — three real fixes: **pulling or building from a
+  private registry now resolves credentials the way the `docker` CLI does**
+  (`~/.docker/config.json`'s `auths`/`credsStore`/`credHelpers`, including
+  keychain-backed stores and cloud registries via their credential helper);
+  **a Docker daemon isn't rejected just for being older than the very latest
+  release** — the API version is now negotiated against the real daemon, down
+  to a 20.10 floor; and **a TLS connection to the daemon no longer fails
+  outright when a single OS trust-store entry can't be read** (patched in the
+  `bollard` fork, offered upstream as
+  [fussybeaver/bollard#796](https://github.com/fussybeaver/bollard/pull/796)).
 
-  Its parity surface is unchanged by design, and one commit exists specifically
-  to keep it that way: `--clean-cache`'s Batect-verbatim output
-  (`Checking for cache volumes...`, `Deleting volume '<name>'...`,
-  `Done! Deleted N volumes.`) is asserted by nothing `cargo test` runs today, so
-  its printing is extracted and unit-tested *before* the storage underneath it
-  moves.
+  Its parity surface is otherwise unchanged by design, and one commit exists
+  specifically to keep it that way: `--clean-cache`'s Batect-verbatim output
+  is extracted and unit-tested *before* `CacheStore`'s move underneath it. See
+  the closed [milestone](https://github.com/or1can/ratect/milestone/1) for
+  everything that shipped.
 - **1.0.0** — the [Batect Parity](ROADMAP.md#batect-parity) section above substantially checked
   off (all of the above, including 0.7.0–0.19.0, not just the items shipped through
   0.6.0), and verified against real Batect projects — the conformance corpus above
@@ -1454,349 +1452,24 @@ to live at, so links written before the split still resolve.
   codes move with `ratect-compat`'s, which is the promise
   [`docs/ratect-cli.md`](docs/ratect-cli.md) already makes about them being
   identical.
-- **0.6.0** — **A refactoring release: give four homeless concepts a module
-  that owns them, and buy back test coverage that does not exist at any price
-  today.** No user-visible behaviour changes — no flag, message or output
-  moves, and if one does, that is a defect in the change rather than a
-  documentation update. Not scoped from this list: it comes from an
-  architecture review of the workspace run after 0.26.0 shipped, graded into
-  six candidates, then grilled one at a time before anything was written. The
-  corrections that grilling produced are recorded at the end of this entry,
-  because a plan that quietly fixes its own source teaches nobody what the
-  source got wrong.
-
-  Ordered **2 → 3 → 4 → 1 → 5 → 6**, grouped by the file each one opens rather
-  than by strength: 2 and 3 both empty `ratect/src/main.rs`, so they run back to
-  back and that file is read once; 4 takes 310 lines out of `docker.rs` before 1
-  starts editing the same file's trait. Every candidate decomposes into
-  independently landable commits, so the release can be cut at any candidate
-  boundary — roughly 18 commits if all six land.
-
-  - ~~**`ratect_core::resources` and `ratect_core::diagnostics`.** Leftover
-    selection, removal (including the containers-before-networks ordering rule
-    and the one-failure-doesn't-abandon-the-rest behaviour), and every
-    `doctor`/`config validate` finding move out of `ratect/src/main.rs` and
-    behind the `ContainerRuntime` seam, generic over it as `TaskEngine` already
-    is. `main.rs` keeps flag parsing and printing; `report_findings` stays there
-    too, so rendering and the "Docker first" finding order remain the binary's.
-    Removal progress reaches the printer through a callback rather than a return
-    value, so `resources clean` does not go quiet on a slow daemon.~~
-
-    ~~This is the whole justification, and it is **testability alone**: six named
-    tests become writable — `--older-than` excludes a young leftover, a resource
-    without the project label is never a candidate however the daemon filtered,
-    `--all-projects` filters on key-existence and never on nothing, containers
-    are removed before networks, one failure does not abandon the rest, and
-    `doctor` counts leftovers through the same selection `resources list` uses.
-    The two that matter most are the ones whose failure mode is removing a
-    stranger's container, and they are proven by nothing at all today. Both
-    existing `#[ignore]`d Docker tests stay: a unit test proves we compute the
-    right filter, only the daemon proves Docker's label filter means what we
-    think it means.~~ — done, to that scope: both modules landed as built above,
-    all six named tests exist and pass (`ratect-core/src/resources_tests.rs`,
-    `ratect-core/src/diagnostics_tests.rs`), and both `#[ignore]`d Docker tests
-    stayed untouched.
-
-    Landed as **two** commits rather than the three sketched above:
-    `resources` on its own (5d74bea), then `diagnostics` combined with wiring
-    `doctor`'s leftover count through `resources::find` (cf1ddd4) — splitting
-    those two apart would have been artificial, since the sixth acceptance test
-    needs both at once. Two review rounds over the pair found a false claim in
-    `diagnostics.rs`'s own module doc and a missing CHANGELOG/AGENTS.md entry;
-    both were fixed in their own commits (4cbe2d5, 5536b70) rather than folded
-    back in, matching this project's own rule for review-found fixes.
-
-  - ~~**`CacheStore` in `cache.rs`.** The same purchase as the entry above, for
-    caches: `CacheSelection` — already the right concept, in the wrong crate —
-    and the shared-cache refusal move into core, where the refusal becomes a
-    typed outcome whose *wording* (which names `--scope shared`, a flag one
-    binary has) is rendered by the binary. Volume-versus-directory becomes an
-    enum, so "a volume cache needs a daemon" stops being an `expect`; the shared
-    cache root is injected at construction, so the half of the rule that
-    protects other projects' storage is testable without writing into the
-    developer's home. `remove` returns both the cache name and its storage name,
-    which is what lets `ratect-compat` print Batect's wording from the same
-    call. About thirteen of `cache.rs`'s seventeen public items become private;
-    `resolve_cache_mount` deliberately does not move behind the store — "what
-    does this volume entry become at container-create time" is a different
-    question from "what storage exists and how do I remove it".~~ — done, to
-    that scope, in four code commits: protecting `ratect-compat`'s
-    Batect-verbatim wording landed first as its own commit (f4e674f);
-    `CacheStore` itself, folding the typed refusal in rather than landing it
-    separately as originally sketched, since `remove`'s signature made no
-    sense without it (d6d379f); a pre-existing test race hit while verifying
-    against the real Docker suite, fixed on its own (8034b24) — nine
-    `#[ignore]`d tests (two sharing a fixture helper, two more sharing a key
-    helper) derived their scratch path or Docker tag from pid and a
-    nanosecond `SystemTime` read with no counter, so two running concurrently
-    could land on the same nanosecond and collide, corrupting one test's
-    fixture or colliding two tags on the one shared daemon. Caught in two
-    passes: three tests during the change itself, the other six found by a
-    review round's class sweep afterward — the fix commit's own message
-    undercounted at "three real-daemon tests", which guideline 16 calls out
-    as exactly the mistake to avoid; and `ratect-compat`'s own switch
-    (271a927), which is what let `clean_volume_caches`/`clean_directory_caches`
-    finally go private.
-
-    Eleven of the original seventeen public items are now private or deleted
-    outright (`list_volume_caches` had no caller left after `find_caches`
-    stopped using it, well before this candidate — dead code, removed here
-    rather than moved); six survive (`CacheType`, `CacheOptions`,
-    `cache_directory`, `project_cache_key` — `engine.rs` calls it directly for
-    runtime mount resolution, a caller this candidate never touches —
-    `shared_cache_root`, `resolve_cache_mount`); and `CacheStore` itself plus
-    the three types its own methods return (`CacheSelection`, `RemovedCache`,
-    `CacheRefusal`) are newly public. Ten items total, not five — the
-    original "about thirteen become private" estimate undercounted by three
-    (`cache_volume_name`, `shared_cache_volume_name`, `shared_cache_directory`
-    were missed in the first pass and caught by a later review round) and the
-    first version of this summary compounded the error by omitting
-    `shared_cache_root` from its own "stayed public" list while still using
-    it two paragraphs above.
-
-    One judgement call worth recording: `ratect-compat`'s `clean_caches` now
-    calls `CacheStore::list` before `remove`, where it previously called
-    `clean_volume_caches`/`clean_directory_caches` directly — one extra
-    `list_volumes`/directory-read per invocation. Output is unchanged
-    (verified against the real Docker suite); the cost is latency on an
-    infrequently-run command, accepted rather than special-cased.
-
-  - ~~**`docker/connection.rs`.** `DockerConnectionOptions` through `connect` —
-    context parsing, TLS and cert-directory resolution, the crypto-provider
-    install — become a submodule, re-exported so every public path stays
-    byte-identical and the existing tests move unchanged. The point is not the
-    move: it is that the module doc can then carry what three investigations
-    into the recurring `Could not load native certs` failure actually
-    established, including the refuted concurrency explanation, so a fourth one
-    starts where the third finished. The image/BuildKit helpers immediately
-    above the cut are the same class and are deliberately left, noted in
-    `TODO.md` rather than swept.~~ — done, and further than scoped: the
-    diagnosis in the module doc turned into an actual fix. `bollard`'s
-    `connect_with_ssl` discarded every certificate that loaded whenever the OS
-    trust store had even one unreadable entry — patched in the fork this crate
-    pins, verified with five clean runs of the real-daemon TLS test both before
-    and after pushing (a local path override first, so nothing was pushed
-    unverified) and a full green `cargo test --workspace --all-targets
-    --all-features` (764/764) afterward. Not proof the flake itself is gone —
-    it already passed at least once earlier in this same candidate, before any
-    fix existed, exactly the false-positive its own module doc warns a single
-    green run can be — but it is proof this specific, independently-confirmed
-    defect no longer exists in what's pinned.
-
-    One thing found doing it that wasn't scoped at all: pushing needed
-    reconciling with the fork's remote state first — the local checkout was
-    stale, and `feat/ssh-named-agents`'s own feature (named-agent sshforward
-    dispatch) turned out to already be merged upstream as
-    [fussybeaver/bollard#770](https://github.com/fussybeaver/bollard/pull/770)
-    on 2026-08-21, which the patch's own `Cargo.toml` comment still called
-    unlanded. Corrected in the same commit, since it was being edited anyway;
-    rebasing the branch past the merge and dropping the now-redundant commit is
-    left for its own change, not folded into an unrelated fix.
-
-    Landed as the three commits settled during grilling: the pure move
-    (a8337f8), the diagnosis (1b337d6), and the fix once it existed to point at
-    (0b03330).
-
-  - ~~**`ContainerSpec`.** The highest-leverage item and the one whose true size
-    is least knowable in advance. One owned value derived by one pure function
-    from the container, an overlay, role and the already-resolved
-    image/volumes/user mapping, crossing the `ContainerRuntime` seam in place of
-    a 14-parameter `run_container` and a 10-parameter
-    `start_background_container`. It lives in its own module because it is
-    shared vocabulary between `engine.rs` and `docker.rs` and owned by neither —
-    making it `docker/spec.rs` would answer "who owns a container's runtime
-    spec" with "the daemon adapter", which is the answer the finding rejects.~~
-
-    ~~The two overlays are *not* interchangeable — `TaskRun` may override
-    `command`/`entrypoint`, a `TaskContainerCustomisation` may not, and Batect
-    parity requires that asymmetry — so the overlay is an enum whose arms
-    destructure their config struct exhaustively, making a newly-added config
-    field a compile error rather than a silently ignored one. Splitting the spec
-    into a `shared` part and the role-varying fields makes the equivalence
-    property (`a.shared == b.shared`) a comparison with no hand-maintained list
-    of exceptions to forget to update. The fake's fourteen `Captured*` maps
-    collapse into one ordered capture, which makes container start *ordering*
-    assertable for the first time; its twenty-six accessors survive as
-    projections over that, so a 7,300-line test file does not churn for a change
-    that alters no behaviour.~~
-
-    ~~The one commit where the fake cannot vouch for itself — it is rewritten
-    alongside the code it checks — requires the real-daemon suite locally before
-    it lands. `build_image` carries the same `too_many_arguments` allow and is
-    explicitly **not** in scope: with one call site it shares the width but not
-    the duplication, and there is no divergence for it to buy back.~~ — done, to
-    that scope, with two corrections a review round made against the paragraphs
-    above rather than against the code: "assertable for the first time" is
-    false — `nested_dependencies_start_in_order_on_same_network` and
-    `deeply_nested_dependencies_all_start_in_order` already asserted container
-    start ordering, via the fake's `events()` log, before this candidate ever
-    touched the fake; a genuinely new ordering test was drafted, checked against
-    those two first, found redundant, and deliberately not added — see
-    container_spec_tests.rs's own commit message. And "fourteen `Captured*`
-    maps" overcounted: the file has fourteen `Captured*` type aliases in total,
-    but only nine of them (`environments`/`images`/`commands`/`interactive`/
-    `user_mapping`/`network_options`/`host_gateways`/`health_checks`/
-    `container_options`) fed `run_container`/`start_background_container` and so
-    collapsed into the new `CapturedSpecs`; the other five plus
-    `build_host_gateways` serve `build_image`/`exec_in_container`, explicitly
-    out of scope, and stayed untouched. Twenty-six accessors surviving as
-    projections was accurate as written.
-
-    Landed as the three commits settled during grilling: the pure move
-    (4da715e), `ContainerSpec`/`derive_spec`/both call sites/the fake rewrite
-    (b8d827e), and the equivalence/overlay-precedence tests (7788687) — plus
-    two further, doc-only fixes: a review-found one (ca9e2be) for two
-    `NetworkOptions`/`ContainerOptions` doc comments that had carried their
-    `too_many_arguments`-avoidance rationale verbatim from the first commit
-    into the second, which is exactly what made it false: that commit is what
-    removed the allow they were still citing; and a self-found one (cf4374e)
-    for `engine.rs`'s own module doc and `resolve_volumes`' doc comment,
-    which still described `tmpfs_mounts`/`capability_names`/`device_triples`
-    as engine.rs's own helpers after the second commit had moved them into
-    `container_spec.rs`. `build_image` was confirmed untouched, carrying its
-    own `too_many_arguments` allow unchanged, as scoped. The real-daemon
-    suite (`cargo test --workspace --test cli --
-    --ignored`, 76 passed) was run locally before the second commit landed, per
-    its own requirement above.
-
-  - ~~**One trust gate, not one traversal.** `collect_completion_task_names` does
-    re-implement the loader's walk, but the divergence is neither silent nor
-    accidental: the walk's own doc comment specifies it — mirror the loader's
-    decisions about *which files are read*, deliberately not its decisions about
-    *whether to fail* — and names `EffectiveGrants`' lost-grant refusal as the
-    one exclusion, with reasons. What is unprotected is that this classification
-    is made by hand, in two bodies. So the fix is one derived value —
-    `include_trust::gate` returning `refuse_read` and `refuse_load`, with
-    boundary containment folded in — that both walkers consume, rather than
-    fusing a breadth-first loader carrying grant bookkeeping and network
-    cloning with a depth-first best-effort name scraper. The classification's
-    reasoning moves onto the gate, because that reasoning *is* the
-    classification. The loader's breadth-first order stays contract: it decides
-    which repository a lost-grant refusal names, which a user reads.~~
-
-    ~~One test lands first and stands alone whatever else happens: completion has
-    no test for the nested-Git refusal. That gap exists today.~~ — done, to that
-    scope, with one correction to the paragraph above: "the classification's
-    reasoning moves onto the gate" overstated it for containment specifically.
-    Only the nested-Git refusal's reasoning (`check_may_declare_git`) and the
-    *sequencing* of the two checks moved into `include_trust::gate` — a
-    containment escape's own message stays exactly where it was, built by
-    `GitBoundary::check_contains`/`check_contains_canonical` in `config.rs`,
-    which `gate` calls through a caller-supplied closure rather than
-    reimplementing. `include_trust.rs`'s own "containment lives in
-    `crate::config`" is therefore still true; what moved is which function
-    decides *whether* to call it and in combination with what, not the check
-    itself.
-
-    Landed as two commits: the standalone completion test (6b032a6, proving
-    today's gap and passing unchanged against pre-refactor code), then the
-    unification itself (87f8b56) — which also rewrote
-    `include_trust_tests.rs`'s equivalence test into one that shows
-    `refuse_read`/`refuse_load` reading a single `gate()` call cannot
-    disagree (previously it compared two separately-called functions), and
-    added two tests for `gate`'s own contract. A review round found one further
-    inaccuracy, this time in 87f8b56's own commit message rather than in this
-    plan: it claimed completion "previously only ran `check_contains`, once,
-    inline" before the loader's `check_contains_canonical` also started
-    reaching it — false. Completion already ran both checks pre-refactor, as
-    a hand-written `check_contains(...).is_err() || check_contains_canonical(...).is_err()`;
-    what changed is that call becoming the shared `boundary_contains` helper,
-    not which checks ran. The loader does pick up one genuinely new (if
-    harmless) redundant `check_contains` call post-refactor, since
-    `resolve_include_target` already ran it once per candidate — verified
-    idempotent on an unchanged path, not a behaviour change. Git commit
-    messages are not amended once made; this is the correction for the
-    record — including a third one found in the same review round, in this
-    paragraph's own first draft: it echoed 87f8b56's own "up from 768"
-    rather than the candidate's actual starting count, 767 (768 was the
-    count right after 6b032a6 alone, one commit into the candidate, not
-    before it). Verified: `cargo test --workspace --all-targets
-    --all-features` (770 passed, up from 767), `cargo clippy --workspace
-    --all-targets --all-features -- -D warnings`, `cargo fmt --all --
-    --check`, all clean.
-
-  - ~~**`TaskEngine` construction.** Six of the eight `with_*` builders duplicate
-    a `TaskEngineSettings` field and have no production caller — only
-    `engine_tests.rs` uses them — so they go, and tests use struct-update
-    syntax. `event_sink` and `interrupt` are promoted to constructor arguments
-    alongside `docker`: they are collaborators the engine *talks to*, not
-    settings it was *told*, and promoting `interrupt` deletes an `Option` that
-    both binaries and an existing test already treat as always-present.
-    `with_host_env` and `with_proc_net_tcp` stay exactly as they are — private,
-    test-only, with no settings counterpart, so they are not the duplication
-    being removed. This is the first candidate to drop if the release runs
-    short: it is the only one whose cost is paid entirely by people editing
-    tests and whose benefit is entirely tidiness.~~ — done, with one correction
-    settled before writing any code rather than found after: "six of the eight
-    `with_*` builders" only ever counted the literally `with_*`-prefixed ones.
-    The five `without_*` builders
-    (`without_port_publishing`/`without_proxy_environment_variables`/
-    `without_prerequisites`/`without_cleanup_after_success`/
-    `without_cleanup_after_failure`) duplicate a `TaskEngineSettings` field and
-    have no direct production caller in exactly the same way, and were left out
-    of the original count by an accident of naming, not a reasoned exclusion —
-    confirmed by asking rather than assuming, since the plan text alone
-    couldn't settle it. Ten builders went in total, not six; `with_settings`
-    itself, and the two private test seams, are the only ones left.
-
-    `interrupt`'s `Option` removal was verified, not assumed: an `Interrupt`
-    nothing has recorded on behaves exactly like `None` did, because
-    `Interrupt::wait_for`/`interrupted` never resolve without a `record()` —
-    confirmed by reading their own implementations before relying on it, since
-    the two `biased tokio::select!`s that read `self.interrupt` would have
-    picked the wrong branch silently if that reasoning were wrong. Both
-    binaries construct their own `Interrupt` directly where they used to call
-    `.listen()` on the one `engine_settings()` built; `TaskEngineSettings`
-    drops the field entirely.
-
-    Landed as a single commit (e6c0a9b) — the promotion and the ten-builder
-    removal are too interdependent to split usefully (`with_settings` has to
-    be rewritten for both at once). 149 of `engine_tests.rs`'s
-    `TaskEngine::new` call sites now go through a small private `engine()`
-    test helper supplying the two constructor defaults, rather than repeating
-    them — e6c0a9b's own message undercounted this at "about 130"; both
-    binaries' `main_tests.rs` lose
-    `an_interrupt_tracker_is_always_supplied_to_the_engine`, since the
-    invariant it guarded (some tracker reaches the engine, not that it's
-    wired to real signals — that test never checked the latter either) is
-    now a compile error to violate, not a runtime regression a test could
-    still fail to catch. One string did change as a side effect —
-    `resolve_volumes`'s internal-invariant `.expect()` panic message now
-    says `with_settings` rather than the removed `with_cache_options` — but
-    it fires only when a `cache` volume is resolved without cache options
-    ever having been set, which neither binary's own flow can reach, so it
-    doesn't contradict "no flag, message or output moves" for anything a
-    user can trigger. A stale doc link elsewhere, found by the same review
-    round (`config.rs`'s `LoadedProject::project_directory`, which still
-    named `with_cache_options`), was fixed alongside it. Verified: the full
-    suite (770 passed in `ratect-core`, unchanged counts in both binaries),
-    the real-daemon suite for both binaries (76 passed), `cargo fmt`/
-    `clippy`, all clean.
-
-  **Corrections to the review this scope came from**, since it was graded before
-  it was checked:
-
-  - It claimed moving `resources`/`doctor` would let `ratect-compat` gain the
-    same verbs without a second copy. It cannot: that binary is a strict
-    flag-for-flag Batect replacement and `resources`/`doctor` are verbs Batect
-    never had. The benefit is testability, and only testability.
-  - It described roughly half of `ratect/src/main.rs`'s 1,968 lines as provable
-    only against a live daemon. The untestable set is about 110 lines — the
-    leftover selection pipeline and the removal loop. Every other `doctor`
-    finding, and `Leftover::describe`/`format_age`, are already unit-tested.
-  - It put the Docker connection block at `docker.rs:1690-2098`. It starts at
-    1788; the hundred lines before that are image and BuildKit helpers, a
-    different concern.
-  - It counted eleven `with_*` builders on `TaskEngine`. There are eight public
-    ones plus two private test seams, and it did not note that `event_sink` is
-    not a settings field — which is why "make settings the sole entry point" was
-    not reachable as stated.
-  - It described the two container-assembly sites as differing only in the
-    overlay source and two fields. They differ in six things, one of which
-    (whether the overlay may override `command`/`entrypoint`) is a parity
-    constraint that a naive unification would silently discard.
-  - It called candidate 5 a silent divergence. It is a specified one; the defect
-    is the hand-made classification, not the divergence.
+- **0.6.0** — **A refactoring release**, in two parts. First, six candidates
+  from an architecture review run after 0.26.0 shipped — each grilled before
+  anything was written, each independently landable — gave four homeless
+  concepts a module or seam of their own (leftover/`doctor` findings, cache
+  storage, Docker connection setup, container runtime specs), plus a
+  shared-classification fix (`include_trust::gate`, unifying how the loader
+  and shell completion decide whether a Git include may be read) and a
+  `TaskEngine` construction cleanup. Then, immediately after, four smaller
+  unifications in the same spirit: `ConfigFormat`'s dialect-conditional rules
+  into one place, `ContainerRuntime` split by caller
+  (`ResourceInventory`/`VolumeStore`), a `BuildSpec` counterpart to
+  `ContainerSpec`, and `Boundary`'s containment and grants halves reunited in
+  `include_trust.rs`. No user-visible behaviour changed anywhere in either
+  part — every commit's own message says so, verified against the real
+  Docker suite where relevant. See the closed [ratect-compat 0.27.0 · ratect
+  0.6.0 milestone](https://github.com/or1can/ratect/milestone/1) for the full
+  list, and git history for the corrections a review round made to the
+  original six-candidate grading rather than restating them here.
 
 Its **1.0.0** means something different from `ratect-compat`'s: interface stability
 (the subcommand structure and config format won't break), not feature-completeness
