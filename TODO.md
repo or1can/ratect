@@ -1,63 +1,16 @@
 # TODO
 
+Ratect's engineering backlog: deferred follow-on work from specific code
+reviews — real findings not worth fixing immediately, deliberate non-fixes
+worth recording so they aren't re-investigated from scratch, and narrower
+architectural notes surfaced along the way. Distinct from ROADMAP.md's
+**Future Vision** section, which is undecided *product* ideas with no code
+behind them yet — everything here is tied to code that already shipped.
+
 Findings from the pre-release code review of 0.16.0's output-modes work
 (`git diff origin/main...HEAD` at the time, covering `ratect-core/src/ui/`,
 the `engine.rs`/`docker.rs` event-posting refactor, and the `--output`/
-`--no-color` CLI surface). Working through these — some are being fixed,
-some may end up won't-fix. See `git log` for what's landed so far:
-
-- fancy mode's cleanup line erasing unterminated task output
-- `TaskFailed` not posting when `--use-network` setup fails early
-- fatal errors being reported only via suppressible `tracing::error!`
-- fancy mode's per-container line stalling when no pull/build ever fires
-  (already-local image, or an image this invocation already resolved)
-- fancy/`all` modes measuring plain `char` count instead of real terminal
-  display width (CJK/zero-width characters) — new `unicode-width` dependency
-- `all` mode dropping a container's buffered final line on a log-stream
-  error, plus the duplicated log-follow pipeline that caused it (one shared
-  `drain_interleaved_log_stream` helper now, with a `debug`-level breadcrumb
-  on the background follower's stream errors)
-- `all` mode's fire-and-forget dependency log follower racing cleanup or
-  bleeding into the next task's transcript — `stop_and_remove_container`
-  now awaits the matching follower before returning
-- two latent (no live bug, but a future third `ContainerIoStreaming`
-  variant could get it wrong) hazards hardened: `TERM=dumb`'s two-idiom
-  duplication folded into `term_environment_variable`, and the two
-  independent opposite-polarity interactive-gating checks in `engine.rs`/
-  `docker.rs` unified onto one `ContainerIoStreaming::allows_interactive`
-- `Console::println`'s redundant explicit `flush()` removed (stdout's own
-  `LineWriter` already flushes on the newline `println` always writes);
-  the triplicated task-summary-line formatting and the twice-duplicated
-  "Cleaning up..." once-guard both consolidated into shared `ui/mod.rs`
-  helpers (`format_task_summary`, `OnceFlag`) — pure internal cleanup, no
-  behavior change
-- `ImagePullProgress`/`ImageBuildProgress`/`SetupCommandOutput` no longer
-  allocate or post at all under `simple`/`quiet`/`NullEventSink` — a new
-  `EventSink::wants_progress_detail` (`false` by default, overridden by
-  `fancy`/`all`) gates all four call sites; no behavior change (still
-  rendered exactly as before under `fancy`/`all`, verified against real
-  Docker)
-- fancy mode now skips a repaint entirely when the rendered content hasn't
-  actually changed since the last one — a `last_rendered` cache in
-  `repaint_startup`, compared before touching the terminal at all. Docker
-  resends the same coarse pull/build status text many times per layer
-  while streaming (the byte-progress detail that *does* keep changing
-  lives in a field Ratect doesn't render), so this suppresses the large
-  majority of "hundreds of repaints/sec during a multi-layer pull" the
-  original finding called out. No behavior change — verified against real
-  Docker.
-- `WidthSource` (a boxed `dyn Fn`) replaced with a plain `fixed_width:
-  Option<u16>` field (`None` in production, `Some` only in tests) — pure
-  internal simplification, no behavior change.
-- `main.rs`'s style→sink selection/construction/validation match moved into
-  a new `ui::create_event_sink`, reusable by the planned `ratect-compat`
-  binary instead of needing its own copy; `main.rs` now gathers
-  stdout/`TERM`/console-dimensions once and passes them to both it and
-  `select_output_style` (previously the `-o fancy` validation re-queried
-  the same facts a second time). No behavior change — verified against
-  real Docker (including the fancy-without-an-interactive-console error
-  path).
-
+`--no-color` CLI surface) — all fixed; see `git log` for what landed.
 Everything below is unfixed. Grouped by severity; pick up top-down.
 
 ## Correctness
@@ -189,32 +142,8 @@ recorded so nobody re-investigates them from scratch.
 # ratect 0.3.0 native config format review
 
 Findings from the focused review of the 0.3.0 native TOML config work
-(`git diff 5023a9d..HEAD`, covering `config.rs`'s native load path, `extends`,
-the include refactor and `to_native_toml`, plus `main.rs`'s `config` verbs). The
-implementation review found no correctness bugs.
-
-**All findings are now closed** (see `git log`): the `config convert`
-non-atomic/TOCTOU overwrite, the cross-include-boundary `extends` anchoring
-test, the `config convert` default-source papercut, the ADR-0003
-self-verification wording, and — in a follow-up pass before the release — the
-six test-coverage gaps below:
-
-- **Cross-format `extends`** — a native container inheriting from a container
-  defined in an included YAML file, plus per-extension parser selection for
-  local `.yml`/`.toml` includes from a native root.
-- **`config convert --stdout`** — prints the document and writes no file.
-- **Config-var precedence** — `--config-var` beats the config-vars file, and an
-  explicitly-named `.yml` file replaces the auto-discovered `ratect.local.toml`.
-- **Base-only container** — no `image`/`build_directory`, used only via
-  `extends`, loads and passes `config validate`.
-- **Multi-candidate "No bundle file found"** — a pathless `type: git` include
-  whose repo has neither candidate names both.
-- **v1 limitations and minor branches** — `to_native_toml`'s compact
-  string form for `ports`/`volumes` is pinned, and a 3-node `extends` cycle.
-
-One thing the last pass turned up beyond the list: task `description` is a
-plain string and is *not* interpolated (matching Batect's own typing), so a
-code comment claiming otherwise was corrected.
+(`git diff 5023a9d..HEAD`) — no correctness bugs found; all findings (a
+handful of papercuts plus six test-coverage gaps) closed. See `git log`.
 
 ---
 
