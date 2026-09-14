@@ -257,7 +257,7 @@ image = "my-repo/my-image:<{tag}"
 image = "my-repo/tools:${IMAGE_TAG:-latest}"
 ```
 
-Both forms work: `<{tag}` reads a [`config_variables`](#config-variables) entry
+Both forms work: `<{tag}` reads a [`config_variables`](#config-variables-and-expressions) entry
 (settable with `--config-var tag=1.2.3`), and `${IMAGE_TAG:-latest}` reads the
 host environment with a fallback. The same rules apply as everywhere else — an
 unset host variable with no `:-default` is a hard error naming it, rather than a
