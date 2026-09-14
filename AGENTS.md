@@ -131,50 +131,59 @@ own yet.
 
 ## Tooling & CI
 
-- **Documentation checks** (`tools/`; the checks themselves are not in CI — `verify-docs.py` runs the branch's own code — though their tests are). `python3 tools/stale-claims.py`
-  ranks prose by how much the code it names has moved since the claim was last
-  touched, `python3 tools/spliced-docs.py` finds doc comments that document a
-  different item from the one they sit on, and `python3 tools/echoed-claims.py`
-  finds prose you just corrected that some *other* file still asserts verbatim.
-  All three are candidate lists that exit 0 —
-  they measure a proxy, not wrongness, so a hit means "re-read this" and a clean
-  run means nothing was *detected*. Run them before a release; guidelines 15 and
-  16 say what to do with what they find.
+- **Documentation checks**: the [`claims`](https://github.com/or1can/claims)
+  Claude Code plugin (enabled in `.claude/settings.json`, configured for this
+  repo in `claims.toml`) — not the four hand-rolled `tools/` scripts this
+  repo used before it existed (`stale-claims.py`, `spliced-docs.py`,
+  `echoed-claims.py`, `verify-docs.py`; see
+  [decisions/0009](decisions/0009-adopt-claims-plugin.md) for the
+  migration). Inside a Claude Code session with the plugin enabled, it runs
+  automatically before every `git commit` via a `PreToolUse` hook — a gate
+  finding blocks the commit, an advisory finding is reported alongside it —
+  and on demand via the `check-claims` skill (ask an agent to check
+  claims, any time mid-task, not only at commit time). Checks: `stale-claims`
+  (advisory, ranks Markdown prose by how much the code it names has moved
+  since the claim was last touched — this repo's own `tools/stale-claims.py`,
+  generalized), `spliced-docs` (advisory, doc comments that document an item
+  other than the one they sit on — this repo's own `tools/spliced-docs.py`,
+  generalized to sweep every tracked `.rs` file rather than a narrower
+  scan), `restatement` (advisory, prose a diff retracted that's still
+  asserted verbatim elsewhere — this repo's own `tools/echoed-claims.py`,
+  generalized), `executable-claims` (gate, `<!-- verify: ... -->` markers —
+  this repo's own `tools/verify-docs.py`, generalized), plus three checks
+  with no prior equivalent here: `check-links` (gate, dead internal Markdown
+  links/anchors), `check-citations` (gate, a backticked name citing a symbol
+  this repo once declared but no longer has, Markdown/Swift only — no Rust
+  support yet), and `claim-words`/`judgment-agent` (advisory, totalising
+  language and architecture-claim review, opt-in via `claims.toml`'s
+  `[claim-words] files` — this repo opts in `AGENTS.md`, `CONTEXT.md`,
+  `ROADMAP.md`, `RELEASES.md`, `TODO.md`, `decisions/*.md`, `docs/**/*.md`).
 
-  `echoed-claims.py` exists because this repo states one behaviour in five
-  places by design — `README.md` summarising `ROADMAP.md` summarising `docs/`,
-  plus `CHANGELOG.md` and a doc comment — and the other two tools rank by *code*
-  churn, which scores that case zero. It is the machine-doable half of guideline
-  16's sweep, and only that half: it matches the words you deleted, so it finds
-  verbatim duplication and misses restatement, which its own header measures
-  rather than assumes. Run it with a range (`'HEAD~3..HEAD'`) or bare against the
-  working tree.
+  `claims.toml` also widens `restatement`'s default `extensions` to add
+  `.rs` — see its own comment for why.
 
-  `python3 tools/verify-docs.py` is the one that decides something: it runs each
-  command marked `<!-- verify: ... -->` above a fenced block and diffs the real
-  output against what the block claims, exiting non-zero on any difference. Opt
-  in per block. It is the only check here that sees a claim falsified by a later
-  commit *on its own branch*, which is where most of this repo's wrong claims
-  have come from — both of the others rank by how much the code underneath has
-  moved, and score that case zero. Mark a block only when its output is
-  reproducible: most example blocks in `docs/` are illustrative, and no marker
-  makes `ratect resources list` print what some other machine had left over.
+  One known, filed noise source remains open:
+  [`or1can/claims#10`](https://github.com/or1can/claims/issues/10) —
+  `stale-claims` lost this repo's old directory-scoped allowlist for
+  bare-name module matches (`` `cache` `` meaning `cache.rs` only in
+  `decisions/`/`AGENTS.md`), so it now also fires on ordinary-English
+  collisions elsewhere (a config field named `cache`, say). Stays
+  advisory-only, so it can't block a commit. Two siblings filed alongside it
+  are already fixed upstream: `spliced-docs`'s weaker `unknown` evidence
+  mode is now opt-in rather than on by default
+  ([#9](https://github.com/or1can/claims/issues/9)), and `restatement` no
+  longer fires on text duplicated across many files by design, like a
+  shared license header ([#12](https://github.com/or1can/claims/issues/12)).
 
-  It has tests — `python3 -m unittest discover -s tools -p 'test_*.py'`, stdlib
-  only — because it is the one that decides: a wrong answer blocks a release or
-  passes a bad one, where a bad ranking costs a skim. Two of its cases load the
-  revision *before* the defect they cover and assert they fail against it, so
-  the file proves it would have caught something rather than claiming so.
+  `executable-claims`' timeout ([#8](https://github.com/or1can/claims/issues/8))
+  is now advisory rather than gate, and configurable via this check's own
+  `claims.toml` section — see `claims.toml`'s comment for why this repo
+  raises it.
 
-  `echoed-claims.py` is tested too, despite exiting 0 like the ranking tools,
-  because its failure mode isn't a bad ranking — it is **silence**. Reporting
-  nothing looks exactly like having nothing to report, so a defect in it gets
-  recorded as a clean sweep. It shipped with three such bugs inside an hour, the
-  worst printing "nothing" for a diff containing the stale sentence it was
-  written to find. `stale-claims.py` and `spliced-docs.py` still have none, and
-  that remains right: they rank, they are read, and a wrong order is visible to
-  whoever reads it. **The test is whether being wrong is noticeable, not whether
-  the exit code is zero.**
+  **The hook is local, not CI-enforced** — a PR opened without Claude Code
+  (a plain shell commit, another editor, or a bot like Renovate) never runs
+  any of this. See `TODO.md`'s Maintainability section for why that isn't
+  wired into CI yet.
 - **Formatting/Linting**: `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` must pass; both are enforced in CI (`.github/workflows/ci.yml`).
 - **Dependency Audit**: `cargo audit` runs in CI against `Cargo.lock`, which is committed to the repo (binary crate convention, not gitignored). One shared lockfile covers the whole workspace. Accepted advisories live in [`.cargo/audit.toml`](.cargo/audit.toml) — currently one, RUSTSEC-2023-0071 (the Marvin timing attack in `rsa` 0.9.x, which has no fixed release). **Every entry there carries a written justification**: what the advisory covers, why it's accepted rather than fixed, what mitigates it meanwhile, and what would let it be removed — an ignore without that is indistinguishable from silencing the check, and `cargo audit` prints nothing about what it skipped. An advisory with a fixed release available never belongs there; upgrade instead.
 - **Tests**: `cargo test --workspace` runs in CI, covering unit tests per module (pattern matching in `dockerignore`, config parsing/resolution, expression interpolation, build-context tar construction, interactive-TTY eligibility, user-mapping generation, and task engine logic — dependency cycles, prerequisite dedup, sidecar/dependency resolution, dependency readiness (health-wait/setup-command ordering and failure paths), environment merging, image resolution — via a fake `ContainerRuntime`) and CLI argument/behavior tests in `ratect-compat/src/main.rs`/`ratect-compat/tests/cli.rs`. `ratect-compat/tests/cli.rs` also has end-to-end tests (`#[ignore]`d by default, run explicitly via `cargo test --workspace --test cli -- --ignored`) that exercise a real Docker daemon against the fixtures under `ratect-compat/tests/fixtures/` — one per feature (sidecars, dependency readiness, environment/config variables, image building, `.dockerignore`, interactive mode, user mapping, hostnames/ports, proxy, `--use-network`). These also run as their own `docker-integration` CI job (`--workspace --test cli` picks up `ratect`'s own `ratect/tests/cli.rs` too, against its own `ratect/tests/fixtures/`). See the fixture files themselves for what each one proves.
@@ -392,9 +401,9 @@ for — note that in `TODO.md` instead.
       the new one's attributes.** A Rust item's doc comment sits *above* its
       `#[test]`/`#[derive]` attributes, so anchoring there splices the new item
       into the previous one's documentation — silently, and the compiler is
-      happy. `python3 tools/spliced-docs.py` finds the ones that get through; it
-      exits 0 regardless, so read each candidate rather than treating a report
-      as a defect.
+      happy. The `claims` plugin's `spliced-docs` check finds the ones that
+      get through; it's advisory (never blocks a commit), so read each
+      candidate rather than treating a report as a defect.
     - **Re-read every string you added, in its final control-flow position.**
       Nothing type-checks a log or error message, so they stay as written while
       the code around them moves. For errors specifically: name something the
@@ -411,12 +420,12 @@ for — note that in `TODO.md` instead.
       this rule *was* grep — for strings naming the old scope — and it reported
       clean while missing three, so the sweep was recorded as done.
 
-      To find which claims to re-read, `python3 tools/stale-claims.py` ranks
-      prose by how much the code it names has moved since the claim was last
-      touched. Treat a hit as "re-read this", never as "this is wrong" — it
-      measures churn, so a true claim about a hot file looks suspicious. Don't
-      record its candidate count anywhere: the number rises when code moves and
-      falls when a doc is fixed, so it measures neither.
+      To find which claims to re-read, the `claims` plugin's `stale-claims`
+      check ranks prose by how much the code it names has moved since the
+      claim was last touched. Treat a hit as "re-read this", never as "this
+      is wrong" — it measures churn, so a true claim about a hot file looks
+      suspicious. Don't record its candidate count anywhere: the number rises
+      when code moves and falls when a doc is fixed, so it measures neither.
     - **Verify a claim before writing it, not after a reviewer questions it** —
       the review-time half of the change loop's write-prose step.
     - **A claim copied from the handoff is unverified.** The handoff is a
@@ -472,21 +481,21 @@ for — note that in `TODO.md` instead.
     already fixed is **failure demand**: work created by not having finished the
     job the first time.
 
-    For prose specifically, run `python3 tools/echoed-claims.py` before
-    committing rather than sweeping from memory: it lists what some other file
-    still says verbatim after you corrected it here — staged or not. It is one
-    pass, not the sweep: it matches the words you deleted, so it finds
+    For prose specifically, the `claims` plugin's `restatement` check runs
+    automatically before each commit (or on demand via `check-claims`)
+    rather than relying on sweeping from memory: it lists what some other
+    file still says verbatim after you corrected it here — staged or not. It
+    is one pass, not the sweep: it matches the words you deleted, so it finds
     quotation and misses paraphrase, and a summary paraphrases what it
     summarises. A clean run buys you the verbatim case and nothing more.
 
     Two things to hold on to. A range changes what is *diffed*, never what is
-    *searched*, which is always the current checkout — so
-    `echoed-claims.py 'abc..def'` answers "did that correction leave anything
-    still asserted today". And **read the phrase it prints, not the line
-    number**: on the one case this was measured against it reports the right
-    file and line while matching a different, perfectly true phrase on it. A
-    hit at the correct location for the wrong reason looks exactly like a
-    catch.
+    *searched*, which is always the current checkout — so pointing it at
+    `main..HEAD` answers "did that correction leave anything still asserted
+    today". And **read the phrase it prints, not the line number**: on the
+    one case this was measured against it reports the right file and line
+    while matching a different, perfectly true phrase on it. A hit at the
+    correct location for the wrong reason looks exactly like a catch.
 
     - **Prefer the structural fix when the local one leaves the invariant
       unstated.** When one area keeps producing findings, the design is the

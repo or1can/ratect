@@ -1,0 +1,36 @@
+# This repo's own config for the `claims` plugin (replaces
+# tools/echoed-claims.py, tools/spliced-docs.py, tools/stale-claims.py and
+# tools/verify-docs.py — see decisions/0009-adopt-claims-plugin.md for the
+# migration).
+
+[restatement]
+# `echoed-claims.py` only ever scanned `.md`. Most of this repo's prose lives
+# in Rust `//!`/`///` doc comments instead (decisions/0006's whole point), so
+# without `.rs` here the check would miss the exact case it exists for: a
+# corrected claim in a doc comment whose stale twin survives in a Markdown
+# page, or vice versa.
+extensions = [".rs"]
+
+[executable-claims]
+# A cold `target/` dir (no incremental build cache — the first `cargo run`
+# in a fresh checkout, or right after `cargo clean`) has taken ~96s for this
+# repo's own `<!-- verify: -->` marker, well past the default 30s. A timeout
+# is advisory rather than gate (claims#8), so raising this only avoids noise
+# on a cold build, not a false gate failure.
+timeout = 120
+
+[claim-words]
+# Opt-in only (spec.md's "designated record-like files") — nothing is swept
+# unless listed here. These are this repo's own claim-bearing, prose-heavy
+# surfaces: contributor process docs, the domain glossary, ADRs, and
+# user-facing docs. Diff-scoped, so this only ever looks at lines a commit
+# adds.
+files = [
+    "AGENTS.md",
+    "CONTEXT.md",
+    "ROADMAP.md",
+    "RELEASES.md",
+    "TODO.md",
+    "decisions/*.md",
+    "docs/**/*.md",
+]

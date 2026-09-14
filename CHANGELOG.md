@@ -21,6 +21,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced the `tools/echoed-claims.py`/`spliced-docs.py`/`stale-claims.py`/`verify-docs.py` documentation-integrity scripts with the [`claims`](https://github.com/or1can/claims) Claude Code plugin — see [decisions/0009](decisions/0009-adopt-claims-plugin.md). No effect on the released binaries; contributor-tooling only.
+
 ## [ratect-compat 0.27.0 · ratect 0.6.0] - 2026-09-13
 
 ### Changed

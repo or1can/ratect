@@ -6,5 +6,16 @@
       "Bash(cargo test --workspace)",
       "Bash(cargo test --workspace --test cli -- --ignored)"
     ]
+  },
+  "extraKnownMarketplaces": {
+    "claims": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/or1can/claims.git"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "claims@claims": true
   }
 }
