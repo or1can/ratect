@@ -78,17 +78,19 @@ the four `tools/` scripts:
   at install rather than always-latest (the plugin's own distribution
   model), so an upstream change can't silently alter what gates a commit
   here without a deliberate re-pin.
-- `stale-claims` is measurably noisier on this repo than the script it
-  replaces, for a reason filed upstream
-  ([#10](https://github.com/or1can/claims/issues/10)) rather than worked
-  around locally — the check exposes no config surface yet that would let
-  this repo suppress the extra noise itself. A sibling finding against
-  `spliced-docs` ([#9](https://github.com/or1can/claims/issues/9)) and one
-  found later against `restatement`
-  ([#12](https://github.com/or1can/claims/issues/12), license-header
-  boilerplate misread as duplicated prose) were both fixed upstream rather
-  than worked around here — evidence the "file it, don't route around it"
-  alternative above was the right call.
+- Four noise/timeout findings from comparing 0.2.2 against the scripts it
+  replaced were all filed upstream rather than worked around locally, and
+  all four shipped fixes within days: `spliced-docs`'s weaker `unknown`
+  evidence mode is now opt-in
+  ([#9](https://github.com/or1can/claims/issues/9)); `restatement` no
+  longer fires on text duplicated across many files by design, like a
+  shared license header ([#12](https://github.com/or1can/claims/issues/12));
+  `executable-claims`'s timeout is now advisory and configurable
+  ([#8](https://github.com/or1can/claims/issues/8)); and `stale-claims`'s
+  bare-name module matching gained the project-configurable scope this
+  repo's own old tool had, via `claims.toml`'s `module_reference_scope`
+  ([#10](https://github.com/or1can/claims/issues/10)) — evidence the "file
+  it, don't route around it" alternative above was the right call.
 - `check-citations` has no Rust support (Markdown and Swift comments only),
   so a dead citation inside a Rust doc comment still isn't caught — the same
   gap that existed before adoption, not a regression from it.

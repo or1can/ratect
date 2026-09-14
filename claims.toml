@@ -1,7 +1,16 @@
 # This repo's own config for the `claims` plugin (replaces
 # tools/echoed-claims.py, tools/spliced-docs.py, tools/stale-claims.py and
 # tools/verify-docs.py — see decisions/0009-adopt-claims-plugin.md for the
-# migration).
+# migration). Full knob reference: the plugin's own docs/configuration.md.
+
+[stale-claims]
+# A bare backtick name (`` `cache` ``, no extension) is ambiguous — as often
+# an ordinary English/config-field word as a module reference — so only
+# trust it as one where this repo actually discusses modules by name.
+# Everywhere else (docs/ especially) the same words mean a YAML/TOML field
+# or a CLI concept instead. An extension-qualified citation (`` `cache.rs` ``)
+# or an explicit relative path always counts, regardless of this list.
+module_reference_scope = ["decisions/*.md", "AGENTS.md"]
 
 [restatement]
 # `echoed-claims.py` only ever scanned `.md`. Most of this repo's prose lives

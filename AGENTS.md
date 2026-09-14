@@ -162,23 +162,17 @@ own yet.
   `claims.toml` also widens `restatement`'s default `extensions` to add
   `.rs` — see its own comment for why.
 
-  One known, filed noise source remains open:
-  [`or1can/claims#10`](https://github.com/or1can/claims/issues/10) —
-  `stale-claims` lost this repo's old directory-scoped allowlist for
-  bare-name module matches (`` `cache` `` meaning `cache.rs` only in
-  `decisions/`/`AGENTS.md`), so it now also fires on ordinary-English
-  collisions elsewhere (a config field named `cache`, say). Stays
-  advisory-only, so it can't block a commit. Two siblings filed alongside it
-  are already fixed upstream: `spliced-docs`'s weaker `unknown` evidence
-  mode is now opt-in rather than on by default
-  ([#9](https://github.com/or1can/claims/issues/9)), and `restatement` no
-  longer fires on text duplicated across many files by design, like a
-  shared license header ([#12](https://github.com/or1can/claims/issues/12)).
+  `claims.toml` also scopes `stale-claims`'s bare-name module matching to
+  `decisions/`/`AGENTS.md` — see its own comment for why — and raises
+  `executable-claims`'s timeout past this repo's own cold-build time.
 
-  `executable-claims`' timeout ([#8](https://github.com/or1can/claims/issues/8))
-  is now advisory rather than gate, and configurable via this check's own
-  `claims.toml` section — see `claims.toml`'s comment for why this repo
-  raises it.
+  Every noise/timeout issue found comparing 0.2.2 against this repo's old
+  tooling is now fixed upstream (`decisions/0009` has the detail and issue
+  links). Separately, `executable-claims` now refuses to run a `<!--
+  verify: -->` marker containing shell chaining, redirection, substitution,
+  or `sed`/`awk`/`grep` — a fixed, no-config-needed gate, not a per-project
+  knob. This repo's one real marker (`AGENTS.md`'s smoke-test example) has
+  none of those, so it's unaffected.
 
   **The hook is local, not CI-enforced** — a PR opened without Claude Code
   (a plain shell commit, another editor, or a bot like Renovate) never runs
