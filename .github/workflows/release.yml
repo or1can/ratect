@@ -13,7 +13,7 @@
 # Note that a GitHub Release with this tag is assumed to exist as a draft
 # with the appropriate title/body, and will be undrafted for you.
 #
-# Two hand-added customizations `dist generate` doesn't know about, kept
+# Three hand-added customizations `dist generate` doesn't know about, kept
 # across regeneration via `dist-workspace.toml`'s `allow-dirty` (see its own
 # comment for the procedure to follow when regenerating this file):
 #
@@ -22,6 +22,11 @@
 #   comment for why. `host`'s `needs`/`if` depend on it.
 # - `build-local-artifacts`'s own `Smoke test` step (ratect#32) runs the
 #   just-built binary before it's uploaded.
+# - `build-global-artifacts` gains an `Install cargo-cyclonedx` step, its
+#   own `Generate SBOM` step (ratect#33), AND a third `target/distrib/
+#   ${{ ... }}.cdx.json` line in that job's `Upload artifacts` `path:` —
+#   all three, or the SBOM is generated and then silently thrown away
+#   rather than uploaded.
 
 name: Release
 permissions:
@@ -287,6 +292,45 @@ jobs:
           pattern: artifacts-*
           path: target/distrib/
           merge-multiple: true
+      # ratect#33: a CycloneDX SBOM for the released binary's actual
+      # dependency tree — generated once here (not once per target in
+      # build-local-artifacts above; the dependency graph cargo-cyclonedx
+      # reports doesn't vary by target for this workspace, so a per-target
+      # SBOM would just be five identical copies) and uploaded alongside
+      # the binaries below. --describe binaries emits one file per
+      # workspace binary crate (ratect and ratect-compat both, even though
+      # only one is being released), so this selects the one that matches
+      # the app actually being released and fails loudly, rather than
+      # uploading nothing, if cargo-cyclonedx didn't write it or if a bare
+      # (Unified-announcement) tag ever released more than one app at once
+      # — see dist-workspace.toml's own note on why that form isn't blocked
+      # outright. --spec-version 1.5 rather than the tool's own 1.3
+      # default: broadly supported by current SBOM-consuming scanners while
+      # staying one version behind the newest (1.6) spec, which tooling
+      # support is less certain for. No best-effort fallback: a failure
+      # here fails this job like any other step failure would.
+      - name: Install cargo-cyclonedx
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-cyclonedx@0.5.9
+      - name: Generate SBOM
+        shell: bash
+        env:
+          APP_NAME: ${{ fromJson(needs.plan.outputs.val).releases[0].app_name }}
+          RELEASE_COUNT: ${{ fromJson(needs.plan.outputs.val).releases | length }}
+        run: |
+          if [ "$RELEASE_COUNT" -ne 1 ]; then
+            echo "::error::expected exactly 1 release in this announcement, found $RELEASE_COUNT — this step only generates an SBOM for releases[0]" >&2
+            exit 1
+          fi
+          cargo cyclonedx --describe binaries --format json --spec-version 1.5
+          sbom_path="$APP_NAME/${APP_NAME}_bin.cdx.json"
+          if [ ! -f "$sbom_path" ]; then
+            echo "::error::expected cargo-cyclonedx to write $sbom_path, it didn't" >&2
+            exit 1
+          fi
+          mkdir -p target/distrib
+          mv "$sbom_path" "target/distrib/$APP_NAME.cdx.json"
       - id: cargo-dist
         shell: bash
         run: |
@@ -306,6 +350,7 @@ jobs:
           path: |
             ${{ steps.cargo-dist.outputs.paths }}
             ${{ env.BUILD_MANIFEST_NAME }}
+            target/distrib/${{ fromJson(needs.plan.outputs.val).releases[0].app_name }}.cdx.json
   # Determines if we should publish/announce
   host:
     needs:

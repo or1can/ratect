@@ -24,7 +24,7 @@ hosting = "github"
 # "Why this exists" docstring. dist attaches artifacts to the existing draft
 # and undrafts it once uploads complete.
 create-release = false
-# `ci`: release.yml has two hand-added customizations `dist generate`
+# `ci`: release.yml has three hand-added customizations `dist generate`
 # doesn't know how to reproduce — see its own file-level comment for what
 # they are — so don't let it flag the file as out of date or overwrite it.
 # To pick up a `cargo-dist-version` bump or any other dist-side change to
