@@ -13,11 +13,15 @@
 # Note that a GitHub Release with this tag is assumed to exist as a draft
 # with the appropriate title/body, and will be undrafted for you.
 #
-# That draft is created by this file's own `create-draft-release` job below,
-# not by dist — see `dist-workspace.toml`'s `create-release`/`allow-dirty`
-# comments for why, and for the procedure to follow when regenerating this
-# file (`dist generate` doesn't know about that job or `host`'s dependency
-# on it, so both need re-adding by hand afterward).
+# Two hand-added customizations `dist generate` doesn't know about, kept
+# across regeneration via `dist-workspace.toml`'s `allow-dirty` (see its own
+# comment for the procedure to follow when regenerating this file):
+#
+# - That draft is created by this file's own `create-draft-release` job
+#   below, not by dist — see `dist-workspace.toml`'s `create-release`
+#   comment for why. `host`'s `needs`/`if` depend on it.
+# - `build-local-artifacts`'s own `Smoke test` step (ratect#32) runs the
+#   just-built binary before it's uploaded.
 
 name: Release
 permissions:
@@ -199,6 +203,42 @@ jobs:
           # Actually do builds and make zips and whatnot
           dist build ${{ needs.plan.outputs.tag-flag }} --print=linkage --output-format=json ${{ matrix.dist_args }} > dist-manifest.json
           echo "dist ran successfully"
+      # ratect#32: a cross-compilation or packaging mistake fails here,
+      # before the artifact is uploaded, rather than only being discovered
+      # by a user running a binary this job already published. Runs the
+      # binary from inside the archive dist just built (not a separate
+      # target/<triple>/ build output) on this matrix entry's own runner —
+      # dist picks a native GitHub-hosted runner per target triple (the
+      # `dist plan` manifest's own `runner` field: macos-14/macos-15-intel
+      # for the two macOS targets, ubuntu-22.04/-arm for the three Linux
+      # ones), so this genuinely executes the artifact, never something
+      # QEMU- or Rosetta-emulated.
+      - name: Smoke test
+        shell: bash
+        run: |
+          executable_count="$(jq '[.artifacts[] | select(any(.assets[]?; .kind == "executable"))] | length' dist-manifest.json)"
+          if [ "$executable_count" -ne 1 ]; then
+            echo "::error::expected exactly 1 executable artifact in dist-manifest.json, found $executable_count" >&2
+            exit 1
+          fi
+          archive="$(jq -r '.artifacts[] | select(any(.assets[]?; .kind == "executable")) | .path' dist-manifest.json)"
+          bin="$(jq -r '.artifacts[] | select(any(.assets[]?; .kind == "executable")) | .assets[] | select(.kind == "executable") | .name' dist-manifest.json)"
+          extract_dir="$(mktemp -d)"
+          tar -xf "$archive" -C "$extract_dir"
+          # The archive's real content sits one level down, in a directory
+          # named after the archive itself (verified locally, not assumed).
+          bin_path=""
+          bin_match_count=0
+          while IFS= read -r candidate; do
+            bin_path="$candidate"
+            bin_match_count=$((bin_match_count + 1))
+          done < <(find "$extract_dir" -type f -name "$bin")
+          if [ "$bin_match_count" -ne 1 ] || [ ! -x "$bin_path" ]; then
+            echo "::error::expected exactly 1 executable named '$bin' under $extract_dir, found $bin_match_count" >&2
+            exit 1
+          fi
+          "$bin_path" --version
+          "$bin_path" --help
       - id: cargo-dist
         name: Post-build
         # We force bash here just because github makes it really hard to get values up
