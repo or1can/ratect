@@ -263,16 +263,30 @@ jobs:
       # silently hand back "null" as a path, which `tar -xf null` fails on
       # with a confusing error, not "not found".
       #
-      # `.upload_files` (a flat array of real, resolved paths) is what
-      # every OTHER step in this file already reads for exactly this
-      # reason — `Post-build` below, and build-global-artifacts's own
-      # jq — and is what this step should have used from the start. Kept
-      # using `.artifacts` only for the executable's *name* inside the
-      # archive (asset names are static, known at plan time, and don't
-      # suffer this staleness — only *paths*, which don't exist until
-      # something is actually built, do), still filtered by this job's own
-      # `matrix.targets` since `.artifacts` legitimately lists all five
-      # targets' worth of names.
+      # `.upload_files` (a flat array of real, resolved paths) doesn't
+      # share `.artifacts`' staleness — confirmed by direct repro, not
+      # inferred: seeded target/distrib/ with the plan manifest *and* all
+      # four sibling per-target manifests *and* their own archives (the
+      # full contamination a real matrix job can see), then ran a real
+      # `dist build` — `.upload_files` still named only this invocation's
+      # own two files. Contamination can only ever add entries to it, never
+      # replace this job's own with a stale one, so the failure mode if
+      # that ever changed is a loud `archive_count != 1` here, not a wrong
+      # binary. `build-global-artifacts`'s own `jq ".upload_files[]"` below
+      # reads the same field directly; `Post-build`'s `dist print-upload-
+      # files-from-manifest` presumably resolves it the same way, though
+      # that's dist's own binary, not something to read the source of here.
+      #
+      # `.artifacts` is kept, still filtered by this job's own
+      # `matrix.targets`, only for the executable's *name* inside the
+      # archive: the plan-time and build-time copies of that asset object
+      # are byte-identical in every manifest inspected during this repro,
+      # and `matrix.targets` is always a subset of what `plan` itself
+      # planned (it comes from `plan`'s own output), so a target this job
+      # is actually building always has a name to find. That's demonstrated
+      # equivalence, not a claim about why dist's merge behaves that way —
+      # don't extend the same reasoning to another `.artifacts` field (e.g.
+      # `.assets[].path`) without checking it the same way.
       #
       # Found by a real ratect#36 rc-tag push, twice: first as "found 5"
       # (a now-fixed jq query with no target filter at all), then — after
@@ -290,7 +304,7 @@ jobs:
         run: |
           archive_count="$(jq -r '[.upload_files[] | select(endswith(".tar.xz"))] | length' dist-manifest.json)"
           if [ "$archive_count" -ne 1 ]; then
-            echo "::error::expected exactly 1 archive in dist-manifest.json's upload_files, found $archive_count" >&2
+            echo "::error::expected exactly 1 archive in dist-manifest.json's upload_files for target(s) $TARGET_LABEL, found $archive_count" >&2
             exit 1
           fi
           archive="$(jq -r '.upload_files[] | select(endswith(".tar.xz"))' dist-manifest.json)"
