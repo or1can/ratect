@@ -136,6 +136,16 @@ jobs:
       # dist's `announcement_is_prerelease` (true only for a `-rc.1`-style
       # suffix) is the wrong source for it here.
       PRERELEASE_FLAG: "${{ startsWith(fromJson(needs.plan.outputs.val).releases[0].app_version, '0.') && '--prerelease' || '' }}"
+      # dist-workspace.toml's own note on the bare `vX.Y.Z` tag form: it
+      # isn't blocked outright, and it announces every dist-able package at
+      # that version at once (2, not 1) — the same releases[0]-only
+      # assumption Generate SBOM already guards against, needed here too
+      # since VERSION/TITLE/PRERELEASE_FLAG above are all releases[0]-only.
+      # Computed via jq-in-bash below, not a GitHub Actions expression —
+      # `.releases | length` is jq's own pipe syntax, which GitHub Actions
+      # expressions don't have at all (ratect#33's own original mistake,
+      # fixed in ratect#35's own PR — same class, not repeated here).
+      PLAN_MANIFEST: ${{ needs.plan.outputs.val }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -143,6 +153,11 @@ jobs:
           submodules: recursive
       - name: Create draft release
         run: |
+          release_count="$(jq '.releases | length' <<<"$PLAN_MANIFEST")"
+          if [ "$release_count" -ne 1 ]; then
+            echo "::error::expected exactly 1 release in this announcement, found $release_count — this job only drafts a release for releases[0]" >&2
+            exit 1
+          fi
           python3 tools/changelog-section.py "$VERSION" > notes.md
           # Idempotent against a "re-run all jobs" retry that lands here a
           # second time: if the draft from a previous attempt already
@@ -232,16 +247,42 @@ jobs:
       # for the two macOS targets, ubuntu-22.04/-arm for the three Linux
       # ones), so this genuinely executes the artifact, never something
       # QEMU- or Rosetta-emulated.
+      #
+      # dist-manifest.json's `.artifacts` isn't scoped to what this
+      # invocation built — it's dist's *known* set, merged from every
+      # *-dist-manifest.json it finds already sitting in target/distrib/
+      # (`.upload_files`, used everywhere else in this file, is the
+      # narrower *produced* set instead; this step is the only one hand-
+      # added here that reaches for `.artifacts`, which is exactly why it
+      # was the only one with this bug). The preceding "Fetch local
+      # artifacts" step's `artifacts-*` pattern also matches
+      # `artifacts-plan-dist-manifest`, uploaded by the `plan` job (a
+      # `needs:` of every matrix job) and covering all five targets — so
+      # every matrix job sees all five before it even runs its own `dist
+      # build`. Deterministic, not a race: a ratect#36 rc-tag rollout run
+      # failed every target uniformly with "found 5", reproduced locally
+      # by copying plan-dist-manifest.json into a clean target/distrib/
+      # before `dist manifest --artifacts=local --target=X`. Sibling
+      # *archives* are irrelevant on their own — only sibling *manifests*
+      # get merged. Filtering on this job's own `matrix.targets` is what
+      # "just built" actually means here.
       - name: Smoke test
         shell: bash
+        env:
+          TARGET_TRIPLES: ${{ toJSON(matrix.targets) }}
+          # `toJSON` pretty-prints (multi-line), which `jq --argjson` is
+          # fine with but a `::error::` annotation is not — GitHub renders
+          # only the first line, silently dropping the rest. This flat
+          # label is for messages only; TARGET_TRIPLES stays the jq input.
+          TARGET_LABEL: ${{ join(matrix.targets, ', ') }}
         run: |
-          executable_count="$(jq '[.artifacts[] | select(any(.assets[]?; .kind == "executable"))] | length' dist-manifest.json)"
+          executable_count="$(jq --argjson targets "$TARGET_TRIPLES" '[.artifacts[] | select(.target_triples == $targets) | select(any(.assets[]?; .kind == "executable"))] | length' dist-manifest.json)"
           if [ "$executable_count" -ne 1 ]; then
-            echo "::error::expected exactly 1 executable artifact in dist-manifest.json, found $executable_count" >&2
+            echo "::error::expected exactly 1 executable artifact for target(s) $TARGET_LABEL in dist-manifest.json, found $executable_count" >&2
             exit 1
           fi
-          archive="$(jq -r '.artifacts[] | select(any(.assets[]?; .kind == "executable")) | .path' dist-manifest.json)"
-          bin="$(jq -r '.artifacts[] | select(any(.assets[]?; .kind == "executable")) | .assets[] | select(.kind == "executable") | .name' dist-manifest.json)"
+          archive="$(jq -r --argjson targets "$TARGET_TRIPLES" '.artifacts[] | select(.target_triples == $targets) | select(any(.assets[]?; .kind == "executable")) | .path' dist-manifest.json)"
+          bin="$(jq -r --argjson targets "$TARGET_TRIPLES" '.artifacts[] | select(.target_triples == $targets) | select(any(.assets[]?; .kind == "executable")) | .assets[] | select(.kind == "executable") | .name' dist-manifest.json)"
           extract_dir="$(mktemp -d)"
           tar -xf "$archive" -C "$extract_dir"
           # The archive's real content sits one level down, in a directory
