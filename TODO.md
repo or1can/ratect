@@ -64,6 +64,16 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
    against — revisit once it does, rather than pinning CI to an arbitrary
    commit SHA in the meantime.
 
+10. **`executable-claims` runs automatically on every `git commit`, sweeping
+    the whole tree for a `<!-- verify: -->` marker and executing whatever it
+    names** (`decisions/0009`) — a malicious branch/PR could plant one
+    anywhere and have it run, with a maintainer's full local privileges, the
+    next time they commit anything while that branch is checked out. Filed
+    upstream as [or1can/claims#15](https://github.com/or1can/claims/issues/15)
+    (diff-scoping or a per-check hook opt-out); revisit once one ships.
+    Meanwhile: don't run `git commit` while reviewing an untrusted branch in
+    a Claude Code session with the plugin enabled.
+
 ## Test coverage
 
 4. **`tests/cli.rs`'s `task_output` helper weakens ~18 converted e2e

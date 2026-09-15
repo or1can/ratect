@@ -94,6 +94,23 @@ the four `tools/` scripts:
 - `check-citations` has no Rust support (Markdown and Swift comments only),
   so a dead citation inside a Rust doc comment still isn't caught — the same
   gap that existed before adoption, not a regression from it.
+- **`executable-claims` now runs automatically on every `git commit`, not
+  just when a human deliberately invokes it — a real risk this repo's own
+  `verify-docs.py` was deliberately designed against.** The check sweeps
+  every tracked file for a `<!-- verify: -->` marker (not diff-scoped) and
+  runs the named command through a real shell; its content check blocks
+  shell metacharacters but not naming an interpreter directly. A malicious
+  branch/PR could plant a marker plus a companion script anywhere in the
+  tree, and it would run — with a maintainer's full local privileges — the
+  next time that maintainer runs any `git commit` while the branch happens
+  to be checked out, regardless of what that commit touches. Filed upstream
+  as [or1can/claims#15](https://github.com/or1can/claims/issues/15)
+  proposing diff-scoping (matching `claim-words`' own precedent) or a
+  per-check hook opt-out; accepted as a documented, known risk for now
+  rather than blocking adoption on it or disabling the hook entirely (which
+  would also drop `check-links`/`check-citations`' real, safe protection).
+  Contributors: avoid running `git commit` while an untrusted branch/PR is
+  checked out, same caution warranted before running any unreviewed code.
 - Doc-integrity enforcement moves from "manual, run before a release" to
   "automatic, every commit" **inside a Claude Code session with the plugin
   enabled**: a gate finding (`check-links`, `check-citations`,
