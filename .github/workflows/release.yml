@@ -331,8 +331,17 @@ jobs:
         shell: bash
         env:
           APP_NAME: ${{ fromJson(needs.plan.outputs.val).releases[0].app_name }}
-          RELEASE_COUNT: ${{ fromJson(needs.plan.outputs.val).releases | length }}
+          # GitHub Actions expressions have no length()/count function and no
+          # pipe operator — `fromJson(...).releases | length` is jq syntax,
+          # not theirs, and fails at workflow-parse time (caught the hard
+          # way: it broke this file's own push trigger outright rather than
+          # just this step, since GitHub validates the whole file's
+          # expressions before running any job). Computed here instead with
+          # the same jq-in-bash pattern the Smoke test step above already
+          # uses for its own JSON parsing.
+          PLAN_MANIFEST: ${{ needs.plan.outputs.val }}
         run: |
+          RELEASE_COUNT="$(jq '.releases | length' <<<"$PLAN_MANIFEST")"
           if [ "$RELEASE_COUNT" -ne 1 ]; then
             echo "::error::expected exactly 1 release in this announcement, found $RELEASE_COUNT — this step only generates an SBOM for releases[0]" >&2
             exit 1
