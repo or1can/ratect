@@ -74,7 +74,13 @@ entries under a new dated heading naming every version in that release — e.g.
 released on its own. That commit is tagged and published as a GitHub Release
 (`prerelease: true` until a binary's own 1.0.0 — see below — with that
 `CHANGELOG.md` section as its body; a joint release uses that same section for
-both, which is correct, because it *is* the same set of changes). The next
+both, which is correct, because it *is* the same set of changes). Pushing the
+tag is what publishes it — a `cargo-dist`-based pipeline
+(`.github/workflows/release.yml`) builds and uploads every target's binaries
+and drafts the Release itself, so the version-bump commit's own heading must
+already be in place *before* the tag is pushed: the pipeline's notes come
+from `tools/changelog-section.py` extracting the section naming that exact
+version, which doesn't exist until that commit lands. The next
 commit — starting the following version's development, also isolated, also
 `chore:` — bumps them back to the next `X.Y.Z-dev`. Neither bump is ever folded
 into a feature commit.

@@ -30,3 +30,8 @@ resolver = "2"
 # patch entirely still needs a new crates.io release with today's `master`.
 [patch.crates-io]
 bollard = { git = "https://github.com/or1can/bollard.git", branch = "fix/native-certs-partial-load" }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

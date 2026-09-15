@@ -1,0 +1,44 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.33.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = []
+# Target platforms to build apps for (Rust target-triple syntax). Only the
+# targets ratect#31 asked for: no aarch64-unknown-linux-gnu (low demand next
+# to the musl build here) and no Windows target yet.
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
+# Where to host releases
+hosting = "github"
+# We create the GitHub Release ourselves (as a draft, with notes extracted
+# from CHANGELOG.md by tools/changelog-section.py) rather than letting dist
+# generate a title/body from the changelog: dist's own changelog matching
+# only understands an exact-version heading, and this repo's shared,
+# combined-heading convention (e.g. "## [ratect-compat 0.27.0 · ratect
+# 0.6.0]") names more than one version per heading — see that script's own
+# "Why this exists" docstring. dist attaches artifacts to the existing draft
+# and undrafts it once uploads complete.
+create-release = false
+# `ci`: release.yml has a hand-added `create-draft-release` job (the
+# create-release = false escape hatch above) that `dist generate` doesn't
+# know how to reproduce, so don't let it flag the file as out of date or
+# overwrite it. To pick up a `cargo-dist-version` bump or any other dist-side
+# change to release.yml, temporarily remove this line, run `dist generate`,
+# then re-add both this line and the `create-draft-release` job/`host`'s
+# dependency on it (see release.yml's own file-level comment) before
+# committing — `dist generate` regenerates the whole file and knows nothing
+# about that job.
+allow-dirty = ["ci"]
+
+# Not configured here: anything that stops a bare `vX.Y.Z` tag (no
+# `ratect`/`ratect-compat` prefix) from triggering a release at all — dist
+# supports that as its "Unified Announcement" mode, releasing every
+# dist-able package currently at that version. This repo's Singular
+# `PACKAGE/vX.Y.Z` tags (decisions/0001's independent version lines,
+# guideline 8) are what satisfy "never a shared workspace-wide tag" — by
+# always pushing one, not by making the other form impossible to push.
