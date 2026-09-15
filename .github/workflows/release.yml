@@ -103,7 +103,10 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       TAG: ${{ needs.plan.outputs.tag }}
       VERSION: ${{ fromJson(needs.plan.outputs.val).releases[0].app_version }}
-      TITLE: ${{ fromJson(needs.plan.outputs.val).announcement_title }}
+      # dist's own `announcement_title` is just the tag string itself (e.g.
+      # "ratect-compat/v0.28.0") for a Singular announcement — fine as an id,
+      # not as a Release title a human reads.
+      TITLE: ${{ fromJson(needs.plan.outputs.val).releases[0].app_name }} ${{ fromJson(needs.plan.outputs.val).releases[0].app_version }}
       # ROADMAP.md's versioning section marks every release `prerelease:
       # true` until a binary's own 1.0.0 — a rule about the binary's own
       # maturity, not the tagged version string's own SemVer shape, so
@@ -118,11 +121,26 @@ jobs:
       - name: Create draft release
         run: |
           python3 tools/changelog-section.py "$VERSION" > notes.md
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --draft --title "$TITLE" --notes-file notes.md $PRERELEASE_FLAG
-          else
-            gh release create "$TAG" --draft --title "$TITLE" --notes-file notes.md $PRERELEASE_FLAG
-          fi
+          # Idempotent against a "re-run all jobs" retry that lands here a
+          # second time: if the draft from a previous attempt already
+          # exists, editing it (rather than erroring on `create`) lets
+          # `host` retry cleanly. But never re-run this against a release
+          # `host` already undrafted — passing `--draft` to `gh release
+          # edit` unconditionally sets it, which would re-draft an already
+          # published release out from under users.
+          is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || echo "missing")"
+          case "$is_draft" in
+            true)
+              gh release edit "$TAG" --draft --title "$TITLE" --notes-file notes.md $PRERELEASE_FLAG
+              ;;
+            missing)
+              gh release create "$TAG" --draft --title "$TITLE" --notes-file notes.md $PRERELEASE_FLAG
+              ;;
+            *)
+              echo "::error::release $TAG already exists and is not a draft; refusing to re-draft it" >&2
+              exit 1
+              ;;
+          esac
 
   # Build and packages all the platform-specific things
   build-local-artifacts:
