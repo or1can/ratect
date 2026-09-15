@@ -18,3 +18,9 @@ ratect-compat/tests/conformance/batect-journey/*/output/
 
 # Python bytecode from tools/ (see AGENTS.md guideline 15).
 __pycache__/
+
+# Per-machine executable-claims grants (decisions/0009) — deliberately never
+# committed; a tracked copy would be exactly the PR-tamperable trust boundary
+# the deny-by-default design exists to avoid, and the claims plugin itself
+# ignores this file's grants outright if it ever is tracked.
+claims.local.toml

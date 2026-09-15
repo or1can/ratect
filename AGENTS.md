@@ -168,11 +168,32 @@ own yet.
 
   Every noise/timeout issue found comparing 0.2.2 against this repo's old
   tooling is now fixed upstream (`decisions/0009` has the detail and issue
-  links). Separately, `executable-claims` now refuses to run a `<!--
-  verify: -->` marker containing shell chaining, redirection, substitution,
-  or `sed`/`awk`/`grep` — a fixed, no-config-needed gate, not a per-project
-  knob. This repo's one real marker (`AGENTS.md`'s smoke-test example) has
-  none of those, so it's unaffected.
+  links). `executable-claims` also refuses to run a `<!-- verify: -->`
+  marker containing shell chaining, redirection, substitution, or
+  `sed`/`awk`/`grep` — a fixed, no-config-needed gate, not a per-project
+  knob.
+
+  **`executable-claims` denies execution by default, gated on a local,
+  git-ignored grant** (`claims.local.toml`, sibling to `claims.toml` —
+  never commit it; `.gitignore` already excludes it, see the plugin's own
+  `docs/adr/0001-executable-claims-deny-by-default.md`). A marker's command
+  with no exact-string entry in that file's `[executable-claims]` section
+  is a **gate finding** naming the command and the exact TOML to add,
+  regardless of whether it's actually safe — a fresh clone hits this
+  immediately on this repo's one real marker (`AGENTS.md`'s smoke-test
+  example above). Add, once per machine:
+
+  ```toml
+  [executable-claims]
+  allowed = [
+      "cargo run -q -p ratect-compat -- -f ratect-compat/tests/fixtures/smoke.yml --list-tasks",
+  ]
+  ```
+
+  This closes the automatic-execution risk `decisions/0009` originally
+  documented as an accepted, unresolved gap — filed upstream as
+  [or1can/claims#15](https://github.com/or1can/claims/issues/15), now
+  fixed and no longer merely mitigated by caution.
 
   **The hook is local, not CI-enforced** — a PR opened without Claude Code
   (a plain shell commit, another editor, or a bot like Renovate) never runs
