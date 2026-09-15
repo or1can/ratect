@@ -21,6 +21,14 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced the `tools/echoed-claims.py`/`spliced-docs.py`/`stale-claims.py`/`verify-docs.py` documentation-integrity scripts with the [`claims`](https://github.com/or1can/claims) Claude Code plugin — see [decisions/0009](decisions/0009-adopt-claims-plugin.md). No effect on the released binaries; contributor-tooling only.
+
+### Security
+
+- Upgraded `rustls` to 0.23.45, fixing [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285) (TLS 1.3 handshake messages incorrectly accepted across encryption level boundaries).
+
 ## [ratect-compat 0.27.0 · ratect 0.6.0] - 2026-09-13
 
 ### Changed

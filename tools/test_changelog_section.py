@@ -19,9 +19,10 @@
 
 This script's output becomes a real published GitHub Release's notes body, so
 a wrong answer from it is not a bad ranking a human skims past — it either
-publishes a release with the wrong notes or an empty body. That is the same
-reasoning `test_verify_docs.py` gives for testing the one script in `tools/`
-that *decides* something rather than ranking candidates for a human to read.
+publishes a release with the wrong notes or an empty body. It is the one
+script in `tools/` that *decides* something rather than ranking candidates
+for a human to read (`tools/`'s other doc-integrity scripts are now the
+`claims` Claude Code plugin instead — see `AGENTS.md`'s Tooling & CI section).
 
 `test_a_short_target_is_not_matched_inside_a_longer_version` pins the bug a
 naive substring search would ship with: `"7.0.0"` is a substring of
@@ -39,7 +40,11 @@ TOOLS = Path(__file__).resolve().parent
 
 
 def load(path):
-    """Imports a `changelog-section.py` by path — see `test_verify_docs.load`."""
+    """Imports a `changelog-section.py` by path.
+
+    The hyphen makes it an invalid module name, so it cannot be imported by
+    name.
+    """
     spec = importlib.util.spec_from_file_location("changelog_section_under_test", path)
     assert spec and spec.loader, path
     module = importlib.util.module_from_spec(spec)

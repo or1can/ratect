@@ -1023,7 +1023,7 @@ volume's `host_path` (see [Volume path resolution](#volume-path-resolution)),
 `build_directory`, `build_args`, a `build_secrets` entry's `path` (not its
 `environment` — that's a literal host environment variable *name*, not itself
 interpolated), a `build_ssh` entry's `paths`, and
-[`run_as_current_user`](#run_as_current_user)'s `home_directory` (interpolated
+[`run_as_current_user`](#user-mapping)'s `home_directory` (interpolated
 but *not* resolved against the config file, since it names a path inside the
 container) support two kinds of expression, resolved once — after CLI-supplied
 config variable overrides (`--config-var`/`--config-vars-file`) are known, so before

@@ -54,6 +54,26 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
    report and posts the stage like any other. The `task_output` fallback
    it warned about is no longer reachable that way.
 
+9. **The `claims` plugin's checks have no CI-level backstop, only the local
+   `git commit` hook** (`decisions/0009`) — a PR opened without Claude Code
+   (a plain shell commit, another editor's Git integration, or a bot account
+   like Renovate) merges without `check-links`/`check-citations`/
+   `executable-claims` ever running against it. Wiring `python3 -m
+   claims.cli --repo-root .` into `.github/workflows/ci.yml` would close
+   this, but `or1can/claims` has no tagged releases yet to pin a CI checkout
+   against — revisit once it does, rather than pinning CI to an arbitrary
+   commit SHA in the meantime.
+
+10. **`executable-claims` runs automatically on every `git commit`, sweeping
+    the whole tree for a `<!-- verify: -->` marker and executing whatever it
+    names** (`decisions/0009`) — a malicious branch/PR could plant one
+    anywhere and have it run, with a maintainer's full local privileges, the
+    next time they commit anything while that branch is checked out. Filed
+    upstream as [or1can/claims#15](https://github.com/or1can/claims/issues/15)
+    (diff-scoping or a per-check hook opt-out); revisit once one ships.
+    Meanwhile: don't run `git commit` while reviewing an untrusted branch in
+    a Claude Code session with the plugin enabled.
+
 ## Test coverage
 
 4. **`tests/cli.rs`'s `task_output` helper weakens ~18 converted e2e

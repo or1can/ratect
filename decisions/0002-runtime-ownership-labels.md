@@ -16,7 +16,7 @@ by their `ratect-` name prefix, and couldn't be attributed to a project or task.
 Batect is no better here — `DockerContainerCreationSpecFactory` applies
 `container.labels` and nothing of its own, and Batect has no cleanup command at
 all — so this had simply never been answerable, which is exactly the complaint
-the [`resources` verb](../ROADMAP.md#uxtooling) exists to fix.
+the [`resources` verb](../ROADMAP.md#ux--tooling) exists to fix.
 
 ## Decision
 
@@ -74,7 +74,7 @@ Sub-decisions baked in:
 
 ## Consequences
 
-- The [`resources list`/`clean`](../ROADMAP.md#uxtooling) verb becomes possible
+- The [`resources list`/`clean`](../ROADMAP.md#ux--tooling) verb becomes possible
   at all, plus `ContainerRuntime::list_containers`/`list_networks` with
   daemon-side label filtering.
 - It's a **parity divergence** — Batect writes no labels of its own — but a

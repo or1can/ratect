@@ -66,3 +66,4 @@ never delete one (same append-only spirit as the roadmap's versioned lists).
 | [0006](0006-code-and-documentation-locality.md) | Where code and its documentation live | Accepted — adopted incrementally |
 | [0007](0007-where-agent-process-docs-live.md) | Where contributor/agent-process docs live | Accepted — adopted immediately |
 | [0008](0008-tracking-release-scope-with-github-issues.md) | Tracking release scope with GitHub Issues, not RELEASES.md | Accepted — adopted immediately |
+| [0009](0009-adopt-claims-plugin.md) | Adopting the `claims` plugin for documentation checks | Accepted — adopted immediately |
