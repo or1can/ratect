@@ -185,3 +185,46 @@ jobs:
       - uses: actions/checkout@v7
       - uses: taiki-e/install-action@cargo-audit
       - run: cargo audit
+
+  # ratect#34: catches a broken dist-workspace.toml (or a Cargo.toml version
+  # dist can't reconcile — e.g. the two binaries' dev versions disagreeing
+  # in a way `dist plan`'s own inference can't paper over) on a normal PR.
+  # Does NOT cover release.yml itself: dist-workspace.toml's `allow-dirty =
+  # ["ci"]` deliberately turns off the generate-time check that would catch
+  # a broken hand-edit there (verified — a deliberately invalid release.yml
+  # doesn't fail this job), so its own hand-added jobs remain covered by
+  # nothing but review. `dist plan` with no --tag is the same tag-agnostic
+  # validity check release.yml's own PR-triggered `plan` job already runs —
+  # this duplicate exists so the *same* signal is reported from ci.yml,
+  # where a future ruleset change could make it required the way every
+  # other job in this file already is (see AGENTS.md's guideline 12); it
+  # is NOT yet in that ruleset itself (tracked in TODO.md), so today this
+  # job reports on every PR without blocking a merge, same as release.yml's
+  # own copy. Deliberately not paths-filtered despite ratect#34's wording:
+  # a required check that's skipped on some PRs (via workflow-level
+  # `paths:`, the only first-party mechanism) never reports on those PRs
+  # and leaves them pending forever — msrv-floor.yml uses paths-filtering
+  # precisely because it's declared NOT required for exactly this reason.
+  # No taiki-e/install-action entry exists for dist (checked), so this
+  # installs it the same way release.yml does — reading the version from
+  # dist-workspace.toml rather than a second hardcoded copy, so the two
+  # can't drift the way the two `cargo-dist-version = "0.33.0"` occurrences
+  # already can (release.yml's own pin and dist-workspace.toml's) — same
+  # single-source-of-truth approach msrv-floor.yml already uses for its own
+  # pin, including its shape-anchored extraction and empty-value guard.
+  dist-plan:
+    name: Release Pipeline Config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Read the pinned dist version from dist-workspace.toml
+        id: dist-version
+        run: |
+          version="$(grep -oE '^cargo-dist-version *= *"[0-9][^"]*"' dist-workspace.toml | head -1 | cut -d'"' -f2)"
+          echo "version=${version:?could not read cargo-dist-version from dist-workspace.toml}" >> "$GITHUB_OUTPUT"
+      - name: Install dist
+        env:
+          DIST_VERSION: ${{ steps.dist-version.outputs.version }}
+        run: curl --proto '=https' --tlsv1.2 -LsSf "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-installer.sh" | sh
+      - run: dist plan

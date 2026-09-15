@@ -74,6 +74,16 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
     Meanwhile: don't run `git commit` while reviewing an untrusted branch in
     a Claude Code session with the plugin enabled.
 
+11. **`ci.yml`'s `Release Pipeline Config` check (ratect#34) isn't in the
+    `main branch protection` ruleset's required status checks** — it runs
+    and reports on every PR (same as `release.yml`'s own `plan` job, which
+    it deliberately duplicates so the signal exists in `ci.yml` at all),
+    but a broken `dist-workspace.toml` shows a red X without actually
+    blocking a merge, same as before #34. Add `Release Pipeline Config` to
+    ruleset `19050737`'s required checks list (a live repo-settings change,
+    left to a maintainer rather than made unilaterally while implementing
+    the ticket) to close the gap #34's own problem statement describes.
+
 ## Test coverage
 
 4. **`tests/cli.rs`'s `task_output` helper weakens ~18 converted e2e
