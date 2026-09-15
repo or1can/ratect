@@ -30,6 +30,9 @@ history, from when it was the only binary.
   uploaded, and attaching a CycloneDX SBOM of the released binary's
   dependency tree. Not yet exercised against a real tag, and not yet the
   documented install path — release-tooling only for now.
+- Added a CI check (`Release Pipeline Config`) that validates
+  `dist-workspace.toml` on every PR. Reported, not yet a required check —
+  contributor-tooling only for now.
 
 ### Changed
 
