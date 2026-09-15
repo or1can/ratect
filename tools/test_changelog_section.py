@@ -124,6 +124,22 @@ class ChangelogSectionTests(unittest.TestCase):
 
         self.assertIn("only section", section)
 
+    def test_matches_a_prerelease_suffixed_version_exactly(self):
+        """A `PACKAGE/vX.Y.Z-rc.N`-style tag (ratect#36's rollout-validation
+        rc tags, not a real release) needs a heading naming that exact
+        suffixed version to resolve notes for it."""
+        changelog = "## [ratect-compat 0.28.0-rc.1 · ratect 0.7.0-rc.1] - 2026-09-15\n\nrc notes\n"
+
+        section = changelog_section.changelog_section(changelog, "0.28.0-rc.1")
+
+        self.assertIn("rc notes", section)
+
+    def test_a_bare_version_does_not_match_a_prerelease_suffixed_heading(self):
+        changelog = "## [ratect-compat 0.28.0-rc.1] - 2026-09-15\n\nrc notes\n"
+
+        with self.assertRaises(ValueError):
+            changelog_section.changelog_section(changelog, "0.28.0")
+
 
 class MainTests(unittest.TestCase):
     def run_main(self, argv):

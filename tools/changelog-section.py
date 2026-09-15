@@ -60,8 +60,12 @@ HEADING_RE = re.compile(r"^## \[(?P<bracket>.+?)\](?:\s*-.*)?\s*$")
 # The version token trailing one `·`-separated fragment of a heading's
 # bracketed content — preceded by whitespace (a named package) or nothing at
 # all (a bare pre-split version), and anchored to the end of the fragment so
-# it can't match part of a longer version number.
-VERSION_TOKEN_RE = re.compile(r"(?:^|\s)(\d+\.\d+\.\d+)$")
+# it can't match part of a longer version number. The optional `-rc.1`-style
+# suffix isn't for a real release (guideline 8's process only ever tags a
+# plain bumped version) — it's so a heading can name the throwaway rc tag
+# ratect#36's rollout validation pushes, which is a real SemVer prerelease
+# and needs its own exact-match heading the same way a real version does.
+VERSION_TOKEN_RE = re.compile(r"(?:^|\s)(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$")
 
 
 def heading_versions(bracket_content):
