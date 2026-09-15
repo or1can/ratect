@@ -24,6 +24,49 @@ hosting = "github"
 # "Why this exists" docstring. dist attaches artifacts to the existing draft
 # and undrafts it once uploads complete.
 create-release = false
+# GitHub Artifact Attestations (ratect#35): lets a user run `gh attestation
+# verify <file> -R or1can/ratect` against a downloaded archive, the SBOM, or
+# sha256.sum to confirm it was built by this repo's own CI from the tagged
+# source, not tampered with in transit — NOT every release asset (source.tar.gz
+# and the per-artifact *.sha256 sidecars aren't attested directly, though
+# source.tar.gz's own digest is inside the attested sha256.sum). `github-
+# attestations-filters` only applies to attestations performed in dist's own
+# "host" phase (its documented limitation — it has no effect on the default
+# "build-local-artifacts" phase), so `github-attestations-phase = "host"` is
+# load-bearing, not redundant with the default: verified locally (by
+# temporarily enabling this, running `dist generate` three times — default
+# phase with no filters, default phase with these filters, and this actual
+# config — and diffing each against the others) that the default phase alone
+# already attests every per-target binary archive (and its own *.sha256
+# sidecar) with no filters key needed, but never sees the SBOM or
+# sha256.sum at all, both built later in build-global-artifacts — exactly
+# the gap ratect#35's own acceptance criteria call out ("not just the
+# binaries"). Filters are globbed against `artifacts/{filter}` (dist's own
+# doc wording), confirmed against the generated `host`-job `Attest` step's
+# `subject-path`, which is exactly these three patterns each prefixed
+# `artifacts/`.
+#
+# `github-attestations-phase` and dist's own `github-release` (which
+# controls which phase's job actually performs the GitHub release —
+# defaults to "host", left unset here) have to name the same phase, or the
+# `Attest` step ends up in a job that never received the permissions
+# (attestations/id-token: write) attestation needs — dist has no validation
+# for this pairing itself, so if either is ever set explicitly, set both.
+#
+# Known, accepted gap: `actions/attest`'s own check only rejects a *total*
+# subject count of zero across all three filters, not each filter
+# individually — so if `*.cdx.json` or `sha256.sum` ever matched nothing
+# (a cargo-cyclonedx or dist internal change that renames either), the
+# binaries would still attest successfully and the release would ship with
+# the SBOM/checksums silently unattested. Not guarded against with a
+# fourth hand-added step here: today's job graph makes build-global-
+# artifacts skipping while host still runs unreachable (host's own `if`
+# requires build-local-artifacts to have succeeded, which build-global-
+# artifacts also needs), so the realistic trigger is narrow — a rename
+# upstream, not a normal run.
+github-attestations = true
+github-attestations-phase = "host"
+github-attestations-filters = ["*.tar.xz", "*.cdx.json", "sha256.sum"]
 # `ci`: release.yml has three hand-added customizations `dist generate`
 # doesn't know how to reproduce — see its own file-level comment for what
 # they are — so don't let it flag the file as out of date or overwrite it.

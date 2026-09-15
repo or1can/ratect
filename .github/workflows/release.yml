@@ -27,6 +27,20 @@
 #   ${{ ... }}.cdx.json` line in that job's `Upload artifacts` `path:` —
 #   all three, or the SBOM is generated and then silently thrown away
 #   rather than uploaded.
+#
+# The `host` job's `Attest` step (ratect#35) is NOT a hand-added
+# customization — it's dist's own generated output, from
+# `dist-workspace.toml`'s `github-attestations*` keys — so it needs no
+# re-adding after a regeneration; it's listed here only so its ordering
+# relative to the (also dist-generated) `Create GitHub Release` step below
+# is understood together. It attests every file `dist-workspace.toml`'s
+# `github-attestations-filters` names, matched against `artifacts/` — the
+# same directory (this job's own `Download GitHub Artifacts` step's target,
+# post-`Cleanup`) `Create GitHub Release`'s `gh release upload` reads from —
+# *before* that upload, but attestation binds to a file's content digest,
+# not to it already being a released asset, so that ordering doesn't matter
+# for correctness; verifying later against either a local copy or the
+# eventually-downloaded release asset resolves the same attestation.
 
 name: Release
 permissions:
@@ -367,6 +381,10 @@ jobs:
     runs-on: "ubuntu-22.04"
     outputs:
       val: ${{ steps.host.outputs.manifest }}
+    permissions:
+      "attestations": "write"
+      "contents": "write"
+      "id-token": "write"
     steps:
       - uses: actions/checkout@v6
         with:
@@ -409,6 +427,13 @@ jobs:
         run: |
           # Remove the granular manifests
           rm -f artifacts/*-dist-manifest.json
+      - name: Attest
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            artifacts/*.tar.xz
+            artifacts/*.cdx.json
+            artifacts/sha256.sum
       - name: Create GitHub Release
         env:
           PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"
