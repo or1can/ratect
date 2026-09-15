@@ -111,6 +111,20 @@ the four `tools/` scripts:
   would also drop `check-links`/`check-citations`' real, safe protection).
   Contributors: avoid running `git commit` while an untrusted branch/PR is
   checked out, same caution warranted before running any unreviewed code.
+
+  **Resolved upstream, not just mitigated.** `executable-claims` now
+  denies execution by default, gated on an exact-string grant in a
+  second, git-ignored, per-machine file (`claims.local.toml`) — neither
+  of the two directions proposed above, but a stronger fix: committed
+  config (this repo's own `claims.toml`, or a PR-planted marker/companion
+  script) can no longer authorize execution on its own, closing the exact
+  "malicious branch + unrelated commit" path described above rather than
+  narrowing its trigger. See the plugin's own
+  `docs/adr/0001-executable-claims-deny-by-default.md` and `AGENTS.md`'s
+  Tooling & CI section ("`executable-claims` denies execution by default")
+  for this repo's own setup. The "avoid running `git commit` while an untrusted
+  branch is checked out" caution is now defense-in-depth, not the primary
+  mitigation.
 - Doc-integrity enforcement moves from "manual, run before a release" to
   "automatic, every commit" **inside a Claude Code session with the plugin
   enabled**: a gate finding (`check-links`, `check-citations`,
