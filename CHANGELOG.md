@@ -28,8 +28,11 @@ history, from when it was the only binary.
   to a GitHub Release on every `ratect`/`ratect-compat` version tag push,
   smoke-testing each freshly built binary (`--version`/`--help`) before it's
   uploaded, and attaching a CycloneDX SBOM of the released binary's
-  dependency tree. Not yet exercised against a real tag, and not yet the
-  documented install path — release-tooling only for now.
+  dependency tree. Every binary archive, the SBOM, and the checksums
+  manifest carry a GitHub Artifact Attestation, verifiable with `gh
+  attestation verify <file> --repo or1can/ratect` once downloaded. Not yet
+  exercised against a real tag, and not yet the documented install path —
+  release-tooling only for now.
 - Added a CI check (`Release Pipeline Config`) that validates
   `dist-workspace.toml` on every PR. Reported, not yet a required check —
   contributor-tooling only for now.
