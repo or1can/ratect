@@ -429,6 +429,13 @@ fn resolve_config_vars_file(explicit: Option<PathBuf>, dir: &Path) -> Option<Pat
     })
 }
 
+/// The CLI's real work, once `Args` is parsed: `--upgrade` is a documented
+/// no-op (see its own doc comment), `--clean`/`--clean-cache` short-circuit
+/// into [`clean_caches`] before any config loads, `--list-tasks` prints and
+/// returns without touching Docker at all, and naming a task loads the
+/// config, builds the engine, and runs it. [`Args::engine_settings`] is kept
+/// synchronous and separate specifically so its flag-to-settings mapping can
+/// be unit-tested without a Docker daemon — see its own doc comment.
 async fn run(args: Args) -> Result<()> {
     if args.upgrade {
         eprintln!(
