@@ -21,6 +21,14 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Added
+
+- Added a `cargo-dist`-based pipeline that builds Linux (x86_64 gnu/musl,
+  aarch64 musl) and native macOS (x86_64, arm64) binaries and publishes them
+  to a GitHub Release on every `ratect`/`ratect-compat` version tag push. Not
+  yet exercised against a real tag, and not yet the documented install path —
+  release-tooling only for now.
+
 ### Changed
 
 - Replaced the `tools/echoed-claims.py`/`spliced-docs.py`/`stale-claims.py`/`verify-docs.py` documentation-integrity scripts with the [`claims`](https://github.com/or1can/claims) Claude Code plugin — see [decisions/0009](decisions/0009-adopt-claims-plugin.md). No effect on the released binaries; contributor-tooling only.
