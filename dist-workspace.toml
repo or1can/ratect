@@ -24,15 +24,14 @@ hosting = "github"
 # "Why this exists" docstring. dist attaches artifacts to the existing draft
 # and undrafts it once uploads complete.
 create-release = false
-# `ci`: release.yml has a hand-added `create-draft-release` job (the
-# create-release = false escape hatch above) that `dist generate` doesn't
-# know how to reproduce, so don't let it flag the file as out of date or
-# overwrite it. To pick up a `cargo-dist-version` bump or any other dist-side
-# change to release.yml, temporarily remove this line, run `dist generate`,
-# then re-add both this line and the `create-draft-release` job/`host`'s
-# dependency on it (see release.yml's own file-level comment) before
-# committing — `dist generate` regenerates the whole file and knows nothing
-# about that job.
+# `ci`: release.yml has two hand-added customizations `dist generate`
+# doesn't know how to reproduce — see its own file-level comment for what
+# they are — so don't let it flag the file as out of date or overwrite it.
+# To pick up a `cargo-dist-version` bump or any other dist-side change to
+# release.yml, temporarily remove this line, run `dist generate`, then
+# re-add both this line and every customization release.yml's file-level
+# comment lists before committing — `dist generate` regenerates the whole
+# file and knows nothing about any of them.
 allow-dirty = ["ci"]
 
 # Not configured here: anything that stops a bare `vX.Y.Z` tag (no
