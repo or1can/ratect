@@ -152,15 +152,17 @@ keeps from being overwritten on regeneration.
   assumption needs re-examining — either the script still resolves
   correctly per version, or the combined-heading convention itself would
   need to fork, which is a bigger decision than this ADR's scope.
-- **`cargo-binstall`/install-script support is unrealized, not
-  delivered.** The tool choice's rationale (this ADR's Alternatives
-  section, and the original spec) named generated install scripts and
-  `cargo-binstall` metadata as benefits of `cargo-dist` over a hand-rolled
-  matrix — but `dist-workspace.toml`'s `installers` list is empty, so
-  no install script is generated in this pass. Whether `cargo-binstall`
-  itself already works off the plain release-asset/manifest shape `dist`
-  produces regardless of `installers` wasn't verified here. Revisit
-  alongside `docs/installation.md`'s rewrite (ticket #38).
+- **`cargo-binstall` support is unrealized, not delivered** — still
+  blocked on the crates.io deferral above. The install-script half of
+  this same original benefit *is* now delivered: `dist-workspace.toml`'s
+  `installers` list gained `"shell"` in ticket #58, once the real
+  0.28.0/0.7.0 tags were safely out of the way of `dist`'s no-milestone-
+  awareness (see that ticket). Verified there that turning it on adds
+  zero new jobs/steps to `release.yml` — the generated script is just
+  another entry in the same manifest-driven artifact upload the archives
+  already use. Whether `cargo-binstall` itself already works off the
+  plain release-asset/manifest shape `dist` produces regardless of
+  `installers` still wasn't verified.
 - **`Release Pipeline Config` (ci.yml) reports, it doesn't yet gate.**
   It isn't in the `main branch protection` ruleset's required status
   checks, so a broken `dist-workspace.toml` shows a red X without
@@ -188,11 +190,12 @@ keeps from being overwritten on regeneration.
 - **Now user-facing** (ticket #38, deliberately not folded into this
   one): `docs/installation.md` documents the GitHub Releases download
   path as primary, and `AGENTS.md`'s release-process guideline describes
-  the tag-push-triggers-release flow. Neither the install script nor
-  `cargo-binstall` support is documented as available, matching the
-  crates.io deferral above — `cargo-binstall`'s normal discovery needs
-  the package resolvable via the crates.io index, which is exactly what
-  that deferral blocks. Until a real version is tagged after this
-  lands, `docs/installation.md`'s instructions point at a Releases page
-  with nothing yet to download for this pipeline specifically — a
-  one-release transition, not a permanent gap.
+  the tag-push-triggers-release flow. Until a real version is tagged
+  after this lands, `docs/installation.md`'s instructions point at a
+  Releases page with nothing yet to download for this pipeline
+  specifically — a one-release transition, not a permanent gap.
+  (The install script itself is documented as of ticket #58, once it
+  existed to document — see the bullet above. `cargo-binstall` support
+  still isn't, matching the crates.io deferral above — its normal
+  discovery needs the package resolvable via the crates.io index, which
+  is exactly what that deferral blocks.)
