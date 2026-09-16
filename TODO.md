@@ -39,21 +39,6 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
 
 ## Maintainability / latent hazards
 
-3. ~~**`CleanupStarting` doesn't post under `--use-network` with no
-   dependencies** (`ratect-core/src/engine.rs`) — correct/honest
-   behavior (nothing is actually cleaned up in that case, and
-   `TaskEvent::CleanupStarting`'s own doc comment documents
-   non-posting for exactly this), not a bug. Flagged only because
-   `tests/cli.rs`'s `task_output` helper's fallback (`end =
-   lines.len()` when no `"Cleaning up..."` line is found) would
-   silently sweep the summary line into an extracted chunk if a future
-   test combined `--use-network` with `task_output`. No existing test
-   is affected — the two current `--use-network` tests never call it.~~
-   — gone in 0.25.0: unifying cleanup ownership made the task's own
-   container the engine's to remove, so such a run now has something to
-   report and posts the stage like any other. The `task_output` fallback
-   it warned about is no longer reachable that way.
-
 9. **The `claims` plugin's checks have no CI-level backstop, only the local
    `git commit` hook** (`decisions/0009`) — a PR opened without Claude Code
    (a plain shell commit, another editor's Git integration, or a bot account
@@ -63,23 +48,6 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
    this, but `or1can/claims` has no tagged releases yet to pin a CI checkout
    against — revisit once it does, rather than pinning CI to an arbitrary
    commit SHA in the meantime.
-
-10. ~~**`executable-claims` runs automatically on every `git commit`, sweeping
-    the whole tree for a `<!-- verify: -->` marker and executing whatever it
-    names** (`decisions/0009`) — a malicious branch/PR could plant one
-    anywhere and have it run, with a maintainer's full local privileges, the
-    next time they commit anything while that branch is checked out. Filed
-    upstream as [or1can/claims#15](https://github.com/or1can/claims/issues/15)
-    (diff-scoping or a per-check hook opt-out); revisit once one ships.
-    Meanwhile: don't run `git commit` while reviewing an untrusted branch in
-    a Claude Code session with the plugin enabled.~~
-    — closed upstream: `executable-claims` now denies execution by default,
-    gated on an exact-string grant in a git-ignored, per-machine
-    `claims.local.toml` (`docs/adr/0001-executable-claims-deny-by-default.md`
-    in the plugin's own repo). Committed config can no longer authorize
-    execution on its own, closing the reported path rather than narrowing
-    it. This repo's own setup is in `AGENTS.md`'s Tooling & CI section and
-    `decisions/0009`.
 
 11. **`ci.yml`'s `Release Pipeline Config` check (ratect#34) isn't in the
     `main branch protection` ruleset's required status checks** — it runs
@@ -204,14 +172,6 @@ recorded so nobody re-investigates them from scratch.
   a defect: this is the deliberate, CHANGELOG-documented Batect-`simple`-
   parity change 0.16.0 exists to make. `-o quiet` is the documented
   escape hatch for scripts that need exact container-output-only stdout.
-
----
-
-# ratect 0.3.0 native config format review
-
-Findings from the focused review of the 0.3.0 native TOML config work
-(`git diff 5023a9d..HEAD`) — no correctness bugs found; all findings (a
-handful of papercuts plus six test-coverage gaps) closed. See `git log`.
 
 ---
 
