@@ -67,3 +67,4 @@ never delete one (same append-only spirit as the roadmap's versioned lists).
 | [0007](0007-where-agent-process-docs-live.md) | Where contributor/agent-process docs live | Accepted — adopted immediately |
 | [0008](0008-tracking-release-scope-with-github-issues.md) | Tracking release scope with GitHub Issues, not RELEASES.md | Accepted — adopted immediately |
 | [0009](0009-adopt-claims-plugin.md) | Adopting the `claims` plugin for documentation checks | Accepted — adopted immediately |
+| [0010](0010-release-binary-distribution.md) | Automated release pipeline: prebuilt binaries, SBOM, provenance | Accepted — implemented (ratect-compat 0.28.0 · ratect 0.7.0) |

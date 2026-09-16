@@ -30,9 +30,10 @@ history, from when it was the only binary.
   uploaded, and attaching a CycloneDX SBOM of the released binary's
   dependency tree. Every binary archive, the SBOM, and the checksums
   manifest carry a GitHub Artifact Attestation, verifiable with `gh
-  attestation verify <file> --repo or1can/ratect` once downloaded. Not yet
-  exercised against a real tag, and not yet the documented install path —
-  release-tooling only for now.
+  attestation verify <file> --repo or1can/ratect` once downloaded.
+  Validated end-to-end against real rc tags — see
+  [decisions/0010](decisions/0010-release-binary-distribution.md). Not
+  yet the documented install path — release-tooling only for now.
 - Added a CI check (`Release Pipeline Config`) that validates
   `dist-workspace.toml` on every PR. Reported, not yet a required check —
   contributor-tooling only for now.
