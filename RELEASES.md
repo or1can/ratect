@@ -1201,6 +1201,17 @@ to live at, so links written before the split still resolve.
   surface is unchanged. See the closed
   [milestone](https://github.com/or1can/ratect/milestone/2) for everything
   that shipped.
+- **0.29.0** — A fast-follow to 0.28.0, closing the install-simplicity gap
+  the previous release's own deferral list left open, shared with
+  [`ratect` 0.8.0](#ratect) below rather than specific to this binary: each
+  release now also publishes a shell installer (`curl | sh`) and a
+  Homebrew formula (`brew install or1can/tap/ratect-compat`) to a new
+  shared tap — see [decisions/0010](decisions/0010-release-binary-distribution.md)'s
+  Consequences section for both, including the Homebrew publish job's real
+  end-to-end validation. `cargo-binstall` remains deferred (crates.io).
+  This binary's own parity surface is unchanged. See the closed
+  [milestone](https://github.com/or1can/ratect/milestone/3) for everything
+  that shipped.
 - **1.0.0** — the [Batect Parity](ROADMAP.md#batect-parity) section above substantially checked
   off (all of the above, including 0.7.0–0.19.0, not just the items shipped through
   0.6.0), and verified against real Batect projects — the conformance corpus above
@@ -1491,6 +1502,15 @@ to live at, so links written before the split still resolve.
   [decisions/0010](decisions/0010-release-binary-distribution.md). This
   binary's own subcommand surface is unchanged. See the closed
   [milestone](https://github.com/or1can/ratect/milestone/2) for everything
+  that shipped.
+- **0.8.0** — the same fast-follow release infrastructure as
+  [`ratect-compat` 0.29.0](#ratect-compat) above, shared rather than
+  specific to this binary: a shell installer and a Homebrew formula
+  (`brew install or1can/tap/ratect`), both published automatically
+  alongside the existing prebuilt binaries — see
+  [decisions/0010](decisions/0010-release-binary-distribution.md). This
+  binary's own subcommand surface is unchanged. See the closed
+  [milestone](https://github.com/or1can/ratect/milestone/3) for everything
   that shipped.
 
 Its **1.0.0** means something different from `ratect-compat`'s: interface stability
