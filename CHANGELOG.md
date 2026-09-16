@@ -32,8 +32,9 @@ history, from when it was the only binary.
   manifest carry a GitHub Artifact Attestation, verifiable with `gh
   attestation verify <file> --repo or1can/ratect` once downloaded.
   Validated end-to-end against real rc tags — see
-  [decisions/0010](decisions/0010-release-binary-distribution.md). Not
-  yet the documented install path — release-tooling only for now.
+  [decisions/0010](decisions/0010-release-binary-distribution.md) — and
+  is now `docs/installation.md`'s documented primary install path. No
+  archive exists to download until this release itself is tagged.
 - Added a CI check (`Release Pipeline Config`) that validates
   `dist-workspace.toml` on every PR. Reported, not yet a required check —
   contributor-tooling only for now.

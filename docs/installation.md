@@ -1,9 +1,85 @@
 # Installation
 
-Ratect is currently **pre-release**. There are no published binaries or a `crates.io`
-release yet, so the only way to install it today is to build it from source.
+## Prebuilt binaries
 
-## Prerequisites
+Every tagged release of `ratect-compat` or `ratect` publishes prebuilt
+binaries as GitHub Release assets, for five platforms:
+
+| Target triple | Platform |
+| --- | --- |
+| `x86_64-unknown-linux-gnu` | x64 Linux |
+| `x86_64-unknown-linux-musl` | x64 MUSL Linux (Alpine, minimal containers) |
+| `aarch64-unknown-linux-musl` | ARM64 MUSL Linux (ARM servers, Raspberry Pi) |
+| `x86_64-apple-darwin` | Intel macOS |
+| `aarch64-apple-darwin` | Apple Silicon macOS |
+
+`ratect-compat` and `ratect` are tagged and released independently (see
+[`ROADMAP.md`](../ROADMAP.md#versioning--releases)), so they're listed as
+separate entries on the [Releases page](https://github.com/or1can/ratect/releases)
+— tags look like `ratect-compat/vX.Y.Z` and `ratect/vX.Y.Z`. Find the most
+recent tag for the binary you want, then download the archive matching
+your platform from that release's assets.
+
+Each archive extracts to a directory (named after the archive itself)
+containing the binary alongside `LICENSE`/`README.md`/`RELEASES.md` — the
+binary isn't at the archive's top level:
+
+```bash
+tar -xf ratect-compat-x86_64-unknown-linux-gnu.tar.xz
+mv ratect-compat-x86_64-unknown-linux-gnu/ratect-compat ~/.local/bin/
+```
+
+(substitute the archive name for your platform and binary; `~/.local/bin`
+assumes it's already on your `PATH` — use whatever directory you normally
+install user binaries into.)
+
+**macOS**: Ratect's binaries aren't code-signed or notarized. If macOS
+refuses to run the extracted binary ("cannot be opened because the
+developer cannot be verified" or similar — some download methods, like a
+browser, mark a downloaded file quarantined; others, like `curl`, don't),
+clear it:
+
+```bash
+xattr -d com.apple.quarantine ratect-compat-x86_64-apple-darwin/ratect-compat
+```
+
+### Verifying a download
+
+Each release also includes a `sha256.sum` covering every archive and the
+source tarball, and every archive/SBOM/`sha256.sum` itself carries a
+[GitHub Artifact Attestation](https://github.com/or1can/ratect/attestations)
+confirming it was built by Ratect's own CI from the tagged source, not
+tampered with in transit:
+
+```bash
+# Checksum (Linux: sha256sum -c sha256.sum). A trailing blank line in the
+# file itself makes shasum warn "1 line is improperly formatted" — harmless,
+# every real entry still verifies.
+shasum -a 256 -c sha256.sum
+
+# Provenance (requires the GitHub CLI, `gh`)
+gh attestation verify ratect-compat-x86_64-unknown-linux-gnu.tar.xz --repo or1can/ratect
+```
+
+### Not yet available
+
+Downloading the archive directly from the Releases page above is the
+only supported path today. Two easier ones aren't available yet, for two
+different reasons — see [decisions/0010](../decisions/0010-release-binary-distribution.md)'s
+Consequences section:
+
+- **A dedicated install script** (`curl | sh`) isn't generated, simply
+  because the release pipeline isn't configured to produce one yet.
+- **`cargo-binstall`** needs Ratect published to crates.io to discover a
+  release automatically, which is itself blocked — see that same ADR's
+  crates.io deferral.
+
+## Building from source
+
+The from-source path below is for contributors, or anyone on a platform
+without a prebuilt binary.
+
+### Prerequisites
 
 - [Rust](https://www.rust-lang.org/) (stable toolchain)
 - [Docker](https://www.docker.com/), running and reachable via the default local
@@ -21,21 +97,21 @@ release yet, so the only way to install it today is to build it from source.
   reason. Check yours with `docker version --format '{{.Server.APIVersion}}'`
   (API 1.41 corresponds to Docker 20.10).
 
-## Build from source
+### Build from source
 
 Clone the repository, then build a release binary. The workspace has two binary
 crates (see [Roadmap](../ROADMAP.md#two-binaries-ratect-and-ratect-compat)) —
 `ratect-compat` is the one that implements Batect-compatible behavior today:
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/or1can/ratect.git
 cd ratect
 cargo build --release -p ratect-compat
 ```
 
 The compiled binary will be at `target/release/ratect-compat`.
 
-## Install the binary onto your `PATH`
+### Install the binary onto your `PATH`
 
 To make `ratect-compat` available as a regular command:
 
@@ -46,14 +122,14 @@ cargo install --path ratect-compat
 This installs to `~/.cargo/bin` (assumed to already be on your `PATH`, which is the
 default for a standard `rustup` install).
 
-## Verify the install
+### Verify the install
 
 ```bash
 ratect-compat --version
 ratect-compat --help
 ```
 
-## Development builds
+### Development builds
 
 If you're working on Ratect itself rather than just using it, a debug build is faster
 to compile and sufficient for local testing:

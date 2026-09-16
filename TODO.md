@@ -91,6 +91,16 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
     left to a maintainer rather than made unilaterally while implementing
     the ticket) to close the gap #34's own problem statement describes.
 
+12. **Released archives don't include `NOTICE`** — `dist-workspace.toml`
+    has no `include`/similar key adding it, so each archive ships
+    `LICENSE`/`README.md`/`RELEASES.md` (dist's own defaults) but not the
+    file carrying the `moby/patternmatcher` (Apache-2.0) and
+    andrej-karpathy-skills (MIT) attributions this repo's own `NOTICE`
+    records. Apache-2.0 §4(d) asks for it to travel with redistributions.
+    Found reviewing `docs/installation.md`'s "what's in the archive" claim
+    (ratect#38); fixing it is a `dist-workspace.toml` config change, out
+    of scope for a docs ticket.
+
 ## Test coverage
 
 4. **`tests/cli.rs`'s `task_output` helper weakens ~18 converted e2e
