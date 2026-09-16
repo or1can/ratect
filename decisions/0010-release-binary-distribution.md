@@ -153,16 +153,35 @@ keeps from being overwritten on regeneration.
   correctly per version, or the combined-heading convention itself would
   need to fork, which is a bigger decision than this ADR's scope.
 - **`cargo-binstall` support is unrealized, not delivered** — still
-  blocked on the crates.io deferral above. The install-script half of
-  this same original benefit *is* now delivered: `dist-workspace.toml`'s
-  `installers` list gained `"shell"` in ticket #58, once the real
-  0.28.0/0.7.0 tags were safely out of the way of `dist`'s no-milestone-
-  awareness (see that ticket). Verified there that turning it on adds
-  zero new jobs/steps to `release.yml` — the generated script is just
-  another entry in the same manifest-driven artifact upload the archives
-  already use. Whether `cargo-binstall` itself already works off the
-  plain release-asset/manifest shape `dist` produces regardless of
-  `installers` still wasn't verified.
+  blocked on the crates.io deferral above. The install-script and
+  Homebrew-tap halves of this same original benefit *are* now delivered:
+  `dist-workspace.toml`'s `installers` list gained `"shell"` in ticket
+  #58 and `"homebrew"` in ticket #59, once the real 0.28.0/0.7.0 tags
+  were safely out of the way of `dist`'s no-milestone-awareness (see
+  both tickets). Verified for #58 that turning on the shell installer
+  adds zero new jobs/steps to `release.yml`. #59's `publish-jobs =
+  ["homebrew"]`/`tap = "or1can/homebrew-tap"` DOES add a real new job
+  (`publish-homebrew-formula`, after `host` and before `announce`) —
+  validated end-to-end against a throwaway `or1can/homebrew-tap-test`
+  repo and a real (later-deleted) rc-tag release: the formula was pushed
+  with correct per-platform URLs/checksums, and `brew tap`/`brew
+  install`/running the installed binary all genuinely worked. Whether
+  `cargo-binstall` itself already works off the plain release-asset/
+  manifest shape `dist` produces regardless of `installers` still wasn't
+  verified.
+- **Two non-obvious GitHub Actions gotchas surfaced by #59's real rc-tag
+  validation**, worth knowing before ever repeating this kind of
+  validation: (1) the built-in `GITHUB_TOKEN` refuses (`403 Resource not
+  accessible by integration`) to retarget a release's `target_commitish`
+  to a commit that isn't reachable from any pushed branch — pushing only
+  the tag (not the branch it's on) leaves the tagged commit dangling and
+  breaks `host`'s own `gh release edit --target`; a personal token has
+  no such restriction, which is what made this confusing to diagnose.
+  Push the branch too. (2) Once a tag name has been deleted from a repo
+  with an associated release, GitHub permanently refuses to recreate
+  that exact tag name (`Cannot create ref due to creations being
+  restricted`) — a throwaway validation that needs a retry must bump to
+  a new suffix (`-rc.2`, `-rc.3`, ...), never reuse the same one.
 - **`Release Pipeline Config` (ci.yml) reports, it doesn't yet gate.**
   It isn't in the `main branch protection` ruleset's required status
   checks, so a broken `dist-workspace.toml` shows a red X without
@@ -194,8 +213,8 @@ keeps from being overwritten on regeneration.
   after this lands, `docs/installation.md`'s instructions point at a
   Releases page with nothing yet to download for this pipeline
   specifically — a one-release transition, not a permanent gap.
-  (The install script itself is documented as of ticket #58, once it
-  existed to document — see the bullet above. `cargo-binstall` support
-  still isn't, matching the crates.io deferral above — its normal
-  discovery needs the package resolvable via the crates.io index, which
-  is exactly what that deferral blocks.)
+  (The install script and Homebrew tap are documented as of tickets #58
+  and #59, once each existed to document — see the bullets above.
+  `cargo-binstall` support still isn't, matching the crates.io deferral
+  above — its normal discovery needs the package resolvable via the
+  crates.io index, which is exactly what that deferral blocks.)
