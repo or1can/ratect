@@ -262,7 +262,7 @@ containers:
 | `command` | string | no | Overrides the image's own default `CMD`. Tokenized into literal argv (quote/backslash-aware whitespace splitting, no shell involved — matching Batect's own tokenizer exactly). No [expression](#expressions) support. Applies as-is to a dependency/sidecar container; a task's own container's `command` can be further overridden by the task-level `run.command` — see [TaskRun](#taskrun). |
 | `entrypoint` | string | no | Overrides the image's own `ENTRYPOINT`. Tokenized into literal argv the same way `command` is (quote/backslash-aware whitespace splitting, no shell involved — matching Batect's own tokenizer exactly). No [expression](#expressions) support. A task's own container's `entrypoint` can be further overridden by the task-level `run.entrypoint` — see [TaskRun](#taskrun). |
 | `labels` | map of string → string | no | Docker labels applied to the container. Container level only — no task-level `run` override. No [expression](#expressions) support. |
-| `capabilities_to_add` | list of strings | no | Linux capabilities to add beyond Docker's own default set (Docker's `--cap-add`), e.g. `NET_ADMIN`. Validated at config-load time against a fixed list based on Batect's own `Capability` enum plus `BPF`/`CHECKPOINT_RESTORE`/`PERFMON` (added to Docker after Batect's last release — see [Differences from Batect](differences-from-batect.md#container-fields)) — an unknown name is rejected with a clear error. Container level only. No expression support. |
+| `capabilities_to_add` | list of strings | no | Linux capabilities to add beyond Docker's own default set (Docker's `--cap-add`), e.g. `NET_ADMIN`. Validated at config-load time against a fixed list based on Batect's own `Capability` enum plus `BPF`/`CHECKPOINT_RESTORE`/`PERFMON` (added to Docker after Batect's last release) — an unknown name is rejected with a clear error. Container level only. No expression support. |
 | `capabilities_to_drop` | list of strings | no | Linux capabilities to drop from Docker's own default set (Docker's `--cap-drop`), e.g. `CHOWN`. Same validation/scope as `capabilities_to_add`. |
 | `privileged` | boolean | no | Runs the container with extended (nearly all host) privileges — Docker's `--privileged`. Defaults to `false`. Container level only. No [expression](#expressions) support. |
 | `shm_size` | string or integer | no | The size of `/dev/shm` — Docker's `--shm-size`. Accepts Batect's own size-string format (`"128"`, `"128b"`, `"128k"`, `"128m"`, `"128g"` — a bare number means bytes) or a plain YAML integer (also bytes). Defaults to Docker's own default (64 MiB). Container level only. No expression support. |
@@ -408,6 +408,21 @@ not the same, and the difference is easy to get surprised by:
 - `Dockerfile` and `.dockerignore` themselves are always included in the build context
   regardless of exclusion patterns, matching Docker's own special-casing (otherwise a
   broad `*` pattern would exclude the file the build needs).
+
+### Private registry credentials
+
+Both pulling an `image` and building one (a Dockerfile `FROM` a private base image)
+resolve credentials from your Docker configuration (`~/.docker/config.json` by
+default, or `DOCKER_CONFIG`, or `--docker-config`) — running `docker login` once
+beforehand is enough, including a keychain-backed store (Docker Desktop/OrbStack's
+default) or a cloud registry's credential helper (ECR/GCR). Building resolves every
+registry your Docker config declares (`auths` and `credHelpers`), since Ratect
+doesn't parse a Dockerfile's `FROM` lines to scope this more precisely.
+
+A registry whose credential helper fails to resolve doesn't block the pull or
+build — a warning names the registry, so a problem with one registry's helper
+can't stop work that never needed it, but also doesn't stay invisible until the
+day that registry actually matters.
 
 ### Volume path resolution
 
