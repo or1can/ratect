@@ -185,7 +185,14 @@ keeps from being overwritten on regeneration.
   own `Release Pipeline Config` job reads `dist-workspace.toml`'s copy
   directly rather than hardcoding a third, so it can't drift from that
   one independently).
-- **Not user-facing yet.** `docs/installation.md` still describes a
-  from-source-only install, and `AGENTS.md`'s release-process guideline
-  doesn't yet describe the tag-push-triggers-release flow — both are
-  ticket #38's job, deliberately not folded into this one.
+- **Now user-facing** (ticket #38, deliberately not folded into this
+  one): `docs/installation.md` documents the GitHub Releases download
+  path as primary, and `AGENTS.md`'s release-process guideline describes
+  the tag-push-triggers-release flow. Neither the install script nor
+  `cargo-binstall` support is documented as available, matching the
+  crates.io deferral above — `cargo-binstall`'s normal discovery needs
+  the package resolvable via the crates.io index, which is exactly what
+  that deferral blocks. Until a real version is tagged after this
+  lands, `docs/installation.md`'s instructions point at a Releases page
+  with nothing yet to download for this pipeline specifically — a
+  one-release transition, not a permanent gap.
