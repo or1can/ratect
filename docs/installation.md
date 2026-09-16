@@ -43,6 +43,21 @@ clear it:
 xattr -d com.apple.quarantine ratect-compat-x86_64-apple-darwin/ratect-compat
 ```
 
+### Install script
+
+Each release also publishes a shell installer that downloads, verifies, and
+extracts the right archive for your platform in one step:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/or1can/ratect/releases/download/ratect-compat/vX.Y.Z/ratect-compat-installer.sh | sh
+```
+
+Substitute the tag (`ratect-compat/vX.Y.Z` or `ratect/vX.Y.Z`) for the
+release you want, and `ratect-compat-installer.sh`/`ratect-installer.sh` for
+the matching binary — see the [Releases page](https://github.com/or1can/ratect/releases)
+for both. Installs to `$CARGO_HOME/bin` (or `$HOME/.cargo/bin`), adding
+that directory to `PATH` via your shell profile if it isn't already there.
+
 ### Verifying a download
 
 Each release also includes a `sha256.sum` covering every archive and the
@@ -63,16 +78,10 @@ gh attestation verify ratect-compat-x86_64-unknown-linux-gnu.tar.xz --repo or1ca
 
 ### Not yet available
 
-Downloading the archive directly from the Releases page above is the
-only supported path today. Two easier ones aren't available yet, for two
-different reasons — see [decisions/0010](../decisions/0010-release-binary-distribution.md)'s
-Consequences section:
-
-- **A dedicated install script** (`curl | sh`) isn't generated, simply
-  because the release pipeline isn't configured to produce one yet.
-- **`cargo-binstall`** needs Ratect published to crates.io to discover a
-  release automatically, which is itself blocked — see that same ADR's
-  crates.io deferral.
+**`cargo-binstall`** needs Ratect published to crates.io to discover a
+release automatically, which is itself blocked — see
+[decisions/0010](../decisions/0010-release-binary-distribution.md)'s
+crates.io deferral.
 
 ## Building from source
 

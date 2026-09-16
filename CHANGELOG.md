@@ -21,6 +21,12 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Added
+
+- Each release now also publishes a shell installer (`curl | sh`) alongside
+  the archives, for both `ratect-compat` and `ratect` — see
+  `docs/installation.md`'s "Install script" section.
+
 ## [ratect-compat 0.28.0 · ratect 0.7.0] - 2026-09-16
 
 ### Added
