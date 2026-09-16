@@ -21,6 +21,8 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+## [ratect-compat 0.29.0 · ratect 0.8.0] - 2026-09-16
+
 ### Added
 
 - Each release now also publishes a shell installer (`curl | sh`) alongside
