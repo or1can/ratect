@@ -1,8 +1,8 @@
 # 0004 — Trusting a Git include's host paths
 
-**Status:** Accepted — implemented. The containment it relaxes shipped in
-0.10.0; `allow_host_paths` itself is unreleased at the time of writing (see
-`CHANGELOG.md`). The nested case in *Consequences* remains open by design.
+**Status:** Accepted — implemented (`allow_host_paths` shipped in
+ratect-compat 0.24.0 · ratect 0.3.0; the containment it relaxes shipped in
+0.10.0). The nested case in *Consequences* remains open by design.
 
 ## Context
 
