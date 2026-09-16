@@ -64,7 +64,7 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
    against — revisit once it does, rather than pinning CI to an arbitrary
    commit SHA in the meantime.
 
-10. **`executable-claims` runs automatically on every `git commit`, sweeping
+10. ~~**`executable-claims` runs automatically on every `git commit`, sweeping
     the whole tree for a `<!-- verify: -->` marker and executing whatever it
     names** (`decisions/0009`) — a malicious branch/PR could plant one
     anywhere and have it run, with a maintainer's full local privileges, the
@@ -72,7 +72,14 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
     upstream as [or1can/claims#15](https://github.com/or1can/claims/issues/15)
     (diff-scoping or a per-check hook opt-out); revisit once one ships.
     Meanwhile: don't run `git commit` while reviewing an untrusted branch in
-    a Claude Code session with the plugin enabled.
+    a Claude Code session with the plugin enabled.~~
+    — closed upstream: `executable-claims` now denies execution by default,
+    gated on an exact-string grant in a git-ignored, per-machine
+    `claims.local.toml` (`docs/adr/0001-executable-claims-deny-by-default.md`
+    in the plugin's own repo). Committed config can no longer authorize
+    execution on its own, closing the reported path rather than narrowing
+    it. This repo's own setup is in `AGENTS.md`'s Tooling & CI section and
+    `decisions/0009`.
 
 11. **`ci.yml`'s `Release Pipeline Config` check (ratect#34) isn't in the
     `main branch protection` ruleset's required status checks** — it runs
