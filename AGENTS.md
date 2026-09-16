@@ -65,7 +65,7 @@ Ratect is a **Cargo workspace** with four crates (the
   | `cache.rs` | `volumes` `cache` mounts → a named volume or host directory (`resolve_cache_mount`), and — a separate concept, same module — the `CacheStore` behind `ratect caches`/`ratect-compat --clean`/`--clean-cache`: what cache storage exists, its project/shared scope rule, and how to list or remove it |
   | `expressions.rs` | Batect's `$VAR`/`${VAR:-default}`/`<name` expression syntax |
   | `container_spec.rs` | What a container's runtime spec is, and what a build's is — `ContainerSpec`/`derive_spec` (from a container's config plus a task's `run`/dependency's `customise` overlay) and `BuildSpec`/`derive_build_spec` (for `build_image`'s own call) — shared vocabulary between `engine.rs` and `docker.rs`, owned by neither |
-  | `docker.rs` (+ `docker/connection.rs`) | All `bollard`/daemon interaction, behind the fakeable `ContainerRuntime` trait — connection selection (`--docker-host`/`-context`/`-tls*`) split into its own submodule, no reference to `ContainerRuntime` at all |
+  | `docker.rs` (+ `ratect-core/src/docker/connection.rs`) | All `bollard`/daemon interaction, behind the fakeable `ContainerRuntime` trait — connection selection (`--docker-host`/`-context`/`-tls*`) split into its own submodule, no reference to `ContainerRuntime` at all |
   | `ssh_agent.rs` | `build_ssh`'s in-process ssh-agent (RFC 9987) — kept extractable, see [0005](decisions/0005-build-ssh-keyring-placement.md) |
   | `user.rs` | Host user lookup and the `/etc/passwd` generators for `run_as_current_user` |
   | `proxy.rs` | Proxy variable detection and propagation, the host-gateway entry a rewritten URL needs, and the loopback-bound proxy it can't fix |
@@ -143,21 +143,25 @@ own yet.
   and on demand via the `check-claims` skill (ask an agent to check
   claims, any time mid-task, not only at commit time). Checks: `stale-claims`
   (advisory, ranks Markdown prose by how much the code it names has moved
-  since the claim was last touched — this repo's own `tools/stale-claims.py`,
-  generalized), `spliced-docs` (advisory, doc comments that document an item
-  other than the one they sit on — this repo's own `tools/spliced-docs.py`,
-  generalized to sweep every tracked `.rs` file rather than a narrower
-  scan), `restatement` (advisory, prose a diff retracted that's still
-  asserted verbatim elsewhere — this repo's own `tools/echoed-claims.py`,
-  generalized), `executable-claims` (gate, `<!-- verify: ... -->` markers —
-  this repo's own `tools/verify-docs.py`, generalized), plus three checks
-  with no prior equivalent here: `check-links` (gate, dead internal Markdown
-  links/anchors), `check-citations` (gate, a backticked name citing a symbol
-  this repo once declared but no longer has, Markdown/Swift only — no Rust
-  support yet), and `claim-words`/`judgment-agent` (advisory, totalising
-  language and architecture-claim review, opt-in via `claims.toml`'s
-  `[claim-words] files` — this repo opts in `AGENTS.md`, `CONTEXT.md`,
-  `ROADMAP.md`, `RELEASES.md`, `TODO.md`, `decisions/*.md`, `docs/**/*.md`).
+  since the claim was last touched — generalized from this repo's own former
+  stale-claims script), `spliced-docs` (advisory, doc comments that document
+  an item other than the one they sit on — generalized from this repo's own
+  former spliced-docs script to sweep every tracked `.rs` file rather than a
+  narrower scan), `restatement` (advisory, prose a diff retracted that's
+  still asserted verbatim elsewhere — generalized from this repo's own
+  former echoed-claims script), `executable-claims` (gate, `<!-- verify: ...
+  -->` markers — generalized from this repo's own former verify-docs
+  script), plus three checks with no prior equivalent here: `check-links`
+  (gate, dead internal Markdown links/anchors), `check-citations` (gate, a
+  backticked name citing a symbol this repo once declared but no longer
+  has, Markdown/Swift only — no Rust support yet), and
+  `claim-words`/`judgment-agent` (advisory, totalising language and
+  architecture-claim review, opt-in via `claims.toml`'s `[claim-words]
+  files` — this repo opts in `AGENTS.md`, `CONTEXT.md`, `ROADMAP.md`,
+  `RELEASES.md`, `TODO.md`, `decisions/*.md`, `docs/**/*.md`). The four
+  former scripts' own paths and the full migration story are in
+  [decisions/0009](decisions/0009-adopt-claims-plugin.md) — not repeated
+  here now that they no longer exist to link to.
 
   `claims.toml` also widens `restatement`'s default `extensions` to add
   `.rs` — see its own comment for why.
@@ -176,7 +180,8 @@ own yet.
   **`executable-claims` denies execution by default, gated on a local,
   git-ignored grant** (`claims.local.toml`, sibling to `claims.toml` —
   never commit it; `.gitignore` already excludes it, see the plugin's own
-  `docs/adr/0001-executable-claims-deny-by-default.md`). A marker's command
+  [deny-by-default ADR](https://github.com/or1can/claims/blob/main/docs/adr/0001-executable-claims-deny-by-default.md)).
+  A marker's command
   with no exact-string entry in that file's `[executable-claims]` section
   is a **gate finding** naming the command and the exact TOML to add,
   regardless of whether it's actually safe — a fresh clone hits this
@@ -213,7 +218,7 @@ Ratect is currently a **Work in Progress**. For a detailed list of supported fea
 
 ## User Documentation
 
-The `docs/` directory is user-facing documentation (installation, getting started, architecture, CLI reference, config reference, differences from Batect) — **not** ROADMAP.md/RELEASES.md/AGENTS.md/CHANGELOG.md/`decisions/`, which are project-management/contributor docs. `docs/` deliberately does not assume familiarity with Batect's own documentation, since Ratect's behavior is a subset of and sometimes diverges from it.
+The `docs/` directory is user-facing documentation (installation, getting started, architecture, CLI reference, config reference, differences from Batect) — **not** `ROADMAP.md`, `RELEASES.md`, this file, `CHANGELOG.md`, or `decisions/`, which are project-management/contributor docs. `docs/` deliberately does not assume familiarity with Batect's own documentation, since Ratect's behavior is a subset of and sometimes diverges from it.
 
 **`docs/ratect-config-reference.md` defers to `docs/config-reference.md` for most
 field semantics, and that deferral is only safe while the differences are about
@@ -397,7 +402,7 @@ for — note that in `TODO.md` instead.
     -   Running a sample task (e.g., `cargo run -p ratect-compat -- -f ratect-compat/tests/fixtures/smoke.yml test-task`) to verify the execution engine and Docker integration. (The repository root's `batect.yml` is Ratect's *own* dev-task config — we build Ratect with Ratect, dogfooding the tool: `cargo run -p ratect-compat -- build`/`test`/`lint`/`fmt` run each in a pinned Rust container with the Cargo registry and build output as `cache` volumes. A root `ratect.toml` mirrors it in the native format, so the same tasks also run through the `ratect` binary (`cargo run -p ratect -- run build`), dogfooding *both* binaries and their two config formats; `ratect-core`'s `the_two_root_dev_configs_agree` test resolves both files and fails if they drift, so an edit to one must be mirrored in the other. That's precisely what the root path *should* hold — this project's own dev tasks — which is why test fixtures deliberately live under `tests/fixtures/` instead, never at the root, so the two are never confused.)
 7.  **Changelog Maintenance**: After completing a task that changes the project's features, dependencies, or structure, ensure that `CHANGELOG.md` is updated in the "Unreleased" section, following the "Keep a Changelog" standard — tersely: state *what* changed, from an upgrading user's perspective, not the rationale, prior state, or implementation detail behind it (that belongs in the change's own GitHub issue, or `RELEASES.md`'s short entry — see guideline 8). Don't repeat a pointer to either on every bullet; a reader who wants that context already knows where to look. A change that breaks existing behavior goes in its own `### Breaking` subsection, listed first under the heading it lands in, so it can be found without reading anything else.
 8.  **Version Lifecycle**: A release's scope is tracked as GitHub Issues under one Milestone, named to match its eventual `CHANGELOG.md` heading (e.g. `ratect-compat 0.27.0 · ratect 0.6.0`) — see [decisions/0008](decisions/0008-tracking-release-scope-with-github-issues.md). When cutting a release, it's not just a version bump — follow the full process documented in [ROADMAP.md](ROADMAP.md#versioning--releases): every issue in the Milestone closed first, then the `X.Y.Z-dev` → `X.Y.Z` bump commit, moving `CHANGELOG.md`'s `Unreleased` entries under that version's own dated heading (the pipeline's release notes can't be extracted before this lands — see below), and tagging it `<binary>/vX.Y.Z` (prefixed since `ratect` and `ratect-compat` are on independent version lines that would otherwise collide — bare `vX.Y.Z` tags are pre-split history). **Pushing that tag is what publishes the release** — see [decisions/0010](decisions/0010-release-binary-distribution.md) and [ROADMAP.md](ROADMAP.md#versioning--releases) for the `cargo-dist`-based pipeline (`.github/workflows/release.yml`) this triggers: it builds every target's binaries, generates a CycloneDX SBOM, attests every binary/SBOM/checksums-manifest, and creates the GitHub Release itself (body = that release's `CHANGELOG.md` section, via `tools/changelog-section.py`) — no separate hand-creation step. There's one shared `CHANGELOG.md`, whose release headings name every version in that release (`## [ratect-compat 0.21.1 · ratect 0.2.0]`) and whose entries name a binary only when they don't apply to both — see ROADMAP.md for why it isn't split per binary. Starting the next version's development is a separate, later commit that bumps every crate back to a `X.Y.Z-dev`. Neither bump is ever folded into a feature commit.
-9.  **ROADMAP.md / RELEASES.md Maintenance**: the two files follow different edit rules, which is why they *are* two files. `ROADMAP.md` is forward-looking and its `## Batect Parity` headline list is a living summary — freely edit, merge, or delete bullets as scope changes or ships (e.g. "Sidecar Containers" and "Docker Networking" were merged into "Full Docker Networking" once shipped). `ROADMAP.md` keeps stub headings at the two anchors [`RELEASES.md`](RELEASES.md)'s lists used to occupy from the original split, so links written before it — including ones in already-released `CHANGELOG.md` sections, which are append-only — still resolve.
+9.  **ROADMAP.md / RELEASES.md Maintenance**: the two files follow different edit rules, which is why they *are* two files. `ROADMAP.md` is forward-looking and freely rewritten as scope changes or ships — not just merging or deleting a bullet, but collapsing a whole section once it's actually done: [Batect Parity](ROADMAP.md#batect-parity) went from an itemized, version-numbered feature list to a two-paragraph pointer at [`docs/differences-from-batect.md`](docs/differences-from-batect.md) (the living itemized tracker) and the conformance corpus, once feature parity itself was reached and the per-field detail had a better home. The lesson generalizes: a section here describing something that's *shipped* is a bug, not documentation — link to where that's actually tracked (`docs/`, `decisions/`, a code doc comment) instead of restating it, the same way [Differences from Batect](docs/differences-from-batect.md) itself only lists real divergences now rather than a field-by-field "Supported" table. `ROADMAP.md` keeps stub headings at the two anchors [`RELEASES.md`](RELEASES.md)'s lists used to occupy from the original split, so links written before it — including ones in already-released `CHANGELOG.md` sections, which are append-only — still resolve.
 
     `RELEASES.md` itself is append-only history — never delete an entry — but since [decisions/0008](decisions/0008-tracking-release-scope-with-github-issues.md) a new entry is a short, one-paragraph retrospective pointer (the release's theme, and a link to its closed GitHub Milestone, which lists every issue that shipped), written once after the release ships. It is no longer a live document edited across the release (scope written before building, then struck through and summarised after) — that live tracking is now the Milestone's own open/closed issue state. Entries from before this change keep their old `~~strikethrough~~`-plus-done-summary form, untouched; don't rewrite them to match the new convention, and don't add scope to them going forward. The append-only guarantee protects a version once it *ships* (tagged, bumped off `-dev`) — not while it's still being written, so an in-progress `-dev` entry already under the old convention (see `decisions/0008`'s own Status for the current example) is expected to be rewritten once, wholesale, into the new short form when that release finally ships. (For the record, since these entries still exist in the file: a `~~strikethrough~~` is inline markdown and cannot cross a blank line — a multi-paragraph entry needed the `~~` closed at the end of each paragraph and reopened at the start of the next, or the markers rendered literally. GitHub's own `/markdown` API answers whether one renders correctly, in one call.)
 10. **User Docs Maintenance**: When a change affects user-visible behavior (CLI flags, config schema, runtime behavior, Batect parity), update the relevant file(s) under `docs/` in the same change — don't let them drift from the code. If you find the code doesn't match what's documented, fix whichever one is wrong rather than leaving the mismatch.
@@ -408,7 +413,7 @@ for — note that in `TODO.md` instead.
 
     **Squash merging is disabled**, both in the ruleset and at the repo level — it flattens a branch's own commit history into one, discarding whatever story separate commits told (see guideline 13's own reasoning for keeping genuinely separable behaviors as separate commits in the first place). Use a merge commit or rebase merge instead; squashing individual commits *on a branch* before opening a PR, to tell a cleaner story, is still fine and encouraged — the distinction is who does the squashing and when, not whether a tidy history matters.
 13. **Commit Packaging**: a release that's one theme (like most 0.x releases so far) lands as a single `feat:` commit. A release bundling several genuinely separable behaviors (e.g. 0.6.0's networking + proxy work) should instead split into one `feat:` commit per behavior, each with its own tests and doc updates — easier to review and to `git bisect`/`git revert` than one large commit. The version bump and any docs-only release summary stay separate commits either way (see 8).
-14. **Architecture Decision Records** ([`decisions/`](decisions/)): the home for a decision's rationale is decided by whether it's **cross-cutting or version-scoped**. A decision referenced from more than one place — the two-binary split, the labels namespace, the native config format — becomes an ADR (`decisions/NNNN-slug.md`, `Status`/`Context`/`Decision`/`Alternatives considered`/`Consequences`); `RELEASES.md`'s own entry for that release then just links to it, same as it links to the release's Milestone. A decision that belongs to one release stays **inline** in that release's own GitHub issue (its "Implementation Decisions" section — see [decisions/0008](decisions/0008-tracking-release-scope-with-github-issues.md)) — don't extract it. Practical trigger: a decision earns an ADR the moment it's about to be referenced from a *second* place; most never cross that line. ADRs are append-only like the versioned lists — supersede and link forward, never delete. See [`decisions/README.md`](decisions/README.md) for the full convention.
+14. **Architecture Decision Records** ([`decisions/`](decisions/)): the home for a decision's rationale is decided by whether it's **cross-cutting or version-scoped**. A decision referenced from more than one place — the two-binary split, the labels namespace, the native config format — becomes an ADR — a new `decisions/NNNN-slug.md` file (`NNNN` the next number in sequence) with `Status`, `Context`, `Decision`, `Alternatives considered`, and `Consequences` sections; `RELEASES.md`'s own entry for that release then just links to it, same as it links to the release's Milestone. A decision that belongs to one release stays **inline** in that release's own GitHub issue (its "Implementation Decisions" section — see [decisions/0008](decisions/0008-tracking-release-scope-with-github-issues.md)) — don't extract it. Practical trigger: a decision earns an ADR the moment it's about to be referenced from a *second* place; most never cross that line. ADRs are append-only like the versioned lists — supersede and link forward, never delete. See [`decisions/README.md`](decisions/README.md) for the full convention.
 15. **Review before committing, not after.** Run a review pass over the working
     diff (`/code-review`) *before* each commit, not over a run of commits
     afterwards. The checks below have each caught something a review missed:

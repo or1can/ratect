@@ -92,7 +92,7 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
 
 ## Test coverage
 
-4. **`tests/cli.rs`'s `task_output` helper weakens ~18 converted e2e
+4. **`ratect-compat/tests/cli.rs`'s `task_output` helper weakens ~18 converted e2e
    assertions** — replaced `assert_eq!(stdout.trim(), expected)` (whole-
    stdout equality) with a windowed extract between the last
    `Running ... in ...` milestone and `Cleaning up...`. Stray output
@@ -105,7 +105,7 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
    but worth a second look.
 
 5. **`task_output`'s frame-finding heuristic is fragile**
-   (`tests/cli.rs`) — `rposition` of a line matching
+   (`ratect-compat/tests/cli.rs`) — `rposition` of a line matching
    `starts_with("Running ") && contains(" in ") && ends_with("...")`
    can match a line the *container itself* printed (e.g.
    `"Running tests in release mode..."`), silently truncating the
@@ -118,7 +118,7 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
 ## Efficiency
 
 6. **`Console`'s `std::sync::Mutex` can block tokio worker threads on a
-    stalled stdout** (`ratect-core/src/ui/mod.rs`) — `post()` runs
+    stalled stdout** (`ratect-core/src/ui.rs`) — `post()` runs
     synchronously from tokio worker threads, so a stalled stdout (closed
     pipe reader, `Ctrl-S`'d terminal) blocks whichever holds the Console
     mutex mid-write and queues every concurrent poster behind it. (The
@@ -178,7 +178,7 @@ recorded so nobody re-investigates them from scratch.
 # ratect-core/src/docker.rs: a second wide-positional-seam cluster
 
 `docker.rs`'s image/BuildKit helpers immediately above the connection block
-that became `docker/connection.rs` in 0.6.0 (`split_image_reference`,
+that became `ratect-core/src/docker/connection.rs` in 0.6.0 (`split_image_reference`,
 `docker_buildkit_env_value`, `select_builder_version`) are the same shape of
 finding the architecture review that motivated that split named — a
 self-contained concept sharing a module with container lifecycle by history,

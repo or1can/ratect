@@ -12,6 +12,33 @@
 # or an explicit relative path always counts, regardless of this list.
 module_reference_scope = ["decisions/*.md", "AGENTS.md"]
 
+[check-file-refs]
+# Two distinct reasons, not one:
+#
+# - CHANGELOG.md/RELEASES.md/decisions/*.md are this repo's own append-only
+#   historical records (AGENTS.md's own rules) — they legitimately cite a
+#   path as it existed when that entry was written, even after a later
+#   refactor renames or deletes it. Excluded rather than fixed, since
+#   "fixing" one would mean rewriting history these files are explicitly
+#   meant never to rewrite.
+# - AGENTS.md/docs/cli-reference.md/docs/config-reference.md each carry at
+#   least one confirmed false positive with no available fix: a
+#   `decisions/NNNN-slug.md` naming-template placeholder, a `~`/`/`-prefixed
+#   path outside the repo entirely (a user's home directory, a Docker
+#   daemon's own host) that the check's own regex strips before resolving —
+#   filed upstream as claims#37 — and a hypothetical filename in a "for
+#   example" illustration that was never meant to exist in this repo.
+#   Revisit once #37 lands; the home/absolute-path case is the only one of
+#   the three with an actual proposed fix.
+exclude = [
+    "CHANGELOG.md",
+    "RELEASES.md",
+    "decisions/*.md",
+    "AGENTS.md",
+    "docs/cli-reference.md",
+    "docs/config-reference.md",
+]
+
 [restatement]
 # `echoed-claims.py` only ever scanned `.md`. Most of this repo's prose lives
 # in Rust `//!`/`///` doc comments instead (decisions/0006's whole point), so

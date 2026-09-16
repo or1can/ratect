@@ -105,6 +105,51 @@ config variable](#built-in-config-variable-batectproject_directory) — which al
 resolves to the root's directory regardless of which file a container is defined in —
 to reference the root project directory explicitly from an included file.
 
+For example, a project laid out as:
+
+```
+myproject/
+├── batect.yml
+├── scripts/
+└── containers/
+    ├── extra.yml
+    └── data/
+```
+
+Root `batect.yml`:
+
+```yaml
+project_name: myproject
+include:
+  - containers/extra.yml
+tasks:
+  my-task:
+    run:
+      container: my-other-container
+```
+
+`containers/extra.yml`:
+
+```yaml
+containers:
+  my-other-container:
+    image: alpine:1.2.3
+    volumes:
+      # containers/extra.yml's own directory is containers/, so this
+      # resolves to myproject/containers/data — not myproject/data.
+      - ./data:/data
+      # Always the root project directory, regardless of which file this
+      # is written in — so this is myproject/scripts, not
+      # myproject/containers/scripts.
+      - <{batect.project_directory}/scripts:/scripts
+```
+
+Running `ratect-compat my-task` from `myproject/` starts `my-other-container`
+with those two volumes mounted exactly as resolved above — `my-task` itself
+lives in the root file, but the container it runs could equally have been
+declared there instead of in the include; only the volume paths' own
+resolution depends on which file declares the container.
+
 ### Local file includes
 
 A local include's path is resolved relative to the directory of the file that
@@ -217,19 +262,6 @@ out to it (`git clone --quiet --no-checkout` followed by
 `git checkout --recurse-submodules <ref>`) rather than embedding a Git library, so
 submodules and any Git configuration (credentials, `.gitconfig` rewrites, etc.) that
 your normal `git clone` already relies on work the same way here.
-
-For example, given `containers/extra.yml` (included from the root `batect.yml`):
-
-```yaml
-containers:
-  my-other-container:
-    image: alpine:1.2.3
-    volumes:
-      # Resolves relative to containers/, not the root project directory.
-      - ./data:/data
-      # Always the root project directory, regardless of where this file lives.
-      - <{batect.project_directory}/scripts:/scripts
-```
 
 ## Container
 
