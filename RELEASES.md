@@ -1188,6 +1188,19 @@ to live at, so links written before the split still resolve.
   is extracted and unit-tested *before* `CacheStore`'s move underneath it. See
   the closed [milestone](https://github.com/or1can/ratect/milestone/1) for
   everything that shipped.
+- **0.28.0** — Release infrastructure, not a product feature, and shared
+  with [`ratect` 0.7.0](#ratect) below rather than specific to this binary:
+  prebuilt binaries for both binaries (Linux x86_64 gnu/musl, aarch64 musl,
+  native macOS x86_64/arm64) now publish automatically via a `cargo-dist`
+  pipeline on every version tag push, each release carrying a CycloneDX
+  SBOM and GitHub Artifact Attestations covering every binary archive, the
+  SBOM, and the checksums manifest — see
+  [decisions/0010](decisions/0010-release-binary-distribution.md) for the
+  full design, including what was deliberately deferred (crates.io,
+  Homebrew, Windows, reproducible builds). This binary's own parity
+  surface is unchanged. See the closed
+  [milestone](https://github.com/or1can/ratect/milestone/2) for everything
+  that shipped.
 - **1.0.0** — the [Batect Parity](ROADMAP.md#batect-parity) section above substantially checked
   off (all of the above, including 0.7.0–0.19.0, not just the items shipped through
   0.6.0), and verified against real Batect projects — the conformance corpus above
@@ -1470,6 +1483,15 @@ to live at, so links written before the split still resolve.
   0.6.0 milestone](https://github.com/or1can/ratect/milestone/1) for the full
   list, and git history for the corrections a review round made to the
   original six-candidate grading rather than restating them here.
+- **0.7.0** — the same release infrastructure as
+  [`ratect-compat` 0.28.0](#ratect-compat) above, shared rather than
+  specific to this binary: prebuilt binaries, a CycloneDX SBOM, and GitHub
+  Artifact Attestations, all published automatically by a `cargo-dist`
+  pipeline on every version tag push — see
+  [decisions/0010](decisions/0010-release-binary-distribution.md). This
+  binary's own subcommand surface is unchanged. See the closed
+  [milestone](https://github.com/or1can/ratect/milestone/2) for everything
+  that shipped.
 
 Its **1.0.0** means something different from `ratect-compat`'s: interface stability
 (the subcommand structure and config format won't break), not feature-completeness

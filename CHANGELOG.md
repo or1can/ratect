@@ -21,6 +21,8 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+## [ratect-compat 0.28.0 · ratect 0.7.0] - 2026-09-16
+
 ### Added
 
 - Added a `cargo-dist`-based pipeline that builds Linux (x86_64 gnu/musl,
@@ -30,11 +32,10 @@ history, from when it was the only binary.
   uploaded, and attaching a CycloneDX SBOM of the released binary's
   dependency tree. Every binary archive, the SBOM, and the checksums
   manifest carry a GitHub Artifact Attestation, verifiable with `gh
-  attestation verify <file> --repo or1can/ratect` once downloaded.
-  Validated end-to-end against real rc tags — see
-  [decisions/0010](decisions/0010-release-binary-distribution.md) — and
-  is now `docs/installation.md`'s documented primary install path. No
-  archive exists to download until this release itself is tagged.
+  attestation verify <file> --repo or1can/ratect` once downloaded. This is
+  the first release built and published this way — see
+  [decisions/0010](decisions/0010-release-binary-distribution.md) and
+  `docs/installation.md` for the details.
 - Added a CI check (`Release Pipeline Config`) that validates
   `dist-workspace.toml` on every PR. Reported, not yet a required check —
   contributor-tooling only for now.
