@@ -43,6 +43,17 @@ clear it:
 xattr -d com.apple.quarantine ratect-compat-x86_64-apple-darwin/ratect-compat
 ```
 
+### Homebrew
+
+Each release also publishes a formula to a shared tap
+([`or1can/homebrew-tap`](https://github.com/or1can/homebrew-tap)) for both
+binaries:
+
+```bash
+brew install or1can/tap/ratect-compat
+brew install or1can/tap/ratect
+```
+
 ### Install script
 
 Each release also publishes a shell installer that downloads, verifies, and

@@ -5,6 +5,7 @@ edition = "2021"
 description = "The forward-looking Ratect CLI, free to diverge from Batect's interface"
 license = "Apache-2.0"
 repository = "https://github.com/or1can/ratect"
+homepage = "https://github.com/or1can/ratect"
 
 # The same CLI-side set `ratect-compat` has, for the same reasons — see
 # AGENTS.md's CLI-vs-core dependency split. `tracing-subscriber` is a binary

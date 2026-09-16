@@ -26,6 +26,9 @@ history, from when it was the only binary.
 - Each release now also publishes a shell installer (`curl | sh`) alongside
   the archives, for both `ratect-compat` and `ratect` — see
   `docs/installation.md`'s "Install script" section.
+- Each release also now publishes a Homebrew formula for both binaries to a
+  shared tap (`or1can/homebrew-tap`) — `brew install or1can/tap/ratect` /
+  `ratect-compat`.
 
 ## [ratect-compat 0.28.0 · ratect 0.7.0] - 2026-09-16
 

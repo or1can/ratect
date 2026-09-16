@@ -8,7 +8,16 @@ cargo-dist-version = "0.33.0"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
-installers = ["shell"]
+installers = ["shell", "homebrew"]
+# `publish-jobs`/`tap` (ratect#59): both `ratect` and `ratect-compat` publish
+# a Homebrew formula to the same shared tap on every release — `tap` is a
+# package-level key in dist's schema but must be byte-identical across every
+# package in a workspace (a `MismatchedTaps` hard error otherwise), so it's
+# set once here rather than per-package. `HOMEBREW_TAP_TOKEN` (a fine-
+# grained PAT scoped to only that tap repo, Contents: write) is the repo
+# secret the generated `publish-homebrew-formula` job pushes with.
+publish-jobs = ["homebrew"]
+tap = "or1can/homebrew-tap"
 # Target platforms to build apps for (Rust target-triple syntax). Only the
 # targets ratect#31 asked for: no aarch64-unknown-linux-gnu (low demand next
 # to the musl build here) and no Windows target yet.
