@@ -376,7 +376,9 @@ task's own container, as a dependency, or by more than one task) — but never r
 - Built images aren't cleaned up automatically — since the tag is reused, the image a
   build replaces becomes a dangling (`<none>`) image rather than disappearing, and
   accumulates until manually pruned (`docker image prune`), same as repeatedly running
-  a plain `docker build -t ... .` would leave behind.
+  a plain `docker build -t ... .` would leave behind. Docker's own build cache is
+  likewise untouched by Ratect. Matches Batect exactly — its `BuildImageStepRunner`/
+  `CleanupStagePlanner` have no cache-control flag or image-removal step either.
 - Ratect has no `--output` mode yet, so build progress is logged rather than
   streamed to the console: each build log line is emitted at `debug` level (set
   `RUST_LOG=info,ratect_core=debug` for a live transcript without unrelated
@@ -1102,6 +1104,9 @@ drift from what Ratect accepts; the checks it can't express are the cross-field 
 (a task needing `run` or `prerequisites`, port ranges on both sides of a mapping
 covering the same number of ports, `customise` naming a container that's actually in
 the task's graph). Those are still reported by Ratect itself, when you run a task.
+
+Not submitted to [SchemaStore's catalog](https://www.schemastore.org/api/json/catalog.json)
+itself — a possible later step, not done yet.
 
 ## Full example
 

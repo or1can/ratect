@@ -9,10 +9,10 @@ behavior applies — if a field or flag isn't marked "Supported" below, or isn't
 [config](config-reference.md)/[CLI](cli-reference.md) reference, assume Ratect doesn't
 do it.
 
-The tables below are the itemized detail behind the "Full Configuration Parity" and
-"Full CLI Options Parity" entries in [`ROADMAP.md`](../ROADMAP.md) — that file describes
-direction, this page describes exact current status per field/flag, verified against
-Batect's own reference documentation.
+The tables below are the itemized detail behind [`ROADMAP.md`](../ROADMAP.md)'s
+Batect Parity section — that file describes direction, this page describes exact
+current status per field/flag, verified against Batect's own reference
+documentation.
 
 > **A note on unsupported fields**: Ratect's YAML parsing rejects unknown keys — if you
 > write a Batect config field that Ratect doesn't understand (e.g. `working_directory`

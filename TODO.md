@@ -101,6 +101,27 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
     (ratect#38); fixing it is a `dist-workspace.toml` config change, out
     of scope for a docs ticket.
 
+13. **No confirmation prompt on `ratect resources clean --all-projects`**
+    (`ratect/src/main.rs`) — the one thing `list`-before-`clean` can't catch
+    is typing the dangerous command by accident, which only a prompt does,
+    since a dry run only helps if you remembered to run it first. Deferred
+    rather than rejected when the verb shipped ([0.2.0](RELEASES.md#ratect)):
+    it would be the first interactive prompt in either binary (Batect has
+    none, so there's no precedent), it needs a `--yes` escape for CI, and the
+    two-layer guard on what `--all-projects` can even reach already removes
+    the catastrophic version of the mistake. Worth revisiting on the first
+    report of a near-miss.
+
+14. **`resources` can't distinguish a concurrently-running task's containers
+    from an orphan** (`ratect-core/src/resources.rs`) — they're labelled
+    identically, because until the run ends they *are* the same thing, and
+    the daemon can't say whether some other `ratect` process still cares
+    about a container. `list` reporting age and `clean` taking
+    `--older-than` is the honest mitigation; claiming to detect liveness
+    would be a lie. If this bites in practice, the next step would be a
+    heartbeat (a running invocation touching its own resources
+    periodically) rather than any attempt to infer liveness after the fact.
+
 ## Test coverage
 
 4. **`tests/cli.rs`'s `task_output` helper weakens ~18 converted e2e

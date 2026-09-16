@@ -370,6 +370,22 @@ pub fn select_output_style(
 /// instead of Batect's behavior of accepting it and crashing on the first
 /// repaint. Deliberately excludes `--no-color`: that only influences the
 /// *default*, since colorless fancy works fine (see [`Console`]).
+///
+/// **Staying with this heuristic rather than a terminfo lookup, deliberately**
+/// (Batect's own roadmap wanted the latter, and this ported the approach it
+/// was dissatisfied with): terminfo is Unix-only, so it would sit *beside*
+/// this heuristic rather than replace it, and Windows is precisely where
+/// detection is hardest; it distinguishes terminals that move the cursor but
+/// can't do colour, a combination that's effectively extinct in developer
+/// environments today; Batect needed the distinction more than Ratect does,
+/// since its `enableComplexOutput` flag coupled colour and cursor movement
+/// into one on/off switch, where Ratect keeps them independent axes (a wrong
+/// guess here degrades one, not both); it costs a new dependency (a terminfo
+/// parser or an ncurses binding) for that narrow benefit; and it doesn't
+/// cover what modern terminals actually signal — truecolor is advertised via
+/// `COLORTERM`, which terminfo handles poorly. `NO_COLOR`/`CLICOLOR_FORCE`/
+/// `COLORTERM` aren't honoured here at all yet — only `--no-color` is — which
+/// is the genuinely useful gap, not a terminfo integration.
 pub fn supports_interactivity(terminal: &TerminalFacts) -> bool {
     terminal.stdout_is_terminal
         && terminal.term.as_deref().is_some_and(|term| term != "dumb")
