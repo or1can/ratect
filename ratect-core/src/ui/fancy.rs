@@ -354,6 +354,13 @@ impl FancyEventLogger {
     /// old frame at all — the safe fallback below leaves it exactly where
     /// it is and starts a fresh block after it, which needs no assumption
     /// about how the terminal chose to reflow anything.
+    ///
+    /// Not manually verified on a real reflowing terminal as of ratect#73
+    /// landing — the actual reflow is the emulator's own rendering, which
+    /// no headless harness here can reproduce or assert against. See
+    /// `ratect-compat/tests/fixtures/manual-terminal-resize.yml` for a
+    /// ready-made repro and the steps to run it by hand; update this note
+    /// once someone has.
     fn repaint_startup(&self, state: &mut State) {
         if state.lines.is_empty() {
             return;
