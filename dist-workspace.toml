@@ -22,6 +22,18 @@ tap = "or1can/homebrew-tap"
 # targets ratect#31 asked for: no aarch64-unknown-linux-gnu (low demand next
 # to the musl build here) and no Windows target yet.
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
+# `NOTICE` carries this repo's third-party attributions (moby/patternmatcher,
+# andrej-karpathy-skills, Batect's own journey-test suite — see NOTICE
+# itself for the full text) — dist's own auto-includes
+# (README*/LICENSE*/RELEASES*/CHANGELOG*)
+# don't match it, so it has to be listed explicitly to travel with every
+# released archive, which Apache-2.0 §4(d) asks for. This is a flat `[dist]`
+# key (not nested under an `artifacts.archives` table) because dist-
+# workspace.toml's `[dist]` table is parsed as the same legacy/generic
+# `DistMetadata` shape Cargo.toml's `[workspace.metadata.dist]` uses —
+# confirmed against cargo-dist 0.33.0's own source, since the nested v1
+# `TomlLayer` shape documented for per-crate config doesn't apply here.
+include = ["NOTICE"]
 # Where to host releases
 hosting = "github"
 # We create the GitHub Release ourselves (as a draft, with notes extracted
@@ -93,3 +105,4 @@ allow-dirty = ["ci"]
 # `PACKAGE/vX.Y.Z` tags (decisions/0001's independent version lines,
 # guideline 8) are what satisfy "never a shared workspace-wide tag" — by
 # always pushing one, not by making the other form impossible to push.
+

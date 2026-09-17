@@ -21,6 +21,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Fixed
+
+- Released archives now include `NOTICE`, alongside the existing `LICENSE`/`README.md`/`RELEASES.md`.
+
 ## [ratect-compat 0.29.0 · ratect 0.8.0] - 2026-09-16
 
 ### Added
