@@ -25,7 +25,7 @@ fn logger_with_width(width: u16) -> (FancyEventLogger, SharedBuffer) {
     (
         FancyEventLogger {
             console,
-            fixed_width: Some(width),
+            fixed_width: AtomicU16::new(width),
             state: Mutex::new(State::default()),
         },
         buffer,
@@ -113,6 +113,104 @@ fn a_progress_event_repaints_the_block_in_place() {
     );
 }
 
+/// Regression test for ratect#73: if the terminal's width
+/// changed since the last paint, a counted cursor-up can no longer be
+/// trusted (the emulator may already have reflowed the old frame onto a
+/// different number of rows) — this can't reproduce an actual reflow
+/// (that's the terminal's own rendering, not anything `SharedBuffer`
+/// simulates), only that `repaint_startup` stops *assuming* the old frame's
+/// row count survived and instead starts a fresh block, which is safe
+/// regardless of what the emulator actually did to the old one.
+#[test]
+fn a_terminal_resize_between_repaints_starts_a_fresh_block_instead_of_a_stale_cursor_up() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("app", Some("app:1"), &["db"], true),
+            info("db", Some("postgres:15"), &[], false),
+        ],
+    });
+    let first_frame = buffer.contents();
+
+    logger.fixed_width.store(40, Ordering::Relaxed);
+    logger.post(TaskEvent::ImagePullStarting {
+        image: "postgres:15".into(),
+    });
+    let after_resize = &buffer.contents()[first_frame.len()..];
+    assert_eq!(
+        after_resize,
+        "\n\
+             \r\x1b[2Kdb: pulling image postgres:15...\n\
+             \r\x1b[2Kapp: ready to pull image app:1\n",
+        "a width change since the last paint should start a fresh block \
+             (a lone newline, no cursor-up) rather than move the cursor over \
+             a frame whose on-screen row count may no longer be accurate"
+    );
+
+    // Subsequent repaints at the now-stable new width go back to a normal
+    // in-place cursor-up, over the block just started above.
+    logger.post(TaskEvent::ImagePullStarting {
+        image: "app:1".into(),
+    });
+    assert!(
+        buffer.contents().ends_with(
+            "\x1b[2A\
+             \r\x1b[2Kdb: pulling image postgres:15...\n\
+             \r\x1b[2Kapp: pulling image app:1...\n"
+        ),
+        "{}",
+        buffer.contents()
+    );
+}
+
+/// A width change that the skip-unchanged-content optimization (see
+/// `last_rendered`'s own docs) swallows — nothing was written for that
+/// event at all, since the newly-clipped text happened to be byte-identical
+/// to what's already on screen — must still update `painted_width`.
+/// Otherwise the *next* real repaint compares against the stale
+/// pre-resize width, sees a spurious mismatch, and takes the width-changed
+/// fallback for a resize that produced no visible difference and needs no
+/// such caution.
+#[test]
+fn a_width_change_with_no_visible_effect_does_not_leave_painted_width_stale() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::ImagePullCompleted {
+        image: "app:1".into(),
+    });
+    let before_resize = buffer.contents();
+
+    // Narrow, but not enough to clip anything this line renders — the skip
+    // optimization fires below, so this event writes nothing at all.
+    logger.fixed_width.store(60, Ordering::Relaxed);
+    logger.post(TaskEvent::ImageResolved {
+        container: "app".into(),
+    });
+    assert_eq!(
+        buffer.contents(),
+        before_resize,
+        "a no-op event at the new width should still skip the write, same as \
+             `image_resolved_does_not_undo_progress_from_a_real_pull`"
+    );
+
+    // A genuine content change at that same (already-current) width must
+    // use a normal cursor-up, not the width-changed fallback — the resize
+    // above produced no visible difference, so there's nothing for that
+    // fallback to protect against here.
+    logger.post(TaskEvent::ContainerBecameHealthy {
+        container: "app".into(),
+    });
+    assert!(
+        buffer.contents()[before_resize.len()..].starts_with("\x1b[1A"),
+        "painted_width should have followed the skipped repaint to 60, so \
+             this repaint at the same width takes the normal cursor-up path, \
+             not the fresh-block fallback: {:?}",
+        &buffer.contents()[before_resize.len()..]
+    );
+}
+
 #[test]
 fn identical_progress_message_does_not_repaint() {
     // Docker resends the same coarse status text ("Downloading", say)
@@ -192,9 +290,8 @@ fn dependency_exiting_while_the_block_is_still_live_repaints_that_line_in_place(
     // In place — the exact same two-line block shape as any other
     // in-place update (see `a_progress_event_repaints_the_block_in_place`),
     // not an extra line appended: an unrelated `println` here would
-    // desync every repaint after it, the same hazard TODO.md's fancy
-    // cursor-narrowing item names, just self-inflicted instead of
-    // terminal-inflicted.
+    // desync every repaint after it, the same row-count hazard ratect#73
+    // names, just self-inflicted instead of terminal-inflicted.
     assert!(
         buffer.contents().ends_with(
             "\x1b[2A\
@@ -474,6 +571,54 @@ fn cleanup_line_counts_down_then_summary_replaces_it() {
         "\x1b[1A\r\x1b[2K\
              test finished with exit code 0 in 1.5s.\n"
     ));
+}
+
+/// Regression test for ratect#73, the cleanup line's own
+/// copy of the same fixed-row-count shape: a resize since the line was last
+/// painted must not attempt a one-row cursor-up over content that may have
+/// already reflowed onto more rows.
+#[test]
+fn a_terminal_resize_since_the_cleanup_line_was_shown_starts_a_fresh_line() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: None,
+    });
+    logger.post(TaskEvent::TaskContainerCreated {
+        container: "app".into(),
+    });
+    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::ContainerRemoved {
+        container: "app".into(),
+    });
+    let before_resize = buffer.contents();
+
+    logger.fixed_width.store(40, Ordering::Relaxed);
+    logger.post(TaskEvent::RemovingNetwork);
+    assert_eq!(
+        &buffer.contents()[before_resize.len()..],
+        "\nCleaning up: removing task network...\n",
+        "a width change since the cleanup line was last painted should \
+             move to a fresh line (no cursor-up) rather than overwrite a \
+             line whose on-screen row count may no longer be accurate"
+    );
+
+    // The task-finished summary hits the very same fallback, one event
+    // later, resizing again first.
+    logger.fixed_width.store(30, Ordering::Relaxed);
+    let before_finish = buffer.contents();
+    logger.post(TaskEvent::TaskFinished {
+        task: "test".into(),
+        exit_code: 0,
+        duration: Duration::from_millis(1500),
+    });
+    assert_eq!(
+        &buffer.contents()[before_finish.len()..],
+        "\ntest finished with exit code 0 in 1.5s.\n"
+    );
 }
 
 #[test]

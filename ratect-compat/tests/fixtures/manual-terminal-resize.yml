@@ -1,0 +1,63 @@
+# Not used by any automated test — this is the one exception to "every
+# fixture here backs an #[ignore]d Docker-integration test" (AGENTS.md's
+# fixture-layer rule). What ratect#73 actually fixes (fancy mode's live
+# status block corrupting when the terminal window narrows mid-run, on a
+# reflowing emulator — iTerm2, GNOME Terminal, kitty) only manifests in the
+# terminal emulator's own rendering, which no headless harness (including
+# ratect-compat's portable-pty dev-dependency) can reproduce or assert
+# against. This fixture exists so that manual check has a ready-made repro
+# instead of being reinvented from scratch each time it's needed.
+#
+# How to use it:
+#
+#   1. Start with a WIDE terminal window (~120 columns) — wide enough that
+#      both dependency lines below fit on one row each without wrapping.
+#   2. Run, in `fancy` mode (the default on a TTY):
+#        ratect-compat -f manual-terminal-resize.yml resize-test
+#   3. Once both "container started, waiting for it to become healthy..."
+#      lines are visible, NARROW the window noticeably (enough that the
+#      long name+description lines below would now need to wrap) at some
+#      point in the first ~10 seconds.
+#   4. Watch what happens at ~12s, when alpha's health check passes and the
+#      block repaints: a build with ratect#73's fix should print a blank
+#      line and start a fresh copy of the block below the old one. A build
+#      without the fix (e.g. anything installed before this ticket) should
+#      visibly corrupt the display — the cursor lands mid-line and
+#      overwrites/garbles existing rows instead.
+#   5. Optionally also widen the window back before the 12s mark, to check
+#      the narrow-then-restore gap `repaint_startup`'s own doc comment
+#      names as a known, deliberately unclosed limitation (equal width
+#      doesn't fully rule out an intermediate resize).
+#   6. Ctrl+C once satisfied — beta's own ~20s health check isn't needed
+#      for the check above, it's only there to keep a second, independently
+#      timed line in the block for the whole run.
+project_name: manual-terminal-resize-test
+
+containers:
+  a-fairly-long-container-name-alpha:
+    image: alpine:3.18.2
+    command: sh -c "sleep 12 && touch /tmp/ready && sleep 60"
+    health_check:
+      command: sh -c "test -f /tmp/ready"
+      interval: 2s
+      retries: 30
+
+  a-fairly-long-container-name-beta:
+    image: alpine:3.18.2
+    command: sh -c "sleep 20 && touch /tmp/ready && sleep 60"
+    health_check:
+      command: sh -c "test -f /tmp/ready"
+      interval: 2s
+      retries: 30
+
+  app:
+    image: alpine:3.18.2
+    dependencies:
+      - a-fairly-long-container-name-alpha
+      - a-fairly-long-container-name-beta
+
+tasks:
+  resize-test:
+    run:
+      container: app
+      command: sh -c "echo done"

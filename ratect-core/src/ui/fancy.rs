@@ -32,17 +32,22 @@
 
 use super::{Color, Console, EventSink, TaskContainerInfo, TaskEvent};
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Mutex;
 use unicode_width::UnicodeWidthChar;
 
 pub struct FancyEventLogger {
     console: Console,
-    /// A fixed terminal width, overriding live detection — `None` in
-    /// production (`stdout`), which queries the real terminal live on
-    /// every repaint via [`FancyEventLogger::current_width`] instead
-    /// (see its own docs); `Some` only in tests, which need a pinned
-    /// value to make assertions on rendered output deterministic.
-    fixed_width: Option<u16>,
+    /// A fixed terminal width, overriding live detection — `0` (no valid
+    /// terminal is ever this width) in production (`stdout`), which
+    /// queries the real terminal live on every repaint via
+    /// [`FancyEventLogger::current_width`] instead (see its own docs).
+    /// Non-zero only in tests, which need a pinned value to make
+    /// assertions on rendered output deterministic — an `AtomicU16` rather
+    /// than a plain `Option<u16>` so a test can change it mid-run, to
+    /// simulate the terminal being resized between two repaints (see
+    /// `fancy_tests.rs`'s reflow-fallback test).
+    fixed_width: AtomicU16,
     state: Mutex<State>,
 }
 
@@ -53,8 +58,20 @@ struct State {
     /// Batect's own order falls out of its graph's node set).
     lines: Vec<ContainerLine>,
     /// How many block lines are currently painted on screen (0 = nothing
-    /// painted yet, so the first paint doesn't cursor-up).
+    /// painted yet, so the first paint doesn't cursor-up) — exact only
+    /// while `painted_width` still matches the terminal's live width; see
+    /// `repaint_startup`'s own docs for why both fields travel together.
     painted_lines: usize,
+    /// `current_width()`'s own return value the last time `painted_lines`
+    /// was set — `None` either before the first paint, or because the
+    /// terminal's size genuinely couldn't be determined at that paint (same
+    /// meaning `current_width` itself gives `None`, not a separate "unset"
+    /// state). A later repaint finding this no longer matches
+    /// `current_width()` means the terminal was resized since — and may
+    /// have silently reflowed the on-screen block onto a different number
+    /// of rows — so `painted_lines` can no longer be trusted for a
+    /// cursor-up (ratect#73).
+    painted_width: Option<u16>,
     /// The lines' own rendered content (post-clip, pre-cursor-movement)
     /// from the last repaint that actually wrote anything — lets
     /// `repaint_startup` skip the write (and its width-query/lock/syscall
@@ -77,6 +94,10 @@ struct State {
     removing_network: bool,
     /// The live cleanup line is currently on screen.
     cleanup_shown: bool,
+    /// The terminal width in effect when the cleanup line was last
+    /// painted — same purpose as `painted_width`, for the single cleanup
+    /// line rather than the multi-line startup block.
+    cleanup_width: Option<u16>,
     /// Whether any task has rendered yet — a blank separator line goes
     /// between one task's output and the next's, matching the simple
     /// logger.
@@ -262,7 +283,7 @@ impl FancyEventLogger {
     pub fn new(console: Console) -> Self {
         Self {
             console,
-            fixed_width: None,
+            fixed_width: AtomicU16::new(0),
             state: Mutex::new(State::default()),
         }
     }
@@ -276,14 +297,17 @@ impl FancyEventLogger {
     }
 
     /// The terminal's current display width, or `None` if it can't be
-    /// determined at all — `fixed_width` when set (tests only), otherwise
-    /// queried live via crossterm on every call (which is also what keeps
-    /// a resized terminal rendering correctly, with no resize-signal
-    /// listener needed). A reported width of `0` (some pseudo-terminals
-    /// with no size set, e.g. `script`'s) means "unknown", not "zero
-    /// columns" — clipping to it would reduce every line to bare `"..."`.
+    /// determined at all — `fixed_width` when non-zero (tests only),
+    /// otherwise queried live via crossterm on every call (which is also
+    /// what keeps a resized terminal rendering correctly, with no
+    /// resize-signal listener needed). A reported width of `0` (some
+    /// pseudo-terminals with no size set, e.g. `script`'s) means
+    /// "unknown", not "zero columns" — clipping to it would reduce every
+    /// line to bare `"..."` — the same reason `0` doubles as `fixed_width`'s
+    /// own "not set" sentinel.
     fn current_width(&self) -> Option<u16> {
-        self.fixed_width.or_else(|| {
+        let fixed = self.fixed_width.load(Ordering::Relaxed);
+        (fixed > 0).then_some(fixed).or_else(|| {
             crossterm::terminal::size()
                 .ok()
                 .and_then(|(width, _)| (width > 0).then_some(width))
@@ -293,6 +317,73 @@ impl FancyEventLogger {
     /// Repaints the whole startup block in place: cursor up over the
     /// previous frame, then clear-and-rewrite every line — emitted as one
     /// atomic `write_raw` so nothing can interleave mid-frame.
+    ///
+    /// The cursor-up is only safe when the terminal's *reported* width
+    /// still matches what it was at the last paint (ratect#73): a counted
+    /// cursor-up assumes each of the previous frame's logical lines still
+    /// occupies exactly one on-screen row, which a reflowing terminal
+    /// emulator (iTerm2, GNOME Terminal, kitty — confirmed; classic xterm
+    /// doesn't reflow) can silently invalidate between two repaints by
+    /// rewrapping already-painted content onto more rows the moment the
+    /// window narrows, with no resize signal this logger listens for.
+    /// `current_width` already re-clips every *future* line to the live
+    /// width; this handles content the terminal itself already reflowed
+    /// since the *last* paint, which clipping can't reach. A known,
+    /// deliberately unclosed gap: an equal reading doesn't rule out an
+    /// intermediate resize the user reversed before this repaint happened
+    /// to fire (narrow-then-restore between two events) — only a real
+    /// resize-signal listener could, and how a given terminal reflows
+    /// content back on a widen is exactly as unspecified as the DECSC/DECRC
+    /// behaviour rejected below, so this check is strictly narrower than
+    /// "definitely unresized" even though it reads that way. Narrower than
+    /// no check at all, though, and closing the remaining gap needs a
+    /// listener this logger doesn't have — not attempted here.
+    ///
+    /// Deliberately *not* fixed with a saved-cursor-position escape
+    /// (DECSC/DECRC, `\x1b7`/`\x1b8`) instead of counting rows — the
+    /// obvious-looking fix, and Ratect's first attempt at this ticket.
+    /// Researched rather than assumed (per this ticket's own instruction):
+    /// iTerm2, kitty, tmux, wezterm, and ghostty all have open, unresolved
+    /// issues for "cursor position wrong after DECSC, resize-with-reflow,
+    /// then DECRC" — the position of a saved cursor across a reflow is
+    /// explicitly unspecified and varies per terminal, so that escape
+    /// would have swapped one unverified row-count assumption for another
+    /// exactly as unverified. Instead: track the width `painted_lines` was
+    /// computed against (`painted_width`), and when the next repaint's
+    /// live width doesn't match it, don't attempt to reposition over the
+    /// old frame at all — the safe fallback below leaves it exactly where
+    /// it is and starts a fresh block after it, which needs no assumption
+    /// about how the terminal chose to reflow anything.
+    ///
+    /// Manually verified against both the bug and the fix, via
+    /// `ratect-compat/tests/fixtures/manual-terminal-resize.yml`'s repro —
+    /// the actual reflow is the emulator's own rendering, which no
+    /// headless harness here can reproduce or assert against.
+    ///
+    /// Pre-fix `ratect-compat` 0.29.0, narrowing mid-run in both macOS
+    /// Terminal and Warp: a moderate narrowing (wrapping the
+    /// "...waiting for it to become healthy..." line once) undercounted
+    /// that line's real row count, so the next repaint's cursor-up landed
+    /// one row short and its "ready" transition printed as a stray extra
+    /// line instead of replacing the one above it. A much narrower window
+    /// (several wraps) reproduced the sharper failure this fix actually
+    /// targets: one container's own "ready" transition overwrote a
+    /// *different* container's still-live line — genuine cross-line
+    /// corruption, not just a stray extra one.
+    ///
+    /// Built from this fix, same repro, macOS Terminal: a blank line, then
+    /// the whole block reprinted fresh below the old one, no corruption —
+    /// the fresh-block fallback as designed. Also tried narrow-then-restore
+    /// to the original width before the next repaint (the gap this
+    /// function's own doc above admits isn't fully closed): 0.29.0 showed
+    /// no visible issue (this terminal's own reflow-then-unflow happened to
+    /// restore the original layout exactly, for this run), and this fix
+    /// took the fresh-block fallback anyway rather than trusting the
+    /// matching width reading — an over-cautious duplicate block in that
+    /// run, not a wrong one. Neither observation *proves* the gap is
+    /// harmless in general (still depends on exact resize timing and the
+    /// terminal's own reflow implementation), but it didn't produce
+    /// corruption in this test either.
     fn repaint_startup(&self, state: &mut State) {
         if state.lines.is_empty() {
             return;
@@ -308,15 +399,33 @@ impl FancyEventLogger {
             // Nothing visible would actually change — skip the write
             // entirely rather than repainting identical content (see
             // `last_rendered`'s own docs for why this is the common case,
-            // not a rare one).
+            // not a rare one). Still record the new width: an identical
+            // `rendered` at a new width means every line was re-clipped to,
+            // and fit, that new width without changing — so what's already
+            // on screen is still accurate at it, and there's nothing here
+            // for the width-changed fallback below to protect against.
+            // Leaving the old `painted_width` in place instead would make
+            // the *next* real repaint see a spurious mismatch and take that
+            // fallback for no reason.
+            state.painted_width = width;
             return;
         }
         let mut frame = String::new();
         if state.painted_lines > 0 {
-            frame.push_str(&format!("\x1b[{}A", state.painted_lines));
+            if state.painted_width == width {
+                frame.push_str(&format!("\x1b[{}A", state.painted_lines));
+            } else {
+                // The terminal was resized since the last paint — the old
+                // frame may already have been reflowed onto a different
+                // number of rows than `painted_lines` assumes. Leave it
+                // alone and start fresh below rather than risk landing the
+                // cursor mid-block.
+                frame.push('\n');
+            }
         }
         frame.push_str(&rendered);
         state.painted_lines = state.lines.len();
+        state.painted_width = width;
         state.last_rendered = Some(rendered);
         self.console.write_raw(&frame);
     }
@@ -342,11 +451,23 @@ impl FancyEventLogger {
     }
 
     /// Paints (or repaints, in place) the single live cleanup line.
+    ///
+    /// Same fixed-row-count shape as `repaint_startup` (ratect#73's sweep
+    /// found it here too): a hardcoded one-row cursor-up assumes the
+    /// previously-painted line still occupies exactly one on-screen row,
+    /// which a reflowing terminal can invalidate between two repaints just
+    /// as it can for the multi-line startup block — same fix, tracking the
+    /// width the line was last painted against (`cleanup_width`) instead
+    /// of a saved-cursor escape (see `repaint_startup`'s own docs for why).
     fn repaint_cleanup(&self, state: &mut State) {
         let width = self.current_width();
         let mut frame = String::new();
         if state.cleanup_shown {
-            frame.push_str(CURSOR_UP_ONE_AND_CLEAR);
+            if state.cleanup_width == width {
+                frame.push_str(CURSOR_UP_ONE_AND_CLEAR);
+            } else {
+                frame.push('\n');
+            }
         } else {
             // A blank separator line first, unconditionally — matching
             // simple mode's blank line before "Cleaning up...". Not just
@@ -360,6 +481,7 @@ impl FancyEventLogger {
         frame.push_str(&clip_to_width(&self.cleanup_text(state), width));
         frame.push('\n');
         state.cleanup_shown = true;
+        state.cleanup_width = width;
         self.console.write_raw(&frame);
     }
 
@@ -410,6 +532,7 @@ impl EventSink for FancyEventLogger {
                     })
                     .collect();
                 state.painted_lines = 0;
+                state.painted_width = None;
                 state.last_rendered = None;
                 // A freshly resolved graph (re)starts the live display —
                 // not just `TaskStarting` — so the block updates even for
@@ -581,8 +704,8 @@ impl EventSink for FancyEventLogger {
                     // place via a cursor-relative row count (see
                     // `repaint_startup`), and an unrelated `println` here
                     // would add a row nothing else accounts for — exactly
-                    // TODO.md's fancy-narrowing hazard, self-inflicted this
-                    // time instead of the terminal doing it.
+                    // ratect#73's row-count hazard, self-inflicted this time
+                    // instead of the terminal doing it.
                     if let Some(line) = Self::line_mut(&mut state, &container) {
                         line.stage = Stage::ExitedUnexpectedly(exit_code);
                     }
@@ -653,9 +776,17 @@ impl EventSink for FancyEventLogger {
                 duration,
             } => {
                 // The live cleanup line makes way for the permanent
-                // summary, matching Batect's `onTaskFinished`.
+                // summary, matching Batect's `onTaskFinished`. Same
+                // width-check as `repaint_cleanup`: only wipe the line in
+                // place if the terminal hasn't been resized since it was
+                // last painted, otherwise leave it and print the summary
+                // on a fresh line below.
                 if state.cleanup_shown {
-                    self.console.write_raw(CURSOR_UP_ONE_AND_CLEAR);
+                    if state.cleanup_width == self.current_width() {
+                        self.console.write_raw(CURSOR_UP_ONE_AND_CLEAR);
+                    } else {
+                        self.console.println("");
+                    }
                     state.cleanup_shown = false;
                 }
                 self.console.println(&super::format_task_summary(

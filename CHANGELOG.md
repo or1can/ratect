@@ -29,6 +29,7 @@ history, from when it was the only binary.
 ### Fixed
 
 - Released archives now include `NOTICE`, alongside the existing `LICENSE`/`README.md`/`RELEASES.md`.
+- `fancy` output no longer corrupts its live status block when the terminal window narrows mid-run on a reflowing emulator (iTerm2, GNOME Terminal, kitty) — it now restarts the block on a fresh line below the old one instead.
 
 ## [ratect-compat 0.29.0 · ratect 0.8.0] - 2026-09-16
 
