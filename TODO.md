@@ -74,30 +74,27 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
 
 4. **`ratect-compat/tests/cli.rs`'s `task_output` helper weakens ~18 converted e2e
    assertions** — replaced `assert_eq!(stdout.trim(), expected)` (whole-
-   stdout equality) with a windowed extract between the last
-   `Running ... in ...` milestone and `Cleaning up...`. Stray output
-   before or after that window is now silently tolerated. No remaining
-   test pins whole-stdout purity in the default (non-quiet) mode —
-   `simple_output_format_frames_task_output_via_docker` asserts
-   presence/order only, and the exact-stdout tests pin `quiet` mode
-   specifically. Whole-stdout exactness may be inherently hard to
-   restore now (pull/build lines are conditional, duration is variable),
-   but worth a second look.
-
-5. **`task_output`'s frame-finding heuristic is fragile**
-   (`ratect-compat/tests/cli.rs`) — `rposition` of a line matching
-   `starts_with("Running ") && contains(" in ") && ends_with("...")`
-   can match a line the *container itself* printed (e.g.
-   `"Running tests in release mode..."`), silently truncating the
-   extract. It also never matches simple mode's command-less
-   `"Running <container>..."` phrasing (no `" in "`) — a test for a
-   task relying on the image's default `CMD` would get the whole
-   stdout including milestones and fail loudly instead. No current
-   fixture triggers either case (future-fragility only).
+   stdout equality) with a windowed extract between the task-container
+   milestone and `Cleaning up...`. Stray output before or after that window
+   is still silently tolerated. Revisited for ratect#72: whole-stdout
+   exactness is confirmed still impractical to restore in the default
+   (non-quiet) mode — pull/build lines are conditional and duration is
+   variable, so nothing short of ignoring both would let a whole-stdout
+   `assert_eq!` pass reliably. What #72 did fix is the window's own frame
+   line, previously found by a loose heuristic that could match a line the
+   container itself printed, or miss simple mode's command-less
+   `"Running <container>..."` phrasing entirely (a task relying on the
+   image's default `CMD`) — `task_output` now anchors on the task's own
+   container name, matching both real milestone shapes exactly, so the
+   only tolerance left is the inherently-variable milestone content this
+   note already names, not a heuristic that could miss the real frame
+   line. `simple_output_format_frames_task_output_via_docker` still
+   asserts presence/order only, and the exact-stdout tests still pin
+   `quiet` mode specifically.
 
 ## Efficiency
 
-6. **`Console`'s `std::sync::Mutex` can block tokio worker threads on a
+5. **`Console`'s `std::sync::Mutex` can block tokio worker threads on a
     stalled stdout** (`ratect-core/src/ui.rs`) — `post()` runs
     synchronously from tokio worker threads, so a stalled stdout (closed
     pipe reader, `Ctrl-S`'d terminal) blocks whichever holds the Console

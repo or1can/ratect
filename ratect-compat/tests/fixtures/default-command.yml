@@ -1,0 +1,15 @@
+# Regression fixture for ratect#72: a task with no `command` override at
+# either the container or `run` level, so `RunningTaskContainer`'s milestone
+# line drops the `in <container>` clause entirely (`"Running build-env..."`,
+# not `"Running <command> in build-env..."`) and the container's own image
+# default `CMD` runs instead. `task_output`'s old heuristic
+# (`starts_with("Running ") && contains(" in ") && ends_with("...")`) never
+# matched this shape.
+project_name: ratect-default-command-test
+containers:
+  build-env:
+    build_directory: ./default-command
+tasks:
+  run-default-command:
+    run:
+      container: build-env
