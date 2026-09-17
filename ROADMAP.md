@@ -24,83 +24,20 @@ actually gates on.
 
 ## Two Binaries: `ratect` and `ratect-compat`
 
-A Cargo workspace with a shared core library (config parsing, task engine,
-`ContainerRuntime`/Docker integration) and two thin binary crates on top:
-**`ratect-compat`**, a strict flag-for-flag/field-for-field drop-in for Batect's
-CLI and `batect.yml` (where all [Batect Parity](#batect-parity) work lands), and
-**`ratect`**, the forward-looking CLI free to diverge (subcommands, a native
-config format, modern-Rust-CLI conventions). No binary is literally named
-`batect`. Because both share the core, an eventual migration path from a
-`ratect-compat`-managed project to a `ratect`-managed one is a goal in its own
-right, not a side effect.
-
-Full rationale, alternatives, and consequences:
+A Cargo workspace with a shared core library and two thin binary crates:
+`ratect-compat` (strict Batect compatibility — where all [Batect
+Parity](#batect-parity) work lands) and `ratect` (forward-looking, free to
+diverge). Full rationale, alternatives, and consequences:
 [decisions/0001](decisions/0001-two-binaries.md).
 
 ## Versioning & Releases
 
-`ratect-compat` and `ratect` are versioned **independently** — they're on different
-maturity clocks, and forcing one number to serve both meanings breaks the moment they
-diverge (which they will, since `ratect-compat` has a head start). What *is* shared is
-the release **process**: a fix in the shared core crate gets released for both binaries
-at the same time (one PR/tag/CI run), each bumping its own patch version independently
-— not the same version number, just released together, so nobody is left running a
-stale, unpatched core. The core crate itself isn't published or meaningfully versioned
-on its own; it's an internal implementation detail, not something either binary's users
-interact with directly.
-
-Mechanically, **every** `Cargo.toml` in the workspace sits at `X.Y.Z-dev` between
-releases — both binaries and `ratect-core`, whichever binary a given cycle is
-actually about, so a build from `main` never claims to be a released version.
-Cutting a release is one isolated `chore:` commit that bumps the crates being
-released to the plain `X.Y.Z` and moves `CHANGELOG.md`'s accumulated `Unreleased`
-entries under a new dated heading naming every version in that release — e.g.
-`## [ratect-compat 0.21.1 · ratect 0.2.0]`, or just the one binary when it's
-released on its own. That commit is tagged and published as a GitHub Release
-(`prerelease: true` until a binary's own 1.0.0 — see below — with that
-`CHANGELOG.md` section as its body; a joint release uses that same section for
-both, which is correct, because it *is* the same set of changes). Pushing the
-tag is what publishes it — a `cargo-dist`-based pipeline
-(`.github/workflows/release.yml`) builds and uploads every target's binaries
-and drafts the Release itself, so the version-bump commit's own heading must
-already be in place *before* the tag is pushed: the pipeline's notes come
-from `tools/changelog-section.py` extracting the section naming that exact
-version, which doesn't exist until that commit lands. The next
-commit — starting the following version's development, also isolated, also
-`chore:` — bumps them back to the next `X.Y.Z-dev`. Neither bump is ever folded
-into a feature commit.
-
-Three mechanics that only became concrete once `ratect` started its own release
-cycle (0.2.0, the first one not about `ratect-compat`):
-
-- **Tags are prefixed with the binary they release** — `ratect/v0.2.0`,
-  `ratect-compat/v0.21.1` — because the two version lines will collide otherwise:
-  `v0.2.0` is already taken, by `ratect-compat`'s own 0.2.0 back when it was the
-  only binary. Bare `vX.Y.Z` tags (`v0.1.0` through `v0.21.0`) are that history and
-  stay exactly as they are; nothing renames them. Everything from here on is
-  prefixed, `ratect-compat` included, rather than leaving one binary on a legacy
-  scheme.
-- **One shared `CHANGELOG.md`, not one per binary.** Most substantive work is in
-  `ratect-core` and so reaches both binaries — the anonymous-volume fix
-  ([0.21.1](RELEASES.md#ratect-compat)) is the pattern, not the exception — so two files
-  would be largely the same prose under different headings, drifting apart on
-  every core change. (That's the opposite of the CLI reference docs, which *are*
-  split per binary: those overlap by almost nothing, since they document
-  different flags. Split where the content differs, share where it doesn't —
-  which is also why `config-reference.md` and `task-lifecycle.md` are shared.)
-  An entry with no binary named applies to both; one that doesn't says
-  `(ratect only)`/`(ratect-compat only)`, so the annotation cost falls on the
-  rarer case. Revisit only if `ratect` diverges far enough that shared-core
-  changes stop being the bulk of the work — 0.3.0's own config format is a step
-  that way — since cutting one file in two later is easy, and merging two back
-  into one isn't.
-- **A cycle bumps the crates it actually changes.** A `ratect`-only cycle still
-  moves `ratect-core` (it's the same shared crate, and its number has always run
-  with the release cadence rather than standing still) and still leaves
-  `ratect-compat` on a `-dev` of its own — a patch bump if nothing but the shared
-  core moved underneath it, a minor one if it gained anything itself. Which of the
-  two it turns out to be is decided at release time; the `-dev` number in between
-  is a statement of intent, not a commitment.
+`ratect-compat` and `ratect` are versioned independently, sharing a release
+process — see [decisions/0001](decisions/0001-two-binaries.md#consequences)
+for why (independent version lines, tag prefixes, the shared `CHANGELOG.md`,
+per-cycle crate bumps), and [AGENTS.md](AGENTS.md)'s Version Lifecycle
+guideline for the actual release-cutting process — the `-dev` cycle, tagging,
+and what pushing a tag triggers.
 
 ### `ratect-compat`
 
@@ -117,10 +54,32 @@ written before the split still resolve.
 
 Leveraging Rust's strengths to provide a superior experience compared to the original JVM-based implementation.
 
-- **Parallel Task Execution**: within-task container startup (image pulls/builds, health-check waits, setup commands for independent branches of one task's dependency graph) now runs concurrently via `tokio` — shipped as `ratect-compat` [0.15.0](RELEASES.md#ratect-compat), since it also closed a Batect parity gap (Batect does exactly this, just not more). Running independent *prerequisite tasks* concurrently too — which Batect itself doesn't do — remains a possible Rust-specific enhancement for later, not currently scheduled.
-- **Static Binaries**: Distribution as zero-dependency static binaries (`ratect` and `ratect-compat`) for easy installation and portability. `x86_64-unknown-linux-musl` belongs in the release matrix specifically: Batect's only open *bug* ([batect#1335](https://github.com/batect/batect/issues/1335), `priority:high`, still unresolved) is that it can't start on Alpine at all — its JNI Docker-client wrapper is extracted to `/tmp` and fails to relocate against musl. Ratect can't have that failure (bollard talks to the daemon socket directly, with no native library to extract), but the issue is evidence that Alpine CI images are a real user environment rather than a niche one, and a glibc-only build would find its own way to fail there.
-- **First-class Cross-platform Support**: Providing a high-performance, native experience across macOS, Linux, and Windows without the overhead or startup latency of a JVM. Two specifics worth naming, so "cross-platform" isn't taken to imply them: **Windows isolation mode** (`process` versus `hyperv`, applied to both builds and container runs) is a config/CLI surface Ratect doesn't have at all, and Batect wanted it too; and **live terminal-resize forwarding is Unix-only by construction** — it's built on `tokio::signal::unix`'s `SIGWINCH` listener, which has no Windows equivalent, so Batect's own "send updated console dimensions to the daemon if the console is resized" item is an open gap here rather than a covered one. Batect's remaining Windows items are JVM artefacts with no Ratect equivalent (a 32-bit JVM named-pipe hang, reading version details out of `kernel32.dll`).
-- **Precise Error Reporting**: Utilizing Rust's type system and error handling to provide clear, actionable feedback on configuration errors and execution failures.
+- **Parallel Task Execution**: within-task startup shipped as [`ratect-compat`
+  0.15.0](RELEASES.md#ratect-compat). Running independent *prerequisite tasks*
+  concurrently too — which Batect itself doesn't do — remains a possible
+  enhancement for later, not currently scheduled.
+- **Static Binaries**: shipped — every release publishes prebuilt binaries for
+  five targets, including `x86_64-unknown-linux-musl`/`aarch64-unknown-linux-musl`
+  (statically linked, no Alpine relocation failure of the kind that's [Batect's
+  only open bug](https://github.com/batect/batect/issues/1335)) — see
+  [decisions/0010](decisions/0010-release-binary-distribution.md).
+- **First-class Cross-platform Support**: **Windows doesn't exist here at all
+  yet** — no target in the release matrix, no CI coverage, no Windows-specific
+  code path. macOS and Linux are covered by the binaries above. Two specifics
+  worth naming for whenever Windows work starts, so "cross-platform" isn't
+  taken to already imply them: **Windows isolation mode** (`process` versus
+  `hyperv`, applied to both builds and container runs) is a config/CLI surface
+  Ratect doesn't have at all, and Batect wanted it too; and **live
+  terminal-resize forwarding is Unix-only by construction** — it's built on
+  `tokio::signal::unix`'s `SIGWINCH` listener, which has no Windows equivalent.
+  Batect's remaining Windows items are JVM artefacts with no Ratect equivalent
+  (a 32-bit JVM named-pipe hang, reading version details out of `kernel32.dll`).
+- **Precise Error Reporting**: an ongoing principle rather than a closeable
+  item — already substantially true today (`anyhow::Context` throughout,
+  config errors carrying precise position information) — see [Future
+  Vision](#future-vision)'s own items ("warn when a dependency exits before
+  the task finishes," GitHub Actions annotations) for what falls under it
+  and is still genuinely open.
 
 ## UX & Tooling
 
@@ -142,11 +101,8 @@ Improving the developer experience through better tools and feedback.
   warning on container/task naming conventions — is deliberately skipped: Ratect
   has no convention to enforce, and inventing one to lint against would be the
   tool overreaching.
-- **Orphaned-resource discovery** (`ratect resources list`/`clean`): shipped — what's
-  still on this machine from a previous run (a crash, a `docker kill`, a
-  `--no-cleanup` run, or a failed teardown), findable via the runtime-ownership
-  labels every container/network now carries. See [CLI
-  reference](docs/ratect-cli.md#resources-options) for the verb itself and
+- **Orphaned-resource discovery** (`ratect resources list`/`clean`): shipped — see
+  [CLI reference](docs/ratect-cli.md#resources-options) for the verb and
   [decisions/0002](decisions/0002-runtime-ownership-labels.md) for the labelling
   design (namespace, why not OCI annotations, why both binaries label). Nothing
   left open here beyond [TODO.md](TODO.md)'s recorded deferrals (a `clean
