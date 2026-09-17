@@ -140,6 +140,16 @@ Improving the developer experience through better tools and feedback.
     bundles are actually *for*, which the [config
     reference](docs/config-reference.md#includes) documents mechanically without
     ever making the case for.
+- **A rendered docs site** — right now `docs/` is only readable as raw Markdown on
+  GitHub: no navigation, no search, no landing page for someone who hasn't heard of
+  Ratect yet. Batect has exactly this in `batect.dev`; Ratect has no discoverability
+  story at all beyond the repository itself (`gh repo view` shows no homepage URL
+  set). Undecided: the rendering tool (mdBook, Docusaurus, Zola, ...), hosting
+  (GitHub Pages is the obvious default, no infra to run), and domain
+  (`ratect.dev`, matching Batect's own naming, would need registering). Content
+  is what `docs/` already has plus whatever lands from the worked-examples/FAQ/
+  comparison items above — this is about presentation and discoverability, not
+  new writing.
 
 ## Future Vision
 
