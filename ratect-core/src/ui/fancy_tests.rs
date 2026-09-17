@@ -113,7 +113,7 @@ fn a_progress_event_repaints_the_block_in_place() {
     );
 }
 
-/// Regression test for TODO.md item 1 (ratect#73): if the terminal's width
+/// Regression test for ratect#73: if the terminal's width
 /// changed since the last paint, a counted cursor-up can no longer be
 /// trusted (the emulator may already have reflowed the old frame onto a
 /// different number of rows) — this can't reproduce an actual reflow
@@ -160,6 +160,54 @@ fn a_terminal_resize_between_repaints_starts_a_fresh_block_instead_of_a_stale_cu
         ),
         "{}",
         buffer.contents()
+    );
+}
+
+/// A width change that the skip-unchanged-content optimization (see
+/// `last_rendered`'s own docs) swallows — nothing was written for that
+/// event at all, since the newly-clipped text happened to be byte-identical
+/// to what's already on screen — must still update `painted_width`.
+/// Otherwise the *next* real repaint compares against the stale
+/// pre-resize width, sees a spurious mismatch, and takes the width-changed
+/// fallback for a resize that produced no visible difference and needs no
+/// such caution.
+#[test]
+fn a_width_change_with_no_visible_effect_does_not_leave_painted_width_stale() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::ImagePullCompleted {
+        image: "app:1".into(),
+    });
+    let before_resize = buffer.contents();
+
+    // Narrow, but not enough to clip anything this line renders — the skip
+    // optimization fires below, so this event writes nothing at all.
+    logger.fixed_width.store(60, Ordering::Relaxed);
+    logger.post(TaskEvent::ImageResolved {
+        container: "app".into(),
+    });
+    assert_eq!(
+        buffer.contents(),
+        before_resize,
+        "a no-op event at the new width should still skip the write, same as \
+             `image_resolved_does_not_undo_progress_from_a_real_pull`"
+    );
+
+    // A genuine content change at that same (already-current) width must
+    // use a normal cursor-up, not the width-changed fallback — the resize
+    // above produced no visible difference, so there's nothing for that
+    // fallback to protect against here.
+    logger.post(TaskEvent::ContainerBecameHealthy {
+        container: "app".into(),
+    });
+    assert!(
+        buffer.contents()[before_resize.len()..].starts_with("\x1b[1A"),
+        "painted_width should have followed the skipped repaint to 60, so \
+             this repaint at the same width takes the normal cursor-up path, \
+             not the fresh-block fallback: {:?}",
+        &buffer.contents()[before_resize.len()..]
     );
 }
 
@@ -242,9 +290,8 @@ fn dependency_exiting_while_the_block_is_still_live_repaints_that_line_in_place(
     // In place — the exact same two-line block shape as any other
     // in-place update (see `a_progress_event_repaints_the_block_in_place`),
     // not an extra line appended: an unrelated `println` here would
-    // desync every repaint after it, the same hazard TODO.md's fancy
-    // cursor-narrowing item names, just self-inflicted instead of
-    // terminal-inflicted.
+    // desync every repaint after it, the same row-count hazard ratect#73
+    // names, just self-inflicted instead of terminal-inflicted.
     assert!(
         buffer.contents().ends_with(
             "\x1b[2A\
@@ -526,7 +573,7 @@ fn cleanup_line_counts_down_then_summary_replaces_it() {
     ));
 }
 
-/// Regression test for TODO.md item 1 (ratect#73), the cleanup line's own
+/// Regression test for ratect#73, the cleanup line's own
 /// copy of the same fixed-row-count shape: a resize since the line was last
 /// painted must not attempt a one-row cursor-up over content that may have
 /// already reflowed onto more rows.

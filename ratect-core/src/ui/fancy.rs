@@ -62,12 +62,15 @@ struct State {
     /// while `painted_width` still matches the terminal's live width; see
     /// `repaint_startup`'s own docs for why both fields travel together.
     painted_lines: usize,
-    /// The terminal width that was in effect the last time `painted_lines`
-    /// was set, or `None` before the first paint. A later repaint finding
-    /// this no longer matches `current_width()` means the terminal was
-    /// resized since — and may have silently reflowed the on-screen block
-    /// onto a different number of rows — so `painted_lines` can no longer
-    /// be trusted for a cursor-up (TODO.md item 1, ratect#73).
+    /// `current_width()`'s own return value the last time `painted_lines`
+    /// was set — `None` either before the first paint, or because the
+    /// terminal's size genuinely couldn't be determined at that paint (same
+    /// meaning `current_width` itself gives `None`, not a separate "unset"
+    /// state). A later repaint finding this no longer matches
+    /// `current_width()` means the terminal was resized since — and may
+    /// have silently reflowed the on-screen block onto a different number
+    /// of rows — so `painted_lines` can no longer be trusted for a
+    /// cursor-up (ratect#73).
     painted_width: Option<u16>,
     /// The lines' own rendered content (post-clip, pre-cursor-movement)
     /// from the last repaint that actually wrote anything — lets
@@ -315,8 +318,8 @@ impl FancyEventLogger {
     /// previous frame, then clear-and-rewrite every line — emitted as one
     /// atomic `write_raw` so nothing can interleave mid-frame.
     ///
-    /// The cursor-up is only safe when the terminal's width hasn't changed
-    /// since the last paint (TODO.md item 1, ratect#73): a counted
+    /// The cursor-up is only safe when the terminal's *reported* width
+    /// still matches what it was at the last paint (ratect#73): a counted
     /// cursor-up assumes each of the previous frame's logical lines still
     /// occupies exactly one on-screen row, which a reflowing terminal
     /// emulator (iTerm2, GNOME Terminal, kitty — confirmed; classic xterm
@@ -325,7 +328,16 @@ impl FancyEventLogger {
     /// window narrows, with no resize signal this logger listens for.
     /// `current_width` already re-clips every *future* line to the live
     /// width; this handles content the terminal itself already reflowed
-    /// since the *last* paint, which clipping can't reach.
+    /// since the *last* paint, which clipping can't reach. A known,
+    /// deliberately unclosed gap: an equal reading doesn't rule out an
+    /// intermediate resize the user reversed before this repaint happened
+    /// to fire (narrow-then-restore between two events) — only a real
+    /// resize-signal listener could, and how a given terminal reflows
+    /// content back on a widen is exactly as unspecified as the DECSC/DECRC
+    /// behaviour rejected below, so this check is strictly narrower than
+    /// "definitely unresized" even though it reads that way. Narrower than
+    /// no check at all, though, and closing the remaining gap needs a
+    /// listener this logger doesn't have — not attempted here.
     ///
     /// Deliberately *not* fixed with a saved-cursor-position escape
     /// (DECSC/DECRC, `\x1b7`/`\x1b8`) instead of counting rows — the
@@ -357,7 +369,15 @@ impl FancyEventLogger {
             // Nothing visible would actually change — skip the write
             // entirely rather than repainting identical content (see
             // `last_rendered`'s own docs for why this is the common case,
-            // not a rare one).
+            // not a rare one). Still record the new width: an identical
+            // `rendered` at a new width means every line was re-clipped to,
+            // and fit, that new width without changing — so what's already
+            // on screen is still accurate at it, and there's nothing here
+            // for the width-changed fallback below to protect against.
+            // Leaving the old `painted_width` in place instead would make
+            // the *next* real repaint see a spurious mismatch and take that
+            // fallback for no reason.
+            state.painted_width = width;
             return;
         }
         let mut frame = String::new();
@@ -654,8 +674,8 @@ impl EventSink for FancyEventLogger {
                     // place via a cursor-relative row count (see
                     // `repaint_startup`), and an unrelated `println` here
                     // would add a row nothing else accounts for — exactly
-                    // TODO.md's fancy-narrowing hazard, self-inflicted this
-                    // time instead of the terminal doing it.
+                    // ratect#73's row-count hazard, self-inflicted this time
+                    // instead of the terminal doing it.
                     if let Some(line) = Self::line_mut(&mut state, &container) {
                         line.stage = Stage::ExitedUnexpectedly(exit_code);
                     }
