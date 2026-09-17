@@ -30,7 +30,7 @@
 //! - Colorless fancy works (`--no-color` suppresses bold/color but not
 //!   cursor movement) — see [`Console`]'s independent-axes design.
 
-use super::{Console, EventSink, TaskContainerInfo, TaskEvent};
+use super::{Color, Console, EventSink, TaskContainerInfo, TaskEvent};
 use std::collections::BTreeSet;
 use std::sync::Mutex;
 use unicode_width::UnicodeWidthChar;
@@ -119,6 +119,13 @@ enum Stage {
     Ready,
     /// The task container's terminal state: its command is running.
     RunningCommand(Option<String>),
+    /// A dependency that had already reached [`Stage::Ready`] exited on its
+    /// own while something else was still going — see
+    /// [`TaskEvent::DependencyExitedUnexpectedly`]. Replaces whatever stage
+    /// the line was in, since nothing later can supersede it: cleanup is
+    /// the only thing that would, and cleanup freezes the whole block
+    /// before touching anything.
+    ExitedUnexpectedly(i64),
 }
 
 impl ContainerLine {
@@ -166,6 +173,9 @@ impl ContainerLine {
             Stage::Ready => "ready".to_string(),
             Stage::RunningCommand(Some(command)) => format!("running {command}"),
             Stage::RunningCommand(None) => "running".to_string(),
+            Stage::ExitedUnexpectedly(exit_code) => {
+                format!("exited unexpectedly with exit code {exit_code}")
+            }
         }
     }
 
@@ -560,6 +570,36 @@ impl EventSink for FancyEventLogger {
                     line.stage = Stage::Ready;
                 }
                 self.repaint_startup(&mut state);
+            }
+            TaskEvent::DependencyExitedUnexpectedly {
+                container,
+                exit_code,
+            } => {
+                if state.keep_updating_startup {
+                    // Folded into the line's own next repaint rather than
+                    // printed separately: the live block still repaints in
+                    // place via a cursor-relative row count (see
+                    // `repaint_startup`), and an unrelated `println` here
+                    // would add a row nothing else accounts for — exactly
+                    // TODO.md's fancy-narrowing hazard, self-inflicted this
+                    // time instead of the terminal doing it.
+                    if let Some(line) = Self::line_mut(&mut state, &container) {
+                        line.stage = Stage::ExitedUnexpectedly(exit_code);
+                    }
+                    self.repaint_startup(&mut state);
+                } else {
+                    // The block already froze (task container running, or
+                    // cleanup already started) — nothing will ever repaint
+                    // this line again, so a plain line is the only way to
+                    // show it, and safe: `repaint_cleanup`'s own first paint
+                    // always starts with its own fresh leading newline
+                    // regardless of what's already on screen below the
+                    // frozen block.
+                    self.console.println(&format!(
+                        "{} {container} exited unexpectedly with exit code {exit_code}.",
+                        self.console.colored(Color::Yellow, "Warning:")
+                    ));
+                }
             }
             TaskEvent::TaskContainerCreated { container } => {
                 // Counted from *created*, not from `RunningTaskContainer` —

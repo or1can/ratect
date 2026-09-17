@@ -1331,6 +1331,18 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// `retries`/`interval` bound how long a verdict can take.
     async fn wait_for_container_healthy(&self, container_id: &str) -> Result<()>;
 
+    /// Blocks until `container_id` exits, returning its exit code — a
+    /// genuine, possibly-long wait, unlike [`exit_code`](DockerClient::exit_code)'s
+    /// own callers, which only ever call it once a container is already
+    /// known to have stopped. Used to watch a dependency that has already
+    /// become ready (see `TaskEvent::DependencyExitedUnexpectedly`) for
+    /// exiting on its own while something else is still going — engine.rs
+    /// aborts the background watcher calling this the moment the task's
+    /// own run finishes, strictly before cleanup stops anything, so this
+    /// never needs to distinguish a genuine crash from a deliberate stop
+    /// itself.
+    async fn wait_for_container_exit(&self, container_id: &str) -> Result<i64>;
+
     /// Runs `command` inside the already-running `container_id` — used for
     /// `setup_commands`. Tokenized into literal argv via
     /// `tokenize_command_line`, the same as `command`/`entrypoint` — no
@@ -1888,10 +1900,17 @@ impl DockerClient {
         format!("{VERDICT} {details}")
     }
 
-    /// Must only be called once the container has already stopped (e.g. after
-    /// its log stream, followed with `follow: true`, has ended) — at that
-    /// point Docker still has the exit status available, so this resolves
-    /// immediately rather than actually waiting.
+    /// The shared primitive behind two different contracts: this method's
+    /// own two callers only ever reach it once a container has already
+    /// stopped (e.g. after its log stream, followed with `follow: true`,
+    /// has ended), at which point Docker still has the exit status
+    /// available and this resolves immediately; [`wait_for_container_exit`]
+    /// reaches the exact same bollard call from the opposite position — a
+    /// container that may still be running for a while yet — and genuinely
+    /// waits. Nothing here depends on which is true; only what each caller
+    /// can promise about the wait does.
+    ///
+    /// [`wait_for_container_exit`]: ContainerRuntime::wait_for_container_exit
     async fn exit_code(&self, container_id: &str) -> Result<i64> {
         let mut wait_stream = self
             .docker
@@ -2520,6 +2539,10 @@ impl ContainerRuntime for DockerClient {
                 other.unwrap_or("<none>")
             )),
         }
+    }
+
+    async fn wait_for_container_exit(&self, container_id: &str) -> Result<i64> {
+        self.exit_code(container_id).await
     }
 
     async fn exec_in_container(

@@ -132,3 +132,10 @@ tables above:
   credential-helper error unconditionally; Ratect warns instead, naming the
   registry that failed to resolve. See [Private registry
   credentials](config-reference.md#private-registry-credentials).
+- **A dependency exiting unexpectedly is reported, not silent.** Batect has no
+  equivalent: a dependency that dies after becoming ready — while the task's own
+  command, or a later dependency's own health/setup wait, is still going — is
+  otherwise invisible until whatever depended on it fails for a confusing,
+  unrelated-looking reason (a connection refused, a timeout). Ratect prints a
+  warning naming the container and its exit code instead, in every output mode.
+  See [task lifecycle](task-lifecycle.md#dependency-resolution).

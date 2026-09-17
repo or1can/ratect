@@ -24,6 +24,7 @@ history, from when it was the only binary.
 ### Added
 
 - A crash now prints where to report it, the binary's version and platform, and a reminder to re-run with `RUST_BACKTRACE=1` if it isn't already set.
+- A dependency that exits on its own after already becoming ready — while the task's own command, or a later dependency's own health/setup wait, is still going — now prints a warning naming the container and its exit code, in every output mode.
 
 ### Fixed
 
