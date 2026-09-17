@@ -45,6 +45,7 @@ pub mod git_include;
 pub(crate) mod include_trust;
 pub mod interrupt;
 pub mod labels;
+pub mod panic_hook;
 pub mod proxy;
 pub mod registry_auth;
 pub mod resources;

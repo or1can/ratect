@@ -368,6 +368,8 @@ fn init_tracing(log_file: Option<&Path>) -> Result<()> {
 
 #[tokio::main]
 async fn main() {
+    ratect_core::panic_hook::install(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+
     let args = Args::parse();
 
     if let Err(err) = init_tracing(args.log_file.as_deref()) {

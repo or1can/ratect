@@ -450,7 +450,11 @@ always reaches stderr — in every output style, including `quiet`. Any of those
 signals abandons the run and then cleans up after it; a second one *during* that cleanup
 stops the cleanup too, and `ratect resources list` finds whatever that leaves. `RUST_LOG` controls Ratect's own internal
 logging (default `info`, on stderr). Unlike `ratect-compat` there's no `--log-file`;
-redirect stderr if you want one.
+redirect stderr if you want one. A crash (a genuine bug) exits `101` and prints where to
+report it, `ratect`'s version and platform, and a reminder to re-run with
+`RUST_BACKTRACE=1` if it isn't already set — see
+[`ratect-compat`'s own note on this](cli-reference.md#exit-codes-and-error-reporting),
+which applies identically here.
 
 ## Differences from `ratect-compat` today
 

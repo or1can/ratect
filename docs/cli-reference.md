@@ -311,6 +311,11 @@ actual behavior — it doesn't yet distinguish "nothing to do" from "success":
   stops the rest of the chain immediately — no other prerequisites, and not the task
   that depended on it, will run — matching
   [Batect's documented behavior](https://github.com/batect/batect.dev/blob/main/docs/reference/config/tasks.md#prerequisites).
+- **A crash (a genuine bug, not one of the above) exits `101`**, Rust's own default for
+  an unhandled panic. `ratect-compat` prints where to report it
+  (https://github.com/or1can/ratect/issues/new), the binary's version and platform, and
+  — if `RUST_BACKTRACE` isn't already set — a reminder to re-run with it set, since a
+  backtrace makes a much more useful report.
 
 ## Environment variables
 
