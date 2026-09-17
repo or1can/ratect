@@ -58,28 +58,19 @@ Leveraging Rust's strengths to provide a superior experience compared to the ori
   0.15.0](RELEASES.md#ratect-compat). Running independent *prerequisite tasks*
   concurrently too — which Batect itself doesn't do — remains a possible
   enhancement for later, not currently scheduled.
-- **Static Binaries**: shipped — every release publishes prebuilt binaries for
-  five targets, including `x86_64-unknown-linux-musl`/`aarch64-unknown-linux-musl`
-  (statically linked, no Alpine relocation failure of the kind that's [Batect's
-  only open bug](https://github.com/batect/batect/issues/1335)) — see
-  [decisions/0010](decisions/0010-release-binary-distribution.md).
 - **First-class Cross-platform Support**: **Windows doesn't exist here at all
   yet** — no target in the release matrix, no CI coverage, no Windows-specific
-  code path. macOS and Linux are covered by the binaries above. Two specifics
-  worth naming for whenever Windows work starts, so "cross-platform" isn't
-  taken to already imply them: **Windows isolation mode** (`process` versus
-  `hyperv`, applied to both builds and container runs) is a config/CLI surface
-  Ratect doesn't have at all, and Batect wanted it too; and **live
-  terminal-resize forwarding is Unix-only by construction** — it's built on
-  `tokio::signal::unix`'s `SIGWINCH` listener, which has no Windows equivalent.
-  Batect's remaining Windows items are JVM artefacts with no Ratect equivalent
-  (a 32-bit JVM named-pipe hang, reading version details out of `kernel32.dll`).
-- **Precise Error Reporting**: an ongoing principle rather than a closeable
-  item — already substantially true today (`anyhow::Context` throughout,
-  config errors carrying precise position information) — see [Future
-  Vision](#future-vision)'s own items ("warn when a dependency exits before
-  the task finishes," GitHub Actions annotations) for what falls under it
-  and is still genuinely open.
+  code path. macOS and Linux already have prebuilt binaries (see
+  [decisions/0010](decisions/0010-release-binary-distribution.md)). Two
+  specifics worth naming for whenever Windows work starts, so
+  "cross-platform" isn't taken to already imply them: **Windows isolation
+  mode** (`process` versus `hyperv`, applied to both builds and container
+  runs) is a config/CLI surface Ratect doesn't have at all, and Batect
+  wanted it too; and **live terminal-resize forwarding is Unix-only by
+  construction** — it's built on `tokio::signal::unix`'s `SIGWINCH`
+  listener, which has no Windows equivalent. Batect's remaining Windows
+  items are JVM artefacts with no Ratect equivalent (a 32-bit JVM
+  named-pipe hang, reading version details out of `kernel32.dll`).
 
 ## UX & Tooling
 
@@ -101,13 +92,6 @@ Improving the developer experience through better tools and feedback.
   warning on container/task naming conventions — is deliberately skipped: Ratect
   has no convention to enforce, and inventing one to lint against would be the
   tool overreaching.
-- **Orphaned-resource discovery** (`ratect resources list`/`clean`): shipped — see
-  [CLI reference](docs/ratect-cli.md#resources-options) for the verb and
-  [decisions/0002](decisions/0002-runtime-ownership-labels.md) for the labelling
-  design (namespace, why not OCI annotations, why both binaries label). Nothing
-  left open here beyond [TODO.md](TODO.md)'s recorded deferrals (a `clean
-  --all-projects` confirmation prompt, a liveness heartbeat) — both worth
-  revisiting only on a real near-miss report, not preemptively.
 - **Improved Progress UI**: output-mode selection and live per-container progress
   shipped as Batect parity ([0.16.0](RELEASES.md#ratect-compat)). What remains is
   going *beyond* Batect — build context upload progress, richer pull progress
@@ -156,14 +140,6 @@ Improving the developer experience through better tools and feedback.
     bundles are actually *for*, which the [config
     reference](docs/config-reference.md#includes) documents mechanically without
     ever making the case for.
-- **Git-include cache management** (`ratect includes list`/`clean`/`refresh`):
-  shipped, `ratect`-only — Batect has no equivalent CLI surface at all (only the
-  automatic sweep), and new ideas belong in `ratect` rather than
-  `ratect-compat` (see [Two Binaries](#two-binaries-ratect-and-ratect-compat)).
-  See [CLI reference](docs/ratect-cli.md#includes-options) for the verb;
-  `ensure_cached`'s locking and the cache-listing performance rationale are
-  recorded in `ratect-core/src/git_include.rs`'s own doc comments. Nothing open
-  here.
 
 ## Future Vision
 
@@ -201,7 +177,7 @@ for parity, same reasoning as `allow_nested_git_includes` (shipped `ratect`
 - **Arguments on a prerequisite reference** ([batect#1053](https://github.com/batect/batect/issues/1053)): today `-- ADDITIONAL_ARGS` reaches only the explicitly-invoked task, never its prerequisites, in both tools — so a `build` task that takes arguments can't be reused as a prerequisite with different ones. Batect's proposed spelling (`prerequisites: [run-gradle build]`) overloads the string; a native-format `ratect.toml` can give a prerequisite entry a proper object shape instead, which is a good argument for this being `ratect`-only.
 - **Setup commands that run in a different container** ([batect#286](https://github.com/batect/batect/issues/286)): `setup_commands` always run inside the container that declares them; this is the "run a command in container B once container A is healthy, before A's dependents start" case (typically seeding a database from a client image that isn't the database itself).
 - **Tasks that run on the host** ([batect#78](https://github.com/batect/batect/issues/78), Batect's oldest open enhancement): a task that executes on the host rather than in a container, so one tool runs *every* task in a workflow and host steps can participate in the dependency graph. The largest philosophical departure on this list — it trades away the reproducibility that is the entire point of a container-based task runner — so it needs a decision about whether Ratect wants to be that tool at all, not just an implementation.
-- **Warn when a dependency exits before the task finishes**, with its exit code: today a dependency that dies mid-task is silent, and the task fails later for a confusing reason (a connection refused, a timeout) rather than the real one. Cheap, and squarely in the "precise error reporting" goal above.
+- **Warn when a dependency exits before the task finishes**, with its exit code: today a dependency that dies mid-task is silent, and the task fails later for a confusing reason (a connection refused, a timeout) rather than the real one. Cheap, and worth doing on its own merits.
 - **Dependency relationships between containers and tasks**: letting a container declare that a task must run before it starts (Batect's example: the app container requires the build task), removing the need to repeat that task as a prerequisite on every task that starts the container.
 - **Per-container graceful shutdown**: cleanup currently stops containers uniformly; Batect wanted the default to be fast termination with an opt-in graceful shutdown for containers where it matters (a database with data shared between invocations, which an abrupt stop can corrupt).
 - **Clone Git includes in parallel**: `config.rs`'s include-resolution loop calls `ensure_cached` one entry at a time, so a project with several Git includes clones them serially on first use. The per-entry lock already exists; the open question Batect noted is what to do about a repository needing interactive authentication, which parallel cloning would interleave unreadably.
