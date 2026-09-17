@@ -1,11 +1,20 @@
 # TODO
 
 Ratect's engineering backlog: deferred follow-on work from specific code
-reviews — real findings not worth fixing immediately, deliberate non-fixes
-worth recording so they aren't re-investigated from scratch, and narrower
+reviews — real findings not worth fixing immediately, and narrower
 architectural notes surfaced along the way. Distinct from ROADMAP.md's
 **Future Vision** section, which is undecided *product* ideas with no code
 behind them yet — everything here is tied to code that already shipped.
+
+A review finding that needs **no fix at all** doesn't get an entry here
+either, past or present — this file used to keep a standing "Reviewed, no
+action needed" section for those, and it only ever grew: almost any dismissed
+finding can be argued to meet "a future reviewer might rediscover this,"
+so the bar didn't actually bound anything. The reasoning behind a non-fix
+belongs as a code comment at the site it's about instead (see
+[decisions/0006](decisions/0006-code-and-documentation-locality.md)) — it
+surfaces exactly when someone is reading that code, rather than requiring a
+separate list to be checked, and it can't accrete the way a list does.
 
 Findings from the pre-release code review of 0.16.0's output-modes work
 (`git diff origin/main...HEAD` at the time, covering `ratect-core/src/ui/`,
@@ -85,40 +94,6 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
     `tracing-appender` pattern) is a bigger change than the other items
     here; low likelihood in practice (`ratect | head` closing early is
     the realistic trigger), not attempted yet.
-
-## Reviewed, no action needed
-
-These were investigated during the review and found not to need a fix.
-Kept here only when a future reviewer would plausibly rediscover the same
-finding independently and burn time re-deciding it — not every dismissed
-idea earns a permanent entry; a triaged, low-stakes finding unlikely to
-resurface is just dropped once decided, no residue.
-
-- **Fancy's `keep_updating_startup` re-arm on `TaskGraphResolved`**
-  (`fancy.rs`) — theoretically fragile (a bare bool set/cleared at five
-  call sites), but unreachable today: the engine always posts
-  `TaskGraphResolved` immediately after `TaskStarting` (which fully
-  resets logger state) for every task, so no graph event can ever arrive
-  after a freeze under the current event-posting order.
-- **`OutputStyleArg` mirroring `ui::OutputStyle` in `main.rs`** — the
-  mirror enum + `From` impl is the documented, deliberate price of
-  keeping `clap` a `ratect`-only dependency (see AGENTS.md's CLI-vs-core
-  dependency split); `ValueEnum`'s derived `[possible values: ...]` help
-  text and typo-suggestion error have no equivalent-complexity
-  string-table replacement.
-- **Default non-TTY stdout no longer being pipe-purity by default** — not
-  a defect: this is the deliberate, CHANGELOG-documented Batect-`simple`-
-  parity change 0.16.0 exists to make. `-o quiet` is the documented
-  escape hatch for scripts that need exact container-output-only stdout.
-- **`engine.rs`'s setup-command output splitting re-implements
-  `LineBuffer`'s framing rule** (`.lines()` + `trim_end_matches('\r')`
-  vs. `LineBuffer::push`/`flush`) — further apart than shallow duplication
-  now that `LineBuffer` also flushes on a lone `\r` (ratect#74):
-  `"a\r\r\n"` is one line, `"a"`, through `engine.rs`'s splitting, but two
-  through `LineBuffer`, `"a"` and `""`. The engine holds an owned `String`
-  where `LineBuffer` wants bytes + an `FnMut` closure, so switching over
-  is still more ceremony than the current 3 lines — not worth unifying,
-  but "shallow" no longer describes the gap between them.
 
 ---
 

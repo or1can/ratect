@@ -516,7 +516,10 @@ impl From<DockerArgs> for DockerConnectionOptions {
 /// on it directly, keeping `clap` out of `ratect-core` — see AGENTS.md's
 /// CLI-vs-core dependency split. `ratect-compat` has its own copy for the
 /// same reason; they're independent on purpose, since each binary's value
-/// names are part of its own interface.
+/// names are part of its own interface. Not worth collapsing into a shared
+/// string table either: `ValueEnum`'s derived `[possible values: ...]` help
+/// text and its typo-suggestion error have no string-table equivalent of
+/// the same complexity.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 enum OutputStyleArg {
     Fancy,
