@@ -12,31 +12,23 @@
 # or an explicit relative path always counts, regardless of this list.
 module_reference_scope = ["decisions/*.md", "AGENTS.md"]
 
-[check-file-refs]
-# Two distinct reasons, not one:
+# CHANGELOG.md/RELEASES.md/decisions/*.md are this repo's own append-only
+# historical records (AGENTS.md's own rules) — they legitimately cite a path
+# as it existed when that entry was written, even after a later refactor
+# renames or deletes it. Excluded rather than fixed, since "fixing" one would
+# mean rewriting history these files are explicitly meant never to rewrite.
 #
-# - CHANGELOG.md/RELEASES.md/decisions/*.md are this repo's own append-only
-#   historical records (AGENTS.md's own rules) — they legitimately cite a
-#   path as it existed when that entry was written, even after a later
-#   refactor renames or deletes it. Excluded rather than fixed, since
-#   "fixing" one would mean rewriting history these files are explicitly
-#   meant never to rewrite.
-# - AGENTS.md/docs/cli-reference.md/docs/config-reference.md each carry at
-#   least one confirmed false positive with no available fix: a
-#   `decisions/NNNN-slug.md` naming-template placeholder, a `~`/`/`-prefixed
-#   path outside the repo entirely (a user's home directory, a Docker
-#   daemon's own host) that the check's own regex strips before resolving —
-#   filed upstream as claims#37 — and a hypothetical filename in a "for
-#   example" illustration that was never meant to exist in this repo.
-#   Revisit once #37 lands; the home/absolute-path case is the only one of
-#   the three with an actual proposed fix.
+# The other false positives this check used to hit here (a `~`/`/`-prefixed
+# path outside the repo, and two hypothetical/template filenames in
+# AGENTS.md and docs/config-reference.md) no longer need a file-wide
+# exclusion: claims#37 fixed the home/absolute-path case, and the
+# `<!-- example -->` inline marker (claims#39) covers the other two
+# in-place, right next to each mention.
+[check-file-refs]
 exclude = [
     "CHANGELOG.md",
     "RELEASES.md",
     "decisions/*.md",
-    "AGENTS.md",
-    "docs/cli-reference.md",
-    "docs/config-reference.md",
 ]
 
 [restatement]
