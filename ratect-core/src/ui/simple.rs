@@ -18,7 +18,7 @@
 //! deliberately ignored — only their start/finish milestones print). The
 //! mode every non-interactive console gets by default.
 
-use super::{Console, EventSink, OnceFlag, TaskEvent};
+use super::{Color, Console, EventSink, OnceFlag, TaskEvent};
 use std::sync::Mutex;
 
 pub struct SimpleEventLogger {
@@ -131,6 +131,15 @@ impl EventSink for SimpleEventLogger {
                 }
                 self.console
                     .println(&format!("{container} has completed all setup commands."));
+            }
+            TaskEvent::DependencyExitedUnexpectedly {
+                container,
+                exit_code,
+            } => {
+                self.console.println(&format!(
+                    "{} {container} exited unexpectedly with exit code {exit_code}.",
+                    self.console.colored(Color::Yellow, "Warning:")
+                ));
             }
             TaskEvent::RunningTaskContainer { container, command } => {
                 let line = match command {

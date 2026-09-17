@@ -281,6 +281,19 @@ impl EventSink for InterleavedEventLogger {
                     "Container has completed all setup commands.",
                 );
             }
+            TaskEvent::DependencyExitedUnexpectedly {
+                container,
+                exit_code,
+            } => {
+                self.print_for_container(
+                    &state,
+                    &container,
+                    &format!(
+                        "{} exited unexpectedly with exit code {exit_code}.",
+                        self.console.colored(Color::Yellow, "Warning:")
+                    ),
+                );
+            }
             TaskEvent::RunningTaskContainer { container, command } => {
                 let line = match command {
                     Some(command) => format!("Running {command}..."),

@@ -177,6 +177,61 @@ fn task_container_start_freezes_the_block_behind_a_blank_line() {
 }
 
 #[test]
+fn dependency_exiting_while_the_block_is_still_live_repaints_that_line_in_place() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("app", Some("app:1"), &["db"], true),
+            info("db", Some("postgres:15"), &[], false),
+        ],
+    });
+    logger.post(TaskEvent::DependencyExitedUnexpectedly {
+        container: "db".into(),
+        exit_code: 137,
+    });
+    // In place — the exact same two-line block shape as any other
+    // in-place update (see `a_progress_event_repaints_the_block_in_place`),
+    // not an extra line appended: an unrelated `println` here would
+    // desync every repaint after it, the same hazard TODO.md's fancy
+    // cursor-narrowing item names, just self-inflicted instead of
+    // terminal-inflicted.
+    assert!(
+        buffer.contents().ends_with(
+            "\x1b[2A\
+             \r\x1b[2Kdb: exited unexpectedly with exit code 137\n\
+             \r\x1b[2Kapp: ready to pull image app:1\n"
+        ),
+        "{}",
+        buffer.contents()
+    );
+}
+
+#[test]
+fn dependency_exiting_after_the_block_has_frozen_prints_a_plain_warning() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: Some("cargo test".into()),
+    });
+    let after_freeze = buffer.contents();
+
+    logger.post(TaskEvent::DependencyExitedUnexpectedly {
+        container: "db".into(),
+        exit_code: 137,
+    });
+
+    // Appended as a plain line, not a repaint — nothing here should touch
+    // the already-frozen block above it.
+    assert_eq!(
+        buffer.contents(),
+        format!("{after_freeze}Warning: db exited unexpectedly with exit code 137.\n")
+    );
+}
+
+#[test]
 fn dependency_becoming_healthy_unblocks_waiting_lines() {
     let (logger, buffer) = logger_with_width(120);
     logger.post(TaskEvent::TaskGraphResolved {

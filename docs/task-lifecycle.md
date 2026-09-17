@@ -242,6 +242,17 @@ why an unhealthy verdict can't arrive quickly) is Docker's own verdict lifecycle
 see [How Docker reaches its verdict](config-reference.md#how-docker-reaches-its-verdict)
 in the config reference.
 
+Not re-checking health doesn't mean staying silent, though: a dependency that has
+already become ready and then exits on its own — while the task's own command, or a
+later dependency's own health/setup wait, is still going — prints a warning naming
+the container and its exit code, in every output mode. Without it, that container's
+own death would otherwise surface later as a confusing symptom in whatever *depended*
+on it (a connection refused, a timeout) rather than the real cause. This is a
+notification only — the run isn't failed or stopped because of it — and it's never
+printed for a container cleanup itself stops: Ratect stops watching a dependency for
+this the moment the task's own execution finishes, strictly before cleanup ever
+touches a container.
+
 More generally, within one task's resolution *any* dependency shared by two others —
 not just a leaf like `cache` above — is only ever started once, no matter how many
 dependents reach it or how deep in the graph they sit, including when they reach it

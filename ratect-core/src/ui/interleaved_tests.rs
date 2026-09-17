@@ -249,6 +249,21 @@ fn task_level_lines_use_the_task_name_prefix() {
 }
 
 #[test]
+fn dependency_exiting_unexpectedly_prints_a_warning_with_its_own_prefix() {
+    let (logger, buffer) = logger();
+    start_task(&logger, vec![info("db", Some("postgres:15"), None)]);
+    logger.post(TaskEvent::DependencyExitedUnexpectedly {
+        container: "db".into(),
+        exit_code: 137,
+    });
+    assert_eq!(
+        buffer.contents(),
+        "test | Running test...\n\
+             db   | Warning: exited unexpectedly with exit code 137.\n"
+    );
+}
+
+#[test]
 fn line_buffer_splits_on_newlines_and_strips_carriage_returns() {
     let mut buffer = LineBuffer::new();
     let mut lines: Vec<String> = Vec::new();

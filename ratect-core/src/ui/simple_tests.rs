@@ -85,6 +85,19 @@ fn renders_lifecycle_milestones_as_plain_lines() {
 }
 
 #[test]
+fn dependency_exiting_unexpectedly_prints_a_warning() {
+    let (logger, buffer) = logger();
+    logger.post(TaskEvent::DependencyExitedUnexpectedly {
+        container: "db".into(),
+        exit_code: 137,
+    });
+    assert_eq!(
+        buffer.contents(),
+        "Warning: db exited unexpectedly with exit code 137.\n"
+    );
+}
+
+#[test]
 fn progress_detail_is_ignored() {
     let (logger, buffer) = logger();
     logger.post(TaskEvent::ImagePullProgress {

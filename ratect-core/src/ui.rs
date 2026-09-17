@@ -192,6 +192,17 @@ pub enum TaskEvent {
     SetupCommandsCompleted {
         container: String,
     },
+    /// A dependency that had already become ready (healthy, setup commands
+    /// done) exited on its own — while the task's own command, or a later
+    /// dependency's own health/setup wait, was still going. Never posted
+    /// for a container that cleanup itself stops: the engine stops
+    /// watching a dependency for this the moment the task's own run
+    /// finishes, strictly before cleanup ever touches a container, so a
+    /// deliberate stop can never be misreported as this.
+    DependencyExitedUnexpectedly {
+        container: String,
+        exit_code: i64,
+    },
     /// The task's own container is about to run. `command` is the resolved
     /// command (`run.command` falling back to the container's own), `None`
     /// when the image's default `CMD` runs instead.

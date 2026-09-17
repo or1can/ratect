@@ -109,6 +109,13 @@ struct FakeContainerRuntime {
     // overlaps with the still-in-flight run rather than happening
     // strictly before or after it (see `with_run_delay`).
     run_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
+    // Container id (keyed the same way as `health_check_delays`) ->
+    // `(delay, exit_code)` `wait_for_container_exit` resolves with — see
+    // `with_dependency_exit`. Absent means "never exits on its own" (the
+    // default for every container): `wait_for_container_exit` then never
+    // resolves, matching a dependency that just keeps running until
+    // something else stops it.
+    dependency_exits: Arc<Mutex<HashMap<String, (std::time::Duration, i64)>>>,
     /// When set, every `stop_and_remove_container` records an interrupt
     /// *before* doing its own work — the only way to land one in the
     /// middle of cleanup deterministically, since cleanup against this
@@ -137,6 +144,7 @@ impl Default for FakeContainerRuntime {
             exec_delays: Default::default(),
             health_check_delays: Default::default(),
             run_delays: Default::default(),
+            dependency_exits: Default::default(),
             interrupt_on_stop: Default::default(),
         }
     }
@@ -277,6 +285,22 @@ impl FakeContainerRuntime {
             .lock()
             .unwrap()
             .insert(format!("sidecar-id-{name}"), delay);
+        self
+    }
+
+    /// Makes `wait_for_container_exit` for dependency `name` resolve after
+    /// `delay` with `exit_code` — simulates the dependency dying on its
+    /// own after becoming ready, instead of the default (never resolving,
+    /// matching a dependency that just keeps running until cleanup stops
+    /// it). Used with `#[tokio::test(start_paused = true)]` to prove this
+    /// is detected while something else (the task's own command, another
+    /// dependency's own health/setup wait) is still going, not just after
+    /// everything else already finished.
+    fn with_dependency_exit(self, name: &str, delay: std::time::Duration, exit_code: i64) -> Self {
+        self.dependency_exits
+            .lock()
+            .unwrap()
+            .insert(format!("sidecar-id-{name}"), (delay, exit_code));
         self
     }
 
@@ -590,6 +614,26 @@ impl ContainerRuntime for FakeContainerRuntime {
             );
         }
         Ok(())
+    }
+
+    async fn wait_for_container_exit(&self, container_id: &str) -> Result<i64> {
+        let configured = self
+            .dependency_exits
+            .lock()
+            .unwrap()
+            .get(container_id)
+            .copied();
+        match configured {
+            Some((delay, exit_code)) => {
+                tokio::time::sleep(delay).await;
+                Ok(exit_code)
+            }
+            // Never exits on its own — matching a real container that just
+            // keeps running until something else stops it. Aborted by the
+            // engine rather than ever resolved, for every dependency this
+            // fake wasn't told to make exit.
+            None => std::future::pending().await,
+        }
     }
 
     async fn exec_in_container(
@@ -2865,6 +2909,55 @@ fn config_with_database_dependency(configure: impl FnOnce(&mut Container)) -> Co
         config_variables: None,
         forbid_telemetry: None,
     }
+}
+
+/// The class of bug this proves isn't happening: a fake that can only
+/// express a dependency exiting at an *expected* moment (e.g. in response
+/// to cleanup) would make this untestable, since there would be no way to
+/// distinguish "detected while something else was still going" from
+/// "detected because the run had already finished anyway" (see AGENTS.md's
+/// note on coverage shaped by the test harness). `with_dependency_exit`
+/// exists so this fake can actually express the case: the dependency exits
+/// mid-run, at a moment the engine did not ask for and does not expect.
+#[tokio::test(start_paused = true)]
+async fn dependency_exiting_after_ready_warns_while_the_task_container_still_runs() {
+    let config = config_with_database_dependency(|_| {});
+    let docker = FakeContainerRuntime::default()
+        // Long enough that the exit below is unambiguously mid-run, not a
+        // race against the task container's own (near-instant, on this
+        // fake) completion.
+        .with_run_delay("app", std::time::Duration::from_secs(10))
+        .with_dependency_exit("database", std::time::Duration::from_secs(1), 137);
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        config,
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let events = sink.events();
+    let warning_index = events
+        .iter()
+        .position(|e| {
+            matches!(
+                e,
+                TaskEvent::DependencyExitedUnexpectedly { container, exit_code }
+                    if container == "database" && *exit_code == 137
+            )
+        })
+        .expect("the dependency's unexpected exit should have been reported");
+    let finished_index = events
+        .iter()
+        .position(|e| matches!(e, TaskEvent::TaskFinished { .. }))
+        .expect("the task should still finish");
+
+    assert!(
+        warning_index < finished_index,
+        "the warning should arrive while the task container is still running, not after: {events:?}"
+    );
 }
 
 #[tokio::test]

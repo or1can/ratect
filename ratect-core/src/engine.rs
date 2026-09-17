@@ -347,9 +347,14 @@ fn format_task_suggestions(tasks: &HashMap<String, Task>, name: &str) -> String 
     format!(" Did you mean {}?", human_readable_list(&quoted, "or"))
 }
 
-pub struct TaskEngine<D: ContainerRuntime + Send + Sync> {
+pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     config: Config,
-    docker: D,
+    /// `Arc`, not owned by value: `ensure_container_ready` needs to hand a
+    /// clone into a detached `tokio::spawn`ed dependency-exit watcher (see
+    /// `TaskEvent::DependencyExitedUnexpectedly`) that outlives its own
+    /// call frame. Every other call site keeps calling `self.docker.foo()`
+    /// unchanged — method resolution derefs through the `Arc` for free.
+    docker: Arc<D>,
     executed_tasks: Mutex<HashSet<String>>,
     /// Image name -> the shared, memoized pull outcome for that name, so an
     /// image referenced by multiple containers (across tasks, or by
@@ -568,7 +573,7 @@ impl Default for TaskEngineSettings {
     }
 }
 
-impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
+impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// `event_sink`/`interrupt` are constructor arguments, not opt-in
     /// settings, like `docker` itself — see their own field doc comments
     /// for why. Everything else opt-in still goes through [`with_settings`]
@@ -585,7 +590,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
     ) -> Self {
         Self {
             config,
-            docker,
+            docker: Arc::new(docker),
             executed_tasks: Mutex::new(HashSet::new()),
             pulled_images: Mutex::new(HashMap::new()),
             built_images: Mutex::new(HashMap::new()),
@@ -1426,6 +1431,13 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         // graph now start concurrently and each registers itself here from
         // its own task.
         let running_sidecars: Mutex<HashMap<String, String>> = Mutex::new(HashMap::new());
+        // Every dependency-exit watcher `ensure_container_ready` spawns
+        // once a dependency reaches `Ready` (see
+        // `TaskEvent::DependencyExitedUnexpectedly`), collected so they can
+        // all be aborted the moment this run's own main body finishes —
+        // strictly before cleanup ever stops a container, so a deliberate
+        // stop is never misreported as one of these.
+        let dependency_watchers: Mutex<Vec<tokio::task::JoinHandle<()>>> = Mutex::new(Vec::new());
         // Memoizes each container's own readiness future for this one task
         // execution — see `ensure_container_ready`/`ReadyCell`. Reset per
         // task (unlike `pulled_images`/`built_images`, which persist for the
@@ -1544,6 +1556,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                     &no_proxy_entries,
                     task.customise.as_ref(),
                     &run_labels,
+                    &dependency_watchers,
                 )
             }))
             .await?;
@@ -1701,6 +1714,12 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
             .map(|interrupted| interrupted.signal);
         let task_container_id = task_container_id.into_inner().unwrap();
         let running_sidecars = running_sidecars.into_inner().unwrap();
+        // Stop watching before cleanup below ever stops a container — see
+        // `dependency_watchers`' own doc comment for why the ordering
+        // matters, not just that it happens.
+        for watcher in dependency_watchers.into_inner().unwrap() {
+            watcher.abort();
+        }
         // `Some` only if network resolution inside the block above actually
         // succeeded — `None` both when `--use-network` was given (we never
         // own that network) and when our own creation failed before ever
@@ -1924,6 +1943,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
         no_proxy_entries: &std::collections::BTreeSet<String>,
         customisations: Option<&HashMap<String, TaskContainerCustomisation>>,
         run_labels: &crate::labels::RunLabels,
+        dependency_watchers: &Mutex<Vec<tokio::task::JoinHandle<()>>>,
     ) -> Result<String> {
         let cell = get_or_create_cell(cells, name);
         let result = cell
@@ -1941,6 +1961,7 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                             no_proxy_entries,
                             customisations,
                             run_labels,
+                            dependency_watchers,
                         )
                     }))
                     .await?;
@@ -2117,6 +2138,46 @@ impl<D: ContainerRuntime + Send + Sync> TaskEngine<D> {
                             container: name.to_string(),
                         });
                     }
+
+                    // Now, and only now: ready is the point after which an
+                    // exit is news rather than expected (still starting, or
+                    // still in its own health/setup wait, both already
+                    // report clearly on their own). Detached, not part of
+                    // this future's own result — this dependency being
+                    // ready doesn't wait on it ever exiting; collected in
+                    // `dependency_watchers` purely so the run can abort it
+                    // later, once watching would otherwise risk catching
+                    // cleanup's own deliberate stop instead of a real one.
+                    let watcher = {
+                        let docker = Arc::clone(&self.docker);
+                        let event_sink = Arc::clone(&self.event_sink);
+                        let watched_id = container_id.clone();
+                        let watched_name = name.to_string();
+                        tokio::spawn(async move {
+                            match docker.wait_for_container_exit(&watched_id).await {
+                                Ok(exit_code) => {
+                                    event_sink.post(TaskEvent::DependencyExitedUnexpectedly {
+                                        container: watched_name,
+                                        exit_code,
+                                    });
+                                }
+                                // Aborted before this ever resolves in the
+                                // overwhelmingly common case (the run
+                                // finishing normally) — a real `Err` here
+                                // means the wait itself failed (a daemon
+                                // hiccup, the container vanishing out from
+                                // under this watcher some other way), which
+                                // isn't worth failing anything over but is
+                                // worth a trace rather than none at all.
+                                Err(error) => tracing::debug!(
+                                    container = watched_name.as_str(),
+                                    error = ?error,
+                                    "dependency-exit watcher ended without a verdict"
+                                ),
+                            }
+                        })
+                    };
+                    dependency_watchers.lock().unwrap().push(watcher);
 
                     Ok(container_id)
                 }
