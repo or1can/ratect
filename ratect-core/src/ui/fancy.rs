@@ -536,7 +536,16 @@ impl EventSink for FancyEventLogger {
                 state.last_rendered = None;
                 // A freshly resolved graph (re)starts the live display —
                 // not just `TaskStarting` — so the block updates even for
-                // an event stream that skips the task-level preamble.
+                // an event stream that skips the task-level preamble. This
+                // re-arm looks fragile in isolation (a bare bool, set and
+                // cleared across every handler in this `match`), but it's
+                // unreachable once the block has actually frozen: the
+                // engine always posts this event immediately after
+                // `TaskStarting`, which already resets the whole `State`
+                // above, for every task — so no `TaskGraphResolved` can
+                // ever arrive after a freeze under the current
+                // event-posting order. If that ordering ever changes, this
+                // comment is the thing that stops being true.
                 state.keep_updating_startup = true;
                 self.repaint_startup(&mut state);
             }

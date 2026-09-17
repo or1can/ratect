@@ -17,6 +17,14 @@
 //! live-updating progress detail at all (pull/build progress events are
 //! deliberately ignored — only their start/finish milestones print). The
 //! mode every non-interactive console gets by default.
+//!
+//! This means a non-interactive `ratect`/`ratect-compat`'s default stdout is
+//! no longer pipe-pure: these milestone lines interleave with the task
+//! container's own raw output on the same stdout, matching Batect's own
+//! `simple` mode (a deliberate, CHANGELOG-documented parity change,
+//! 0.16.0) rather than a stricter container-output-only default. `-o quiet`
+//! is the documented escape hatch for a script that needs exact
+//! container-output-only stdout.
 
 use super::{Color, Console, EventSink, OnceFlag, TaskEvent};
 use std::sync::Mutex;
