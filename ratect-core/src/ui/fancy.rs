@@ -358,15 +358,32 @@ impl FancyEventLogger {
     /// Manually verified against both the bug and the fix, via
     /// `ratect-compat/tests/fixtures/manual-terminal-resize.yml`'s repro —
     /// the actual reflow is the emulator's own rendering, which no
-    /// headless harness here can reproduce or assert against. Pre-fix
-    /// `ratect-compat` 0.29.0, narrowing mid-run in both macOS Terminal and
-    /// Warp: the width change undercounted the wrapped "...waiting for it
-    /// to become healthy..." line's real row count, so the next repaint's
-    /// cursor-up landed one row short and its "ready" transition printed as
-    /// a stray extra line instead of replacing the one above it. Built from
-    /// this fix, same repro, macOS Terminal: a blank line, then the whole
-    /// block reprinted fresh below the old one, with no corruption — the
-    /// fresh-block fallback as designed.
+    /// headless harness here can reproduce or assert against.
+    ///
+    /// Pre-fix `ratect-compat` 0.29.0, narrowing mid-run in both macOS
+    /// Terminal and Warp: a moderate narrowing (wrapping the
+    /// "...waiting for it to become healthy..." line once) undercounted
+    /// that line's real row count, so the next repaint's cursor-up landed
+    /// one row short and its "ready" transition printed as a stray extra
+    /// line instead of replacing the one above it. A much narrower window
+    /// (several wraps) reproduced the sharper failure this fix actually
+    /// targets: one container's own "ready" transition overwrote a
+    /// *different* container's still-live line — genuine cross-line
+    /// corruption, not just a stray extra one.
+    ///
+    /// Built from this fix, same repro, macOS Terminal: a blank line, then
+    /// the whole block reprinted fresh below the old one, no corruption —
+    /// the fresh-block fallback as designed. Also tried narrow-then-restore
+    /// to the original width before the next repaint (the gap this
+    /// function's own doc above admits isn't fully closed): 0.29.0 showed
+    /// no visible issue (this terminal's own reflow-then-unflow happened to
+    /// restore the original layout exactly, for this run), and this fix
+    /// took the fresh-block fallback anyway rather than trusting the
+    /// matching width reading — an over-cautious duplicate block in that
+    /// run, not a wrong one. Neither observation *proves* the gap is
+    /// harmless in general (still depends on exact resize timing and the
+    /// terminal's own reflow implementation), but it didn't produce
+    /// corruption in this test either.
     fn repaint_startup(&self, state: &mut State) {
         if state.lines.is_empty() {
             return;
