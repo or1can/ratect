@@ -313,6 +313,13 @@ Nothing without Ratect's own labels is ever listed or removed, `--all-projects`
 included: containers started by other tools, and Docker's built-in `bridge`/`host`/
 `none` networks, are invisible to both commands.
 
+**What this doesn't cover**: cache volumes/directories are [`caches`](#caches-options)'
+territory, not `resources`' — they're a deliberate cache, not a leftover. Likewise the
+Git include cache under `~/.ratect/incl` is [`includes`](#includes-options)' own
+command. Built images are tagged `<project>-<container>` and reused/overwritten on
+every run rather than tracked as a resource — also a deliberate cache. Tmpfs mounts
+and exec instances die with their container, so there's nothing left to find.
+
 ## `config`
 
 `ratect config validate` is `doctor`'s configuration half on its own — it loads the

@@ -6,7 +6,8 @@ This directory vendors test projects from **Batect's own journey-test suite**
 own acceptance tests assert. It is the strongest evidence available that
 `ratect-compat` is a drop-in replacement: the scenarios are Batect's, not ours,
 so they cover cases we wouldn't have thought to test — the whole point (see
-`ROADMAP.md`'s conformance section, the run-up to `ratect-compat` 1.0.0).
+[`ROADMAP.md`'s Batect Parity section](../../../ROADMAP.md#batect-parity), the
+run-up to `ratect-compat` 1.0.0).
 
 ## Provenance and licence
 

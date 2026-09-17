@@ -39,21 +39,6 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
 
 ## Maintainability / latent hazards
 
-3. ~~**`CleanupStarting` doesn't post under `--use-network` with no
-   dependencies** (`ratect-core/src/engine.rs`) — correct/honest
-   behavior (nothing is actually cleaned up in that case, and
-   `TaskEvent::CleanupStarting`'s own doc comment documents
-   non-posting for exactly this), not a bug. Flagged only because
-   `tests/cli.rs`'s `task_output` helper's fallback (`end =
-   lines.len()` when no `"Cleaning up..."` line is found) would
-   silently sweep the summary line into an extracted chunk if a future
-   test combined `--use-network` with `task_output`. No existing test
-   is affected — the two current `--use-network` tests never call it.~~
-   — gone in 0.25.0: unifying cleanup ownership made the task's own
-   container the engine's to remove, so such a run now has something to
-   report and posts the stage like any other. The `task_output` fallback
-   it warned about is no longer reachable that way.
-
 9. **The `claims` plugin's checks have no CI-level backstop, only the local
    `git commit` hook** (`decisions/0009`) — a PR opened without Claude Code
    (a plain shell commit, another editor's Git integration, or a bot account
@@ -63,23 +48,6 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
    this, but `or1can/claims` has no tagged releases yet to pin a CI checkout
    against — revisit once it does, rather than pinning CI to an arbitrary
    commit SHA in the meantime.
-
-10. ~~**`executable-claims` runs automatically on every `git commit`, sweeping
-    the whole tree for a `<!-- verify: -->` marker and executing whatever it
-    names** (`decisions/0009`) — a malicious branch/PR could plant one
-    anywhere and have it run, with a maintainer's full local privileges, the
-    next time they commit anything while that branch is checked out. Filed
-    upstream as [or1can/claims#15](https://github.com/or1can/claims/issues/15)
-    (diff-scoping or a per-check hook opt-out); revisit once one ships.
-    Meanwhile: don't run `git commit` while reviewing an untrusted branch in
-    a Claude Code session with the plugin enabled.~~
-    — closed upstream: `executable-claims` now denies execution by default,
-    gated on an exact-string grant in a git-ignored, per-machine
-    `claims.local.toml` (`docs/adr/0001-executable-claims-deny-by-default.md`
-    in the plugin's own repo). Committed config can no longer authorize
-    execution on its own, closing the reported path rather than narrowing
-    it. This repo's own setup is in `AGENTS.md`'s Tooling & CI section and
-    `decisions/0009`.
 
 11. **`ci.yml`'s `Release Pipeline Config` check (ratect#34) isn't in the
     `main branch protection` ruleset's required status checks** — it runs
@@ -101,9 +69,30 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
     (ratect#38); fixing it is a `dist-workspace.toml` config change, out
     of scope for a docs ticket.
 
+13. **No confirmation prompt on `ratect resources clean --all-projects`**
+    (`ratect/src/main.rs`) — the one thing `list`-before-`clean` can't catch
+    is typing the dangerous command by accident, which only a prompt does,
+    since a dry run only helps if you remembered to run it first. Deferred
+    rather than rejected when the verb shipped ([0.2.0](RELEASES.md#ratect)):
+    it would be the first interactive prompt in either binary (Batect has
+    none, so there's no precedent), it needs a `--yes` escape for CI, and the
+    two-layer guard on what `--all-projects` can even reach already removes
+    the catastrophic version of the mistake. Worth revisiting on the first
+    report of a near-miss.
+
+14. **`resources` can't distinguish a concurrently-running task's containers
+    from an orphan** (`ratect-core/src/resources.rs`) — they're labelled
+    identically, because until the run ends they *are* the same thing, and
+    the daemon can't say whether some other `ratect` process still cares
+    about a container. `list` reporting age and `clean` taking
+    `--older-than` is the honest mitigation; claiming to detect liveness
+    would be a lie. If this bites in practice, the next step would be a
+    heartbeat (a running invocation touching its own resources
+    periodically) rather than any attempt to infer liveness after the fact.
+
 ## Test coverage
 
-4. **`tests/cli.rs`'s `task_output` helper weakens ~18 converted e2e
+4. **`ratect-compat/tests/cli.rs`'s `task_output` helper weakens ~18 converted e2e
    assertions** — replaced `assert_eq!(stdout.trim(), expected)` (whole-
    stdout equality) with a windowed extract between the last
    `Running ... in ...` milestone and `Cleaning up...`. Stray output
@@ -116,7 +105,7 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
    but worth a second look.
 
 5. **`task_output`'s frame-finding heuristic is fragile**
-   (`tests/cli.rs`) — `rposition` of a line matching
+   (`ratect-compat/tests/cli.rs`) — `rposition` of a line matching
    `starts_with("Running ") && contains(" in ") && ends_with("...")`
    can match a line the *container itself* printed (e.g.
    `"Running tests in release mode..."`), silently truncating the
@@ -129,7 +118,7 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
 ## Efficiency
 
 6. **`Console`'s `std::sync::Mutex` can block tokio worker threads on a
-    stalled stdout** (`ratect-core/src/ui/mod.rs`) — `post()` runs
+    stalled stdout** (`ratect-core/src/ui.rs`) — `post()` runs
     synchronously from tokio worker threads, so a stalled stdout (closed
     pipe reader, `Ctrl-S`'d terminal) blocks whichever holds the Console
     mutex mid-write and queues every concurrent poster behind it. (The
@@ -186,18 +175,10 @@ recorded so nobody re-investigates them from scratch.
 
 ---
 
-# ratect 0.3.0 native config format review
-
-Findings from the focused review of the 0.3.0 native TOML config work
-(`git diff 5023a9d..HEAD`) — no correctness bugs found; all findings (a
-handful of papercuts plus six test-coverage gaps) closed. See `git log`.
-
----
-
 # ratect-core/src/docker.rs: a second wide-positional-seam cluster
 
 `docker.rs`'s image/BuildKit helpers immediately above the connection block
-that became `docker/connection.rs` in 0.6.0 (`split_image_reference`,
+that became `ratect-core/src/docker/connection.rs` in 0.6.0 (`split_image_reference`,
 `docker_buildkit_env_value`, `select_builder_version`) are the same shape of
 finding the architecture review that motivated that split named — a
 self-contained concept sharing a module with container lifecycle by history,

@@ -119,9 +119,9 @@ the four `tools/` scripts:
   config (this repo's own `claims.toml`, or a PR-planted marker/companion
   script) can no longer authorize execution on its own, closing the exact
   "malicious branch + unrelated commit" path described above rather than
-  narrowing its trigger. See the plugin's own
-  `docs/adr/0001-executable-claims-deny-by-default.md` and `AGENTS.md`'s
-  Tooling & CI section ("`executable-claims` denies execution by default")
+  narrowing its trigger. See the plugin's own [deny-by-default
+  ADR](https://github.com/or1can/claims/blob/main/docs/adr/0001-executable-claims-deny-by-default.md)
+  and `AGENTS.md`'s Tooling & CI section ("`executable-claims` denies execution by default")
   for this repo's own setup. The "avoid running `git commit` while an untrusted
   branch is checked out" caution is now defense-in-depth, not the primary
   mitigation.

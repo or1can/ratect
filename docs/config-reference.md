@@ -105,6 +105,51 @@ config variable](#built-in-config-variable-batectproject_directory) — which al
 resolves to the root's directory regardless of which file a container is defined in —
 to reference the root project directory explicitly from an included file.
 
+For example, a project laid out as:
+
+```
+myproject/
+├── batect.yml
+├── scripts/
+└── containers/
+    ├── extra.yml
+    └── data/
+```
+
+Root `batect.yml`:
+
+```yaml
+project_name: myproject
+include:
+  - containers/extra.yml
+tasks:
+  my-task:
+    run:
+      container: my-other-container
+```
+
+`containers/extra.yml`:
+
+```yaml
+containers:
+  my-other-container:
+    image: alpine:1.2.3
+    volumes:
+      # containers/extra.yml's own directory is containers/, so this
+      # resolves to myproject/containers/data — not myproject/data.
+      - ./data:/data
+      # Always the root project directory, regardless of which file this
+      # is written in — so this is myproject/scripts, not
+      # myproject/containers/scripts.
+      - <{batect.project_directory}/scripts:/scripts
+```
+
+Running `ratect-compat my-task` from `myproject/` starts `my-other-container`
+with those two volumes mounted exactly as resolved above — `my-task` itself
+lives in the root file, but the container it runs could equally have been
+declared there instead of in the include; only the volume paths' own
+resolution depends on which file declares the container.
+
 ### Local file includes
 
 A local include's path is resolved relative to the directory of the file that
@@ -218,19 +263,6 @@ out to it (`git clone --quiet --no-checkout` followed by
 submodules and any Git configuration (credentials, `.gitconfig` rewrites, etc.) that
 your normal `git clone` already relies on work the same way here.
 
-For example, given `containers/extra.yml` (included from the root `batect.yml`):
-
-```yaml
-containers:
-  my-other-container:
-    image: alpine:1.2.3
-    volumes:
-      # Resolves relative to containers/, not the root project directory.
-      - ./data:/data
-      # Always the root project directory, regardless of where this file lives.
-      - <{batect.project_directory}/scripts:/scripts
-```
-
 ## Container
 
 ```yaml
@@ -262,7 +294,7 @@ containers:
 | `command` | string | no | Overrides the image's own default `CMD`. Tokenized into literal argv (quote/backslash-aware whitespace splitting, no shell involved — matching Batect's own tokenizer exactly). No [expression](#expressions) support. Applies as-is to a dependency/sidecar container; a task's own container's `command` can be further overridden by the task-level `run.command` — see [TaskRun](#taskrun). |
 | `entrypoint` | string | no | Overrides the image's own `ENTRYPOINT`. Tokenized into literal argv the same way `command` is (quote/backslash-aware whitespace splitting, no shell involved — matching Batect's own tokenizer exactly). No [expression](#expressions) support. A task's own container's `entrypoint` can be further overridden by the task-level `run.entrypoint` — see [TaskRun](#taskrun). |
 | `labels` | map of string → string | no | Docker labels applied to the container. Container level only — no task-level `run` override. No [expression](#expressions) support. |
-| `capabilities_to_add` | list of strings | no | Linux capabilities to add beyond Docker's own default set (Docker's `--cap-add`), e.g. `NET_ADMIN`. Validated at config-load time against a fixed list based on Batect's own `Capability` enum plus `BPF`/`CHECKPOINT_RESTORE`/`PERFMON` (added to Docker after Batect's last release — see [Differences from Batect](differences-from-batect.md#container-fields)) — an unknown name is rejected with a clear error. Container level only. No expression support. |
+| `capabilities_to_add` | list of strings | no | Linux capabilities to add beyond Docker's own default set (Docker's `--cap-add`), e.g. `NET_ADMIN`. Validated at config-load time against a fixed list based on Batect's own `Capability` enum plus `BPF`/`CHECKPOINT_RESTORE`/`PERFMON` (added to Docker after Batect's last release) — an unknown name is rejected with a clear error. Container level only. No expression support. |
 | `capabilities_to_drop` | list of strings | no | Linux capabilities to drop from Docker's own default set (Docker's `--cap-drop`), e.g. `CHOWN`. Same validation/scope as `capabilities_to_add`. |
 | `privileged` | boolean | no | Runs the container with extended (nearly all host) privileges — Docker's `--privileged`. Defaults to `false`. Container level only. No [expression](#expressions) support. |
 | `shm_size` | string or integer | no | The size of `/dev/shm` — Docker's `--shm-size`. Accepts Batect's own size-string format (`"128"`, `"128b"`, `"128k"`, `"128m"`, `"128g"` — a bare number means bytes) or a plain YAML integer (also bytes). Defaults to Docker's own default (64 MiB). Container level only. No expression support. |
@@ -376,7 +408,9 @@ task's own container, as a dependency, or by more than one task) — but never r
 - Built images aren't cleaned up automatically — since the tag is reused, the image a
   build replaces becomes a dangling (`<none>`) image rather than disappearing, and
   accumulates until manually pruned (`docker image prune`), same as repeatedly running
-  a plain `docker build -t ... .` would leave behind.
+  a plain `docker build -t ... .` would leave behind. Docker's own build cache is
+  likewise untouched by Ratect. Matches Batect exactly — its `BuildImageStepRunner`/
+  `CleanupStagePlanner` have no cache-control flag or image-removal step either.
 - Ratect has no `--output` mode yet, so build progress is logged rather than
   streamed to the console: each build log line is emitted at `debug` level (set
   `RUST_LOG=info,ratect_core=debug` for a live transcript without unrelated
@@ -406,6 +440,21 @@ not the same, and the difference is easy to get surprised by:
 - `Dockerfile` and `.dockerignore` themselves are always included in the build context
   regardless of exclusion patterns, matching Docker's own special-casing (otherwise a
   broad `*` pattern would exclude the file the build needs).
+
+### Private registry credentials
+
+Both pulling an `image` and building one (a Dockerfile `FROM` a private base image)
+resolve credentials from your Docker configuration (`~/.docker/config.json` by
+default, or `DOCKER_CONFIG`, or `--docker-config`) — running `docker login` once
+beforehand is enough, including a keychain-backed store (Docker Desktop/OrbStack's
+default) or a cloud registry's credential helper (ECR/GCR). Building resolves every
+registry your Docker config declares (`auths` and `credHelpers`), since Ratect
+doesn't parse a Dockerfile's `FROM` lines to scope this more precisely.
+
+A registry whose credential helper fails to resolve doesn't block the pull or
+build — a warning names the registry, so a problem with one registry's helper
+can't stop work that never needed it, but also doesn't stay invisible until the
+day that registry actually matters.
 
 ### Volume path resolution
 
@@ -1102,6 +1151,9 @@ drift from what Ratect accepts; the checks it can't express are the cross-field 
 (a task needing `run` or `prerequisites`, port ranges on both sides of a mapping
 covering the same number of ports, `customise` naming a container that's actually in
 the task's graph). Those are still reported by Ratect itself, when you run a task.
+
+Not submitted to [SchemaStore's catalog](https://www.schemastore.org/api/json/catalog.json)
+itself — a possible later step, not done yet.
 
 ## Full example
 

@@ -298,8 +298,7 @@ colliding.
   gives the setup command time to run and report its real result. Also unlike
   Batect: the main command itself is never cancelled early just because the
   readiness gate fails first — it always runs to completion, and the task is still
-  reported as failed overall either way. See [differences from
-  Batect](differences-from-batect.md#container-fields).
+  reported as failed overall either way.
 - **Prerequisite tasks stay sequential, matching Batect exactly** — `prerequisites`
   entries run one after another, each to completion, never concurrently with each
   other or with the task that named them (see "Task ordering" above). This is Batect's
