@@ -49,16 +49,6 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
    against — revisit once it does, rather than pinning CI to an arbitrary
    commit SHA in the meantime.
 
-11. **`ci.yml`'s `Release Pipeline Config` check (ratect#34) isn't in the
-    `main branch protection` ruleset's required status checks** — it runs
-    and reports on every PR (same as `release.yml`'s own `plan` job, which
-    it deliberately duplicates so the signal exists in `ci.yml` at all),
-    but a broken `dist-workspace.toml` shows a red X without actually
-    blocking a merge, same as before #34. Add `Release Pipeline Config` to
-    ruleset `19050737`'s required checks list (a live repo-settings change,
-    left to a maintainer rather than made unilaterally while implementing
-    the ticket) to close the gap #34's own problem statement describes.
-
 12. **Released archives don't include `NOTICE`** — `dist-workspace.toml`
     has no `include`/similar key adding it, so each archive ships
     `LICENSE`/`README.md`/`RELEASES.md` (dist's own defaults) but not the
@@ -121,40 +111,25 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
     stalled stdout** (`ratect-core/src/ui.rs`) — `post()` runs
     synchronously from tokio worker threads, so a stalled stdout (closed
     pipe reader, `Ctrl-S`'d terminal) blocks whichever holds the Console
-    mutex mid-write and queues every concurrent poster behind it. (The
-    redundant explicit `flush()` after every `println` — stdout's own
-    `LineWriter` already flushes on the newline `println` always writes —
-    is already fixed.) A real fix (an mpsc channel draining to one
-    dedicated writer thread/task, the `tracing-appender` pattern) is a
-    bigger change than the other items here; low likelihood in practice
-    (`ratect | head` closing early is the realistic trigger), not
-    attempted yet.
-
-7. **Fancy queries terminal width via a `crossterm::terminal::size()`
-    ioctl on every repaint** — negligible on its own (a non-blocking
-    ioctl, not a syscall that can stall), and the identical-frame skip
-    (already fixed) cuts how often it matters in practice, but the query
-    itself still runs even on a *suppressed* repaint (needed to build the
-    frame the skip then compares). A cached width refreshed via the
-    `SIGWINCH` pattern the codebase already uses for interactive-mode
-    resize (`docker.rs`) would remove it entirely — lowest priority of
-    the efficiency items, given how cheap a single ioctl already is.
-
-## Reuse / duplication
-
-8. **`engine.rs`'s setup-command output splitting re-implements
-    `LineBuffer`'s framing rule** (`.lines()` + `trim_end_matches('\r')`
-    vs. `LineBuffer::push`/`flush`) — not strictly identical on a
-    multi-`\r` edge case (`"a\r\r\n"` → `"a"` today vs. `"a\r"` via
-    `LineBuffer`), and the engine holds an owned `String` where
-    `LineBuffer` wants bytes + an `FnMut` closure, so switching over is
-    arguably *more* ceremony than the current 3 lines. Real but shallow
-    duplication — low priority.
+    mutex mid-write and queues every concurrent poster behind it, which
+    in turn stalls whatever is draining the Docker attach/log stream that
+    feeds it — the same container-blocks-because-nobody's-reading effect
+    Docker's own log buffering produces, just triggered from the host
+    side instead of the daemon side. (The redundant explicit `flush()`
+    after every `println` — stdout's own `LineWriter` already flushes on
+    the newline `println` always writes — is already fixed.) A real fix
+    (an mpsc channel draining to one dedicated writer thread/task, the
+    `tracing-appender` pattern) is a bigger change than the other items
+    here; low likelihood in practice (`ratect | head` closing early is
+    the realistic trigger), not attempted yet.
 
 ## Reviewed, no action needed
 
-These were investigated during the review and found not to need a fix —
-recorded so nobody re-investigates them from scratch.
+These were investigated during the review and found not to need a fix.
+Kept here only when a future reviewer would plausibly rediscover the same
+finding independently and burn time re-deciding it — not every dismissed
+idea earns a permanent entry; a triaged, low-stakes finding unlikely to
+resurface is just dropped once decided, no residue.
 
 - **Fancy's `keep_updating_startup` re-arm on `TaskGraphResolved`**
   (`fancy.rs`) — theoretically fragile (a bare bool set/cleared at five
@@ -172,6 +147,14 @@ recorded so nobody re-investigates them from scratch.
   a defect: this is the deliberate, CHANGELOG-documented Batect-`simple`-
   parity change 0.16.0 exists to make. `-o quiet` is the documented
   escape hatch for scripts that need exact container-output-only stdout.
+- **`engine.rs`'s setup-command output splitting re-implements
+  `LineBuffer`'s framing rule** (`.lines()` + `trim_end_matches('\r')`
+  vs. `LineBuffer::push`/`flush`) — not strictly identical on a
+  multi-`\r` edge case (`"a\r\r\n"` → `"a"` today vs. `"a\r"` via
+  `LineBuffer`), and the engine holds an owned `String` where
+  `LineBuffer` wants bytes + an `FnMut` closure, so switching over is
+  arguably *more* ceremony than the current 3 lines. Real but shallow
+  duplication, not worth unifying.
 
 ---
 
