@@ -1716,7 +1716,13 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         let running_sidecars = running_sidecars.into_inner().unwrap();
         // Stop watching before cleanup below ever stops a container — see
         // `dependency_watchers`' own doc comment for why the ordering
-        // matters, not just that it happens.
+        // matters, not just that it happens. `abort()` only takes effect at
+        // a watcher's next `.await` point, so one that already resolved
+        // `wait_for_container_exit` and is synchronously mid-`post()` right
+        // now can still complete despite this — accepted, since cleanup
+        // hasn't stopped anything yet at this point either way, so the
+        // report that slips through is still a truthful one, just late,
+        // never a deliberate stop misreported as a crash.
         for watcher in dependency_watchers.into_inner().unwrap() {
             watcher.abort();
         }
