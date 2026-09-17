@@ -49,16 +49,6 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
    against — revisit once it does, rather than pinning CI to an arbitrary
    commit SHA in the meantime.
 
-12. **Released archives don't include `NOTICE`** — `dist-workspace.toml`
-    has no `include`/similar key adding it, so each archive ships
-    `LICENSE`/`README.md`/`RELEASES.md` (dist's own defaults) but not the
-    file carrying the `moby/patternmatcher` (Apache-2.0) and
-    andrej-karpathy-skills (MIT) attributions this repo's own `NOTICE`
-    records. Apache-2.0 §4(d) asks for it to travel with redistributions.
-    Found reviewing `docs/installation.md`'s "what's in the archive" claim
-    (ratect#38); fixing it is a `dist-workspace.toml` config change, out
-    of scope for a docs ticket.
-
 13. **No confirmation prompt on `ratect resources clean --all-projects`**
     (`ratect/src/main.rs`) — the one thing `list`-before-`clean` can't catch
     is typing the dangerous command by accident, which only a prompt does,

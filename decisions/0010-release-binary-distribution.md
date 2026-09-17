@@ -182,11 +182,11 @@ keeps from being overwritten on regeneration.
   that exact tag name (`Cannot create ref due to creations being
   restricted`) — a throwaway validation that needs a retry must bump to
   a new suffix (`-rc.2`, `-rc.3`, ...), never reuse the same one.
-- **`Release Pipeline Config` (ci.yml) reports, it doesn't yet gate.**
-  It isn't in the `main branch protection` ruleset's required status
-  checks, so a broken `dist-workspace.toml` shows a red X without
-  blocking a merge — tracked in `TODO.md` (item 11) as a live
-  repo-settings change left to a maintainer, not made unilaterally while
+- **`Release Pipeline Config` (ci.yml) now gates, not just reports.**
+  Added to the `main branch protection` ruleset's required status checks
+  after this ADR's own initial gap (a broken `dist-workspace.toml` used
+  to show a red X without blocking a merge) — a live repo-settings
+  change, made by a maintainer rather than unilaterally while
   implementing the ticket that added the check.
 - **A narrow, accepted attestation gap**: `actions/attest`'s own
   completeness check rejects only a *total* zero-subject count across

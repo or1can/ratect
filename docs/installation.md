@@ -21,8 +21,8 @@ recent tag for the binary you want, then download the archive matching
 your platform from that release's assets.
 
 Each archive extracts to a directory (named after the archive itself)
-containing the binary alongside `LICENSE`/`README.md`/`RELEASES.md` — the
-binary isn't at the archive's top level:
+containing the binary alongside `LICENSE`/`NOTICE`/`README.md`/`RELEASES.md`
+— the binary isn't at the archive's top level:
 
 ```bash
 tar -xf ratect-compat-x86_64-unknown-linux-gnu.tar.xz
