@@ -343,13 +343,25 @@ impl EventSink for InterleavedEventLogger {
 }
 
 /// Turns a container's raw output chunks into whole lines: buffers until a
-/// `\n`, strips a trailing `\r` (a carriage-return progress spinner
-/// collapses to plain lines), and hands each complete line to `emit`.
-/// [`LineBuffer::flush`] emits any unterminated tail when the stream ends.
-/// A port of Batect's `InterleavedContainerOutputSink`'s line splitting;
-/// `docker.rs` drives one of these per streamed container.
+/// `\n` *or* a lone `\r` (one not immediately followed by `\n` — a CRLF pair
+/// still folds to one line break, not two), and hands each complete line to
+/// `emit`. [`LineBuffer::flush`] emits any unterminated tail when the stream
+/// ends. Deliberately **not** a port of Batect's own
+/// `InterleavedContainerOutputSink`, which splits on `\n` alone: a
+/// carriage-return progress redraw (pip/curl/apt-style) would otherwise
+/// produce no output until the stream ends, then dump one giant
+/// concatenated line — see `docs/differences-from-batect.md`'s own entry
+/// for this. `docker.rs` drives one of these per streamed container.
 pub struct LineBuffer {
     pending: Vec<u8>,
+    /// Set on seeing a `\r` whose successor isn't known yet — resolved by
+    /// the very next byte, whichever call it arrives on: `\n` folds into
+    /// one line break (CRLF), anything else means the `\r` was a lone
+    /// flush boundary of its own and that next byte starts fresh content.
+    /// A field rather than a `push`-local, since the two bytes of a CRLF
+    /// pair can land in different chunks (and therefore different `push`
+    /// calls) when Docker's stream happens to split there.
+    pending_cr: bool,
 }
 
 impl LineBuffer {
@@ -357,31 +369,46 @@ impl LineBuffer {
     pub fn new() -> Self {
         Self {
             pending: Vec::new(),
+            pending_cr: false,
         }
     }
 
     pub fn push(&mut self, chunk: &[u8], mut emit: impl FnMut(&str)) {
-        for byte in chunk {
-            if *byte == b'\n' {
-                let mut line = std::mem::take(&mut self.pending);
-                if line.last() == Some(&b'\r') {
-                    line.pop();
+        for &byte in chunk {
+            if self.pending_cr {
+                self.pending_cr = false;
+                if byte == b'\n' {
+                    // CRLF: one line break, not two.
+                    self.flush_line(&mut emit);
+                    continue;
                 }
-                emit(&String::from_utf8_lossy(&line));
-            } else {
-                self.pending.push(*byte);
+                // A lone `\r` — its own flush boundary. `byte` wasn't part
+                // of it, so it still falls through to the match below.
+                self.flush_line(&mut emit);
+            }
+            match byte {
+                b'\r' => self.pending_cr = true,
+                b'\n' => self.flush_line(&mut emit),
+                _ => self.pending.push(byte),
             }
         }
     }
 
     pub fn flush(&mut self, mut emit: impl FnMut(&str)) {
+        // Nothing will ever arrive to resolve a still-pending `\r` at this
+        // point (the stream ended) — the content buffered before it is the
+        // whole story either way, so it's flushed the same as any other
+        // unterminated tail; the `\r` itself is simply dropped, never
+        // emitted.
+        self.pending_cr = false;
         if !self.pending.is_empty() {
-            let mut line = std::mem::take(&mut self.pending);
-            if line.last() == Some(&b'\r') {
-                line.pop();
-            }
-            emit(&String::from_utf8_lossy(&line));
+            self.flush_line(&mut emit);
         }
+    }
+
+    fn flush_line(&mut self, emit: &mut impl FnMut(&str)) {
+        let line = std::mem::take(&mut self.pending);
+        emit(&String::from_utf8_lossy(&line));
     }
 }
 
