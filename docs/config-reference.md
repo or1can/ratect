@@ -128,7 +128,7 @@ tasks:
       container: my-other-container
 ```
 
-`containers/extra.yml`:
+`containers/extra.yml` <!-- example -->:
 
 ```yaml
 containers:
