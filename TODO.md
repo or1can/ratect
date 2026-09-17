@@ -13,19 +13,6 @@ the `engine.rs`/`docker.rs` event-posting refactor, and the `--output`/
 `--no-color` CLI surface) — all fixed; see `git log` for what landed.
 Everything below is unfixed. Grouped by severity; pick up top-down.
 
-## Correctness — cosmetic / narrow
-
-2. **Interleaved: `LineBuffer` only splits on `\n`, buffers CR-only
-   progress redraws unboundedly** (`ratect-core/src/ui/interleaved.rs`) —
-   a container emitting lone-`\r` progress (pip/curl/apt-style redraws)
-   produces no output until the stream ends, then dumps one giant
-   concatenated line. **Verified faithful to Batect's own
-   `InterleavedContainerOutputSink`**, which has the identical `\n`-only
-   splitting behavior — not a Ratect-specific bug. Also mitigated in
-   practice by the interleaved policy's `TERM=dumb` (most tools fall back
-   to newline-based non-interactive output without a real TTY). Low
-   priority; matches upstream Batect exactly.
-
 ## Maintainability / latent hazards
 
 9. **The `claims` plugin's checks have no CI-level backstop, only the local
@@ -125,12 +112,13 @@ resurface is just dropped once decided, no residue.
   escape hatch for scripts that need exact container-output-only stdout.
 - **`engine.rs`'s setup-command output splitting re-implements
   `LineBuffer`'s framing rule** (`.lines()` + `trim_end_matches('\r')`
-  vs. `LineBuffer::push`/`flush`) — not strictly identical on a
-  multi-`\r` edge case (`"a\r\r\n"` → `"a"` today vs. `"a\r"` via
-  `LineBuffer`), and the engine holds an owned `String` where
-  `LineBuffer` wants bytes + an `FnMut` closure, so switching over is
-  arguably *more* ceremony than the current 3 lines. Real but shallow
-  duplication, not worth unifying.
+  vs. `LineBuffer::push`/`flush`) — further apart than shallow duplication
+  now that `LineBuffer` also flushes on a lone `\r` (ratect#74):
+  `"a\r\r\n"` is one line, `"a"`, through `engine.rs`'s splitting, but two
+  through `LineBuffer`, `"a"` and `""`. The engine holds an owned `String`
+  where `LineBuffer` wants bytes + an `FnMut` closure, so switching over
+  is still more ceremony than the current 3 lines — not worth unifying,
+  but "shallow" no longer describes the gap between them.
 
 ---
 

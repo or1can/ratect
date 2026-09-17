@@ -26,6 +26,10 @@ history, from when it was the only binary.
 - A crash now prints where to report it, the binary's version and platform, and a reminder to re-run with `RUST_BACKTRACE=1` if it isn't already set.
 - A dependency that exits on its own after already becoming ready — while the task's own command, or a later dependency's own health/setup wait, is still going — now prints a warning naming the container and its exit code, in every output mode.
 
+### Changed
+
+- `all` output mode now also flushes a line on a lone carriage return (`\r`), not just `\n` — a container redrawing progress in place (pip/curl/apt-style) now prints one line per redraw instead of staying silent until the stream ends and then dumping everything as one line.
+
 ### Fixed
 
 - Released archives now include `NOTICE`, alongside the existing `LICENSE`/`README.md`/`RELEASES.md`.

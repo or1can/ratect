@@ -139,3 +139,12 @@ tables above:
   unrelated-looking reason (a connection refused, a timeout). Ratect prints a
   warning naming the container and its exit code instead, in every output mode.
   See [task lifecycle](task-lifecycle.md#dependency-resolution).
+- **`all` mode splits on a lone carriage return too, not just `\n`.** Batect's
+  `InterleavedContainerOutputSink` splits on `\n` only, so a container using
+  `\r` to redraw progress in place (pip/curl/apt-style) produces no output at
+  all until the stream ends, then dumps everything as one giant concatenated
+  line. A deliberate divergence: Ratect flushes on a lone `\r` (one not
+  immediately followed by `\n` — a CRLF pair still folds to a single line
+  break) the same way it already does on `\n`, so a real progress bar now
+  prints one interleaved line per redraw tick instead of staying silent —
+  spammier, but never silent-then-dumped.

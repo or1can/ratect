@@ -278,3 +278,60 @@ fn line_buffer_splits_on_newlines_and_strips_carriage_returns() {
     // Nothing pending — flush again emits nothing.
     buffer.flush(&mut |_line: &str| panic!("nothing should be pending"));
 }
+
+#[test]
+fn line_buffer_flushes_on_a_lone_carriage_return_mid_stream() {
+    let mut buffer = LineBuffer::new();
+    let mut lines: Vec<String> = Vec::new();
+    buffer.push(
+        b"progress: 1%\rprogress: 2%\rprogress: 3%\n",
+        &mut |line: &str| lines.push(line.to_string()),
+    );
+    assert_eq!(lines, vec!["progress: 1%", "progress: 2%", "progress: 3%"]);
+}
+
+#[test]
+fn line_buffer_folds_a_split_crlf_pair_into_one_line_break() {
+    // The CRLF pair split across two separate `push` calls — Docker's
+    // stream can chunk anywhere, including between the two bytes of one
+    // pair — must still fold to a single line break, not two (which would
+    // otherwise emit a spurious empty line between "first" and "second").
+    let mut buffer = LineBuffer::new();
+    let mut lines: Vec<String> = Vec::new();
+    buffer.push(b"first\r", &mut |line: &str| lines.push(line.to_string()));
+    assert!(
+        lines.is_empty(),
+        "a lone \\r isn't resolved until the next byte arrives"
+    );
+    buffer.push(b"\nsecond\n", &mut |line: &str| {
+        lines.push(line.to_string())
+    });
+    assert_eq!(lines, vec!["first", "second"]);
+}
+
+#[test]
+fn line_buffer_flushes_a_run_of_bare_carriage_returns_separately() {
+    let mut buffer = LineBuffer::new();
+    let mut lines: Vec<String> = Vec::new();
+    buffer.push(b"a\r\r\rb\n", &mut |line: &str| {
+        lines.push(line.to_string())
+    });
+    // Each bare `\r` is its own flush boundary — including the two
+    // back-to-back ones with nothing between them, which flush an empty
+    // line each, the same as `\n\n` already would.
+    assert_eq!(lines, vec!["a", "", "", "b"]);
+}
+
+#[test]
+fn line_buffer_drops_an_unresolved_trailing_carriage_return_on_flush() {
+    let mut buffer = LineBuffer::new();
+    let mut lines: Vec<String> = Vec::new();
+    buffer.push(b"last", &mut |line: &str| lines.push(line.to_string()));
+    buffer.push(b"\r", &mut |line: &str| lines.push(line.to_string()));
+    assert!(
+        lines.is_empty(),
+        "a trailing \\r with the stream not yet ended isn't resolved"
+    );
+    buffer.flush(&mut |line: &str| lines.push(line.to_string()));
+    assert_eq!(lines, vec!["last"]);
+}
