@@ -48,8 +48,9 @@ Two consequences of the split were decided alongside it:
 
 Both binaries are **versioned independently** (different maturity clocks) but
 share a **release process** — a core fix ships for both at once, each bumping its
-own patch version, so nobody runs a stale core. See
-[Versioning & Releases](../ROADMAP.md#versioning--releases) for the mechanics.
+own patch version, so nobody runs a stale core. See this ADR's own Consequences
+below for why, and [AGENTS.md](../AGENTS.md)'s Version Lifecycle guideline for
+the actual release-cutting mechanics.
 
 ## Alternatives considered
 
@@ -77,8 +78,38 @@ own patch version, so nobody runs a stale core. See
   engine behaviour, not the flat CLI. See
   [AGENTS.md / CLAUDE.md](../CLAUDE.md) "Where a fixture lives — by *layer*".
 - The two binaries carry **independent version lines** (e.g. `ratect-compat 0.24`
-  vs. `ratect 0.3`), which is why release tags are prefixed (`ratect/vX.Y.Z`,
-  `ratect-compat/vX.Y.Z`) and the `version` label on created resources comes from
-  the *binary*, not the core ([ADR-0002](0002-runtime-ownership-labels.md)).
+  vs. `ratect 0.3`) because forcing one number to serve both meanings breaks the
+  moment they diverge — which they will, since `ratect-compat` has a head start.
+  The core crate itself isn't published or meaningfully versioned on its own;
+  it's an internal implementation detail, not something either binary's users
+  interact with directly.
+- **Tags are prefixed with the binary they release** — `ratect/vX.Y.Z`,
+  `ratect-compat/vX.Y.Z` — because the two version lines would otherwise
+  collide: `v0.2.0` was already taken, by `ratect-compat`'s own 0.2.0 back when
+  it was the only binary. Bare `vX.Y.Z` tags (`v0.1.0` through `v0.21.0`) are
+  that pre-split history and stay exactly as they are, and the `version` label
+  on a created resource comes from the *binary*, not the core
+  ([ADR-0002](0002-runtime-ownership-labels.md)).
+- **One shared `CHANGELOG.md`, not one per binary.** Most substantive work is in
+  `ratect-core` and so reaches both binaries — the anonymous-volume fix
+  ([0.21.1](../RELEASES.md#ratect-compat)) is the pattern, not the exception —
+  so two files would be largely the same prose under different headings,
+  drifting apart on every core change. (That's the opposite of the CLI
+  reference docs, which *are* split per binary: those overlap by almost
+  nothing, since they document different flags. Split where the content
+  differs, share where it doesn't.) An entry with no binary named applies to
+  both; one that doesn't says `(ratect only)`/`(ratect-compat only)`, so the
+  annotation cost falls on the rarer case. Revisit only if `ratect` diverges
+  far enough that shared-core changes stop being the bulk of the work — 0.3.0's
+  own config format is a step that way — since cutting one file in two later
+  is easy, and merging two back into one isn't.
+- **A release cycle bumps only the crates it actually changes.** A
+  `ratect`-only cycle still moves `ratect-core` (the same shared crate, whose
+  number has always run with the release cadence rather than standing still)
+  and still leaves `ratect-compat` on a `-dev` of its own — a patch bump if
+  nothing but the shared core moved underneath it, a minor one if it gained
+  anything itself. Which of the two it turns out to be is decided at release
+  time; the `-dev` number in between is a statement of intent, not a
+  commitment.
 - Every future "is this compat or forward-looking?" question has a home for its
   answer; this ADR is the one nearly every other decision leans on.
