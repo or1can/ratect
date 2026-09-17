@@ -40,12 +40,30 @@ fn ratect_command() -> Command {
 /// into the middle of its output (see `SimpleEventLogger::is_task_container`),
 /// so nothing nondeterministic lands inside this window. Dependency
 /// containers' milestones are all printed before the window opens.
-fn task_output(stdout: &str) -> String {
+///
+/// `container` (TODO.md item 4, ratect#72) anchors the frame line to the
+/// task's own container by name, matching `SimpleEventLogger`'s two actual
+/// output shapes exactly (`ratect-core/src/ui/simple.rs`'s
+/// `RunningTaskContainer` handler) rather than the old generic
+/// `starts_with("Running ") && contains(" in ") && ends_with("...")` shape,
+/// which had two bugs: it could match a line the container itself printed
+/// (any `"Running ... in ..."`-shaped line, not just ratect's own), and it
+/// never matched the command-less `"Running <container>..."` phrasing a
+/// task with no `command` override (image default `CMD`) actually produces —
+/// silently including the whole stdout, including every milestone, rather
+/// than truncating. Naming the real container narrows the collision risk to
+/// a container printing that *exact* container name in the same position
+/// (a much smaller target), and the explicit bare-line branch fixes the
+/// command-less case outright — see
+/// `task_with_no_command_uses_the_image_default_cmd_via_docker` below.
+fn task_output(stdout: &str, container: &str) -> String {
+    let bare = format!("Running {container}...");
+    let suffix = format!(" in {container}...");
     let lines: Vec<&str> = stdout.lines().collect();
     let start = lines
         .iter()
         .rposition(|line| {
-            line.starts_with("Running ") && line.contains(" in ") && line.ends_with("...")
+            *line == bare || (line.starts_with("Running ") && line.ends_with(&suffix))
         })
         .map(|index| index + 1)
         .unwrap_or(0);
@@ -99,6 +117,10 @@ fn image_with_build_fields_config_path() -> PathBuf {
 
 fn environment_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/environment.yml")
+}
+
+fn default_command_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/default-command.yml")
 }
 
 fn config_vars_file_path() -> PathBuf {
@@ -603,6 +625,37 @@ fn simple_output_format_frames_task_output_via_docker() {
         "",
         "a blank line should separate task output from cleanup:\n{stdout}"
     );
+}
+
+/// Requires a running Docker daemon and network access to build from
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Regression test for TODO.md item 4 (ratect#72): a task with no `command`
+/// override at either the container or `run` level produces the command-less
+/// `"Running <container>..."` milestone (see `RunningTaskContainer`'s `None`
+/// arm in `ratect-core/src/ui/simple.rs`) instead of `"Running <command> in
+/// <container>..."`. `task_output`'s old heuristic required `" in "` and
+/// never matched this shape, so this case would previously have failed
+/// loudly with the whole framed stdout instead of just the container's own
+/// output.
+#[test]
+#[ignore]
+fn task_with_no_command_uses_the_image_default_cmd_via_docker() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(default_command_config_path())
+        .arg("run-default-command")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(task_output(&stdout, "build-env"), "default-cmd-output");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -1405,7 +1458,7 @@ fn task_containers_own_setup_commands_run_via_docker() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(task_output(&stdout), "SETUP-RAN-DURING-TASK");
+    assert_eq!(task_output(&stdout, "app"), "SETUP-RAN-DURING-TASK");
 }
 
 /// Requires a running Docker daemon with network access to pull
@@ -1538,7 +1591,7 @@ fn additional_args_are_forwarded_to_the_task_command() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(task_output(&stdout), "args: foo bar baz");
+    assert_eq!(task_output(&stdout, "build-env"), "args: foo bar baz");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -1573,7 +1626,7 @@ fn environment_and_config_variables_reach_the_real_container() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(
-        task_output(&stdout),
+        task_output(&stdout, "build-env"),
         "GREETING=hello-fallback ENV_NAME=from-cli",
         "--config-var should take precedence over --config-vars-file"
     );
@@ -1605,7 +1658,7 @@ fn config_vars_file_alone_provides_a_declared_variables_value() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(
-        task_output(&stdout),
+        task_output(&stdout, "build-env"),
         "GREETING=hello-fallback ENV_NAME=from-file"
     );
 }
@@ -1633,7 +1686,7 @@ fn container_working_directory_reaches_the_real_container() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(task_output(&stdout), "/tmp");
+    assert_eq!(task_output(&stdout, "build-env"), "/tmp");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -1658,7 +1711,7 @@ fn task_run_working_directory_overrides_the_real_container() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(task_output(&stdout), "/var");
+    assert_eq!(task_output(&stdout, "build-env"), "/var");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -1686,7 +1739,7 @@ fn container_entrypoint_combines_correctly_with_command_on_the_real_container() 
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(task_output(&stdout), "hello-from-sh-c");
+    assert_eq!(task_output(&stdout, "build-env"), "hello-from-sh-c");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -1713,7 +1766,7 @@ fn task_run_entrypoint_overrides_the_real_container() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(task_output(&stdout), "override-worked");
+    assert_eq!(task_output(&stdout, "build-env"), "override-worked");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -1738,7 +1791,7 @@ fn chown_succeeds_without_a_dropped_capability() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(task_output(&stdout), "chown-worked");
+    assert_eq!(task_output(&stdout, "normal"), "chown-worked");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -1774,7 +1827,7 @@ fn capabilities_to_drop_removes_chown_on_the_real_container() {
 #[test]
 #[ignore]
 fn privileged_grants_a_larger_capability_set_on_the_real_container() {
-    let cap_eff = |task: &str| {
+    let cap_eff = |task: &str, container: &str| {
         let output = ratect_command()
             .arg("-f")
             .arg(privileged_config_path())
@@ -1786,7 +1839,7 @@ fn privileged_grants_a_larger_capability_set_on_the_real_container() {
             "stderr:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let stdout = task_output(&String::from_utf8_lossy(&output.stdout));
+        let stdout = task_output(&String::from_utf8_lossy(&output.stdout), container);
         let hex = stdout
             .split_whitespace()
             .nth(1)
@@ -1795,8 +1848,8 @@ fn privileged_grants_a_larger_capability_set_on_the_real_container() {
             .unwrap_or_else(|e| panic!("failed to parse CapEff '{hex}': {e}"))
     };
 
-    let normal = cap_eff("show-caps-normal");
-    let privileged = cap_eff("show-caps-privileged");
+    let normal = cap_eff("show-caps-normal", "normal");
+    let privileged = cap_eff("show-caps-privileged", "root-privileged");
 
     assert!(
         privileged > normal,
@@ -1826,7 +1879,7 @@ fn shm_size_reaches_the_real_container() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let stdout = task_output(&String::from_utf8_lossy(&output.stdout));
+    let stdout = task_output(&String::from_utf8_lossy(&output.stdout), "custom-shm");
     let blocks: u64 = stdout
         .split_whitespace()
         .nth(1)
@@ -1859,7 +1912,7 @@ fn tmpfs_mount_reaches_the_real_container() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let stdout = task_output(&String::from_utf8_lossy(&output.stdout));
+    let stdout = task_output(&String::from_utf8_lossy(&output.stdout), "build-env");
     let blocks: u64 = stdout
         .split_whitespace()
         .nth(1)
@@ -1893,7 +1946,7 @@ fn devices_reaches_the_real_container() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(task_output(&stdout), "device-mapped");
+    assert_eq!(task_output(&stdout, "build-env"), "device-mapped");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -1908,7 +1961,7 @@ fn devices_reaches_the_real_container() {
 #[test]
 #[ignore]
 fn enable_init_process_wraps_pid_1_on_the_real_container() {
-    let pid1_comm = |task: &str| {
+    let pid1_comm = |task: &str, container: &str| {
         let output = ratect_command()
             .arg("-f")
             .arg(enable_init_process_config_path())
@@ -1920,11 +1973,11 @@ fn enable_init_process_wraps_pid_1_on_the_real_container() {
             "stderr:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        task_output(&String::from_utf8_lossy(&output.stdout))
+        task_output(&String::from_utf8_lossy(&output.stdout), container)
     };
 
-    let normal = pid1_comm("show-pid1-normal");
-    let with_init = pid1_comm("show-pid1-with-init");
+    let normal = pid1_comm("show-pid1-normal", "no-init");
+    let with_init = pid1_comm("show-pid1-with-init", "with-init");
 
     assert_eq!(
         normal, "cat",
@@ -2036,7 +2089,7 @@ fn build_directory_and_build_args_reach_a_real_docker_build() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(task_output(&stdout), "hello-from-build-arg");
+    assert_eq!(task_output(&stdout, "build-env"), "hello-from-build-arg");
 }
 
 /// Requires a running Docker daemon with network access to pull
@@ -2067,7 +2120,7 @@ fn dockerfile_and_build_target_reach_a_real_docker_build() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(task_output(&stdout), "from-builder-stage");
+    assert_eq!(task_output(&stdout, "build-env"), "from-builder-stage");
 }
 
 /// Requires a running Docker daemon that supports BuildKit sessions (any
@@ -2103,7 +2156,7 @@ fn build_secrets_reach_a_real_buildkit_session_build() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(task_output(&stdout), "hello-from-build-secret");
+    assert_eq!(task_output(&stdout, "build-env"), "hello-from-build-secret");
 }
 
 /// A dedicated throwaway `ssh-agent` process spawned for one test, plus a
@@ -2506,7 +2559,10 @@ fn default_builder_is_the_daemon_advertised_buildkit() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(task_output(&stdout), "built with buildkit heredoc support");
+    assert_eq!(
+        task_output(&stdout, "build-env"),
+        "built with buildkit heredoc support"
+    );
 }
 
 /// Requires a running Docker daemon and network access to pull
@@ -2560,7 +2616,7 @@ fn classic_builder_still_works_when_forced_via_docker_buildkit_env() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(task_output(&stdout), "hello-from-build-arg");
+    assert_eq!(task_output(&stdout, "build-env"), "hello-from-build-arg");
 }
 
 /// Requires a running Docker daemon. Run explicitly with
@@ -3083,7 +3139,7 @@ tasks:
     )
     .unwrap();
 
-    let stdout = task_output(&String::from_utf8_lossy(&output.stdout));
+    let stdout = task_output(&String::from_utf8_lossy(&output.stdout), "app");
     let mut lines = stdout.lines();
     let container_uid = lines.next().unwrap_or_default();
     let container_gid = lines.next().unwrap_or_default();
@@ -3146,7 +3202,7 @@ fn ssh_agent_socket_mounts_under_run_as_current_user() {
         "the task should run with the socket mounted:\nstderr:\n{stderr}"
     );
     assert_eq!(
-        task_output(&String::from_utf8_lossy(&output.stdout)),
+        task_output(&String::from_utf8_lossy(&output.stdout), "app"),
         "mounted-ok"
     );
 }
@@ -3268,7 +3324,7 @@ tasks:
                 String::from_utf8_lossy(&output.stderr)
             );
         }
-        task_output(&String::from_utf8_lossy(&output.stdout))
+        task_output(&String::from_utf8_lossy(&output.stdout), "app")
     };
 
     let first_run = run_task();
