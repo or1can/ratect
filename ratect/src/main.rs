@@ -598,6 +598,8 @@ fn init_tracing() {
 
 #[tokio::main]
 async fn main() {
+    ratect_core::panic_hook::install(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+
     // Dynamic shell completion (prototype, `unstable-dynamic`). At `<TAB>` the
     // shell — driven by the script `ratect completions <shell>` installs — sets
     // `COMPLETE=<shell>` and re-invokes `ratect`; this handles that request and

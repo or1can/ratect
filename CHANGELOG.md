@@ -21,6 +21,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Added
+
+- A crash now prints where to report it, the binary's version and platform, and a reminder to re-run with `RUST_BACKTRACE=1` if it isn't already set.
+
 ### Fixed
 
 - Released archives now include `NOTICE`, alongside the existing `LICENSE`/`README.md`/`RELEASES.md`.
