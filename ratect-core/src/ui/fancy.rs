@@ -355,12 +355,18 @@ impl FancyEventLogger {
     /// it is and starts a fresh block after it, which needs no assumption
     /// about how the terminal chose to reflow anything.
     ///
-    /// Not manually verified on a real reflowing terminal as of ratect#73
-    /// landing — the actual reflow is the emulator's own rendering, which
-    /// no headless harness here can reproduce or assert against. See
-    /// `ratect-compat/tests/fixtures/manual-terminal-resize.yml` for a
-    /// ready-made repro and the steps to run it by hand; update this note
-    /// once someone has.
+    /// Manually verified against both the bug and the fix, via
+    /// `ratect-compat/tests/fixtures/manual-terminal-resize.yml`'s repro —
+    /// the actual reflow is the emulator's own rendering, which no
+    /// headless harness here can reproduce or assert against. Pre-fix
+    /// `ratect-compat` 0.29.0, narrowing mid-run in both macOS Terminal and
+    /// Warp: the width change undercounted the wrapped "...waiting for it
+    /// to become healthy..." line's real row count, so the next repaint's
+    /// cursor-up landed one row short and its "ready" transition printed as
+    /// a stray extra line instead of replacing the one above it. Built from
+    /// this fix, same repro, macOS Terminal: a blank line, then the whole
+    /// block reprinted fresh below the old one, with no corruption — the
+    /// fresh-block fallback as designed.
     fn repaint_startup(&self, state: &mut State) {
         if state.lines.is_empty() {
             return;
