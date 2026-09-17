@@ -25,7 +25,7 @@ fn logger_with_width(width: u16) -> (FancyEventLogger, SharedBuffer) {
     (
         FancyEventLogger {
             console,
-            fixed_width: Some(width),
+            fixed_width: AtomicU16::new(width),
             state: Mutex::new(State::default()),
         },
         buffer,
@@ -110,6 +110,56 @@ fn a_progress_event_repaints_the_block_in_place() {
              \x1b[2A\
              \r\x1b[2Kdb: pulling image postgres:15...\n\
              \r\x1b[2Kapp: ready to pull image app:1\n"
+    );
+}
+
+/// Regression test for TODO.md item 1 (ratect#73): if the terminal's width
+/// changed since the last paint, a counted cursor-up can no longer be
+/// trusted (the emulator may already have reflowed the old frame onto a
+/// different number of rows) — this can't reproduce an actual reflow
+/// (that's the terminal's own rendering, not anything `SharedBuffer`
+/// simulates), only that `repaint_startup` stops *assuming* the old frame's
+/// row count survived and instead starts a fresh block, which is safe
+/// regardless of what the emulator actually did to the old one.
+#[test]
+fn a_terminal_resize_between_repaints_starts_a_fresh_block_instead_of_a_stale_cursor_up() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("app", Some("app:1"), &["db"], true),
+            info("db", Some("postgres:15"), &[], false),
+        ],
+    });
+    let first_frame = buffer.contents();
+
+    logger.fixed_width.store(40, Ordering::Relaxed);
+    logger.post(TaskEvent::ImagePullStarting {
+        image: "postgres:15".into(),
+    });
+    let after_resize = &buffer.contents()[first_frame.len()..];
+    assert_eq!(
+        after_resize,
+        "\n\
+             \r\x1b[2Kdb: pulling image postgres:15...\n\
+             \r\x1b[2Kapp: ready to pull image app:1\n",
+        "a width change since the last paint should start a fresh block \
+             (a lone newline, no cursor-up) rather than move the cursor over \
+             a frame whose on-screen row count may no longer be accurate"
+    );
+
+    // Subsequent repaints at the now-stable new width go back to a normal
+    // in-place cursor-up, over the block just started above.
+    logger.post(TaskEvent::ImagePullStarting {
+        image: "app:1".into(),
+    });
+    assert!(
+        buffer.contents().ends_with(
+            "\x1b[2A\
+             \r\x1b[2Kdb: pulling image postgres:15...\n\
+             \r\x1b[2Kapp: pulling image app:1...\n"
+        ),
+        "{}",
+        buffer.contents()
     );
 }
 
@@ -474,6 +524,54 @@ fn cleanup_line_counts_down_then_summary_replaces_it() {
         "\x1b[1A\r\x1b[2K\
              test finished with exit code 0 in 1.5s.\n"
     ));
+}
+
+/// Regression test for TODO.md item 1 (ratect#73), the cleanup line's own
+/// copy of the same fixed-row-count shape: a resize since the line was last
+/// painted must not attempt a one-row cursor-up over content that may have
+/// already reflowed onto more rows.
+#[test]
+fn a_terminal_resize_since_the_cleanup_line_was_shown_starts_a_fresh_line() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: None,
+    });
+    logger.post(TaskEvent::TaskContainerCreated {
+        container: "app".into(),
+    });
+    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::ContainerRemoved {
+        container: "app".into(),
+    });
+    let before_resize = buffer.contents();
+
+    logger.fixed_width.store(40, Ordering::Relaxed);
+    logger.post(TaskEvent::RemovingNetwork);
+    assert_eq!(
+        &buffer.contents()[before_resize.len()..],
+        "\nCleaning up: removing task network...\n",
+        "a width change since the cleanup line was last painted should \
+             move to a fresh line (no cursor-up) rather than overwrite a \
+             line whose on-screen row count may no longer be accurate"
+    );
+
+    // The task-finished summary hits the very same fallback, one event
+    // later, resizing again first.
+    logger.fixed_width.store(30, Ordering::Relaxed);
+    let before_finish = buffer.contents();
+    logger.post(TaskEvent::TaskFinished {
+        task: "test".into(),
+        exit_code: 0,
+        duration: Duration::from_millis(1500),
+    });
+    assert_eq!(
+        &buffer.contents()[before_finish.len()..],
+        "\ntest finished with exit code 0 in 1.5s.\n"
+    );
 }
 
 #[test]

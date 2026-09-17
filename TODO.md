@@ -13,17 +13,6 @@ the `engine.rs`/`docker.rs` event-posting refactor, and the `--output`/
 `--no-color` CLI surface) — all fixed; see `git log` for what landed.
 Everything below is unfixed. Grouped by severity; pick up top-down.
 
-## Correctness
-
-1. **Fancy: terminal narrowing mid-run can desync the cursor-up count**
-   (`ratect-core/src/ui/fancy.rs`) — PLAUSIBLE, depends on terminal
-   emulator reflow behavior (confirmed on reflowing emulators like
-   iTerm2/GNOME Terminal/kitty; classic xterm doesn't reflow so is
-   unaffected). Width is re-queried per repaint (fixes *future* clipping),
-   but nothing accounts for rows a *previously* painted long line now
-   occupies after the terminal narrowed and the emulator rewrapped it —
-   the next repaint's `\x1b[{painted_lines}A` then lands mid-block.
-
 ## Correctness — cosmetic / narrow
 
 2. **Interleaved: `LineBuffer` only splits on `\n`, buffers CR-only
@@ -94,7 +83,7 @@ Everything below is unfixed. Grouped by severity; pick up top-down.
 
 ## Efficiency
 
-5. **`Console`'s `std::sync::Mutex` can block tokio worker threads on a
+6. **`Console`'s `std::sync::Mutex` can block tokio worker threads on a
     stalled stdout** (`ratect-core/src/ui.rs`) — `post()` runs
     synchronously from tokio worker threads, so a stalled stdout (closed
     pipe reader, `Ctrl-S`'d terminal) blocks whichever holds the Console
