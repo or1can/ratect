@@ -58,6 +58,17 @@ Leveraging Rust's strengths to provide a superior experience compared to the ori
   0.15.0](RELEASES.md#ratect-compat). Running independent *prerequisite tasks*
   concurrently too — which Batect itself doesn't do — remains a possible
   enhancement for later, not currently scheduled.
+- **Stream the build context instead of buffering it in memory**: `docker.rs`'s
+  `build_context_tar` builds the *entire* tar archive as a `Vec<u8>` before
+  handing it to the Docker API at all — a large build context (a monorepo, an
+  unfiltered `node_modules`/`target` a `.dockerignore` should exclude but
+  doesn't) means holding the whole thing in memory twice over (once as files
+  read, once as the assembled tar) before a single byte reaches the daemon.
+  Streaming it (tar entries written directly to the request body as they're
+  read from disk) would fix that and, as a side effect, is what real build
+  context *upload* progress (see Improved Progress UI, under UX & Tooling
+  below) needs to exist at all — today there's nothing to report progress on
+  until the whole buffer is already built.
 - **First-class Cross-platform Support**: **Windows doesn't exist here at all
   yet** — no target in the release matrix, no CI coverage, no Windows-specific
   code path. macOS and Linux already have prebuilt binaries (see
@@ -177,6 +188,9 @@ Exploring innovative features that go beyond the original Batect, as well as pla
 - **External Health Checks**: Support for external health checks (e.g., HTTP) that don't require specialized tools like `curl` to be installed within the container.
 - **Image Lifecycle Management**: Tools for building and pushing images independently of task execution, and cleaning up unused images.
 - **OCI annotations on built images**: a config field for build-time image labels (`source`, `revision`, `created` — distinct from `Container.labels`, which applies to the *container*, not the image it builds), as the project's own provenance on an image `build_directory` produces. Today that's a Dockerfile `LABEL`, which already works and needs nothing from Ratect. Ratect shouldn't guess these itself (shelling out to `git` in the build context would be wrong as often as right) — only worth building if someone actually wants the ergonomics. `ratect`-only, since Batect has no such field. Not to be confused with [decisions/0002](decisions/0002-runtime-ownership-labels.md)'s runtime-ownership labels, a different thing on a different object (a running container/network, not the image).
+- **Custom DNS parameters**: no config field for a container's DNS servers or search domains (`dns`/`dns_search`, in Docker's own terms) — Batect has no equivalent field either, confirmed by reading its `Container` config class, so this isn't a parity gap.
+- **Custom network mode**: every container always joins the task's own per-task bridge network (see [task lifecycle](docs/task-lifecycle.md)); there's no way to ask for `host`, `none`, or `container:<name>` networking instead. Batect has no `network_mode`-equivalent field either — its own architecture assumes the same per-task bridge network Ratect ported. Interacts with `--use-network` (an existing *different* escape hatch: reusing one shared network across every container in a task, still a bridge) and would need its own decision about which of the two takes precedence if both were ever set.
+- **Additional users in the container's `/etc/passwd`**: `run_as_current_user` (`user.rs`, ported from Batect's `RunAsCurrentUserConfigurationProvider`) generates a minimal `/etc/passwd`/`/etc/shadow`/`/etc/group` containing only the host user Ratect runs as (plus `root`, its own special case) — there's no way to add further entries (e.g. a service account a tool inside the container expects to exist). Worth deciding whether this is `run_as_current_user`-specific or a more general per-container "extra passwd entries" field independent of it.
 - **`ulimit` Support**: Support for setting `ulimit` values for containers.
 - **Secrets Management**: Integrated support for securely handling sensitive information like API keys and credentials.
 - **Plugin System**: A flexible architecture to allow users to extend Ratect's functionality with custom logic.
