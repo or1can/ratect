@@ -343,6 +343,25 @@ impl TerminalFacts {
     }
 }
 
+/// Folds the `NO_COLOR` environment variable (<https://no-color.org> — its
+/// spec: present, regardless of value, means no color) into the
+/// `--no-color` flag's own boolean, so an unset flag with `NO_COLOR` in the
+/// environment behaves exactly as if `--no-color` had been passed —
+/// disables color *and* pushes the default output style toward `Simple`
+/// the same way the flag already does (see [`select_output_style`]).
+/// Deliberately not narrowed to "color only", even though that's closer to
+/// the letter of the NO_COLOR spec: `--no-color` already couples the two,
+/// and diverging only for the environment variable would make the flag and
+/// the variable disagree for no reason a user would expect.
+///
+/// `env` is `impl Fn(&str) -> Option<String>` rather than calling
+/// `std::env::var` directly, matching `proxy.rs`'s own `HostEnv`
+/// convention — real `std::env::var` in production, a fixed closure in
+/// tests.
+pub fn resolve_no_color(cli_flag: bool, env: impl Fn(&str) -> Option<String>) -> bool {
+    cli_flag || env("NO_COLOR").is_some()
+}
+
 /// Picks the output style when `--output` wasn't given — a port of Batect's
 /// `EventLoggerProvider`/`ConsoleInfo.supportsInteractivity` rule: `Fancy`
 /// on a console that can actually support it (stdout is a real terminal,

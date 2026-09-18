@@ -131,6 +131,35 @@ fn no_color_forces_the_default_to_simple_even_on_an_interactive_console() {
 }
 
 #[test]
+fn resolve_no_color_is_false_when_neither_the_flag_nor_the_env_var_is_set() {
+    assert!(!resolve_no_color(false, |_| None));
+}
+
+#[test]
+fn resolve_no_color_is_true_when_the_flag_alone_is_set() {
+    assert!(resolve_no_color(true, |_| None));
+}
+
+#[test]
+fn resolve_no_color_is_true_when_no_color_alone_is_set() {
+    assert!(resolve_no_color(false, |name| (name == "NO_COLOR").then(String::new)));
+}
+
+#[test]
+fn resolve_no_color_treats_no_color_as_set_regardless_of_its_value() {
+    // Per the spec (https://no-color.org): present, regardless of value —
+    // even an empty string, which the test above already covers, and a
+    // value that would be "falsy" in most other conventions.
+    assert!(resolve_no_color(false, |name| (name == "NO_COLOR").then(|| "0".to_string())));
+}
+
+#[test]
+fn resolve_no_color_ignores_other_variables() {
+    assert!(!resolve_no_color(false, |name| (name == "CLICOLOR_FORCE")
+        .then(|| "1".to_string())));
+}
+
+#[test]
 fn quiet_and_all_are_never_auto_selected() {
     // Exhaustively: the default is only ever Fancy or Simple.
     for no_color in [false, true] {
