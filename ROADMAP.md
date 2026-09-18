@@ -144,6 +144,13 @@ Improving the developer experience through better tools and feedback.
     bundles are actually *for*, which the [config
     reference](docs/config-reference.md#includes) documents mechanically without
     ever making the case for.
+- **A version picker on the rendered docs site** — deliberately not built with the
+  site itself ([#86](https://github.com/or1can/ratect/issues/86)): the site tracks
+  `main` only for now, so there's nothing yet to pick between. Worth adding once
+  the content above is in good enough shape to be worth freezing per release —
+  and needs its own answer for `ratect-compat`/`ratect` sitting on [independent
+  version lines](#versioning--releases), which a naive "docs for vX.Y.Z" scheme
+  doesn't map onto cleanly.
 
 ## Future Vision
 
