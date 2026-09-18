@@ -21,6 +21,8 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+## [ratect-compat 0.30.0 · ratect 0.9.0] - 2026-09-18
+
 ### Added
 
 - A crash now prints where to report it, the binary's version and platform, and a reminder to re-run with `RUST_BACKTRACE=1` if it isn't already set.
