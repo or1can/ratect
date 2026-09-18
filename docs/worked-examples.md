@@ -13,6 +13,15 @@ convert`](ratect-cli.md#config) to translate one to the other). See the
 does, and [Getting Started](getting-started.md) if you haven't run a task
 before.
 
+Every `command` below that chains two steps with `&&` wraps them in `sh -c
+'...'`. `command` is [tokenized into literal argv, with no shell
+involved](config-reference.md#taskrun) — an unwrapped `&&` doesn't fail
+loudly, it's just handed to the first program as a literal extra argument,
+which several package managers silently ignore rather than reject. All five
+examples below were actually run against a real Docker daemon (`build`,
+`test`, and `lint`, each against a minimal real project for that ecosystem)
+before being written up here, which is exactly how this got caught.
+
 ## Rust
 
 A `Cargo.toml`-based project. The official `rust` image doesn't ship the
@@ -45,7 +54,7 @@ run = { container = "build-env", command = "cargo test --workspace" }
 [tasks.lint]
 description = "Run clippy with warnings denied"
 group = "Checks"
-run = { container = "build-env", command = "rustup component add clippy --quiet && cargo clippy --workspace --all-targets -- -D warnings" }
+run = { container = "build-env", command = "sh -c 'rustup --quiet component add clippy && cargo clippy --workspace --all-targets -- -D warnings'" }
 ```
 
 ## Go
@@ -118,17 +127,17 @@ volumes = [
 [tasks.build]
 description = "Compile TypeScript"
 group = "Development"
-run = { container = "build-env", command = "npm ci && npm run build" }
+run = { container = "build-env", command = "sh -c 'npm ci && npm run build'" }
 
 [tasks.test]
 description = "Run the test suite"
 group = "Development"
-run = { container = "build-env", command = "npm ci && npm test" }
+run = { container = "build-env", command = "sh -c 'npm ci && npm test'" }
 
 [tasks.lint]
 description = "Run eslint"
 group = "Checks"
-run = { container = "build-env", command = "npm ci && npm run lint" }
+run = { container = "build-env", command = "sh -c 'npm ci && npm run lint'" }
 ```
 
 ## Python
@@ -153,17 +162,17 @@ volumes = [
 [tasks.build]
 description = "Build the distributable package"
 group = "Development"
-run = { container = "build-env", command = "pip install build && python -m build" }
+run = { container = "build-env", command = "sh -c 'pip install build && python -m build'" }
 
 [tasks.test]
 description = "Run the test suite"
 group = "Development"
-run = { container = "build-env", command = "pip install -e '.[dev]' && pytest" }
+run = { container = "build-env", command = "sh -c \"pip install -e '.[dev]' && pytest\"" }
 
 [tasks.lint]
 description = "Run ruff"
 group = "Checks"
-run = { container = "build-env", command = "pip install -e '.[dev]' && ruff check ." }
+run = { container = "build-env", command = "sh -c \"pip install -e '.[dev]' && ruff check .\"" }
 ```
 
 ## JVM (Gradle)
