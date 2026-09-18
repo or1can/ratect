@@ -438,7 +438,13 @@ fn resolve_config_vars_file(explicit: Option<PathBuf>, dir: &Path) -> Option<Pat
 /// config, builds the engine, and runs it. [`Args::engine_settings`] is kept
 /// synchronous and separate specifically so its flag-to-settings mapping can
 /// be unit-tested without a Docker daemon — see its own doc comment.
-async fn run(args: Args) -> Result<()> {
+async fn run(mut args: Args) -> Result<()> {
+    // Folded in once, here, rather than at each of `args.no_color`'s own
+    // call sites below — see `resolve_no_color`'s own doc comment for what
+    // NO_COLOR does and why it's not narrowed to "color only".
+    args.no_color =
+        ratect_core::ui::resolve_no_color(args.no_color, |name| std::env::var(name).ok());
+
     if args.upgrade {
         eprintln!(
             "--upgrade has no effect: Ratect is a single native binary, not a self-updating \

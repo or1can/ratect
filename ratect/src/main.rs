@@ -34,7 +34,9 @@ use ratect_core::diagnostics::{
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
 use ratect_core::resources::Leftover;
-use ratect_core::ui::{create_event_sink, select_output_style, OutputStyle, TerminalFacts};
+use ratect_core::ui::{
+    create_event_sink, resolve_no_color, select_output_style, OutputStyle, TerminalFacts,
+};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -637,7 +639,14 @@ async fn main() {
 }
 
 async fn run(cli: Cli) -> Result<()> {
-    let Cli { global, command } = cli;
+    let Cli {
+        mut global,
+        command,
+    } = cli;
+    // Folded in once, here, rather than at each of `global.no_color`'s own
+    // call sites below — see `resolve_no_color`'s own doc comment for what
+    // NO_COLOR does and why it's not narrowed to "color only".
+    global.no_color = resolve_no_color(global.no_color, |name| std::env::var(name).ok());
 
     // Gathered once and shared between the output-format decisions and
     // (inside `create_event_sink`) the logger itself, rather than each

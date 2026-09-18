@@ -128,7 +128,7 @@ and `ratect run build -f custom.yml` are the same invocation.
 | --- | --- | --- |
 | `-f`, `--config-file <PATH>` | `ratect.toml` | The configuration file. Parsed by extension — `.toml` as the native format, `.yml`/`.yaml` as Batect-format YAML — so `-f batect.yml` keeps reading a Batect config while migrating. `caches` uses it only to locate the project *directory* — it never reads the contents. |
 | `-o`, `--output <STYLE>` | auto | `fancy`, `simple`, `all` or `quiet` — see [output styles](cli-reference.md#output-styles), which behave identically here. |
-| `--no-color` | — | No color in Ratect's own output (never affects a task's own output). |
+| `--no-color` | — | No color in Ratect's own output (never affects a task's own output). The [`NO_COLOR`](https://no-color.org) environment variable has exactly the same effect, if set. |
 
 Narrower options attach to the commands that actually use them, rather than being
 global: a flag that's accepted and then ignored reads as a promise. So the
