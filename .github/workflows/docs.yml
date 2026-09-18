@@ -66,6 +66,11 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # `enablement` defaults to `false` (verified against this repo's own
+      # first deploy run, which 404'd looking up a Pages site) — without it,
+      # a repo with Pages never previously turned on stays never turned on.
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - id: deployment
         uses: actions/deploy-pages@v4
