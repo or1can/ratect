@@ -144,6 +144,44 @@ jobs:
       # binary so it runs with exclusive Docker access (see that file).
       - run: cargo test --workspace --test cli --test conformance --test volume_cleanup -- --ignored
 
+  # `docs/worked-examples.md` `{{#include}}`s each project's `ratect.toml`/
+  # `batect.yml` directly rather than a copy pasted into the doc, so the
+  # published config is always exactly what this job runs. It caught a real
+  # bug once already: `command` has no shell, so an unwrapped `&&` doesn't
+  # error, it just silently drops everything after the first program — a
+  # `ratect config validate`/`ratect tasks list`-only check missed that
+  # entirely, which is why this actually runs `build`/`test`/`lint` against
+  # a real daemon rather than stopping at config validation.
+  worked-examples:
+    name: Worked Examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p ratect -p ratect-compat
+      - name: Run build/test/lint for every worked example
+        shell: bash
+        run: |
+          for dir in examples/*/; do
+            name=$(basename "$dir")
+            if [ -f "$dir/ratect.toml" ]; then
+              bin=./target/debug/ratect
+              cmd() { "$bin" run "$1" -f "$dir/ratect.toml"; }
+            elif [ -f "$dir/batect.yml" ]; then
+              bin=./target/debug/ratect-compat
+              cmd() { "$bin" -f "$dir/batect.yml" "$1"; }
+            else
+              echo "::error::$dir has neither ratect.toml nor batect.yml"
+              exit 1
+            fi
+            echo "::group::$name"
+            cmd build
+            cmd test
+            cmd lint
+            echo "::endgroup::"
+          done
+
   dev-env:
     name: Dev-env CLI smoke test
     runs-on: ubuntu-latest

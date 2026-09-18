@@ -13,20 +13,23 @@ name: Docs
 # actually on disk rather than flagged just because docs/ is the only
 # tree this site publishes.
 #
-# Path-filtered so a PR that doesn't touch docs/ or the book itself never
-# runs this (mirrors msrv-floor.yml's approach).
+# Path-filtered so a PR that doesn't touch docs/, examples/ (which
+# docs/worked-examples.md {{#include}}s from directly), or the book itself
+# never runs this (mirrors msrv-floor.yml's approach).
 
 on:
   push:
     branches: [main]
     paths:
       - docs/**
+      - examples/**
       - book.toml
       - .github/workflows/docs.yml
   pull_request:
     branches: [main]
     paths:
       - docs/**
+      - examples/**
       - book.toml
       - .github/workflows/docs.yml
   workflow_dispatch: {}

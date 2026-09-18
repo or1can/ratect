@@ -1,0 +1,34 @@
+project_name: example-jvm
+
+containers:
+  build-env:
+    image: eclipse-temurin:21-jdk
+    working_directory: /code
+    volumes:
+      - local: .
+        container: /code
+      - type: cache
+        name: gradle-cache
+        container: /root/.gradle
+
+tasks:
+  build:
+    description: Compile and assemble
+    group: Development
+    run:
+      container: build-env
+      command: ./gradlew assemble
+
+  test:
+    description: Run the test suite
+    group: Development
+    run:
+      container: build-env
+      command: ./gradlew test
+
+  lint:
+    description: Run Checkstyle
+    group: Checks
+    run:
+      container: build-env
+      command: ./gradlew checkstyleMain checkstyleTest
