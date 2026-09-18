@@ -26,7 +26,7 @@
 //! is the documented escape hatch for a script that needs exact
 //! container-output-only stdout.
 
-use super::{Color, Console, EventSink, OnceFlag, TaskEvent};
+use super::{Color, ColorMode, Console, EventSink, OnceFlag, TaskEvent};
 use std::sync::Mutex;
 
 pub struct SimpleEventLogger {
@@ -59,10 +59,10 @@ impl SimpleEventLogger {
         }
     }
 
-    /// The logger `main.rs` actually wires up: real stdout, color iff
-    /// stdout is a terminal and `--no-color` wasn't given.
-    pub fn stdout(no_color: bool) -> Self {
-        Self::new(Console::stdout(no_color))
+    /// The logger `main.rs` actually wires up: real stdout, colored
+    /// according to `color_mode` (see [`ColorMode`]).
+    pub fn stdout(color_mode: ColorMode) -> Self {
+        Self::new(Console::stdout(color_mode))
     }
 }
 

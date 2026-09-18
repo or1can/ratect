@@ -30,7 +30,7 @@
 //! - Colorless fancy works (`--no-color` suppresses bold/color but not
 //!   cursor movement) — see [`Console`]'s independent-axes design.
 
-use super::{Color, Console, EventSink, TaskContainerInfo, TaskEvent};
+use super::{Color, ColorMode, Console, EventSink, TaskContainerInfo, TaskEvent};
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Mutex;
@@ -288,12 +288,12 @@ impl FancyEventLogger {
         }
     }
 
-    /// The logger `main.rs` actually wires up: real stdout (color iff it's
-    /// a terminal and `--no-color` wasn't given — colorless fancy keeps the
-    /// live repaint, only dropping bold/color), width queried live from the
-    /// terminal.
-    pub fn stdout(no_color: bool) -> Self {
-        Self::new(Console::stdout(no_color))
+    /// The logger `main.rs` actually wires up: real stdout, colored
+    /// according to `color_mode` (see [`ColorMode`]) — colorless fancy
+    /// keeps the live repaint, only dropping bold/color — width queried
+    /// live from the terminal.
+    pub fn stdout(color_mode: ColorMode) -> Self {
+        Self::new(Console::stdout(color_mode))
     }
 
     /// The terminal's current display width, or `None` if it can't be

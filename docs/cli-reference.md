@@ -80,7 +80,7 @@ listed under.
 | Flag | Short | Default | Description |
 |---|---|---|---|
 | `--output <STYLE>` | `-o` | auto | Forces a particular output style for Ratect's own progress reporting: `fancy` (a live-updating status block, one line per container), `simple` (plain, append-only milestone lines), `quiet` (error messages only, and a machine-readable `--list-tasks` format), or `all` (line-by-line output from *every* container, prefixed with its name — the only style that changes what the task command's own output looks like; the others never touch it) — see [Output styles](#output-styles). Unset means auto-select: `fancy` on an interactive console, `simple` otherwise. |
-| `--no-color` | — | — | Disables colored output from Ratect itself (task command output is never affected). Colors are already skipped automatically when stdout isn't a terminal, so this only matters on an interactive console. Also makes `simple` the auto-selected output style. The [`NO_COLOR`](#environment-variables) environment variable has exactly the same effect, if set. |
+| `--no-color` | — | — | Disables colored output from Ratect itself (task command output is never affected). Colors are already skipped automatically when stdout isn't a terminal, so this only matters on an interactive console — unless [`CLICOLOR_FORCE`](#environment-variables) is also set, which forces them past that check regardless. Also makes `simple` the auto-selected output style. The [`NO_COLOR`](#environment-variables) environment variable has exactly the same effect, if set, and always wins over `CLICOLOR_FORCE`. |
 | `--log-file <PATH>` | — | — | Writes Ratect's own internal logs to this file, in addition to stderr (both still governed by `RUST_LOG` — see [Environment variables](#environment-variables)). Plain text, no ANSI color codes, regardless of stderr's own coloring. |
 
 ### Recognized for Batect compatibility, no effect
@@ -329,6 +329,7 @@ actual behavior — it doesn't yet distinguish "nothing to do" from "success":
 | `DOCKER_TLS_VERIFY` | Enables TLS (fully verified — see [TLS with a private certificate authority](#tls-with-a-private-certificate-authority)) — see `--docker-tls-verify`. |
 | `DOCKER_BUILDKIT` | Forces the image builder on (`1`/`true`) or off (`0`/`false`) — see `--enable-buildkit` and [config reference](config-reference.md#image-building). |
 | `NO_COLOR` | If set (to anything — see [no-color.org](https://no-color.org)), has exactly the same effect as `--no-color`: disables colored output and makes `simple` the auto-selected output style. |
+| `CLICOLOR_FORCE` | If set to anything other than `0`, forces colored output even when stdout isn't a terminal (e.g. a CI log viewer that renders ANSI despite the pipe) — but never affects output *style* selection, and never wins over `--no-color`/`NO_COLOR` if either is also set. |
 
 Ratect supports interpolating host environment variables and config variables into
 `environment` values, volume host paths, `build_directory`, `build_args`,

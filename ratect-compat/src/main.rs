@@ -444,6 +444,14 @@ async fn run(mut args: Args) -> Result<()> {
     // NO_COLOR does and why it's not narrowed to "color only".
     args.no_color =
         ratect_core::ui::resolve_no_color(args.no_color, |name| std::env::var(name).ok());
+    // `CLICOLOR_FORCE`, on top of that — see `resolve_color_mode`'s own doc
+    // comment for why this takes the already-resolved `no_color` rather
+    // than re-deriving it, and why it's a separate value from `no_color`
+    // rather than folded into it: `--output`'s own auto-selection must
+    // never see anything but `Off`/not, so `select_output_style` below
+    // still gets `args.no_color`, never this.
+    let color_mode =
+        ratect_core::ui::resolve_color_mode(args.no_color, |name| std::env::var(name).ok());
 
     if args.upgrade {
         eprintln!(
@@ -509,7 +517,7 @@ async fn run(mut args: Args) -> Result<()> {
             // validation all live in `create_event_sink` — see its own docs
             // for why, and for the fancy-on-a-non-interactive-console error
             // it can return.
-            let event_sink = create_event_sink(requested_style, args.no_color, &terminal)?;
+            let event_sink = create_event_sink(requested_style, color_mode, &terminal)?;
             // Built before the connection options consume `args` below.
             let settings = args.engine_settings(project_directory);
             // Constructed here rather than inside `ratect-core` — a library
