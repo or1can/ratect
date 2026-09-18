@@ -1,0 +1,4 @@
+[book]
+title = "Ratect"
+description = "A fast, lightweight task execution engine for Docker — a from-scratch Rust reimplementation of Batect."
+src = "docs"
