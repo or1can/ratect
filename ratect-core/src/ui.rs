@@ -362,6 +362,48 @@ pub fn resolve_no_color(cli_flag: bool, env: impl Fn(&str) -> Option<String>) ->
     cli_flag || env("NO_COLOR").is_some()
 }
 
+/// Whether [`Console`]'s own ANSI output is suppressed, left to the real
+/// terminal, or forced on regardless of the terminal — a plain `bool` can't
+/// express "force past a non-terminal", which is exactly what
+/// `CLICOLOR_FORCE` needs (see [`resolve_color_mode`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorMode {
+    /// Color iff the real console turns out to be a terminal — [`Console::stdout`]'s
+    /// own `is_terminal()` check decides.
+    Auto,
+    /// Never color, regardless of the terminal — `--no-color`/`NO_COLOR`.
+    Off,
+    /// Always color, even when the terminal check would otherwise say no —
+    /// `CLICOLOR_FORCE`.
+    ForcedOn,
+}
+
+/// Folds `CLICOLOR_FORCE` in on top of [`resolve_no_color`]'s own verdict —
+/// takes that verdict directly (`no_color`) rather than re-deriving
+/// `--no-color`/`NO_COLOR` itself, since a caller has always already
+/// resolved it by the time this runs. `CLICOLOR_FORCE` never gets a say
+/// once `no_color` is `true`: an explicit "no color" always wins over a
+/// forced "yes color". Deliberately narrower than `NO_COLOR`'s "any value,
+/// even empty, counts" rule: `CLICOLOR_FORCE=0` explicitly means "don't
+/// force", matching the convention other tools (`ripgrep`, `bat`) already
+/// use for it — don't "fix" this to match `NO_COLOR`'s own rule; the two
+/// variables have different conventions on purpose.
+///
+/// Deliberately returns [`ColorMode`], not a second `bool`: `Auto` and
+/// `ForcedOn` must never push [`select_output_style`]'s default toward
+/// `Simple` the way `Off` does — forcing `fancy`'s cursor-repaint into a
+/// non-terminal pipe would corrupt the output outright, so callers pass
+/// `no_color` (never this) to that function.
+pub fn resolve_color_mode(no_color: bool, env: impl Fn(&str) -> Option<String>) -> ColorMode {
+    if no_color {
+        return ColorMode::Off;
+    }
+    match env("CLICOLOR_FORCE") {
+        Some(value) if value != "0" => ColorMode::ForcedOn,
+        _ => ColorMode::Auto,
+    }
+}
+
 /// Picks the output style when `--output` wasn't given — a port of Batect's
 /// `EventLoggerProvider`/`ConsoleInfo.supportsInteractivity` rule: `Fancy`
 /// on a console that can actually support it (stdout is a real terminal,
@@ -413,9 +455,12 @@ pub fn select_output_style(
 /// guess here degrades one, not both); it costs a new dependency (a terminfo
 /// parser or an ncurses binding) for that narrow benefit; and it doesn't
 /// cover what modern terminals actually signal — truecolor is advertised via
-/// `COLORTERM`, which terminfo handles poorly. `NO_COLOR`/`CLICOLOR_FORCE`/
-/// `COLORTERM` aren't honoured here at all yet — only `--no-color` is — which
-/// is the genuinely useful gap, not a terminfo integration.
+/// `COLORTERM`, which terminfo handles poorly, and which Ratect has no use
+/// for regardless: [`Color`] only ever emits basic 8-color SGR codes, so
+/// there's no truecolor escape anywhere to gate on `COLORTERM` in the first
+/// place — not a gap, just nothing to honour. `NO_COLOR`/`CLICOLOR_FORCE`
+/// *are* honoured (see [`resolve_no_color`]/[`resolve_color_mode`]) — that
+/// was the genuinely useful gap, not a terminfo integration.
 pub fn supports_interactivity(terminal: &TerminalFacts) -> bool {
     terminal.stdout_is_terminal
         && terminal.term.as_deref().is_some_and(|term| term != "dumb")
@@ -448,12 +493,16 @@ pub fn console_dimensions_available() -> bool {
 /// only actually fire for an explicit `-o fancy`.
 pub fn create_event_sink(
     requested: Option<OutputStyle>,
-    no_color: bool,
+    color_mode: ColorMode,
     terminal: &TerminalFacts,
 ) -> anyhow::Result<Arc<dyn EventSink>> {
+    // Style selection only ever means "off or not" — `ForcedOn` must never
+    // push the default toward `Simple` the way `Off` does (see
+    // `resolve_color_mode`'s own doc comment for why).
+    let no_color = color_mode == ColorMode::Off;
     let style = select_output_style(requested, no_color, terminal);
     Ok(match style {
-        OutputStyle::Simple => Arc::new(simple::SimpleEventLogger::stdout(no_color)),
+        OutputStyle::Simple => Arc::new(simple::SimpleEventLogger::stdout(color_mode)),
         // Batect's quiet logger renders only task-failure events; Ratect
         // reports failures via the error chain on stderr regardless of
         // output style, so quiet's remaining job — suppressing every
@@ -467,9 +516,9 @@ pub fn create_event_sink(
                      be determined) — use --output simple instead."
                 );
             }
-            Arc::new(fancy::FancyEventLogger::stdout(no_color))
+            Arc::new(fancy::FancyEventLogger::stdout(color_mode))
         }
-        OutputStyle::All => Arc::new(interleaved::InterleavedEventLogger::stdout(no_color)),
+        OutputStyle::All => Arc::new(interleaved::InterleavedEventLogger::stdout(color_mode)),
     })
 }
 
@@ -603,15 +652,19 @@ pub struct Console {
 }
 
 impl Console {
-    /// A console on the real stdout, with color enabled iff stdout is a
-    /// terminal *and* `--no-color` wasn't given — colors are never emitted
-    /// into a pipe or redirection regardless of the flag, matching Batect's
-    /// `enableComplexOutput = !disableColorOutput && stdoutIsTTY`.
-    pub fn stdout(no_color: bool) -> Self {
-        Self::new(
-            Box::new(std::io::stdout()),
-            !no_color && std::io::stdout().is_terminal(),
-        )
+    /// A console on the real stdout, colored according to `color_mode`
+    /// (see [`ColorMode`]): never for `Off`, always for `ForcedOn`
+    /// (`CLICOLOR_FORCE` — colors reach a pipe or redirection on purpose),
+    /// and otherwise iff stdout is actually a terminal — matching Batect's
+    /// `enableComplexOutput = !disableColorOutput && stdoutIsTTY` for the
+    /// `Auto`/`Off` cases, which is all Batect itself has.
+    pub fn stdout(color_mode: ColorMode) -> Self {
+        let color_enabled = match color_mode {
+            ColorMode::Off => false,
+            ColorMode::ForcedOn => true,
+            ColorMode::Auto => std::io::stdout().is_terminal(),
+        };
+        Self::new(Box::new(std::io::stdout()), color_enabled)
     }
 
     pub fn new(writer: Box<dyn Write + Send>, color_enabled: bool) -> Self {

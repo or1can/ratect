@@ -41,6 +41,21 @@ fn console_colors_only_when_enabled() {
 }
 
 #[test]
+fn console_stdout_forced_on_colors_even_though_the_test_harness_captures_stdout() {
+    // `cargo test`'s own stdout capture means `std::io::stdout().is_terminal()`
+    // is false here — exactly the non-terminal case `ForcedOn` exists to
+    // override. This only passes if it actually does.
+    let console = Console::stdout(ColorMode::ForcedOn);
+    assert_eq!(console.colored(Color::Green, "0"), "\x1b[32m0\x1b[0m");
+}
+
+#[test]
+fn console_stdout_off_never_colors_regardless_of_the_terminal() {
+    let console = Console::stdout(ColorMode::Off);
+    assert_eq!(console.colored(Color::Green, "0"), "0");
+}
+
+#[test]
 fn console_println_writes_line_with_newline() {
     let buffer = test_support::SharedBuffer::default();
     let console = Console::new(Box::new(buffer.clone()), false);
@@ -157,6 +172,49 @@ fn resolve_no_color_treats_no_color_as_set_regardless_of_its_value() {
 fn resolve_no_color_ignores_other_variables() {
     assert!(!resolve_no_color(false, |name| (name == "CLICOLOR_FORCE")
         .then(|| "1".to_string())));
+}
+
+fn env_var(name: &'static str, value: &'static str) -> impl Fn(&str) -> Option<String> {
+    move |queried| (queried == name).then(|| value.to_string())
+}
+
+#[test]
+fn resolve_color_mode_is_auto_when_nothing_is_set() {
+    assert_eq!(resolve_color_mode(false, |_| None), ColorMode::Auto);
+}
+
+#[test]
+fn resolve_color_mode_is_forced_on_when_clicolor_force_is_set() {
+    assert_eq!(
+        resolve_color_mode(false, env_var("CLICOLOR_FORCE", "1")),
+        ColorMode::ForcedOn
+    );
+}
+
+#[test]
+fn resolve_color_mode_treats_clicolor_force_0_as_not_forced() {
+    // Unlike NO_COLOR (any value counts), CLICOLOR_FORCE=0 explicitly
+    // means "don't force" — the convention `ripgrep`/`bat` already use.
+    assert_eq!(
+        resolve_color_mode(false, env_var("CLICOLOR_FORCE", "0")),
+        ColorMode::Auto
+    );
+}
+
+#[test]
+fn resolve_color_mode_is_off_when_no_color_is_already_true_even_with_clicolor_force_set() {
+    // no_color=true here stands in for either --no-color or NO_COLOR
+    // already having resolved to true (see `resolve_no_color`) — an
+    // explicit "no color" always wins over a forced "yes color".
+    assert_eq!(
+        resolve_color_mode(true, env_var("CLICOLOR_FORCE", "1")),
+        ColorMode::Off
+    );
+}
+
+#[test]
+fn resolve_color_mode_is_off_when_no_color_is_true_and_clicolor_force_is_unset() {
+    assert_eq!(resolve_color_mode(true, |_| None), ColorMode::Off);
 }
 
 #[test]

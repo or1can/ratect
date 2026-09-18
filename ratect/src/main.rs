@@ -35,7 +35,8 @@ use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
 use ratect_core::resources::Leftover;
 use ratect_core::ui::{
-    create_event_sink, resolve_no_color, select_output_style, OutputStyle, TerminalFacts,
+    create_event_sink, resolve_color_mode, resolve_no_color, select_output_style, ColorMode,
+    OutputStyle, TerminalFacts,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -647,6 +648,13 @@ async fn run(cli: Cli) -> Result<()> {
     // call sites below — see `resolve_no_color`'s own doc comment for what
     // NO_COLOR does and why it's not narrowed to "color only".
     global.no_color = resolve_no_color(global.no_color, |name| std::env::var(name).ok());
+    // `CLICOLOR_FORCE`, on top of that — see `resolve_color_mode`'s own doc
+    // comment for why this takes the already-resolved `no_color` rather
+    // than re-deriving it, and why it's a separate value from `no_color`
+    // rather than folded into it: `--output`'s own auto-selection below
+    // must never see anything but `Off`/not, so it still gets
+    // `global.no_color`, never this.
+    let color_mode = resolve_color_mode(global.no_color, |name| std::env::var(name).ok());
 
     // Gathered once and shared between the output-format decisions and
     // (inside `create_event_sink`) the logger itself, rather than each
@@ -659,7 +667,7 @@ async fn run(cli: Cli) -> Result<()> {
     match command {
         Command::Run(args) => {
             let project = load(&global, &args.config_vars).await?;
-            run_task(project, args, global.no_color, requested_style, terminal).await
+            run_task(project, args, color_mode, requested_style, terminal).await
         }
         Command::Tasks {
             command: TasksCommand::List(args),
@@ -798,14 +806,14 @@ const BATECT_CONFIG_FILE: &str = "batect.yml";
 async fn run_task(
     project: ratect_core::config::LoadedProject,
     args: RunArgs,
-    no_color: bool,
+    color_mode: ColorMode,
     requested_style: Option<OutputStyle>,
     terminal: TerminalFacts,
 ) -> Result<()> {
     // One logger, shared by the Docker client (pull/build progress) and the
     // engine (lifecycle milestones), so it sees the whole event stream in
     // order.
-    let event_sink = create_event_sink(requested_style, no_color, &terminal)?;
+    let event_sink = create_event_sink(requested_style, color_mode, &terminal)?;
 
     // Built before the connection options are consumed below.
     let settings = args.engine_settings(project.project_directory);

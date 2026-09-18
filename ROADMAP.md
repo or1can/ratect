@@ -112,19 +112,6 @@ Improving the developer experience through better tools and feedback.
   - **Wrap text in `fancy` output** rather than letting a long line run off the edge. Note `fancy.rs` already clips to the real display width via `unicode-width`, so the machinery to measure is there — this is about what to *do* at the boundary.
   - **A log-aggregation output mode** (Batect's example was starting a Seq instance and pointing every container's logs at it). Ratect's `EventSink` design makes an extra mode cheap to add; the open question is whether a task runner should be starting a log server on your behalf, or just be easy to point at one you already run.
   - **Cheaper repaints in `fancy` mode.** Batect wanted to batch console updates rather than reprinting on every event. Ratect is already better in one direction — `fancy.rs:59` skips a repaint entirely when the content hasn't changed — and worse in another: it repaints the whole block per event, where Batect diffs and rewrites only the lines that changed (`fancy.rs:26`). Deliberately left as a future item rather than scoped: nobody has reported it and the cost hasn't been measured, so the honest first step is a measurement (a task with many dependencies emitting events rapidly) rather than an optimisation.
-
-  Also open: `CLICOLOR_FORCE` — forcing color when stdout isn't a terminal — is
-  honoured nowhere in either binary yet; `--no-color`/`NO_COLOR` already are (see
-  [`resolve_no_color`](ratect-core/src/ui.rs)). `CLICOLOR_FORCE` needs a real
-  tri-state (auto/off/forced-on) threaded through `Console::stdout` and every
-  `*EventLogger::stdout` wrapper, not a bool, and must never affect output
-  *style* selection (forcing `fancy`'s cursor-repaint into a pipe would corrupt
-  output) — a genuinely bigger change than `NO_COLOR` was. `COLORTERM` isn't
-  actionable at all: it signals truecolor support, but `ui::Color` only ever
-  emits basic 8-color SGR codes, so there's no truecolor escape anywhere to gate
-  on. (Terminal-capability auto-detection itself is settled, deliberately
-  staying heuristic rather than moving to terminfo — see
-  [`supports_interactivity`](ratect-core/src/ui.rs)'s own doc comment for why.)
 - **Watch Mode**: Automatically re-running tasks when source files change.
 - **Documentation beyond reference material** — tracked here as roadmap work, not as
   an afterthought, because for a task runner the documentation *is* a large part of

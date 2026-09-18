@@ -27,7 +27,7 @@
 //! drops that inner prefix — the outer one already says whose line it is,
 //! and Ratect's milestone wording is unambiguous about being Ratect's own.
 
-use super::{Color, Console, ContainerIoStreaming, EventSink, OnceFlag, TaskEvent};
+use super::{Color, ColorMode, Console, ContainerIoStreaming, EventSink, OnceFlag, TaskEvent};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use unicode_width::UnicodeWidthStr;
@@ -80,10 +80,10 @@ impl InterleavedEventLogger {
         }
     }
 
-    /// The logger `main.rs` actually wires up: real stdout, color iff
-    /// stdout is a terminal and `--no-color` wasn't given.
-    pub fn stdout(no_color: bool) -> Self {
-        Self::new(Console::stdout(no_color))
+    /// The logger `main.rs` actually wires up: real stdout, colored
+    /// according to `color_mode` (see [`ColorMode`]).
+    pub fn stdout(color_mode: ColorMode) -> Self {
+        Self::new(Console::stdout(color_mode))
     }
 
     fn print_prefixed(&self, state: &State, name: &str, color: Color, line: &str) {
