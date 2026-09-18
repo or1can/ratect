@@ -42,6 +42,29 @@ jobs:
       - uses: actions/checkout@v7
       - uses: taiki-e/install-action@mdbook
       - run: mdbook build
+      # Generated rather than a static file under docs/, so a page added or
+      # removed from SUMMARY.md can't leave it stale. 404.html/print.html/
+      # toc.html are mdBook's own infrastructure pages (an error page, the
+      # whole-book duplicate-content print view, and the sidebar's iframe
+      # source respectively), not content — excluded so a crawler is never
+      # pointed at them.
+      - name: Generate sitemap.xml
+        run: |
+          base=https://ratect.apps.orican.eu
+          {
+            echo '<?xml version="1.0" encoding="UTF-8"?>'
+            echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+            for f in book/*.html; do
+              name=$(basename "$f")
+              case "$name" in
+                404.html|print.html|toc.html) continue ;;
+              esac
+              rel="$name"
+              [ "$name" = index.html ] && rel=""
+              echo "  <url><loc>$base/$rel</loc></url>"
+            done
+            echo '</urlset>'
+          } > book/sitemap.xml
       - uses: lycheeverse/lychee-action@v2
         with:
           args: --offline --include-fragments --no-progress 'docs/**/*.md'
