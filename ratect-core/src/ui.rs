@@ -455,9 +455,12 @@ pub fn select_output_style(
 /// guess here degrades one, not both); it costs a new dependency (a terminfo
 /// parser or an ncurses binding) for that narrow benefit; and it doesn't
 /// cover what modern terminals actually signal — truecolor is advertised via
-/// `COLORTERM`, which terminfo handles poorly. `NO_COLOR`/`CLICOLOR_FORCE`/
-/// `COLORTERM` aren't honoured here at all yet — only `--no-color` is — which
-/// is the genuinely useful gap, not a terminfo integration.
+/// `COLORTERM`, which terminfo handles poorly, and which Ratect has no use
+/// for regardless: [`Color`] only ever emits basic 8-color SGR codes, so
+/// there's no truecolor escape anywhere to gate on `COLORTERM` in the first
+/// place — not a gap, just nothing to honour. `NO_COLOR`/`CLICOLOR_FORCE`
+/// *are* honoured (see [`resolve_no_color`]/[`resolve_color_mode`]) — that
+/// was the genuinely useful gap, not a terminfo integration.
 pub fn supports_interactivity(terminal: &TerminalFacts) -> bool {
     terminal.stdout_is_terminal
         && terminal.term.as_deref().is_some_and(|term| term != "dumb")
