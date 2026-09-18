@@ -1212,6 +1212,20 @@ to live at, so links written before the split still resolve.
   This binary's own parity surface is unchanged. See the closed
   [milestone](https://github.com/or1can/ratect/milestone/3) for everything
   that shipped.
+- **0.30.0** — Six independent fixes and features, not one theme, shared with
+  [`ratect` 0.9.0](#ratect) below rather than specific to this binary — all
+  of it lives in `ratect-core`: a panic hook naming the version and where to
+  report it; a warning when a dependency exits on its own after already
+  becoming ready, instead of surfacing later as a confusing symptom in
+  whatever depended on it; two `fancy`/`all`-mode output fixes — a live-block
+  corruption when the terminal narrows mid-run, and (a deliberate divergence
+  from Batect) `all` mode now flushing on a lone carriage return instead of
+  staying silent until the stream ends and dumping everything as one line;
+  `NO_COLOR`/`CLICOLOR_FORCE` environment variable support; and `NOTICE` now
+  travels with released archives (Apache-2.0 §4(d)). This binary's own parity
+  surface is unchanged. See the closed
+  [milestone](https://github.com/or1can/ratect/milestone/4) for everything
+  that shipped, including the test-only fixes this list leaves out.
 - **1.0.0** — the [Batect Parity](ROADMAP.md#batect-parity) section above substantially checked
   off (all of the above, including 0.7.0–0.19.0, not just the items shipped through
   0.6.0), and verified against real Batect projects — the conformance corpus above
@@ -1511,6 +1525,14 @@ to live at, so links written before the split still resolve.
   [decisions/0010](decisions/0010-release-binary-distribution.md). This
   binary's own subcommand surface is unchanged. See the closed
   [milestone](https://github.com/or1can/ratect/milestone/3) for everything
+  that shipped.
+- **0.9.0** — the same shared `ratect-core` work as
+  [`ratect-compat` 0.30.0](#ratect-compat) above: a panic hook, a
+  dependency-exit warning, two `fancy`/`all`-mode output fixes, and
+  `NO_COLOR`/`CLICOLOR_FORCE` support. `NOTICE` in released archives applies
+  here too, since it's the same `dist-workspace.toml`. This binary's own
+  subcommand surface is unchanged. See the closed
+  [milestone](https://github.com/or1can/ratect/milestone/4) for everything
   that shipped.
 
 Its **1.0.0** means something different from `ratect-compat`'s: interface stability
