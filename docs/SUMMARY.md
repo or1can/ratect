@@ -6,6 +6,7 @@
 
 - [Installation](installation.md)
 - [Getting Started](getting-started.md)
+- [Worked Examples](worked-examples.md)
 - [How It Works](how-it-works.md)
 - [Task Lifecycle](task-lifecycle.md)
 
