@@ -1,0 +1,71 @@
+name: Docs
+
+# Builds the mdBook site from docs/ and, on push to main, publishes it to
+# GitHub Pages. Also link-checks docs/ on every run (build and deploy
+# alike) — mdbook-linkcheck, the mdBook-ecosystem tool for this, hasn't
+# been released since 2022 and no longer parses current mdbook's render
+# context, so this uses lychee directly against the Markdown sources
+# instead: `--offline` skips the http(s) links docs/ also has (no
+# dependency on a third party's uptime), `--include-fragments` checks
+# `#anchor` targets too, and running it against the .md files rather than
+# the rendered HTML means a relative link out to something else in the
+# repo (../AGENTS.md, ../decisions/*, ...) is checked against what's
+# actually on disk rather than flagged just because docs/ is the only
+# tree this site publishes.
+#
+# Path-filtered so a PR that doesn't touch docs/ or the book itself never
+# runs this (mirrors msrv-floor.yml's approach).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/**
+      - book.toml
+      - .github/workflows/docs.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - docs/**
+      - book.toml
+      - .github/workflows/docs.yml
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@mdbook
+      - run: mdbook build
+      - uses: lycheeverse/lychee-action@v2
+        with:
+          args: --offline --include-fragments --no-progress 'docs/**/*.md'
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: book
+
+  # A pull request only runs the `build` job above — this one publishes,
+  # and only for a push that landed on main.
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+      - id: deployment
+        uses: actions/deploy-pages@v4

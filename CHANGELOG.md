@@ -21,6 +21,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Added
+
+- A rendered, searchable documentation site (mdBook), built from the existing `docs/` tree and published to GitHub Pages on every push to `main`. Pull requests that touch `docs/` build the same site and link-check it, without publishing.
+
 ## [ratect-compat 0.30.0 · ratect 0.9.0] - 2026-09-18
 
 ### Added
