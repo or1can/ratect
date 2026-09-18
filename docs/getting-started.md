@@ -133,3 +133,9 @@ RUST_LOG=debug ratect-compat test
 
 `debug` also surfaces low-level Docker API activity (container create/start/remove),
 which is useful when troubleshooting.
+
+## Next steps
+
+See [Worked Examples](worked-examples.md) for a real `build`/`test`/`lint` task set
+in Rust, Go, Node.js, Python, or the JVM — a faster starting point than building one
+up from scratch if your project is in one of those.

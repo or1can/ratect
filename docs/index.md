@@ -17,7 +17,8 @@ full list, drop-in replacement included. It's an independent project, not
 affiliated with or endorsed by the original Batect project.
 
 - New here? Start with [Installation](installation.md) and
-  [Getting Started](getting-started.md).
+  [Getting Started](getting-started.md), or jump straight to a [worked
+  example](worked-examples.md) for your language.
 - Coming from Batect? See [Differences from Batect](differences-from-batect.md)
   for what to expect.
 - Looking for a specific flag or config field? Jump to a reference:

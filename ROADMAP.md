@@ -123,10 +123,6 @@ Improving the developer experience through better tools and feedback.
   [installation](docs/installation.md), [getting-started](docs/getting-started.md))
   and has nothing in the shapes below — which is also, near enough, Batect's own
   unbuilt documentation list, so the gap is inherited rather than newly created:
-  - **Worked examples per language/ecosystem** — a real `ratect.toml` for a Rust,
-    Go, Node, Python and JVM project. The single most-requested shape of
-    documentation for a tool like this, and the fastest path from "interesting" to
-    "running".
   - **How to introduce Ratect to an existing project** — incremental adoption,
     starting from one task rather than converting everything. Ratect has an
     unusually strong story here that's currently undocumented: `ratect config
