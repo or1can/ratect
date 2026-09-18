@@ -13,6 +13,17 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 
 Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone.
 
+## Rejected feature requests: `.out-of-scope/`
+
+`/triage` closing an enhancement as `wontfix` (not "already implemented" —
+that's a built feature, points to where it lives instead) records the
+decision in `.out-of-scope/<concept>.md`: what was rejected, why, and every
+issue that requested it. One file per concept, not per issue — a repeat
+request gets appended to the existing file's list rather than re-litigated.
+Triage reads this directory first so a matching new issue can be closed
+against the existing rationale instead of a fresh one being written. See the
+`triage` skill's own `OUT-OF-SCOPE.md` for the format and full flow.
+
 ## Pull requests as a triage surface
 
 **PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_
