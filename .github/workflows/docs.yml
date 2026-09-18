@@ -45,9 +45,13 @@ jobs:
       - uses: lycheeverse/lychee-action@v2
         with:
           args: --offline --include-fragments --no-progress 'docs/**/*.md'
-      - uses: actions/upload-pages-artifact@v3
+      # mdbook writes book/.nojekyll (telling GitHub Pages' legacy
+      # branch-based build not to run Jekyll over the output) — v4+ of this
+      # action drops dotfiles from the artifact unless told to keep them.
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: book
+          include-hidden-files: true
 
   # A pull request only runs the `build` job above — this one publishes,
   # and only for a push that landed on main.
@@ -66,6 +70,11 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/configure-pages@v5
+      # `enablement` defaults to `false` (verified against this repo's own
+      # first deploy run, which 404'd looking up a Pages site) — without it,
+      # a repo with Pages never previously turned on stays never turned on.
+      - uses: actions/configure-pages@v6
+        with:
+          enablement: true
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
