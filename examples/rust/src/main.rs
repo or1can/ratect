@@ -1,11 +1,17 @@
+fn greet() -> String {
+    "Hello, world!".to_string()
+}
+
 fn main() {
-    println!("Hello, world!");
+    println!("{}", greet());
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
+    fn it_greets() {
+        assert_eq!(greet(), "Hello, world!");
     }
 }

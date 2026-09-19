@@ -19,7 +19,17 @@ description = "Run the test suite"
 group = "Development"
 run = { container = "build-env", command = "go test ./..." }
 
+[tasks.run]
+description = "Run the application"
+group = "Development"
+run = { container = "build-env", command = "go run ." }
+
 [tasks.lint]
 description = "Run go vet"
 group = "Checks"
 run = { container = "build-env", command = "go vet ./..." }
+
+[tasks.shell]
+description = "Start a shell in the build environment"
+group = "Utilities"
+run = { container = "build-env", command = "bash" }

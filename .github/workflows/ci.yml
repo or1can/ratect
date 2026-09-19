@@ -150,8 +150,8 @@ jobs:
   # bug once already: `command` has no shell, so an unwrapped `&&` doesn't
   # error, it just silently drops everything after the first program — a
   # `ratect config validate`/`ratect tasks list`-only check missed that
-  # entirely, which is why this actually runs `build`/`test`/`lint` against
-  # a real daemon rather than stopping at config validation.
+  # entirely, which is why this actually runs `build`/`test`/`run`/`lint`/`shell`
+  # against a real daemon rather than stopping at config validation.
   worked-examples:
     name: Worked Examples
     runs-on: ubuntu-latest
@@ -160,17 +160,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p ratect -p ratect-compat
-      - name: Run build/test/lint for every worked example
+      - name: Run build/test/run/lint/shell for every worked example
         shell: bash
         run: |
+          # Global options (`-f`, here) work before or after the subcommand
+          # (cli-reference.md), so both binaries take the same `-f "$cfg"`
+          # placement — only whether a leading `run` subcommand is needed
+          # differs, and that's `prefix`, not a second `cmd` body.
+          cmd() { "$bin" -f "$cfg" "${prefix[@]}" "$1" "${@:2}"; }
           for dir in examples/*/; do
             name=$(basename "$dir")
             if [ -f "$dir/ratect.toml" ]; then
               bin=./target/debug/ratect
-              cmd() { "$bin" run "$1" -f "$dir/ratect.toml"; }
+              cfg="$dir/ratect.toml"
+              prefix=(run)
             elif [ -f "$dir/batect.yml" ]; then
               bin=./target/debug/ratect-compat
-              cmd() { "$bin" -f "$dir/batect.yml" "$1"; }
+              cfg="$dir/batect.yml"
+              prefix=()
             else
               echo "::error::$dir has neither ratect.toml nor batect.yml"
               exit 1
@@ -178,7 +185,15 @@ jobs:
             echo "::group::$name"
             cmd build
             cmd test
+            cmd run
             cmd lint
+            # `shell` is interactive by design (config-reference.md's own
+            # Interactive mode), so it never gets a bare invocation here —
+            # `-- -c '...'` appends argv onto the container's `bash`,
+            # turning "drop into a shell" into "run one command and exit",
+            # which still proves the container/task actually starts without
+            # hanging CI waiting on a TTY that never arrives.
+            cmd shell -- -c "echo $name shell ok"
             echo "::endgroup::"
           done
 

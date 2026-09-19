@@ -1,19 +1,25 @@
 # Worked Examples
 
 A real, minimal hello-world project for five common ecosystems — Rust, Go,
-Node.js, Python, and the JVM — each with `build`, `test`, and `lint` tasks
-using that ecosystem's own usual tooling and base image. The config below
-each intro is included directly from the actual project, checked into this
-repository under
+Node.js, Python, and the JVM — each with `build`, `test`, `run`, `lint`, and
+`shell`
+tasks using that ecosystem's own usual tooling and base image. `shell` starts an
+interactive shell in the build environment — no config needed beyond the task
+itself, since [interactive mode](config-reference.md#interactive-mode) is
+automatic. It's the fastest way to poke around when a build environment isn't
+behaving as expected. The config below each intro is included directly from
+the actual project, checked into this repository under
 [`examples/`](https://github.com/or1can/ratect/tree/main/examples) — what you
 read here is exactly what a CI job in this repository runs against a real
 Docker daemon on every change, so it can't silently drift out of date. Clone
 the whole directory to run one yourself, or copy the config and adjust the
 commands to your own scripts.
 
-Every example below is `ratect.toml`; the same containers and tasks work
+Four of the five are `ratect.toml`; the same containers and tasks work
 identically as `batect.yml` with `ratect-compat` (see [`ratect config
-convert`](ratect-cli.md#config) to translate one to the other). See the
+convert`](ratect-cli.md#config) to translate one to the other) — the JVM
+example below is `batect.yml` itself, for reasons its own section explains.
+See the
 [configuration reference](ratect-config-reference.md) for what each field
 does, and [Getting Started](getting-started.md) if you haven't run a task
 before.
@@ -23,6 +29,32 @@ Every `command` below that chains two steps with `&&` wraps them in `sh -c
 involved](config-reference.md#taskrun) — an unwrapped `&&` doesn't fail
 loudly, it's just handed to the first program as a literal extra argument,
 which several package managers silently ignore rather than reject.
+
+## Try it
+
+Cloning [`examples/rust`](https://github.com/or1can/ratect/tree/main/examples/rust)
+and running `ratect tasks list` there prints:
+
+<!-- verify: cargo run -q -p ratect -- tasks list -f examples/rust/ratect.toml -->
+```
+Tasks in example-rust:
+
+Checks:
+- lint: Run clippy with warnings denied
+
+Development:
+- build: Compile the project
+- run: Run the application
+- test: Run the test suite
+
+Utilities:
+- shell: Start a shell in the build environment
+```
+
+`ratect run` followed by any task name (`build`, `test`, `run`, `lint`, or `shell`)
+then actually runs it — see [Getting
+Started](getting-started.md#3-run-a-task) for what that output looks like
+against a real Docker daemon.
 
 ## Rust
 

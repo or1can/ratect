@@ -2,6 +2,8 @@ package main
 
 import "testing"
 
-func TestMain_doesNotPanic(t *testing.T) {
-	main()
+func TestGreet(t *testing.T) {
+	if got := Greet(); got != "Hello, world!" {
+		t.Fatalf("expected %q, got %q", "Hello, world!", got)
+	}
 }

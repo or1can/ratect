@@ -18,7 +18,17 @@ description = "Run the test suite"
 group = "Development"
 run = { container = "build-env", command = "sh -c 'pip install -r requirements-dev.txt && pytest'" }
 
+[tasks.run]
+description = "Run the application"
+group = "Development"
+run = { container = "build-env", command = "python hello.py" }
+
 [tasks.lint]
 description = "Run ruff"
 group = "Checks"
 run = { container = "build-env", command = "sh -c 'pip install -r requirements-dev.txt && ruff check .'" }
+
+[tasks.shell]
+description = "Start a shell in the build environment"
+group = "Utilities"
+run = { container = "build-env", command = "bash" }

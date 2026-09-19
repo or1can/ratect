@@ -19,7 +19,17 @@ description = "Run the test suite"
 group = "Development"
 run = { container = "build-env", command = "cargo test" }
 
+[tasks.run]
+description = "Run the application"
+group = "Development"
+run = { container = "build-env", command = "cargo run" }
+
 [tasks.lint]
 description = "Run clippy with warnings denied"
 group = "Checks"
 run = { container = "build-env", command = "sh -c 'rustup --quiet component add clippy && cargo clippy --all-targets -- -D warnings'" }
+
+[tasks.shell]
+description = "Start a shell in the build environment"
+group = "Utilities"
+run = { container = "build-env", command = "bash" }

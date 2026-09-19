@@ -26,9 +26,23 @@ tasks:
       container: build-env
       command: ./gradlew test
 
+  run:
+    description: Run the application
+    group: Development
+    run:
+      container: build-env
+      command: ./gradlew run
+
   lint:
     description: Run Checkstyle
     group: Checks
     run:
       container: build-env
       command: ./gradlew checkstyleMain checkstyleTest
+
+  shell:
+    description: Start a shell in the build environment
+    group: Utilities
+    run:
+      container: build-env
+      command: bash
