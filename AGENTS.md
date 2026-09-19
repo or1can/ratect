@@ -185,13 +185,15 @@ own yet.
   with no exact-string entry in that file's `[executable-claims]` section
   is a **gate finding** naming the command and the exact TOML to add,
   regardless of whether it's actually safe — a fresh clone hits this
-  immediately on this repo's one real marker (`AGENTS.md`'s smoke-test
-  example above). Add, once per machine:
+  immediately on this repo's markers (`AGENTS.md`'s smoke-test example
+  above, and [`docs/worked-examples.md`](docs/worked-examples.md)'s own
+  `tasks list` transcript). Add, once per machine:
 
   ```toml
   [executable-claims]
   allowed = [
       "cargo run -q -p ratect-compat -- -f ratect-compat/tests/fixtures/smoke.yml --list-tasks",
+      "cargo run -q -p ratect -- tasks list -f examples/rust/ratect.toml",
   ]
   ```
 
@@ -213,6 +215,7 @@ own yet.
   - **Core engine/Docker behaviour → a `ratect-compat` fixture.** It's the permanent home because `ratect-compat` is permanently `batect.yml`-format (compatibility requires it — see `ROADMAP.md`), so those fixtures never have to change format, and its thin CLI exercises the whole stack. Don't re-prove the same behaviour through `ratect`'s CLI — that re-tests the engine via a second driver for no added confidence; `ratect` proves *its* CLI reaches the engine with one representative e2e (`run_executes_a_task_via_docker`) and inherits the rest.
   - **A binary's own CLI surface → that binary's fixtures.** `ratect`'s set is small *because it should be*: its subcommand surface (`tasks.yml`) and its own verbs (`caches`/`resources`/`labels`, which `ratect-compat` doesn't have). From 0.3.0 it also has fixtures in `ratect`'s *own* config format — which is the deeper reason the two sets are never merged into a shared directory: a file can't be both a valid `batect.yml` and a valid `ratect`-native config, so a "common" fixtures dir would have to fork exactly when that format lands (the very next release). The fixtures belong to the format, and the format is `ratect-compat`'s permanent territory. CI runs the non-Docker suite as `cargo test --workspace --all-targets --all-features` — the `--all-features` part is what runs `ratect-core`'s `schema` module tests (see the module list above); plain `cargo test --workspace` skips them, so run `cargo test -p ratect-core --features schema` after touching anything in `config.rs`. When a config type changes, regenerate *both* committed schemas (`batect.yml`'s and `ratect.toml`'s) with `RATECT_UPDATE_SCHEMA=1 cargo test -p ratect-core --features schema schema::` and commit the result alongside — the test fails, with that same command in its message, if you don't.
   - **One documented exception: a fixture with no test at all.** `ratect-compat/tests/fixtures/manual-terminal-resize.yml` (ratect#73) backs a manual-only repro — a live terminal's own reflow rendering isn't something any headless harness here, `portable-pty` included, can reproduce or assert against. Its own header comment carries the steps; don't read its lack of a `#[ignore]`d test as orphaned or delete it as dead weight.
+  - **[`examples/`](examples/) is neither fixture set — it's user-facing, not test-owned.** A real per-ecosystem project (Rust, Go, Node.js, Python, Gradle/JVM) that [`docs/worked-examples.md`](docs/worked-examples.md) `{{#include}}`s its config from, so what's documented is always exactly what's on disk. It doesn't belong under either `tests/fixtures/` directory because it isn't proving engine/Docker behaviour or a binary's CLI surface — that's already covered by the two sets above — it's proving that a real, cloneable project actually works, which is a different claim with a different audience. Verified anyway, by its own CI job (see Tests below), because a doc that claims something runs and doesn't check it is exactly the gap that job was built to close.
 - **Coverage**: `cargo llvm-cov --workspace --show-missing-lines --summary-only` (requires `rustup component add llvm-tools-preview` and `cargo install cargo-llvm-cov`) reports exact uncovered lines per file — use it to find gaps, not to chase a percentage. `cargo llvm-cov --workspace --html` opens a browsable report at `target/llvm-cov/html`. CI runs this and uploads the HTML report as a `coverage-report` artifact (non-gating).
 
 ## Current Status & Roadmap

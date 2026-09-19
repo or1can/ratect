@@ -164,10 +164,10 @@ jobs:
         shell: bash
         run: |
           # Global options (`-f`, here) work before or after the subcommand
-          # (cli-reference.md), so both binaries take the same `-f "$cfg"`
+          # (ratect-cli.md), so both binaries take the same `-f "$cfg"`
           # placement — only whether a leading `run` subcommand is needed
           # differs, and that's `prefix`, not a second `cmd` body.
-          cmd() { "$bin" -f "$cfg" "${prefix[@]}" "$1" "${@:2}"; }
+          cmd() { "$bin" -f "$cfg" "${prefix[@]}" "$@"; }
           for dir in examples/*/; do
             name=$(basename "$dir")
             if [ -f "$dir/ratect.toml" ]; then
@@ -185,15 +185,37 @@ jobs:
             echo "::group::$name"
             cmd build
             cmd test
-            cmd run
+            # Not just an exit-code check: `run` is the one task whose whole
+            # job is producing a specific line of output, so assert on it
+            # directly — an exit-code-only check already missed a real bug
+            # once (see this job's own comment above).
+            if ! run_output=$(cmd run 2>&1); then
+              echo "$run_output"
+              echo "::error::$name's run task failed"
+              exit 1
+            fi
+            echo "$run_output"
+            if ! grep -q "Hello, world!" <<< "$run_output"; then
+              echo "::error::$name's run task didn't print the expected greeting"
+              exit 1
+            fi
             cmd lint
             # `shell` is interactive by design (config-reference.md's own
-            # Interactive mode), so it never gets a bare invocation here —
-            # `-- -c '...'` appends argv onto the container's `bash`,
-            # turning "drop into a shell" into "run one command and exit",
-            # which still proves the container/task actually starts without
-            # hanging CI waiting on a TTY that never arrives.
-            cmd shell -- -c "echo $name shell ok"
+            # Interactive mode) — `-- -c '...'` turns it from "drop into a
+            # shell" into "run one command and exit", giving this something
+            # real to assert on (the echoed string) instead of just an exit
+            # code, and sidestepping needing a real TTY on stdin/stdout for
+            # what a bare invocation would otherwise wait to attach to.
+            if ! shell_output=$(cmd shell -- -c "echo $name shell ok" 2>&1); then
+              echo "$shell_output"
+              echo "::error::$name's shell task failed"
+              exit 1
+            fi
+            echo "$shell_output"
+            if ! grep -q "$name shell ok" <<< "$shell_output"; then
+              echo "::error::$name's shell task didn't run the given command"
+              exit 1
+            fi
             echo "::endgroup::"
           done
 

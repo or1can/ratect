@@ -120,7 +120,8 @@ Improving the developer experience through better tools and feedback.
   strong on reference (two CLI references, two config references,
   [how-it-works](docs/how-it-works.md), [task-lifecycle](docs/task-lifecycle.md),
   [differences-from-batect](docs/differences-from-batect.md),
-  [installation](docs/installation.md), [getting-started](docs/getting-started.md))
+  [installation](docs/installation.md), [getting-started](docs/getting-started.md),
+  [worked-examples](docs/worked-examples.md))
   and has nothing in the shapes below — which is also, near enough, Batect's own
   unbuilt documentation list, so the gap is inherited rather than newly created:
   - **How to introduce Ratect to an existing project** — incremental adoption,
