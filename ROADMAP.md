@@ -121,7 +121,7 @@ Improving the developer experience through better tools and feedback.
   [how-it-works](docs/how-it-works.md), [task-lifecycle](docs/task-lifecycle.md),
   [differences-from-batect](docs/differences-from-batect.md),
   [installation](docs/installation.md), [getting-started](docs/getting-started.md),
-  [worked-examples](docs/worked-examples.md))
+  [worked-examples](docs/worked-examples.md), [comparison](docs/comparison.md))
   and has nothing in the shapes below — which is also, near enough, Batect's own
   unbuilt documentation list, so the gap is inherited rather than newly created:
   - **How to introduce Ratect to an existing project** — incremental adoption,
@@ -133,10 +133,6 @@ Improving the developer experience through better tools and feedback.
     to run something at container start regardless of the task's command
     (`ENTRYPOINT` plus `exec`); why task idempotency matters; raising Docker
     Desktop's CPU/memory limits on macOS.
-  - **How Ratect compares to other tools** — Docker Compose, Make, Task, Earthly,
-    Dagger, `just`. Batect's own list named Cage and Toast, both largely dormant
-    now; the comparison worth writing is against what people actually reach for
-    today, which is a different set than when Batect wrote that entry.
   - **Using Ratect as reusable pipeline building blocks** — what Git includes and
     bundles are actually *for*, which the [config
     reference](docs/config-reference.md#includes) documents mechanically without
