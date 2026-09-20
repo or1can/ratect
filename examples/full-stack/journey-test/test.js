@@ -24,6 +24,12 @@ console.log(`app responded: ${JSON.stringify(body)}`);
 // (app, and this container) both need `cache`, so it must be the same
 // container either way, not started twice.
 const redis = createClient({ url: process.env.REDIS_URL });
+// Without a listener, node-redis throws an unhandled 'error' event on a
+// backend/connection problem, crashing this script with a raw stack trace
+// instead of the informative fail() message the rest of this file is for.
+redis.on("error", (err) => {
+  fail(`Redis client error: ${err.message}`);
+});
 await redis.connect();
 const cached = await redis.get("visits:count");
 if (cached === null) {

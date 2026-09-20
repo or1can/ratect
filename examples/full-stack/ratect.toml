@@ -21,7 +21,7 @@ health_check = { command = "node -e \"fetch('http://127.0.0.1:8080/healthz').the
 image = "postgres:16"
 environment = { POSTGRES_HOST_AUTH_METHOD = "trust" }
 volumes = [{ local = "db/init", container = "/docker-entrypoint-initdb.d" }]
-health_check = { command = "pg_isready -h 127.0.0.1 -U postgres", interval = "1s", retries = 30 }
+health_check = { command = "pg_isready -h 127.0.0.1 -U postgres", interval = "1s", retries = 90 }
 
 [containers.cache]
 image = "redis:7"
