@@ -57,3 +57,9 @@ verbatim from Batect's own journey-test suite
 (`app/src/journeyTest/resources/` in github.com/batect/batect), and are used to
 demonstrate that `ratect-compat` reproduces Batect's own observable behaviour. Batect
 is licensed under the Apache License, Version 2.0. Copyright 2017-2022 Charles Korn.
+
+`vendor/asciinema-player.min.js` and `vendor/asciinema-player.css` are the built
+release assets of `github.com/asciinema/asciinema-player` v3.17.0, self-hosted so the
+docs site's live demo (`docs/index.md`) doesn't depend on a third party's uptime for
+playback. That project is licensed under the Apache License, Version 2.0. Author:
+Marcin Kulik.
