@@ -1,3 +1,4 @@
+# ANCHOR: homepage-demo
 project_name = "ratect-full-stack"
 
 [containers.app]
@@ -15,18 +16,6 @@ volumes = [
 dependencies = ["db", "cache"]
 command = "sh -c 'npm ci && npm start'"
 health_check = { command = "node -e \"fetch('http://127.0.0.1:8080/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"", interval = "1s", retries = 20 }
-
-# `app`'s own health_check applies to *any* task run in that container —
-# including a one-shot `npm ci`, which would exit long before a server on
-# port 8080 ever exists for the check to find. `build`/`unit-test`/`lint`/
-# `shell` run here instead, on the same image with no health check to race.
-[containers.dev]
-image = "node:22"
-working_directory = "/code"
-volumes = [
-    { local = "app", container = "/code" },
-    { type = "cache", name = "full-stack-npm-cache", container = "/root/.npm" },
-]
 
 [containers.db]
 image = "postgres:16"
@@ -47,6 +36,19 @@ volumes = [
     { type = "cache", name = "full-stack-npm-cache", container = "/root/.npm" },
 ]
 command = "sh -c 'npm ci && node test.js'"
+# ANCHOR_END: homepage-demo
+
+# `app`'s own health_check applies to *any* task run in that container —
+# including a one-shot `npm ci`, which would exit long before a server on
+# port 8080 ever exists for the check to find. `build`/`unit-test`/`lint`/
+# `shell` run here instead, on the same image with no health check to race.
+[containers.dev]
+image = "node:22"
+working_directory = "/code"
+volumes = [
+    { local = "app", container = "/code" },
+    { type = "cache", name = "full-stack-npm-cache", container = "/root/.npm" },
+]
 
 [tasks.build]
 description = "Install app dependencies"
@@ -63,11 +65,13 @@ description = "Start the app and its dependencies (db, cache)"
 group = "Development"
 run = { container = "app" }
 
+# ANCHOR: homepage-demo-task
 [tasks.journey-test]
 description = "Exercise the running app end to end, sharing `cache` with `app`"
 group = "Development"
 dependencies = ["app", "cache"]
 run = { container = "journey-test" }
+# ANCHOR_END: homepage-demo-task
 
 [tasks.lint]
 description = "Run eslint"

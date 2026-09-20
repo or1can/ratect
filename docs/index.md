@@ -18,29 +18,19 @@ affiliated with or endorsed by the original Batect project.
 
 ## See it in action
 
-Under twenty lines gets a real Postgres, waits for it to actually be ready (not
-just "started"), seeds it, then queries what it just seeded — no
-`wait-for-it.sh`, no manual networking, no leftover container or volume once
-it's done:
+A real request against a real, composed stack — an app, a database, and a
+cache, each waiting for the last to actually be ready (not just
+"started") before it starts itself — no `wait-for-it.sh`, no manual
+networking, no leftover containers once it's done. This is the dependency
+graph from
+[`examples/full-stack`](https://github.com/or1can/ratect/tree/main/examples/full-stack)
+— that project also has `build`/`unit-test`/`lint`/`shell` tasks, omitted
+here to keep this to the part that's actually running below:
 
 ```toml
-project_name = "ratect-demo"
+{{#include ../examples/full-stack/ratect.toml:homepage-demo}}
 
-[containers.db]
-image = "postgres:16"
-environment = { POSTGRES_HOST_AUTH_METHOD = "trust" }
-health_check = { command = "pg_isready -h 127.0.0.1 -U postgres", interval = "1s", retries = 10 }
-setup_commands = [
-    { command = "psql -U postgres -c \"CREATE TABLE greeting (message TEXT)\"" },
-    { command = "psql -U postgres -c \"INSERT INTO greeting VALUES ('Hello from Ratect!')\"" },
-]
-
-[containers.client]
-image = "postgres:16"
-
-[tasks.demo]
-run = { container = "client", command = "psql -h db -U postgres -c 'SELECT message FROM greeting'" }
-dependencies = ["db"]
+{{#include ../examples/full-stack/ratect.toml:homepage-demo-task}}
 ```
 
 <div id="demo-player"></div>
@@ -64,14 +54,17 @@ window.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 
-A real recording, not a mockup — `fancy` output shows both containers'
-status live, updating in place. `health_check` is the readiness gate;
-`setup_commands` runs *inside* `db` after it's healthy but before `client`
-ever starts, so the row is already there by the time anything queries it —
-see [Dependency readiness](config-reference.md#dependency-readiness) for the
-full model. Both containers are removed afterwards regardless of how the
-task ends, whether it's the first run (pulling the image first) or, as
-recorded here, a later one.
+A real recording, not a mockup — `fancy` output shows all four containers'
+status live, updating in place, each independently: `db` seeding a real
+million-row table before it's ready (genuinely, not padded — that's why it
+takes longer than `app`/`cache`), then `app` and `journey-test` both
+starting only once `cache` says it's ready — `cache` itself, once, even
+though it's a dependency of both. `journey-test` makes a real HTTP request
+to `app` (the JSON in the middle is its real response), then checks Redis
+*directly* to confirm the value `app` read got cached — see [Dependency
+readiness](config-reference.md#dependency-readiness) for the full model
+behind all of it. Every container is removed afterwards regardless of how
+the task ends.
 
 - New here? Start with [Installation](installation.md) and
   [Getting Started](getting-started.md), or jump straight to a [worked
