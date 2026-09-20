@@ -1,0 +1,14 @@
+# Build/dependency-manager output for the worked examples under this
+# directory — each is a real project, not a fixture, so it accumulates the
+# usual per-ecosystem clutter when built or tested locally.
+target/
+node_modules/
+dist/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.gradle/
+build/
+
+# go build's default output binary, named after the module.
+/go/example-go

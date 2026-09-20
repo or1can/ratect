@@ -16,8 +16,59 @@ format. See [Differences from Batect](differences-from-batect.md) for the
 full list, drop-in replacement included. It's an independent project, not
 affiliated with or endorsed by the original Batect project.
 
+## See it in action
+
+A real request against a real, composed stack — an app, a database, and a
+cache, each waiting for the last to actually be ready (not just
+"started") before it starts itself — no `wait-for-it.sh`, no manual
+networking, no leftover containers once it's done. This is the dependency
+graph from
+[`examples/full-stack`](https://github.com/or1can/ratect/tree/main/examples/full-stack)
+— that project also has `build`/`unit-test`/`lint`/`shell` tasks, omitted
+here to keep this to the part that's actually running below:
+
+```toml
+{{#include ../examples/full-stack/ratect.toml:homepage-demo}}
+
+{{#include ../examples/full-stack/ratect.toml:homepage-demo-task}}
+```
+
+<div id="demo-player"></div>
+<script>
+// mdBook injects `additional-js` near the end of <body>, after this inline
+// script — AsciinemaPlayer isn't defined yet at this point in the page, only
+// once the whole document (including that later script tag) has loaded.
+window.addEventListener('DOMContentLoaded', function () {
+  // Real speed, deliberately: the recording's own output prints how long
+  // Ratect actually took, and slowing playback down would make that claim
+  // and what's on screen disagree. `loop` has no built-in pause between
+  // repeats, so that's driven manually via the `ended` event instead.
+  var player = AsciinemaPlayer.create('demo.cast', document.getElementById('demo-player'), {
+    autoPlay: true,
+    cols: 80,
+    rows: 24,
+  });
+  player.addEventListener('ended', function () {
+    setTimeout(function () { player.play(); }, 2500);
+  });
+});
+</script>
+
+A real recording, not a mockup — `fancy` output shows all four containers'
+status live, updating in place, each independently: `db` seeding a real
+million-row table before it's ready (genuinely, not padded — that's why it
+takes longer than `app`/`cache`), then `app` and `journey-test` both
+starting only once `cache` says it's ready — `cache` itself, once, even
+though it's a dependency of both. `journey-test` makes a real HTTP request
+to `app` (the JSON in the middle is its real response), then checks Redis
+*directly* to confirm the value `app` read got cached — see [Dependency
+readiness](config-reference.md#dependency-readiness) for the full model
+behind all of it. Every container is removed afterwards regardless of how
+the task ends.
+
 - New here? Start with [Installation](installation.md) and
-  [Getting Started](getting-started.md).
+  [Getting Started](getting-started.md), or jump straight to a [worked
+  example](worked-examples.md) for your language.
 - Coming from Batect? See [Differences from Batect](differences-from-batect.md)
   for what to expect.
 - Looking for a specific flag or config field? Jump to a reference:

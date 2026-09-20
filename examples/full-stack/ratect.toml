@@ -1,0 +1,84 @@
+# ANCHOR: homepage-demo
+project_name = "ratect-full-stack"
+
+[containers.app]
+image = "node:22"
+working_directory = "/code"
+ports = [{ local = 8080, container = 8080 }]
+environment = { DATABASE_URL = "postgres://postgres@db:5432/postgres", REDIS_URL = "redis://cache:6379" }
+volumes = [
+    { local = "app", container = "/code" },
+    { type = "cache", name = "full-stack-npm-cache", container = "/root/.npm" },
+]
+# Not just for `run` — `app` cannot even start without both (it connects to
+# `cache` at module load, and `db` on its first request), so this belongs
+# on the container itself rather than repeated on every task that uses it.
+dependencies = ["db", "cache"]
+command = "sh -c 'npm ci && npm start'"
+health_check = { command = "node -e \"fetch('http://127.0.0.1:8080/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"", interval = "1s", retries = 20 }
+
+[containers.db]
+image = "postgres:16"
+environment = { POSTGRES_HOST_AUTH_METHOD = "trust" }
+volumes = [{ local = "db/init", container = "/docker-entrypoint-initdb.d" }]
+health_check = { command = "pg_isready -h 127.0.0.1 -U postgres", interval = "1s", retries = 30 }
+
+[containers.cache]
+image = "redis:7"
+health_check = { command = "redis-cli ping", interval = "1s", retries = 10 }
+
+[containers.journey-test]
+image = "node:22"
+working_directory = "/code"
+environment = { REDIS_URL = "redis://cache:6379" }
+volumes = [
+    { local = "journey-test", container = "/code" },
+    { type = "cache", name = "full-stack-npm-cache", container = "/root/.npm" },
+]
+command = "sh -c 'npm ci && node test.js'"
+# ANCHOR_END: homepage-demo
+
+# `app`'s own health_check applies to *any* task run in that container —
+# including a one-shot `npm ci`, which would exit long before a server on
+# port 8080 ever exists for the check to find. `build`/`unit-test`/`lint`/
+# `shell` run here instead, on the same image with no health check to race.
+[containers.dev]
+image = "node:22"
+working_directory = "/code"
+volumes = [
+    { local = "app", container = "/code" },
+    { type = "cache", name = "full-stack-npm-cache", container = "/root/.npm" },
+]
+
+[tasks.build]
+description = "Install app dependencies"
+group = "Development"
+run = { container = "dev", command = "sh -c 'npm ci'" }
+
+[tasks.unit-test]
+description = "Run fast unit tests (no live dependencies)"
+group = "Development"
+run = { container = "dev", command = "sh -c 'npm ci && npm test'" }
+
+[tasks.run]
+description = "Start the app and its dependencies (db, cache)"
+group = "Development"
+run = { container = "app" }
+
+# ANCHOR: homepage-demo-task
+[tasks.journey-test]
+description = "Exercise the running app end to end, sharing `cache` with `app`"
+group = "Development"
+dependencies = ["app", "cache"]
+run = { container = "journey-test" }
+# ANCHOR_END: homepage-demo-task
+
+[tasks.lint]
+description = "Run eslint"
+group = "Checks"
+run = { container = "dev", command = "sh -c 'npm ci && npm run lint'" }
+
+[tasks.shell]
+description = "Start a shell in the app's environment"
+group = "Utilities"
+run = { container = "dev", command = "bash" }

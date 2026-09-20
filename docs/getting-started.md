@@ -45,11 +45,20 @@ Tasks in my-project:
 ratect-compat test
 ```
 
-The first run pulls the `alpine:3.18` image (printing "Pulling alpine:3.18..." /
-"Pulled alpine:3.18." around it), then creates, starts, and runs the container.
-Whatever the container writes to stdout/stderr is streamed live and printed as-is —
-that's the actual output of your task — framed by Ratect's own progress lines
-("Running test...", then a "finished with exit code 0" summary).
+```
+Running test...
+Pulling alpine:3.18...
+Pulled alpine:3.18.
+Running ls /code in build-env...
+batect.yml
+
+Cleaning up...
+test finished with exit code 0 in 1.6s.
+```
+
+`batect.yml` is `ls /code`'s actual output, streamed live as the container produces
+it — everything else is Ratect's own framing. A second run skips the pull, since the
+image is already local.
 
 ## 4. Prerequisites
 
@@ -133,3 +142,9 @@ RUST_LOG=debug ratect-compat test
 
 `debug` also surfaces low-level Docker API activity (container create/start/remove),
 which is useful when troubleshooting.
+
+## Next steps
+
+See [Worked Examples](worked-examples.md) for a real `build`/`test`/`run`/`lint`/`shell` task set
+in Rust, Go, Node.js, Python, or the JVM — a faster starting point than building one
+up from scratch if your project is in one of those.

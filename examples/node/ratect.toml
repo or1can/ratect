@@ -1,0 +1,35 @@
+project_name = "example-node"
+
+[containers.build-env]
+image = "node:22"
+working_directory = "/code"
+volumes = [
+    { local = ".", container = "/code" },
+    { type = "cache", name = "npm-cache", container = "/root/.npm" },
+]
+
+[tasks.build]
+description = "Compile TypeScript"
+group = "Development"
+run = { container = "build-env", command = "sh -c 'npm ci && npm run build'" }
+
+[tasks.test]
+description = "Run the test suite"
+group = "Development"
+run = { container = "build-env", command = "sh -c 'npm ci && npm test'" }
+
+[tasks.run]
+description = "Run the built application"
+group = "Development"
+prerequisites = ["build"]
+run = { container = "build-env", command = "node dist/index.js" }
+
+[tasks.lint]
+description = "Run eslint"
+group = "Checks"
+run = { container = "build-env", command = "sh -c 'npm ci && npm run lint'" }
+
+[tasks.shell]
+description = "Start a shell in the build environment"
+group = "Utilities"
+run = { container = "build-env", command = "bash" }

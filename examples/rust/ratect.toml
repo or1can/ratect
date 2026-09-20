@@ -1,0 +1,35 @@
+project_name = "example-rust"
+
+[containers.build-env]
+image = "rust:1.90"
+working_directory = "/code"
+volumes = [
+    { local = ".", container = "/code" },
+    { type = "cache", name = "cargo-registry", container = "/usr/local/cargo/registry" },
+    { type = "cache", name = "cargo-target", container = "/code/target" },
+]
+
+[tasks.build]
+description = "Compile the project"
+group = "Development"
+run = { container = "build-env", command = "cargo build" }
+
+[tasks.test]
+description = "Run the test suite"
+group = "Development"
+run = { container = "build-env", command = "cargo test" }
+
+[tasks.run]
+description = "Run the application"
+group = "Development"
+run = { container = "build-env", command = "cargo run" }
+
+[tasks.lint]
+description = "Run clippy with warnings denied"
+group = "Checks"
+run = { container = "build-env", command = "sh -c 'rustup --quiet component add clippy && cargo clippy --all-targets -- -D warnings'" }
+
+[tasks.shell]
+description = "Start a shell in the build environment"
+group = "Utilities"
+run = { container = "build-env", command = "bash" }

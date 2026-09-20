@@ -2,3 +2,12 @@
 title = "Ratect"
 description = "A fast, lightweight task execution engine for Docker — a from-scratch Rust reimplementation of Batect."
 src = "docs"
+
+[output.html]
+# The homepage's live demo (docs/index.md) — a self-hosted asciinema-player
+# rather than a CDN <script>, so playback doesn't depend on a third party's
+# uptime (same reasoning as docs.yml's lychee --offline). Loaded on every
+# page, not just the homepage: mdBook has no per-page equivalent, and the
+# combined ~200KB is cached across the whole site after the first page.
+additional-css = ["vendor/asciinema-player.css"]
+additional-js = ["vendor/asciinema-player.min.js"]

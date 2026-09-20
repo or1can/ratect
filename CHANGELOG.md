@@ -23,7 +23,9 @@ history, from when it was the only binary.
 
 ### Added
 
-- A rendered, searchable documentation site (mdBook), built from the existing `docs/` tree and published to GitHub Pages on every push to `main`. Pull requests that touch `docs/` build the same site and link-check it, without publishing.
+- A rendered, searchable documentation site (mdBook), built from the existing `docs/` tree and published to GitHub Pages on every push to `main`. Pull requests that touch `docs/` build the same site and link-check it, without publishing. Adds `robots.txt` and a generated `sitemap.xml`.
+- [Worked Examples](docs/worked-examples.md): a real hello-world project with `build`/`test`/`run`/`lint`/`shell` tasks for Rust, Go, Node.js, Python, and the JVM, each now with a README. `examples/full-stack/` adds a real multi-service project (a Node app, Postgres, Redis, and a journey test) for illustrating dependency readiness.
+- The docs homepage gains a live, real (not staged) terminal recording of Ratect actually running a task.
 
 ## [ratect-compat 0.30.0 · ratect 0.9.0] - 2026-09-18
 

@@ -1,0 +1,35 @@
+project_name = "example-go"
+
+[containers.build-env]
+image = "golang:1.23"
+working_directory = "/code"
+volumes = [
+    { local = ".", container = "/code" },
+    { type = "cache", name = "go-mod", container = "/go/pkg/mod" },
+    { type = "cache", name = "go-build", container = "/root/.cache/go-build" },
+]
+
+[tasks.build]
+description = "Build the binary"
+group = "Development"
+run = { container = "build-env", command = "go build ./..." }
+
+[tasks.test]
+description = "Run the test suite"
+group = "Development"
+run = { container = "build-env", command = "go test ./..." }
+
+[tasks.run]
+description = "Run the application"
+group = "Development"
+run = { container = "build-env", command = "go run ." }
+
+[tasks.lint]
+description = "Run go vet"
+group = "Checks"
+run = { container = "build-env", command = "go vet ./..." }
+
+[tasks.shell]
+description = "Start a shell in the build environment"
+group = "Utilities"
+run = { container = "build-env", command = "bash" }
