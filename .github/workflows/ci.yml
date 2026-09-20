@@ -170,6 +170,13 @@ jobs:
           cmd() { "$bin" -f "$cfg" "${prefix[@]}" "$@"; }
           for dir in examples/*/; do
             name=$(basename "$dir")
+            # full-stack isn't one of these: its task names differ (no bare
+            # `test`, `run` is a long-lived server that never exits on its
+            # own), so it gets its own step below rather than this generic
+            # build/test/run/lint/shell sweep.
+            if [ "$name" = full-stack ]; then
+              continue
+            fi
             if [ -f "$dir/ratect.toml" ]; then
               bin=./target/debug/ratect
               cfg="$dir/ratect.toml"
@@ -218,6 +225,37 @@ jobs:
             fi
             echo "::endgroup::"
           done
+      - name: Run build/unit-test/lint/journey-test/shell for the full-stack example
+        shell: bash
+        run: |
+          cd examples/full-stack
+          bin=../../target/debug/ratect
+          "$bin" run build -f ratect.toml
+          "$bin" run unit-test -f ratect.toml
+          "$bin" run lint -f ratect.toml
+          # The stack's own end-to-end proof — unlike the other examples'
+          # `run`, full-stack's own `run` starts a server that never exits
+          # on its own, so it has no place in an assert-and-move-on script.
+          if ! output=$("$bin" run journey-test -f ratect.toml 2>&1); then
+            echo "$output"
+            echo "::error::full-stack's journey-test task failed"
+            exit 1
+          fi
+          echo "$output"
+          if ! grep -q "journey test passed" <<< "$output"; then
+            echo "::error::full-stack's journey-test task didn't report success"
+            exit 1
+          fi
+          if ! shell_output=$("$bin" run shell -f ratect.toml -- -c "echo full-stack shell ok" 2>&1); then
+            echo "$shell_output"
+            echo "::error::full-stack's shell task failed"
+            exit 1
+          fi
+          echo "$shell_output"
+          if ! grep -q "full-stack shell ok" <<< "$shell_output"; then
+            echo "::error::full-stack's shell task didn't run the given command"
+            exit 1
+          fi
 
   dev-env:
     name: Dev-env CLI smoke test
