@@ -1,8 +1,11 @@
 # How Ratect Compares to Other Tools
 
-Batect's own version of this page named Cage and Toast — both largely dormant
-today. The comparison worth writing is against what people actually reach
-for now, which is a different set: [Docker
+Batect's own version of this page compares against shell scripts, Docker
+Compose, [Dojo](https://github.com/kudulab/dojo), Earthly, CI tools with a
+local runner (GitLab CI, CircleCI), and Vagrant — reasonable choices when it
+was written, but Dojo and Vagrant are far less likely to be what a project
+is actually choosing between today. The comparison worth writing now is
+against what people actually reach for: [Docker
 Compose](https://github.com/docker/compose),
 [Make](https://www.gnu.org/software/make/),
 [Task](https://github.com/go-task/task),
