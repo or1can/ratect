@@ -22,7 +22,7 @@
 
 # Migrating from Batect
 
-- [Adopting Ratect in an Existing Project](adopting-ratect.md)
+- [Migrating a Batect Project to Ratect](migrating-batect-project.md)
 - [Differences from Batect](differences-from-batect.md)
 
 # Comparisons

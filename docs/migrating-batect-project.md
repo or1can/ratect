@@ -1,11 +1,15 @@
-# Adopting Ratect in an Existing Project
+# Migrating a Batect Project to Ratect
+
+This page is specifically for a project that already has a `batect.yml` —
+see [Getting Started](getting-started.md) instead if you're bringing Ratect
+into a project that doesn't use Batect at all.
 
 Most task runners assume a clean slate — convert everything, or don't bother.
 Ratect doesn't: `ratect-compat` reads an existing `batect.yml` unchanged, and a
 native `ratect.toml` project can `include` a `batect.yml` fragment as-is. That
-makes adoption a series of independent, optional steps rather than one
-all-or-nothing migration — stop at whichever one matches how much of the tool
-you actually want.
+makes migration a series of independent, optional steps rather than one
+all-or-nothing conversion — stop at whichever one matches how much of the
+tool you actually want.
 
 ## Step 1: point `ratect-compat` at what you already have
 

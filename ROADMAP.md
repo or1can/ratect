@@ -122,7 +122,7 @@ Improving the developer experience through better tools and feedback.
   [differences-from-batect](docs/differences-from-batect.md),
   [installation](docs/installation.md), [getting-started](docs/getting-started.md),
   [worked-examples](docs/worked-examples.md), [comparison](docs/comparison.md),
-  [adopting-ratect](docs/adopting-ratect.md))
+  [migrating-batect-project](docs/migrating-batect-project.md))
   and has nothing in the shapes below. The first two are, near enough, Batect's
   own unbuilt documentation list, so that gap is inherited rather than newly
   created; the third is different — Batect actually built this one

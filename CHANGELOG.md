@@ -27,7 +27,7 @@ history, from when it was the only binary.
 - [Worked Examples](docs/worked-examples.md): a real hello-world project with `build`/`test`/`run`/`lint`/`shell` tasks for Rust, Go, Node.js, Python, and the JVM, each now with a README. `examples/full-stack/` adds a real multi-service project (a Node app, Postgres, Redis, and a journey test) for illustrating dependency readiness.
 - The docs homepage gains a live, real (not staged) terminal recording of Ratect actually running a task.
 - [How Ratect Compares to Other Tools](docs/comparison.md): honest, both-directions tradeoffs against Docker Compose, Make, Task, Earthly, Dagger, and `just`.
-- [Adopting Ratect in an Existing Project](docs/adopting-ratect.md): a staged path from `ratect-compat` against an unmodified `batect.yml`, through mixed `.yml`/`.toml` includes, to a fully native `ratect.toml`.
+- [Migrating a Batect Project to Ratect](docs/migrating-batect-project.md): a staged path from `ratect-compat` against an unmodified `batect.yml`, through mixed `.yml`/`.toml` includes, to a fully native `ratect.toml`.
 
 ## [ratect-compat 0.30.0 · ratect 0.9.0] - 2026-09-18
 
