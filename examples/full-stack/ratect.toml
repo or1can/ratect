@@ -4,6 +4,7 @@ project_name = "ratect-full-stack"
 [containers.app]
 image = "node:22"
 working_directory = "/code"
+enable_init_process = true
 ports = [{ local = 8080, container = 8080 }]
 environment = { DATABASE_URL = "postgres://postgres@db:5432/postgres", REDIS_URL = "redis://cache:6379" }
 volumes = [
