@@ -14,8 +14,9 @@ additional-js = ["vendor/asciinema-player.min.js"]
 
 # The two `ratect-compat` reference pages were renamed to say which binary
 # they document (#160). Their old URLs had been live for days, so each gets
-# a redirect page here; mdBook 0.5's generated page also forwards the
-# `#fragment`, so a deep link into a section keeps working too.
+# a redirect page here. mdBook 0.5's generated page also forwards the
+# `#fragment` — by script, so in a browser, which is where a deep link
+# into a section is followed from.
 [output.html.redirect]
 "/cli-reference.html" = "ratect-compat-cli.html"
 "/config-reference.html" = "ratect-compat-config-reference.html"

@@ -31,7 +31,7 @@ history, from when it was the only binary.
 
 ### Changed
 
-- The two `ratect-compat` reference pages are renamed to say which binary they document: [`docs/ratect-compat-cli.md`](docs/ratect-compat-cli.md) (was `cli-reference.md`) and [`docs/ratect-compat-config-reference.md`](docs/ratect-compat-config-reference.md) (was `config-reference.md`). The old URLs on the documentation site redirect, section anchors included.
+- The two `ratect-compat` reference pages are renamed to say which binary they document: [`docs/ratect-compat-cli.md`](docs/ratect-compat-cli.md) (was `cli-reference.md`) and [`docs/ratect-compat-config-reference.md`](docs/ratect-compat-config-reference.md) (was `config-reference.md`). The old URLs on the documentation site redirect, and a browser keeps the section anchor across the redirect.
 
 ## [ratect-compat 0.30.0 · ratect 0.9.0] - 2026-09-18
 
