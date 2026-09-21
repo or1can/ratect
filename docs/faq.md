@@ -73,21 +73,9 @@ gives you for free. Within *one* invocation, a prerequisite reached by more than
 path does run only once (see [`prerequisites`](config-reference.md#task) — that's
 cycle-safe dedup, not a guarantee your script is safe to run twice), but every
 separate `ratect-compat`/`ratect` invocation from the shell starts completely fresh,
-with no memory of any previous run:
-
-```yaml
-tasks:
-  migrate:
-    run:
-      container: app
-      command: run-migrations.sh
-  test:
-    prerequisites:
-      - migrate
-    run:
-      container: app
-      command: run-tests.sh
-```
+with no memory of any previous run. Take the `migrate`/`test` example from [Cross-task
+isolation](task-lifecycle.md#cross-task-isolation) — `test` has `migrate` as a
+prerequisite, and `migrate` runs `run-migrations.sh`:
 
 Every `ratect-compat test` run executes `migrate` again first, from a fresh
 container. If `run-migrations.sh` isn't safe to run twice — it reapplies a

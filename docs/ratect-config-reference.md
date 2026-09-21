@@ -44,6 +44,11 @@ only, and names the images and cache volumes the project creates — see
 `ratect.toml`; point it at a differently-named file, or a `batect.yml`, with
 `-f`.
 
+This closely mirrors [`examples/rust/ratect.toml`](https://github.com/or1can/ratect/blob/main/examples/rust/ratect.toml)'s
+own real `build-env` container and `build` task — same image, same command, same
+task `description`/`group` — with an `environment` entry added here purely to
+show the syntax; the real file doesn't set one.
+
 ## `extends`: inheritance instead of YAML anchors
 
 `batect.yml` factors out a shared base container with YAML anchors/aliases/merge
