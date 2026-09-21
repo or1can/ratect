@@ -10,6 +10,7 @@
 - [How It Works](how-it-works.md)
 - [Task Lifecycle](task-lifecycle.md)
 - [FAQ](faq.md)
+- [Reusable Pipeline Building Blocks](reusable-building-blocks.md)
 
 # ratect-compat Reference
 
