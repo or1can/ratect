@@ -20,11 +20,18 @@ actually have — not which tool wins a feature count. What follows is honest
 about both directions.
 
 Reach for Ratect when the problem is **running development tasks
-identically on every machine, in Docker, with real dependency
-orchestration** — a database or another service that needs to actually be
-ready, not just started, before your task touches it. That's a narrower
-claim than "runs my project"; the sections below say plainly where it isn't
-the best fit.
+identically on every machine, isolated from your host and from each other,
+with real dependency orchestration**. Two of those are for free just by
+running in Docker at all: the image is built the same way regardless of
+what's on your host (reproducibility), and by default each run gets its own
+disposable network — created fresh per invocation, named after that run,
+torn down after — so containers on one run can't reach containers or ports
+from another (isolation), unless you deliberately opt out with
+`--use-network`. The third — a database or another service that needs
+to actually be ready, not just started, before your task touches it — is
+Ratect's own design, not a side effect of Docker. That's a narrower claim
+than "runs my project"; the sections below say plainly where it isn't the
+best fit.
 
 ## Docker Compose
 
@@ -48,7 +55,12 @@ a health check, which is real and useful, but Compose has nothing like
 step that runs *inside* a dependency once it's healthy but before anything
 depends on it starts. Seeding a database before code touches it means an
 init container or an entrypoint script you write and maintain yourself;
-in Ratect it's a config field.
+in Ratect it's a config field. The isolation model differs too: a Compose
+stack is meant to be brought up once and left running, its network and
+containers shared across however many `docker compose exec` calls you make
+against it afterward. Ratect's network and containers, by default, are
+scoped to one task invocation and torn down when it finishes, rather than
+persisting for the next run to reach.
 
 ## Make
 
@@ -66,10 +78,12 @@ container* decides to skip work is between that tool and its own cache, not
 something Ratect tracks itself.
 
 **Where Ratect wins:** Make runs on whatever's already on your host — the
-exact "works on my machine" problem Ratect exists to remove. It also has no
-native model for orchestrating dependent *services* (bring up a database,
-wait for it, run something against it); that's shell script bolted onto a
-recipe, not something the tool understands.
+exact "works on my machine" problem Ratect exists to remove, and whatever a
+recipe installs, writes, or leaves running stays on your host too, since
+Make has no isolation from it at all. It also has no native model for
+orchestrating dependent *services* (bring up a database, wait for it, run
+something against it); that's shell script bolted onto a recipe, not
+something the tool understands.
 
 ## Task
 
@@ -85,10 +99,10 @@ without Docker Desktop in the loop. Its `sources`/`generates` fields give
 file-based skip-if-unchanged tracking similar to Make's, which Ratect has
 no equivalent of.
 
-**Where Ratect wins:** the same reproducibility gap as Make — Task's default
-is your host toolchain, so "works on my machine" is back on the table unless
-you deliberately containerize each task yourself, and even then there's no
-built-in service-dependency/readiness model to reach for.
+**Where Ratect wins:** the same reproducibility and isolation gap as Make —
+Task's default is your host toolchain, so "works on my machine" is back on
+the table unless you deliberately containerize each task yourself, and even
+then there's no built-in service-dependency/readiness model to reach for.
 
 ## Earthly
 
@@ -153,9 +167,9 @@ explicitly not trying to be either of those things.
 
 | Reach for... | when the problem is |
 | --- | --- |
-| **Ratect** | development tasks that need to run identically everywhere, and/or real services (a database, another API) they depend on actually being ready first |
+| **Ratect** | development tasks that need to run identically everywhere, isolated from your host, and/or real services (a database, another API) they depend on actually being ready first |
 | **Docker Compose** | bringing up and living inside a multi-container stack, more than running discrete tasks against it |
-| **Make** | you already have `make` everywhere you need it, and don't need containers or cross-machine reproducibility |
+| **Make** | you already have `make` everywhere you need it, and don't need containers, isolation, or cross-machine reproducibility |
 | **Task** | Make-like ergonomics without Make's own syntax, for tasks that don't need Docker |
 | **Dagger** | a pipeline complex enough to genuinely need a real programming language, not a config file |
 | **`just`** | short, memorable shortcuts for commands you already know how to run |
