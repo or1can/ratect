@@ -689,6 +689,14 @@ override; there's no concept of one replacing an entry from the other.
 `Container.ports` and any `TaskRun.ports` — regardless of what's configured. See
 [CLI reference](cli-reference.md).
 
+A real, simpler instance of the object form:
+[`examples/full-stack`](https://github.com/or1can/ratect/tree/main/examples/full-stack)'s
+`app` container publishes `- local: 8080` / `container: 8080` — one port, no
+range or protocol (that project is written in the native `ratect.toml`
+format, where the same field means exactly the same thing — see [Field
+reference](ratect-config-reference.md#field-reference)). The range and UDP
+forms above have no real counterpart in `examples/` today.
+
 ### Dependency readiness
 
 ```yaml
@@ -786,6 +794,43 @@ simplifications](task-lifecycle.md#known-simplifications-relative-to-batect) for
 one race this still leaves (a very fast main command can finish before a setup
 command gets a chance to run) and [Differences from
 Batect](differences-from-batect.md#container-fields).
+
+**A real instance of the `health_check` half:**
+[`examples/full-stack`](https://github.com/or1can/ratect/tree/main/examples/full-stack)'s
+`db` container is a real `postgres:16` gated on `pg_isready`, and `app` depends on
+both `db` and `cache`, each with their own health check — `cache` itself is a
+**shared dependency** reached two ways (`app` depends on it directly, and
+`journey-test` also depends on it to check what `app` cached), started and
+waited-on exactly once regardless. That project is written in the native
+`ratect.toml` format, where `health_check`/`dependencies` mean exactly the
+same thing — see [Field reference](ratect-config-reference.md#field-reference)
+— so this is real output from `ratect run journey-test -f
+examples/full-stack/ratect.toml`, not `ratect-compat`:
+
+```
+Running journey-test...
+Starting cache...
+Starting db...
+Started db.
+Started cache.
+cache has become healthy.
+db has become healthy.
+Starting app...
+Started app.
+app has become healthy.
+Running sh -c 'npm ci && node test.js' in journey-test...
+...
+journey test passed
+
+Cleaning up...
+journey-test finished with exit code 0 in 7.9s.
+```
+
+`examples/full-stack` doesn't use `setup_commands` — its own database seeding
+uses Postgres's native `/docker-entrypoint-initdb.d` mechanism instead, mounted
+as a plain volume, not the field this section documents — so the
+`setup_commands` example above stays illustrative rather than pointing at a
+real project.
 
 ## Task
 
@@ -886,31 +931,38 @@ Tasks in my-project:
 
 Once *any* task in the project declares a `group`, every task is listed under a
 heading instead — one per distinct `group` value (sorted alphabetically), plus a
-trailing `Ungrouped tasks:` heading for any task that doesn't set `group`:
+trailing `Ungrouped tasks:` heading for any task that doesn't set `group`. Real
+output, from running `--list-tasks` against
+[`examples/jvm/batect.yml`](https://github.com/or1can/ratect/blob/main/examples/jvm/batect.yml)
+(every task there sets a `group`, so there's no `Ungrouped tasks:` heading to
+show):
 
 ```
-Tasks in my-project:
+Tasks in example-jvm:
 
-compilation:
-- build: Builds the app
+Checks:
+- lint: Run Checkstyle
 
-verification:
-- lint
-- test: Runs the test suite
+Development:
+- build: Compile and assemble
+- run: Run the application
+- test: Run the test suite
 
-Ungrouped tasks:
-- clean
+Utilities:
+- shell: Start a shell in the build environment
 ```
 
 With [`--output quiet`](cli-reference.md#output-styles), both forms are replaced by
 a machine-readable listing instead — one task per line, sorted by name, as `name`
-alone or `name<TAB>description`, with no header and no grouping:
+alone or `name<TAB>description`, with no header and no grouping — the same project
+again:
 
 ```
-build	Builds the app
-clean
-lint
-test	Runs the test suite
+build	Compile and assemble
+lint	Run Checkstyle
+run	Run the application
+shell	Start a shell in the build environment
+test	Run the test suite
 ```
 
 ## TaskRun
