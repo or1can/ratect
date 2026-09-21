@@ -117,7 +117,7 @@ styles are Batect's own four, all implemented:
   `-o fancy` without one fails up front with a clear error (Batect instead
   accepts it and crashes on the first repaint). Works with
   [`--no-color`](#options) (the repaint stays; bold/color go — a combination
-  Batect rejects).
+  Batect rejects). [See it in action ↓](#fancy-in-action).
 - **`simple`** — plain, append-only milestone lines: `Running <task>...`,
   `Pulling <image>...`/`Pulled <image>.`, `Building <container>...`/`Built
   <container>.`, dependency start/health/setup-command milestones, a blank line +
@@ -129,12 +129,12 @@ styles are Batect's own four, all implemented:
   (see [task lifecycle](task-lifecycle.md#known-simplifications-relative-to-batect)),
   so printing them would drop a line into the middle of that command's own
   output — use `all` (below) to see them. A readiness *failure* is still
-  reported, on stderr, in every style.
+  reported, on stderr, in every style. [See it in action ↓](#simple-in-action).
 - **`quiet`** — no milestone lines at all: stdout is exactly the containers' own
   output, so it's safe to pipe (error reporting stays on stderr, unchanged). Also
   switches `--list-tasks` to a machine-readable format: one task per line, sorted
   by name, as `name` alone or `name<TAB>description` — no header, no
-  [grouping](config-reference.md#list-tasks-output).
+  [grouping](config-reference.md#list-tasks-output). [See it in action ↓](#quiet-in-action).
 - **`all`** — every line of output prefixed with the container it belongs to
   (`name    | `, padded to a common column, each container's prefix in its own
   color), interleaved as it happens. The only style that shows *dependency*
@@ -144,12 +144,108 @@ styles are Batect's own four, all implemented:
   container gets no TTY and no stdin, and every container gets `TERM=dumb`
   (matching Batect — a full-screen program can't render into line-prefixed
   output). Task-level lines (the `Running <task>...` preamble, `Cleaning up...`,
-  the summary) carry the task's own name as their prefix.
+  the summary) carry the task's own name as their prefix. [See it in action
+  ↓](#all-in-action).
 
 When `--output` isn't given, Ratect auto-selects: `fancy` on an interactive
 console (stdout a real terminal, `TERM` set and not `dumb`, terminal size
 queryable, no `--no-color`); `simple` otherwise. `quiet` and `all` are never
 auto-selected.
+
+### Seeing it for real
+
+Every transcript below is the *same* real run — `ratect run journey-test`
+against
+[`examples/full-stack`](https://github.com/or1can/ratect/tree/main/examples/full-stack)
+— shown in each of the four styles, so you can compare them directly rather
+than four different projects. That's the `ratect` binary against a native
+`ratect.toml`, not `ratect-compat` (`examples/full-stack` has no `batect.yml`
+counterpart), but the rendering is the exact same code either way — see
+[`ui.rs`](https://github.com/or1can/ratect/blob/main/ratect-core/src/ui.rs).
+
+#### `fancy`, in action
+
+Static text genuinely can't convey `fancy`'s in-place repaint — this is the
+same real recording from [the homepage](index.md), unedited:
+
+<div id="demo-player-cli"></div>
+<script>
+window.addEventListener('DOMContentLoaded', function () {
+  AsciinemaPlayer.create('demo.cast', document.getElementById('demo-player-cli'), {
+    autoPlay: false,
+    cols: 80,
+    rows: 24,
+  });
+});
+</script>
+
+#### `simple`, in action
+
+```
+Running journey-test...
+Starting cache...
+Starting db...
+Started cache.
+Started db.
+cache has become healthy.
+db has become healthy.
+Running setup command psql -U postgres -c "ANALYZE visits;" (1 of 1) in db...
+db has completed all setup commands.
+Starting app...
+Started app.
+app has become healthy.
+Running sh -c 'npm ci && node test.js' in journey-test...
+...
+journey test passed
+
+Cleaning up...
+journey-test finished with exit code 0 in 8.0s.
+```
+
+#### `quiet`, in action
+
+Stdout is exactly `journey-test`'s own output — nothing from `app`/`db`/
+`cache` (their own stdout is never shown outside `all`, regardless of style)
+and not one Ratect milestone line:
+
+```
+added 7 packages, and audited 8 packages in 1s
+
+found 0 vulnerabilities
+app responded: {"message":"Hello from Ratect!","visit_id":1000001,"total_visits":1000001,"count_source":"database"}
+cache holds visits:count=1000001, confirming app and this container share the same cache
+journey test passed
+```
+
+#### `all`, in action
+
+Every line now carries its container's name (each in its own color on a
+real terminal — flattened to plain text below, same as every other block on
+this page), including `db`'s own `setup_commands` step (`Setup command 1 |
+...`) and its dependency-readiness milestones — the parts `simple`/`quiet`
+can't show at all:
+
+```
+journey-test | Running journey-test...
+cache        | Starting container...
+db           | Starting container...
+...
+db           | Container became healthy.
+db           | Running setup command psql -U postgres -c "ANALYZE visits;" (1 of 1)...
+db           | Setup command 1 | ANALYZE
+db           | Container has completed all setup commands.
+app          | Starting container...
+...
+journey-test | journey test passed
+journey-test | Cleaning up...
+...
+journey-test | Removing task network...
+journey-test | journey-test finished with exit code 0 in 9.1s.
+```
+
+Nothing in `examples/` builds from a `Dockerfile` (every container uses a
+prebuilt `image`), so `Image build | ...` output has no real capture to
+point at here.
 
 ## TLS with a private certificate authority
 
