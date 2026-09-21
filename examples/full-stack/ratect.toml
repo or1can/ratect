@@ -23,6 +23,15 @@ image = "postgres:16"
 environment = { POSTGRES_HOST_AUTH_METHOD = "trust" }
 volumes = [{ local = "db/init", container = "/docker-entrypoint-initdb.d" }]
 health_check = { command = "pg_isready -h 127.0.0.1 -U postgres", interval = "1s", retries = 90 }
+# ANALYZE needs a real, committed table to work against, which is exactly
+# what setup_commands is for — running once db is healthy, not baked into
+# the init script that creates and seeds that table in the first place.
+# Genuinely useful here, not just illustrative: a bulk INSERT this size
+# leaves the query planner without fresh statistics until something
+# collects them, and the journey-test/app queries below count() this table.
+setup_commands = [
+    { command = "psql -U postgres -c \"ANALYZE visits;\"" },
+]
 
 [containers.cache]
 image = "redis:7"

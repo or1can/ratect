@@ -57,14 +57,16 @@ window.addEventListener('DOMContentLoaded', function () {
 A real recording, not a mockup — `fancy` output shows all four containers'
 status live, updating in place, each independently: `db` seeding a real
 million-row table before it's ready (genuinely, not padded — that's why it
-takes longer than `app`/`cache`), then `app` and `journey-test` both
-starting only once `cache` says it's ready — `cache` itself, once, even
-though it's a dependency of both. `journey-test` makes a real HTTP request
-to `app` (the JSON in the middle is its real response), then checks Redis
-*directly* to confirm the value `app` read got cached — see [Dependency
-readiness](config-reference.md#dependency-readiness) for the full model
-behind all of it. Every container is removed afterwards regardless of how
-the task ends.
+takes longer than `app`/`cache`), then running a real `setup_commands` step
+(`ANALYZE visits`, giving the query planner fresh statistics after that
+bulk insert) once it's healthy but before anything depends on it, then
+`app` and `journey-test` both starting only once `cache` says it's ready —
+`cache` itself, once, even though it's a dependency of both. `journey-test`
+makes a real HTTP request to `app` (the JSON in the middle is its real
+response), then checks Redis *directly* to confirm the value `app` read
+got cached — see [Dependency readiness](config-reference.md#dependency-readiness)
+for the full model behind all of it. Every container is removed afterwards
+regardless of how the task ends.
 
 - New here? Start with [Installation](installation.md) and
   [Getting Started](getting-started.md), or jump straight to a [worked

@@ -795,26 +795,33 @@ one race this still leaves (a very fast main command can finish before a setup
 command gets a chance to run) and [Differences from
 Batect](differences-from-batect.md#container-fields).
 
-**A real instance of the `health_check` half:**
+**A real instance of both halves:**
 [`examples/full-stack`](https://github.com/or1can/ratect/tree/main/examples/full-stack)'s
-`db` container is a real `postgres:16` gated on `pg_isready`, and `app` depends on
-both `db` and `cache`, each with their own health check — `cache` itself is a
-**shared dependency** reached two ways (`app` depends on it directly, and
-`journey-test` also depends on it to check what `app` cached), started and
-waited-on exactly once regardless. That project is written in the native
-`ratect.toml` format, where `health_check`/`dependencies` mean exactly the
-same thing — see [Field reference](ratect-config-reference.md#field-reference)
-— so this is real output from `ratect run journey-test -f
-examples/full-stack/ratect.toml`, not `ratect-compat`:
+`db` container is a real `postgres:16` gated on `pg_isready`, and once it's
+healthy, a real `setup_commands` entry runs `ANALYZE visits` against the
+table its own init script just bulk-seeded — a genuine step (fresh query
+planner statistics after a large `INSERT`, not baked into the init script
+that creates the table in the first place), not just illustrative. `app`
+depends on both `db` and `cache`, each with their own health check — `cache`
+itself is a **shared dependency** reached two ways (`app` depends on it
+directly, and `journey-test` also depends on it to check what `app`
+cached), started and waited-on exactly once regardless. That project is
+written in the native `ratect.toml` format, where `health_check`/
+`setup_commands`/`dependencies` mean exactly the same thing — see [Field
+reference](ratect-config-reference.md#field-reference) — so this is real
+output from `ratect run journey-test -f examples/full-stack/ratect.toml`,
+not `ratect-compat`:
 
 ```
 Running journey-test...
-Starting cache...
 Starting db...
-Started db.
+Starting cache...
 Started cache.
+Started db.
 cache has become healthy.
 db has become healthy.
+Running setup command psql -U postgres -c "ANALYZE visits;" (1 of 1) in db...
+db has completed all setup commands.
 Starting app...
 Started app.
 app has become healthy.
@@ -823,14 +830,8 @@ Running sh -c 'npm ci && node test.js' in journey-test...
 journey test passed
 
 Cleaning up...
-journey-test finished with exit code 0 in 7.9s.
+journey-test finished with exit code 0 in 8.0s.
 ```
-
-`examples/full-stack` doesn't use `setup_commands` — its own database seeding
-uses Postgres's native `/docker-entrypoint-initdb.d` mechanism instead, mounted
-as a plain volume, not the field this section documents — so the
-`setup_commands` example above stays illustrative rather than pointing at a
-real project.
 
 ## Task
 
