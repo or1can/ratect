@@ -77,10 +77,11 @@ files = [
     "decisions/*.md",
     # Matched with fnmatch, not a path-aware glob — `**` has no recursive
     # meaning there, just two flat wildcards either side of a literal `/`.
-    # docs/ has no subdirectories today, so that plain form is what
-    # actually matches; verified empirically that "docs/**/*.md" matches
-    # none of the 9 real files here. Add "docs/**/*.md" back alongside
-    # this if a subdirectory ever lands under docs/ — neither form alone
+    # Every Markdown page sits directly under docs/ (docs/captures/ holds
+    # only .ansi captures), so that plain form is what actually matches;
+    # verified empirically that "docs/**/*.md" matches none of the real
+    # files here. Add "docs/**/*.md" back alongside this if a Markdown
+    # page ever lands in a subdirectory of docs/ — neither form alone
     # covers both a flat and a nested layout under this matcher.
     "docs/*.md",
 ]

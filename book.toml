@@ -9,8 +9,18 @@ src = "docs"
 # uptime (same reasoning as docs.yml's lychee --offline). Loaded on every
 # page, not just the homepage: mdBook has no per-page equivalent, and the
 # combined ~200KB is cached across the whole site after the first page.
-additional-css = ["vendor/asciinema-player.css"]
+additional-css = ["vendor/asciinema-player.css", "tools/mdbook-ansi.css"]
 additional-js = ["vendor/asciinema-player.min.js"]
+
+# Renders a ```ansi fenced block — a `{{#include}}` of a docs/captures/*.ansi
+# file `tools/capture-output.py` wrote — as coloured HTML, styled by the
+# `tools/mdbook-ansi.css` above (AGENTS.md's captured-output rules). `after`
+# matters: the built-in `links` preprocessor is what expands the include,
+# and this one refuses a block that still holds the marker rather than
+# publishing it as the transcript.
+[preprocessor.ansi]
+command = "python3 tools/mdbook-ansi.py"
+after = ["links"]
 
 # The two `ratect-compat` reference pages were renamed to say which binary
 # they document (#160). Their old URLs had been live for days, so each gets

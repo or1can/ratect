@@ -181,25 +181,11 @@ window.addEventListener('DOMContentLoaded', function () {
 
 #### `simple`, in action
 
-```
-Running journey-test...
-Starting cache...
-Starting db...
-Started cache.
-Started db.
-cache has become healthy.
-db has become healthy.
-Running setup command psql -U postgres -c "ANALYZE visits;" (1 of 1) in db...
-db has completed all setup commands.
-Starting app...
-Started app.
-app has become healthy.
-Running sh -c 'npm ci && node test.js' in journey-test...
-...
-journey test passed
+`ratect run journey-test -o simple`, captured on a terminal in
+`examples/full-stack` — colours included, as the binary printed them:
 
-Cleaning up...
-journey-test finished with exit code 0 in 8.0s.
+```ansi
+{{#include captures/output-styles-simple.ansi}}
 ```
 
 #### `quiet`, in action
@@ -220,10 +206,9 @@ journey test passed
 #### `all`, in action
 
 Every line now carries its container's name (each in its own color on a
-real terminal — flattened to plain text below, same as every other block on
-this page), including `db`'s own `setup_commands` step (`Setup command 1 |
-...`) and its dependency-readiness milestones — the parts `simple`/`quiet`
-can't show at all:
+real terminal — flattened to plain text below), including `db`'s own
+`setup_commands` step (`Setup command 1 | ...`) and its dependency-readiness
+milestones — the parts `simple`/`quiet` can't show at all:
 
 ```
 journey-test | Running journey-test...

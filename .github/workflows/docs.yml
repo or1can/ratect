@@ -14,8 +14,9 @@ name: Docs
 # tree this site publishes.
 #
 # Path-filtered so a PR that doesn't touch docs/, examples/ (which
-# docs/worked-examples.md {{#include}}s from directly), or the book itself
-# never runs this (mirrors msrv-floor.yml's approach).
+# docs/worked-examples.md {{#include}}s from directly), the book itself, or
+# the `ansi` preprocessor it runs never runs this (mirrors msrv-floor.yml's
+# approach).
 
 on:
   push:
@@ -24,6 +25,8 @@ on:
       - docs/**
       - examples/**
       - book.toml
+      - tools/mdbook-ansi.py
+      - tools/mdbook-ansi.css
       - .github/workflows/docs.yml
   pull_request:
     branches: [main]
@@ -31,6 +34,8 @@ on:
       - docs/**
       - examples/**
       - book.toml
+      - tools/mdbook-ansi.py
+      - tools/mdbook-ansi.css
       - .github/workflows/docs.yml
   workflow_dispatch: {}
 
