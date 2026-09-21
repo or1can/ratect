@@ -31,6 +31,21 @@ exclude = [
     "decisions/*.md",
 ]
 
+# The same three files, for `check-links` — but *not* excluded, since a
+# changelog's Unreleased section is live and its links should still gate.
+# `historical` instead holds a shipped entry's link to the tree as of the
+# commit that wrote it (the plugin's ADR 0002): a docs page can be renamed
+# or split without editing an entry that links to it, and the rename
+# commit still has to fix every link from a living page. Needs claims
+# 0.10.0 (or1can/claims#51); an older plugin ignores the key, so this is
+# harmless until `claude plugin update` picks that up.
+[check-links]
+historical = [
+    "CHANGELOG.md",
+    "RELEASES.md",
+    "decisions/*.md",
+]
+
 [restatement]
 # `echoed-claims.py` only ever scanned `.md`. Most of this repo's prose lives
 # in Rust `//!`/`///` doc comments instead (decisions/0006's whole point), so
