@@ -55,6 +55,11 @@
       "description": "rand_chacha 0.10's ChaCha20Rng doesn't implement the trait generation ssh_key::PrivateKey::random requires (that bound comes from signature 2.x, transitively pinned by ssh-key 0.6.7) — only allow 0.3.x patches, not the breaking 0.x minor bump to 0.10. ssh-key's only newer line is an unreleased 0.7.0 release-candidate chain (still RC as of this check) — revisit once it ships stable.",
       "matchPackageNames": ["rand_chacha"],
       "allowedVersions": "<0.4.0"
+    },
+    {
+      "description": "examples/node's typescript-eslint 8.x hard-caps its own peer dependency at 'typescript >=4.8.4 <6.1.0' (ts-api-utils, transitively) — `npm ci` refuses to resolve typescript 7.x at all, not just a warning. Confirmed by trying it directly: build fails with ERESOLVE before anything else runs. Block the bump here instead of letting Renovate re-open it every week; revisit once typescript-eslint ships a release whose peer range covers 7.x.",
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<6.1.0"
     }
   ]
 }
