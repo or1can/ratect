@@ -121,14 +121,13 @@ Improving the developer experience through better tools and feedback.
   [how-it-works](docs/how-it-works.md), [task-lifecycle](docs/task-lifecycle.md),
   [differences-from-batect](docs/differences-from-batect.md),
   [installation](docs/installation.md), [getting-started](docs/getting-started.md),
-  [worked-examples](docs/worked-examples.md), [comparison](docs/comparison.md))
-  and has nothing in the shapes below — which is also, near enough, Batect's own
-  unbuilt documentation list, so the gap is inherited rather than newly created:
-  - **How to introduce Ratect to an existing project** — incremental adoption,
-    starting from one task rather than converting everything. Ratect has an
-    unusually strong story here that's currently undocumented: `ratect config
-    convert` for a `batect.yml`, mixed TOML/YAML includes so a project migrates a
-    file at a time, and `ratect-compat` as a drop-in first step.
+  [worked-examples](docs/worked-examples.md), [comparison](docs/comparison.md),
+  [adopting-ratect](docs/adopting-ratect.md))
+  and has nothing in the shapes below. The first two are, near enough, Batect's
+  own unbuilt documentation list, so that gap is inherited rather than newly
+  created; the third is different — Batect actually built this one
+  (`using-batect-with/tools/`), so it's a real gap against Batect specifically,
+  not an inherited one:
   - **An FAQ** — when to mount a directory versus copying files into the image; how
     to run something at container start regardless of the task's command
     (`ENTRYPOINT` plus `exec`); why task idempotency matters; raising Docker
@@ -137,6 +136,13 @@ Improving the developer experience through better tools and feedback.
     bundles are actually *for*, which the [config
     reference](docs/config-reference.md#includes) documents mechanically without
     ever making the case for.
+  - **Language/ecosystem-specific concerns** — what to cache and where, per
+    ecosystem, in the spirit of Batect's own `using-batect-with/tools/` pages.
+    `examples/` already gets this right for Rust, Go, Node.js, Python, and the
+    JVM (`cargo-registry`/`cargo-target`, `GOPATH`/`GOCACHE` equivalents,
+    `npm-cache`, `pip-cache`, `gradle-cache`), it's just never been written up
+    as prose explaining *why* those specific directories, or what breaks
+    without them.
 - **A version picker on the rendered docs site** — deliberately not built with the
   site itself ([#86](https://github.com/or1can/ratect/issues/86)): the site tracks
   `main` only for now, so there's nothing yet to pick between. Worth adding once
