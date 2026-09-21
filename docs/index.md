@@ -76,7 +76,7 @@ regardless of how the task ends.
 - Weighing Ratect against Docker Compose, Make, Task, Earthly, Dagger or
   `just`? See [How Ratect Compares to Other Tools](comparison.md).
 - Looking for a specific flag or config field? Jump to a reference:
-  [`ratect-compat` CLI](ratect-compat-cli.md) · [`batect.yml`](ratect-compat-config-reference.md) ·
-  [`ratect` CLI](ratect-cli.md) · [`ratect.toml`](ratect-config-reference.md).
+  [`ratect` CLI](ratect-cli.md) · [`ratect.toml`](ratect-config-reference.md) ·
+  [`ratect-compat` CLI](ratect-compat-cli.md) · [`batect.yml`](ratect-compat-config-reference.md).
 
 Source and issue tracker: [or1can/ratect](https://github.com/or1can/ratect).
