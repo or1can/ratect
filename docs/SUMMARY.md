@@ -11,6 +11,7 @@
 - [Task Lifecycle](task-lifecycle.md)
 - [FAQ](faq.md)
 - [Reusable Pipeline Building Blocks](reusable-building-blocks.md)
+- [Using Ratect With Language Ecosystems](using-ratect-with.md)
 
 # ratect-compat Reference
 

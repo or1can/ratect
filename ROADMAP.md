@@ -113,38 +113,12 @@ Improving the developer experience through better tools and feedback.
   - **A log-aggregation output mode** (Batect's example was starting a Seq instance and pointing every container's logs at it). Ratect's `EventSink` design makes an extra mode cheap to add; the open question is whether a task runner should be starting a log server on your behalf, or just be easy to point at one you already run.
   - **Cheaper repaints in `fancy` mode.** Batect wanted to batch console updates rather than reprinting on every event. Ratect is already better in one direction — `fancy.rs:59` skips a repaint entirely when the content hasn't changed — and worse in another: it repaints the whole block per event, where Batect diffs and rewrites only the lines that changed (`fancy.rs:26`). Deliberately left as a future item rather than scoped: nobody has reported it and the cost hasn't been measured, so the honest first step is a measurement (a task with many dependencies emitting events rapidly) rather than an optimisation.
 - **Watch Mode**: Automatically re-running tasks when source files change.
-- **Documentation beyond reference material** — tracked here as roadmap work, not as
-  an afterthought, because for a task runner the documentation *is* a large part of
-  the user experience: the tool's whole value is being easy to adopt on an existing
-  project, and nobody adopts what they can't get started with. Ratect's `docs/` is
-  strong on reference (two CLI references, two config references,
-  [how-it-works](docs/how-it-works.md), [task-lifecycle](docs/task-lifecycle.md),
-  [differences-from-batect](docs/differences-from-batect.md),
-  [installation](docs/installation.md), [getting-started](docs/getting-started.md),
-  [worked-examples](docs/worked-examples.md), [comparison](docs/comparison.md),
-  [migrating-batect-project](docs/migrating-batect-project.md), [FAQ](docs/faq.md),
-  [reusable-building-blocks](docs/reusable-building-blocks.md))
-  and has nothing in the shapes below. The first two are, near enough, Batect's
-  own unbuilt documentation list, so that gap is inherited rather than newly
-  created; the third is different — Batect actually built this one
-  (`using-batect-with/tools/`), so it's a real gap against Batect specifically,
-  not an inherited one:
-  - **Language/ecosystem-specific concerns**, in the spirit of Batect's own
-    `using-batect-with/tools/` pages — mostly caching (what to cache and where,
-    which `examples/` already gets right for Rust, Go, Node.js, Python, and the
-    JVM: `cargo-registry`/`cargo-target`, `GOPATH`/`GOCACHE` equivalents,
-    `npm-cache`, `pip-cache`, `gradle-cache`), but not only that: Batect's own
-    pages also cover ecosystem-specific correctness/performance gotchas that
-    aren't a caching question at all — disabling the Gradle daemon (pointless
-    and counterproductive in an ephemeral container) and Node.js needing
-    [`enable_init_process`](docs/config-reference.md#container) for correct
-    signal handling as PID 1, which only applies where a Node container
-    actually stays running (`examples/node`'s own `run` task doesn't — it
-    prints and exits; `examples/full-stack`'s `app` container does). Both
-    fixed now (`examples/jvm`'s Gradle daemon disabled, `examples/full-stack`'s
-    `app` container running an init process), so a doc page can honestly cite
-    them as done right. Batect also
-    covers .NET and Ruby, which `examples/` has nothing for at all.
+- **Documentation beyond reference material** is done — `docs/` covered only
+  reference material until this batch of work; [`using-ratect-with`](docs/using-ratect-with.md)
+  was the last piece, closing the one gap here that was real against Batect
+  specifically, not just inherited from something Batect itself never built.
+  See [`docs/SUMMARY.md`](docs/SUMMARY.md) for the full current list rather
+  than duplicating it here.
 - **A version picker on the rendered docs site** — deliberately not built with the
   site itself ([#86](https://github.com/or1can/ratect/issues/86)): the site tracks
   `main` only for now, so there's nothing yet to pick between. Worth adding once

@@ -154,4 +154,6 @@ which is useful when troubleshooting.
 
 See [Worked Examples](worked-examples.md) for a real `build`/`test`/`run`/`lint`/`shell` task set
 in Rust, Go, Node.js, Python, or the JVM — a faster starting point than building one
-up from scratch if your project is in one of those.
+up from scratch if your project is in one of those. Once you have a container running
+your own toolchain, [Using Ratect With Language Ecosystems](using-ratect-with.md) covers
+what to cache and a couple of correctness gotchas per ecosystem.
