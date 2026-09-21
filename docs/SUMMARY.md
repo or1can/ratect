@@ -23,3 +23,7 @@
 # Migrating from Batect
 
 - [Differences from Batect](differences-from-batect.md)
+
+# Comparisons
+
+- [How Ratect Compares to Other Tools](comparison.md)
