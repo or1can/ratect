@@ -51,6 +51,9 @@ jobs:
       # whole-book duplicate-content print view, and the sidebar's iframe
       # source respectively), not content — excluded so a crawler is never
       # pointed at them.
+      # The two redirect stubs book.toml declares for renamed pages are
+      # excluded for the same reason: a crawler should index the target,
+      # not a meta-refresh page pointing at it.
       - name: Generate sitemap.xml
         run: |
           base=https://ratect.apps.orican.eu
@@ -60,7 +63,7 @@ jobs:
             for f in book/*.html; do
               name=$(basename "$f")
               case "$name" in
-                404.html|print.html|toc.html) continue ;;
+                404.html|print.html|toc.html|cli-reference.html|config-reference.html) continue ;;
               esac
               rel="$name"
               [ "$name" = index.html ] && rel=""
