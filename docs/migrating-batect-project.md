@@ -57,7 +57,7 @@ The native format isn't all-or-nothing either. An `include` entry is parsed by
 its file extension (see [Includes](ratect-config-reference.md#includes)), so a
 `ratect.toml` project can pull in an entire existing `batect.yml` unconverted.
 The one adjustment needed: an included file must not declare `project_name`,
-since that's root-only (see [Includes](config-reference.md#includes)) — move
+since that's root-only (see [Includes](ratect-compat-config-reference.md#includes)) — move
 that one line out into the new root file instead.
 
 ```yaml

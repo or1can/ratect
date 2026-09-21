@@ -2,7 +2,7 @@
 
 This is about *why* you'd reach for a Git include, not the mechanics of one —
 those are already covered in full by the [configuration
-reference](config-reference.md#git-includes) (and its native-format
+reference](ratect-compat-config-reference.md#git-includes) (and its native-format
 counterpart, [`ratect.toml`'s own Includes
 section](ratect-config-reference.md#includes)). This page motivates the use
 case first, then the trust model it depends on, since a bundle is code you
@@ -40,7 +40,7 @@ tasks:
 
 Here `shared-lint` isn't defined anywhere in this project's own file — it
 came from the bundle, merged in exactly as if it had been written locally
-(see [Includes](config-reference.md#includes) for the merge rules). The
+(see [Includes](ratect-compat-config-reference.md#includes) for the merge rules). The
 project's own `lint` task just sequences it in as a
 [prerequisite](faq.md#whats-the-difference-between-a-dependency-and-a-prerequisite).
 
@@ -88,7 +88,7 @@ without forking it:
   `volumes`: letting a consumer silently add a mount to someone else's
   container would undercut the containment above at the one place it
   actually matters. See
-  [TaskContainerCustomisation](config-reference.md#taskcontainercustomisation).
+  [TaskContainerCustomisation](ratect-compat-config-reference.md#taskcontainercustomisation).
 - **`extends`** (`ratect.toml` only) — a container in your own file can
   inherit from one defined in an included bundle and layer its own fields on
   top, shallow-merged per field. Useful when a bundle ships a base image and

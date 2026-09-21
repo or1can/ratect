@@ -214,7 +214,7 @@ jobs:
             cmd test
             assert_output "$name's run task" "Hello, world!" cmd run || exit 1
             cmd lint
-            # `shell` is interactive by design (config-reference.md's own
+            # `shell` is interactive by design (ratect-compat-config-reference.md's own
             # Interactive mode) — `-- -c '...'` turns it from "drop into a
             # shell" into "run one command and exit", giving this something
             # real to assert on (the echoed string) instead of just an exit

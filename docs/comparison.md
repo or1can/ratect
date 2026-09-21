@@ -51,7 +51,7 @@ loop with no equivalent in Ratect at all.
 distinct `build`/`test`/`lint` verbs, no per-invocation ephemeral
 containers. `depends_on: condition: service_healthy` gates *start order* on
 a health check, which is real and useful, but Compose has nothing like
-[`setup_commands`](config-reference.md#dependency-readiness) — a scripted
+[`setup_commands`](ratect-compat-config-reference.md#dependency-readiness) — a scripted
 step that runs *inside* a dependency once it's healthy but before anything
 depends on it starts. Seeding a database before code touches it means an
 init container or an entrypoint script you write and maintain yourself;

@@ -8,7 +8,7 @@ for a map of the source layout.
 
 Each binary has its own `main.rs`, and both parse arguments with
 [`clap`](https://docs.rs/clap): `ratect-compat/src/main.rs` for Batect's flat flag
-interface ([CLI reference](cli-reference.md)), and `ratect/src/main.rs` for the
+interface ([CLI reference](ratect-compat-cli.md)), and `ratect/src/main.rs` for the
 subcommand interface ([`ratect` CLI reference](ratect-cli.md)). Everything below
 this step is shared — both call into `ratect-core`, which is where the rest of
 this document lives. Parsing has to happen before config resolution (step 2)
@@ -25,14 +25,14 @@ aren't known at the first:
    [`toml`](https://docs.rs/toml), one struct set for both formats — and its
    top-level `include` list (if any) is resolved, with every loaded file's
    `containers`/`tasks`/`config_variables` merged into one `Config` (see
-   [Includes](config-reference.md#includes)). No expression interpolation yet.
+   [Includes](ratect-compat-config-reference.md#includes)). No expression interpolation yet.
 
    Includes are walked breadth-first, so every entry in the root file is reached
    before any included file's own, and each file is loaded exactly once however
    many entries name it. A `type: git` entry clones its repository into
    `~/.ratect/incl` first (`ratect-core/src/git_include.rs`), and everything
    reached through one is confined to that clone and may do only what the entry
-   granted it — see [Git includes](config-reference.md#git-includes) for the
+   granted it — see [Git includes](ratect-compat-config-reference.md#git-includes) for the
    rules, and [`CONTEXT.md`](../CONTEXT.md) for what *bundle*, *grant* and
    *boundary* each denote.
 
@@ -44,14 +44,14 @@ aren't known at the first:
    `--config-var`/`--config-vars-file` have been parsed and merged into an overrides
    map — from `load_project`/`load_project_native` in `config.rs`, which run both
    steps in order so neither binary has to know the order. In one pass:
-   - Resolves [expressions](config-reference.md#expressions) (`$VAR`, `${VAR:-default}`,
+   - Resolves [expressions](ratect-compat-config-reference.md#expressions) (`$VAR`, `${VAR:-default}`,
      `<name`, `<{name}`, plus the built-in `batect.project_directory`) in every field
      that takes one: `environment` values (container and task `run`), `local` volume
      mount host paths, `build_directory`, `build_args`, a `build_secrets` entry's
      `path`, a `build_ssh` entry's `paths`, `run_as_current_user.home_directory`, and
      — `ratect.toml` only — `image`. A `cache` mount's `name`/`container` are plain
      strings, matching Batect: nothing to interpolate (see
-     [Cache volumes](config-reference.md#cache-volumes)).
+     [Cache volumes](ratect-compat-config-reference.md#cache-volumes)).
    - **Volume path resolution**: *after* interpolating a `local` mount's host path, if
      the result is relative, it's resolved to an absolute path relative to *that
      container's own origin file's* directory (via `container_base_paths` — the root
@@ -67,13 +67,13 @@ aren't known at the first:
      The resolved path is then checked against `container_boundaries`: a
      container that came from a Git-included file may only reach inside its own
      clone or your project directory, unless that include was granted
-     [`allow_host_paths`](config-reference.md#git-includes). Checked twice: once
+     [`allow_host_paths`](ratect-compat-config-reference.md#git-includes). Checked twice: once
      lexically, with both the check and the path normalized first, since
      `Path::starts_with` does not interpret `..`; then against the real
      locations, with symlinks resolved as far as the path exists, since a
      bundle can commit one inside its own clone.
 
-   See the [configuration reference](config-reference.md#expressions) for the full
+   See the [configuration reference](ratect-compat-config-reference.md#expressions) for the full
    expression syntax, precedence, and error rules.
 
 ## 3. Task engine (`ratect-core/src/engine.rs`)
@@ -96,12 +96,12 @@ where that lives and stays current.
    interactively, so only the originally-requested task's own container is ever
    eligible, however deeply nested its prerequisites are. A task with no `run` of
    its own stops here and succeeds — it exists purely to chain prerequisites (see
-   [config reference](config-reference.md#task)), matching Batect's own
+   [config reference](ratect-compat-config-reference.md#task)), matching Batect's own
    `TaskRunner`.
 4. **Create the task's network** and start everything in the task's container
    graph on it, before the task's own container, so it can reach them by name. The
    graph is the container's own `dependencies` unioned with the task's, resolved
-   recursively, with any [`customise`](config-reference.md#taskcontainercustomisation)
+   recursively, with any [`customise`](ratect-compat-config-reference.md#taskcontainercustomisation)
    overrides applied to whichever container they target at whatever depth. Every
    task execution gets its own network — a task's container is never left on
    Docker's shared default bridge — and it is torn down afterwards. With
@@ -110,16 +110,16 @@ where that lives and stays current.
    lifecycle](task-lifecycle.md) for the step-by-step and diagrams.
 5. **Resolve and run the image.** `resolve_image` turns a container's `image` or
    `build_directory` into something runnable — pulling (per
-   [`image_pull_policy`](config-reference.md#container)) or building, or
+   [`image_pull_policy`](ratect-compat-config-reference.md#container)) or building, or
    erroring if neither is set — and is used identically for the task's own
    container and for dependencies. The container then runs with the task's
    `command`, joined to the task's network, its environment layered host `TERM` →
-   [proxy variables](config-reference.md#proxy-environment-variables) → the
+   [proxy variables](ratect-compat-config-reference.md#proxy-environment-variables) → the
    container's `environment` → the task's `run.environment`, each winning over the
    last. Everything else on the container — ports, hostnames, working directory,
    entrypoint, capabilities, devices, and the rest — is assembled here from the
    config and handed to `docker.rs` as plain values; the [config
-   reference](config-reference.md) is the list of what those fields mean, and which
+   reference](ratect-compat-config-reference.md) is the list of what those fields mean, and which
    accept a task-level `run` override.
 
 The "run once", "pull once" and "build once" guarantees are in-memory and scoped to
@@ -159,7 +159,7 @@ unit-tested with a fake implementation instead of a real Docker daemon.
 - **`run_container`**: creates, starts and streams the task's own container until
   it exits. Three start/attach paths sit behind it — fully non-interactive,
   stdin-forwarding, and a real TTY with raw mode and live resize — chosen by
-  whether the task is [interactive](config-reference.md#interactive-mode)-eligible
+  whether the task is [interactive](ratect-compat-config-reference.md#interactive-mode)-eligible
   and whether Ratect's own stdin *and* stdout are terminals. It does **not** remove
   the container: the engine's cleanup stage removes everything a task created, its
   own container included, so `--no-cleanup-*` is interpreted in exactly one place.
@@ -170,7 +170,7 @@ unit-tested with a fake implementation instead of a real Docker daemon.
   dependency or sidecar — started and left running alongside the task rather than
   waited on, so no logs are streamed and no task `command` applies.
 - **`wait_for_container_healthy` / `exec_in_container`**: the two halves of the
-  [dependency readiness gate](config-reference.md#dependency-readiness). The first
+  [dependency readiness gate](ratect-compat-config-reference.md#dependency-readiness). The first
   blocks on Docker's own event stream, replayed from the beginning so a verdict
   that arrived before the stream opened still counts, and turns an *unhealthy*
   verdict into an error carrying the last health check's exit code and output. The
@@ -203,7 +203,7 @@ Ratect keeps two channels deliberately separate:
   Batect puts them. Internally these progress lines are typed events
   (`ratect-core/src/ui/`): `engine.rs` and `docker.rs` post task-execution
   milestones to an event sink instead of printing, and the selected
-  [output style](cli-reference.md#output-styles) (`--output`/`-o`) decides what
+  [output style](ratect-compat-cli.md#output-styles) (`--output`/`-o`) decides what
   each event renders as — `fancy`'s live per-container status block on an
   interactive terminal, `simple`'s plain append-only lines otherwise, nothing at
   all under `quiet` (whose stdout is then exactly the containers' own output,
@@ -216,7 +216,7 @@ Ratect keeps two channels deliberately separate:
   exit non-zero), which `main.rs` prints directly (`Error: <message>`) rather than
   through `tracing::error!`: it must stay visible even when `RUST_LOG` suppresses
   everything else, since there'd otherwise be no visible explanation at all for the
-  failure under `RUST_LOG=off` combined with [`-o quiet`](cli-reference.md#output-styles).
+  failure under `RUST_LOG=off` combined with [`-o quiet`](ratect-compat-cli.md#output-styles).
 
 Colors (e.g. the exit code in the task summary line) are only emitted when stdout is
 actually a terminal — piped or redirected output gets plain text.
@@ -227,7 +227,7 @@ actually a terminal — piped or redirected output gets plain text.
 [`EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)
 syntax lets you scope it to specific modules (`target=level` directives, comma-separated).
 This matters in practice once you turn on `debug` for anything build-related (e.g. to see
-a live [image build](config-reference.md#image-building) transcript): `bollard` (the Docker
+a live [image build](ratect-compat-config-reference.md#image-building) transcript): `bollard` (the Docker
 API client Ratect is built on) also logs at `debug`, and a bare `RUST_LOG=debug` includes
 *all* of its raw API traffic — usually far more noise than signal.
 

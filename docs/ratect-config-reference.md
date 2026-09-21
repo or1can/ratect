@@ -2,14 +2,14 @@
 
 This documents **`ratect.toml`**, the native configuration format the
 [`ratect`](ratect-cli.md) binary reads by default (from 0.3.0). It is the same
-schema the [Configuration Reference](config-reference.md) documents — the same
+schema the [Configuration Reference](ratect-compat-config-reference.md) documents — the same
 containers, tasks, and fields, with the same meanings — re-spelled in TOML, with
 a few native additions (`extends`, an auto-discovered local overrides file) and a
 few YAML-isms removed (anchors, the compact string shorthands).
 
 Because the *field semantics* are identical across both formats, this reference
 does not repeat them: for what a given field actually does, follow the links into
-[`config-reference.md`](config-reference.md). What's covered here is the parts
+[`ratect-compat-config-reference.md`](ratect-compat-config-reference.md). What's covered here is the parts
 that are genuinely different — the TOML spelling, and the native-only rules.
 
 > The native format is `ratect`'s alone. `ratect-compat` reads `batect.yml`
@@ -40,7 +40,7 @@ run = { container = "build-env", command = "cargo build" }
 
 `project_name` is the only required top-level key (it's taken from the root file
 only, and names the images and cache volumes the project creates — see
-[Top level](config-reference.md#top-level)). `ratect` defaults `-f` to
+[Top level](ratect-compat-config-reference.md#top-level)). `ratect` defaults `-f` to
 `ratect.toml`; point it at a differently-named file, or a `batect.yml`, with
 `-f`.
 
@@ -119,12 +119,12 @@ container = "/dev/kvm"
 ```
 
 - A **`volumes`** entry is a host bind (`local` + `container` [+ `options`]), a
-  named [cache volume](config-reference.md#cache-volumes)
+  named [cache volume](ratect-compat-config-reference.md#cache-volumes)
   (`{ type = "cache", name = "...", container = "..." }`), or a
-  [tmpfs mount](config-reference.md#tmpfs-mounts)
+  [tmpfs mount](ratect-compat-config-reference.md#tmpfs-mounts)
   (`{ type = "tmpfs", container = "...", options = "..." }`).
 - A **`ports`** entry is `{ local, container }` [+ `protocol`], with port ranges
-  written as `"6000-6010"` — see [Port mappings](config-reference.md#port-mappings).
+  written as `"6000-6010"` — see [Port mappings](ratect-compat-config-reference.md#port-mappings).
 - A **`devices`** entry is `{ local, container }` [+ `options`].
 
 The parser itself still *accepts* the string forms (which is what lets a
@@ -139,8 +139,8 @@ values inside strings, so it carries across verbatim. Which **fields** resolve
 one is not identical: this format also resolves them in `image`, which a
 `batect.yml` refuses — see [Expressions in `image`](#expressions-in-image), and
 note that the `image` line in the example below is exactly that case. Otherwise
-see [ConfigVariable](config-reference.md#configvariable) and
-[Expressions](config-reference.md#expressions).
+see [ConfigVariable](ratect-compat-config-reference.md#configvariable) and
+[Expressions](ratect-compat-config-reference.md#expressions).
 
 ```toml
 [config_variables.tag]
@@ -188,7 +188,7 @@ include = [
 A `type = "git"` entry with no `path` discovers its bundle file by looking for
 **`ratect-bundle.toml` first, then `batect-bundle.yml`** — so an unmigrated Batect
 bundle keeps working, and a bundle author can ship both files to support `ratect`
-and Batect at once. See [Includes](config-reference.md#includes) for how paths
+and Batect at once. See [Includes](ratect-compat-config-reference.md#includes) for how paths
 resolve, the containment rules for Git bundles, and the shared
 `~/.ratect/incl` cache ([`ratect includes`](ratect-cli.md#includes-options)
 manages it).
@@ -221,7 +221,7 @@ This exists because the alternative is worse. A bundle that wants one Cargo
 registry or npm cache across projects has, until now, had to spell it as a
 host path (`local = "~/.cache/cargo"`), which means granting the bundle access
 to your home directory — the thing
-[`allow_host_paths`](config-reference.md#git-includes) exists to permit and
+[`allow_host_paths`](ratect-compat-config-reference.md#git-includes) exists to permit and
 [decisions/0004](https://github.com/or1can/ratect/blob/main/decisions/0004-git-include-host-path-trust.md)
 would rather solve properly. A shared cache says the same thing directly,
 grants no host filesystem access at all, and keeps the location under Ratect's
@@ -248,7 +248,7 @@ ignored — see [Differences](#differences-from-batectyml-at-a-glance) below.
 
 ## Expressions in `image`
 
-A container's `image` takes [expressions](config-reference.md#expressions), so a
+A container's `image` takes [expressions](ratect-compat-config-reference.md#expressions), so a
 pipeline can choose its image per run without a flag:
 
 ```toml
@@ -293,7 +293,7 @@ knows the difference between an expression and a literal `$`: `alpine:3.18` and
 
 ## Nested Git includes
 
-A [Git include](config-reference.md#git-includes) fetches configuration from a
+A [Git include](ratect-compat-config-reference.md#git-includes) fetches configuration from a
 repository and merges it into yours. That bundle can declare `include` entries
 of its own — and in a `batect.yml` those may be further `type: git` entries,
 naming any remote, with the same trust your own includes get.
@@ -327,7 +327,7 @@ file yours is that it was not reached through a Git include, not its extension.
 
 **The grant is one level deep.** It admits that bundle's own Git includes; it
 does not let *those* bundles declare further ones. Like
-[`allow_host_paths`](config-reference.md#git-includes), it counts only in
+[`allow_host_paths`](ratect-compat-config-reference.md#git-includes), it counts only in
 configuration you control — written inside a Git-included file it is ignored,
 so a bundle can neither grant itself the permission nor pass on the one you
 gave it. If a bundle genuinely needs a chain deeper than that, include the
@@ -341,7 +341,7 @@ include yourself beats a bundle to it; between two entries in the same file, the
 earlier one wins. Where two entries reach the same file and the losing one
 carries a grant, Ratect refuses to load and names the repository, rather than
 dropping it silently; the same rule covers
-[`allow_host_paths`](config-reference.md#git-includes).
+[`allow_host_paths`](ratect-compat-config-reference.md#git-includes).
 
 It is the *file* that races, not the repository: two entries naming the same
 repository with different `path`s pull in two different files, and each keeps
@@ -371,7 +371,7 @@ that format never applies.
 
 ## Field reference
 
-Every container and task field from [`config-reference.md`](config-reference.md)
+Every container and task field from [`ratect-compat-config-reference.md`](ratect-compat-config-reference.md)
 applies, with the same meaning except where [Where the semantics
 differ](#where-the-semantics-differ) says otherwise. Scalars, string maps
 (`environment`, `labels`, `build_args`, …) and scalar lists
@@ -381,18 +381,18 @@ The container fields, by area:
 
 | Area | Fields | Semantics |
 | --- | --- | --- |
-| Image | `image`, `image_pull_policy`, `build_directory`, `dockerfile`, `build_target`, `build_args`, `build_secrets`, `build_ssh` | [Image building](config-reference.md#image-building) |
-| Mounts | `volumes` (host / `cache` / `tmpfs`) | [Volumes](config-reference.md#volume-path-resolution), [caches](config-reference.md#cache-volumes), [tmpfs](config-reference.md#tmpfs-mounts). A cache also takes [`scope`](#shared-caches) *(native only)* — the linked section describes project-keyed storage, which `scope = "shared"` deliberately does not use. |
-| Runtime | `command`, `entrypoint`, `working_directory`, `environment`, `enable_init_process`, `privileged`, `shm_size`, `capabilities_to_add`, `capabilities_to_drop`, `devices`, `labels`, `log_driver`, `log_options` | [Container](config-reference.md#container) |
-| Networking | `ports`, `additional_hostnames`, `additional_hosts`, `dependencies` | [Ports](config-reference.md#port-mappings), [readiness](config-reference.md#dependency-readiness) |
-| Readiness | `health_check`, `setup_commands` | [Dependency readiness](config-reference.md#dependency-readiness) |
-| User | `run_as_current_user` | [User mapping](config-reference.md#user-mapping) |
+| Image | `image`, `image_pull_policy`, `build_directory`, `dockerfile`, `build_target`, `build_args`, `build_secrets`, `build_ssh` | [Image building](ratect-compat-config-reference.md#image-building) |
+| Mounts | `volumes` (host / `cache` / `tmpfs`) | [Volumes](ratect-compat-config-reference.md#volume-path-resolution), [caches](ratect-compat-config-reference.md#cache-volumes), [tmpfs](ratect-compat-config-reference.md#tmpfs-mounts). A cache also takes [`scope`](#shared-caches) *(native only)* — the linked section describes project-keyed storage, which `scope = "shared"` deliberately does not use. |
+| Runtime | `command`, `entrypoint`, `working_directory`, `environment`, `enable_init_process`, `privileged`, `shm_size`, `capabilities_to_add`, `capabilities_to_drop`, `devices`, `labels`, `log_driver`, `log_options` | [Container](ratect-compat-config-reference.md#container) |
+| Networking | `ports`, `additional_hostnames`, `additional_hosts`, `dependencies` | [Ports](ratect-compat-config-reference.md#port-mappings), [readiness](ratect-compat-config-reference.md#dependency-readiness) |
+| Readiness | `health_check`, `setup_commands` | [Dependency readiness](ratect-compat-config-reference.md#dependency-readiness) |
+| User | `run_as_current_user` | [User mapping](ratect-compat-config-reference.md#user-mapping) |
 | Inheritance | `extends` | [above](#extends-inheritance-instead-of-yaml-anchors) *(native only)* |
 
 ### Where the semantics differ
 
 Almost nothing: the two formats parse into the same model, so a field means
-what [`config-reference.md`](config-reference.md) says it means. The
+what [`ratect-compat-config-reference.md`](ratect-compat-config-reference.md) says it means. The
 exceptions fall into three groups: places where `extends` gives a combination
 a meaning it cannot have in a `batect.yml`, which has no inheritance; places
 where this format is deliberately **stricter**, having no Batect
@@ -414,10 +414,10 @@ cannot tell you so without forbidding the override above. If a build field
 looks like it is being ignored, check whether the container resolves to an
 `image`.
 
-Task fields: `run` (a [`TaskRun`](config-reference.md#taskrun) table —
+Task fields: `run` (a [`TaskRun`](ratect-compat-config-reference.md#taskrun) table —
 `container`, `command`, `entrypoint`, `environment`, `ports`,
 `working_directory`), `prerequisites`, `dependencies`, `description`, `group`,
-and `customise` (see [Task](config-reference.md#task)). A task needs at least one
+and `customise` (see [Task](ratect-compat-config-reference.md#task)). A task needs at least one
 of `run` or `prerequisites`.
 
 ```toml
@@ -439,7 +439,7 @@ editor extension at it — [taplo](https://taplo.tamasfe.dev) / "Even Better TOM
 for VS Code, or JetBrains' TOML support — gives field-name autocompletion, hover
 documentation, and a red squiggle under a misspelled or unsupported field. It's
 the native counterpart of the [`batect.yml`
-schema](config-reference.md#editor-autocompletion-and-validation): the same
+schema](ratect-compat-config-reference.md#editor-autocompletion-and-validation): the same
 schema, adjusted to the native shape (object-only list entries, plus `extends`).
 
 The simplest way to use it is a schema directive on the first line of your

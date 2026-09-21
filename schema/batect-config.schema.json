@@ -152,7 +152,7 @@
           ]
         },
         "build_ssh": {
-          "description": "Makes SSH keys available to a `build_directory` build, for a Dockerfile's `RUN --mount=type=ssh` instructions. Each entry is one agent, named by an `id` a `RUN` instruction can select (`--mount=type=ssh,id=<id>`), and ids must be unique across the list (checked in `Config::resolve_expressions_with`). An entry with no `paths` forwards the host's own running ssh-agent via `SSH_AUTH_SOCK`; an entry with `paths` serves those private key files instead, which is what works in CI where no agent is running. See `SshAgent`, and [Image building](https://github.com/or1can/ratect/blob/main/docs/config-reference.md#image-building).",
+          "description": "Makes SSH keys available to a `build_directory` build, for a Dockerfile's `RUN --mount=type=ssh` instructions. Each entry is one agent, named by an `id` a `RUN` instruction can select (`--mount=type=ssh,id=<id>`), and ids must be unique across the list (checked in `Config::resolve_expressions_with`). An entry with no `paths` forwards the host's own running ssh-agent via `SSH_AUTH_SOCK`; an entry with `paths` serves those private key files instead, which is what works in CI where no agent is running. See `SshAgent`, and [Image building](https://github.com/or1can/ratect/blob/main/docs/ratect-compat-config-reference.md#image-building).",
           "items": {
             "$ref": "#/definitions/SshAgent"
           },

@@ -1,7 +1,7 @@
 # Frequently Asked Questions
 
 Answers to real questions that come up using Ratect — not a restatement of the
-[configuration reference](config-reference.md), which already covers every field
+[configuration reference](ratect-compat-config-reference.md), which already covers every field
 mechanically. This page is expected to grow: if something surprised you, it likely
 surprises the next person too — open an issue.
 
@@ -9,14 +9,14 @@ surprises the next person too — open an issue.
 
 Ratect gives you both, and they trade off differently:
 
-- A [`volumes` bind mount](config-reference.md#volume-path-resolution)
+- A [`volumes` bind mount](ratect-compat-config-reference.md#volume-path-resolution)
   (`{ local: ".", container: "/code" }`) makes your working directory show up live
   inside the container — every one of `examples/`'s projects does exactly this for
   its own source tree. Edit a file on the host, rerun the task, and the container
   sees the change with no rebuild. The image itself stays generic (a stock language
   toolchain image, not your code baked into it), so pulling it is normally fast and
   cached.
-- [`build_directory`](config-reference.md#image-building) instead builds a
+- [`build_directory`](ratect-compat-config-reference.md#image-building) instead builds a
   `Dockerfile` — your code is `COPY`'d in at build time, so the resulting image is
   fully self-contained (nothing left on the host is needed to run it) and portable
   (push it, run it elsewhere, get the exact same bytes). The cost is the build step
@@ -32,7 +32,7 @@ disposable environment to run your code in.
 
 ## How do I run something at container start regardless of the task's command?
 
-Use [`entrypoint`](config-reference.md#container) rather than `command`. Docker runs
+Use [`entrypoint`](ratect-compat-config-reference.md#container) rather than `command`. Docker runs
 `Entrypoint ++ Cmd` — the entrypoint always executes first regardless of what
 `command` (or a task's `run.command`) is set to, and the classic idiom is a wrapper
 script that does its setup, then hands off to whatever was actually asked for:
@@ -62,7 +62,7 @@ through to Docker with neither side adding an extra shell layer of its own.
 
 If what you actually need is *signal forwarding and zombie reaping* rather than a
 custom setup step, see
-[`enable_init_process`](config-reference.md#container) instead — it runs Docker's
+[`enable_init_process`](ratect-compat-config-reference.md#container) instead — it runs Docker's
 own init process ahead of your command for exactly that, with nothing to write.
 
 ## Why does task idempotency matter?
@@ -70,7 +70,7 @@ own init process ahead of your command for exactly that, with nothing to write.
 Because Ratect doesn't cache "already succeeded" *across* invocations — there's no
 timestamp check, no "nothing changed, skipping" the way a build tool like `make`
 gives you for free. Within *one* invocation, a prerequisite reached by more than one
-path does run only once (see [`prerequisites`](config-reference.md#task) — that's
+path does run only once (see [`prerequisites`](ratect-compat-config-reference.md#task) — that's
 cycle-safe dedup, not a guarantee your script is safe to run twice), but every
 separate `ratect-compat`/`ratect` invocation from the shell starts completely fresh,
 with no memory of any previous run. Take the `migrate`/`test` example from [Cross-task
@@ -120,7 +120,7 @@ command: sh -c 'echo $HOME && echo done'
 ```
 
 This is easy to conflate with a second, entirely different `$`-syntax: Ratect's own
-[config-time expressions](config-reference.md#expressions) (`$VAR`,
+[config-time expressions](ratect-compat-config-reference.md#expressions) (`$VAR`,
 `${VAR:-default}`, `<name`), which *do* exist — but only in specific fields
 (`environment` values, a volume's `host_path`, `build_directory`, and a few others),
 resolved once before any task runs, never inside `command` itself. So there are
@@ -137,7 +137,7 @@ Containers don't inherit the host's environment automatically — not Ratect's o
 choice, just how Docker containers work, but a common first surprise for anyone
 coming from local shell scripts where every variable is already there. Any host
 variable a container's command needs has to be passed through explicitly via
-[`environment`](config-reference.md#expressions), using Ratect's own expression
+[`environment`](ratect-compat-config-reference.md#expressions), using Ratect's own expression
 syntax:
 
 ```yaml
@@ -157,14 +157,14 @@ exported in whoever's shell ran it.
 
 They sound like synonyms but are two unrelated mechanisms:
 
-- A **dependency** (a container's own [`dependencies`](config-reference.md#container)
+- A **dependency** (a container's own [`dependencies`](ratect-compat-config-reference.md#container)
   list) is another *container*, started alongside the one that needs it, kept
   running for the whole task, and torn down together at the end. Use it for
   something your task's container talks to over the network while it runs — a
   database, a cache, a queue. See [Dependency
   resolution](task-lifecycle.md#dependency-resolution) for how several of these
   combine.
-- A **prerequisite** (a task's own [`prerequisites`](config-reference.md#task) list)
+- A **prerequisite** (a task's own [`prerequisites`](ratect-compat-config-reference.md#task) list)
   is another *task*, run to completion — including its own full cleanup — strictly
   before the task that names it starts. Use it to sequence work: `compile` before
   `test`, a migration before the tests that need it migrated. See [Task

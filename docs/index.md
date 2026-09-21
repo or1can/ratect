@@ -64,7 +64,7 @@ bulk insert) once it's healthy but before anything depends on it, then
 `cache` itself, once, even though it's a dependency of both. `journey-test`
 makes a real HTTP request to `app` (the JSON in the middle is its real
 response), then checks Redis *directly* to confirm the value `app` read
-got cached — see [Dependency readiness](config-reference.md#dependency-readiness)
+got cached — see [Dependency readiness](ratect-compat-config-reference.md#dependency-readiness)
 for the full model behind all of it. Every container is removed afterwards
 regardless of how the task ends.
 
@@ -73,8 +73,10 @@ regardless of how the task ends.
   example](worked-examples.md) for your language.
 - Coming from Batect? See [Differences from Batect](differences-from-batect.md)
   for what to expect.
+- Weighing Ratect against Docker Compose, Make, Task, Earthly, Dagger or
+  `just`? See [How Ratect Compares to Other Tools](comparison.md).
 - Looking for a specific flag or config field? Jump to a reference:
-  [`ratect-compat` CLI](cli-reference.md) · [`batect.yml`](config-reference.md) ·
-  [`ratect` CLI](ratect-cli.md) · [`ratect.toml`](ratect-config-reference.md).
+  [`ratect` CLI](ratect-cli.md) · [`ratect.toml`](ratect-config-reference.md) ·
+  [`ratect-compat` CLI](ratect-compat-cli.md) · [`batect.yml`](ratect-compat-config-reference.md).
 
 Source and issue tracker: [or1can/ratect](https://github.com/or1can/ratect).

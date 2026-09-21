@@ -2,7 +2,7 @@
 
 This documents the **`ratect`** binary — the forward-looking CLI, free to diverge
 from Batect's interface. For the Batect-compatible binary, see the
-[`ratect-compat` CLI reference](cli-reference.md) instead; the two are described
+[`ratect-compat` CLI reference](ratect-compat-cli.md) instead; the two are described
 separately because they are deliberately different interfaces, not two spellings of
 one.
 
@@ -11,7 +11,7 @@ one.
 > see [Releases](../RELEASES.md#ratect) and
 > [decisions/0003](../decisions/0003-ratect-native-config-format.md). Its full
 > schema is the [`ratect.toml` reference](ratect-config-reference.md); it's the
-> same schema [Configuration Reference](config-reference.md) documents for
+> same schema [Configuration Reference](ratect-compat-config-reference.md) documents for
 > `batect.yml`, re-spelled in TOML, with `extends` in place of YAML anchors. A
 > `batect.yml` is still readable by naming it with `-f`, so a project can migrate
 > incrementally — [`ratect config convert`](#config) translates one automatically.
@@ -20,7 +20,7 @@ one.
 
 ## The native config format
 
-`ratect.toml` is [`batect.yml`](config-reference.md)'s schema in TOML: named
+`ratect.toml` is [`batect.yml`](ratect-compat-config-reference.md)'s schema in TOML: named
 containers and tasks become tables, and list entries (`volumes`, `ports`,
 `devices`) become inline tables or `[[...]]` blocks. A small example:
 
@@ -51,7 +51,7 @@ overrides — is the [`ratect.toml` reference](ratect-config-reference.md).
 
 A **`ratect.local.toml`** beside your config file is loaded automatically when
 present — no `--config-vars-file` needed — supplying [config
-variable](config-reference.md#configvariable) *values* (a flat `name = "value"`
+variable](ratect-compat-config-reference.md#configvariable) *values* (a flat `name = "value"`
 map) for the current developer or machine. Gitignore it. See
 [the reference](ratect-config-reference.md#local-overrides) for precedence and
 the reasoning.
@@ -127,7 +127,7 @@ and `ratect run build -f custom.yml` are the same invocation.
 | Option | Default | Description |
 | --- | --- | --- |
 | `-f`, `--config-file <PATH>` | `ratect.toml` | The configuration file. Parsed by extension — `.toml` as the native format, `.yml`/`.yaml` as Batect-format YAML — so `-f batect.yml` keeps reading a Batect config while migrating. `caches` uses it only to locate the project *directory* — it never reads the contents. |
-| `-o`, `--output <STYLE>` | auto | `fancy`, `simple`, `all` or `quiet` — see [output styles](cli-reference.md#output-styles), which behave identically here. |
+| `-o`, `--output <STYLE>` | auto | `fancy`, `simple`, `all` or `quiet` — see [output styles](ratect-compat-cli.md#output-styles), which behave identically here. |
 | `--no-color` | — | No color in Ratect's own output (never affects a task's own output). The [`NO_COLOR`](https://no-color.org) environment variable has exactly the same effect, if set. The `CLICOLOR_FORCE` environment variable does the opposite — forces color even when stdout isn't a terminal, without affecting which output style is auto-selected — but `NO_COLOR`/`--no-color` always win over it if either is also set. |
 
 Narrower options attach to the commands that actually use them, rather than being
@@ -138,7 +138,7 @@ reach a daemon).
 
 | Option | Applies to | Description |
 | --- | --- | --- |
-| `--config-var <NAME=VALUE>` | `run`, `tasks list` | Sets a [config variable](config-reference.md#configvariable). Repeatable; wins over `--config-vars-file` and the variable's own default. |
+| `--config-var <NAME=VALUE>` | `run`, `tasks list` | Sets a [config variable](ratect-compat-config-reference.md#configvariable). Repeatable; wins over `--config-vars-file` and the variable's own default. |
 | `--config-vars-file <PATH>` | `run`, `tasks list` | A file of config variable values (a flat `NAME = VALUE` map), parsed as TOML or YAML by extension. Defaults to an auto-discovered [`ratect.local.toml`](#local-overrides) beside the config file, when present. |
 
 ## Docker connection options
@@ -151,7 +151,7 @@ Taken by `run` and by `caches` (whose default storage is Docker volumes); never 
 | `--docker-host <HOST>` | `DOCKER_HOST`, then Docker's default | The daemon to connect to. Mutually exclusive with `--docker-context`. |
 | `--docker-context <NAME>` | `DOCKER_CONTEXT`, then the CLI's active context | The Docker CLI context to connect through. |
 | `--docker-config <PATH>` | `DOCKER_CONFIG`, then `~/.docker` | Where the Docker CLI's own configuration lives. |
-| `--docker-tls`, `--docker-tls-verify` | — | Connect over TLS, always verifying the daemon's certificate — see [TLS with a private CA](cli-reference.md#tls-with-a-private-certificate-authority). |
+| `--docker-tls`, `--docker-tls-verify` | — | Connect over TLS, always verifying the daemon's certificate — see [TLS with a private CA](ratect-compat-cli.md#tls-with-a-private-certificate-authority). |
 | `--docker-cert-path <PATH>` | `DOCKER_CERT_PATH`, then `~/.docker` | Directory holding `ca.pem`/`cert.pem`/`key.pem`. |
 | `--docker-tls-ca-cert`, `--docker-tls-cert`, `--docker-tls-key` | from `--docker-cert-path` | Individual TLS file overrides. |
 
@@ -162,13 +162,13 @@ Taken by `run` and by `caches` (whose default storage is Docker volumes); never 
 | `--enable-buildkit` | — | Force BuildKit for image builds, over the daemon's default and `DOCKER_BUILDKIT`. Only `run` builds images, so only `run` takes it. |
 | `--use-network <NAME>` | — | Reuse an existing Docker network instead of creating one for the task. |
 | `--disable-ports` | — | Never bind container ports on the host. |
-| `--no-proxy-vars` | — | Don't propagate [proxy environment variables](config-reference.md#proxy-environment-variables). |
+| `--no-proxy-vars` | — | Don't propagate [proxy environment variables](ratect-compat-config-reference.md#proxy-environment-variables). |
 | `--skip-prerequisites` | — | Run the task alone, without its `prerequisites`. |
 | `--override-image <CONTAINER=IMAGE>` | — | Replace a container's image. Repeatable. |
 | `--tag-image <CONTAINER=TAG>` | — | Extra tag for an image a container builds. Repeatable. |
 | `--no-cleanup`, `--no-cleanup-after-success`, `--no-cleanup-after-failure` | — | Leave containers running for investigation. |
 | `--max-parallelism <N>` | unbounded | Cap concurrent image pulls/builds. |
-| `--cache-type <TYPE>` | `volume` | `volume` or `directory` — see [cache volumes](config-reference.md#cache-volumes). |
+| `--cache-type <TYPE>` | `volume` | `volume` or `directory` — see [cache volumes](ratect-compat-config-reference.md#cache-volumes). |
 
 ## `caches` options
 
@@ -227,7 +227,7 @@ whose configuration is broken.
 ## `includes` options
 
 The Git include cache under `~/.ratect/incl` — where a `type: git`
-[include](config-reference.md#git-includes) is cloned and kept.
+[include](ratect-compat-config-reference.md#git-includes) is cloned and kept.
 
 ```
 $ ratect includes list
@@ -245,7 +245,7 @@ re-cloneable, so the worst case is a fetch.
 
 | Command | Description |
 | --- | --- |
-| `includes clean` | Removes includes nothing has used for 30 days — the same threshold the [automatic sweep](config-reference.md#git-includes) applies, done on demand. |
+| `includes clean` | Removes includes nothing has used for 30 days — the same threshold the [automatic sweep](ratect-compat-config-reference.md#git-includes) applies, done on demand. |
 | `includes clean --older-than <AGE>` | A different threshold (`30m`, `2h`, `7d`). |
 | `includes clean --all` | Everything, regardless of age. |
 | `includes refresh` | Discards every cached clone and fetches it again. |
@@ -453,7 +453,7 @@ logging (default `info`, on stderr). Unlike `ratect-compat` there's no `--log-fi
 redirect stderr if you want one. A crash (a genuine bug) exits `101` and prints where to
 report it, `ratect`'s version and platform, and a reminder to re-run with
 `RUST_BACKTRACE=1` if it isn't already set — see
-[`ratect-compat`'s own note on this](cli-reference.md#exit-codes-and-error-reporting),
+[`ratect-compat`'s own note on this](ratect-compat-cli.md#exit-codes-and-error-reporting),
 which applies identically here.
 
 ## Differences from `ratect-compat` today

@@ -44,8 +44,8 @@ Ratect is a **Cargo workspace** with four crates (the
   hand-edited file), and `completions` (see the `clap_complete` dependency note).
   User docs are [`docs/ratect-cli.md`](docs/ratect-cli.md) plus the format's own
   [`docs/ratect-config-reference.md`](docs/ratect-config-reference.md), both
-  separate from `ratect-compat`'s [`docs/cli-reference.md`](docs/cli-reference.md)
-  and [`docs/config-reference.md`](docs/config-reference.md) — two interfaces and
+  separate from `ratect-compat`'s [`docs/ratect-compat-cli.md`](docs/ratect-compat-cli.md)
+  and [`docs/ratect-compat-config-reference.md`](docs/ratect-compat-config-reference.md) — two interfaces and
   two formats, not two spellings of one, so a change to either only ever touches
   its own page.
 - **`ratect-core`** (library crate, `ratect-core/src/`): all the reusable logic, with
@@ -226,10 +226,10 @@ Ratect is currently a **Work in Progress**. For a detailed list of supported fea
 
 The `docs/` directory is user-facing documentation (installation, getting started, architecture, CLI reference, config reference, differences from Batect) — **not** `ROADMAP.md`, `RELEASES.md`, this file, `CHANGELOG.md`, or `decisions/`, which are project-management/contributor docs. `docs/` deliberately does not assume familiarity with Batect's own documentation, since Ratect's behavior is a subset of and sometimes diverges from it.
 
-**`docs/ratect-config-reference.md` defers to `docs/config-reference.md` for most
+**`docs/ratect-config-reference.md` defers to `docs/ratect-compat-config-reference.md` for most
 field semantics, and that deferral is only safe while the differences are about
 *shape*.** It says every field "applies, with the same meaning" and then links
-into the `batect.yml` reference from ~19 places, so any behaviour that is
+into the `batect.yml` reference from ~30 places, so any behaviour that is
 `ratect-compat`-only silently falsifies it for native readers who followed a
 link. The first semantic divergence (0.25.0's image-source validation, which
 `extends` requires the native format not to have) is why there is now a **Where

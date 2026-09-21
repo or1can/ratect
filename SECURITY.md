@@ -23,7 +23,7 @@ existing hardening lives:
 - **Git includes** (`type: git`): fetched bundles are treated as untrusted input —
   path containment within the clone, restricted Git transports, and argv hygiene
   are enforced (see the
-  [config reference](docs/config-reference.md#git-includes)). Anything that lets a
+  [config reference](docs/ratect-compat-config-reference.md#git-includes)). Anything that lets a
   fetched bundle read or write outside its clone (or the project directory) is a
   vulnerability.
 - **What a bundle is *granted***: widening a bundle's containment
@@ -33,7 +33,7 @@ existing hardening lives:
   bundle obtaining either without that — by writing the flag itself, passing on
   one it was given, or racing another entry to a file — is a vulnerability, as is
   a grant that silently fails to apply. See [Git
-  includes](docs/config-reference.md#git-includes) and
+  includes](docs/ratect-compat-config-reference.md#git-includes) and
   [decisions/0004](decisions/0004-git-include-host-path-trust.md).
 - **Container/volume path resolution**: escapes of the documented containment
   rules via config values (volumes, `build_directory`, `build_secrets.path`, …).

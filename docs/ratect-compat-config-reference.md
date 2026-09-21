@@ -1,4 +1,4 @@
-# Configuration Reference
+# `batect.yml` Configuration Reference
 
 Ratect reads a YAML file (`batect.yml` by default) describing containers and tasks.
 This documents the schema Ratect actually parses today (`ratect-core/src/config.rs`) — it is a
@@ -287,7 +287,7 @@ containers:
 | `run_as_current_user` | object (`enabled`, `home_directory`) | no | Runs this container as the host's own user/group instead of the image's default (see [User mapping](#user-mapping) below). |
 | `additional_hostnames` | list of strings | no | Extra network aliases this container is reachable by, beyond its own name. No [expression](#expressions) support. |
 | `additional_hosts` | map of string → string | no | Extra `/etc/hosts` entries in this container, `hostname: ip`, Docker's own `--add-host` mechanism. No expression support. |
-| `ports` | list of strings/objects | no | Publishes container ports to the host (see [Port mappings](#port-mappings) below). No expression support. Suppressed entirely by `--disable-ports`, regardless of this field. See [CLI reference](cli-reference.md). |
+| `ports` | list of strings/objects | no | Publishes container ports to the host (see [Port mappings](#port-mappings) below). No expression support. Suppressed entirely by `--disable-ports`, regardless of this field. See [CLI reference](ratect-compat-cli.md). |
 | `health_check` | object | no | Overrides the health check configuration baked into the container's image (see [Dependency readiness](#dependency-readiness) below). No expression support. |
 | `setup_commands` | list of objects (`command`, `working_directory`) | no | Commands run inside the started container after it becomes healthy but before its dependents start (see [Dependency readiness](#dependency-readiness) below). No expression support. |
 | `working_directory` | string | no | Overrides the image's own `WORKDIR`. No [expression](#expressions) support. A task's own container's `working_directory` can be further overridden by the task-level `run.working_directory` — see [TaskRun](#taskrun). A `setup_commands` entry with no `working_directory` of its own falls back to this, then to the image's own default. |
@@ -326,7 +326,7 @@ task's own container, as a dependency, or by more than one task) — but never r
   `DOCKER_BUILDKIT` environment variable overrides this either way (`1`/`true`
   forces BuildKit, `0`/`false` forces the classic builder; any other value is an
   error), the same variable the docker CLI honors. `--enable-buildkit`
-  (see [CLI reference](cli-reference.md)) forces BuildKit on, taking precedence
+  (see [CLI reference](ratect-compat-cli.md)) forces BuildKit on, taking precedence
   over `DOCKER_BUILDKIT` too — there's no `--disable-buildkit` counterpart;
   force the classic builder via `DOCKER_BUILDKIT=0`/`false` instead. A daemon old
   enough not to advertise a default builder at all falls back to the classic
@@ -529,7 +529,7 @@ is what a cache is for.
 A `cache` mount persists between separate `ratect` invocations — unlike `local`, its
 contents aren't tied to a specific host path in `batect.yml`. `name` identifies it,
 combined with a per-project key into either a Docker named volume (the default) or a
-host directory, selected by `--cache-type` (see [CLI reference](cli-reference.md)):
+host directory, selected by `--cache-type` (see [CLI reference](ratect-compat-cli.md)):
 
 ```yaml
 containers:
@@ -563,7 +563,7 @@ containers:
 `--clean` removes every one of this project's own cache volumes/directories (per
 `--cache-type`) and exits, without running anything; `--clean-cache <NAME>` (repeatable)
 restricts this to the named cache(s) instead of all of them — see
-[CLI reference](cli-reference.md).
+[CLI reference](ratect-compat-cli.md).
 
 ### Tmpfs mounts
 
@@ -687,7 +687,7 @@ override; there's no concept of one replacing an entry from the other.
 
 `--disable-ports` suppresses publishing of every container's `ports` — from both
 `Container.ports` and any `TaskRun.ports` — regardless of what's configured. See
-[CLI reference](cli-reference.md).
+[CLI reference](ratect-compat-cli.md).
 
 A real, simpler instance of the object form:
 [`examples/full-stack`](https://github.com/or1can/ratect/tree/main/examples/full-stack)'s
@@ -953,7 +953,7 @@ Utilities:
 - shell: Start a shell in the build environment
 ```
 
-With [`--output quiet`](cli-reference.md#output-styles), both forms are replaced by
+With [`--output quiet`](ratect-compat-cli.md#output-styles), both forms are replaced by
 a machine-readable listing instead — one task per line, sorted by name, as `name`
 alone or `name<TAB>description`, with no header and no grouping — the same project
 again:
@@ -971,7 +971,7 @@ test	Run the test suite
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `container` | string | yes | Name of a container defined under `containers`. |
-| `command` | string | no | Overrides the container's own `command` for this task's run specifically (see [Container](#container)). Tokenized the same way. If neither this nor the container's own `command` is set, the image's own default `CMD` runs instead. Any `-- ADDITIONAL_ARGS` from the CLI are appended as further literal argv entries — see [CLI reference](cli-reference.md#using-additional_args-in-a-task-command). |
+| `command` | string | no | Overrides the container's own `command` for this task's run specifically (see [Container](#container)). Tokenized the same way. If neither this nor the container's own `command` is set, the image's own default `CMD` runs instead. Any `-- ADDITIONAL_ARGS` from the CLI are appended as further literal argv entries — see [CLI reference](ratect-compat-cli.md#using-additional_args-in-a-task-command). |
 | `environment` | map of string → string | no | Environment variables to set for this task's run specifically. Merged with the container's own `environment` (see [Container](#container)): the container's values apply first, and `run.environment` overrides them on a key collision. Values support the same [expressions](#expressions) as `environment` does. |
 | `ports` | list of strings/objects | no | Additional port mappings for this task's run specifically — see [Port mappings](#port-mappings). *Added* to the container's own `ports`, not an override — there's no concept of one replacing an entry from the other. |
 | `working_directory` | string | no | Overrides the container's own `working_directory` for this task's run specifically (see [Container](#container)). No [expression](#expressions) support. |
@@ -989,7 +989,7 @@ sidecar's; only the task actually named on the command line is ever eligible —
 gets its stdin forwarded and the host's `TERM` environment variable propagated into its
 own environment (see [below](#term-propagation)), independent of whether Ratect's own
 stdin/stdout are real terminals. The one exception is
-[`--output all`](cli-reference.md#output-styles), whose line-prefixed output can't
+[`--output all`](ratect-compat-cli.md#output-styles), whose line-prefixed output can't
 host an interactive session: under it no container gets a TTY or stdin, and every
 container gets `TERM=dumb` instead — matching Batect. A real Docker TTY (raw mode locally, live terminal
 resizing) is additionally allocated when *both* Ratect's own stdin *and* stdout are
@@ -1087,7 +1087,7 @@ A few details worth knowing:
   *user-defined* network the run is using, never Docker's default `docker0`
   bridge, so a firewall rule written for `docker0` won't cover it. Ratect creates
   a network per task, or uses the one
-  [`--use-network`](cli-reference.md#task-execution) names — and a run can't fall
+  [`--use-network`](ratect-compat-cli.md#task-execution) names — and a run can't fall
   back to the default bridge even if you point `--use-network` at it, because
   Ratect gives every container a network-scoped alias and Docker only allows
   those on user-defined networks (`docker run` refuses with `network-scoped
@@ -1099,7 +1099,7 @@ A few details worth knowing:
   `com.docker.network.bridge.name`, which is how `docker0` itself gets its
   name — so a rule pinned to an interface is both harder to write and easier to
   get wrong.
-- **`--no-proxy-vars`** disables all of this. See [CLI reference](cli-reference.md).
+- **`--no-proxy-vars`** disables all of this. See [CLI reference](ratect-compat-cli.md).
 
 See also: [`TERM` propagation](#term-propagation) — a similarly automatic,
 lowest-precedence-layer environment injection for the invoked task's own container, but
@@ -1161,7 +1161,7 @@ config variable referenced via `<name`/`<{name}` must be declared under
 no value from any source (see [ConfigVariable](#configvariable)'s precedence order).
 Config variable values themselves come from, highest precedence first: `--config-var
 NAME=VALUE` (repeatable), `--config-vars-file` (a flat YAML map), then the variable's
-own `default` — see [CLI reference](cli-reference.md).
+own `default` — see [CLI reference](ratect-compat-cli.md).
 
 ### Built-in config variable: `batect.project_directory`
 
