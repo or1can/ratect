@@ -9,6 +9,7 @@
 - [Worked Examples](worked-examples.md)
 - [How It Works](how-it-works.md)
 - [Task Lifecycle](task-lifecycle.md)
+- [FAQ](faq.md)
 
 # ratect-compat Reference
 
