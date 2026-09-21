@@ -113,16 +113,11 @@ Improving the developer experience through better tools and feedback.
   - **A log-aggregation output mode** (Batect's example was starting a Seq instance and pointing every container's logs at it). Ratect's `EventSink` design makes an extra mode cheap to add; the open question is whether a task runner should be starting a log server on your behalf, or just be easy to point at one you already run.
   - **Cheaper repaints in `fancy` mode.** Batect wanted to batch console updates rather than reprinting on every event. Ratect is already better in one direction — `fancy.rs:59` skips a repaint entirely when the content hasn't changed — and worse in another: it repaints the whole block per event, where Batect diffs and rewrites only the lines that changed (`fancy.rs:26`). Deliberately left as a future item rather than scoped: nobody has reported it and the cost hasn't been measured, so the honest first step is a measurement (a task with many dependencies emitting events rapidly) rather than an optimisation.
 - **Watch Mode**: Automatically re-running tasks when source files change.
-- **Documentation beyond reference material** is done — `docs/` covered only
-  reference material until this batch of work; [`using-ratect-with`](docs/using-ratect-with.md)
-  was the last piece, closing the one gap here that was real against Batect
-  specifically, not just inherited from something Batect itself never built.
-  See [`docs/SUMMARY.md`](docs/SUMMARY.md) for the full current list rather
-  than duplicating it here.
 - **A version picker on the rendered docs site** — deliberately not built with the
   site itself ([#86](https://github.com/or1can/ratect/issues/86)): the site tracks
   `main` only for now, so there's nothing yet to pick between. Worth adding once
-  the content above is in good enough shape to be worth freezing per release —
+  `docs/` (see [`docs/SUMMARY.md`](docs/SUMMARY.md) for the current list) is in
+  good enough shape to be worth freezing per release —
   and needs its own answer for `ratect-compat`/`ratect` sitting on [independent
   version lines](#versioning--releases), which a naive "docs for vX.Y.Z" scheme
   doesn't map onto cleanly.
