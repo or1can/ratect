@@ -3,6 +3,13 @@
 This walks through defining and running your first task with Ratect. It assumes you've
 already [installed Ratect](installation.md) and have Docker running.
 
+Already have a `batect.yml`? See [Migrating a Batect Project to
+Ratect](migrating-batect-project.md) instead — this page assumes you're starting
+from nothing. Otherwise, nothing below assumes a brand-new codebase either:
+writing a `batect.yml` doesn't touch any of your existing code, build scripts,
+or CI — it's one new file describing how to run what you already have in a
+container, alongside whatever else the project does today.
+
 ## 1. Create a `batect.yml`
 
 Ratect reads its configuration from a `batect.yml` file in the current directory (or
