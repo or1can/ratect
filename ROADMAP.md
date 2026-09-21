@@ -122,7 +122,8 @@ Improving the developer experience through better tools and feedback.
   [differences-from-batect](docs/differences-from-batect.md),
   [installation](docs/installation.md), [getting-started](docs/getting-started.md),
   [worked-examples](docs/worked-examples.md), [comparison](docs/comparison.md),
-  [migrating-batect-project](docs/migrating-batect-project.md))
+  [migrating-batect-project](docs/migrating-batect-project.md),
+  [reusable-building-blocks](docs/reusable-building-blocks.md))
   and has nothing in the shapes below. The first two are, near enough, Batect's
   own unbuilt documentation list, so that gap is inherited rather than newly
   created; the third is different — Batect actually built this one
@@ -132,10 +133,6 @@ Improving the developer experience through better tools and feedback.
     to run something at container start regardless of the task's command
     (`ENTRYPOINT` plus `exec`); why task idempotency matters; raising Docker
     Desktop's CPU/memory limits on macOS.
-  - **Using Ratect as reusable pipeline building blocks** — what Git includes and
-    bundles are actually *for*, which the [config
-    reference](docs/config-reference.md#includes) documents mechanically without
-    ever making the case for.
   - **Language/ecosystem-specific concerns**, in the spirit of Batect's own
     `using-batect-with/tools/` pages — mostly caching (what to cache and where,
     which `examples/` already gets right for Rust, Go, Node.js, Python, and the
