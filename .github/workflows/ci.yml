@@ -163,6 +163,26 @@ jobs:
       - name: Run build/test/run/lint/shell for every worked example
         shell: bash
         run: |
+          # Shared by both the generic loop below and full-stack's own
+          # section: run a command, and — unlike a bare exit-code check,
+          # which already missed a real bug once (see this job's own
+          # comment above) — assert its output actually contains what that
+          # task's whole job is to produce, not just that it exited 0.
+          assert_output() {
+            local label=$1 expected=$2
+            shift 2
+            local output
+            if ! output=$("$@" 2>&1); then
+              echo "$output"
+              echo "::error::$label failed"
+              return 1
+            fi
+            echo "$output"
+            if ! grep -q "$expected" <<< "$output"; then
+              echo "::error::$label didn't produce the expected output"
+              return 1
+            fi
+          }
           # Global options (`-f`, here) work before or after the subcommand
           # (ratect-cli.md), so both binaries take the same `-f "$cfg"`
           # placement — only whether a leading `run` subcommand is needed
@@ -172,8 +192,8 @@ jobs:
             name=$(basename "$dir")
             # full-stack isn't one of these: its task names differ (no bare
             # `test`, `run` is a long-lived server that never exits on its
-            # own), so it gets its own step below rather than this generic
-            # build/test/run/lint/shell sweep.
+            # own), so it gets its own section below rather than this
+            # generic build/test/run/lint/shell sweep.
             if [ "$name" = full-stack ]; then
               continue
             fi
@@ -192,20 +212,7 @@ jobs:
             echo "::group::$name"
             cmd build
             cmd test
-            # Not just an exit-code check: `run` is the one task whose whole
-            # job is producing a specific line of output, so assert on it
-            # directly — an exit-code-only check already missed a real bug
-            # once (see this job's own comment above).
-            if ! run_output=$(cmd run 2>&1); then
-              echo "$run_output"
-              echo "::error::$name's run task failed"
-              exit 1
-            fi
-            echo "$run_output"
-            if ! grep -q "Hello, world!" <<< "$run_output"; then
-              echo "::error::$name's run task didn't print the expected greeting"
-              exit 1
-            fi
+            assert_output "$name's run task" "Hello, world!" cmd run || exit 1
             cmd lint
             # `shell` is interactive by design (config-reference.md's own
             # Interactive mode) — `-- -c '...'` turns it from "drop into a
@@ -213,21 +220,11 @@ jobs:
             # real to assert on (the echoed string) instead of just an exit
             # code, and sidestepping needing a real TTY on stdin/stdout for
             # what a bare invocation would otherwise wait to attach to.
-            if ! shell_output=$(cmd shell -- -c "echo $name shell ok" 2>&1); then
-              echo "$shell_output"
-              echo "::error::$name's shell task failed"
-              exit 1
-            fi
-            echo "$shell_output"
-            if ! grep -q "$name shell ok" <<< "$shell_output"; then
-              echo "::error::$name's shell task didn't run the given command"
-              exit 1
-            fi
+            assert_output "$name's shell task" "$name shell ok" cmd shell -- -c "echo $name shell ok" || exit 1
             echo "::endgroup::"
           done
-      - name: Run build/unit-test/lint/journey-test/shell for the full-stack example
-        shell: bash
-        run: |
+
+          echo "::group::full-stack"
           cd examples/full-stack
           bin=../../target/debug/ratect
           "$bin" run build -f ratect.toml
@@ -236,26 +233,11 @@ jobs:
           # The stack's own end-to-end proof — unlike the other examples'
           # `run`, full-stack's own `run` starts a server that never exits
           # on its own, so it has no place in an assert-and-move-on script.
-          if ! output=$("$bin" run journey-test -f ratect.toml 2>&1); then
-            echo "$output"
-            echo "::error::full-stack's journey-test task failed"
-            exit 1
-          fi
-          echo "$output"
-          if ! grep -q "journey test passed" <<< "$output"; then
-            echo "::error::full-stack's journey-test task didn't report success"
-            exit 1
-          fi
-          if ! shell_output=$("$bin" run shell -f ratect.toml -- -c "echo full-stack shell ok" 2>&1); then
-            echo "$shell_output"
-            echo "::error::full-stack's shell task failed"
-            exit 1
-          fi
-          echo "$shell_output"
-          if ! grep -q "full-stack shell ok" <<< "$shell_output"; then
-            echo "::error::full-stack's shell task didn't run the given command"
-            exit 1
-          fi
+          assert_output "full-stack's journey-test task" "journey test passed" \
+            "$bin" run journey-test -f ratect.toml || exit 1
+          assert_output "full-stack's shell task" "full-stack shell ok" \
+            "$bin" run shell -f ratect.toml -- -c "echo full-stack shell ok" || exit 1
+          echo "::endgroup::"
 
   dev-env:
     name: Dev-env CLI smoke test
