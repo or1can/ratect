@@ -219,9 +219,11 @@ journey test passed
 
 #### `all`, in action
 
-Every line now carries its container's name and color, including `db`'s own
-`setup_commands` step (`Setup command 1 | ...`) and its dependency-readiness
-milestones — the parts `simple`/`quiet` can't show at all:
+Every line now carries its container's name (each in its own color on a
+real terminal — flattened to plain text below, same as every other block on
+this page), including `db`'s own `setup_commands` step (`Setup command 1 |
+...`) and its dependency-readiness milestones — the parts `simple`/`quiet`
+can't show at all:
 
 ```
 journey-test | Running journey-test...
