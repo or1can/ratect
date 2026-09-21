@@ -37,12 +37,17 @@ jobs:
       # the github-actions manager's bumps (pinned action versions in this
       # very file) can't be auto-PR'd, so RENOVATE_ENABLED_MANAGERS
       # excludes it here — an env-var override scoped to this run only,
-      # leaving renovate.json untouched so a local `renovate
+      # leaving renovate.json5 untouched so a local `renovate
       # --platform=local` run still surfaces those bumps for manual review
-      # and an ordinary hand-written commit.
+      # and an ordinary hand-written commit. Every other manager that
+      # actually finds something in this repo is listed explicitly —
+      # cargo/dockerfile/batect at the root, plus npm/gomod/gradle/
+      # gradle-wrapper/pip_requirements for examples/'s per-ecosystem
+      # projects (see renovate.json5's own ignorePaths comment for why
+      # those need the same coverage as everything else here).
       - uses: renovatebot/github-action@v46.3.0
         env:
-          RENOVATE_ENABLED_MANAGERS: "cargo,dockerfile,batect"
+          RENOVATE_ENABLED_MANAGERS: "cargo,dockerfile,batect,npm,gomod,gradle,gradle-wrapper,pip_requirements"
           # Without this, Renovate does nothing and warns "No repositories
           # found" — it does not infer the current repo from GitHub Actions'
           # own ambient context, contrary to what the action's own minimal
@@ -51,5 +56,5 @@ jobs:
           # having found nothing).
           RENOVATE_REPOSITORIES: "${{ github.repository }}"
         with:
-          configurationFile: renovate.json
+          configurationFile: renovate.json5
           token: "${{ secrets.RENOVATE_TOKEN }}"
