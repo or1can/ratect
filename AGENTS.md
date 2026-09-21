@@ -229,7 +229,7 @@ The `docs/` directory is user-facing documentation (installation, getting starte
 **`docs/ratect-config-reference.md` defers to `docs/ratect-compat-config-reference.md` for most
 field semantics, and that deferral is only safe while the differences are about
 *shape*.** It says every field "applies, with the same meaning" and then links
-into the `batect.yml` reference from ~19 places, so any behaviour that is
+into the `batect.yml` reference from ~30 places, so any behaviour that is
 `ratect-compat`-only silently falsifies it for native readers who followed a
 link. The first semantic divergence (0.25.0's image-source validation, which
 `extends` requires the native format not to have) is why there is now a **Where
