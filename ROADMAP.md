@@ -122,17 +122,13 @@ Improving the developer experience through better tools and feedback.
   [differences-from-batect](docs/differences-from-batect.md),
   [installation](docs/installation.md), [getting-started](docs/getting-started.md),
   [worked-examples](docs/worked-examples.md), [comparison](docs/comparison.md),
-  [migrating-batect-project](docs/migrating-batect-project.md),
+  [migrating-batect-project](docs/migrating-batect-project.md), [FAQ](docs/faq.md),
   [reusable-building-blocks](docs/reusable-building-blocks.md))
   and has nothing in the shapes below. The first two are, near enough, Batect's
   own unbuilt documentation list, so that gap is inherited rather than newly
   created; the third is different — Batect actually built this one
   (`using-batect-with/tools/`), so it's a real gap against Batect specifically,
   not an inherited one:
-  - **An FAQ** — when to mount a directory versus copying files into the image; how
-    to run something at container start regardless of the task's command
-    (`ENTRYPOINT` plus `exec`); why task idempotency matters; raising Docker
-    Desktop's CPU/memory limits on macOS.
   - **Language/ecosystem-specific concerns**, in the spirit of Batect's own
     `using-batect-with/tools/` pages — mostly caching (what to cache and where,
     which `examples/` already gets right for Rust, Go, Node.js, Python, and the
@@ -142,13 +138,12 @@ Improving the developer experience through better tools and feedback.
     aren't a caching question at all — disabling the Gradle daemon (pointless
     and counterproductive in an ephemeral container) and Node.js needing
     [`enable_init_process`](docs/config-reference.md#container) for correct
-    signal handling as PID 1 — a real gap only where a Node container actually
-    stays running, which `examples/node`'s own `run` task doesn't (it prints
-    and exits). Neither is set in `examples/jvm`/`examples/full-stack`'s
-    `app` container (the one Node container that genuinely runs as a
-    long-lived server) today — real gaps in the examples themselves, not
-    just missing prose, and worth fixing before a doc page cites them as
-    done right. Batect also
+    signal handling as PID 1, which only applies where a Node container
+    actually stays running (`examples/node`'s own `run` task doesn't — it
+    prints and exits; `examples/full-stack`'s `app` container does). Both
+    fixed now (`examples/jvm`'s Gradle daemon disabled, `examples/full-stack`'s
+    `app` container running an init process), so a doc page can honestly cite
+    them as done right. Batect also
     covers .NET and Ruby, which `examples/` has nothing for at all.
 - **A version picker on the rendered docs site** — deliberately not built with the
   site itself ([#86](https://github.com/or1can/ratect/issues/86)): the site tracks
