@@ -145,9 +145,13 @@ Improving the developer experience through better tools and feedback.
     aren't a caching question at all — disabling the Gradle daemon (pointless
     and counterproductive in an ephemeral container) and Node.js needing
     [`enable_init_process`](docs/config-reference.md#container) for correct
-    signal handling as PID 1. Neither is set in `examples/jvm`/`examples/node`
-    today — real gaps in the examples themselves, not just missing prose, and
-    worth fixing before a doc page cites them as done right. Batect also
+    signal handling as PID 1 — a real gap only where a Node container actually
+    stays running, which `examples/node`'s own `run` task doesn't (it prints
+    and exits). Neither is set in `examples/jvm`/`examples/full-stack`'s
+    `app` container (the one Node container that genuinely runs as a
+    long-lived server) today — real gaps in the examples themselves, not
+    just missing prose, and worth fixing before a doc page cites them as
+    done right. Batect also
     covers .NET and Ruby, which `examples/` has nothing for at all.
 - **A version picker on the rendered docs site** — deliberately not built with the
   site itself ([#86](https://github.com/or1can/ratect/issues/86)): the site tracks
