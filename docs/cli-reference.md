@@ -151,6 +151,87 @@ console (stdout a real terminal, `TERM` set and not `dumb`, terminal size
 queryable, no `--no-color`); `simple` otherwise. `quiet` and `all` are never
 auto-selected.
 
+### Seeing it for real
+
+**`fancy`** is the one style static text genuinely can't convey — its whole
+point is the in-place repaint, not the final text. Here's the same real
+recording from [the homepage](index.md), unedited — `ratect run
+journey-test` against
+[`examples/full-stack`](https://github.com/or1can/ratect/tree/main/examples/full-stack)
+(that's the `ratect` binary against a native `ratect.toml`, not
+`ratect-compat`, but the rendering is the exact same code either way — see
+[`ui.rs`](https://github.com/or1can/ratect/blob/main/ratect-core/src/ui.rs)):
+
+<div id="demo-player-cli"></div>
+<script>
+window.addEventListener('DOMContentLoaded', function () {
+  AsciinemaPlayer.create('demo.cast', document.getElementById('demo-player-cli'), {
+    autoPlay: false,
+    cols: 80,
+    rows: 24,
+  });
+});
+</script>
+
+The other three are genuinely just text, so here they are as real captures —
+`ratect-compat -f examples/jvm/batect.yml build` (the one real `batect.yml`
+example under `examples/`, so this is reproducible exactly as shown), each
+style against the same task:
+
+`-o simple`:
+
+```
+Running build...
+Running ./gradlew assemble in build-env...
+...
+Cleaning up...
+build finished with exit code 0 in 2.7s.
+```
+
+`-o quiet` — the same run, stdout exactly as `./gradlew` itself printed, not
+one Ratect line among them:
+
+```
+...
+BUILD SUCCESSFUL in 2s
+5 actionable tasks: 5 up-to-date
+Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.7.1/userguide/configuration_cache_enabling.html
+```
+
+`-o all` — every line now carries its container's name and color:
+
+```
+build     | Running build...
+build-env | Running ./gradlew assemble...
+build-env | Container became healthy.
+...
+build     | Cleaning up...
+build-env | Container removed.
+build     | Removing task network...
+build     | build finished with exit code 0 in 2.5s.
+```
+
+`examples/jvm` has no dependencies, so that transcript can't show the
+`Setup command N | ...` line the bullet above mentions — `examples/full-stack`
+does, via `ratect` again rather than `ratect-compat` for the same reason as
+the recording above. An excerpt from the same `all`-mode run, around its one
+dependency-readiness gate:
+
+```
+db           | Container became healthy.
+db           | Running setup command psql -U postgres -c "ANALYZE visits;" (1 of 1)...
+db           | Setup command 1 | ANALYZE
+db           | Container has completed all setup commands.
+app          | Starting container...
+...
+journey-test | journey test passed
+journey-test | Cleaning up...
+```
+
+Nothing in `examples/` builds from a `Dockerfile` (every container uses a
+prebuilt `image`), so `Image build | ...` output has no real capture to
+point at here either.
+
 ## TLS with a private certificate authority
 
 `--docker-tls`/`--docker-tls-verify` always fully verify the Docker daemon's
