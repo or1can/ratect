@@ -4,6 +4,8 @@ containers:
   build-env:
     image: eclipse-temurin:25-jdk
     working_directory: /code
+    environment:
+      GRADLE_OPTS: -Dorg.gradle.daemon=false
     volumes:
       - local: .
         container: /code
