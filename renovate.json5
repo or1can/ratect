@@ -1,0 +1,60 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":gitSignOff"
+  ],
+  "gitAuthor": "Ratect Renovate <renovate@ratect.invalid>",
+  // config:recommended extends `:ignoreModulesAndTests`, which sets ignorePaths
+  // to ["**/node_modules/**", "**/bower_components/**", "**/vendor/**",
+  // "**/examples/**", "**/__tests__/**", "**/test/**", "**/tests/**",
+  // "**/__fixtures__/**"] (github.com/renovatebot/renovate, lib/config/presets/internal/ignore.ts).
+  // Unlike every other test fixture directory here, examples/ holds real,
+  // cloneable projects with their own dependency manifests (Cargo.toml,
+  // package.json, go.mod, build.gradle.kts, requirements*.txt — see AGENTS.md's
+  // "examples/ is neither fixture set" note) that CI actually builds and runs,
+  // so they need the same dependency coverage as the rest of the repo — the
+  // vitest CVE examples/node hit is exactly the case this exists to catch.
+  //
+  // Renovate has no way to subtract one entry from a preset's ignorePaths —
+  // setting ignorePaths here replaces the preset's value outright rather than
+  // merging with it (confirmed by running Renovate locally against both forms;
+  // a negation-only override like ["!**/examples/**"] does not restore the
+  // other entries either — it makes everything *except* examples/ ignored,
+  // which is worse). So this list is the preset's own list, copied by hand,
+  // minus "**/examples/**". It does not track future changes to that preset
+  // automatically — if `:ignoreModulesAndTests` ever adds or removes an entry
+  // upstream, this needs the same edit made here by hand.
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/bower_components/**",
+    "**/vendor/**",
+    "**/__tests__/**",
+    "**/test/**",
+    "**/tests/**",
+    "**/__fixtures__/**"
+  ],
+  "packageRules": [
+    {
+      "description": "nginx's stable releases use even minor versions (1.28.x, 1.30.x); odd ones (1.27.x, 1.29.x, 1.31.x) are mainline/development builds — stay on the stable line rather than the newest tag available.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["nginx"],
+      "allowedVersions": "/^\\d+\\.\\d*[02468]\\.\\d+$/"
+    },
+    {
+      "description": "signature is hard-pinned by ssh-key 0.6.7's own manifest (^2) — allow patch/minor churn within 2.x, block the 3.x jump.",
+      "matchPackageNames": ["signature"],
+      "allowedVersions": "<3.0.0"
+    },
+    {
+      "description": "ssh-encoding is hard-pinned by ssh-key 0.6.7's own manifest (^0.2) — a 0.x minor bump is semver-breaking, so only allow 0.2.x patches.",
+      "matchPackageNames": ["ssh-encoding"],
+      "allowedVersions": "<0.3.0"
+    },
+    {
+      "description": "rand_chacha 0.10's ChaCha20Rng doesn't implement the trait generation ssh_key::PrivateKey::random requires (that bound comes from signature 2.x, transitively pinned by ssh-key 0.6.7) — only allow 0.3.x patches, not the breaking 0.x minor bump to 0.10. ssh-key's only newer line is an unreleased 0.7.0 release-candidate chain (still RC as of this check) — revisit once it ships stable.",
+      "matchPackageNames": ["rand_chacha"],
+      "allowedVersions": "<0.4.0"
+    }
+  ]
+}
