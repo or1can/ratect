@@ -232,6 +232,16 @@ class TransformMarkdownTests(unittest.TestCase):
             '1. Run it:\n\n   <pre><code class="nohighlight ansi">one&#10;two</code></pre>\n',
         )
 
+    def test_a_fence_whose_info_string_has_attributes_is_still_one_fence(self):
+        # Otherwise its closer reads as an opener and swallows the ansi
+        # block after it, which then ships as raw escape bytes.
+        markdown = "```rust ignore\nfn f() {}\n```\n\n```ansi\nhi\n```\n"
+
+        result = mdbook_ansi.transform_markdown(markdown)
+
+        self.assertIn("```rust ignore\nfn f() {}\n```\n", result)
+        self.assertIn('<pre><code class="nohighlight ansi">hi</code></pre>', result)
+
     def test_a_tilde_fence_works_too(self):
         markdown = "~~~ansi\nhi\n~~~\n"
 

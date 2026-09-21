@@ -90,7 +90,9 @@ OTHER_ESC_RE = re.compile(r"\x1b(?:[()*+\-./].|.)", re.DOTALL)
 # the viewport, which for a capture longer than the screen is its tail.
 VIEWPORT_ROWS = 24
 
-FENCE_OPEN_RE = re.compile(r"^([ \t]*)(`{3,}|~{3,})[ \t]*(\S*)[ \t]*$")
+# An opening fence, with its whole info string: `rust ignore` is one fence,
+# whose first word is the language.
+FENCE_OPEN_RE = re.compile(r"^([ \t]*)(`{3,}|~{3,})[ \t]*(.*?)[ \t]*$")
 
 
 @dataclass(frozen=True)
@@ -339,11 +341,15 @@ def transform_markdown(markdown):
             i += 1
             continue
         indent, fence, info = match.groups()
+        if fence[0] == "`" and "`" in info:
+            out.append(lines[i])  # Not a fence: inline code on a line of its own.
+            i += 1
+            continue
         close_re = re.compile(rf"^[ \t]*{re.escape(fence[0])}{{{len(fence)},}}[ \t]*$")
         end = i + 1
         while end < len(lines) and not close_re.match(lines[end]):
             end += 1
-        if info == "ansi":
+        if info.split()[:1] == ["ansi"]:
             # As CommonMark reads a fence: content is relative to its indent.
             body = "\n".join(line.removeprefix(indent) for line in lines[i + 1 : end])
             if "{{#include" in body:
