@@ -13,7 +13,7 @@ container, alongside whatever else the project does today.
 ## 1. Create a `batect.yml`
 
 Ratect reads its configuration from a `batect.yml` file in the current directory (or
-wherever you point `-f`/`--config-file` — see the [CLI reference](cli-reference.md)).
+wherever you point `-f`/`--config-file` — see the [CLI reference](ratect-compat-cli.md)).
 
 ```yaml
 project_name: my-project
@@ -33,7 +33,7 @@ This defines one container (`build-env`, based on the `alpine:3.18` image, with 
 current directory mounted at `/code`) and one task (`test`, which runs `ls /code`
 inside that container).
 
-See the [configuration reference](config-reference.md) for the full schema.
+See the [configuration reference](ratect-compat-config-reference.md) for the full schema.
 
 ## 2. List available tasks
 
@@ -128,9 +128,9 @@ dev`. Override the config variable from the command line instead of relying on i
 ratect-compat --config-var environment_name=staging test
 ```
 
-See the [configuration reference](config-reference.md#expressions) for the full
+See the [configuration reference](ratect-compat-config-reference.md#expressions) for the full
 expression syntax (including `batect.project_directory`, always available without
-being declared) and the [CLI reference](cli-reference.md) for `--config-var`/
+being declared) and the [CLI reference](ratect-compat-cli.md) for `--config-var`/
 `--config-vars-file`.
 
 ## 6. Reading the output

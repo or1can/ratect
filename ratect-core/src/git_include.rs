@@ -115,7 +115,7 @@ impl GitClient for SystemGitClient {
             // itself from a git-included bundle, so it's not fully
             // trusted input. `file` stays allowed here (unlike the
             // checkout step below): a local-path `repo` is a documented,
-            // supported feature (see docs/config-reference.md's `repo`
+            // supported feature (see docs/ratect-compat-config-reference.md's `repo`
             // field), and it's the caller's own config value, not
             // third-party content the way a submodule URL is.
             .env("GIT_ALLOW_PROTOCOL", "file:git:http:https:ssh")

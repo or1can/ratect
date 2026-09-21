@@ -6,7 +6,7 @@ its incremental build cache to survive between invocations. Ratect's own
 container model doesn't give you that for free — [every task starts a fresh
 container](task-lifecycle.md#cross-task-isolation), and anything written
 outside a mounted volume disappears with it. Without a
-[`cache` volume](config-reference.md#cache-volumes) pointed at the right
+[`cache` volume](ratect-compat-config-reference.md#cache-volumes) pointed at the right
 directory, a toolchain that assumes persistence just re-downloads or
 recompiles everything, every single run, as if it were on a brand-new
 machine each time.
@@ -77,7 +77,7 @@ by `npm ci` on each run, from what's in the cache); what needs to persist is
 npm's *cache* of already-downloaded package tarballs, so a repeat `npm ci`
 doesn't re-download the same versions from the registry every time.
 
-**A long-lived Node process needs [`enable_init_process`](config-reference.md#container)
+**A long-lived Node process needs [`enable_init_process`](ratect-compat-config-reference.md#container)
 too** — this isn't a caching question, but Batect's own `nodejs.md` covers it
 for the same reason it belongs here: Node doesn't handle running as PID 1
 correctly, so a container with no init process won't forward `SIGINT`/Ctrl+C

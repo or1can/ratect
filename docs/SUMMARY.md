@@ -15,8 +15,8 @@
 
 # ratect-compat Reference
 
-- [CLI Reference](cli-reference.md)
-- [Configuration Reference](config-reference.md)
+- [CLI Reference](ratect-compat-cli.md)
+- [Configuration Reference](ratect-compat-config-reference.md)
 
 # ratect Reference
 

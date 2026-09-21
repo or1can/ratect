@@ -6,11 +6,11 @@ upstream repository was archived in October 2023), not a wrapper or fork. It doe
 read Batect's documentation or source at runtime.
 
 **Every Batect configuration field and CLI flag is supported, field-for-field and
-flag-for-flag, unless listed below** — see [config reference](config-reference.md)/
-[CLI reference](cli-reference.md) for the full accepted schema and flags. This page
+flag-for-flag, unless listed below** — see [config reference](ratect-compat-config-reference.md)/
+[CLI reference](ratect-compat-cli.md) for the full accepted schema and flags. This page
 lists the exceptions: a real behavioral divergence, an extension beyond what Batect
 does, or a restriction narrower than it. It doesn't restate how a field or flag
-works — [config reference](config-reference.md)/[CLI reference](cli-reference.md)/
+works — [config reference](ratect-compat-config-reference.md)/[CLI reference](ratect-compat-cli.md)/
 [task lifecycle](task-lifecycle.md) are the authoritative source for that; this page
 only says what's *different* and points there for the rest.
 
@@ -25,63 +25,63 @@ only says what's *different* and points there for the rest.
 ### Top-level fields
 
 Every other top-level field is supported field-for-field — see [config
-reference](config-reference.md) for the full list. The exceptions:
+reference](ratect-compat-config-reference.md) for the full list. The exceptions:
 
 | Field | Notes |
 |---|---|
 | `config_variables` | `description:` is recognized but inert — Ratect has no help/usage output to show one in. |
-| `include` | Ratect enforces that a Git include's `path` (and anything it transitively includes) stays within that repository's own clone; Batect has no equivalent containment check. In `ratect.toml` specifically, a Git-included bundle also can't declare further Git includes of its own unless `allow_nested_git_includes` is set — `ratect-compat` stays unrestricted, matching Batect. See [Git includes](config-reference.md#git-includes). |
+| `include` | Ratect enforces that a Git include's `path` (and anything it transitively includes) stays within that repository's own clone; Batect has no equivalent containment check. In `ratect.toml` specifically, a Git-included bundle also can't declare further Git includes of its own unless `allow_nested_git_includes` is set — `ratect-compat` stays unrestricted, matching Batect. See [Git includes](ratect-compat-config-reference.md#git-includes). |
 | `forbid_telemetry` | Recognized, no effect — Ratect doesn't collect telemetry, so there's nothing to forbid. |
 
 ### Expressions
 
 Matches Batect exactly, field-for-field — see
-[Expressions](config-reference.md#expressions) for the full syntax and which
+[Expressions](ratect-compat-config-reference.md#expressions) for the full syntax and which
 fields support it. The one exception, `image`, is in [Container
 fields](#container-fields) below.
 
 ### Container fields
 
 Every other container field is supported field-for-field — see [config
-reference](config-reference.md#container) for the full list. The exceptions:
+reference](ratect-compat-config-reference.md#container) for the full list. The exceptions:
 
 | Field | Notes |
 |---|---|
-| `image` | An [expression](#expressions)-looking value (`$VAR`) is rejected when the file loads rather than resolved or used as a literal — Batect resolves nothing here either, but silently treats it as a literal image name that then fails at pull time instead. `ratect.toml` does resolve them; see [config reference](config-reference.md#container). |
-| `volumes` | A `cache` mount's `name` must use Docker's own volume-name character set; Batect doesn't validate it at all, so an unvalidated name could bind-mount an arbitrary host directory under `--cache-type=directory`. Breaking change for `--cache-type=directory` only — `--cache-type=volume` already enforced this via Docker itself. See [Cache volumes](config-reference.md#cache-volumes). |
+| `image` | An [expression](#expressions)-looking value (`$VAR`) is rejected when the file loads rather than resolved or used as a literal — Batect resolves nothing here either, but silently treats it as a literal image name that then fails at pull time instead. `ratect.toml` does resolve them; see [config reference](ratect-compat-config-reference.md#container). |
+| `volumes` | A `cache` mount's `name` must use Docker's own volume-name character set; Batect doesn't validate it at all, so an unvalidated name could bind-mount an arbitrary host directory under `--cache-type=directory`. Breaking change for `--cache-type=directory` only — `--cache-type=volume` already enforced this via Docker itself. See [Cache volumes](ratect-compat-config-reference.md#cache-volumes). |
 | `capabilities_to_add` / `capabilities_to_drop` | Also accepts `BPF`/`CHECKPOINT_RESTORE`/`PERFMON` — Docker capabilities added after Batect's last release, so its own `Capability` enum predates them. A superset: every config Batect itself accepts here still parses identically. |
 | `health_check` / `setup_commands` | The task's own container's readiness gate can race a very fast main command — see [task lifecycle](task-lifecycle.md#known-simplifications-relative-to-batect). |
 | `log_driver` / `log_options` | An absent value leaves the daemon's own default alone; Batect's config model bakes in a literal `"json-file"` default explicitly. Immaterial in practice — that's Docker's own out-of-the-box default too. |
-| `run_as_current_user` | Host-side uid/gid lookup only works on Unix — see [User mapping](config-reference.md#user-mapping). |
+| `run_as_current_user` | Host-side uid/gid lookup only works on Unix — see [User mapping](ratect-compat-config-reference.md#user-mapping). |
 
 ### Task fields
 
 Every task field is supported field-for-field, with no divergence from Batect —
-see [config reference](config-reference.md#task) for the full list.
+see [config reference](ratect-compat-config-reference.md#task) for the full list.
 
 ### `run` fields
 
 Every `run` field is supported field-for-field, with no divergence from Batect —
-see [TaskRun](config-reference.md#taskrun) for the full list.
+see [TaskRun](ratect-compat-config-reference.md#taskrun) for the full list.
 
 ## CLI flags
 
 Every other flag from Batect's own [CLI
 reference](https://github.com/batect/batect.dev/blob/main/docs/reference/cli.mdx)
-is supported flag-for-flag — see [CLI reference](cli-reference.md) for the full
+is supported flag-for-flag — see [CLI reference](ratect-compat-cli.md) for the full
 list. The exceptions:
 
 | Flag | Notes |
 |---|---|
 | `--version` | Also gets a `-V` short form Batect doesn't have (a `clap` default). |
-| `--output` / `-o` | An explicit `-o fancy` on a non-interactive console fails up front with a clear error; Batect accepts it and crashes with an unhandled exception on the first repaint. `all`'s status lines also drop Batect's inner `Batect \| ` prefix — the outer prefix already says whose line it is. See [Output styles](cli-reference.md#output-styles). |
+| `--output` / `-o` | An explicit `-o fancy` on a non-interactive console fails up front with a clear error; Batect accepts it and crashes with an unhandled exception on the first repaint. `all`'s status lines also drop Batect's inner `Batect \| ` prefix — the outer prefix already says whose line it is. See [Output styles](ratect-compat-cli.md#output-styles). |
 | `--no-color` | A superset, not a gap: Batect rejects `-o fancy --no-color` at parse time (its console couples color and cursor movement under one flag); Ratect's keeps them independent, so that combination renders colorless fancy instead. |
 | `--no-cleanup`, `--no-cleanup-after-failure`, `--no-cleanup-after-success` | Batect's own `DontCleanup` still stops a started container, just skips removing it; Ratect leaves it genuinely running (not just present-but-stopped) for investigation. |
-| `--docker-cert-path`, `--docker-tls`, `--docker-tls-verify`, `--docker-tls-ca-cert`, `--docker-tls-cert`, `--docker-tls-key` | Batect's bare `--docker-tls` (without `-verify`) disables *all* server certificate verification, not just hostname matching. Ratect doesn't support that mode at all — `--docker-tls` and `--docker-tls-verify` behave identically here, the daemon's certificate always fully verified. See [TLS with a private certificate authority](cli-reference.md#tls-with-a-private-certificate-authority) for the supported alternative (your own CA). |
+| `--docker-cert-path`, `--docker-tls`, `--docker-tls-verify`, `--docker-tls-ca-cert`, `--docker-tls-cert`, `--docker-tls-key` | Batect's bare `--docker-tls` (without `-verify`) disables *all* server certificate verification, not just hostname matching. Ratect doesn't support that mode at all — `--docker-tls` and `--docker-tls-verify` behave identically here, the daemon's certificate always fully verified. See [TLS with a private certificate authority](ratect-compat-cli.md#tls-with-a-private-certificate-authority) for the supported alternative (your own CA). |
 | `--cache-type` | Unlike Batect, not forced to `directory` for Windows containers — Ratect has no Windows support to special-case yet. |
 | `--max-parallelism` | Batect's flag caps *every* setup/cleanup step via a step-scheduling model Ratect doesn't have. Ratect's caps a narrower set — image pulls/builds, a dependency's create+start, and setup commands — the resource-intensive operations; health-check waits and cleanup teardown are deliberately excluded, and the task's own container's run is never gated, matching Batect's own exemption for it. |
 | `--log-file` | Batect's own default (no `--log-file`) is a silent `NullLogSink`, nothing anywhere; Ratect always logs to stderr regardless, so `--log-file` here tees into a file *in addition to* stderr, not instead of it. |
-| `--no-update-notification`, `--upgrade`, `--no-wrapper-cache-cleanup` | Recognized, no effect — permanently inapplicable, since Ratect is a single native binary with no self-updating wrapper script to disable notifications for, clean caches for, or upgrade. Recognized rather than rejected so an existing Batect invocation carrying one doesn't hard-fail outright. See [CLI reference](cli-reference.md#recognized-for-batect-compatibility-no-effect). |
+| `--no-update-notification`, `--upgrade`, `--no-wrapper-cache-cleanup` | Recognized, no effect — permanently inapplicable, since Ratect is a single native binary with no self-updating wrapper script to disable notifications for, clean caches for, or upgrade. Recognized rather than rejected so an existing Batect invocation carrying one doesn't hard-fail outright. See [CLI reference](ratect-compat-cli.md#recognized-for-batect-compatibility-no-effect). |
 
 ## Runtime behavior gaps
 
@@ -114,9 +114,9 @@ tables above:
   whether its output is a real terminal; Ratect's requires *both* stdin and stdout
   to be real terminals. Live terminal-resize tracking is also Unix-only — synced
   once at session start elsewhere, not tracked further. See [Interactive
-  mode](config-reference.md#interactive-mode).
+  mode](ratect-compat-config-reference.md#interactive-mode).
 - **Proxy support**: two deliberate differences — see [Proxy environment
-  variables](config-reference.md#proxy-environment-variables) for the full mechanics.
+  variables](ratect-compat-config-reference.md#proxy-environment-variables) for the full mechanics.
 
   - **A `localhost` proxy is rewritten on Linux too.** Batect rewrites on
     macOS/Windows only; on Linux it propagates the URL verbatim, where `localhost`
@@ -131,7 +131,7 @@ tables above:
 - **Private registry credentials**: Batect's own Go client swallows every
   credential-helper error unconditionally; Ratect warns instead, naming the
   registry that failed to resolve. See [Private registry
-  credentials](config-reference.md#private-registry-credentials).
+  credentials](ratect-compat-config-reference.md#private-registry-credentials).
 - **A dependency exiting unexpectedly is reported, not silent.** Batect has no
   equivalent: a dependency that dies after becoming ready — while the task's own
   command, or a later dependency's own health/setup wait, is still going — is

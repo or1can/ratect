@@ -11,3 +11,11 @@ src = "docs"
 # combined ~200KB is cached across the whole site after the first page.
 additional-css = ["vendor/asciinema-player.css"]
 additional-js = ["vendor/asciinema-player.min.js"]
+
+# The two `ratect-compat` reference pages were renamed to say which binary
+# they document (#160). Their old URLs had been live for days, so each gets
+# a redirect page here; mdBook 0.5's generated page also forwards the
+# `#fragment`, so a deep link into a section keeps working too.
+[output.html.redirect]
+"/cli-reference.html" = "ratect-compat-cli.html"
+"/config-reference.html" = "ratect-compat-config-reference.html"

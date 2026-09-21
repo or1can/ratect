@@ -51,7 +51,7 @@
 //! `batect.yml`'s (`config_file_schema`, committed at
 //! `schema/batect-config.schema.json`) and, since 0.3.0, `ratect.toml`'s
 //! (`native_config_file_schema`, at `schema/ratect-config.schema.json`) — see
-//! [config reference](https://github.com/or1can/ratect/blob/main/docs/config-reference.md#editor-autocompletion-and-validation)
+//! [config reference](https://github.com/or1can/ratect/blob/main/docs/ratect-compat-config-reference.md#editor-autocompletion-and-validation)
 //! and the [`ratect.toml` reference](https://github.com/or1can/ratect/blob/main/docs/ratect-config-reference.md#editor-support)
 //! for the user-facing halves. The native one is the same generated base put
 //! through `make_native`, which applies *exactly* the two differences that define

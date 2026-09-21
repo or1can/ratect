@@ -47,7 +47,7 @@
 //! already-cached-git includes, never clones or errors.
 //! `Config::load_from_file` parses the root file and resolves
 //! `include` (local files and Git bundles — see
-//! [config reference](https://github.com/or1can/ratect/blob/main/docs/config-reference.md#includes)), merging every loaded
+//! [config reference](https://github.com/or1can/ratect/blob/main/docs/ratect-compat-config-reference.md#includes)), merging every loaded
 //! file's `containers`/`tasks`/`config_variables` into one `Config`, returned inside a
 //! `LoadedConfig` alongside a `container_base_paths` map (each container name → its
 //! own origin file's directory). A separate `LoadedConfig::resolve_expressions` call
@@ -224,7 +224,7 @@ pub struct Container {
     /// `paths` forwards the host's own running ssh-agent via
     /// `SSH_AUTH_SOCK`; an entry with `paths` serves those private key
     /// files instead, which is what works in CI where no agent is running.
-    /// See [`SshAgent`], and [Image building](https://github.com/or1can/ratect/blob/main/docs/config-reference.md#image-building).
+    /// See [`SshAgent`], and [Image building](https://github.com/or1can/ratect/blob/main/docs/ratect-compat-config-reference.md#image-building).
     pub build_ssh: Option<Vec<SshAgent>>,
     /// Host bind mounts (`local`) and/or named cache volumes (`cache`) — see
     /// [`VolumeMount`]. A `local` mount's host path is resolved in
@@ -2223,7 +2223,7 @@ fn resolve_include_target(
 /// [`resolve_expressions`](Self::resolve_expressions) to resolve each
 /// container's relative paths (`volumes` host paths, `build_directory`)
 /// against *its own* origin file's directory rather than always the root
-/// config's directory — see [Includes](../../docs/config-reference.md#includes).
+/// config's directory — see [Includes](../../docs/ratect-compat-config-reference.md#includes).
 #[derive(Debug)]
 pub struct LoadedConfig {
     pub config: Config,

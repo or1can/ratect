@@ -20,7 +20,7 @@ module_reference_scope = ["decisions/*.md", "AGENTS.md"]
 #
 # The other false positives this check used to hit here (a `~`/`/`-prefixed
 # path outside the repo, and two hypothetical/template filenames in
-# AGENTS.md and docs/config-reference.md) no longer need a file-wide
+# AGENTS.md and docs/ratect-compat-config-reference.md) no longer need a file-wide
 # exclusion: claims#37 fixed the home/absolute-path case, and the
 # `<!-- example -->` inline marker (claims#39) covers the other two
 # in-place, right next to each mention.

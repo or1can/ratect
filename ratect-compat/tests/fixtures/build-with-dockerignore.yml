@@ -2,7 +2,7 @@
 # pattern ("build") only excludes a root-level match, not a nested one with
 # the same name — Docker's actual semantics, not `.gitignore`'s any-depth
 # matching for bare patterns (see
-# docs/config-reference.md#dockerignore-semantics) — while a `**/`-prefixed
+# docs/ratect-compat-config-reference.md#dockerignore-semantics) — while a `**/`-prefixed
 # pattern ("**/secret.txt") excludes at every depth. The Dockerfile's own
 # `RUN test` assertions fail the build if the context doesn't match what's
 # expected, so a successful build here is the proof.

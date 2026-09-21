@@ -32,7 +32,7 @@ Running `ratect-compat test` here runs `compile` to completion first, fully clea
 after it, then runs `test`.
 
 A task doesn't strictly need a `run` of its own — a task with only `prerequisites`
-is valid (see [config reference](config-reference.md#task)), and exists purely to
+is valid (see [config reference](ratect-compat-config-reference.md#task)), and exists purely to
 chain other tasks together:
 
 ```yaml
@@ -55,13 +55,13 @@ host. If the container *does* declare `dependencies`, those are started on that
 network *before* the task's own container, so the task's container can reach them by
 name — and so is anything named in the *task's own* `dependencies` (sidecars scoped
 to this task specifically, distinct from the container-level field — see [config
-reference](config-reference.md#task)), unioned in alongside the container-level ones.
+reference](ratect-compat-config-reference.md#task)), unioned in alongside the container-level ones.
 All of this — network, dependencies, and the task's own container — is scoped
 to **this one task execution** and torn down before moving on, regardless of whether
 the task succeeded — unless `--no-cleanup`/`--no-cleanup-after-failure`/
 `--no-cleanup-after-success` says otherwise, in which case everything below is left
 genuinely running instead, for investigation (see [CLI
-reference](cli-reference.md)):
+reference](ratect-compat-cli.md)):
 
 ```mermaid
 sequenceDiagram
@@ -108,10 +108,10 @@ task's own container ran to completion instead, regardless of its exit code (a
 non-zero exit is still "success" for this purpose — it's the task's own container
 actually running that matters, not what it returned); `--no-cleanup` is both at once.
 Either way, everything above is left genuinely running, not just present-but-stopped
-— see [CLI reference](cli-reference.md).
+— see [CLI reference](ratect-compat-cli.md).
 
 `pull_image()` in the diagram above is conditional on `image_pull_policy` (see [config
-reference](config-reference.md#container)): `IfNotPresent`, the default, checks whether
+reference](ratect-compat-config-reference.md#container)): `IfNotPresent`, the default, checks whether
 the image already exists locally first and skips the pull entirely if so; `Always`
 skips that check and pulls unconditionally. Either way, the *decision* (pull or don't)
 is made once per image name per `ratect` invocation, same as before this field
@@ -122,7 +122,7 @@ Passing `--use-network <name>` skips network creation and teardown entirely for 
 task in this invocation: the named network is checked to exist up front (a clear error
 if it doesn't), and reused instead — dependencies and the task's own container all join
 it exactly as they would a freshly-created one, but it's never removed at cleanup,
-since Ratect didn't create it. See [CLI reference](cli-reference.md).
+since Ratect didn't create it. See [CLI reference](ratect-compat-cli.md).
 
 ## Dependency resolution
 
@@ -209,7 +209,7 @@ those specific operations run at a time, invocation-wide. The health-check wait 
 is deliberately *not* capped (it's a polling wait, not real work), so two dependencies
 can still become healthy at the same time even under a low cap — only the pull/build/
 start/setup-command steps queue up behind it. See [CLI
-reference](cli-reference.md#options) and [differences from
+reference](ratect-compat-cli.md#options) and [differences from
 Batect](differences-from-batect.md#cli-flags) for exactly what's covered.
 
 A task's own `dependencies` (sidecars scoped to that task specifically) join this
@@ -220,13 +220,13 @@ And a task's `customise` map, if it has one, is checked against whichever depend
 is starting: a match overrides that container's `environment`/`ports`/
 `working_directory` for this task's run of it specifically (merged the same way a
 task's own `run` overrides its main container — see [config
-reference](config-reference.md#taskcontainercustomisation)), before it starts,
+reference](ratect-compat-config-reference.md#taskcontainercustomisation)), before it starts,
 regardless of how deep in this graph it sits.
 
 Started isn't ready, though: each dependency must become **ready** before whatever
 depends on it starts — it must report healthy (immediately so for a container with no
 Docker health check at all, from neither its image nor the `health_check` field), and
-then every one of its [`setup_commands`](config-reference.md#dependency-readiness)
+then every one of its [`setup_commands`](ratect-compat-config-reference.md#dependency-readiness)
 must succeed, in declared order. In the example above, `database`'s migrations (a
 setup command) provably finish before `app`'s command gets to run. A dependency
 that's reported unhealthy — or that exits before a verdict, or whose setup command
@@ -239,7 +239,7 @@ dependency that turns unhealthy after its dependents have started doesn't affect
 rest of the task, even though Docker itself keeps running the check for the
 container's whole lifetime. How long the wait for that first verdict can take (and
 why an unhealthy verdict can't arrive quickly) is Docker's own verdict lifecycle —
-see [How Docker reaches its verdict](config-reference.md#how-docker-reaches-its-verdict)
+see [How Docker reaches its verdict](ratect-compat-config-reference.md#how-docker-reaches-its-verdict)
 in the config reference.
 
 Not re-checking health doesn't mean staying silent, though: a dependency that has

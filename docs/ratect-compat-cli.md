@@ -29,7 +29,7 @@ listed under.
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
-| `--config-var <NAME=VALUE>` | — | — | Sets a [config variable](config-reference.md#configvariable)'s value; repeatable. Takes precedence over `--config-vars-file` and the variable's `default`. |
+| `--config-var <NAME=VALUE>` | — | — | Sets a [config variable](ratect-compat-config-reference.md#configvariable)'s value; repeatable. Takes precedence over `--config-vars-file` and the variable's `default`. |
 | `--config-vars-file <PATH>` | `batect.local.yml` if it exists | — | A flat YAML file of config variable `name: value` pairs, in the same format as `batect.yml` itself. Lower precedence than `--config-var`. When not given, defaults to `batect.local.yml` in the current directory *if that file exists* (an absent default file just means no overrides from a file, not an error) — matching Batect. |
 
 ### Task execution
@@ -38,13 +38,13 @@ listed under.
 |---|---|---|---|
 | `--use-network <NAME>` | — | — | Reuses an existing Docker network for every task in this invocation instead of creating (and removing) a fresh one per task. Errors clearly if the named network doesn't exist. See [task lifecycle](task-lifecycle.md). |
 | `--disable-ports` | — | — | Disables publishing of any container's `ports` to the host, regardless of what's configured. |
-| `--no-proxy-vars` | — | — | Don't propagate proxy-related environment variables (`http_proxy`, `https_proxy`, `ftp_proxy`, `no_proxy`) to image builds or containers. See [Proxy environment variables](config-reference.md#proxy-environment-variables). |
+| `--no-proxy-vars` | — | — | Don't propagate proxy-related environment variables (`http_proxy`, `https_proxy`, `ftp_proxy`, `no_proxy`) to image builds or containers. See [Proxy environment variables](ratect-compat-config-reference.md#proxy-environment-variables). |
 | `--skip-prerequisites` | — | — | Don't run the named task's own `prerequisites`. Only ever affects the task actually named on the command line — if that task is itself reached as someone else's prerequisite in a later invocation, this flag has no bearing on that. |
 | `--override-image <CONTAINER=IMAGE>` | — | — | Overrides the image used by `CONTAINER`; repeatable. Replaces the container's `image`/`build_directory` and `image_pull_policy` entirely — the override is always pulled under the default `IfNotPresent` policy, regardless of what the container itself configures. Errors immediately if `CONTAINER` isn't defined in the config. |
 | `--tag-image <CONTAINER=TAG>` | — | — | Tags the image built by `CONTAINER` with `TAG`, in addition to the default `<project_name>-<container_name>` tag; repeatable, and `CONTAINER` may be given more than once to apply multiple tags. Only valid for a container that actually builds an image — errors immediately if `CONTAINER` ends up using a pulled image (whether configured that way or via `--override-image`), and errors once the whole task (and its prerequisites) finishes if `CONTAINER` never actually ran. |
-| `--enable-buildkit` | — | — | Use BuildKit for image builds, taking precedence over the `DOCKER_BUILDKIT` environment variable — see [config reference](config-reference.md#image-building). No `--disable-buildkit` counterpart; force the classic builder via `DOCKER_BUILDKIT=0`/`false` instead. |
+| `--enable-buildkit` | — | — | Use BuildKit for image builds, taking precedence over the `DOCKER_BUILDKIT` environment variable — see [config reference](ratect-compat-config-reference.md#image-building). No `--disable-buildkit` counterpart; force the classic builder via `DOCKER_BUILDKIT=0`/`false` instead. |
 | `--max-parallelism <N>` | — | unbounded | Caps how many image pulls/builds, dependency container starts, and setup-command executions run concurrently across the whole invocation. Health-check waits and container stop/removal are never gated — see [Differences from Batect](differences-from-batect.md#cli-flags). |
-| `--cache-type <volume\|directory>` | — | `volume` | Storage mechanism for a `cache` volume mount (see [Cache volumes](config-reference.md#cache-volumes)): `volume` resolves it to a Docker named volume, `directory` to a host directory under `<project_directory>/.batect/caches/<name>/`. Has no effect on a config with no `cache` mounts — but does still select which storage `--clean`/`--clean-cache` act on. |
+| `--cache-type <volume\|directory>` | — | `volume` | Storage mechanism for a `cache` volume mount (see [Cache volumes](ratect-compat-config-reference.md#cache-volumes)): `volume` resolves it to a Docker named volume, `directory` to a host directory under `<project_directory>/.batect/caches/<name>/`. Has no effect on a config with no `cache` mounts — but does still select which storage `--clean`/`--clean-cache` act on. |
 
 ### Cleanup after a run
 
@@ -72,7 +72,7 @@ listed under.
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
-| `--clean` | — | — | Removes every one of this project's own cache volumes/directories (per `--cache-type`) and exits — doesn't run anything, and doesn't need `--config-file` to actually exist. See [Cache volumes](config-reference.md#cache-volumes). |
+| `--clean` | — | — | Removes every one of this project's own cache volumes/directories (per `--cache-type`) and exits — doesn't run anything, and doesn't need `--config-file` to actually exist. See [Cache volumes](ratect-compat-config-reference.md#cache-volumes). |
 | `--clean-cache <NAME>` | — | — | Removes just the named cache (repeatable) and exits, instead of every one of them. Given together with `--clean`, the explicit name(s) win — `--clean`'s own "everything" behavior only applies when `--clean-cache` is never given at all. |
 
 ### Output
@@ -134,7 +134,7 @@ styles are Batect's own four, all implemented:
   output, so it's safe to pipe (error reporting stays on stderr, unchanged). Also
   switches `--list-tasks` to a machine-readable format: one task per line, sorted
   by name, as `name` alone or `name<TAB>description` — no header, no
-  [grouping](config-reference.md#list-tasks-output). [See it in action ↓](#quiet-in-action).
+  [grouping](ratect-compat-config-reference.md#list-tasks-output). [See it in action ↓](#quiet-in-action).
 - **`all`** — every line of output prefixed with the container it belongs to
   (`name    | `, padded to a common column, each container's prefix in its own
   color), interleaved as it happens. The only style that shows *dependency*
@@ -385,7 +385,7 @@ actual behavior — it doesn't yet distinguish "nothing to do" from "success":
   even under `RUST_LOG=off` or a filter that excludes Ratect's own target — including
   under [`-o quiet`](#output-styles), whose whole contract is "only error messages".
 - A misspelled task name (whether given directly on the command line, or as a
-  [`prerequisites`](config-reference.md#task) entry) gets a `Did you mean 'x'?`
+  [`prerequisites`](ratect-compat-config-reference.md#task) entry) gets a `Did you mean 'x'?`
   suggestion appended to the error, for every existing task name within a Levenshtein
   edit distance of 3 — ported from Batect's own `TaskSuggester`/`EditDistanceCalculator`
   (confirmed by reading Batect's source). Multiple equally-close matches are all
@@ -403,7 +403,7 @@ actual behavior — it doesn't yet distinguish "nothing to do" from "success":
   same exit code.** Ratect waits for the container to exit and inspects its status —
   a task whose command is `exit 42` makes `ratect` itself exit `42`, matching
   `docker run`'s convention rather than collapsing every failure to a generic `1`. A
-  task that runs as a [prerequisite](config-reference.md#task) and fails this way
+  task that runs as a [prerequisite](ratect-compat-config-reference.md#task) and fails this way
   stops the rest of the chain immediately — no other prerequisites, and not the task
   that depended on it, will run — matching
   [Batect's documented behavior](https://github.com/batect/batect.dev/blob/main/docs/reference/config/tasks.md#prerequisites).
@@ -423,7 +423,7 @@ actual behavior — it doesn't yet distinguish "nothing to do" from "success":
 | `DOCKER_CONFIG` | Directory containing the Docker CLI's own configuration files — see `--docker-config`. |
 | `DOCKER_CERT_PATH` | Directory containing `ca.pem`/`cert.pem`/`key.pem` for TLS — see `--docker-cert-path`. |
 | `DOCKER_TLS_VERIFY` | Enables TLS (fully verified — see [TLS with a private certificate authority](#tls-with-a-private-certificate-authority)) — see `--docker-tls-verify`. |
-| `DOCKER_BUILDKIT` | Forces the image builder on (`1`/`true`) or off (`0`/`false`) — see `--enable-buildkit` and [config reference](config-reference.md#image-building). |
+| `DOCKER_BUILDKIT` | Forces the image builder on (`1`/`true`) or off (`0`/`false`) — see `--enable-buildkit` and [config reference](ratect-compat-config-reference.md#image-building). |
 | `NO_COLOR` | If set (to anything — see [no-color.org](https://no-color.org)), has exactly the same effect as `--no-color`: disables colored output and makes `simple` the auto-selected output style. |
 | `CLICOLOR_FORCE` | If set to anything other than `0`, forces colored output even when stdout isn't a terminal (e.g. a CI log viewer that renders ANSI despite the pipe) — but never affects output *style* selection, and never wins over `--no-color`/`NO_COLOR` if either is also set. |
 
@@ -431,5 +431,5 @@ Ratect supports interpolating host environment variables and config variables in
 `environment` values, volume host paths, `build_directory`, `build_args`,
 `build_secrets`' `path`, and a `build_ssh` entry's `paths` in `batect.yml` (`$VAR`,
 `${VAR:-default}`, `<name` — see
-[config reference](config-reference.md#expressions)) — see
+[config reference](ratect-compat-config-reference.md#expressions)) — see
 [differences from Batect](differences-from-batect.md).
