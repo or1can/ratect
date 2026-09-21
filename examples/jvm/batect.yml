@@ -2,7 +2,7 @@ project_name: example-jvm
 
 containers:
   build-env:
-    image: eclipse-temurin:21-jdk
+    image: eclipse-temurin:25-jdk
     working_directory: /code
     volumes:
       - local: .
