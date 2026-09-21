@@ -35,7 +35,7 @@ best fit.
 
 ## Docker Compose
 
-Compose defines and runs multi-container applications — the closest match
+[Compose](https://docs.docker.com/compose/) defines and runs multi-container applications — the closest match
 to Ratect in shape (containers, networks, dependencies between them), and
 the one most likely to already be sitting in a project you're looking at.
 
@@ -64,9 +64,10 @@ persisting for the next run to reach.
 
 ## Make
 
-The original. Targets, prerequisites, recipes, and a dependency graph driven
-by file timestamps — genuinely incremental, in a way nothing else on this
-page (Ratect included) fully replicates.
+[GNU Make](https://www.gnu.org/software/make/manual/make.html) — the
+original. Targets, prerequisites, recipes, and a dependency graph driven by
+file timestamps — genuinely incremental, in a way nothing else on this page
+(Ratect included) fully replicates.
 
 **Where Make wins:** it's already installed, on nearly every Unix-like
 system, with zero extra daemon and zero extra dependency — spinning up
@@ -106,10 +107,11 @@ then there's no built-in service-dependency/readiness model to reach for.
 
 ## Earthly
 
-Worth naming plainly: **Earthly is no longer actively maintained** — its own
-README says so directly, pointing at a post titled "shutting down Earthly
-Cloud." Its last tagged release was mid-2025. Comparing against it now is
-closer to Ratect's own relationship with Batect than a live rivalry.
+Worth naming plainly: **Earthly is no longer actively maintained** —
+[its own README](https://github.com/earthly/earthly) says so directly,
+pointing at a post titled "shutting down Earthly Cloud." Its last tagged
+release was mid-2025. Comparing against it now is closer to Ratect's own
+relationship with Batect than a live rivalry.
 
 While it was under active development, Earthly's actual design point was a
 containerized *build* framework — Dockerfile-and-Makefile-flavored syntax,
@@ -125,11 +127,11 @@ services, which was never Earthly's target.
 
 ## Dagger
 
-A programmable automation engine, not a config format: pipelines are code,
-in a real language (Go, Python, TypeScript, and others), compiling down to
-containers as Dagger's own primitive. The pitch is portability — the same
-pipeline runs on your laptop, in CI, or in Dagger's own cloud — backed by
-built-in OpenTelemetry tracing.
+[A programmable automation engine](https://dagger.io/), not a config
+format: pipelines are code, in a real language (Go, Python, TypeScript, and
+others), compiling down to containers as Dagger's own primitive. The pitch
+is portability — the same pipeline runs on your laptop, in CI, or in
+Dagger's own cloud — backed by built-in OpenTelemetry tracing.
 
 **Where Dagger wins:** a real programming language for pipeline logic —
 loops, conditionals, functions, tests for the pipeline itself — which
@@ -147,10 +149,10 @@ Dagger is a from-scratch mental model, not a migration path from anything.
 
 ## `just`
 
-Its own README calls it "a command runner, not a build system" — a
-deliberate, stated distinction from Make, not an oversight. `justfile`
-recipes run on the host, with none of Make's dependency-graph or
-incremental-rebuild machinery.
+[Its own README](https://github.com/casey/just) calls it "a command
+runner, not a build system" — a deliberate, stated distinction from Make,
+not an oversight. `justfile` recipes run on the host, with none of Make's
+dependency-graph or incremental-rebuild machinery.
 
 **Where `just` wins:** about as light as this category gets — a single
 small binary, no daemon, recipes that are just shell commands with better
