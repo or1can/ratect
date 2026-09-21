@@ -136,13 +136,19 @@ Improving the developer experience through better tools and feedback.
     bundles are actually *for*, which the [config
     reference](docs/config-reference.md#includes) documents mechanically without
     ever making the case for.
-  - **Language/ecosystem-specific concerns** — what to cache and where, per
-    ecosystem, in the spirit of Batect's own `using-batect-with/tools/` pages.
-    `examples/` already gets this right for Rust, Go, Node.js, Python, and the
-    JVM (`cargo-registry`/`cargo-target`, `GOPATH`/`GOCACHE` equivalents,
-    `npm-cache`, `pip-cache`, `gradle-cache`), it's just never been written up
-    as prose explaining *why* those specific directories, or what breaks
-    without them.
+  - **Language/ecosystem-specific concerns**, in the spirit of Batect's own
+    `using-batect-with/tools/` pages — mostly caching (what to cache and where,
+    which `examples/` already gets right for Rust, Go, Node.js, Python, and the
+    JVM: `cargo-registry`/`cargo-target`, `GOPATH`/`GOCACHE` equivalents,
+    `npm-cache`, `pip-cache`, `gradle-cache`), but not only that: Batect's own
+    pages also cover ecosystem-specific correctness/performance gotchas that
+    aren't a caching question at all — disabling the Gradle daemon (pointless
+    and counterproductive in an ephemeral container) and Node.js needing
+    [`enable_init_process`](docs/config-reference.md#container) for correct
+    signal handling as PID 1. Neither is set in `examples/jvm`/`examples/node`
+    today — real gaps in the examples themselves, not just missing prose, and
+    worth fixing before a doc page cites them as done right. Batect also
+    covers .NET and Ruby, which `examples/` has nothing for at all.
 - **A version picker on the rendered docs site** — deliberately not built with the
   site itself ([#86](https://github.com/or1can/ratect/issues/86)): the site tracks
   `main` only for now, so there's nothing yet to pick between. Worth adding once
