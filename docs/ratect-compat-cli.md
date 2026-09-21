@@ -1,4 +1,4 @@
-# CLI Reference
+# `ratect-compat` CLI Reference
 
 ```
 ratect-compat [OPTIONS] [TASK_NAME] [-- ADDITIONAL_ARGS...]
