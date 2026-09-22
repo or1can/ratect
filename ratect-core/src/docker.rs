@@ -1334,13 +1334,19 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// Blocks until `container_id` exits, returning its exit code — a
     /// genuine, possibly-long wait, unlike [`exit_code`](DockerClient::exit_code)'s
     /// own callers, which only ever call it once a container is already
-    /// known to have stopped. Used to watch a dependency that has already
-    /// become ready (see `TaskEvent::DependencyExitedUnexpectedly`) for
-    /// exiting on its own while something else is still going — engine.rs
-    /// aborts the background watcher calling this the moment the task's
-    /// own run finishes, strictly before cleanup stops anything, so this
-    /// never needs to distinguish a genuine crash from a deliberate stop
-    /// itself.
+    /// known to have stopped. Two call sites in engine.rs, with different
+    /// stakes:
+    ///
+    /// - The background watcher for a dependency that has already become
+    ///   ready (see `TaskEvent::DependencyExitedUnexpectedly`), watching for
+    ///   it exiting on its own while something else is still going — engine.rs
+    ///   aborts this call the moment the task's own run finishes, strictly
+    ///   before cleanup stops anything, so it never needs to distinguish a
+    ///   genuine crash from a deliberate stop itself.
+    /// - A `run_to_completion` dependency's own readiness gate (ratect#97):
+    ///   called synchronously, in the foreground, *before* the dependency is
+    ///   considered ready at all — not a background watcher, and not aborted
+    ///   by anything; its exit code is what readiness is decided on.
     async fn wait_for_container_exit(&self, container_id: &str) -> Result<i64>;
 
     /// Runs `command` inside the already-running `container_id` — used for

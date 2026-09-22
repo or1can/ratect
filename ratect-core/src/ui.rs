@@ -179,6 +179,14 @@ pub enum TaskEvent {
     ContainerBecameHealthy {
         container: String,
     },
+    /// A `run_to_completion` dependency exited with status 0 and is now
+    /// ready — this dialect's counterpart to
+    /// [`TaskEvent::ContainerBecameHealthy`] for a container that has no
+    /// health check at all, since it runs to completion instead of staying
+    /// detached. `ratect`-native only, like the field itself.
+    DependencyCompleted {
+        container: String,
+    },
     /// One of a dependency's `setup_commands` is about to run. `index` is
     /// 1-based, for rendering as "(n of total)".
     RunningSetupCommand {

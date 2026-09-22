@@ -233,6 +233,18 @@ that's reported unhealthy — or that exits before a verdict, or whose setup com
 exits non-zero — fails the task; already-started containers are still cleaned up as
 usual.
 
+A `ratect.toml` dependency can opt into a different readiness gate entirely:
+[`run_to_completion`](ratect-config-reference.md#run_to_completion-init-containers)
+(`ratect`-native only — `batect.yml` has no equivalent) replaces "healthy, then
+setup commands" with running to completion and exiting 0 — Kubernetes-style
+init-container behavior, still just a node in this same dependency graph. It
+participates in resolution exactly like any other dependency (concurrent with
+an unrelated branch, deduplicated if shared, nestable either directly under a
+task's own `dependencies` or under another dependency's); the only difference
+is what "ready" means for it. A non-zero exit fails the task the same way an
+unhealthy dependency or a failing setup command does, and already-started
+containers — including the exited one itself — are still cleaned up as usual.
+
 Health is a **one-time gate in this sequence, not ongoing monitoring**: Ratect waits
 for Docker's *first* health verdict and never re-checks — matching Batect, a
 dependency that turns unhealthy after its dependents have started doesn't affect the
@@ -251,7 +263,9 @@ on it (a connection refused, a timeout) rather than the real cause. This is a
 notification only — the run isn't failed or stopped because of it — and it's never
 printed for a container cleanup itself stops: Ratect stops watching a dependency for
 this the moment the task's own execution finishes, strictly before cleanup ever
-touches a container.
+touches a container. This warning doesn't apply to a `run_to_completion` dependency
+either: its exit is how it *became* ready in the first place, not a later surprise,
+so there's nothing unexpected to report.
 
 More generally, within one task's resolution *any* dependency shared by two others —
 not just a leaf like `cache` above — is only ever started once, no matter how many
@@ -292,24 +306,39 @@ colliding.
 
 ## Known simplifications relative to Batect
 
-- **The task's own container's readiness gate can race a fast main command.**
-  Since 0.21.0, the task's own container goes through the same readiness gate a
-  dependency always has — health-check wait, then `setup_commands`, in order — run
-  concurrently with its main command rather than gating anything on it (nothing else
-  in the graph depends on the task container's own readiness). A setup command or
-  health-check failure fails the task even if the main command already succeeded.
-  One race this doesn't close, matching Batect's own (its `RunStage` completion is
-  driven purely by the container's exit event, not its readiness): a main command
-  that exits very quickly — especially with no `health_check` configured, since the
-  readiness gate then starts its `setup_commands` almost immediately after the
-  container starts — can finish before a `setup_commands` entry gets a chance to
-  `docker exec` into it, surfacing Docker's own "container is not running" error
-  instead of that setup command's actual outcome. In practice this only bites a
-  near-instant main command; anything taking more than a few tens of milliseconds
-  gives the setup command time to run and report its real result. Also unlike
-  Batect: the main command itself is never cancelled early just because the
-  readiness gate fails first — it always runs to completion, and the task is still
-  reported as failed overall either way.
+- **The task's own container's readiness gate can race a fast main command** —
+  and "main command" is usually a task-specific override. A task's
+  `run.command`/`run.entrypoint` (see [TaskRun](ratect-compat-config-reference.md#taskrun))
+  replaces whatever the container's own `command`/`entrypoint`, or the image's
+  default `CMD`, would otherwise run — often to run a one-off command (`psql`,
+  a one-shot migration script) against a container that's really built for
+  something else, a long-running service. That override is what actually
+  starts the instant the container starts. It is never gated on the
+  container's own `health_check`/`setup_commands` — since 0.21.0 the task's
+  own container goes through that same readiness gate a dependency always
+  has (health-check wait, then `setup_commands`, in order), but run
+  *concurrently* with the main command rather than blocking it, because
+  nothing else in the graph depends on the task container's own readiness. A
+  setup command or health-check failure still fails the task even if the
+  main command already succeeded — including a `health_check` written for
+  the container's usual, non-overridden role, which a one-off command
+  doesn't make go away. Whether that's the right behaviour for a task's own
+  container specifically — nothing in this task's own graph actually depends
+  on its readiness — is an open question, tracked in
+  [ratect#173](https://github.com/or1can/ratect/issues/173).
+  One race this doesn't close, matching Batect's own (its
+  `RunStage` completion is driven purely by the container's exit event, not
+  its readiness): a main command that exits very quickly — especially with
+  no `health_check` configured, since the readiness gate then starts its
+  `setup_commands` almost immediately after the container starts — can
+  finish before a `setup_commands` entry gets a chance to `docker exec` into
+  it, surfacing Docker's own "container is not running" error instead of
+  that setup command's actual outcome. In practice this only bites a
+  near-instant main command; anything taking more than a few tens of
+  milliseconds gives the setup command time to run and report its real
+  result. Also unlike Batect: the main command itself is never cancelled
+  early just because the readiness gate fails first — it always runs to
+  completion, and the task is still reported as failed overall either way.
 - **Prerequisite tasks stay sequential, matching Batect exactly** — `prerequisites`
   entries run one after another, each to completion, never concurrently with each
   other or with the task that named them (see "Task ordering" above). This is Batect's

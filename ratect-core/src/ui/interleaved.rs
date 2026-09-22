@@ -251,6 +251,9 @@ impl EventSink for InterleavedEventLogger {
             TaskEvent::ContainerBecameHealthy { container } => {
                 self.print_for_container(&state, &container, "Container became healthy.");
             }
+            TaskEvent::DependencyCompleted { container } => {
+                self.print_for_container(&state, &container, "Container ran to completion.");
+            }
             TaskEvent::RunningSetupCommand {
                 container,
                 command,

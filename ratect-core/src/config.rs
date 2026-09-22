@@ -270,6 +270,20 @@ pub struct Container {
     /// support — matching Batect, which doesn't type these as expressions
     /// either.
     pub setup_commands: Option<Vec<SetupCommand>>,
+    /// Runs this dependency to completion instead of leaving it detached —
+    /// Kubernetes-style init-container behavior, expressed as a plain node
+    /// in the existing dependency graph rather than a separate concept. A
+    /// dependency with this set to `true` is started, run to completion (not
+    /// detached), and considered ready once it exits with status 0; a
+    /// non-zero exit fails the task run the same way a health-check or
+    /// `setup_commands` failure does today. Mutually exclusive with
+    /// `health_check`/`setup_commands` — neither concept applies once a
+    /// dependency runs to completion. `ratect`-native only, like `extends` —
+    /// Batect has no equivalent, so `ratect-compat` rejects it — and, unlike
+    /// `extends`, meaningless on a task's own `run` block, which has no
+    /// `dependencies` of its own to place this on in the first place.
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub run_to_completion: Option<bool>,
     /// Overrides the image's own `WORKDIR`. A plain string, not an
     /// [expression](#expressions) — matching Batect's own `String` (not
     /// `Expression`) typing for this field. Overridden by the task-level
@@ -2076,7 +2090,7 @@ impl ConfigFormat {
     /// unconditionally from [`load_project_impl`], before expression
     /// resolution — load-bearing for [`reject_image_expressions_in_compat`],
     /// which inspects an `image`'s literal text and must judge what was
-    /// written rather than what an expression resolved to; the other three
+    /// written rather than what an expression resolved to; the other four
     /// checks presence/shape of fields expression resolution never touches,
     /// so the ordering is inert for them but still correct. `Native` has
     /// nothing to reject here: every field below is native's own.
@@ -2084,6 +2098,7 @@ impl ConfigFormat {
         match self {
             ConfigFormat::Compat => {
                 reject_extends_in_compat(config)?;
+                reject_run_to_completion_in_compat(config)?;
                 reject_shared_caches_in_compat(config)?;
                 validate_image_sources_in_compat(&config.containers)?;
                 reject_image_expressions_in_compat(config)?;
@@ -2878,6 +2893,25 @@ impl Config {
                         );
                     }
                 }
+                // Unconditional (not compat-only, unlike
+                // `validate_image_sources_in_compat`): there is no
+                // `extends`-inheritance complication here, since no
+                // legitimate base container needs both a health check and
+                // run-to-completion behavior.
+                if container.run_to_completion.unwrap_or(false) {
+                    if container.health_check.is_some() {
+                        anyhow::bail!(
+                            "has 'run_to_completion' set, but also has 'health_check' — \
+                             a run-to-completion dependency has no health check of its own"
+                        );
+                    }
+                    if container.setup_commands.is_some() {
+                        anyhow::bail!(
+                            "has 'run_to_completion' set, but also has 'setup_commands' — \
+                             a run-to-completion dependency has no setup commands of its own"
+                        );
+                    }
+                }
                 Ok(())
             })()
             .with_context(|| format!("Container '{container_name}'"))?;
@@ -3309,6 +3343,9 @@ async fn load_project_impl(
     // After `extends`, so an inherited cache mount is judged on the scope
     // the container effectively has.
     reject_conflicting_cache_scopes(&config)?;
+    // Same reasoning, same placement: a container's effective
+    // `run_to_completion` isn't known until `extends` has resolved it.
+    reject_run_to_completion_on_main_container(&config)?;
     Ok(LoadedProject {
         config,
         project_directory,
@@ -3400,6 +3437,27 @@ fn reject_extends_in_compat(config: &Config) -> Result<()> {
         anyhow::bail!(
             "The container '{name}' uses 'extends', which is a ratect-native field \
              not supported in Batect-compatible configuration."
+        );
+    }
+    Ok(())
+}
+
+/// `run_to_completion` is a `ratect`-native field (init-container behavior);
+/// a `batect.yml` that uses it is rejected rather than silently ignored,
+/// same reasoning as [`reject_extends_in_compat`] — Batect has no such
+/// concept.
+fn reject_run_to_completion_in_compat(config: &Config) -> Result<()> {
+    let mut offenders: Vec<&str> = config
+        .containers
+        .iter()
+        .filter(|(_, container)| container.run_to_completion.unwrap_or(false))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    offenders.sort_unstable();
+    if let Some(name) = offenders.first() {
+        anyhow::bail!(
+            "The container '{name}' uses 'run_to_completion', which is a ratect-native \
+             field not supported in Batect-compatible configuration."
         );
     }
     Ok(())
@@ -3598,6 +3656,42 @@ fn reject_conflicting_cache_scopes(config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Rejects a task whose own `run.container` has `run_to_completion` set —
+/// whether declared directly or inherited via `extends`, which is exactly
+/// why this runs *after* [`resolve_extends`], same placement/reasoning as
+/// [`reject_conflicting_cache_scopes`]: a container's effective
+/// `run_to_completion` isn't known until inheritance has resolved it. A
+/// task's own container already always runs to completion by definition —
+/// that's what running a task's command means — so the flag would silently
+/// have no effect there rather than erroring, which is worse than rejecting
+/// it outright. The same container can still legitimately be
+/// `run_to_completion` when used as a *dependency* by another task; this
+/// only rejects a task naming it as its own `run.container` while the flag
+/// is set.
+fn reject_run_to_completion_on_main_container(config: &Config) -> Result<()> {
+    let mut offenders: Vec<(&str, &str)> = config
+        .tasks
+        .iter()
+        .filter_map(|(task_name, task)| {
+            let run = task.run.as_ref()?;
+            let container = config.containers.get(&run.container)?;
+            container
+                .run_to_completion
+                .unwrap_or(false)
+                .then_some((task_name.as_str(), run.container.as_str()))
+        })
+        .collect();
+    offenders.sort_unstable();
+    if let Some((task_name, container_name)) = offenders.first() {
+        anyhow::bail!(
+            "Task '{task_name}' has 'run_to_completion' set on its main container \
+             '{container_name}' — that flag only applies to a dependency; a task's own \
+             container already always runs to completion"
+        );
+    }
+    Ok(())
+}
+
 /// Resolves every container's `extends` — `ratect`'s native inheritance,
 /// replacing YAML anchors. Shallow, per field (`child.or(parent)`, exactly
 /// Cargo's profile `inherits`): a field the child sets wins, an unset one is
@@ -3688,6 +3782,7 @@ fn inherit_container_fields(child: &mut Container, parent: Container) {
         ports,
         health_check,
         setup_commands,
+        run_to_completion,
         working_directory,
         command,
         entrypoint,
@@ -3718,6 +3813,7 @@ fn inherit_container_fields(child: &mut Container, parent: Container) {
     child.ports = child.ports.take().or(ports);
     child.health_check = child.health_check.take().or(health_check);
     child.setup_commands = child.setup_commands.take().or(setup_commands);
+    child.run_to_completion = child.run_to_completion.take().or(run_to_completion);
     child.working_directory = child.working_directory.take().or(working_directory);
     child.command = child.command.take().or(command);
     child.entrypoint = child.entrypoint.take().or(entrypoint);

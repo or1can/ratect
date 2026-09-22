@@ -1,0 +1,33 @@
+# A native `ratect.toml` fixture proving `run_to_completion` (ratect#97)
+# against a real Docker daemon: `init` is a dependency that must run to
+# completion and exit 0 before `app` starts. Native-only — `run_to_completion`
+# has no `batect.yml`/`ratect-compat` equivalent, so this fixture, unlike most
+# of the engine/Docker behaviour proven under `ratect-compat/tests/fixtures/`,
+# can only be expressed here (see AGENTS.md's fixture-layer guideline).
+project_name = "ratect-run-to-completion-test"
+
+[containers.init]
+image = "alpine:3.18.2"
+command = "true"
+run_to_completion = true
+
+[containers.init-failing]
+image = "alpine:3.18.2"
+command = "false"
+run_to_completion = true
+
+[containers.app]
+image = "alpine:3.18.2"
+dependencies = ["init"]
+
+[containers.app-with-failing-init]
+image = "alpine:3.18.2"
+dependencies = ["init-failing"]
+
+[tasks.start]
+description = "Runs after 'init' completes successfully"
+run = { container = "app", command = "echo app-started" }
+
+[tasks.start-with-failing-init]
+description = "Must fail before 'app-with-failing-init' ever runs"
+run = { container = "app-with-failing-init", command = "echo should-not-run" }

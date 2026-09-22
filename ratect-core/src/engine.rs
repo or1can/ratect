@@ -2046,6 +2046,36 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         .unwrap()
                         .insert(name.to_string(), container_id.clone());
 
+                    // A `run_to_completion` dependency (ratect#97) takes a
+                    // different readiness gate entirely: it has no health
+                    // check and no `setup_commands` of its own — mutually
+                    // exclusive at config-load time (see
+                    // `Config::resolve_expressions_with_boundaries`) — so
+                    // instead it must simply run to completion and exit 0.
+                    // No watcher is spawned below for it either: its exit is
+                    // the readiness signal itself, not a later surprise.
+                    if dependency_config.run_to_completion.unwrap_or(false) {
+                        let exit_code = self
+                            .docker
+                            .wait_for_container_exit(&container_id)
+                            .await
+                            .with_context(|| {
+                                format!("Container '{}' did not run to completion", name)
+                            })?;
+                        if exit_code != 0 {
+                            anyhow::bail!(
+                                "Container '{}' (a run-to-completion dependency) exited with \
+                                 code {}",
+                                name,
+                                exit_code
+                            );
+                        }
+                        self.event_sink.post(TaskEvent::DependencyCompleted {
+                            container: name.to_string(),
+                        });
+                        return Ok(container_id);
+                    }
+
                     // Batect's readiness gate (see docs/task-lifecycle.md):
                     // started isn't ready. The dependency must report
                     // healthy (immediate for a container with no health
