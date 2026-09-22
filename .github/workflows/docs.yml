@@ -27,6 +27,7 @@ on:
       - book.toml
       - tools/mdbook-ansi.py
       - tools/mdbook-ansi.css
+      - vendor/**
       - .github/workflows/docs.yml
   pull_request:
     branches: [main]
@@ -36,6 +37,7 @@ on:
       - book.toml
       - tools/mdbook-ansi.py
       - tools/mdbook-ansi.css
+      - vendor/**
       - .github/workflows/docs.yml
   workflow_dispatch: {}
 
@@ -49,6 +51,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: taiki-e/install-action@mdbook
+      # book.toml's [preprocessor.mermaid] — see the comment there.
+      - uses: taiki-e/install-action@mdbook-mermaid
       - run: mdbook build
       # Generated rather than a static file under docs/, so a page added or
       # removed from SUMMARY.md can't leave it stale. 404.html/print.html/

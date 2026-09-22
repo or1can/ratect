@@ -10,7 +10,16 @@ src = "docs"
 # page, not just the homepage: mdBook has no per-page equivalent, and the
 # combined ~200KB is cached across the whole site after the first page.
 additional-css = ["vendor/asciinema-player.css", "tools/mdbook-ansi.css"]
-additional-js = ["vendor/asciinema-player.min.js"]
+additional-js = [
+    "vendor/asciinema-player.min.js",
+    # Mermaid, for the ```mermaid diagrams [preprocessor.mermaid] below
+    # rewrites — the same self-hosting reasoning as the player, and at
+    # ~2.6MB the larger reason for it. `mermaid-init.js` is mdbook-mermaid's
+    # own loader (it picks Mermaid's light or dark theme from mdBook's), moved
+    # here from the book root where `mdbook-mermaid install` writes it.
+    "vendor/mermaid.min.js",
+    "vendor/mermaid-init.js",
+]
 
 # Renders a ```ansi fenced block — a `{{#include}}` of a docs/captures/*.ansi
 # file `tools/capture-output.py` wrote — as coloured HTML, styled by the
@@ -21,6 +30,16 @@ additional-js = ["vendor/asciinema-player.min.js"]
 [preprocessor.ansi]
 command = "python3 tools/mdbook-ansi.py"
 after = ["links"]
+
+# Turns a ```mermaid fenced block into the <pre class="mermaid"> the vendored
+# Mermaid renders in the browser; without it mdBook shows the diagram's
+# source as a code block, which is what the site did until this landed.
+# docs.yml installs the binary via taiki-e/install-action; locally,
+# `cargo install mdbook-mermaid`. Re-running `mdbook-mermaid install .`
+# is safe (it detects this config) but writes the two assets to the book
+# root again — move them back under vendor/.
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
 
 # The two `ratect-compat` reference pages were renamed to say which binary
 # they document (#160). Their old URLs had been live for days, so each gets
