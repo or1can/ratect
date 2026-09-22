@@ -3,7 +3,9 @@
 Ratect is a from-scratch Rust implementation inspired by
 [Batect](https://github.com/batect/batect) (which is itself no longer maintained — the
 upstream repository was archived in October 2023), not a wrapper or fork. It does not
-read Batect's documentation or source at runtime.
+read Batect's documentation or source at runtime. To move an existing project
+over, follow [Migrating a Batect Project to Ratect](migrating-batect-project.md);
+this page is what changes once you have.
 
 **Every Batect configuration field and CLI flag is supported, field-for-field and
 flag-for-flag, unless listed below** — see [config reference](ratect-compat-config-reference.md)/
