@@ -396,6 +396,9 @@ expression support there either.
 > field here, for a cache shared across projects. Everything below describes the
 > project-scoped kind, which is the only one `batect.yml` has.
 
+Which directory to point a cache at for each toolchain — Cargo, Go, npm, pip,
+Gradle — is in [Using Ratect With Language Ecosystems](using-ratect-with.md).
+
 A cache `name` must start with a letter or digit and contain only letters,
 digits, underscores, dots and dashes — Docker's own volume-name character set.
 The name becomes a host directory under `--cache-type=directory`, so a name
@@ -607,7 +610,7 @@ Each `setup_commands` entry takes:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `command` | string | yes | The command to run. Tokenized into literal argv the same way a container's own `command`/`entrypoint` is (see [TaskRun](#taskrun)) — no shell involved. A command relying on shell operators (`&&`, `$VAR` expansion, etc.) needs an explicit `sh -c '...'` wrapper. |
+| `command` | string | yes | The command to run. Tokenized into literal argv the same way a container's own `command`/`entrypoint` is (see [TaskRun](#taskrun)) — no shell involved. A command relying on shell operators (`&&`, `$VAR` expansion, etc.) needs an explicit `sh -c '...'` wrapper — the [FAQ](faq.md#why-doesnt--or-var-work-in-my-command) has the worked explanation. |
 | `working_directory` | string | no | Directory to run it in. Falls back to the container's own `working_directory` when omitted, and then to the image's own default when neither is set. |
 
 ## Task
@@ -752,6 +755,9 @@ test	Run the test suite
 ```
 
 ## TaskRun
+
+For why `&&` and `$VAR` don't do what they look like they do in `command`, and
+the three different `$`-syntaxes that resemble each other, see the [FAQ](faq.md#why-doesnt--or-var-work-in-my-command).
 
 | Field | Type | Required | Description |
 |---|---|---|---|

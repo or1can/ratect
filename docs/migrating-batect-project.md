@@ -28,7 +28,12 @@ Once `ratect-compat` is in place, there are two ways to move onto the native
 [`ratect config convert`](ratect-cli.md#config) only ever reads a Batect-format
 root file, so it has to run **before** the project's root becomes `ratect.toml`
 (path A below), not after. Once the root is native, finishing off any
-remaining `.yml` includes is a by-hand job (path B).
+remaining `.yml` includes is a by-hand job (path B). What actually changes
+between the two formats is tabulated in the `ratect.toml` reference — [at a
+glance](ratect-config-reference.md#differences-from-batectyml-at-a-glance) and
+[where the semantics differ](ratect-config-reference.md#where-the-semantics-differ)
+— and between the two binaries in the [`ratect` CLI
+reference](ratect-cli.md#differences-from-ratect-compat-today).
 
 ### Path A: convert everything in one pass
 

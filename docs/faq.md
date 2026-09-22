@@ -11,8 +11,8 @@ Ratect gives you both, and they trade off differently:
 
 - A [`volumes` bind mount](ratect-compat-config-reference.md#volume-path-resolution)
   (`{ local: ".", container: "/code" }`) makes your working directory show up live
-  inside the container — every one of `examples/`'s projects does exactly this for
-  its own source tree. Edit a file on the host, rerun the task, and the container
+  inside the container — every one of the [worked examples](worked-examples.md)
+  does exactly this for its own source tree. Edit a file on the host, rerun the task, and the container
   sees the change with no rebuild. The image itself stays generic (a stock language
   toolchain image, not your code baked into it), so pulling it is normally fast and
   cached.
@@ -91,7 +91,8 @@ means it always will.
 
 This isn't a Ratect setting — every container Ratect starts still runs under
 whatever CPU/memory ceiling Docker itself is configured with, so a heavier build
-(the JVM or Node examples under `examples/` are the ones most likely to notice)
+(the [JVM](worked-examples.md#jvm-gradle) or [Node](worked-examples.md#nodejs)
+examples are the ones most likely to notice)
 can look like it's hanging or gets silently OOM-killed when Docker's own default is
 too tight, and it's easy to blame the task runner instead of the actual cause.
 

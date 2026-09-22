@@ -28,7 +28,9 @@ Every `command` below that chains two steps with `&&` wraps them in `sh -c
 '...'`. `command` is [tokenized into literal argv, with no shell
 involved](ratect-compat-config-reference.md#taskrun) — an unwrapped `&&` doesn't fail
 loudly, it's just handed to the first program as a literal extra argument,
-which several package managers silently ignore rather than reject.
+which several package managers silently ignore rather than reject. The
+[FAQ](faq.md#why-doesnt--or-var-work-in-my-command) walks through it, including
+the config-time `$VAR` syntax that looks the same and isn't.
 
 ## Try it
 

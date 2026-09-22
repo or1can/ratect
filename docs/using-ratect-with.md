@@ -127,6 +127,10 @@ happens in a Ratect container, disposable per task. Without
 and then throws it away with the container, strictly worse than never
 starting one. `examples/jvm` sets this on `build-env` via `GRADLE_OPTS`.
 
+If a Gradle build under Docker Desktop looks hung or dies without a message,
+the ceiling is usually Docker's own, not Ratect's — see the
+[FAQ](faq.md#how-do-i-raise-docker-desktops-resource-limits).
+
 ## Not yet covered
 
 Batect's own equivalent pages also cover .NET Core and Ruby — both

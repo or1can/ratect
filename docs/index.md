@@ -71,8 +71,9 @@ regardless of how the task ends.
 - New here? Start with [Installation](installation.md) and
   [Getting Started](getting-started.md), or jump straight to a [worked
   example](worked-examples.md) for your language.
-- Coming from Batect? See [Differences from Batect](differences-from-batect.md)
-  for what to expect.
+- Coming from Batect? Start with [Migrating a Batect Project to
+  Ratect](migrating-batect-project.md), then [Differences from
+  Batect](differences-from-batect.md) for what to expect.
 - Weighing Ratect against Docker Compose, Make, Task, Earthly, Dagger or
   `just`? See [How Ratect Compares to Other Tools](comparison.md).
 - Looking for a specific flag or config field? Jump to a reference:
