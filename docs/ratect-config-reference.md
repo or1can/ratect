@@ -188,10 +188,13 @@ include = [
 A `type = "git"` entry with no `path` discovers its bundle file by looking for
 **`ratect-bundle.toml` first, then `batect-bundle.yml`** — so an unmigrated Batect
 bundle keeps working, and a bundle author can ship both files to support `ratect`
-and Batect at once. See [Includes](ratect-compat-config-reference.md#includes) for how paths
-resolve, the containment rules for Git bundles, and the shared
-`~/.ratect/incl` cache ([`ratect includes`](ratect-cli.md#includes-options)
-manages it).
+and Batect at once. How included files combine, where their paths resolve
+and what a bundle may do are on [Includes](includes.md); the shared
+`~/.ratect/incl` cache is in the [`batect.yml`
+reference](ratect-compat-config-reference.md#git-includes)
+([`ratect includes`](ratect-cli.md#includes-options) manages it); why you'd
+share a bundle across projects at all is [Reusable Pipeline Building
+Blocks](reusable-building-blocks.md).
 
 An `extends` in a native file may inherit from a container defined in *any*
 included file, including a YAML bundle — the container namespace is flat once
@@ -221,7 +224,7 @@ This exists because the alternative is worse. A bundle that wants one Cargo
 registry or npm cache across projects has, until now, had to spell it as a
 host path (`local = "~/.cache/cargo"`), which means granting the bundle access
 to your home directory — the thing
-[`allow_host_paths`](ratect-compat-config-reference.md#git-includes) exists to permit and
+[`allow_host_paths`](includes.md#vouching-for-a-bundle) exists to permit and
 [decisions/0004](https://github.com/or1can/ratect/blob/main/decisions/0004-git-include-host-path-trust.md)
 would rather solve properly. A shared cache says the same thing directly,
 grants no host filesystem access at all, and keeps the location under Ratect's
@@ -293,24 +296,13 @@ knows the difference between an expression and a literal `$`: `alpine:3.18` and
 
 ## Nested Git includes
 
-A [Git include](ratect-compat-config-reference.md#git-includes) fetches configuration from a
+A [Git include](includes.md#two-kinds-of-include) fetches configuration from a
 repository and merges it into yours. That bundle can declare `include` entries
 of its own — and in a `batect.yml` those may be further `type: git` entries,
-naming any remote, with the same trust your own includes get.
-
-In `ratect.toml` that is **refused by default**:
-
-```
-The bundle 'https://github.com/my-org/infra-bundle.git' at '1.2.3' declares a
-Git include of its own ('https://elsewhere.example/other.git'), which would
-fetch and run configuration from a remote you have not named. Set
-'allow_nested_git_includes' to true on that bundle's own include entry to
-accept this.
-```
-
-You chose the bundle; you did not choose whatever it decides to pull in next,
-and that choice can change under you the next time the ref moves. Opt in per
-bundle:
+naming any remote, with the same trust your own includes get. In `ratect.toml`
+that is **refused by default**: you chose the bundle; you did not choose
+whatever it decides to pull in next. Opt in per bundle by setting
+`allow_nested_git_includes` on that bundle's include entry:
 
 ```toml
 [[include]]
@@ -320,39 +312,10 @@ ref = "1.2.3"
 allow_nested_git_includes = true
 ```
 
-The entry doesn't have to be in the `ratect.toml` itself — a native project can
-[include](#includes) a local `.yml`, and an entry declared there is just as much
-your own configuration, spelled `allow_nested_git_includes: true`. What makes a
-file yours is that it was not reached through a Git include, not its extension.
-
-**The grant is one level deep.** It admits that bundle's own Git includes; it
-does not let *those* bundles declare further ones. Like
-[`allow_host_paths`](ratect-compat-config-reference.md#git-includes), it counts only in
-configuration you control — written inside a Git-included file it is ignored,
-so a bundle can neither grant itself the permission nor pass on the one you
-gave it. If a bundle genuinely needs a chain deeper than that, include the
-second repository yourself, where you can see it.
-
-**Put it on the entry that reaches the file first.** An included file is read
-once however many entries reach it, so the first entry to reach one decides what
-it may do — and this grant, on a losing entry, would do nothing at all. Every
-entry in your root file is reached before any bundle's own, so declaring the
-include yourself beats a bundle to it; between two entries in the same file, the
-earlier one wins. Where two entries reach the same file and the losing one
-carries a grant, Ratect refuses to load and names the repository, rather than
-dropping it silently; the same rule covers
-[`allow_host_paths`](ratect-compat-config-reference.md#git-includes).
-
-It is the *file* that races, not the repository: two entries naming the same
-repository with different `path`s pull in two different files, and each keeps
-the grant written on its own entry.
-
-That is a different case from the paragraph above, which two words could easily
-blur. A grant written *inside* a bundle is **ignored** — accepted by the parser
-and worth nothing, because honouring it would let a bundle grant itself. A
-grant written in your own configuration that loses the race above is
-**refused** — the load stops, because you wrote something that cannot take
-effect and nothing else would tell you.
+The grant is one level deep, counts only in configuration you control, and
+has to sit on the entry that reaches the bundle's file first — the same rules
+as `allow_host_paths`, stated once on [Includes](includes.md#nested-git-includes)
+along with the refusal you see without the grant.
 
 **A nested include's clone failure is reported without `git`'s own message.**
 Whether a remote is unreachable, refusing connections, missing, or demanding

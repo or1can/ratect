@@ -1,12 +1,11 @@
 # Reusable Pipeline Building Blocks
 
 This is about *why* you'd reach for a Git include, not the mechanics of one —
-those are already covered in full by the [configuration
-reference](ratect-compat-config-reference.md#git-includes) (and its native-format
-counterpart, [`ratect.toml`'s own Includes
-section](ratect-config-reference.md#includes)). This page motivates the use
-case first, then the trust model it depends on, since a bundle is code you
-didn't write, running in your own environment.
+those are on [Includes](includes.md), with the entries' own fields in the
+[`batect.yml`](ratect-compat-config-reference.md#git-includes) and
+[`ratect.toml`](ratect-config-reference.md#includes) references. This page
+motivates the use case first, then the trust model it depends on, since a
+bundle is code you didn't write, running in your own environment.
 
 ## The use case
 
@@ -40,41 +39,21 @@ tasks:
 
 Here `shared-lint` isn't defined anywhere in this project's own file — it
 came from the bundle, merged in exactly as if it had been written locally
-(see [Includes](ratect-compat-config-reference.md#includes) for the merge rules). The
+(see [how included files combine](includes.md#how-included-files-combine)). The
 project's own `lint` task just sequences it in as a
 [prerequisite](faq.md#whats-the-difference-between-a-dependency-and-a-prerequisite).
 
 ## A bundle is untrusted code by default
 
 A bundle doesn't just define a container — it also controls the command that
-runs inside it. That combination matters: without a check, a bundle could
-declare a container mounting `~/.ssh` or `~/.aws` and a command that reads it,
-and a project including that bundle would have no way to know from its own
-config alone. [decisions/0004](https://github.com/or1can/ratect/blob/main/decisions/0004-git-include-host-path-trust.md)
-covers the full reasoning; the short version is what it means day to day:
-
-- **Containment is the default.** A container defined inside a bundle can only
-  mount a host path that resolves inside the bundle's own clone, or inside
-  your project directory — nowhere else. This is a deliberate divergence from
-  Batect, which has no equivalent check.
-- **Some bundles legitimately need more** — most often a shared tool cache
-  under your home directory (`~/.cache/trivy`, so a security scanner's own
-  database is reused across every project rather than re-downloaded each
-  time). `allow_host_paths: true` on your own `include` entry lifts
-  containment for that specific bundle. It's a grant *you* make, on an entry
-  *you* wrote — the same flag written inside the bundle itself is ignored, so
-  a bundle can't grant itself the permission.
-- **Trust doesn't recurse.** Vouching for a bundle says nothing about bundles
-  *it* includes in turn. `ratect.toml` goes further than `batect.yml` here: a
-  bundle's own nested Git includes are refused outright unless you opt in
-  per bundle with
-  [`allow_nested_git_includes`](ratect-config-reference.md#nested-git-includes).
-
-None of this makes a bundle *safe* to include blindly — it still runs code
-you didn't write, the same as adding any dependency does. What it buys you is
-that the one attack this project has specifically hardened against (a bundle
-quietly reaching for your credentials via a host mount) needs an explicit,
-visible grant in your own file rather than working by default.
+runs inside it, so Ratect loads it under a boundary: its containers may mount
+only inside the bundle's own clone or your project directory unless you
+vouch for it with `allow_host_paths`, a grant counts only when written in your
+own configuration, and (in `ratect.toml`) its own Git includes are refused
+until you opt in per bundle. The rules, the two grants and what they do and
+don't buy you are on [Includes](includes.md#what-a-bundle-may-do);
+[decisions/0004](https://github.com/or1can/ratect/blob/main/decisions/0004-git-include-host-path-trust.md)
+covers the full reasoning.
 
 ## What a consuming project can and can't change
 

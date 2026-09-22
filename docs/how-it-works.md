@@ -25,14 +25,14 @@ aren't known at the first:
    [`toml`](https://docs.rs/toml), one struct set for both formats — and its
    top-level `include` list (if any) is resolved, with every loaded file's
    `containers`/`tasks`/`config_variables` merged into one `Config` (see
-   [Includes](ratect-compat-config-reference.md#includes)). No expression interpolation yet.
+   [how included files combine](includes.md#how-included-files-combine)). No expression interpolation yet.
 
    Includes are walked breadth-first, so every entry in the root file is reached
    before any included file's own, and each file is loaded exactly once however
    many entries name it. A `type: git` entry clones its repository into
    `~/.ratect/incl` first (`ratect-core/src/git_include.rs`), and everything
    reached through one is confined to that clone and may do only what the entry
-   granted it — see [Git includes](ratect-compat-config-reference.md#git-includes) for the
+   granted it — see [What a bundle may do](includes.md#what-a-bundle-may-do) for the
    rules, and [`CONTEXT.md`](../CONTEXT.md) for what *bundle*, *grant* and
    *boundary* each denote.
 
@@ -67,7 +67,7 @@ aren't known at the first:
      The resolved path is then checked against `container_boundaries`: a
      container that came from a Git-included file may only reach inside its own
      clone or your project directory, unless that include was granted
-     [`allow_host_paths`](ratect-compat-config-reference.md#git-includes). Checked twice: once
+     [`allow_host_paths`](includes.md#vouching-for-a-bundle). Checked twice: once
      lexically, with both the check and the path normalized first, since
      `Path::starts_with` does not interpret `..`; then against the real
      locations, with symlinks resolved as far as the path exists, since a
