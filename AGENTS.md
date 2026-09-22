@@ -533,4 +533,4 @@ The `docs/` directory is the user-facing documentation tree, as distinct
 from `ROADMAP.md`, `RELEASES.md`, `CHANGELOG.md`, `decisions/` and this
 file, which are for contributors. How to write a page there — the two
 config references' deferral rule, the three kinds of example, the
-captured-output rules — is `agents/docs.md`.
+captured-output rules, the ownership guidelines — is `agents/docs.md`.

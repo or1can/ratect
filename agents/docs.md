@@ -99,6 +99,64 @@ description of every style followed by a gallery of them), Getting Started's fir
 plain `<!-- verify: -->` form instead — the binary prints them uncoloured, so
 a capture would add nothing the marker's re-run doesn't already prove.
 
+## Ownership
+
+Which page owns a fact, and which format and binary a page speaks in.
+Six rules, each with its purpose and the page that already models
+it; the evidence for each — the pages found breaking it — is in the
+[second-pass audit on #158](https://github.com/or1can/ratect/issues/158#issuecomment-5784985911),
+not restated here:
+
+1. **Docs mirror the code split.** A per-binary reference documents that
+   binary's interface only. Behaviour both binaries share is written once,
+   in a shared page under Using Ratect, and each reference's row for a
+   shared flag is one line plus a link. The same holds for the two config
+   references: a section with no config field of its own is a concept, not
+   a reference entry. Purpose: `ratect-core` is shared and the binaries are
+   thin ([decisions/0001](../decisions/0001-two-binaries.md)), and a
+   paraphrase on the second page drifts from the first. Model: the
+   "Semantics" column of
+   [`docs/ratect-config-reference.md`'s field reference](../docs/ratect-config-reference.md#field-reference)
+   is a link, with at most a native-only qualifier beside it, never a
+   paraphrase of the linked section.
+2. **Concept pages are format-neutral.** Native spelling first, the
+   `batect.yml` spelling only where the syntax differs, and `ratect run` as
+   the command. Purpose: Getting Started is native-first, so a concept page
+   it links to must not land the reader in the other format and the other
+   binary. Model: `docs/includes.md`, which states this rule for itself,
+   and `docs/getting-started.md` for the command form.
+3. **Reference prose is present tense.** Version numbers and "yet", "used
+   to", "this first version" belong in `CHANGELOG.md`; a reference
+   describes what the binary does today. Purpose: there is no version
+   picker, so a reader can't check "since 0.21.0" against the binary they
+   have, and a "yet" rots silently once the thing lands. Model:
+   `docs/faq.md` and `docs/reusable-building-blocks.md`, which carry no
+   version or temporal wording at all.
+4. **A user page links out of `docs/` for reasoning, never for the fact.**
+   An ADR link for the why is fine; a `ROADMAP.md`/`RELEASES.md` link for
+   what the tool is, is not. Purpose: `docs/` is self-contained, and
+   `ROADMAP.md` is freely rewritten (`AGENTS.md`'s guideline 9), so an
+   anchor into it can vanish from under a user page. Model: the
+   `decisions/` links already in `docs/` — `docs/installation.md`'s to
+   [0010](../decisions/0010-release-binary-distribution.md),
+   `docs/includes.md`'s to
+   [0004](../decisions/0004-git-include-host-path-trust.md) — each a why
+   beside a fact the page states itself.
+5. **Batect-relative framing only on the Coming-from-Batect pages.** No
+   page outside that section opens by comparing itself to a Batect page,
+   and no section heading outside it names Batect; an inline "matching
+   Batect" aside is fine. Purpose: `docs/` does not assume familiarity with
+   Batect's documentation (above), and a New-to-Ratect reader has never
+   seen the page an opening compares itself to. Model:
+   `docs/dependency-readiness.md` — no Batect opening, no Batect heading,
+   and a "matching Batect" aside inline wherever a detail does.
+6. **Every page in a path section hands off.** Each page ends with where
+   to go next, and the section's last page hands to the next section.
+   Purpose: mdBook's previous/next buttons make `docs/SUMMARY.md`'s order a
+   reading order, so a page without a hand-off strands the reader at a
+   button. Model: `docs/getting-started.md`'s "Next steps" section; no section's
+   last page hands off yet, so the second clause has no model.
+
 ## Around `docs/`
 
 The [`decisions/`](../decisions/) directory holds Architecture Decision Records — the **cross-cutting** decisions that get referenced from more than one place (the two-binary split, the runtime-ownership labels, the native config format, trusting a Git include's host paths). Its [`README.md`](../decisions/README.md) states the convention; see `AGENTS.md`'s guideline 14 for when to write one.
