@@ -31,6 +31,10 @@ history, from when it was the only binary.
 - [Migrating a Batect Project to Ratect](docs/migrating-batect-project.md): a staged path from `ratect-compat` against an unmodified `batect.yml`, through mixed `.yml`/`.toml` includes, to a fully native `ratect.toml`.
 - `run_to_completion` (ratect only): a dependency can be marked to run to completion — started, run to exit, and considered ready once it exits with status 0 — instead of staying detached behind a health check and `setup_commands`. Kubernetes-style init-container behavior, expressed as a plain node in the existing dependency graph. See [Config Reference](docs/ratect-config-reference.md#run_to_completion-init-containers).
 
+### Fixed
+
+- The documentation site now renders its Mermaid diagrams (dependency graphs and sequence diagrams on the Task Lifecycle page); they were shown as diagram source.
+
 ### Changed
 
 - [Getting Started](docs/getting-started.md) now teaches `ratect` and `ratect.toml` rather than `ratect-compat` and `batect.yml`, on a real project checked in as `examples/getting-started/`. [Installation](docs/installation.md)'s from-source instructions build and install both binaries.

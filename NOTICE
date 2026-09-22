@@ -63,3 +63,11 @@ release assets of `github.com/asciinema/asciinema-player` v3.17.0, self-hosted s
 docs site's live demo (`docs/index.md`) doesn't depend on a third party's uptime for
 playback. That project is licensed under the Apache License, Version 2.0. Author:
 Marcin Kulik.
+
+`vendor/mermaid.min.js` is the built release asset of `github.com/mermaid-js/mermaid`
+v11.6.0, as shipped by `mdbook-mermaid` v0.17.1 (`mdbook-mermaid install`), self-hosted
+for the same reason as the player above — the docs site's diagrams render from it.
+Mermaid is licensed under the MIT License. Copyright (c) 2014 - 2022 Knut Sveidqvist.
+`vendor/mermaid-init.js` is `mdbook-mermaid`'s own loader script
+(`github.com/badboy/mdbook-mermaid`, same version), licensed under the Mozilla Public
+License, v. 2.0 — a copy is at https://mozilla.org/MPL/2.0/. Author: Jan-Erik Rediger.
