@@ -1,0 +1,38 @@
+# Backs `doctor_reports_each_kind_of_config_finding_from_the_doctor_fixture`
+# in tests/cli.rs and the captured `ratect doctor` transcript on
+# docs/ratect-cli.md: each warning `doctor` can raise from a configuration,
+# plus a problem, in one file. In its own directory rather than beside the
+# other fixtures because the wrapper-script check looks in the configuration
+# file's directory — the `batect` stub here would otherwise be flagged on
+# every other fixture's `doctor` run too.
+#
+# - `database`, with no image tag: the floating-tag warning.
+# - `cache`, a dependency with no health_check: the unguarded-dependency warning.
+# - `app`, whose build_directory doesn't exist: the problem that fails the command.
+# - `batect`, beside this file: the wrapper-script warning.
+# - `build`, on the pinned `build-env`: the one task here that actually runs.
+#   A `--no-cleanup-after-success` run of it is what gives the docs capture
+#   its leftover-resources warning.
+project_name = "ratect-doctor-fixture"
+
+[containers.build-env]
+image = "alpine:3.18.2"
+
+[containers.database]
+image = "postgres"
+health_check = { command = "pg_isready -h 127.0.0.1 -U postgres", interval = "1s", retries = 10 }
+
+[containers.cache]
+image = "redis:7"
+
+[containers.app]
+build_directory = "missing-dir"
+dependencies = ["database", "cache"]
+
+[tasks.build]
+description = "The one task here that runs"
+run = { container = "build-env", command = "echo built" }
+
+[tasks.run]
+description = "Never runnable: app's build_directory doesn't exist"
+run = { container = "app" }

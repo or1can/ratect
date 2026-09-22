@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# This file is part of Batect.
+#
+# It isn't: this is a stand-in for Batect's wrapper script, kept beside
+# ratect.toml so `ratect doctor` flags it. The check matches the notice line
+# above and nothing else (see `is_batect_wrapper` in
+# ratect-core/src/diagnostics.rs), which is exactly the line Batect's real
+# wrapper carries — so this reproduces what a migrated project's leftover
+# `./batect` looks like to `doctor` without committing the real script.
+echo "This is a test fixture, not Batect." >&2
+exit 1

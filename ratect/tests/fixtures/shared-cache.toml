@@ -1,0 +1,16 @@
+# Backs `a_run_creates_a_shared_cache_that_only_a_scoped_clean_removes` in
+# tests/cli.rs, and the captured `caches list`/`caches clean` transcripts on
+# docs/ratect-cli.md, which need a shared cache to exist on the machine —
+# nothing under examples/ declares one. Its own project because the test's
+# `caches clean` removes what it lists, and the shared volume it creates,
+# `ratect-shared-cache-shared-tools`, is machine-wide: no other fixture or
+# example may declare a shared cache of that name.
+project_name = "ratect-cli-shared-cache-test"
+
+[containers.build-env]
+image = "alpine:3.18.2"
+volumes = [{ type = "cache", name = "shared-tools", scope = "shared", container = "/cache" }]
+
+[tasks.warm-cache]
+description = "Write something into the shared cache"
+run = { container = "build-env", command = "touch /cache/marker" }
