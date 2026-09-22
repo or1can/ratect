@@ -676,6 +676,24 @@ impl EventSink for FancyEventLogger {
                 }
                 self.repaint_startup(&mut state);
             }
+            // A `run_to_completion` dependency's own terminal state — same
+            // treatment as `ContainerBecameHealthy` above (`Ready`, cleared
+            // from any other line's `WaitingForDependencies`), since it
+            // reaches "ready" by exiting rather than by a health check.
+            TaskEvent::DependencyCompleted { container } => {
+                if !state.keep_updating_startup {
+                    return;
+                }
+                if let Some(line) = Self::line_mut(&mut state, &container) {
+                    line.stage = Stage::Ready;
+                }
+                for line in &mut state.lines {
+                    if let Stage::WaitingForDependencies(remaining) = &mut line.stage {
+                        remaining.remove(&container);
+                    }
+                }
+                self.repaint_startup(&mut state);
+            }
             TaskEvent::RunningSetupCommand {
                 container,
                 command,

@@ -263,6 +263,21 @@ fn make_native(json: &mut serde_json::Value) {
                                 both — or neither — legal on one container.",
             }),
         );
+        // Add the native-only `run_to_completion` field — skipped from the
+        // compat schema (`Container::run_to_completion`'s `schemars(skip)`,
+        // since `ratect-compat` rejects it), same reasoning as `extends`
+        // above.
+        properties.insert(
+            "run_to_completion".to_string(),
+            serde_json::json!({
+                "type": ["boolean", "null"],
+                "description": "Runs this dependency to completion instead of leaving it \
+                                detached — Kubernetes-style init-container behavior. Started, \
+                                run to completion (not detached), and considered ready once it \
+                                exits with status 0; a non-zero exit fails the task run. \
+                                Mutually exclusive with `health_check`/`setup_commands`.",
+            }),
+        );
     }
 }
 

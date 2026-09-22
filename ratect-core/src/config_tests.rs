@@ -2378,6 +2378,7 @@ fn container_with_build(build_directory: &str, build_args: HashMap<String, Strin
         ports: None,
         health_check: None,
         setup_commands: None,
+        run_to_completion: None,
         working_directory: None,
         command: None,
         entrypoint: None,
@@ -3163,6 +3164,7 @@ fn container_with_run_as_current_user(enabled: bool, home_directory: Option<&str
         ports: None,
         health_check: None,
         setup_commands: None,
+        run_to_completion: None,
         working_directory: None,
         command: None,
         entrypoint: None,
@@ -4693,6 +4695,249 @@ async fn extends_is_rejected_in_compat_mode() {
     assert!(
         format!("{err:#}").contains("uses 'extends'"),
         "expected a compat rejection"
+    );
+}
+
+#[tokio::test]
+async fn parses_run_to_completion() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.migrate]
+image = "alpine:3.18"
+run_to_completion = true
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["migrate"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        project.config.containers["migrate"].run_to_completion,
+        Some(true)
+    );
+}
+
+/// `run_to_completion` is native-only, same reasoning as `extends`: a
+/// `batect.yml` using it is rejected rather than silently ignored, since
+/// Batect has no such concept.
+#[tokio::test]
+async fn run_to_completion_is_rejected_in_compat_mode() {
+    let dir = unique_temp_dir();
+    let path = dir.join("batect.yml");
+    std::fs::write(
+        &path,
+        "project_name: demo\ncontainers:\n  migrate:\n    image: alpine\n    run_to_completion: true\ntasks: {}\n",
+    )
+    .unwrap();
+    let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(
+        format!("{err:#}").contains("uses 'run_to_completion'"),
+        "expected a compat rejection, got: {err:#}"
+    );
+}
+
+#[tokio::test]
+async fn run_to_completion_rejects_a_health_check() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.migrate]
+image = "alpine:3.18"
+run_to_completion = true
+[containers.migrate.health_check]
+command = "true"
+
+[tasks.t]
+run = { container = "migrate" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("'run_to_completion' set, but also has 'health_check'"),
+        "got: {err:#}"
+    );
+}
+
+#[tokio::test]
+async fn run_to_completion_rejects_setup_commands() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.migrate]
+image = "alpine:3.18"
+run_to_completion = true
+setup_commands = [{ command = "./migrate.sh" }]
+
+[tasks.t]
+run = { container = "migrate" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("'run_to_completion' set, but also has 'setup_commands'"),
+        "got: {err:#}"
+    );
+}
+
+#[tokio::test]
+async fn run_to_completion_is_inherited_via_extends() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+run_to_completion = true
+
+[containers.migrate]
+extends = "base"
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["migrate"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        project.config.containers["migrate"].run_to_completion,
+        Some(true)
+    );
+}
+
+/// `run_to_completion` exists only on `Container` — a task's own `run` block
+/// (a distinct, fixed-field [`TaskRun`]) has no such field to set in the
+/// first place, so this is caught structurally by `deny_unknown_fields`
+/// rather than a dedicated runtime check.
+#[tokio::test]
+async fn run_to_completion_is_rejected_on_a_tasks_own_run_block() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.app]
+image = "alpine:3.18"
+
+[tasks.t.run]
+container = "app"
+run_to_completion = true
+"#,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("run_to_completion"),
+        "got: {err:#}"
+    );
+}
+
+/// The container `run.container` names is a plain `Container`, so nothing
+/// stops `run_to_completion` from being set on *that* container by name —
+/// only the previous test's `TaskRun` shape is structurally protected. A
+/// task's own container already always runs to completion by definition,
+/// so the flag would silently do nothing there; this is rejected instead of
+/// left to load successfully with no effect.
+#[tokio::test]
+async fn run_to_completion_is_rejected_on_a_tasks_main_container() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.app]
+image = "alpine:3.18"
+run_to_completion = true
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("run_to_completion")
+            && format!("{err:#}").contains("'app'")
+            && format!("{err:#}").contains("'t'"),
+        "expected the error to name the task and its main container, got: {err:#}"
+    );
+}
+
+/// The same container can still legitimately be `run_to_completion` when
+/// used as a *dependency* elsewhere — only being named as a task's own
+/// `run.container` while the flag is set is rejected.
+#[tokio::test]
+async fn run_to_completion_is_still_allowed_when_the_same_container_is_used_as_a_dependency() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.migrate]
+image = "alpine:3.18"
+run_to_completion = true
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["migrate"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        project.config.containers["migrate"].run_to_completion,
+        Some(true)
+    );
+}
+
+/// The main-container check runs *after* `extends` resolves — a container
+/// that only ends up `run_to_completion` by inheriting it from a base is
+/// rejected as a task's own container exactly like one that sets the field
+/// directly. Catches the gap a check placed before `extends` (inside
+/// `resolve_expressions_with_boundaries`) would miss entirely, since the
+/// child's own `run_to_completion` is still unset at that point.
+#[tokio::test]
+async fn run_to_completion_inherited_via_extends_is_still_rejected_on_a_main_container() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+run_to_completion = true
+
+[containers.migrate]
+extends = "base"
+
+[tasks.t]
+run = { container = "migrate" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("run_to_completion")
+            && format!("{err:#}").contains("'migrate'")
+            && format!("{err:#}").contains("'t'"),
+        "expected the error to name the task and its (inheriting) main container, got: {err:#}"
     );
 }
 
@@ -6895,6 +7140,7 @@ fn container_with_environment(environment: HashMap<String, String>) -> Container
         ports: None,
         health_check: None,
         setup_commands: None,
+        run_to_completion: None,
         working_directory: None,
         command: None,
         entrypoint: None,

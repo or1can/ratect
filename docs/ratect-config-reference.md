@@ -369,6 +369,50 @@ The field is rejected in a `batect.yml` rather than ignored, value and all:
 setting `allow_nested_git_includes` to false there would claim a restriction
 that format never applies.
 
+## `run_to_completion`: init containers
+
+A dependency normally starts detached, waits for a health check (immediate if
+none is configured), then runs its `setup_commands` — see [Dependency
+readiness](ratect-compat-config-reference.md#dependency-readiness). `run_to_completion` replaces that whole
+gate with a simpler one: the dependency runs, and is ready once it exits with
+status 0 — a non-zero exit fails the task run the same way an unhealthy
+dependency or a failing setup command does today. Kubernetes-style
+init-container behavior, expressed as a plain node in the existing dependency
+graph rather than a separate concept:
+
+```toml
+[containers.migrate]
+image = "my-repo/migrate:latest"
+run_to_completion = true
+
+[containers.app]
+image = "my-repo/app:latest"
+dependencies = ["migrate"]
+```
+
+- **No health check, no `setup_commands`.** Neither concept applies once a
+  dependency runs to completion — setting either alongside `run_to_completion`
+  is rejected when the file loads.
+- **Ordinary graph participation.** A `run_to_completion` dependency can depend
+  on other dependencies (of either kind), other dependencies can depend on it,
+  and it can be declared directly under a task's own `dependencies` or nested
+  under another dependency's — no special-casing either way.
+- **Concurrent when independent.** Two `run_to_completion` dependencies for one
+  container that don't depend on each other run at the same time, gated purely
+  by the graph, not a separate strictly-sequential list.
+- **The task's own container is unaffected.** It already always runs to
+  completion by definition — that's what running a task's command means. The
+  field is meaningless there twice over: structurally, a task's own `run`
+  block has no field to set it on in the first place; and on the container
+  itself, setting it on whichever container a task names via `run.container`
+  is rejected when the file loads (directly, or inherited via `extends`),
+  rather than silently doing nothing. The same container can still be
+  `run_to_completion` when used as a *dependency* by another task — only
+  being a task's own main container while the flag is set is rejected.
+- **`ratect`-native only**, like `extends`: `batect.yml` has no equivalent
+  concept, so a container using it is rejected when the file loads rather than
+  silently ignored.
+
 ## Field reference
 
 Every container and task field from [`ratect-compat-config-reference.md`](ratect-compat-config-reference.md)
@@ -386,6 +430,7 @@ The container fields, by area:
 | Runtime | `command`, `entrypoint`, `working_directory`, `environment`, `enable_init_process`, `privileged`, `shm_size`, `capabilities_to_add`, `capabilities_to_drop`, `devices`, `labels`, `log_driver`, `log_options` | [Container](ratect-compat-config-reference.md#container) |
 | Networking | `ports`, `additional_hostnames`, `additional_hosts`, `dependencies` | [Ports](ratect-compat-config-reference.md#port-mappings), [readiness](ratect-compat-config-reference.md#dependency-readiness) |
 | Readiness | `health_check`, `setup_commands` | [Dependency readiness](ratect-compat-config-reference.md#dependency-readiness) |
+| Init containers | `run_to_completion` | [above](#run_to_completion-init-containers) *(native only)* |
 | User | `run_as_current_user` | [User mapping](ratect-compat-config-reference.md#user-mapping) |
 | Inheritance | `extends` | [above](#extends-inheritance-instead-of-yaml-anchors) *(native only)* |
 
@@ -464,6 +509,7 @@ so it also works as a CI gate.
 | Default file | `batect.yml` | `ratect.toml` |
 | Reuse | anchors / aliases / merge keys | [`extends`](#extends-inheritance-instead-of-yaml-anchors) |
 | Cross-project cache | — | [`scope = "shared"`](#shared-caches) on a `cache` mount |
+| Init containers | — | [`run_to_completion`](#run_to_completion-init-containers) on a dependency |
 | List entries | string shorthand *or* object | object (inline table or `[[...]]`) |
 | Local overrides | `batect.local.yml` | `ratect.local.toml` |
 | Git bundle default | `batect-bundle.yml` | `ratect-bundle.toml`, then `batect-bundle.yml` |
@@ -471,7 +517,8 @@ so it also works as a CI gate.
 
 Most field *meanings* are unchanged; the spelling and the format-level rules
 above are the bulk of the difference. The exceptions are the native-only
-fields (`extends`, a cache's `scope`) and the handful of behaviours in [Where
+fields (`extends`, a cache's `scope`, a dependency's `run_to_completion`) and
+the handful of behaviours in [Where
 the semantics differ](#where-the-semantics-differ), which exist because
 `extends` gives some combinations a meaning `batect.yml` has no way to
 express.

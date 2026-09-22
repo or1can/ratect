@@ -337,6 +337,13 @@
           ],
           "description": "Runs the container as the host's own user rather than the image's default, so files it writes to a mounted volume aren't root-owned."
         },
+        "run_to_completion": {
+          "description": "Runs this dependency to completion instead of leaving it detached — Kubernetes-style init-container behavior. Started, run to completion (not detached), and considered ready once it exits with status 0; a non-zero exit fails the task run. Mutually exclusive with `health_check`/`setup_commands`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "setup_commands": {
           "description": "Commands run inside the container (via `docker exec`) after it becomes healthy but before its dependents start — see `SetupCommand`. Plain strings, no expression support — matching Batect, which doesn't type these as expressions either.",
           "items": {

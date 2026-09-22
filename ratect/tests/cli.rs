@@ -56,6 +56,13 @@ fn native_fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native.toml")
 }
 
+/// `run_to_completion` (ratect#97) — native-only, so its own fixture (unlike
+/// most engine/Docker behaviour) lives here rather than under
+/// `ratect-compat/tests/fixtures/`.
+fn run_to_completion_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run-to-completion.toml")
+}
+
 /// A unique, empty temp directory to stand up a small project in.
 fn unique_project_dir() -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1021,6 +1028,66 @@ fn run_executes_a_task_from_a_native_toml_config_via_docker() {
         String::from_utf8_lossy(&output.stdout).contains("built"),
         "the task run via extends-resolved container should reach stdout:\n{}",
         String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// `run_to_completion` (ratect#97), end to end: `app`'s `init` dependency
+/// must run to completion (`command = "true"`, exit 0) before `app` itself
+/// starts. Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn run_to_completion_dependency_runs_before_the_task_container_via_docker() {
+    let _guard = serial_docker();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(run_to_completion_fixture_path())
+        .args(["run", "start"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("app-started"),
+        "the task should only run once its run-to-completion dependency exited 0:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// The failure half of the fixture above: `init-failing` (`command =
+/// "false"`) exits non-zero, which must fail the run the same way an
+/// unhealthy dependency does — before `app-with-failing-init` ever starts.
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn a_failing_run_to_completion_dependency_fails_the_run_via_docker() {
+    let _guard = serial_docker();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(run_to_completion_fixture_path())
+        .args(["run", "start-with-failing-init"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        !output.status.success(),
+        "a non-zero exit from a run-to-completion dependency should fail the run"
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("should-not-run"),
+        "the task must never run when its run-to-completion dependency fails:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("init-failing"),
+        "the error should name the failing dependency:\n{}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 

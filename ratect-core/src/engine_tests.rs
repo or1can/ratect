@@ -807,6 +807,7 @@ fn container(image: &str, dependencies: Option<Vec<String>>) -> Container {
         log_options: None,
         health_check: None,
         setup_commands: None,
+        run_to_completion: None,
     }
 }
 
@@ -863,6 +864,7 @@ fn config_with_cycle() -> Config {
             log_options: None,
             health_check: None,
             setup_commands: None,
+            run_to_completion: None,
         },
     );
 
@@ -960,6 +962,7 @@ fn config_with_shared_prerequisite() -> Config {
             log_options: None,
             health_check: None,
             setup_commands: None,
+            run_to_completion: None,
         },
     );
 
@@ -1493,6 +1496,7 @@ fn container_with_run_as_current_user(
         log_options: None,
         health_check: None,
         setup_commands: None,
+        run_to_completion: None,
     }
 }
 
@@ -1972,6 +1976,7 @@ async fn run_as_current_user_explicitly_disabled_reaches_the_container_with_no_m
             log_options: None,
             health_check: None,
             setup_commands: None,
+            run_to_completion: None,
         },
     );
     let mut tasks = HashMap::new();
@@ -2031,6 +2036,7 @@ fn container_with_build_directory(
         log_options: None,
         health_check: None,
         setup_commands: None,
+        run_to_completion: None,
     }
 }
 
@@ -2635,6 +2641,7 @@ async fn container_without_image_or_build_directory_errors() {
             log_options: None,
             health_check: None,
             setup_commands: None,
+            run_to_completion: None,
         },
     );
     let mut tasks = HashMap::new();
@@ -3132,6 +3139,275 @@ async fn unhealthy_dependency_fails_the_task_and_still_cleans_up() {
         events.iter().any(|e| e.starts_with("network-remove:")),
         "the network must still be removed: {events:?}"
     );
+}
+
+/// A `run_to_completion` dependency (ratect#97) is started like any other,
+/// but its readiness gate is running to exit 0 — not a health check or
+/// `setup_commands`, neither of which apply to it.
+#[tokio::test]
+async fn run_to_completion_dependency_runs_to_completion_before_the_task_starts() {
+    let config = config_with_database_dependency(|database| {
+        database.run_to_completion = Some(true);
+    });
+    let docker = FakeContainerRuntime::default().with_dependency_exit(
+        "database",
+        std::time::Duration::ZERO,
+        0,
+    );
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let events = docker.events();
+    let start_index = events
+        .iter()
+        .position(|e| e.starts_with("sidecar-start:database:"))
+        .expect("the dependency should have started");
+    let run_index = events
+        .iter()
+        .position(|e| e.starts_with("run:app:"))
+        .expect("the task container should have run");
+    assert!(
+        start_index < run_index,
+        "the dependency must run to completion before the task starts: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.starts_with("wait-healthy:sidecar-id-database")),
+        "a run-to-completion dependency has no health check to wait for: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.starts_with("exec:sidecar-id-database:")),
+        "a run-to-completion dependency has no setup commands to run: {events:?}"
+    );
+}
+
+/// The `DependencyCompleted` event (`ContainerBecameHealthy`'s counterpart
+/// for this dialect) is what tells a display the dependency is ready.
+#[tokio::test]
+async fn run_to_completion_dependency_posts_dependency_completed() {
+    let config = config_with_database_dependency(|database| {
+        database.run_to_completion = Some(true);
+    });
+    let docker = FakeContainerRuntime::default().with_dependency_exit(
+        "database",
+        std::time::Duration::ZERO,
+        0,
+    );
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        config,
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let events = sink.events();
+    assert!(
+        events.iter().any(
+            |e| matches!(e, TaskEvent::DependencyCompleted { container } if container == "database")
+        ),
+        "expected a DependencyCompleted event for 'database': {events:?}"
+    );
+    assert!(
+        !events.iter().any(
+            |e| matches!(e, TaskEvent::ContainerBecameHealthy { container } if container == "database")
+        ),
+        "a run-to-completion dependency has no health check, so no ContainerBecameHealthy \
+         event should post for it: {events:?}"
+    );
+}
+
+/// A non-zero exit fails the task run the same way a health-check or
+/// `setup_commands` failure does today, with normal cleanup still running
+/// afterward.
+#[tokio::test]
+async fn failing_run_to_completion_dependency_fails_the_task_and_still_cleans_up() {
+    let config = config_with_database_dependency(|database| {
+        database.run_to_completion = Some(true);
+    });
+    let docker = FakeContainerRuntime::default().with_dependency_exit(
+        "database",
+        std::time::Duration::ZERO,
+        1,
+    );
+    let engine = engine(config, docker.clone());
+
+    let result = engine.run_task("start", &[]).await;
+
+    let message = format!("{:#}", result.unwrap_err());
+    assert!(
+        message.contains("'database'") && message.contains("exited with code 1"),
+        "error should name the failing dependency and its exit code: {message}"
+    );
+
+    let events = docker.events();
+    assert!(
+        !events.iter().any(|e| e.starts_with("run:")),
+        "the task must not run when a run-to-completion dependency fails: {events:?}"
+    );
+    assert!(
+        events.contains(&"sidecar-stop:sidecar-id-database".to_string()),
+        "the failed dependency's already-exited container must still be cleaned up: {events:?}"
+    );
+    assert!(
+        events.iter().any(|e| e.starts_with("network-remove:")),
+        "the network must still be removed: {events:?}"
+    );
+}
+
+/// A container can mix a regular (long-running) dependency and a
+/// run-to-completion one at once, in any combination.
+#[tokio::test]
+async fn run_to_completion_and_regular_dependencies_can_be_mixed() {
+    let mut containers = HashMap::new();
+    containers.insert("migrate".to_string(), {
+        let mut c = container("alpine:3.18", None);
+        c.run_to_completion = Some(true);
+        c
+    });
+    containers.insert("cache".to_string(), container("redis:7", None));
+    containers.insert(
+        "app".to_string(),
+        container(
+            "alpine:3.18",
+            Some(vec!["migrate".to_string(), "cache".to_string()]),
+        ),
+    );
+    let mut tasks = HashMap::new();
+    tasks.insert("start".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default().with_dependency_exit(
+        "migrate",
+        std::time::Duration::ZERO,
+        0,
+    );
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let events = docker.events();
+    assert!(events
+        .iter()
+        .any(|e| e.starts_with("sidecar-start:migrate:")));
+    assert!(events.iter().any(|e| e.starts_with("sidecar-start:cache:")));
+    assert!(events
+        .iter()
+        .any(|e| e.starts_with("wait-healthy:sidecar-id-cache")));
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.starts_with("wait-healthy:sidecar-id-migrate")),
+        "the run-to-completion dependency must not go through the health-check gate: {events:?}"
+    );
+    assert!(events.iter().any(|e| e.starts_with("run:app:")));
+}
+
+/// Two run-to-completion dependencies for the same container that don't
+/// depend on each other run concurrently, gated purely by the graph —
+/// mirrors `independent_dependencies_start_concurrently_not_sequentially`.
+#[tokio::test(start_paused = true)]
+async fn independent_run_to_completion_dependencies_run_concurrently() {
+    let mut containers = HashMap::new();
+    containers.insert("migrate-a".to_string(), {
+        let mut c = container("alpine:3.18", None);
+        c.run_to_completion = Some(true);
+        c
+    });
+    containers.insert("migrate-b".to_string(), {
+        let mut c = container("alpine:3.18", None);
+        c.run_to_completion = Some(true);
+        c
+    });
+    containers.insert(
+        "app".to_string(),
+        container(
+            "alpine:3.18",
+            Some(vec!["migrate-a".to_string(), "migrate-b".to_string()]),
+        ),
+    );
+    let mut tasks = HashMap::new();
+    tasks.insert("start".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let delay = std::time::Duration::from_millis(100);
+    let docker = FakeContainerRuntime::default()
+        .with_dependency_exit("migrate-a", delay, 0)
+        .with_dependency_exit("migrate-b", delay, 0);
+    let engine = engine(config, docker);
+
+    let start = tokio::time::Instant::now();
+    engine.run_task("start", &[]).await.unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < delay * 2,
+        "two independent run-to-completion dependencies with a {delay:?} delay each should \
+         overlap, not run sequentially (elapsed: {elapsed:?})"
+    );
+}
+
+/// A run-to-completion dependency can be declared directly under a task's
+/// own `dependencies`, not only nested under another dependency — same
+/// readiness gate either way.
+#[tokio::test]
+async fn run_to_completion_dependency_declared_directly_on_the_task() {
+    let mut containers = HashMap::new();
+    containers.insert("migrate".to_string(), {
+        let mut c = container("alpine:3.18", None);
+        c.run_to_completion = Some(true);
+        c
+    });
+    containers.insert("app".to_string(), container("alpine:3.18", None));
+    let mut tasks = HashMap::new();
+    let mut task = task("app", "echo hi");
+    task.dependencies = Some(vec!["migrate".to_string()]);
+    tasks.insert("start".to_string(), task);
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default().with_dependency_exit(
+        "migrate",
+        std::time::Duration::ZERO,
+        0,
+    );
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let events = docker.events();
+    let start_index = events
+        .iter()
+        .position(|e| e.starts_with("sidecar-start:migrate:"))
+        .expect("the task-level dependency should have started");
+    let run_index = events
+        .iter()
+        .position(|e| e.starts_with("run:app:"))
+        .expect("the task container should have run");
+    assert!(start_index < run_index, "events: {events:?}");
 }
 
 /// An already-recorded interrupt wins because `run_task_internal`'s
@@ -4551,6 +4827,7 @@ async fn dependency_without_image_or_build_directory_errors() {
             log_options: None,
             health_check: None,
             setup_commands: None,
+            run_to_completion: None,
         },
     );
     containers.insert(

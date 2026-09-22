@@ -120,6 +120,10 @@ impl EventSink for SimpleEventLogger {
                 self.console
                     .println(&format!("{container} has become healthy."));
             }
+            TaskEvent::DependencyCompleted { container } => {
+                self.console
+                    .println(&format!("{container} ran to completion."));
+            }
             TaskEvent::RunningSetupCommand {
                 container,
                 command,
