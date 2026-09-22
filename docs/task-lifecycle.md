@@ -1,7 +1,9 @@
 # Task Lifecycle
 
 This is the detailed, step-by-step version of what `ratect-compat <task>` actually does,
-covering dependency (sidecar) container resolution and cleanup in depth. For the
+covering task ordering, per-task setup and cleanup in depth (what a dependency
+has to pass before it counts as ready is on its own page — see [Dependency
+Readiness](dependency-readiness.md)). For the
 broader architecture (config loading, CLI parsing, logging), see
 [how it works](how-it-works.md); this page is the equivalent of Batect's own
 [task lifecycle](https://github.com/batect/batect.dev/blob/main/docs/concepts/task-lifecycle.mdx)
@@ -126,154 +128,11 @@ since Ratect didn't create it. See [CLI reference](ratect-compat-cli.md).
 
 ## Dependency resolution
 
-Dependencies are resolved **concurrently, gated by readiness**: a container with
-dependencies of its own never starts before every one of them is ready (see below),
-but two containers with no dependency relationship to each other start at the same
-time rather than one after the other. For example:
-
-```yaml
-containers:
-  app:
-    image: my-app
-    dependencies:
-      - database
-  database:
-    image: postgres:16
-    dependencies:
-      - cache
-  cache:
-    image: redis:7-alpine
-```
-
-```mermaid
-graph TD
-    app["app (task's container)"] --> database
-    database --> cache
-```
-
-Running a task against `app` starts `cache` first (nothing else is holding it back),
-then `database` once `cache` is ready, then `app` once `database` is ready — a
-straight chain, so each one is genuinely waiting on the last. All three share one
-network and are reachable by their container-config name (e.g. `app`'s command can
-reach `database:5432` and `cache:6379`).
-
-Add a second container that also depends on `cache` — say `queue`, also one of
-`app`'s dependencies, but with no relationship to `database` — and `cache` is now a
-**shared dependency** of two others, forming a diamond rather than a straight chain:
-
-```mermaid
-graph TD
-    app["app (task's container)"] --> database
-    app --> queue
-    database --> cache
-    queue --> cache
-```
-
-```mermaid
-sequenceDiagram
-    participant Engine as TaskEngine
-    participant Cache as cache
-    participant Database as database
-    participant Queue as queue
-    participant App as app (task's container)
-
-    Note over Engine: cache has no dependencies of its own — starts immediately
-    Engine->>Cache: start, wait for healthy, run setup commands
-    Note over Cache: ready
-
-    par database and queue both depend only on cache — start together,<br/>the moment it's ready, not one after the other
-        Engine->>Database: start, wait for healthy, run setup commands
-        Note over Database: ready
-    and
-        Engine->>Queue: start, wait for healthy, run setup commands
-        Note over Queue: ready
-    end
-
-    Note over Engine: app depends on both database and queue —<br/>waits for whichever is slower before starting
-    Engine->>App: start (runs to completion)
-```
-
-`cache` is only ever started **once**, even though both `database` and `queue` depend
-on it: whichever of the two reaches it first triggers the actual start, and the other
-waits on that same in-flight readiness rather than starting a second instance or
-pulling its image twice (see below — this holds generally, not just for a leaf like
-`cache`). `database` and `queue` then genuinely overlap in time — both start the
-moment `cache`'s readiness gate has actually passed, not just once its container
-exists, and neither waits on the other since they share no relationship. `app` is
-gated on whichever of the two takes longer, not just the first one to finish.
-
-This concurrency is unbounded by default — every independent branch's pull/build,
-create+start, and setup commands can all be in flight at once, across the whole
-invocation, not just within one task. `--max-parallelism <N>` caps it: at most `N` of
-those specific operations run at a time, invocation-wide. The health-check wait itself
-is deliberately *not* capped (it's a polling wait, not real work), so two dependencies
-can still become healthy at the same time even under a low cap — only the pull/build/
-start/setup-command steps queue up behind it. See [CLI
-reference](ratect-compat-cli.md#options) and [differences from
-Batect](differences-from-batect.md#cli-flags) for exactly what's covered.
-
-A task's own `dependencies` (sidecars scoped to that task specifically) join this
-same resolution at the root, alongside `app`'s own — each still resolves its *own*
-container-level `dependencies` transitively from there, same as any other
-dependency, and is just as eligible to start concurrently with an unrelated branch.
-And a task's `customise` map, if it has one, is checked against whichever dependency
-is starting: a match overrides that container's `environment`/`ports`/
-`working_directory` for this task's run of it specifically (merged the same way a
-task's own `run` overrides its main container — see [config
-reference](ratect-compat-config-reference.md#taskcontainercustomisation)), before it starts,
-regardless of how deep in this graph it sits.
-
-Started isn't ready, though: each dependency must become **ready** before whatever
-depends on it starts — it must report healthy (immediately so for a container with no
-Docker health check at all, from neither its image nor the `health_check` field), and
-then every one of its [`setup_commands`](ratect-compat-config-reference.md#dependency-readiness)
-must succeed, in declared order. In the example above, `database`'s migrations (a
-setup command) provably finish before `app`'s command gets to run. A dependency
-that's reported unhealthy — or that exits before a verdict, or whose setup command
-exits non-zero — fails the task; already-started containers are still cleaned up as
-usual.
-
-A `ratect.toml` dependency can opt into a different readiness gate entirely:
-[`run_to_completion`](ratect-config-reference.md#run_to_completion-init-containers)
-(`ratect`-native only — `batect.yml` has no equivalent) replaces "healthy, then
-setup commands" with running to completion and exiting 0 — Kubernetes-style
-init-container behavior, still just a node in this same dependency graph. It
-participates in resolution exactly like any other dependency (concurrent with
-an unrelated branch, deduplicated if shared, nestable either directly under a
-task's own `dependencies` or under another dependency's); the only difference
-is what "ready" means for it. A non-zero exit fails the task the same way an
-unhealthy dependency or a failing setup command does, and already-started
-containers — including the exited one itself — are still cleaned up as usual.
-
-Health is a **one-time gate in this sequence, not ongoing monitoring**: Ratect waits
-for Docker's *first* health verdict and never re-checks — matching Batect, a
-dependency that turns unhealthy after its dependents have started doesn't affect the
-rest of the task, even though Docker itself keeps running the check for the
-container's whole lifetime. How long the wait for that first verdict can take (and
-why an unhealthy verdict can't arrive quickly) is Docker's own verdict lifecycle —
-see [How Docker reaches its verdict](ratect-compat-config-reference.md#how-docker-reaches-its-verdict)
-in the config reference.
-
-Not re-checking health doesn't mean staying silent, though: a dependency that has
-already become ready and then exits on its own — while the task's own command, or a
-later dependency's own health/setup wait, is still going — prints a warning naming
-the container and its exit code, in every output mode. Without it, that container's
-own death would otherwise surface later as a confusing symptom in whatever *depended*
-on it (a connection refused, a timeout) rather than the real cause. This is a
-notification only — the run isn't failed or stopped because of it — and it's never
-printed for a container cleanup itself stops: Ratect stops watching a dependency for
-this the moment the task's own execution finishes, strictly before cleanup ever
-touches a container. This warning doesn't apply to a `run_to_completion` dependency
-either: its exit is how it *became* ready in the first place, not a later surprise,
-so there's nothing unexpected to report.
-
-More generally, within one task's resolution *any* dependency shared by two others —
-not just a leaf like `cache` above — is only ever started once, no matter how many
-dependents reach it or how deep in the graph they sit, including when they reach it
-genuinely concurrently: the second to arrive waits on the first's already-in-flight
-readiness rather than starting a second instance or double-pulling its image. A
-circular container dependency (`a` depends on `b` depends on `a`) is detected up
-front, before any container starts, and reported as an error rather than hanging.
+What happens between `create_network()` and the task's own container starting
+in the diagram above — how a dependency graph's independent branches start
+concurrently, why a shared dependency starts once, and what a dependency has to
+pass before anything that depends on it starts — is its own page: [Dependency
+Readiness](dependency-readiness.md).
 
 ## Cross-task isolation
 

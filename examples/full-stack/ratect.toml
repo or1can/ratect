@@ -18,6 +18,7 @@ dependencies = ["db", "cache"]
 command = "sh -c 'npm ci && npm start'"
 health_check = { command = "node -e \"fetch('http://127.0.0.1:8080/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"", interval = "1s", retries = 20 }
 
+# ANCHOR: readiness-db
 [containers.db]
 image = "postgres:16"
 environment = { POSTGRES_HOST_AUTH_METHOD = "trust" }
@@ -32,6 +33,7 @@ health_check = { command = "pg_isready -h 127.0.0.1 -U postgres", interval = "1s
 setup_commands = [
     { command = "psql -U postgres -c \"ANALYZE visits;\"" },
 ]
+# ANCHOR_END: readiness-db
 
 [containers.cache]
 image = "redis:7"

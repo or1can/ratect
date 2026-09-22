@@ -28,6 +28,7 @@ history, from when it was the only binary.
 - The docs homepage gains a live, real (not staged) terminal recording of Ratect actually running a task.
 - The documentation site can show a transcript in colour, as the terminal showed it: the `simple` output-style example on the `ratect-compat` CLI reference is the first, captured from a real run.
 - [How Ratect Compares to Other Tools](docs/comparison.md): honest, both-directions tradeoffs against Docker Compose, Make, Task, Earthly, Dagger, and `just`.
+- [Dependency Readiness](docs/dependency-readiness.md): one page for when a dependency counts as ready and how several dependencies' waits combine, built around `examples/full-stack`'s real `db` container and a colour capture of it running. Its prose moves there from [Task Lifecycle](docs/task-lifecycle.md) and the [`batect.yml` reference](docs/ratect-compat-config-reference.md).
 - [Migrating a Batect Project to Ratect](docs/migrating-batect-project.md): a staged path from `ratect-compat` against an unmodified `batect.yml`, through mixed `.yml`/`.toml` includes, to a fully native `ratect.toml`.
 - `run_to_completion` (ratect only): a dependency can be marked to run to completion — started, run to exit, and considered ready once it exits with status 0 — instead of staying detached behind a health check and `setup_commands`. Kubernetes-style init-container behavior, expressed as a plain node in the existing dependency graph. See [Config Reference](docs/ratect-config-reference.md#run_to_completion-init-containers).
 

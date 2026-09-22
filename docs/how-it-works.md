@@ -136,7 +136,7 @@ starting and health-waiting at the same time, gated only on each container's own
 `dependencies` being ready. Running independent prerequisites concurrently too is
 a possible Rust-specific enhancement beyond Batect — see the
 [roadmap](../ROADMAP.md#rust-enhancements) — and
-[task lifecycle](task-lifecycle.md#dependency-resolution) has the detail.
+[Dependency Readiness](dependency-readiness.md#resolution-order) has the detail.
 
 ### Testability
 
@@ -170,7 +170,7 @@ unit-tested with a fake implementation instead of a real Docker daemon.
   dependency or sidecar — started and left running alongside the task rather than
   waited on, so no logs are streamed and no task `command` applies.
 - **`wait_for_container_healthy` / `exec_in_container`**: the two halves of the
-  [dependency readiness gate](ratect-compat-config-reference.md#dependency-readiness). The first
+  [dependency readiness gate](dependency-readiness.md#the-two-gates). The first
   blocks on Docker's own event stream, replayed from the beginning so a verdict
   that arrived before the stream opened still counts, and turns an *unhealthy*
   verdict into an error carrying the last health check's exit code and output. The

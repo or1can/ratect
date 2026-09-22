@@ -162,7 +162,7 @@ They sound like synonyms but are two unrelated mechanisms:
   running for the whole task, and torn down together at the end. Use it for
   something your task's container talks to over the network while it runs — a
   database, a cache, a queue. See [Dependency
-  resolution](task-lifecycle.md#dependency-resolution) for how several of these
+  Readiness](dependency-readiness.md#resolution-order) for how several of these
   combine.
 - A **prerequisite** (a task's own [`prerequisites`](ratect-compat-config-reference.md#task) list)
   is another *task*, run to completion — including its own full cleanup — strictly

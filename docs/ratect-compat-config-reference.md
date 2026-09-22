@@ -286,7 +286,7 @@ containers:
 | `dockerfile` | string | no | The Dockerfile to build, as a path relative to `build_directory`'s own root. Defaults to `Dockerfile` at `build_directory`'s root. Only meaningful alongside `build_directory`. No [expression](#expressions) support. |
 | `build_target` | string | no | The build stage to stop at (Docker's own `--target` mechanism), for a multi-stage `FROM ... AS <name>` Dockerfile. Only meaningful alongside `build_directory`. No expression support. |
 | `volumes` | list of strings/objects | no | Host bind mounts (`local`), named cache volumes (`cache`), and in-memory tmpfs mounts (`tmpfs`) — see [Volume path resolution](#volume-path-resolution), [Cache volumes](#cache-volumes), and [Tmpfs mounts](#tmpfs-mounts) below. |
-| `dependencies` | list of strings | no | Names of other containers to start (recursively, if they themselves have dependencies) before this one, reachable by name over a Docker network created for the duration of the task. Each dependency must become *ready* — healthy, with all its `setup_commands` completed — before its dependents start; see [Dependency readiness](#dependency-readiness) below and [the task lifecycle](task-lifecycle.md) for the full model. |
+| `dependencies` | list of strings | no | Names of other containers to start (recursively, if they themselves have dependencies) before this one, reachable by name over a Docker network created for the duration of the task. Each dependency must become *ready* — healthy, with all its `setup_commands` completed — before its dependents start; see [Dependency Readiness](dependency-readiness.md) for the full model, and [Dependency readiness](#dependency-readiness) below for the two fields it rests on. |
 | `environment` | map of string → string | no | Environment variables to set in the container, e.g. `FOO: bar`. Values support [expressions](#expressions) (`$VAR`, `${VAR:-default}`, `<name`). A non-string scalar value (`PORT: 8080`, `DEBUG: true`) is accepted and coerced to its string form, matching Batect. A dependency container only ever gets its own `environment` — see [TaskRun](#taskrun) for how a task's own container's `environment` combines with `run.environment`. |
 | `run_as_current_user` | object (`enabled`, `home_directory`) | no | Runs this container as the host's own user/group instead of the image's default (see [User mapping](#user-mapping) below). |
 | `additional_hostnames` | list of strings | no | Extra network aliases this container is reachable by, beyond its own name. No [expression](#expressions) support. |
@@ -703,39 +703,12 @@ forms above have no real counterpart in `examples/` today.
 
 ### Dependency readiness
 
-```yaml
-containers:
-  database:
-    image: postgres:16
-    health_check:
-      command: pg_isready -h localhost
-      interval: 2s
-      retries: 5
-      start_period: 3s
-      timeout: 1s
-    setup_commands:
-      - command: ./apply-migrations.sh
-      - command: ./seed-data.sh
-        working_directory: /setup
-```
-
-A dependency container being *started* doesn't mean it's *ready* — a database
-accepts connections some time after its process launches. Matching Batect, a
-dependency must pass two gates, in order, before anything that depends on it (another
-dependency, or the task's own container) starts:
-
-1. **It must report healthy.** If the container has a Docker health check — from its
-   image's own `HEALTHCHECK`, from the `health_check` field, or both — Ratect waits
-   for Docker's verdict: proceeds on *healthy*; fails the task on *unhealthy* (the
-   error includes the last health-check run's exit code and output) or if the
-   container exits first. A container with no health check at all is immediately
-   considered healthy — the pre-0.9.0 "started = ready" behavior, now just the
-   no-health-check special case.
-2. **Its `setup_commands` must succeed.** Each runs inside the running container (via
-   Docker's `exec` mechanism), one at a time in declared order, with the container's
-   own `environment` and (under [User mapping](#user-mapping)) the same user/group
-   the container runs as. A command exiting non-zero fails the task, with its output
-   in the error.
+A dependency must be *ready* before anything that depends on it starts:
+healthy, then every one of its `setup_commands` succeeded, in declared order.
+What each of those two gates waits for, how Docker reaches a health verdict,
+how several dependencies' waits combine into one task's start-up, and a real
+run of all of it are on [Dependency Readiness](dependency-readiness.md); the two
+fields are below.
 
 `health_check` *overrides* the image's health check configuration — each field
 replaces that one aspect, and any field left out inherits the image's own value:
@@ -752,90 +725,12 @@ Durations are strings in Batect's (Go-style) format: one or more `<number><unit>
 components — `ns`, `us`, `ms`, `s`, `m`, `h`, numbers optionally fractional — e.g.
 `2s`, `500ms`, `1m30s`, `1.5h`, or a bare `0`.
 
-#### How Docker reaches its verdict
-
-This is Docker's own behavior, not Ratect's, but it's what actually determines how
-long the gate waits and when it fails, so it's worth spelling out:
-
-- A freshly started container with a health check isn't unhealthy — it's in a third
-  state, **`starting`**, until Docker reaches a first verdict. Docker runs `command`
-  every `interval`; the first success makes the container *healthy*, and only
-  `retries` **consecutive** failures make it *unhealthy*. With the example above
-  (`interval: 2s`, `retries: 5`), the earliest possible unhealthy verdict is about
-  ten seconds in — a health check can't "fail fast" on its first bad run.
-- Failures during `start_period` don't count toward `retries` at all — that's the
-  grace period for slow-booting services — but a success during it still flips the
-  container healthy immediately.
-- Ratect waits for that first verdict, and **only** the first: matching Batect, a
-  dependency's health is never re-checked once its dependents have started, even
-  though Docker keeps running the check for the container's whole lifetime and the
-  state can flip later.
-
-While a task appears to hang on a dependency, `docker ps` shows each container's
-health state in its `STATUS` column (`health: starting`, etc.), and
-`docker inspect --format '{{.State.Health.Status}}' <container>` shows it directly —
-`.State.Health.Log` keeps the last few check runs' exit codes and output, which is
-also where the detail in Ratect's "did not become healthy" error comes from.
-
 Each `setup_commands` entry takes:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `command` | string | yes | The command to run. Tokenized into literal argv the same way a container's own `command`/`entrypoint` is (see [TaskRun](#taskrun)) — no shell involved. A command relying on shell operators (`&&`, `$VAR` expansion, etc.) needs an explicit `sh -c '...'` wrapper. |
 | `working_directory` | string | no | Directory to run it in. Falls back to the container's own `working_directory` when omitted, and then to the image's own default when neither is set. |
-
-Ratect imposes no timeout of its own on the health wait (matching Batect) — Docker's
-own `interval`/`retries` bound how long a verdict can take, so a health check
-configured to retry forever waits forever.
-
-The task's own container goes through this same readiness gate too (0.21.0), run
-concurrently with its main command rather than gating anything on it — matching
-Batect, which runs every container through identical per-container steps, task
-container included. A health-check or setup-command failure fails the task even if
-the main command already succeeded — but the main command itself is never cancelled
-early because of it (unlike Batect); it always runs to completion. See [known
-simplifications](task-lifecycle.md#known-simplifications-relative-to-batect) for the
-one race this still leaves (a very fast main command can finish before a setup
-command gets a chance to run) and [Differences from
-Batect](differences-from-batect.md#container-fields).
-
-**A real instance of both halves:**
-[`examples/full-stack`](https://github.com/or1can/ratect/tree/main/examples/full-stack)'s
-`db` container is a real `postgres:16` gated on `pg_isready`, and once it's
-healthy, a real `setup_commands` entry runs `ANALYZE visits` against the
-table its own init script just bulk-seeded — a genuine step (fresh query
-planner statistics after a large `INSERT`, not baked into the init script
-that creates the table in the first place), not just illustrative. `app`
-depends on both `db` and `cache`, each with their own health check — `cache`
-itself is a **shared dependency** reached two ways (`app` depends on it
-directly, and `journey-test` also depends on it to check what `app`
-cached), started and waited-on exactly once regardless. That project is
-written in the native `ratect.toml` format, where `health_check`/
-`setup_commands`/`dependencies` mean exactly the same thing — see [Field
-reference](ratect-config-reference.md#field-reference) — so this is real
-output from `ratect run journey-test -f examples/full-stack/ratect.toml`,
-not `ratect-compat`:
-
-```
-Running journey-test...
-Starting db...
-Starting cache...
-Started cache.
-Started db.
-cache has become healthy.
-db has become healthy.
-Running setup command psql -U postgres -c "ANALYZE visits;" (1 of 1) in db...
-db has completed all setup commands.
-Starting app...
-Started app.
-app has become healthy.
-Running sh -c 'npm ci && node test.js' in journey-test...
-...
-journey test passed
-
-Cleaning up...
-journey-test finished with exit code 0 in 8.0s.
-```
 
 ## Task
 
