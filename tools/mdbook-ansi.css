@@ -1,0 +1,112 @@
+/* Styles for the spans `tools/mdbook-ansi.py` emits — loaded site-wide via
+ * book.toml's `additional-css`, like the asciinema player's stylesheet.
+ *
+ * Two palettes, chosen by the class mdBook puts on <html>: the code-block
+ * background is near-white under `light`/`rust` (highlight.css) and near-
+ * black under `coal`/`navy`/`ayu` (tomorrow-night.css/ayu-highlight.css),
+ * and no one set of eight ANSI colours reads on both. The dark palette is
+ * Tomorrow Night's own, so a coloured span sits naturally next to the
+ * syntax-highlighted blocks around it; the light one is Tomorrow's. `html:
+ * not(.js)` mirrors variables.css: with scripting off mdBook applies no
+ * theme class, and falls back to the system colour scheme. */
+
+:root,
+html:not(.js) {
+    --ansi-black: #4d4d4c;
+    --ansi-red: #c82829;
+    --ansi-green: #718c00;
+    --ansi-yellow: #eab700;
+    --ansi-blue: #4271ae;
+    --ansi-magenta: #8959a8;
+    --ansi-cyan: #3e999f;
+    --ansi-white: #8e908c;
+    --ansi-bright-black: #8e908c;
+    --ansi-bright-red: #c82829;
+    --ansi-bright-green: #718c00;
+    --ansi-bright-yellow: #eab700;
+    --ansi-bright-blue: #4271ae;
+    --ansi-bright-magenta: #8959a8;
+    --ansi-bright-cyan: #3e999f;
+    --ansi-bright-white: #4d4d4c;
+}
+
+.coal,
+.navy,
+.ayu {
+    --ansi-black: #969896;
+    --ansi-red: #cc6666;
+    --ansi-green: #b5bd68;
+    --ansi-yellow: #f0c674;
+    --ansi-blue: #81a2be;
+    --ansi-magenta: #b294bb;
+    --ansi-cyan: #8abeb7;
+    --ansi-white: #c5c8c6;
+    --ansi-bright-black: #969896;
+    --ansi-bright-red: #cc6666;
+    --ansi-bright-green: #b5bd68;
+    --ansi-bright-yellow: #f0c674;
+    --ansi-bright-blue: #81a2be;
+    --ansi-bright-magenta: #b294bb;
+    --ansi-bright-cyan: #8abeb7;
+    --ansi-bright-white: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+    html:not(.js) {
+        --ansi-black: #969896;
+        --ansi-red: #cc6666;
+        --ansi-green: #b5bd68;
+        --ansi-yellow: #f0c674;
+        --ansi-blue: #81a2be;
+        --ansi-magenta: #b294bb;
+        --ansi-cyan: #8abeb7;
+        --ansi-white: #c5c8c6;
+        --ansi-bright-black: #969896;
+        --ansi-bright-red: #cc6666;
+        --ansi-bright-green: #b5bd68;
+        --ansi-bright-yellow: #f0c674;
+        --ansi-bright-blue: #81a2be;
+        --ansi-bright-magenta: #b294bb;
+        --ansi-bright-cyan: #8abeb7;
+        --ansi-bright-white: #ffffff;
+    }
+}
+
+.ansi-bold { font-weight: bold; }
+.ansi-dim { opacity: 0.6; }
+.ansi-italic { font-style: italic; }
+.ansi-underline { text-decoration: underline; }
+
+.ansi-fg-black { color: var(--ansi-black); }
+.ansi-fg-red { color: var(--ansi-red); }
+.ansi-fg-green { color: var(--ansi-green); }
+.ansi-fg-yellow { color: var(--ansi-yellow); }
+.ansi-fg-blue { color: var(--ansi-blue); }
+.ansi-fg-magenta { color: var(--ansi-magenta); }
+.ansi-fg-cyan { color: var(--ansi-cyan); }
+.ansi-fg-white { color: var(--ansi-white); }
+.ansi-fg-bright-black { color: var(--ansi-bright-black); }
+.ansi-fg-bright-red { color: var(--ansi-bright-red); }
+.ansi-fg-bright-green { color: var(--ansi-bright-green); }
+.ansi-fg-bright-yellow { color: var(--ansi-bright-yellow); }
+.ansi-fg-bright-blue { color: var(--ansi-bright-blue); }
+.ansi-fg-bright-magenta { color: var(--ansi-bright-magenta); }
+.ansi-fg-bright-cyan { color: var(--ansi-bright-cyan); }
+.ansi-fg-bright-white { color: var(--ansi-bright-white); }
+
+.ansi-bg-black { background-color: var(--ansi-black); }
+.ansi-bg-red { background-color: var(--ansi-red); }
+.ansi-bg-green { background-color: var(--ansi-green); }
+.ansi-bg-yellow { background-color: var(--ansi-yellow); }
+.ansi-bg-blue { background-color: var(--ansi-blue); }
+.ansi-bg-magenta { background-color: var(--ansi-magenta); }
+.ansi-bg-cyan { background-color: var(--ansi-cyan); }
+.ansi-bg-white { background-color: var(--ansi-white); }
+.ansi-bg-bright-black { background-color: var(--ansi-bright-black); }
+.ansi-bg-bright-red { background-color: var(--ansi-bright-red); }
+.ansi-bg-bright-green { background-color: var(--ansi-bright-green); }
+.ansi-bg-bright-yellow { background-color: var(--ansi-bright-yellow); }
+.ansi-bg-bright-blue { background-color: var(--ansi-bright-blue); }
+.ansi-bg-bright-magenta { background-color: var(--ansi-bright-magenta); }
+.ansi-bg-bright-cyan { background-color: var(--ansi-bright-cyan); }
+.ansi-bg-bright-white { background-color: var(--ansi-bright-white); }

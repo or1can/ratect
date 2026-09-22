@@ -237,6 +237,73 @@ the semantics differ** table in the native reference: a new behavioural
 divergence needs a row there *and* a marker at the compat end of the link, not
 just a sentence wherever it was implemented.
 
+**Examples and captured output.** A `docs/` page shows one of three kinds of
+example, chosen by what the real thing is:
+
+- **When the real file *is* the example, `{{#include}}` it verbatim** — a
+  config under [`examples/`](examples/), anchored (`ANCHOR`/`ANCHOR_END`) when
+  only a slice is wanted, as `docs/worked-examples.md` and the homepage do. A
+  hand-copied excerpt is the one thing the `worked-examples` CI job can't
+  catch drifting.
+- **When it is the binary's output, it is a capture** — the six rules below.
+- **Invented only when no real project has the shape**, and then with a
+  pointer to the nearest real one, so a reader knows it is illustrative and
+  the next editor knows what to capture instead. The exception, not a third
+  equal option.
+
+The captured-output rules (settled on #158; the tooling landed in #161):
+
+1. **Captured or absent.** A block showing the binary's output comes from a
+   real run against a real, checked-in project — `examples/*`, or a
+   `tests/fixtures/*` file when the point is a state no example has (a flat
+   task list; a `doctor` finding). Not typed, not edited. Each block carries
+   a one-line provenance: the command and the project.
+2. **Animated only where the output changes in place.** `fancy` mode, a
+   pull/build progress line, the `Cleaning up:` countdown — those are
+   asciinema recordings (`docs/demo.cast`, played by the self-hosted player
+   `book.toml` loads; the homepage and the `fancy` section share the one
+   recording). Everything else is static: `simple`, `quiet`, `all`,
+   listings, `doctor`, `caches`/`includes`/`resources`, errors.
+3. **Colour is captured, not added.** `tools/capture-output.py <name> --
+   <command...>` runs the command on a pseudo-terminal
+   (`TERM=xterm-256color`, 80×24, stdin included — so a task container gets
+   its TTY, as it would in a shell) and writes the raw bytes to
+   `docs/captures/<name>.ansi`: the green/red exit code, `all`'s
+   per-container prefix colours, whatever a container's own program
+   coloured. The page includes it as
+
+   ````markdown
+   ```ansi
+   {{#include captures/<name>.ansi}}
+   ```
+   ````
+
+   and `tools/mdbook-ansi.py` (`book.toml`'s `[preprocessor.ansi]`) renders
+   that at build time as a `<pre>` of spans, styled for mdBook's light and
+   dark themes by `tools/mdbook-ansi.css` — no generated HTML is committed.
+   It is a small terminal emulator, not a colour-code converter, because a
+   TTY capture holds in-place drawing too (npm's spinner; a `\r`-overwritten
+   progress line), and what the reader should see is the terminal's final
+   state. On GitHub's own rendering of the `.md` file the block shows the
+   include marker instead — accepted; the site is the published form. A
+   `<!-- verify: -->` marker keeps a plain listing honest exactly as before;
+   the colour capture is the same command's TTY run.
+4. **Show, then clarify.** Where a capture can show it, prose doesn't
+   describe it. Prose says what the capture can't: that `all` allocates no
+   TTY; that `simple` hides the task container's own readiness milestones,
+   and why; that `db` takes longer because it seeds a million rows.
+5. **One project per comparison.** Blocks meant to be compared (the four
+   output styles; flat vs grouped vs quiet listings) come from the same
+   project, so the reader compares styles rather than projects.
+6. **The tutorial runs on a real project.** `docs/getting-started.md`'s
+   config belongs in a checked-in project under `examples/`, `{{#include}}`d
+   step by step, so its transcripts are captures and the `worked-examples`
+   job proves the tutorial still runs (#162 is the move; today's
+   `my-project` is still invented).
+
+Only the `simple` block on `docs/ratect-compat-cli.md` follows all six so
+far; #166 is the sweep over the rest, and #162 the tutorial.
+
 The [`decisions/`](decisions/) directory holds Architecture Decision Records — the **cross-cutting** decisions that get referenced from more than one place (the two-binary split, the runtime-ownership labels, the native config format, trusting a Git include's host paths). Its [`README.md`](decisions/README.md) states the convention; see guideline 14 below for when to write one.
 
 [`CONTEXT.md`](CONTEXT.md) at the root is the **glossary**: what each term in
