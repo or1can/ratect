@@ -413,6 +413,17 @@ dependencies = ["migrate"]
   concept, so a container using it is rejected when the file loads rather than
   silently ignored.
 
+**Not a substitute for `prerequisites`.** A `prerequisites` entry (and
+[ROADMAP.md](../ROADMAP.md#future-vision)'s unbuilt "container declares a task
+as its own prerequisite" sugar over it, ported from Batect's own roadmap) runs
+as a fully separate task execution — own network, own containers, own
+cleanup — strictly sequential relative to whatever named it, whether or not it
+ran concurrently with anything else. That isolation is the point when the two
+runs genuinely shouldn't share anything. `run_to_completion` solves a
+different problem: staying *inside* one task's own dependency graph, sharing
+its network with siblings (a `cache`, a long-running `app`) that must keep
+running while it finishes.
+
 ## Field reference
 
 Every container and task field from [`ratect-compat-config-reference.md`](ratect-compat-config-reference.md)
