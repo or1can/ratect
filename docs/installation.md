@@ -119,23 +119,29 @@ without a prebuilt binary.
 
 ### Build from source
 
-Clone the repository, then build a release binary. The workspace has two binary
-crates (see [Roadmap](../ROADMAP.md#two-binaries-ratect-and-ratect-compat)) —
-`ratect-compat` is the one that implements Batect-compatible behavior today:
+Clone the repository, then build release binaries. The workspace has two binary
+crates (see [Roadmap](../ROADMAP.md#two-binaries-ratect-and-ratect-compat)):
+`ratect`, which reads its own `ratect.toml` format, and `ratect-compat`, the
+drop-in replacement for Batect that reads a `batect.yml` unchanged. [Getting
+Started](getting-started.md) says which to pick; building both costs little
+extra, since they share almost all of their code:
 
 ```bash
 git clone https://github.com/or1can/ratect.git
 cd ratect
-cargo build --release -p ratect-compat
+cargo build --release -p ratect -p ratect-compat
 ```
 
-The compiled binary will be at `target/release/ratect-compat`.
+The compiled binaries will be at `target/release/ratect` and
+`target/release/ratect-compat`.
 
-### Install the binary onto your `PATH`
+### Install the binaries onto your `PATH`
 
-To make `ratect-compat` available as a regular command:
+To make `ratect` and `ratect-compat` available as regular commands (one line per
+binary, so install only the one you want if that's all you need):
 
 ```bash
+cargo install --path ratect
 cargo install --path ratect-compat
 ```
 
@@ -145,6 +151,8 @@ default for a standard `rustup` install).
 ### Verify the install
 
 ```bash
+ratect --version
+ratect --help
 ratect-compat --version
 ratect-compat --help
 ```
@@ -156,6 +164,7 @@ to compile and sufficient for local testing:
 
 ```bash
 cargo build --workspace
+cargo run -p ratect -- tasks list
 cargo run -p ratect-compat -- --list-tasks
 ```
 

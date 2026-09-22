@@ -190,13 +190,14 @@ jobs:
           cmd() { "$bin" -f "$cfg" "${prefix[@]}" "$@"; }
           for dir in examples/*/; do
             name=$(basename "$dir")
-            # full-stack isn't one of these: its task names differ (no bare
-            # `test`, `run` is a long-lived server that never exits on its
-            # own), so it gets its own section below rather than this
-            # generic build/test/run/lint/shell sweep.
-            if [ "$name" = full-stack ]; then
-              continue
-            fi
+            # Two aren't one of these, and get their own sections below
+            # rather than this generic build/test/run/lint/shell sweep:
+            # getting-started's tasks are docs/getting-started.md's own
+            # steps, and full-stack's names differ too (no bare `test`, and
+            # `run` is a long-lived server that never exits on its own).
+            case "$name" in
+              getting-started|full-stack) continue ;;
+            esac
             if [ -f "$dir/ratect.toml" ]; then
               bin=./target/debug/ratect
               cfg="$dir/ratect.toml"
@@ -223,6 +224,24 @@ jobs:
             assert_output "$name's shell task" "$name shell ok" cmd shell -- -c "echo $name shell ok" || exit 1
             echo "::endgroup::"
           done
+
+          # docs/getting-started.md's own project — the page includes this
+          # config slice by slice and states what each task prints, so each
+          # task runs here and its printed line is asserted: `test` twice, for
+          # its `build` prerequisite's line and its own; `greet` twice, once
+          # with the config-variable override the page says reaches the
+          # container.
+          echo "::group::getting-started"
+          bin=./target/debug/ratect
+          cfg=examples/getting-started/ratect.toml
+          prefix=(run)
+          assert_output "getting-started's hello task" "ratect.toml" cmd hello || exit 1
+          assert_output "getting-started's test task (its build prerequisite)" "building..." cmd test || exit 1
+          assert_output "getting-started's test task" "testing..." cmd test || exit 1
+          assert_output "getting-started's greet task" "hello-world in dev" cmd greet || exit 1
+          assert_output "getting-started's greet task with an override" "hello-world in staging" \
+            cmd greet --config-var environment_name=staging || exit 1
+          echo "::endgroup::"
 
           echo "::group::full-stack"
           cd examples/full-stack
