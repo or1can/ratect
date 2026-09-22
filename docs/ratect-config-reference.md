@@ -373,7 +373,7 @@ that format never applies.
 
 A dependency normally starts detached, waits for a health check (immediate if
 none is configured), then runs its `setup_commands` — see [Dependency
-readiness](ratect-compat-config-reference.md#dependency-readiness). `run_to_completion` replaces that whole
+Readiness](dependency-readiness.md#the-two-gates). `run_to_completion` replaces that whole
 gate with a simpler one: the dependency runs, and is ready once it exits with
 status 0 — a non-zero exit fails the task run the same way an unhealthy
 dependency or a failing setup command does today. Kubernetes-style
@@ -439,8 +439,8 @@ The container fields, by area:
 | Image | `image`, `image_pull_policy`, `build_directory`, `dockerfile`, `build_target`, `build_args`, `build_secrets`, `build_ssh` | [Image building](ratect-compat-config-reference.md#image-building) |
 | Mounts | `volumes` (host / `cache` / `tmpfs`) | [Volumes](ratect-compat-config-reference.md#volume-path-resolution), [caches](ratect-compat-config-reference.md#cache-volumes), [tmpfs](ratect-compat-config-reference.md#tmpfs-mounts). A cache also takes [`scope`](#shared-caches) *(native only)* — the linked section describes project-keyed storage, which `scope = "shared"` deliberately does not use. |
 | Runtime | `command`, `entrypoint`, `working_directory`, `environment`, `enable_init_process`, `privileged`, `shm_size`, `capabilities_to_add`, `capabilities_to_drop`, `devices`, `labels`, `log_driver`, `log_options` | [Container](ratect-compat-config-reference.md#container) |
-| Networking | `ports`, `additional_hostnames`, `additional_hosts`, `dependencies` | [Ports](ratect-compat-config-reference.md#port-mappings), [readiness](ratect-compat-config-reference.md#dependency-readiness) |
-| Readiness | `health_check`, `setup_commands` | [Dependency readiness](ratect-compat-config-reference.md#dependency-readiness) |
+| Networking | `ports`, `additional_hostnames`, `additional_hosts`, `dependencies` | [Ports](ratect-compat-config-reference.md#port-mappings), [readiness](dependency-readiness.md) |
+| Readiness | `health_check`, `setup_commands` | [Dependency Readiness](dependency-readiness.md) |
 | Init containers | `run_to_completion` | [above](#run_to_completion-init-containers) *(native only)* |
 | User | `run_as_current_user` | [User mapping](ratect-compat-config-reference.md#user-mapping) |
 | Inheritance | `extends` | [above](#extends-inheritance-instead-of-yaml-anchors) *(native only)* |

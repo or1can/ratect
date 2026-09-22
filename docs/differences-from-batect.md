@@ -138,7 +138,7 @@ tables above:
   otherwise invisible until whatever depended on it fails for a confusing,
   unrelated-looking reason (a connection refused, a timeout). Ratect prints a
   warning naming the container and its exit code instead, in every output mode.
-  See [task lifecycle](task-lifecycle.md#dependency-resolution).
+  See [Dependency Readiness](dependency-readiness.md#once-ready).
 - **`all` mode splits on a lone carriage return too, not just `\n`.** Batect's
   `InterleavedContainerOutputSink` splits on `\n` only, so a container using
   `\r` to redraw progress in place (pip/curl/apt-style) produces no output at

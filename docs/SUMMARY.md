@@ -18,6 +18,7 @@
 # Using Ratect
 
 - [Task Lifecycle](task-lifecycle.md)
+- [Dependency Readiness](dependency-readiness.md)
 - [Reusable Pipeline Building Blocks](reusable-building-blocks.md)
 - [FAQ](faq.md)
 - [How It Works](how-it-works.md)

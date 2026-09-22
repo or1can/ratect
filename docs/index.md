@@ -64,7 +64,7 @@ bulk insert) once it's healthy but before anything depends on it, then
 `cache` itself, once, even though it's a dependency of both. `journey-test`
 makes a real HTTP request to `app` (the JSON in the middle is its real
 response), then checks Redis *directly* to confirm the value `app` read
-got cached — see [Dependency readiness](ratect-compat-config-reference.md#dependency-readiness)
+got cached — see [Dependency Readiness](dependency-readiness.md)
 for the full model behind all of it. Every container is removed afterwards
 regardless of how the task ends.
 
