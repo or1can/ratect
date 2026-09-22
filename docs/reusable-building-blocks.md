@@ -100,8 +100,10 @@ having in the first place). If `ref` itself moved (a branch, or a re-pushed
 tag) rather than your own config changing, `ratect` has a purpose-built
 command for that: `ratect includes refresh` discards every cached clone and
 re-fetches it — see [the CLI reference](ratect-cli.md#includes-options).
-`ratect-compat` has no equivalent subcommand; deleting the corresponding
-directory under `~/.ratect/incl` by hand is the only option there.
+`ratect-compat` has no equivalent subcommand, but both binaries share
+`~/.ratect/incl`, so `ratect includes refresh` refreshes what a
+`ratect-compat` run cached too; failing that, delete the corresponding
+directory under `~/.ratect/incl` by hand.
 
 ## Authoring a bundle that supports both formats
 
