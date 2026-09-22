@@ -32,6 +32,7 @@ history, from when it was the only binary.
 
 ### Changed
 
+- [Getting Started](docs/getting-started.md) now teaches `ratect` and `ratect.toml` rather than `ratect-compat` and `batect.yml`, on a real project checked in as `examples/getting-started/`. [Installation](docs/installation.md)'s from-source instructions build and install both binaries.
 - The two `ratect-compat` reference pages are renamed to say which binary they document: [`docs/ratect-compat-cli.md`](docs/ratect-compat-cli.md) (was `cli-reference.md`) and [`docs/ratect-compat-config-reference.md`](docs/ratect-compat-config-reference.md) (was `config-reference.md`). The old URLs on the documentation site redirect, and a browser keeps the section anchor across the redirect.
 
 ## [ratect-compat 0.30.0 · ratect 0.9.0] - 2026-09-18

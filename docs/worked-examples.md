@@ -53,7 +53,7 @@ Utilities:
 
 `ratect run` followed by any task name (`build`, `test`, `run`, `lint`, or `shell`)
 then actually runs it — see [Getting
-Started](getting-started.md#3-run-a-task) for what that output looks like
+Started](getting-started.md#2-run-a-task) for what that output looks like
 against a real Docker daemon.
 
 ## Rust

@@ -1,0 +1,34 @@
+# The project docs/getting-started.md builds up step by step: each step
+# `{{#include}}`s one of the anchored slices below, so what the page shows
+# is exactly this file. The worked-examples CI job runs every task here
+# against a real Docker daemon.
+
+# ANCHOR: minimal
+project_name = "getting-started"
+
+[containers.build-env]
+image = "alpine:3.24"
+volumes = [{ local = ".", container = "/code" }]
+
+[tasks.hello]
+run = { container = "build-env", command = "ls /code" }
+# ANCHOR_END: minimal
+
+# ANCHOR: prerequisites
+[tasks.build]
+run = { container = "build-env", command = "echo building..." }
+
+[tasks.test]
+prerequisites = ["build"]
+run = { container = "build-env", command = "echo testing..." }
+# ANCHOR_END: prerequisites
+
+# ANCHOR: expressions
+[config_variables.environment_name]
+default = "dev"
+
+[tasks.greet.run]
+container = "build-env"
+command = "sh -c 'echo $GREETING in $ENVIRONMENT_NAME'"
+environment = { GREETING = "hello-${WHO:-world}", ENVIRONMENT_NAME = "<environment_name" }
+# ANCHOR_END: expressions
