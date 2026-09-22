@@ -1,0 +1,11 @@
+Checking ratect.toml...
+  ok      Docker daemon reachable (29.4.0)
+  warning 'batect' is a Batect wrapper script and still runs Batect, not Ratect — delete it and run ratect (or ratect-compat) from your PATH
+  ok      ratect.toml loads (4 container(s), 2 task(s))
+  warning container 'database' uses a floating image tag — pin it, or the same configuration will run a different image later
+  warning dependency 'cache' has no health_check — unless its image defines one, it counts as ready the moment it starts
+  problem container 'app' has build_directory '/private/tmp/ratect/ratect/tests/fixtures/doctor/missing-dir', which doesn't exist
+  warning 2 resource(s) left over from previous runs — see `ratect resources list`
+
+7 check(s): 1 problem(s), 4 warning(s).
+Error: 1 problem(s) found.

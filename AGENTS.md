@@ -186,15 +186,18 @@ own yet.
   is a **gate finding** naming the command and the exact TOML to add,
   regardless of whether it's actually safe — a fresh clone hits this
   immediately on this repo's markers (`AGENTS.md`'s smoke-test example
-  above, and the `tasks list` transcripts on
-  [`docs/worked-examples.md`](docs/worked-examples.md) and
-  [`docs/getting-started.md`](docs/getting-started.md)). Add, once per
-  machine:
+  above, and the task listings on
+  [`docs/worked-examples.md`](docs/worked-examples.md),
+  [`docs/getting-started.md`](docs/getting-started.md) and
+  [`docs/ratect-compat-config-reference.md`](docs/ratect-compat-config-reference.md)).
+  Add, once per machine:
 
   ```toml
   [executable-claims]
   allowed = [
       "cargo run -q -p ratect-compat -- -f ratect-compat/tests/fixtures/smoke.yml --list-tasks",
+      "cargo run -q -p ratect-compat -- -f examples/jvm/batect.yml --list-tasks",
+      "cargo run -q -p ratect-compat -- -f examples/jvm/batect.yml -o quiet --list-tasks",
       "cargo run -q -p ratect -- tasks list -f examples/rust/ratect.toml",
       "cargo run -q -p ratect -- tasks list -f examples/getting-started/ratect.toml",
   ]
@@ -296,15 +299,25 @@ The captured-output rules (settled on #158; the tooling landed in #161):
    TTY; that `simple` hides the task container's own readiness milestones,
    and why; that `db` takes longer because it seeds a million rows.
 5. **One project per comparison.** Blocks meant to be compared (the four
-   output styles; flat vs grouped vs quiet listings) come from the same
-   project, so the reader compares styles rather than projects.
+   output styles; grouped vs quiet listings) come from the same project, so
+   the reader compares styles rather than projects. Task listings can't all
+   share one: a flat listing needs a project with no `group`, and
+   `ratect-compat`'s listings can't come from a `ratect.toml` project. So
+   the rule holds *within* a page's comparison, and each page's listing uses
+   its own binary's nearest real project rather than forcing one across.
 6. **The tutorial runs on a real project.** `docs/getting-started.md`'s
    config is [`examples/getting-started/`](examples/getting-started/),
    `{{#include}}`d step by step by anchor, so its transcripts are captures
    and the `worked-examples` job proves the tutorial still runs.
 
-The `simple` block on `docs/ratect-compat-cli.md` and Getting Started's
-first run are the colour captures so far; #166 is the sweep over the rest.
+Captured so far (#161, then #166's sweep): `simple`/`quiet`/`all` on
+`docs/ratect-compat-cli.md` (`fancy` is the recording, per rule 2; each
+style is one subsection — clarifying prose beside its capture, not a
+description of every style followed by a gallery of them), Getting Started's first run, `docs/ratect-cli.md`'s
+`caches`/`includes`/`resources`/`doctor` blocks, and
+`docs/migrating-batect-project.md`'s `config convert`. Task listings are the
+plain `<!-- verify: -->` form instead — the binary prints them uncoloured, so
+a capture would add nothing the marker's re-run doesn't already prove.
 
 The [`decisions/`](decisions/) directory holds Architecture Decision Records — the **cross-cutting** decisions that get referenced from more than one place (the two-binary split, the runtime-ownership labels, the native config format, trusting a Git include's host paths). Its [`README.md`](decisions/README.md) states the convention; see guideline 14 below for when to write one.
 

@@ -34,12 +34,12 @@ remaining `.yml` includes is a by-hand job (path B).
 
 `ratect config convert` reads a project's actual root `batect.yml` — includes
 and all — and flattens every included file (Git bundles too) into one
-`ratect.toml`:
+`ratect.toml`. `ratect config convert -f batect.yml`, captured in
+[`examples/jvm`](https://github.com/or1can/ratect/tree/main/examples/jvm) —
+the one example kept as a `batect.yml`:
 
-```console
-$ ratect config convert -f batect.yml
-Converted batect.yml to ratect.toml.
-Review it, then remove batect.yml (and any now-flattened includes).
+```ansi
+{{#include captures/config-convert.ansi}}
 ```
 
 The output is a starting point, not a finished file: [`config

@@ -1,0 +1,2 @@
+Converted batect.yml to ratect.toml.
+Review it, then remove batect.yml (and any now-flattened includes).

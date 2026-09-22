@@ -1,0 +1,7 @@
+[1G[0K\[1G[0K|[1G[0K/[1G[0K-[1G[0K\[1G[0K|[1G[0K/[1G[0K
+added 7 packages, and audited 8 packages in 1s
+[1G[0K/[1G[0K
+found [32m[1m0[22m[39m vulnerabilities
+[1G[0K/[1G[0Kapp responded: {"message":"Hello from Ratect!","visit_id":1000001,"total_visits":1000001,"count_source":"database"}
+cache holds visits:count=1000001, confirming app and this container share the same cache
+journey test passed
