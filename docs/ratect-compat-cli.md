@@ -4,9 +4,9 @@
 ratect-compat [OPTIONS] [TASK_NAME] [-- ADDITIONAL_ARGS...]
 ```
 
-This reflects the flags Ratect actually implements today (`ratect-compat/src/main.rs`),
-not the full Batect CLI — see [differences from Batect](differences-from-batect.md) for
-what's missing.
+This reflects the flags Ratect actually implements today (`ratect-compat/src/main.rs`) —
+every Batect CLI flag is supported, flag-for-flag, unless listed in
+[differences from Batect](differences-from-batect.md).
 
 This is the **`ratect-compat`** binary, whose interface deliberately matches Batect's.
 The forward-looking `ratect` binary has its own, subcommand-based interface — see the

@@ -1,9 +1,9 @@
 # `batect.yml` Configuration Reference
 
 Ratect reads a YAML file (`batect.yml` by default) describing containers and tasks.
-This documents the schema Ratect actually parses today (`ratect-core/src/config.rs`) — it is a
-**subset** of Batect's configuration format. See
-[differences from Batect](differences-from-batect.md) for what's not yet supported.
+This documents the schema Ratect actually parses today (`ratect-core/src/config.rs`) —
+every Batect configuration field is supported, field-for-field, unless listed in
+[differences from Batect](differences-from-batect.md).
 
 Standard YAML features — anchors (`&name`), aliases (`*name`), and merge keys
 (`<<:`) — work throughout the file, not just in specific fields: they're core
@@ -169,8 +169,12 @@ rather than reloaded, so it's safe for two files to both include a common third 
 A `(repo, ref)` pair is cloned **once and cached forever** at
 `~/.ratect/incl/<hash>`, keyed by a hash of the pair — it is never re-fetched, even if
 the remote's `ref` later moves (e.g. a branch, or a tag someone re-pushed). This is why
-`ref` must be pinned to something immutable: Ratect has no update/refresh mechanism yet,
-matching Batect, whose own cache clones only when the working copy is missing too. Note
+`ref` must be pinned to something immutable: `ratect-compat` has no update/refresh
+mechanism of its own, matching Batect, whose own cache clones only when the working
+copy is missing too — the `ratect` binary can force a re-clone via `ratect includes
+refresh` (see the [`ratect` CLI reference](ratect-cli.md#includes-options)), which also
+refreshes entries a prior `ratect-compat` run cached, since both binaries share
+`~/.ratect/incl`. Note
 that the 30-day eviction sweep doesn't help here — it removes entries that go *unused*,
 and an include you're actively using never becomes stale, so it stays frozen at whatever
 its `ref` pointed to when first cloned. If you need to pick up a change made to a
@@ -1210,7 +1214,8 @@ itself — a possible later step, not done yet.
 
 ## Full example
 
-This mirrors the sample config used in the test suite (`batect.yml` in the repo root):
+This mirrors the sample config used in the test suite
+(`ratect-compat/tests/fixtures/smoke.yml`):
 
 ```yaml
 project_name: ratect-test
