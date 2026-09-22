@@ -23,7 +23,7 @@ additional-js = [
 
 # Renders a ```ansi fenced block — a `{{#include}}` of a docs/captures/*.ansi
 # file `tools/capture-output.py` wrote — as coloured HTML, styled by the
-# `tools/mdbook-ansi.css` above (AGENTS.md's captured-output rules). `after`
+# `tools/mdbook-ansi.css` above (agents/docs.md's captured-output rules). `after`
 # matters: the built-in `links` preprocessor is what expands the include,
 # and this one refuses a block that still holds the marker rather than
 # publishing it as the transcript.

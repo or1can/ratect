@@ -70,6 +70,9 @@ timeout = 120
 # adds.
 files = [
     "AGENTS.md",
+    # The per-task process references AGENTS.md points at (decisions/0007):
+    # the same kind of prose, just loaded on demand rather than every session.
+    "agents/*.md",
     "CONTEXT.md",
     "ROADMAP.md",
     "RELEASES.md",

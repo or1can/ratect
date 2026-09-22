@@ -5,7 +5,7 @@ How the engineering skills should consume this repo's domain documentation when 
 ## Before exploring, read these
 
 - **`CONTEXT.md`** at the repo root — the domain glossary for Ratect's configuration model (`ratect`/`ratect-compat`/`ratect-core`). This is a single-context repo for that domain, despite being a multi-crate Cargo workspace, so there's one `CONTEXT.md`, not one per crate. The exception is `dockerignore`: a from-scratch port of Docker's own `.dockerignore` matching, deliberately kept free of any Ratect-specific type so it could be extracted and published independently — it isn't part of this glossary's domain, and a change scoped to it has no `CONTEXT.md` term to consult.
-- **`decisions/`** at the repo root — this repo's ADRs. Not `docs/adr/`: `decisions/README.md` explains the convention, and `AGENTS.md` explains why the location is deliberate (`docs/` is the user-facing tree; ADRs are for contributors, and moving them would break append-only `CHANGELOG.md` links into already-released sections). Read ADRs that touch the area you're about to work in.
+- **`decisions/`** at the repo root — this repo's ADRs. Not `docs/adr/`: `decisions/README.md` explains the convention, and `agents/docs.md` explains why the location is deliberate (`docs/` is the user-facing tree; ADRs are for contributors, and moving them would break append-only `CHANGELOG.md` links into already-released sections). Read ADRs that touch the area you're about to work in.
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 

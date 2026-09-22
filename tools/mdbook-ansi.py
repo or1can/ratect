@@ -45,7 +45,7 @@ and erase controls a static transcript actually contains (`\\r`, `\\b`,
 CHA/CUP/CUU/CUD/CUF/CUB, EL, ED), rendering the grid's final state. A
 block that needs more than that — anything whose output changes over time
 rather than settling — is the animated case, and belongs in an asciinema
-recording, not here (AGENTS.md's captured-output rules).
+recording, not here (agents/docs.md's captured-output rules).
 
 # What the HTML has to satisfy
 
