@@ -104,18 +104,38 @@ tasks:
 ## Documentation
 
 Ratect is not a Batect wrapper — its documentation is self-contained and doesn't
-assume you've read Batect's docs.
+assume you've read Batect's docs. It is published at
+<https://ratect.apps.orican.eu/> ([source](docs/index.md)); the same pages, grouped
+as the site groups them:
+
+**New to Ratect**
 
 - [Installation](docs/installation.md)
 - [Getting Started](docs/getting-started.md)
-- [How It Works](docs/how-it-works.md)
-- [Task Lifecycle](docs/task-lifecycle.md)
-- [CLI Reference (`ratect-compat`)](docs/ratect-compat-cli.md)
-- [CLI Reference (`ratect`)](docs/ratect-cli.md)
-- [Configuration Reference (`batect.yml`)](docs/ratect-compat-config-reference.md)
-- [Configuration Reference (`ratect.toml`)](docs/ratect-config-reference.md)
+- [Worked Examples](docs/worked-examples.md)
+- [Using Ratect With Language Ecosystems](docs/using-ratect-with.md)
+- [How Ratect Compares to Other Tools](docs/comparison.md)
+
+**Coming from Batect**
+
+- [Migrating a Batect Project to Ratect](docs/migrating-batect-project.md)
 - [Differences from Batect](docs/differences-from-batect.md)
-- [Roadmap](ROADMAP.md)
+
+**Using Ratect**
+
+- [Task Lifecycle](docs/task-lifecycle.md)
+- [Dependency Readiness](docs/dependency-readiness.md)
+- [Includes](docs/includes.md)
+- [Reusable Pipeline Building Blocks](docs/reusable-building-blocks.md)
+- [FAQ](docs/faq.md)
+- [How It Works](docs/how-it-works.md)
+
+**Reference**
+
+- [`ratect` CLI](docs/ratect-cli.md)
+- [`ratect.toml`](docs/ratect-config-reference.md)
+- [`ratect-compat` CLI](docs/ratect-compat-cli.md)
+- [`batect.yml`](docs/ratect-compat-config-reference.md)
 
 ## Contributing & Security
 
