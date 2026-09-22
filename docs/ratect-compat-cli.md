@@ -102,71 +102,24 @@ message at all.
 
 `--output`/`-o` controls how Ratect reports its own progress on stdout — never what
 the task's command itself prints, which always streams through unmodified. The
-styles are Batect's own four, all implemented:
-
-- **`fancy`** — a live status block, one line per container in the task's
-  dependency graph (`<name>: <what it's doing right now>` — pulling/building with
-  live progress detail, waiting for dependencies, starting, waiting to become
-  healthy, running setup commands, ready), repainted in place as events arrive.
-  There is no spinner — the animation is purely rewriting changed lines, exactly
-  like Batect. The moment the task's own container starts, the block freezes
-  behind a blank line and the container's raw output streams below it untouched;
-  after it exits, a single live `Cleaning up: ...` countdown line tracks
-  teardown, then makes way for the final summary line. Lines are clipped to the
-  terminal's current width. Requires an interactive console — an explicit
-  `-o fancy` without one fails up front with a clear error (Batect instead
-  accepts it and crashes on the first repaint). Works with
-  [`--no-color`](#options) (the repaint stays; bold/color go — a combination
-  Batect rejects). [See it in action ↓](#fancy-in-action).
-- **`simple`** — plain, append-only milestone lines: `Running <task>...`,
-  `Pulling <image>...`/`Pulled <image>.`, `Building <container>...`/`Built
-  <container>.`, dependency start/health/setup-command milestones, a blank line +
-  `Cleaning up...`, and a final `<task> finished with exit code <n> in
-  <duration>.` summary (the exit code green/red on a color-capable console). No
-  live-updating progress detail at all — safe for CI logs and redirected output.
-  The health/setup-command milestones are shown for *dependency* containers
-  only: the task's own container's readiness runs concurrently with its command
-  (see [task lifecycle](task-lifecycle.md#known-simplifications-relative-to-batect)),
-  so printing them would drop a line into the middle of that command's own
-  output — use `all` (below) to see them. A readiness *failure* is still
-  reported, on stderr, in every style. [See it in action ↓](#simple-in-action).
-- **`quiet`** — no milestone lines at all: stdout is exactly the containers' own
-  output, so it's safe to pipe (error reporting stays on stderr, unchanged). Also
-  switches `--list-tasks` to a machine-readable format: one task per line, sorted
-  by name, as `name` alone or `name<TAB>description` — no header, no
-  [grouping](ratect-compat-config-reference.md#list-tasks-output). [See it in action ↓](#quiet-in-action).
-- **`all`** — every line of output prefixed with the container it belongs to
-  (`name    | `, padded to a common column, each container's prefix in its own
-  color), interleaved as it happens. The only style that shows *dependency*
-  containers' stdout/stderr, setup-command output (`Setup command N | ...`), and
-  full image-build output (`Image build | ...`) — everything the other styles
-  discard. In exchange, no container is interactive in this mode: the task
-  container gets no TTY and no stdin, and every container gets `TERM=dumb`
-  (matching Batect — a full-screen program can't render into line-prefixed
-  output). Task-level lines (the `Running <task>...` preamble, `Cleaning up...`,
-  the summary) carry the task's own name as their prefix. [See it in action
-  ↓](#all-in-action).
+styles are Batect's own four, all implemented, and each is shown below from the
+*same* real run — `ratect run journey-test` against
+[`examples/full-stack`](https://github.com/or1can/ratect/tree/main/examples/full-stack)
+— so you compare styles rather than projects. That's the `ratect` binary
+against a native `ratect.toml`, not `ratect-compat` (`examples/full-stack` has
+no `batect.yml` counterpart), but the rendering is the exact same code either
+way — see
+[`ui.rs`](https://github.com/or1can/ratect/blob/main/ratect-core/src/ui.rs).
 
 When `--output` isn't given, Ratect auto-selects: `fancy` on an interactive
 console (stdout a real terminal, `TERM` set and not `dumb`, terminal size
 queryable, no `--no-color`); `simple` otherwise. `quiet` and `all` are never
 auto-selected.
 
-### Seeing it for real
+### `fancy`
 
-Every transcript below is the *same* real run — `ratect run journey-test`
-against
-[`examples/full-stack`](https://github.com/or1can/ratect/tree/main/examples/full-stack)
-— shown in each of the four styles, so you can compare them directly rather
-than four different projects. That's the `ratect` binary against a native
-`ratect.toml`, not `ratect-compat` (`examples/full-stack` has no `batect.yml`
-counterpart), but the rendering is the exact same code either way — see
-[`ui.rs`](https://github.com/or1can/ratect/blob/main/ratect-core/src/ui.rs).
-
-#### `fancy`, in action
-
-Static text genuinely can't convey `fancy`'s in-place repaint — this is the
-same real recording from [the homepage](index.md), unedited:
+The same real recording as [the homepage](index.md), unedited — static text
+can't convey an in-place repaint:
 
 <div id="demo-player-cli"></div>
 <script>
@@ -179,54 +132,63 @@ window.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 
-#### `simple`, in action
+What the recording can't tell you: there is no spinner — the animation is
+purely rewriting changed lines, exactly like Batect — and lines are clipped to
+the terminal's current width. Because it repaints, it requires an interactive
+console: an explicit `-o fancy` without one fails up front with a clear error
+(Batect instead accepts it and crashes on the first repaint). Works with
+[`--no-color`](#options) — the repaint stays; bold/color go — a combination
+Batect rejects.
+
+### `simple`
 
 `ratect run journey-test -o simple`, captured on a terminal in
-`examples/full-stack` — colours included, as the binary printed them:
+`examples/full-stack`:
 
 ```ansi
 {{#include captures/output-styles-simple.ansi}}
 ```
 
-#### `quiet`, in action
+Append-only, with no live-updating progress detail at all, so it is safe for
+CI logs and redirected output. The health/setup-command milestones are shown
+for *dependency* containers only: the task's own container's readiness runs
+concurrently with its command (see [task
+lifecycle](task-lifecycle.md#known-simplifications-relative-to-batect)), so
+printing them would drop a line into the middle of that command's own output
+— [`all`](#all) shows them. A readiness *failure* is still reported, on stderr,
+in every style.
 
-Stdout is exactly `journey-test`'s own output — nothing from `app`/`db`/
-`cache` (their own stdout is never shown outside `all`, regardless of style)
-and not one Ratect milestone line:
+### `quiet`
 
+`ratect run journey-test -o quiet`, captured the same way:
+
+```ansi
+{{#include captures/output-styles-quiet.ansi}}
 ```
-added 7 packages, and audited 8 packages in 1s
 
-found 0 vulnerabilities
-app responded: {"message":"Hello from Ratect!","visit_id":1000001,"total_visits":1000001,"count_source":"database"}
-cache holds visits:count=1000001, confirming app and this container share the same cache
-journey test passed
+Stdout is exactly the containers' own output, so it's safe to pipe; error
+reporting stays on stderr, unchanged. Nothing from `app`/`db`/`cache` — a
+dependency's own stdout is never shown outside `all`, whatever the style.
+`quiet` also switches `--list-tasks` to a machine-readable format: one task
+per line, sorted by name, as `name` alone or `name<TAB>description` — no
+header, no [grouping](ratect-compat-config-reference.md#list-tasks-output).
+
+### `all`
+
+`ratect run journey-test -o all`, captured the same way — long, because every
+line `db`, `cache` and `app` wrote during the run is here too:
+
+```ansi
+{{#include captures/output-styles-all.ansi}}
 ```
 
-#### `all`, in action
-
-Every line now carries its container's name (each in its own color on a
-real terminal — flattened to plain text below), including `db`'s own
-`setup_commands` step (`Setup command 1 | ...`) and its dependency-readiness
-milestones — the parts `simple`/`quiet` can't show at all:
-
-```
-journey-test | Running journey-test...
-cache        | Starting container...
-db           | Starting container...
-...
-db           | Container became healthy.
-db           | Running setup command psql -U postgres -c "ANALYZE visits;" (1 of 1)...
-db           | Setup command 1 | ANALYZE
-db           | Container has completed all setup commands.
-app          | Starting container...
-...
-journey-test | journey test passed
-journey-test | Cleaning up...
-...
-journey-test | Removing task network...
-journey-test | journey-test finished with exit code 0 in 9.1s.
-```
+The only style that shows *dependency* containers' stdout/stderr,
+setup-command output, and full image-build output (`Image build | ...`) —
+everything the other styles discard. In exchange, no container is interactive
+in this mode: the task container gets no TTY and no stdin, and every container
+gets `TERM=dumb` (matching Batect — a full-screen program can't render into
+line-prefixed output). That is why, next to `simple`'s capture, npm draws no
+spinner here.
 
 Nothing in `examples/` builds from a `Dockerfile` (every container uses a
 prebuilt `image`), so `Image build | ...` output has no real capture to

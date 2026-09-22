@@ -1409,3 +1409,134 @@ fn run_forwards_arguments_after_a_double_dash_to_the_task_command() {
         String::from_utf8_lossy(&output.stdout)
     );
 }
+
+/// Each warning `doctor` can raise from a configuration, plus a problem,
+/// from one fixture (`doctor/`), so `docs/ratect-cli.md`'s captured `doctor` output
+/// comes from a checked-in project rather than an invented one. Each finding
+/// is asserted on its own line — one assertion per kind, not one for "doctor
+/// found things" — and the Docker/leftover findings are left alone, since
+/// whether a daemon is reachable is the machine's business, not the fixture's.
+#[test]
+fn doctor_reports_each_kind_of_config_finding_from_the_doctor_fixture() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/doctor/ratect.toml"))
+        .arg("doctor")
+        .output()
+        .expect("failed to run ratect");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // One line carrying every fragment — two half-matching lines would
+    // otherwise pass for one finding.
+    let has_line = |kind: &str, fragments: &[&str]| {
+        stdout.lines().any(|line| {
+            line.trim_start().starts_with(kind)
+                && fragments.iter().all(|fragment| line.contains(fragment))
+        })
+    };
+
+    assert!(
+        has_line("warning ", &["'batect' is a Batect wrapper script"]),
+        "the wrapper stub beside the fixture should be flagged:\n{stdout}"
+    );
+    assert!(
+        has_line(
+            "warning ",
+            &["container 'database' uses a floating image tag"]
+        ),
+        "the untagged image should be flagged:\n{stdout}"
+    );
+    assert!(
+        has_line("warning ", &["dependency 'cache' has no health_check"]),
+        "the unguarded dependency should be flagged:\n{stdout}"
+    );
+    assert!(
+        has_line(
+            "problem ",
+            &[
+                "container 'app' has build_directory",
+                "missing-dir', which doesn't exist"
+            ]
+        ),
+        "the missing build_directory should be a problem:\n{stdout}"
+    );
+    assert!(
+        !output.status.success(),
+        "a problem must fail the command:\n{stdout}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// A shared cache made the way a user makes one — by running a task whose
+/// `cache` mount says `scope = "shared"` — rather than by creating the
+/// volume directly as `caches_reports_scope_and_refuses_an_ambiguous_name`
+/// does. Proves the run creates `ratect-shared-cache-<name>`, that an
+/// unqualified `clean` refuses it by name, and that `--scope shared` removes
+/// it. Asserts on `docker volume inspect`, not the exit code, so a `clean`
+/// that removed nothing can't pass. Its own fixture (`shared-cache.toml`)
+/// because the shared volume is machine-wide: nothing else may share the
+/// name, or this test's `clean` would take that project's storage with it.
+#[test]
+#[ignore]
+fn a_run_creates_a_shared_cache_that_only_a_scoped_clean_removes() {
+    let _guard = serial_docker();
+    let config = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/shared-cache.toml");
+    let ratect = |arguments: &[&str]| {
+        let mut command = ratect_command();
+        command.arg("-f").arg(&config);
+        command.args(arguments);
+        command.output().expect("failed to run ratect")
+    };
+    let volume_exists = || {
+        std::process::Command::new("docker")
+            .args(["volume", "inspect", "ratect-shared-cache-shared-tools"])
+            .output()
+            .expect("failed to inspect")
+            .status
+            .success()
+    };
+
+    // Every observation is taken before any assertion, and the volume is
+    // removed before the first one runs: a failure partway through would
+    // otherwise leave the machine-wide volume behind, and the next run's
+    // "the run created it" would pass without the run having done anything.
+    let run = ratect(&["run", "warm-cache"]);
+    let created = volume_exists();
+    let listed = ratect(&["caches", "list", "--scope", "shared"]);
+    let refused = ratect(&["caches", "clean", "shared-tools"]);
+    let survived_refusal = volume_exists();
+    let removed = ratect(&["caches", "clean", "shared-tools", "--scope", "shared"]);
+    let gone = !volume_exists();
+    let _ = std::process::Command::new("docker")
+        .args(["volume", "rm", "-f", "ratect-shared-cache-shared-tools"])
+        .output();
+
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(created, "the run should have created the shared volume");
+    let listing = String::from_utf8_lossy(&listed.stdout);
+    assert!(
+        listing.contains("- shared-tools"),
+        "the shared cache should be listed under its own name:\n{listing}"
+    );
+    let refusal = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        !refused.status.success() && refusal.contains("--scope shared"),
+        "an unqualified clean should refuse and name the flag:\n{refusal}"
+    );
+    assert!(
+        survived_refusal,
+        "a refused clean must not have removed the volume"
+    );
+    assert!(
+        removed.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&removed.stderr)
+    );
+    assert!(gone, "the scoped clean should have removed the volume");
+}

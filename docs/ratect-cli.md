@@ -195,26 +195,23 @@ a typo.
 [shared cache](ratect-config-reference.md#shared-caches) is one every project on
 the machine can use, so the listing keeps them apart — a shared cache is
 **not** this project's, and most of the ones shown will belong to other
-projects:
+projects. `ratect caches list`, captured on a terminal in `examples/full-stack`
+after a run, while
+[`ratect/tests/fixtures/shared-cache.toml`](https://github.com/or1can/ratect/blob/main/ratect/tests/fixtures/shared-cache.toml)'s
+`warm-cache` task had created its shared cache:
 
-```
-$ ratect caches list
-Caches for this project:
-- build-output
-
-Shared caches on this machine:
-- cargo-registry
+```ansi
+{{#include captures/caches-list.ansi}}
 ```
 
 **Removing a shared cache always takes `--scope shared`** — whether it is named
 or not, and whether or not this project has a cache of the same name. A shared
 cache holds storage every other project on the machine is using, so it is never
-reached by an unqualified `clean`:
+reached by an unqualified `clean`. `ratect caches clean shared-tools`, in the
+same state:
 
-```
-$ ratect caches clean cargo-registry
-Error: 'cargo-registry' is a shared cache, used by every project on this
-machine. Re-run with '--scope shared' to remove it.
+```ansi
+{{#include captures/caches-clean-shared.ansi}}
 ```
 
 `caches clean` with no names therefore sweeps this project's caches only.
@@ -228,13 +225,12 @@ whose configuration is broken.
 
 The Git include cache under `~/.ratect/incl` — where a `type: git`
 [include](ratect-compat-config-reference.md#git-includes) is cloned and kept.
+`ratect includes list`, captured after
+[the one checked-in project with a Git include](https://github.com/or1can/ratect/blob/main/ratect-compat/tests/conformance/batect-journey/git-include/batect.yml)
+had been loaded once into an otherwise empty cache:
 
-```
-$ ratect includes list
-1 cached Git include(s), 16.4 MiB on disk:
-
-  https://github.com/example/shared-tasks.git at v2.1.0
-    16.4 MiB, last used 3 days ago
+```ansi
+{{#include captures/includes-list.ansi}}
 ```
 
 Unlike [`caches`](#caches-options) and [`resources`](#resources-options), this cache is
@@ -264,17 +260,11 @@ Under `-o quiet`, `list` prints `repo<TAB>ref` per line and nothing else.
 Containers and networks outlive a run when something goes wrong — a crash, a
 `docker kill`, a `--no-cleanup` run, or a cleanup that failed. `resources` finds
 them by the labels Ratect stamps on everything it creates, so they're identifiable
-however long ago they were made:
+however long ago they were made. `ratect resources list`, captured in
+`examples/full-stack` after `ratect run journey-test --no-cleanup-after-success`:
 
-```
-$ ratect resources list
-2 left over from 1 previous run:
-
-  integration-test (3 days ago, run a01df375-8365-4689-85e4-11b33dee70b8):
-    - container database (running)
-    - network ratect-a01df375-8365-4689-85e4-11b33dee70b8
-
-Remove them with: ratect resources clean
+```ansi
+{{#include captures/resources-list.ansi}}
 ```
 
 Grouped by run, because that's the unit a leftover belongs to: a run that was killed
@@ -282,8 +272,8 @@ outright, or crashed, leaves a network and every container it started, and they 
 make sense together. (Ctrl+C, `SIGTERM` and `SIGHUP` aren't those cases any more — each
 cleans up after itself. `SIGKILL` can't be trapped by anything, so it still is; see
 [Differences from Batect](differences-from-batect.md#runtime-behavior-gaps).)
-A container is named as your configuration names it (`database`), not by the random
-words Docker assigns.
+A container is named as your configuration names it, not by the random words
+Docker assigns.
 
 | Option | Applies to | Description |
 | --- | --- | --- |
@@ -351,19 +341,14 @@ rather than the object form; both are valid, and reformatting is a review step.)
 
 ## `doctor`
 
-Answers "why did that fail?", or "will it?", without running a task:
+Answers "why did that fail?", or "will it?", without running a task.
+`ratect doctor`, captured in
+[`ratect/tests/fixtures/doctor`](https://github.com/or1can/ratect/tree/main/ratect/tests/fixtures/doctor)
+— a project written to trip each warning and a problem — after
+`ratect run build --no-cleanup-after-success` there:
 
-```
-$ ratect doctor
-Checking ratect.toml...
-  ok      Docker daemon reachable (29.4.0)
-  ok      ratect.toml loads (3 container(s), 1 task(s))
-  warning container 'database' uses a floating image tag — pin it, or the same configuration will run a different image later
-  warning dependency 'cache' has no health_check — unless its image defines one, it counts as ready the moment it starts
-  problem container 'app' has build_directory '/project/missing-dir', which doesn't exist
-  warning 4 resource(s) left over from previous runs — see `ratect resources list`
-
-6 check(s): 1 problem(s), 3 warning(s).
+```ansi
+{{#include captures/doctor.ansi}}
 ```
 
 A **problem** will fail a run — an unreachable daemon, a configuration that doesn't

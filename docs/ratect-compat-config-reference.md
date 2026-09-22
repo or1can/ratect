@@ -699,22 +699,29 @@ because the name doesn't exist at all, or exists but isn't reachable from
 ### List-tasks output
 
 With no task declaring a `group`, `--list-tasks` prints a single flat, alphabetically
-sorted list — each task's name, plus its `description` if set:
+sorted list — each task's name, plus its `description` if set. Against
+[`ratect-compat/tests/fixtures/smoke.yml`](https://github.com/or1can/ratect/blob/main/ratect-compat/tests/fixtures/smoke.yml),
+which sets neither:
 
+<!-- verify: cargo run -q -p ratect-compat -- -f ratect-compat/tests/fixtures/smoke.yml --list-tasks -->
 ```
-Tasks in my-project:
-- build: Builds the app
-- test
+Tasks in ratect-test:
+- list-volume-task
+- prereq-task
+- prerequisites-only-task
+- shared-prereq
+- test-task
 ```
 
 Once *any* task in the project declares a `group`, every task is listed under a
 heading instead — one per distinct `group` value (sorted alphabetically), plus a
-trailing `Ungrouped tasks:` heading for any task that doesn't set `group`. Real
-output, from running `--list-tasks` against
+trailing `Ungrouped tasks:` heading for any task that doesn't set `group`.
+Against
 [`examples/jvm/batect.yml`](https://github.com/or1can/ratect/blob/main/examples/jvm/batect.yml)
 (every task there sets a `group`, so there's no `Ungrouped tasks:` heading to
 show):
 
+<!-- verify: cargo run -q -p ratect-compat -- -f examples/jvm/batect.yml --list-tasks -->
 ```
 Tasks in example-jvm:
 
@@ -735,6 +742,7 @@ a machine-readable listing instead — one task per line, sorted by name, as `na
 alone or `name<TAB>description`, with no header and no grouping — the same project
 again:
 
+<!-- verify: cargo run -q -p ratect-compat -- -f examples/jvm/batect.yml -o quiet --list-tasks -->
 ```
 build	Compile and assemble
 lint	Run Checkstyle

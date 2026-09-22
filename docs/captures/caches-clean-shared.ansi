@@ -1,0 +1,1 @@
+Error: 'shared-tools' is a shared cache, used by every project on this machine. Re-run with '--scope shared' to remove it.
