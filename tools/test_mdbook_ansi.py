@@ -203,7 +203,7 @@ class TransformMarkdownTests(unittest.TestCase):
         self.assertNotIn("```ansi", result)
 
     def test_an_ansi_fence_inside_another_fence_is_left_alone(self):
-        # A page *showing* the syntax (AGENTS.md-style) must not have its
+        # A page *showing* the syntax (agents/docs.md-style) must not have its
         # example rendered.
         markdown = "````markdown\n```ansi\n{{#include x.ansi}}\n```\n````\n"
 
