@@ -93,70 +93,19 @@ An included file uses the same schema as the root file, with two differences:
   default to empty) — a file that exists only to `include` further files, or only to
   add one task, doesn't need to restate the others.
 
-Every loaded file's `containers`, `tasks`, and `config_variables` are merged into one
-flat set. A name defined in more than one file is a hard error naming the conflicting
-files — it's never treated as one file overriding another.
-
-Relative paths *within* a container (a volume's host path, `build_directory`, a
-`build_secrets` entry's `path`) resolve against that container's *own* origin file's
-directory, not the root project
-directory. Use the built-in [`batect.project_directory`
-config variable](#built-in-config-variable-batectproject_directory) — which always
-resolves to the root's directory regardless of which file a container is defined in —
-to reference the root project directory explicitly from an included file.
-
-For example, a project laid out as:
-
-```
-myproject/
-├── batect.yml
-├── scripts/
-└── containers/
-    ├── extra.yml
-    └── data/
-```
-
-Root `batect.yml`:
-
-```yaml
-project_name: myproject
-include:
-  - containers/extra.yml
-tasks:
-  my-task:
-    run:
-      container: my-other-container
-```
-
-`containers/extra.yml` <!-- example -->:
-
-```yaml
-containers:
-  my-other-container:
-    image: alpine:1.2.3
-    volumes:
-      # containers/extra.yml's own directory is containers/, so this
-      # resolves to myproject/containers/data — not myproject/data.
-      - ./data:/data
-      # Always the root project directory, regardless of which file this
-      # is written in — so this is myproject/scripts, not
-      # myproject/containers/scripts.
-      - <{batect.project_directory}/scripts:/scripts
-```
-
-Running `ratect-compat my-task` from `myproject/` starts `my-other-container`
-with those two volumes mounted exactly as resolved above — `my-task` itself
-lives in the root file, but the container it runs could equally have been
-declared there instead of in the include; only the volume paths' own
-resolution depends on which file declares the container.
+How every loaded file's `containers`, `tasks`, and `config_variables` merge into
+one set, and where an included file's relative paths resolve, are on
+[Includes](includes.md) — one page for both formats, from the plain file
+include through what a Git-included bundle may do and why. Why you'd share
+a bundle across projects at all is [Reusable Pipeline Building
+Blocks](reusable-building-blocks.md).
 
 ### Local file includes
 
 A local include's path is resolved relative to the directory of the file that
 declares the `include` — *not* the root project directory — so an included file
 further down a subdirectory can itself `include` more files using paths relative to
-its own location. An already-loaded file (by resolved absolute path) is skipped
-rather than reloaded, so it's safe for two files to both include a common third file.
+its own location.
 
 ### Git includes
 
@@ -165,6 +114,7 @@ rather than reloaded, so it's safe for two files to both include a common third 
 | `repo` | string | yes | A Git remote — anything `git clone` itself accepts (an HTTPS/SSH URL, or a local path). |
 | `ref` | string | yes | The tag, branch, or commit to check out. **Must be a value that never changes** (in practice, an immutable tag or a pinned commit SHA, not a branch) — see below. |
 | `path` | string | no, default `batect-bundle.yml` | The path, within the repository, of the file to include — resolved relative to the repository's own root, not the file that declared the `include`. |
+| `allow_host_paths` | boolean | no, default `false` | Vouches for this bundle: lets a container it defines mount a host path outside both the clone and your project directory. Honoured only on an entry in your own configuration — see [Vouching for a bundle](includes.md#vouching-for-a-bundle). |
 
 A `(repo, ref)` pair is cloned **once and cached forever** at
 `~/.ratect/incl/<hash>`, keyed by a hash of the pair — it is never re-fetched, even if
@@ -181,85 +131,13 @@ its `ref` pointed to when first cloned. If you need to pick up a change made to 
 bundle, choose a new `ref` (e.g. bump the tag) or delete the corresponding directory
 under `~/.ratect/incl` by hand.
 
-The included file's own relative paths (a volume's host path, `build_directory`, a
-`build_secrets` entry's `path`, and any further `include` entries it declares) resolve
-against the *cloned repository's*
-root, the same way a local include's relative paths resolve against its own directory
-(see above) — just rooted at the clone instead of a directory in your project.
-
-**Containment**: a Git include's `path`, and every `include` entry declared
-(transitively) by the file it names, must resolve to somewhere *inside* that
-repository's own clone — an absolute path, a `../..` traversal, or a symlink pointing
-back out are all rejected with a clear error rather than silently reading a file
-elsewhere on the machine running `ratect`. This matters because `repo`/`ref` may point
-at a repository you don't fully control, unlike a local file include (which stays
-unrestricted, since it's always something already in your own project checkout). A
-Git-included bundle *can* still declare a further `type: git` include of its own —
-that's a fresh repository with its own boundary, not an escape from this one.
-
-> **`ratect.toml` differs here.** The native format refuses a bundle's own Git
-> includes unless you opt in per bundle with `allow_nested_git_includes` — see
-> [Nested Git includes](ratect-config-reference.md#nested-git-includes). This
-> page describes `batect.yml`, where they are always allowed, matching Batect.
-
-The same containment applies to a `volumes` host path, `build_directory`, or
-`build_secrets` entry's `path` declared by a *container* defined inside a
-Git-included file: it must resolve to somewhere inside
-that repository's own clone, **or** inside your project directory — an absolute path,
-a `../..` traversal, or a symlink pointing back out of both is rejected the same way. A
-path Ratect cannot resolve at all is also rejected, rather than assumed harmless: if a
-directory along it can't be searched, or a symlink loops, where the path really leads
-can't be established — and the Docker daemon that would dereference it runs as root,
-under no such restriction. A path that simply doesn't exist yet is fine; Ratect or
-Docker creates it. The project directory is
-allowed as a second root (rather than requiring pure containment within the clone)
-because referencing it explicitly via
-[`batect.project_directory`](#built-in-config-variable-batectproject_directory) (e.g.
-`<{batect.project_directory}/output:/output`) is a legitimate, common thing for a
-shared bundle to do — the project directory is your own fully-trusted tree, distinct
-from the repository the container definition itself came from.
-
-**Vouching for a bundle** (`allow_host_paths`): some bundles legitimately need a path
-outside both roots — most often a shared tool cache under your home directory, like
-`~/.cache/trivy`, so the cached data is reused across all your projects rather than
-re-fetched per project. Since neither `customise` nor a local redefinition can add a
-volume to someone else's container, there'd otherwise be no way to use such a bundle
-at all. `allow_host_paths: true` on the include entry lifts the restriction for that
-bundle:
-
-```yaml
-include:
-  - type: git
-    repo: https://github.com/my-org/infra-bundle.git
-    ref: 1.2.3
-    allow_host_paths: true
-```
-
-It applies **only to the bundle named there** — never to bundles *it* includes in
-turn — and is honoured **only in your own configuration**: the same flag written
-inside a Git-included file is ignored, so a bundle can't grant itself the permission
-or pass it along. It doesn't relax the include-`path` containment above either; that
-governs which *files* become part of your configuration, which is a separate question
-from where a container may mount. Full rationale, and what a future allowlist form
-would have to preserve, in
-[decisions/0004](https://github.com/or1can/ratect/blob/main/decisions/0004-git-include-host-path-trust.md).
-
-**Put a vouched-for include on the entry that reaches the file first.** A
-repository is cloned *once* and each file in it read *once*, however many
-entries reach it, so whichever entry gets there first decides what that file is
-allowed — and a grant on the loser would quietly do nothing. Entries in the root
-configuration file are always reached before any bundle's own, so declaring the
-include yourself beats a bundle to it; between two entries in the same file, the
-earlier one wins. Where two entries reach the same file and the losing one
-carries a grant, Ratect refuses to load, names the repository and gives the
-ordering rule above, rather than leaving you to wonder why the flag had no
-effect. It cannot name the winning entry for you, and that entry is often inside
-a bundle you can't edit — in which case the move is to declare the include
-yourself, in your root file, where it gets there first. It is the file that races, not the repository: two entries naming the
-same repository with different `path`s pull in two different files, and each
-keeps the grant written on its own entry. Note the two outcomes are different: a grant written *inside* a bundle
-is **ignored** (accepted, worth nothing — see above), while one of your own that
-loses this race is **refused** outright.
+Everything reached through a Git include is treated as untrusted input: the
+file it names must stay inside the clone, a container it defines may mount
+only inside the clone or your project directory unless `allow_host_paths`
+vouches for it, and a grant counts only on the entry that reaches a file
+first. The rules — and the one place the two formats differ, a bundle's own
+Git includes, which `batect.yml` always allows — are on [What a bundle may
+do](includes.md#what-a-bundle-may-do).
 
 Cloning requires the system `git` binary to be installed and on `PATH` — Ratect shells
 out to it (`git clone --quiet --no-checkout` followed by
@@ -524,7 +402,7 @@ The name becomes a host directory under `--cache-type=directory`, so a name
 like `/etc` or `../../.ssh` would otherwise have an arbitrary host directory
 bind-mounted into the container; Batect performs no such check, and Ratect
 diverges here for the same reason it applies [containment to Git
-includes](#git-includes). Under `--cache-type=volume` Docker already enforced this, so nothing that
+includes](includes.md#containment). Under `--cache-type=volume` Docker already enforced this, so nothing that
 worked there is affected. **Directory caches are a breaking change**: they
 accepted any name, so `name: my cache` or `name: node/modules` loaded before
 and now fails. Rename the cache — the storage is rebuilt on the next run, which

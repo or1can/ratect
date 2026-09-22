@@ -47,7 +47,7 @@
 //! already-cached-git includes, never clones or errors.
 //! `Config::load_from_file` parses the root file and resolves
 //! `include` (local files and Git bundles — see
-//! [config reference](https://github.com/or1can/ratect/blob/main/docs/ratect-compat-config-reference.md#includes)), merging every loaded
+//! [Includes](https://github.com/or1can/ratect/blob/main/docs/includes.md)), merging every loaded
 //! file's `containers`/`tasks`/`config_variables` into one `Config`, returned inside a
 //! `LoadedConfig` alongside a `container_base_paths` map (each container name → its
 //! own origin file's directory). A separate `LoadedConfig::resolve_expressions` call
@@ -2238,7 +2238,8 @@ fn resolve_include_target(
 /// [`resolve_expressions`](Self::resolve_expressions) to resolve each
 /// container's relative paths (`volumes` host paths, `build_directory`)
 /// against *its own* origin file's directory rather than always the root
-/// config's directory — see [Includes](../../docs/ratect-compat-config-reference.md#includes).
+/// config's directory — see [Where relative paths
+/// resolve](../../docs/includes.md#where-relative-paths-resolve).
 #[derive(Debug)]
 pub struct LoadedConfig {
     pub config: Config,
