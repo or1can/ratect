@@ -24,17 +24,14 @@ releases, a changelog), and let every consuming project pull in a pinned
 version with one `include` entry. Bump the pin when you're ready to take a
 change; every consumer bumps on its own schedule, not in lockstep.
 
-```yaml
-# batect.yml
-include:
-  - type: git
-    repo: https://github.com/my-org/lint-bundle.git
-    ref: v2.1.0
+```toml
+# ratect.toml
+include = [
+    { type = "git", repo = "https://github.com/my-org/lint-bundle.git", ref = "v2.1.0" },
+]
 
-tasks:
-  lint:
-    prerequisites:
-      - shared-lint
+[tasks.lint]
+prerequisites = ["shared-lint"]
 ```
 
 Here `shared-lint` isn't defined anywhere in this project's own file — it
