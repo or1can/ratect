@@ -4985,8 +4985,12 @@ run_to_completion = true
 [containers.migrate.health_check]
 command = "true"
 
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["migrate"]
+
 [tasks.t]
-run = { container = "migrate" }
+run = { container = "app" }
 "#,
     )
     .await
@@ -5008,8 +5012,12 @@ image = "alpine:3.18"
 run_to_completion = true
 setup_commands = [{ command = "./migrate.sh" }]
 
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["migrate"]
+
 [tasks.t]
-run = { container = "migrate" }
+run = { container = "app" }
 "#,
     )
     .await
@@ -5838,6 +5846,49 @@ run = {{ container = "foo" }}
     );
 }
 
+/// The conflict rules are about a container's *effective* configuration, so
+/// they have to run after `extends` has supplied it. This is the gap that
+/// existed while the check sat in `resolve_expressions_with_boundaries`: the
+/// child's own `setup_commands`/`health_check` were still unset at that
+/// point, so the config loaded and `engine.rs` then returned at the
+/// run-to-completion branch, dropping the inherited setup commands in
+/// silence.
+#[tokio::test]
+async fn run_to_completion_conflicts_are_judged_after_extends_resolves() {
+    for inherited in [
+        "setup_commands = [{ command = \"echo seeding\" }]",
+        "health_check = { command = \"true\" }",
+    ] {
+        let err = load_native_toml(&format!(
+            r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+{inherited}
+
+[containers.migrate]
+extends = "base"
+run_to_completion = true
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["migrate"]
+
+[tasks.t]
+run = {{ container = "app" }}
+"#
+        ))
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("'migrate'")
+                && format!("{err:#}").contains("'run_to_completion' set, but also has"),
+            "an inherited {inherited} must be judged too, got: {err:#}"
+        );
+    }
+}
+
 /// An explicitly empty `setup_commands` is how an `extends` child *clears*
 /// an inherited one, so it declares no setup commands rather than declaring
 /// none-of-them. Rejecting it would leave a child that inherits
@@ -5912,6 +5963,41 @@ run = { container = "app" }
         format!("{err:#}").contains("does not start with a letter or digit"),
         "got: {err:#}"
     );
+}
+
+/// The leading-character rule covers `_` and `.` as well as `-`, so the
+/// message must not claim the character would be "read as an option" —
+/// only `-` would. An empty name also has no first character to quote at
+/// all, which previously put a raw NUL byte in the error.
+#[tokio::test]
+async fn the_leading_character_error_does_not_misstate_its_own_reason() {
+    for name in ["_api", ".api", ""] {
+        let err = load_native_toml(&format!(
+            r#"
+project_name = "demo"
+
+[containers."{name}"]
+image = "my-org/api:1.0.0"
+[containers."{name}".external_health_check]
+type = "tcp"
+port = 8080
+
+[tasks.t]
+run = {{ container = "{name}" }}
+"#
+        ))
+        .await
+        .unwrap_err();
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("does not start with a letter or digit"),
+            "expected {name:?} to be rejected, got: {message}"
+        );
+        assert!(
+            !message.contains('\0'),
+            "an empty name has no character to quote: {message:?}"
+        );
+    }
 }
 
 /// The same "can never pass" class as a zero port: curl's `%{http_code}` is

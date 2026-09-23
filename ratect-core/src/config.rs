@@ -3286,35 +3286,6 @@ impl Config {
                         );
                     }
                 }
-                // Unconditional (not compat-only, unlike
-                // `validate_image_sources_in_compat`): there is no
-                // `extends`-inheritance complication here, since no
-                // legitimate base container needs both a health check and
-                // run-to-completion behavior.
-                if container.run_to_completion.unwrap_or(false) {
-                    if container.health_check.is_some() {
-                        anyhow::bail!(
-                            "has 'run_to_completion' set, but also has 'health_check' — \
-                             a run-to-completion dependency has no health check of its own"
-                        );
-                    }
-                    // An explicitly empty list is how an `extends` child
-                    // *clears* an inherited one (`child.take().or(parent)`
-                    // in `inherit_container_fields`), so it declares no
-                    // setup commands rather than declaring none-of-them —
-                    // exactly what this demands. Rejecting it would leave a
-                    // child inheriting `setup_commands` no way to opt in.
-                    if container
-                        .setup_commands
-                        .as_ref()
-                        .is_some_and(|commands| !commands.is_empty())
-                    {
-                        anyhow::bail!(
-                            "has 'run_to_completion' set, but also has 'setup_commands' — \
-                             a run-to-completion dependency has no setup commands of its own"
-                        );
-                    }
-                }
                 Ok(())
             })()
             .with_context(|| format!("Container '{container_name}'"))?;
@@ -3749,6 +3720,9 @@ async fn load_project_impl(
     // Same reasoning, same placement: a container's effective
     // `run_to_completion` isn't known until `extends` has resolved it.
     reject_run_to_completion_on_main_container(&config)?;
+    // Same reasoning, same placement: what a container *effectively* has is
+    // not known until inheritance has supplied it.
+    reject_run_to_completion_conflicts(&config)?;
     // Same reasoning again: a `run_in` target has to be checked against the
     // declaring container's *effective* `dependencies`, which `extends` may
     // have supplied.
@@ -4204,6 +4178,57 @@ fn reject_conflicting_cache_scopes(config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Rejects a `run_to_completion` container that also declares a
+/// `health_check` or `setup_commands` — neither concept applies once a
+/// dependency's readiness is "it exited 0", and the engine acts on that: it
+/// returns at the run-to-completion branch without ever running a setup
+/// command.
+///
+/// **After `resolve_extends`, which is the whole point of it being here
+/// rather than in [`Config::resolve_expressions_with_boundaries`]** — where
+/// it used to live, under a comment asserting there was no inheritance
+/// complication to worry about. There is: a base declaring `setup_commands`
+/// and a child adding `extends` plus `run_to_completion` passed that
+/// earlier check, because the child's own `setup_commands` was still unset
+/// when it ran, and the commands were then dropped in silence at run time.
+/// A rule about a container's *effective* configuration has to be applied
+/// to the effective configuration.
+///
+/// An explicitly empty `setup_commands` is not a declaration of any: it is
+/// how an `extends` child clears a list it would otherwise inherit (see
+/// `inherit_container_fields`, where the child's own value wins outright),
+/// so it is the way to make an inheriting container legal here rather than
+/// something to reject.
+fn reject_run_to_completion_conflicts(config: &Config) -> Result<()> {
+    let mut names: Vec<&String> = config.containers.keys().collect();
+    names.sort_unstable();
+    for name in names {
+        let container = &config.containers[name];
+        if !container.run_to_completion.unwrap_or(false) {
+            continue;
+        }
+        if container.health_check.is_some() {
+            anyhow::bail!(
+                "Container '{name}' has 'run_to_completion' set, but also has \
+                 'health_check' — a run-to-completion dependency has no health check of \
+                 its own"
+            );
+        }
+        if container
+            .setup_commands
+            .as_ref()
+            .is_some_and(|commands| !commands.is_empty())
+        {
+            anyhow::bail!(
+                "Container '{name}' has 'run_to_completion' set, but also has \
+                 'setup_commands' — a run-to-completion dependency has no setup commands \
+                 of its own"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Rejects a task whose own `run.container` has `run_to_completion` set —
 /// whether declared directly or inherited via `extends`, which is exactly
 /// why this runs *after* [`resolve_extends`], same placement/reasoning as
@@ -4421,10 +4446,10 @@ fn expand_external_health_checks(config: &mut Config) -> Result<()> {
         // reporting a host it never contacted.
         if !name.starts_with(|c: char| c.is_ascii_alphanumeric()) {
             anyhow::bail!(
-                "Container '{name}' has an 'external_health_check', but its own name \
-                 does not start with a letter or digit — the check passes it as a \
-                 hostname, and a leading '{}' would be read as an option instead",
-                name.chars().next().unwrap_or_default()
+                "Container '{name}' has an 'external_health_check', but its own name does \
+                 not start with a letter or digit — the check reaches it by that name as a \
+                 hostname, and for a TCP check the name is a bare argument to 'nc', where a \
+                 leading '-' is read as an option rather than a host"
             );
         }
         if let ExternalHealthCheckKind::Http { path, .. } = &check.kind {
