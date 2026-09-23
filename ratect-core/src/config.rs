@@ -1263,10 +1263,21 @@ pub struct HealthCheckConfig {
 /// `curlimages/curl` is curl's own published image and is Alpine-based, so
 /// one image covers both check kinds: `curl` for the HTTP form, BusyBox's
 /// `nc` for the TCP form, and `/bin/sh` for the retry loop around either.
-/// Pinned rather than floating, for the reason `ratect doctor` warns about
-/// floating tags — the same configuration must not start checking
-/// differently next week.
-pub const EXTERNAL_HEALTH_CHECK_IMAGE: &str = "curlimages/curl:8.11.1";
+///
+/// **By digest, not by tag** (`8.11.1`, whose manifest list this is). A tag
+/// is mutable, so pinning to one would mean the same configuration could
+/// start checking with a different image later — precisely what `ratect
+/// doctor` warns users about, and a standard Ratect has to meet in the one
+/// image it chooses *on the user's behalf*: they did not write this
+/// reference and cannot review what it resolves to. The digest is the
+/// multi-arch manifest list (`linux/386`, `amd64`, `arm64`, `ppc64le`), not
+/// one platform's own manifest, so it resolves on every host Ratect ships a
+/// binary for.
+///
+/// This pins *what* is pulled, not that it is trustworthy: Ratect verifies no
+/// image signature, for this one or for any a user declares.
+pub const EXTERNAL_HEALTH_CHECK_IMAGE: &str =
+    "curlimages/curl@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69";
 
 /// The prefix every generated external-health-check companion's name
 /// carries — see [`external_health_check_container_name`].
@@ -1285,6 +1296,25 @@ pub fn external_health_check_container_name(container: &str) -> String {
 /// shell and no check tooling of its own — a distroless or `scratch` build,
 /// where the only way to satisfy [`HealthCheckConfig`] is to bloat the image
 /// with a `curl` that exists solely to be health-checked with.
+///
+/// **A separate field from [`HealthCheckConfig`] because it is a separate
+/// concept, not a second spelling of one.** `health_check` *is* Docker's own
+/// `HEALTHCHECK`: Ratect hands it to the daemon, which owns the schedule, the
+/// `starting`/`healthy`/`unhealthy` state machine and the re-running for the
+/// container's whole lifetime. This is closer to a Kubernetes **readiness**
+/// check — an external observer asking "can this be used yet?" once, from
+/// outside, with no opinion about the container's own health afterwards.
+/// (Ratect has no equivalent of a *liveness* check at all, in either form.)
+///
+/// That is also why folding this into `health_check` under a `type` tag was
+/// rejected: the three field names the two share — `interval`, `retries`,
+/// `timeout` — do not quite share meanings. Docker's `retries` counts
+/// *consecutive failures before flipping to unhealthy*, cushioned by a
+/// `start_period` that has no meaning here; this one counts *attempts*. An
+/// omitted value there inherits the image's own; here there is no image to
+/// inherit from, so [`ExternalHealthCheck::DEFAULT_INTERVAL`] and its
+/// siblings apply. One field would have had to document each of those three
+/// names twice over.
 ///
 /// Config-level sugar over `run_to_completion` ([`Container::run_to_completion`],
 /// ratect#97), not a second readiness mechanism: a container declaring this

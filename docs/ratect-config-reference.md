@@ -459,7 +459,15 @@ container it checks, so it needs a shell and a tool (`curl`, `wget`,
 `pg_isready`) to be present in that image. A distroless or `scratch` image has
 neither, and the usual workaround is to add tooling that exists for no reason
 but to be health-checked with. `external_health_check` checks such a container
-from outside instead:
+from outside instead.
+
+It is a separate field because it is a separate concept, not a second
+spelling of `health_check`. `health_check` *is* Docker's own `HEALTHCHECK` —
+the daemon owns its schedule, its `starting`/`healthy`/`unhealthy` state and
+its re-running for the container's whole lifetime. This is closer to a
+Kubernetes *readiness* check: an external observer asking "can this be used
+yet?", once, with no opinion about the container's health afterwards. (Ratect
+has no equivalent of a *liveness* check in either form.)
 
 ```toml
 [containers.api]
@@ -509,7 +517,9 @@ it by that name.
   port to check each other.
 - **Ratect runs the check from a companion container.** Declaring one
   generates a container named `ratect-health-check-<container>` running
-  `curlimages/curl`, which loops the check and exits 0 or non-zero — an
+  `curlimages/curl` (pinned by digest, not by tag — you did not write that
+  reference, so it must not resolve to something different later), which loops
+  the check and exits 0 or non-zero — an
   ordinary [`run_to_completion`](#run_to_completion-init-containers)
   dependency, so the waiting happens in the dependency graph rather than
   anywhere new. You will see it start and complete in the output, and a check
@@ -539,6 +549,12 @@ it by that name.
 - **`ratect`-native only**, like `run_to_completion`: `batect.yml` has no
   equivalent concept, so a container using it is rejected when the file loads
   rather than silently ignored.
+
+Because the two are separate concepts, `interval`, `retries` and `timeout` do
+not quite mean the same thing in both, despite the shared names — which is why
+they are not one field under a `type` tag. Docker's `retries` counts
+*consecutive failures before flipping to unhealthy*, cushioned by a
+`start_period` that has no meaning out here; this one counts *attempts*.
 
 ## Field reference
 

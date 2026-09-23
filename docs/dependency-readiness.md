@@ -46,6 +46,11 @@ that depends on it (another dependency, or the task's own container) starts:
    all is immediately considered healthy — for it, started *is* ready. In the
    transcript, this
    gate is the gap between `Started db.` and `db has become healthy.`
+
+   This gate is Docker's own health check, so it needs a shell and a check tool
+   *inside* the image. If yours has neither — a distroless or `scratch` build —
+   a `ratect.toml` container can be checked from outside instead, with
+   [`external_health_check`](ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it).
 2. **Its `setup_commands` must succeed.** Each runs inside the running container
    (via Docker's `exec` mechanism), one at a time in declared order, with the
    container's own `environment` and (under [User
@@ -84,7 +89,12 @@ A `ratect.toml` container can also be checked *from outside itself*:
 [`external_health_check`](ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it)
 (`ratect`-native only) makes an HTTP request or a bare TCP connection to the
 container over the project's own network, for an image with no shell and no
-check tooling to run gate 1 with — a distroless or `scratch` build. It is
+check tooling to run gate 1 with — a distroless or `scratch` build. The two
+are different concepts rather than two spellings of one: `health_check` *is*
+Docker's own `HEALTHCHECK`, owned by the daemon and re-run for the container's
+whole lifetime, while this is closer to a Kubernetes *readiness* check — asked
+once, from outside, with no opinion about the container's health afterwards.
+(Ratect has no equivalent of a *liveness* check in either form.) It is
 config-level sugar over `run_to_completion` rather than a third kind of gate:
 declaring one generates a companion container that loops the check and exits
 0 or non-zero, and everything that depended on the checked container depends
