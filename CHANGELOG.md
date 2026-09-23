@@ -37,6 +37,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- A relative `cache` mount path on a container with `run_as_current_user` enabled was accepted when `extends` supplied the two across a base and a child, instead of being rejected as it is when both are written on one container. The path then failed from Docker, naming a container id rather than the container you wrote (ratect only, since `extends` is native-only).
 - The documentation site now renders its Mermaid diagrams (dependency graphs and sequence diagrams on the Task Lifecycle page); they were shown as diagram source.
 
 ### Changed

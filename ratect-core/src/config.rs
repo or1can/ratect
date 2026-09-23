@@ -3241,30 +3241,12 @@ impl Config {
                             );
                         }
                         // Each `cache` mount's container path, for the same
-                        // reason and in the same place: `run_as_current_user`
-                        // takes ownership of them, which means uploading an
-                        // archive to that path. A non-absolute one would
-                        // otherwise surface from the Docker layer, whose only
-                        // identifier is a container id — reading as though the
-                        // configuration had named that.
-                        //
-                        // Scoped to `cache` mounts under an *enabled*
-                        // `run_as_current_user`, matching Batect exactly. Wider
-                        // would be tempting and wrong: Batect never checks
-                        // `local`/`tmpfs` destinations, so a Windows-container
-                        // config mounting `C:\code` would stop loading here
-                        // while still working there.
-                        for volume in container.volumes.iter().flatten() {
-                            if let VolumeMount::Cache(cache) = volume {
-                                if !cache.container.starts_with('/') {
-                                    anyhow::bail!(
-                                        "has an invalid 'cache' volume mount: \
-                                         '{}' is not an absolute path",
-                                        cache.container
-                                    );
-                                }
-                            }
-                        }
+                        // The rule itself now lives in
+                        // `reject_relative_cache_mounts_under_user_mapping`,
+                        // after `resolve_extends` — it spans two fields
+                        // (`volumes` and `run_as_current_user`), so this
+                        // pass is the wrong place for it. See this method's
+                        // own doc comment.
                         // `home_directory` is interpolated raw into a
                         // colon-delimited `/etc/passwd`/`/etc/shadow` line
                         // (`user::generate_passwd_file`) — a `:` shifts that
@@ -3723,6 +3705,9 @@ async fn load_project_impl(
     // Same reasoning, same placement: what a container *effectively* has is
     // not known until inheritance has supplied it.
     reject_run_to_completion_conflicts(&config)?;
+    // And again, for the same reason: this one spans `volumes` and
+    // `run_as_current_user`, either of which `extends` can supply alone.
+    reject_relative_cache_mounts_under_user_mapping(&config)?;
     // Same reasoning again: a `run_in` target has to be checked against the
     // declaring container's *effective* `dependencies`, which `extends` may
     // have supplied.
@@ -4178,6 +4163,52 @@ fn reject_conflicting_cache_scopes(config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Rejects a relative `cache` mount destination on a container with
+/// `run_as_current_user` enabled.
+///
+/// Those destinations have to be absolute for the same reason and in the
+/// same place: `run_as_current_user` takes ownership of them, which means
+/// uploading an archive to that path. A non-absolute one would otherwise
+/// surface from the Docker layer, whose only identifier is a container id —
+/// reading as though the configuration had named that.
+///
+/// Scoped to `cache` mounts under an *enabled* `run_as_current_user`,
+/// matching Batect exactly. Wider would be tempting and wrong: Batect never
+/// checks `local`/`tmpfs` destinations, so a Windows-container config
+/// mounting `C:\code` would stop loading here while still working there.
+///
+/// **After `resolve_extends`**, because it spans two fields and `extends`
+/// can supply either alone — a base carrying the `volumes` and a child
+/// adding `run_as_current_user`, or the reverse. Both loaded cleanly while
+/// this lived in [`Config::resolve_expressions_with_boundaries`]; see that
+/// method's doc comment for the general rule.
+fn reject_relative_cache_mounts_under_user_mapping(config: &Config) -> Result<()> {
+    let mut names: Vec<&String> = config.containers.keys().collect();
+    names.sort_unstable();
+    for name in names {
+        let container = &config.containers[name];
+        if !container
+            .run_as_current_user
+            .as_ref()
+            .is_some_and(|user| user.enabled)
+        {
+            continue;
+        }
+        for volume in container.volumes.iter().flatten() {
+            if let VolumeMount::Cache(cache) = volume {
+                if !cache.container.starts_with('/') {
+                    anyhow::bail!(
+                        "Container '{name}' has an invalid 'cache' volume mount: \
+                         '{}' is not an absolute path",
+                        cache.container
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Rejects a `run_to_completion` container that also declares a
 /// `health_check` or `setup_commands` — neither concept applies once a
 /// dependency's readiness is "it exited 0", and the engine acts on that: it
@@ -4440,16 +4471,17 @@ fn expand_external_health_checks(config: &mut Config) -> Result<()> {
                  must hold only letters, digits, '-', '_' and '.'"
             );
         }
-        // And must *start* with one of the letters or digits: the name is a
-        // bare argument to `nc -z -w 5 <name> <port>`, so a leading '-' is
-        // read as an option rather than a host, and the check would fail
-        // reporting a host it never contacted.
+        // And must *start* with one of the letters or digits, which is
+        // Docker's own rule for a name (`[a-zA-Z0-9][a-zA-Z0-9_.-]*`) and so
+        // for the network alias the check resolves. A leading '-' is worse
+        // than merely invalid, for the TCP form specifically: the name is a
+        // bare argument to `nc -z -w 5 <name> <port>`, where it would be
+        // read as an option rather than a host.
         if !name.starts_with(|c: char| c.is_ascii_alphanumeric()) {
             anyhow::bail!(
                 "Container '{name}' has an 'external_health_check', but its own name does \
-                 not start with a letter or digit — the check reaches it by that name as a \
-                 hostname, and for a TCP check the name is a bare argument to 'nc', where a \
-                 leading '-' is read as an option rather than a host"
+                 not start with a letter or digit — the check reaches it by that name, and \
+                 Docker requires a name to start with one"
             );
         }
         if let ExternalHealthCheckKind::Http { path, .. } = &check.kind {

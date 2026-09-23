@@ -2220,7 +2220,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     // different readiness gate entirely: it has no health
                     // check and no `setup_commands` of its own — mutually
                     // exclusive at config-load time (see
-                    // `Config::resolve_expressions_with_boundaries`) — so
+                    // `config::reject_run_to_completion_conflicts`, which
+                    // runs after `extends` has resolved — this branch is
+                    // exactly what silently dropped an *inherited*
+                    // `setup_commands` while that check ran too early) — so
                     // instead it must simply run to completion and exit 0.
                     // No watcher is spawned below for it either: its exit is
                     // the readiness signal itself, not a later surprise.

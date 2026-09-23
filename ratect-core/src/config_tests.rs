@@ -2624,7 +2624,7 @@ fn image_container() -> Container {
 /// container the user wrote. Previously it surfaced from the Docker layer
 /// against a 64-hex container id.
 #[test]
-fn resolve_expressions_rejects_a_relative_cache_path_under_run_as_current_user() {
+fn a_relative_cache_path_under_run_as_current_user_is_rejected_naming_the_container() {
     let mut container = container_with_run_as_current_user(true, Some("/home/x"));
     container.volumes = Some(vec![VolumeMount::Cache(CacheVolumeMount {
         name: "c".to_string(),
@@ -2632,7 +2632,7 @@ fn resolve_expressions_rejects_a_relative_cache_path_under_run_as_current_user()
         options: None,
         scope: Default::default(),
     })]);
-    let mut config = Config {
+    let config = Config {
         project_name: "demo".to_string(),
         containers: HashMap::from([("build-env".to_string(), container)]),
         tasks: HashMap::new(),
@@ -2640,14 +2640,11 @@ fn resolve_expressions_rejects_a_relative_cache_path_under_run_as_current_user()
         forbid_telemetry: None,
     };
 
-    let err = config
-        .resolve_expressions_with(
-            Path::new("/base"),
-            &HashMap::new(),
-            &HashMap::new(),
-            no_host_env,
-        )
-        .unwrap_err();
+    // The rule's own function rather than the expression pass it used to
+    // live in: it spans `volumes` and `run_as_current_user`, so it runs
+    // after `extends` (see that function, and the sibling test covering an
+    // inherited split).
+    let err = reject_relative_cache_mounts_under_user_mapping(&config).unwrap_err();
 
     let message = format!("{err:#}");
     assert!(
@@ -5846,6 +5843,44 @@ run = {{ container = "foo" }}
     );
 }
 
+/// The same class as the `run_to_completion` conflict below: a rule
+/// spanning `volumes` and `run_as_current_user` cannot run before
+/// `extends`, because either side can be inherited. Both directions load
+/// cleanly if it does, and the relative path then surfaces from the Docker
+/// layer identified only by a container id — the failure the rule exists to
+/// prevent.
+#[tokio::test]
+async fn a_relative_cache_mount_is_rejected_however_extends_splits_the_two_fields() {
+    let volumes = r#"volumes = [{ type = "cache", name = "c", container = "relative/path" }]"#;
+    let user = r#"run_as_current_user = { enabled = true, home_directory = "/home/u" }"#;
+    for (base, child) in [(volumes, user), (user, volumes)] {
+        let err = load_native_toml(&format!(
+            r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+{base}
+
+[containers.app]
+extends = "base"
+{child}
+
+[tasks.t]
+run = {{ container = "app", command = "true" }}
+"#
+        ))
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("is not an absolute path")
+                && format!("{err:#}").contains("'app'"),
+            "expected the inherited combination to be rejected, naming the container, \
+             got: {err:#}"
+        );
+    }
+}
+
 /// The conflict rules are about a container's *effective* configuration, so
 /// they have to run after `extends` has supplied it. This is the gap that
 /// existed while the check sat in `resolve_expressions_with_boundaries`: the
@@ -5934,9 +5969,11 @@ run = {{ container = "app" }}
     }
 }
 
-/// The name is a bare argument to `nc -z -w 5 <name> <port>`, so a leading
-/// '-' is read as an option: the check could never pass, and would report a
-/// host it never contacted.
+/// Docker's own name rule rejects any leading non-alphanumeric, and the
+/// error says so. '-' still earns its own test, because it is the one that
+/// would also be actively misread rather than merely refused: the name is a
+/// bare argument to `nc -z -w 5 <name> <port>`, where it parses as an
+/// option, and the check would report a host it never contacted.
 #[tokio::test]
 async fn external_health_check_rejects_a_container_name_starting_with_a_dash() {
     let err = load_native_toml(
