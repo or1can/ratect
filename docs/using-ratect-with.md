@@ -11,11 +11,10 @@ directory, a toolchain that assumes persistence just re-downloads or
 recompiles everything, every single run, as if it were on a brand-new
 machine each time.
 
-This page is Ratect's answer to Batect's own [`using-batect-with/tools/`
-pages](https://batect.dev/docs/using-batect-with/tools/) — one section per
-ecosystem, naming exactly which directories need to be a `cache` volume and
-why, plus the couple of correctness gotchas that aren't a caching question at
-all. Every config referenced here is the real, CI-proven config under
+This page has one section per ecosystem, naming exactly which directories
+need to be a `cache` volume and why, plus the couple of correctness gotchas
+that aren't a caching question at all. Every config referenced here is the
+real, CI-proven config under
 [`examples/`](https://github.com/or1can/ratect/tree/main/examples) — see
 [Worked Examples](worked-examples.md) for the full files.
 
@@ -133,8 +132,10 @@ the ceiling is usually Docker's own, not Ratect's — see the
 
 ## Not covered
 
-Batect's own equivalent pages also cover .NET Core and Ruby — both
-caching-only concerns there, no correctness gotcha like Gradle's or Node's.
+Batect's own [per-ecosystem
+pages](https://batect.dev/docs/using-batect-with/tools/) also cover .NET Core
+and Ruby — both caching-only concerns there, no correctness gotcha like
+Gradle's or Node's.
 Ratect has no example project for either ecosystem, so there's nothing
 real to ground a section in here without inventing untested config; a real
 worked example for either is its own, larger undertaking than this page.

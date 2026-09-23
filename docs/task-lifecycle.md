@@ -6,9 +6,7 @@ covering task ordering, per-task setup and cleanup in depth (what a dependency
 has to pass before it counts as ready is on its own page — see [Dependency
 Readiness](dependency-readiness.md)). For the
 broader architecture (config loading, CLI parsing, logging), see
-[how it works](how-it-works.md); this page is the equivalent of Batect's own
-[task lifecycle](https://github.com/batect/batect.dev/blob/main/docs/concepts/task-lifecycle.mdx)
-page, describing Ratect's own (deliberately simplified) version of the same idea.
+[how it works](how-it-works.md).
 
 ## Task ordering
 
@@ -151,7 +149,7 @@ is also what makes concurrent `ratect` invocations on the same host safe: each t
 execution's network is named with a random UUID, so there's no risk of two runs
 colliding.
 
-## Known simplifications relative to Batect
+## Known limitations
 
 - **The task's own container's readiness gate can race a fast main command** —
   and "main command" is usually a task-specific override. A task's
@@ -200,3 +198,8 @@ colliding.
   fully-configurable Docker networking Batect offers (custom drivers, other than by
   pre-creating the network yourself) — see
   [differences from Batect](differences-from-batect.md).
+
+Coming from Batect? Its own [task
+lifecycle](https://github.com/batect/batect.dev/blob/main/docs/concepts/task-lifecycle.mdx)
+page describes the model this one is a deliberately simplified version of;
+the limitations above say where the two match and where they differ.
