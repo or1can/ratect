@@ -11,9 +11,12 @@ and a genuine (not padded) wait for a slow-starting dependency.
 - **`app`** — a Node HTTP service (`GET /hello`): inserts a row into
   Postgres, then returns the total row count — read from Redis if a recent
   count is cached, from Postgres if not. `GET /healthz` is a separate,
-  side-effect-free route used only by the health check; it deliberately
-  isn't the same route `/hello` is, so a health-check poll never counts as
-  a fake visit or pre-warms the cache before a real request does.
+  side-effect-free route used only by the readiness check; it deliberately
+  isn't the same route `/hello` is, so a check never counts as a fake visit
+  or pre-warms the cache before a real request does. That check is an
+  [`external_health_check`](../../docs/ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it):
+  Ratect requests `/healthz` over the project's own network, so nothing runs
+  inside `app` to establish that it is ready.
 - **`db`** — Postgres, seeded via a real
   [`docker-entrypoint-initdb.d`](db/init/01-schema.sql) script with a
   million rows of sample history — real "sample data to develop against"
@@ -31,12 +34,18 @@ and a genuine (not padded) wait for a slow-starting dependency.
 on the `run`/`journey-test` tasks that use it — it genuinely cannot start
 without both (it connects to `cache` at module load, `db` on its first
 request), so repeating it per task would just be two chances to get it
-wrong. Compare `dev`, a separate container on the same image for
-`build`/`unit-test`/`lint`/`shell`: those tasks' commands (`npm ci`, a unit
-test, `eslint`) never start a server, so if they ran in `app` instead, its
-health check would wait forever for a server that command was never going
-to start — this is why `dev` exists as its own container rather than reusing
-`app` for everything.
+wrong. That is also why `dev` exists: a separate container on the same
+image for `build`/`unit-test`/`lint`/`shell`, whose commands (`npm ci`, a
+unit test, `eslint`) want none of `app`'s runtime wiring — running them in
+`app` would start Postgres and Redis and take port 8080 for a task that
+never serves anything.
+
+It used to have a second reason that no longer applies, which is worth
+knowing if you are reading older Ratect material: `app`'s check was once an
+in-container `health_check`, and a task's own container waits on that, so
+`npm ci` in `app` would have waited forever for a server it never starts.
+An `external_health_check` is inert on a task's own container — nothing
+waits on it, because running the container *is* the task.
 
 ## Tasks
 

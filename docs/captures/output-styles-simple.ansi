@@ -1,6 +1,6 @@
 Running journey-test...
-Starting cache...
 Starting db...
+Starting cache...
 Started cache.
 Started db.
 cache has become healthy.
@@ -10,14 +10,17 @@ db has completed all setup commands.
 Starting app...
 Started app.
 app has become healthy.
+Starting ratect-health-check-app...
+Started ratect-health-check-app.
+ratect-health-check-app ran to completion.
 Running sh -c 'npm ci && node test.js' in journey-test...
-[1G[0K\[1G[0K|[1G[0K/[1G[0K-[1G[0K\[1G[0K|[1G[0K/[1G[0K
-added 7 packages, and audited 8 packages in 1s
-[1G[0K/[1G[0K
+[1G[0K\[1G[0K|[1G[0K/[1G[0K-[1G[0K\[1G[0K|[1G[0K
+added 7 packages, and audited 8 packages in 957ms
+[1G[0K|[1G[0K
 found [32m[1m0[22m[39m vulnerabilities
-[1G[0K/[1G[0Kapp responded: {"message":"Hello from Ratect!","visit_id":1000001,"total_visits":1000001,"count_source":"database"}
+[1G[0K|[1G[0Kapp responded: {"message":"Hello from Ratect!","visit_id":1000001,"total_visits":1000001,"count_source":"database"}
 cache holds visits:count=1000001, confirming app and this container share the same cache
 journey test passed
 
 Cleaning up...
-journey-test finished with exit code [32m0[0m in 8.2s.
+journey-test finished with exit code [32m0[0m in 8.3s.

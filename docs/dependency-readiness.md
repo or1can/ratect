@@ -21,7 +21,11 @@ entry once it's healthy:
 ```
 
 `app` depends on `db` and on `cache` (a `redis:7` with its own health check),
-and the `journey-test` task depends on `app` and, again, on `cache`. `ratect run
+and the `journey-test` task depends on `app` and, again, on `cache`. `app`
+itself is checked a third way — an
+[`external_health_check`](ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it)
+requesting `/healthz` from outside it — which is what the
+`ratect-health-check-app` container in the transcript below is. `ratect run
 journey-test -o simple`, captured on a terminal in `examples/full-stack`:
 
 ```ansi
@@ -30,8 +34,11 @@ journey-test -o simple`, captured on a terminal in `examples/full-stack`:
 
 The recording on the [homepage](index.md) is the same command in `fancy` mode.
 `db` takes longer than `cache` because it's genuinely seeding that table before
-its health check can pass, not because anything is padded. The rest of this page
-is what the lines between `Starting db...` and `Starting app...` mean.
+its health check can pass, not because anything is padded. `app has become
+healthy.` arrives immediately because `app` has no *Docker* health check to
+wait for — that gate is empty for it, and the wait that matters is the
+companion below it. The rest of this page is what the lines between `Starting
+db...` and `Starting app...` mean.
 
 ## The two gates
 
