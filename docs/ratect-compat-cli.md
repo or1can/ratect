@@ -83,7 +83,7 @@ listed under.
 | `--no-color` | — | — | Disables colored output from Ratect itself (task command output is never affected). Colors are already skipped automatically when stdout isn't a terminal, so this only matters on an interactive console — unless [`CLICOLOR_FORCE`](#environment-variables) is also set, which forces them past that check regardless. Also makes `simple` the auto-selected output style. The [`NO_COLOR`](#environment-variables) environment variable has exactly the same effect, if set, and always wins over `CLICOLOR_FORCE`. |
 | `--log-file <PATH>` | — | — | Writes Ratect's own internal logs to this file, in addition to stderr (both still governed by `RUST_LOG` — see [Environment variables](#environment-variables)). Plain text, no ANSI color codes, regardless of stderr's own coloring. |
 
-### Recognized for Batect compatibility, no effect
+### Recognized, no effect
 
 `--upgrade`, `--no-update-notification`, and `--no-wrapper-cache-cleanup` are accepted
 but do nothing — hidden from `--help`, since they're not real Ratect features, just
@@ -153,7 +153,7 @@ Append-only, with no live-updating progress detail at all, so it is safe for
 CI logs and redirected output. The health/setup-command milestones are shown
 for *dependency* containers only: the task's own container's readiness runs
 concurrently with its command (see [task
-lifecycle](task-lifecycle.md#known-simplifications-relative-to-batect)), so
+lifecycle](task-lifecycle.md#known-limitations)), so
 printing them would drop a line into the middle of that command's own output
 — [`all`](#all) shows them. A readiness *failure* is still reported, on stderr,
 in every style.

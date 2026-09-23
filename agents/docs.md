@@ -145,7 +145,9 @@ not restated here:
 5. **Batect-relative framing only on the Coming-from-Batect pages.** No
    page outside that section opens by comparing itself to a Batect page,
    and no section heading outside it names Batect; an inline "matching
-   Batect" aside is fine. Purpose: `docs/` does not assume familiarity with
+   Batect" aside is fine, and so is a closing "Coming from Batect?"
+   paragraph, after the page has said its own piece (`docs/comparison.md`,
+   `docs/task-lifecycle.md`). Purpose: `docs/` does not assume familiarity with
    Batect's documentation (above), and a New-to-Ratect reader has never
    seen the page an opening compares itself to. Model:
    `docs/dependency-readiness.md` — no Batect opening, no Batect heading,

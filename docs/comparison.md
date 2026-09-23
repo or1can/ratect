@@ -1,11 +1,7 @@
 # How Ratect Compares to Other Tools
 
-Batect's own version of this page compares against shell scripts, Docker
-Compose, [Dojo](https://github.com/kudulab/dojo), Earthly, CI tools with a
-local runner (GitLab CI, CircleCI), and Vagrant — reasonable choices when it
-was written, but Dojo and Vagrant are far less likely to be what a project
-is actually choosing between today. The comparison worth writing now is
-against what people actually reach for: [Docker
+This page compares Ratect against what a project is actually likely to be
+choosing between today: [Docker
 Compose](https://github.com/docker/compose),
 [Make](https://www.gnu.org/software/make/),
 [Task](https://github.com/go-task/task),
@@ -184,3 +180,10 @@ Nothing here is exclusive — a real project often uses more than one of
 these at once (a `justfile` that shells out to `ratect run`, or a Compose
 stack a Ratect task talks to). This is a guide to which problem each tool
 was built for, not a bracket with one winner.
+
+Coming from Batect? Its own comparison page ranged over shell scripts, Docker
+Compose, [Dojo](https://github.com/kudulab/dojo), Earthly, CI tools with a
+local runner (GitLab CI, CircleCI), and Vagrant — reasonable choices when it
+was written. Of those, Docker Compose and Earthly are the two this page also
+covers. To move a `batect.yml` project over, see [Migrating a Batect Project
+to Ratect](migrating-batect-project.md).

@@ -51,7 +51,7 @@
 //! interpreted identically in two modules, and keeping them in step by hand
 //! produced a distinct bug in each of three consecutive review rounds. Don't
 //! reintroduce a removal here. See [task
-//! lifecycle](https://github.com/or1can/ratect/blob/main/docs/task-lifecycle.md#known-simplifications-relative-to-batect) for
+//! lifecycle](https://github.com/or1can/ratect/blob/main/docs/task-lifecycle.md#known-limitations) for
 //! the one race this still shares with Batect (a near-instant main command with no
 //! `health_check` can still race past a `setup_commands` entry's own `docker exec`)
 //! and the one deliberate divergence (the main command is never cancelled early

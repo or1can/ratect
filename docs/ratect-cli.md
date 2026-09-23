@@ -1,7 +1,7 @@
 # `ratect` CLI Reference
 
-This documents the **`ratect`** binary — the forward-looking CLI, free to diverge
-from Batect's interface. For the Batect-compatible binary, see the
+This documents the **`ratect`** binary — the forward-looking CLI, with its own
+subcommand-based interface. For the compatibility binary, see the
 [`ratect-compat` CLI reference](ratect-compat-cli.md) instead; the two are described
 separately because they are deliberately different interfaces, not two spellings of
 one. If you haven't run a task yet, [Getting Started](getting-started.md) runs a

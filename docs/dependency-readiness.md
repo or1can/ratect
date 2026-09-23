@@ -286,5 +286,5 @@ matching Batect, which runs every container through identical per-container
 steps, task container included. What a failure there means for the task, the
 one race that leaves open, and where Ratect differs from Batect on it are in
 [known
-simplifications](task-lifecycle.md#known-simplifications-relative-to-batect)
+limitations](task-lifecycle.md#known-limitations)
 and [Differences from Batect](differences-from-batect.md#container-fields).
