@@ -671,7 +671,7 @@
           "additionalProperties": {
             "$ref": "#/definitions/TaskContainerCustomisation"
           },
-          "description": "Per-task overrides for a *non-main* container used somewhere in this task's own container graph (a task-level or container-level dependency, at any depth) — keyed by container name. Can't target `run.container` itself (set the equivalent property on `run` instead) or a container outside this task's graph — both validated in `Config::resolve_expressions_with_boundaries`, matching Batect's own `Task`/`ContainerDependencyGraph` checks. Applied in `TaskEngine::start_dependency`.",
+          "description": "Per-task overrides for a *non-main* container used somewhere in this task's own container graph (a task-level or container-level dependency, at any depth) — keyed by container name. Can't target `run.container` itself (set the equivalent property on `run` instead) or a container outside this task's graph; both are rejected when the file loads, matching Batect's own `Task`/`ContainerDependencyGraph` checks.",
           "type": [
             "object",
             "null"

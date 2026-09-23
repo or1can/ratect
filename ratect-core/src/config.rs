@@ -1286,7 +1286,7 @@ const EXTERNAL_HEALTH_CHECK_PREFIX: &str = "ratect-health-check-";
 /// The reserved name of the companion container generated for a container's
 /// [`ExternalHealthCheck`]. Deterministic, so the same config always
 /// produces the same graph, and rejected as a collision by
-/// [`expand_external_health_checks`] if the project declares a container of
+/// `expand_external_health_checks` if the project declares a container of
 /// its own under it.
 pub fn external_health_check_container_name(container: &str) -> String {
     format!("{EXTERNAL_HEALTH_CHECK_PREFIX}{container}")
@@ -1321,7 +1321,7 @@ pub fn external_health_check_container_name(container: &str) -> String {
 /// gets a generated companion container ([`external_health_check_container_name`])
 /// that loops the check and exits 0 or non-zero, and every dependent of the
 /// checked container gains that companion as a dependency too. The engine
-/// sees nothing new — see [`expand_external_health_checks`], which is the
+/// sees nothing new — see `expand_external_health_checks`, which is the
 /// whole of it.
 ///
 /// The check runs over the project's own Docker network, reaching the
@@ -2009,10 +2009,18 @@ pub struct Task {
     /// task's own container graph (a task-level or container-level
     /// dependency, at any depth) — keyed by container name. Can't target
     /// `run.container` itself (set the equivalent property on `run`
-    /// instead) or a container outside this task's graph — both validated
-    /// in [`Config::resolve_expressions_with_boundaries`], matching
-    /// Batect's own `Task`/`ContainerDependencyGraph` checks. Applied in
-    /// `TaskEngine::start_dependency`.
+    /// instead) or a container outside this task's graph; both are rejected
+    /// when the file loads, matching Batect's own
+    /// `Task`/`ContainerDependencyGraph` checks.
+    ///
+    /// Only the paragraph above becomes the generated schemas' description,
+    /// which is why the two rejections' own homes are named here rather than
+    /// there: the main-container one in
+    /// [`Config::resolve_expressions_with_boundaries`], the
+    /// outside-the-graph one in
+    /// `reject_customisations_outside_the_task_graph`, which runs after
+    /// `extends` because membership depends on `dependencies` a container
+    /// can inherit. Applied in `TaskEngine::start_dependency`.
     pub customise: Option<HashMap<String, TaskContainerCustomisation>>,
 }
 
@@ -2041,7 +2049,8 @@ pub struct TaskContainerCustomisation {
 /// proxy traffic to them" exemption list passed to
 /// `proxy::proxy_environment_variables`, and to validate a `customise`
 /// entry actually names a container that's part of the task (see
-/// [`Config::resolve_expressions_with_boundaries`]).
+/// `reject_customisations_outside_the_task_graph`, which has to run after
+/// `extends` for exactly the reason this function walks `dependencies`).
 ///
 /// `task_dependencies` (a task's own task-level `dependencies` — sidecars
 /// scoped to this one task, distinct from `root`'s own container-level
@@ -2661,7 +2670,7 @@ impl Config {
     /// wants `containers` itself, companions and all.
     ///
     /// Derived rather than flagged, and unambiguously so:
-    /// [`expand_external_health_checks`] refuses to load a project that
+    /// `expand_external_health_checks` refuses to load a project that
     /// declares or refers to a companion's name itself, so a container
     /// matching one can only ever be the generated one.
     pub fn declared_containers(&self) -> impl Iterator<Item = (&String, &Container)> {
@@ -3053,6 +3062,31 @@ impl Config {
     /// — see `Boundary::check_path_allowed` for why the project
     /// directory is a second allowed root rather than requiring pure
     /// containment within the clone.
+    ///
+    /// **Validation added here may only judge one field's own internal
+    /// shape** — that a `home_directory` is absolute, that `build_ssh` ids
+    /// are unique, that a config variable is declared. It runs *before*
+    /// [`resolve_extends`], and that is safe for exactly those rules:
+    /// `inherit_container_fields` replaces a field whole rather than merging
+    /// into it, so an inherited value is identical to one this pass already
+    /// judged on the parent.
+    ///
+    /// A rule spanning **two** fields is not safe here and belongs after
+    /// `resolve_extends` — with [`reject_conflicting_cache_scopes`],
+    /// [`reject_run_to_completion_conflicts`] and the rest — because
+    /// `extends` can supply one side of it and not the other, so this pass
+    /// sees a combination the container does not actually end up with. Nor
+    /// may a rule here read a *container's* fields while judging a task —
+    /// `container_names_in_task` walks `dependencies`, which is inherited
+    /// like anything else.
+    ///
+    /// None of that is hypothetical. Three rules lived here and were wrong
+    /// to: `run_to_completion`'s conflict with `health_check`/`setup_commands`
+    /// and the `cache`-mount path rule both accepted every inherited case,
+    /// and the `customise` membership rule *rejected* valid ones. Each moved
+    /// out only after the one before it had been found, which is the reason
+    /// this paragraph exists rather than another comment asserting the pass
+    /// is fine.
     fn resolve_expressions_with_boundaries(
         &mut self,
         base_path: &Path,
@@ -3240,7 +3274,6 @@ impl Config {
                                 home_directory
                             );
                         }
-                        // Each `cache` mount's container path, for the same
                         // The rule itself now lives in
                         // `reject_relative_cache_mounts_under_user_mapping`,
                         // after `resolve_extends` — it spans two fields
@@ -3307,22 +3340,11 @@ impl Config {
                         task_name
                     );
                 }
-                let names_in_task = container_names_in_task(
-                    &self.containers,
-                    &run.container,
-                    task.dependencies.as_deref(),
-                );
-                if let Some(customisation_name) =
-                    customise.keys().find(|n| !names_in_task.contains(*n))
-                {
-                    anyhow::bail!(
-                        "Task '{}' has customisations for container '{}', but the container \
-                         '{}' will not be started as part of the task",
-                        task_name,
-                        customisation_name,
-                        customisation_name
-                    );
-                }
+                // Whether a customised container is *in* the task's graph
+                // depends on container `dependencies`, which `extends` can
+                // supply — so that half lives in
+                // `reject_customisations_outside_the_task_graph`, after
+                // inheritance. See this method's own doc comment.
             }
             if let Some(run) = &mut task.run {
                 if let Some(environment) = &mut run.environment {
@@ -3708,6 +3730,11 @@ async fn load_project_impl(
     // And again, for the same reason: this one spans `volumes` and
     // `run_as_current_user`, either of which `extends` can supply alone.
     reject_relative_cache_mounts_under_user_mapping(&config)?;
+    // Third of the same kind, and the one that rejected valid configs
+    // rather than accepting invalid ones. Before `expand_external_health_checks`,
+    // whose own reserved-name check relies on `customise` keys having been
+    // judged against a graph with no generated companions in it yet.
+    reject_customisations_outside_the_task_graph(&config)?;
     // Same reasoning again: a `run_in` target has to be checked against the
     // declaring container's *effective* `dependencies`, which `extends` may
     // have supplied.
@@ -4163,6 +4190,44 @@ fn reject_conflicting_cache_scopes(config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Rejects a task customising a container that its own graph never starts.
+///
+/// **After `resolve_extends`**: membership is computed by
+/// `container_names_in_task`, which walks container `dependencies` — and a
+/// container can inherit that list. While this lived in
+/// [`Config::resolve_expressions_with_boundaries`] a base declaring
+/// `dependencies` and a child adding `extends` made every customisation of
+/// one of those dependencies fail to load, even though the task does start
+/// it. Unlike the two sibling rules that moved for the same reason, this one
+/// rejected valid configuration rather than accepting invalid.
+fn reject_customisations_outside_the_task_graph(config: &Config) -> Result<()> {
+    let mut task_names: Vec<&String> = config.tasks.keys().collect();
+    task_names.sort_unstable();
+    for task_name in task_names {
+        let task = &config.tasks[task_name];
+        let (Some(run), Some(customise)) = (&task.run, &task.customise) else {
+            continue;
+        };
+        let names_in_task = container_names_in_task(
+            &config.containers,
+            &run.container,
+            task.dependencies.as_deref(),
+        );
+        let mut customised: Vec<&String> = customise.keys().collect();
+        customised.sort_unstable();
+        if let Some(name) = customised
+            .into_iter()
+            .find(|name| !names_in_task.contains(*name))
+        {
+            anyhow::bail!(
+                "Task '{task_name}' has customisations for container '{name}', but the \
+                 container '{name}' will not be started as part of the task"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Rejects a relative `cache` mount destination on a container with
 /// `run_as_current_user` enabled.
 ///
@@ -4215,15 +4280,13 @@ fn reject_relative_cache_mounts_under_user_mapping(config: &Config) -> Result<()
 /// returns at the run-to-completion branch without ever running a setup
 /// command.
 ///
-/// **After `resolve_extends`, which is the whole point of it being here
-/// rather than in [`Config::resolve_expressions_with_boundaries`]** — where
-/// it used to live, under a comment asserting there was no inheritance
-/// complication to worry about. There is: a base declaring `setup_commands`
-/// and a child adding `extends` plus `run_to_completion` passed that
-/// earlier check, because the child's own `setup_commands` was still unset
-/// when it ran, and the commands were then dropped in silence at run time.
-/// A rule about a container's *effective* configuration has to be applied
-/// to the effective configuration.
+/// **After `resolve_extends`**, because it spans two fields: a base
+/// declaring `setup_commands` and a child adding `extends` plus
+/// `run_to_completion` passed while this ran earlier, since the child's own
+/// `setup_commands` was still unset at that point — and the commands were
+/// then dropped in silence at run time. See
+/// [`Config::resolve_expressions_with_boundaries`]'s own doc comment for
+/// the rule this is one of three instances of.
 ///
 /// An explicitly empty `setup_commands` is not a declaration of any: it is
 /// how an `extends` child clears a list it would otherwise inherit (see
@@ -4471,17 +4534,20 @@ fn expand_external_health_checks(config: &mut Config) -> Result<()> {
                  must hold only letters, digits, '-', '_' and '.'"
             );
         }
-        // And must *start* with one of the letters or digits, which is
-        // Docker's own rule for a name (`[a-zA-Z0-9][a-zA-Z0-9_.-]*`) and so
-        // for the network alias the check resolves. A leading '-' is worse
-        // than merely invalid, for the TCP form specifically: the name is a
-        // bare argument to `nc -z -w 5 <name> <port>`, where it would be
-        // read as an option rather than a host.
-        if !name.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+        // And must not *start* with a '-' or a '.'. Deliberately narrower
+        // than "must start with a letter or digit", because that was tried
+        // and was wrong: measured against the real tools, Docker accepts and
+        // resolves a `_api` network alias, and both `curl` and `nc` reach it
+        // — so a leading '_' has nothing wrong with it. The two that do:
+        // `.api` is not a resolvable host at all (`curl` reports `000`, `nc`
+        // "bad address"), and `-api` is read by `nc` as an option rather
+        // than a host, so the check fails naming somewhere it never
+        // contacted. An empty name has no host to reach at all.
+        if name.is_empty() || name.starts_with(['-', '.']) {
             anyhow::bail!(
-                "Container '{name}' has an 'external_health_check', but its own name does \
-                 not start with a letter or digit — the check reaches it by that name, and \
-                 Docker requires a name to start with one"
+                "Container '{name}' has an 'external_health_check', but its own name is \
+                 empty or starts with '-' or '.' — the check reaches it by that name, and \
+                 such a name is either unresolvable or read as an option instead of a host"
             );
         }
         if let ExternalHealthCheckKind::Http { path, .. } = &check.kind {

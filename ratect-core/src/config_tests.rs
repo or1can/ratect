@@ -505,8 +505,8 @@ tasks:
 }
 
 #[test]
-fn resolve_expressions_errors_when_customise_targets_a_container_outside_the_tasks_graph() {
-    let mut config = parse(
+fn customise_targeting_a_container_outside_the_tasks_graph_is_rejected() {
+    let config = parse(
         r#"
 project_name: demo
 containers:
@@ -524,12 +524,10 @@ tasks:
 "#,
     );
 
-    let result = config.resolve_expressions_with(
-        Path::new("/base"),
-        &HashMap::new(),
-        &HashMap::new(),
-        no_host_env,
-    );
+    // The rule's own function rather than the expression pass it used to
+    // live in: membership walks container `dependencies`, which `extends`
+    // can supply, so it runs after inheritance.
+    let result = reject_customisations_outside_the_task_graph(&config);
 
     assert!(format!("{:#}", result.unwrap_err()).contains(
         "Task 'test' has customisations for container 'unrelated', but the container \
@@ -5843,6 +5841,108 @@ run = {{ container = "foo" }}
     );
 }
 
+/// Pins the *order* of two load steps, which is otherwise only a line
+/// position: `reject_customisations_outside_the_task_graph` has to run
+/// before `expand_external_health_checks`, or a `customise` entry keyed on a
+/// generated companion's reserved name is judged against a graph that
+/// already contains it — and is accepted, reaching into a container the user
+/// never wrote. The reserved-name check deliberately has no `customise` arm
+/// *because* of this ordering, so nothing else would notice it changing.
+#[tokio::test]
+async fn a_customise_entry_cannot_reach_a_generated_health_check_companion() {
+    let err = load_native_toml(&format!(
+        r#"
+project_name = "demo"
+
+[containers.api]
+image = "my-org/api:1.0.0"
+[containers.api.external_health_check]
+type = "tcp"
+port = 8080
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["api"]
+
+[tasks.t]
+run = {{ container = "app", command = "true" }}
+[tasks.t.customise."{companion}"]
+environment = {{ A = "b" }}
+"#,
+        companion = external_health_check_container_name("api")
+    ))
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains(&external_health_check_container_name("api")),
+        "got: {err:#}"
+    );
+}
+
+/// The third rule of this class, and the only one that was wrong in the
+/// *rejecting* direction: membership comes from `container_names_in_task`,
+/// which walks container `dependencies`, so a task customising a dependency
+/// its container inherited failed to load even though the task does start
+/// it.
+#[tokio::test]
+async fn a_customised_container_reached_through_an_inherited_dependency_is_accepted() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.db]
+image = "alpine:3.18"
+
+[containers.base]
+image = "alpine:3.18"
+dependencies = ["db"]
+
+[containers.app]
+extends = "base"
+
+[tasks.t]
+run = { container = "app", command = "true" }
+[tasks.t.customise.db]
+environment = { A = "b" }
+"#,
+    )
+    .await
+    .expect("the task does start 'db', through an inherited dependencies list");
+    assert!(project.config.tasks["t"]
+        .customise
+        .as_ref()
+        .unwrap()
+        .contains_key("db"));
+}
+
+/// A container the task genuinely never starts is still rejected — the rule
+/// moved, it did not weaken.
+#[tokio::test]
+async fn a_customised_container_outside_the_task_graph_is_still_rejected() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.nowhere]
+image = "alpine:3.18"
+
+[containers.app]
+image = "alpine:3.18"
+
+[tasks.t]
+run = { container = "app", command = "true" }
+[tasks.t.customise.nowhere]
+environment = { A = "b" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("will not be started as part of the task"),
+        "got: {err:#}"
+    );
+}
+
 /// The same class as the `run_to_completion` conflict below: a rule
 /// spanning `volumes` and `run_as_current_user` cannot run before
 /// `extends`, because either side can be inherited. Both directions load
@@ -5969,11 +6069,10 @@ run = {{ container = "app" }}
     }
 }
 
-/// Docker's own name rule rejects any leading non-alphanumeric, and the
-/// error says so. '-' still earns its own test, because it is the one that
-/// would also be actively misread rather than merely refused: the name is a
-/// bare argument to `nc -z -w 5 <name> <port>`, where it parses as an
-/// option, and the check would report a host it never contacted.
+/// '-' earns its own test separately from the unreachable names above,
+/// because it fails in a worse way than not resolving: the name is a bare
+/// argument to `nc -z -w 5 <name> <port>`, where it parses as an option, so
+/// the check would fail reporting a host it never contacted.
 #[tokio::test]
 async fn external_health_check_rejects_a_container_name_starting_with_a_dash() {
     let err = load_native_toml(
@@ -5997,18 +6096,19 @@ run = { container = "app" }
     .await
     .unwrap_err();
     assert!(
-        format!("{err:#}").contains("does not start with a letter or digit"),
+        format!("{err:#}").contains("starts with '-' or '.'"),
         "got: {err:#}"
     );
 }
 
-/// The leading-character rule covers `_` and `.` as well as `-`, so the
-/// message must not claim the character would be "read as an option" —
-/// only `-` would. An empty name also has no first character to quote at
-/// all, which previously put a raw NUL byte in the error.
+/// Only the names the real tools actually choke on. Measured, not assumed:
+/// Docker resolves a `_api` alias and both `curl` and `nc` reach it, so
+/// `_api` must *load* — the sibling test below. `.api` resolves nowhere
+/// (`curl` reports `000`, `nc` says "bad address") and `-api` is read by
+/// `nc` as an option; an empty name has no host at all.
 #[tokio::test]
-async fn the_leading_character_error_does_not_misstate_its_own_reason() {
-    for name in ["_api", ".api", ""] {
+async fn external_health_check_rejects_only_unreachable_leading_characters() {
+    for name in [".api", ""] {
         let err = load_native_toml(&format!(
             r#"
 project_name = "demo"
@@ -6027,14 +6127,47 @@ run = {{ container = "{name}" }}
         .unwrap_err();
         let message = format!("{err:#}");
         assert!(
-            message.contains("does not start with a letter or digit"),
+            message.contains("starts with '-' or '.'"),
             "expected {name:?} to be rejected, got: {message}"
         );
+        // An empty name has no first character to quote; interpolating one
+        // previously put a raw NUL byte in the message.
         assert!(
             !message.contains('\0'),
             "an empty name has no character to quote: {message:?}"
         );
     }
+}
+
+/// The half that stops the rule drifting back to "must start alphanumeric":
+/// a leading '_' is reachable in practice, so rejecting it would refuse a
+/// configuration that works.
+#[tokio::test]
+async fn an_underscore_leading_container_name_may_be_externally_checked() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers._api]
+image = "my-org/api:1.0.0"
+[containers._api.external_health_check]
+type = "tcp"
+port = 8080
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["_api"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .expect("a leading underscore resolves for both curl and nc");
+    assert!(project
+        .config
+        .containers
+        .contains_key(&external_health_check_container_name("_api")));
 }
 
 /// The same "can never pass" class as a zero port: curl's `%{http_code}` is

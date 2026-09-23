@@ -505,9 +505,10 @@ zero is rejected when the file loads rather than taken literally — nothing
 listens on port 0, zero attempts would never check at all, and the tools the
 check is made with read a zero timeout as *no* timeout. So is an
 `expected_status` that isn't three digits, which no HTTP response can carry.
-A checked container's own name has to be a plain hostname — letters, digits,
-`-`, `_`, `.`, and starting with a letter or digit — since the check reaches
-it by that name.
+A checked container's own name has to be reachable as a hostname, since the
+check reaches it by that name: letters, digits, `-`, `_` and `.`, not
+starting with a `-` or a `.`. (A leading `_` is fine — Docker resolves it and
+both tools the check uses reach it.)
 
 - **Over the project's own network, never a published port.** The check
   reaches the container by its container-config name — the same network alias
