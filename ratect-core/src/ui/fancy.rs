@@ -136,7 +136,7 @@ enum Stage {
         index: usize,
         total: usize,
         /// The container it runs inside, when that isn't the one whose row
-        /// this is — see [`TaskEvent::RunningSetupCommand::run_in`].
+        /// this is — see [`TaskEvent::RunningSetupCommand`]'s own `run_in`.
         run_in: Option<String>,
     },
     /// A dependency's terminal state: healthy, setup commands done.

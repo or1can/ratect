@@ -1279,8 +1279,8 @@ pub struct SetupCommand {
     /// container's setup commands run, so the target is guaranteed to exist
     /// and be running. A sibling has no ordering edge to this container at
     /// all, and a *dependent* structurally cannot have started yet — either
-    /// would be a race. Validated in [`validate_setup_command_targets`],
-    /// after [`resolve_extends`], so an inherited `dependencies` list counts.
+    /// would be a race. Validated in `validate_setup_command_targets`,
+    /// after `resolve_extends`, so an inherited `dependencies` list counts.
     ///
     /// Deliberately the *container's* own `dependencies` and not a task's:
     /// a task-level `dependencies` entry does order the target ahead of that
