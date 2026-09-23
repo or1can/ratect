@@ -110,18 +110,17 @@ dependencies of its own never starts before every one of them is ready, but two
 containers with no dependency relationship to each other start at the same time
 rather than one after the other. For example:
 
-```yaml
-containers:
-  app:
-    image: my-app
-    dependencies:
-      - database
-  database:
-    image: postgres:16
-    dependencies:
-      - cache
-  cache:
-    image: redis:7-alpine
+```toml
+[containers.app]
+image = "my-app"
+dependencies = ["database"]
+
+[containers.database]
+image = "postgres:16"
+dependencies = ["cache"]
+
+[containers.cache]
+image = "redis:7-alpine"
 ```
 
 ```mermaid

@@ -1,6 +1,7 @@
 # Task Lifecycle
 
-This is the detailed, step-by-step version of what `ratect-compat <task>` actually does,
+This is the detailed, step-by-step version of what `ratect run <task>` (or
+`ratect-compat <task>` — the two binaries share one engine) actually does,
 covering task ordering, per-task setup and cleanup in depth (what a dependency
 has to pass before it counts as ready is on its own page — see [Dependency
 Readiness](dependency-readiness.md)). For the
@@ -16,36 +17,28 @@ just order sequential task executions — each prerequisite task runs to complet
 (including its own cleanup, described below) before the next one starts, and before
 the originally-requested task itself runs.
 
-```yaml
-tasks:
-  compile:
-    run:
-      container: build-env
-      command: ./build.sh
-  test:
-    prerequisites:
-      - compile
-    run:
-      container: build-env
-      command: ./test.sh
+```toml
+[tasks.compile]
+run = { container = "build-env", command = "./build.sh" }
+
+[tasks.test]
+prerequisites = ["compile"]
+run = { container = "build-env", command = "./test.sh" }
 ```
 
-Running `ratect-compat test` here runs `compile` to completion first, fully cleaning up
+Running `ratect run test` here runs `compile` to completion first, fully cleaning up
 after it, then runs `test`.
 
 A task doesn't strictly need a `run` of its own — a task with only `prerequisites`
 is valid (see [config reference](ratect-compat-config-reference.md#task)), and exists purely to
 chain other tasks together:
 
-```yaml
-tasks:
-  ci:
-    prerequisites:
-      - compile
-      - test
+```toml
+[tasks.ci]
+prerequisites = ["compile", "test"]
 ```
 
-Running `ratect-compat ci` here runs `compile` then `test` to completion, same as above,
+Running `ratect run ci` here runs `compile` then `test` to completion, same as above,
 then stops — there's no container of `ci`'s own left to run.
 
 ## Per-task steps
@@ -140,22 +133,17 @@ Because dependency resolution is scoped to a single task execution, **two differ
 tasks that each depend on the same container name get their own separate instance** —
 nothing is shared or deduped across tasks, even within one `ratect` invocation:
 
-```yaml
-tasks:
-  migrate:
-    run:
-      container: app
-      command: run-migrations.sh
-  test:
-    prerequisites:
-      - migrate
-    run:
-      container: app
-      command: run-tests.sh
+```toml
+[tasks.migrate]
+run = { container = "app", command = "run-migrations.sh" }
+
+[tasks.test]
+prerequisites = ["migrate"]
+run = { container = "app", command = "run-tests.sh" }
 ```
 
 Both `migrate` and `test` here depend on `database` (via `app`'s container config).
-Running `ratect-compat test` starts a `database` instance, its own network, runs `migrate`,
+Running `ratect run test` starts a `database` instance, its own network, runs `migrate`,
 cleans both up — then starts a *second*, independent `database` instance and network
 for `test`. This matches Batect's own documented behavior ("each task will start its
 own instance of each container, even if multiple tasks share the same container") and

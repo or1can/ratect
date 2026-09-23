@@ -10,7 +10,7 @@ surprises the next person too — open an issue.
 Ratect gives you both, and they trade off differently:
 
 - A [`volumes` bind mount](ratect-compat-config-reference.md#volume-path-resolution)
-  (`{ local: ".", container: "/code" }`) makes your working directory show up live
+  (`{ local = ".", container = "/code" }`) makes your working directory show up live
   inside the container — every one of the [worked examples](worked-examples.md)
   does exactly this for its own source tree. Edit a file on the host, rerun the task, and the container
   sees the change with no rebuild. The image itself stays generic (a stock language
@@ -37,11 +37,10 @@ Use [`entrypoint`](ratect-compat-config-reference.md#container) rather than `com
 `command` (or a task's `run.command`) is set to, and the classic idiom is a wrapper
 script that does its setup, then hands off to whatever was actually asked for:
 
-```yaml
-containers:
-  app:
-    image: my-app
-    entrypoint: /entrypoint.sh
+```toml
+[containers.app]
+image = "my-app"
+entrypoint = "/entrypoint.sh"
 ```
 
 ```sh
@@ -56,7 +55,7 @@ The `exec "$@"` at the end matters: it replaces the shell process with the real
 command instead of running it as a child, so the real command becomes PID 1 (or
 inherits proper signal delivery under `exec`) rather than being one process removed
 from it. This is also why `entrypoint`/`command` combine cleanly for the well-known
-`entrypoint: /bin/sh -c`, `command: 'make lint'` idiom (an entrypoint tokenizes
+`entrypoint = "/bin/sh -c"`, `command = "make lint"` idiom (an entrypoint tokenizes
 exactly like `command` does — see the field reference) — Ratect passes both straight
 through to Docker with neither side adding an extra shell layer of its own.
 
@@ -77,7 +76,7 @@ with no memory of any previous run. Take the `migrate`/`test` example from [Cros
 isolation](task-lifecycle.md#cross-task-isolation) — `test` has `migrate` as a
 prerequisite, and `migrate` runs `run-migrations.sh`:
 
-Every `ratect-compat test` run executes `migrate` again first, from a fresh
+Every `ratect run test` run executes `migrate` again first, from a fresh
 container. If `run-migrations.sh` isn't safe to run twice — it reapplies a
 migration that's already applied, or errors on a table that already exists — every
 single `test` run breaks or corrupts state, not just the first one. The same applies
@@ -110,14 +109,14 @@ too tight, and it's easy to blame the task runner instead of the actual cause.
 
 `command` (and `entrypoint`) are tokenized into literal argv — quote/backslash-aware
 whitespace splitting, matching Batect's own tokenizer exactly — with **no shell
-involved and no expression support**. `command: echo $HOME && echo done` doesn't
+involved and no expression support**. `command = "echo $HOME && echo done"` doesn't
 run two commands with `$HOME` expanded; it's parsed as a single program named
 `echo` given the literal argv `$HOME`, `&&`, `echo`, `done` — Docker will fail to
 find an executable called `$HOME`. Anything relying on shell operators (`&&`, `||`,
 pipes) or runtime environment expansion needs an explicit shell wrapper:
 
-```yaml
-command: sh -c 'echo $HOME && echo done'
+```toml
+command = "sh -c 'echo $HOME && echo done'"
 ```
 
 This is easy to conflate with a second, entirely different `$`-syntax: Ratect's own
@@ -141,12 +140,10 @@ variable a container's command needs has to be passed through explicitly via
 [`environment`](ratect-compat-config-reference.md#expressions), using Ratect's own expression
 syntax:
 
-```yaml
-containers:
-  app:
-    image: my-app
-    environment:
-      API_KEY: $API_KEY
+```toml
+[containers.app]
+image = "my-app"
+environment = { API_KEY = "$API_KEY" }
 ```
 
 Nothing here is a default worth changing — declaring every environment variable a
