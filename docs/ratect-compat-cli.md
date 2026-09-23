@@ -4,7 +4,7 @@
 ratect-compat [OPTIONS] [TASK_NAME] [-- ADDITIONAL_ARGS...]
 ```
 
-This reflects the flags Ratect actually implements today (`ratect-compat/src/main.rs`) —
+This reflects the flags Ratect implements (`ratect-compat/src/main.rs`) —
 every Batect CLI flag is supported, flag-for-flag, unless listed in
 [differences from Batect](differences-from-batect.md).
 
@@ -88,8 +88,8 @@ listed under.
 `--upgrade`, `--no-update-notification`, and `--no-wrapper-cache-cleanup` are accepted
 but do nothing — hidden from `--help`, since they're not real Ratect features, just
 recognized so an existing Batect invocation carrying one doesn't hard-fail outright
-(before these were recognized, any of them caused a `clap` parse error that killed the
-*entire* invocation before anything ran at all, including `--list-tasks`). All three
+(an unrecognized flag is a `clap` parse error that kills the *entire* invocation before
+anything runs at all, including `--list-tasks`). All three
 only make sense for Batect's own self-updating wrapper script, which Ratect — a single
 native binary — doesn't have and isn't planning to grow. `--upgrade` specifically
 prints a one-line notice to stderr and exits `0` rather than running silently, since a
@@ -204,8 +204,8 @@ hostname check). This isn't just inherited from a missing feature: `rustls`, the
 library Ratect's TLS support is built on, takes the same position deliberately —
 there's no boolean toggle for skipping verification in `rustls` either, only a
 `dangerous()` accessor that requires implementing the `ServerCertVerifier` trait from
-scratch to bypass it. Ratect doesn't reach for that. If you've historically reached
-for `--docker-tls` (skip-verify) because your daemon's certificate is self-signed —
+scratch to bypass it. Ratect doesn't reach for that. If you reach for `--docker-tls`
+(skip-verify) because your daemon's certificate is self-signed —
 including for local development or CI — the fix isn't to skip verification, it's to
 make the certificate verifiable: run your own certificate authority, and trust *that*,
 rather than trusting nothing.
@@ -317,10 +317,10 @@ passed directly as the container's entrypoint arguments instead, matching plain
 
 ## Exit codes and error reporting
 
-Ratect uses a plain `0` (success) / non-zero (failure) convention, but note the current
-actual behavior — it doesn't yet distinguish "nothing to do" from "success":
+Ratect uses a plain `0` (success) / non-zero (failure) convention, but note that it
+doesn't distinguish "nothing to do" from "success":
 
-- Running with no task name at all (and not `--list-tasks`) currently **exits `0`** —
+- Running with no task name at all (and not `--list-tasks`) **exits `0`** —
   Ratect logs a warning but doesn't fail the process. This is a rough edge, not
   intentional design; don't rely on it in scripts.
 - A missing or malformed config file (fails to parse), a task/container referenced by

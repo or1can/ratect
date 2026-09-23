@@ -1,7 +1,7 @@
 # `batect.yml` Configuration Reference
 
 Ratect reads a YAML file (`batect.yml` by default) describing containers and tasks.
-This documents the schema Ratect actually parses today (`ratect-core/src/config.rs`) —
+This documents the schema Ratect parses (`ratect-core/src/config.rs`) —
 every Batect configuration field is supported, field-for-field, unless listed in
 [differences from Batect](differences-from-batect.md).
 
@@ -222,7 +222,7 @@ task's own container, as a dependency, or by more than one task) — but never r
 - A `.dockerignore` file at `build_directory`'s root, if present, excludes matching
   files from the build context — see [`.dockerignore` semantics](#dockerignore-semantics)
   below for the (non-obvious) matching rules. No `.dockerignore` means the whole
-  directory tree becomes the build context, unchanged from before this existed.
+  directory tree becomes the build context.
   `dockerfile` and `.dockerignore` itself are always included in the build context
   regardless of exclusion patterns, matching Docker's own special-casing.
 - `build_secrets` exposes secrets to the build via BuildKit's secret-mount mechanism
@@ -293,13 +293,18 @@ task's own container, as a dependency, or by more than one task) — but never r
   a plain `docker build -t ... .` would leave behind. Docker's own build cache is
   likewise untouched by Ratect. Matches Batect exactly — its `BuildImageStepRunner`/
   `CleanupStagePlanner` have no cache-control flag or image-removal step either.
-- Ratect has no `--output` mode yet, so build progress is logged rather than
-  streamed to the console: each build log line is emitted at `debug` level (set
+- How much of a build's output you see depends on the
+  [output style](ratect-compat-cli.md#output-styles): `-o all` streams every
+  build log line as `<container> | Image build | ...`; `fancy` shows the latest
+  line in the container's status row; `simple` prints only `Building
+  <container>...` and `Built <container>.`; `quiet` prints nothing. Independently
+  of the style, each build log line is also emitted at `debug` level (set
   `RUST_LOG=info,ratect_core=debug` for a live transcript without unrelated
   dependency noise — see [filtering `RUST_LOG`](how-it-works.md#filtering-rust_log)),
   and if the build fails, the *entire* transcript is included in the error Ratect
   reports — not just Docker's one-line failure summary — so a failing `RUN` step's
-  own output is always visible without needing `RUST_LOG` set.
+  own output is always visible, under every output style, without needing
+  `RUST_LOG` set.
 
 #### `.dockerignore` semantics
 
@@ -405,11 +410,11 @@ The name becomes a host directory under `--cache-type=directory`, so a name
 like `/etc` or `../../.ssh` would otherwise have an arbitrary host directory
 bind-mounted into the container; Batect performs no such check, and Ratect
 diverges here for the same reason it applies [containment to Git
-includes](includes.md#containment). Under `--cache-type=volume` Docker already enforced this, so nothing that
-worked there is affected. **Directory caches are a breaking change**: they
-accepted any name, so `name: my cache` or `name: node/modules` loaded before
-and now fails. Rename the cache — the storage is rebuilt on the next run, which
-is what a cache is for.
+includes](includes.md#containment). Under `--cache-type=volume` Docker already enforces this, so nothing that
+worked there is affected. Under `--cache-type=directory` the same rule
+applies, so a `name: my cache` or `name: node/modules` fails to load. Rename
+the cache — the storage is rebuilt on the next run, which is what a cache is
+for.
 
 A `cache` mount persists between separate `ratect` invocations — unlike `local`, its
 contents aren't tied to a specific host path in `batect.yml`. `name` identifies it,
@@ -580,7 +585,7 @@ A real, simpler instance of the object form:
 range or protocol (that project is written in the native `ratect.toml`
 format, where the same field means exactly the same thing — see [Field
 reference](ratect-config-reference.md#field-reference)). The range and UDP
-forms above have no real counterpart in `examples/` today.
+forms above have no real counterpart in `examples/`.
 
 ### Dependency readiness
 
@@ -838,9 +843,8 @@ A few details worth knowing:
   machine running a proxy. A value that isn't a `http`/`https` URL, or doesn't refer to
   the local machine, is left unchanged.
 
-  On every platform, including Linux — which is the part that used to be
-  missing, since Docker Desktop supplies `host.docker.internal` itself and on
-  Linux nothing does.
+  On every platform, including Linux — where, unlike under Docker Desktop,
+  nothing supplies `host.docker.internal` by itself.
 
   So a run that rewrote a URL also adds `host.docker.internal:host-gateway` to
   every container it starts and every image it builds, using Docker's own
@@ -997,7 +1001,7 @@ covering the same number of ports, `customise` naming a container that's actuall
 the task's graph). Those are still reported by Ratect itself, when you run a task.
 
 Not submitted to [SchemaStore's catalog](https://www.schemastore.org/api/json/catalog.json)
-itself — a possible later step, not done yet.
+itself, so an editor only picks the schema up via the `$schema` line above.
 
 ## Full example
 

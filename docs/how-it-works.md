@@ -25,7 +25,7 @@ aren't known at the first:
    [`toml`](https://docs.rs/toml), one struct set for both formats — and its
    top-level `include` list (if any) is resolved, with every loaded file's
    `containers`/`tasks`/`config_variables` merged into one `Config` (see
-   [how included files combine](includes.md#how-included-files-combine)). No expression interpolation yet.
+   [how included files combine](includes.md#how-included-files-combine)). Expressions are not interpolated at this stage.
 
    Includes are walked breadth-first, so every entry in the root file is reached
    before any included file's own, and each file is loaded exactly once however

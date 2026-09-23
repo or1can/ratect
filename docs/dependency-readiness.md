@@ -43,8 +43,8 @@ that depends on it (another dependency, or the task's own container) starts:
    waits for Docker's verdict: proceeds on *healthy*; fails the task on
    *unhealthy* (the error includes the last health-check run's exit code and
    output) or if the container exits first. A container with no health check at
-   all is immediately considered healthy — the pre-0.9.0 "started = ready"
-   behavior, now just the no-health-check special case. In the transcript, this
+   all is immediately considered healthy — for it, started *is* ready. In the
+   transcript, this
    gate is the gap between `Started db.` and `db has become healthy.`
 2. **Its `setup_commands` must succeed.** Each runs inside the running container
    (via Docker's `exec` mechanism), one at a time in declared order, with the
@@ -244,7 +244,7 @@ nothing unexpected to report.
 
 ## The task's own container
 
-The task's own container goes through this same readiness gate too (0.21.0),
+The task's own container goes through this same readiness gate too,
 run concurrently with its main command rather than gating anything on it —
 matching Batect, which runs every container through identical per-container
 steps, task container included. What a failure there means for the task, the

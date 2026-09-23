@@ -79,8 +79,8 @@ without forking it:
 `ratect.toml`'s [shared caches](ratect-config-reference.md#shared-caches)
 (`scope = "shared"` on a `cache` volume) are worth calling out specifically
 for a bundle that wants one Cargo registry or npm cache reused across every
-project that includes it. Before this existed, the only way to get that was
-a host path — `local: ~/.cache/cargo` — which meant asking every consumer for
+project that includes it. The alternative is a host path —
+`local: ~/.cache/cargo` — which means asking every consumer for
 `allow_host_paths`. A shared cache says the same thing directly, grants no
 host filesystem access, and stays under Ratect's own control
 (`ratect-shared-cache-<name>`, alongside `~/.ratect/incl` where Git includes

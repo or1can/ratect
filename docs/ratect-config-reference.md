@@ -1,7 +1,7 @@
 # `ratect.toml` Configuration Reference
 
 This documents **`ratect.toml`**, the native configuration format the
-[`ratect`](ratect-cli.md) binary reads by default (from 0.3.0). It is the same
+[`ratect`](ratect-cli.md) binary reads by default. It is the same
 schema the [Configuration Reference](ratect-compat-config-reference.md) documents — the same
 containers, tasks, and fields, with the same meanings — re-spelled in TOML, with
 a few native additions (`extends`, an auto-discovered local overrides file) and a
@@ -221,7 +221,7 @@ container = "/build"    # no scope: private to this project
 ```
 
 This exists because the alternative is worse. A bundle that wants one Cargo
-registry or npm cache across projects has, until now, had to spell it as a
+registry or npm cache across projects would otherwise have to spell it as a
 host path (`local = "~/.cache/cargo"`), which means granting the bundle access
 to your home directory — the thing
 [`allow_host_paths`](includes.md#vouching-for-a-bundle) exists to permit and
@@ -339,7 +339,7 @@ none is configured), then runs its `setup_commands` — see [Dependency
 Readiness](dependency-readiness.md#the-two-gates). `run_to_completion` replaces that whole
 gate with a simpler one: the dependency runs, and is ready once it exits with
 status 0 — a non-zero exit fails the task run the same way an unhealthy
-dependency or a failing setup command does today. Kubernetes-style
+dependency or a failing setup command does. Kubernetes-style
 init-container behavior, expressed as a plain node in the existing dependency
 graph rather than a separate concept:
 
