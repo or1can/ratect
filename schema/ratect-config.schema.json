@@ -605,7 +605,7 @@
     },
     "SetupCommand": {
       "additionalProperties": false,
-      "description": "One entry in a container's `setup_commands` list: a command run inside the started container after it becomes healthy but before its dependents start. Runs with the container's own environment and user/group. Tokenized into literal argv the same way `command`/`entrypoint` are (see `tokenize_command_line` in `docker.rs`) — no shell involved, matching Batect's own `SetupCommand.command` exactly (typed `Command`, the same type as `Container.command`/`entrypoint`, and passed to Docker's exec API as already-parsed argv — confirmed by reading `RunContainerSetupCommandsStepRunner.runSetupCommand`, not assumed from Batect's docs). A command relying on shell operators (`&&`, `$VAR` expansion, etc.) needs an explicit `sh -c '...'` wrapper, same as `command`/`entrypoint`.",
+      "description": "One entry in a container's `setup_commands` list: a command run after the container becomes healthy but before its dependents start — inside that container, or, with `run_in`, inside one of its dependencies. Runs with the environment and user/group of whichever container it runs in. Tokenized into literal argv the same way `command`/`entrypoint` are — no shell involved, so a command relying on shell operators (`&&`, `$VAR` expansion, etc.) needs an explicit `sh -c '...'` wrapper.",
       "properties": {
         "command": {
           "description": "The command to run, tokenized into arguments rather than run through a shell — wrap it in `sh -c '...'` to use shell operators.",

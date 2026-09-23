@@ -232,6 +232,32 @@ fn make_native(json: &mut serde_json::Value) {
     // Add the native-only `run_in` field to a setup command — skipped from
     // the compat schema (`SetupCommand::run_in`'s `schemars(skip)`, since
     // `ratect-compat` rejects it), same reasoning as `extends` below.
+    //
+    // The object's *own* description is corrected first, for the same
+    // reason its `working_directory` one is below: the shared text says a
+    // setup command runs inside the container that declares it, with that
+    // container's environment and user, which `run_in` makes untrue here.
+    // This is the only place a native user reading their editor can find
+    // that out, so leaving it would make the generated artifact the one
+    // source that still says the old thing.
+    if let Some(setup_command) = definitions
+        .get_mut("SetupCommand")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        setup_command.insert(
+            "description".to_string(),
+            serde_json::json!(
+                "One entry in a container's `setup_commands` list: a command run after \
+                 the container becomes healthy but before its dependents start — inside \
+                 that container, or, with `run_in`, inside one of its dependencies. Runs \
+                 with the environment and user/group of whichever container it runs in. \
+                 Tokenized into literal argv the same way `command`/`entrypoint` are — no \
+                 shell involved, so a command relying on shell operators (`&&`, `$VAR` \
+                 expansion, etc.) needs an explicit `sh -c '...'` wrapper."
+            ),
+        );
+    }
+
     if let Some(properties) = definitions
         .get_mut("SetupCommand")
         .and_then(|setup_command| setup_command.get_mut("properties"))
