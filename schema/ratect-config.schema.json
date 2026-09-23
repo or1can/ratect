@@ -253,6 +253,83 @@
           "description": "Inherit every field from another container by name, then override only the fields set here — ratect's native replacement for YAML anchors. Shallow and per-field: a field set here replaces the inherited one; a field left unset is taken from the named container.",
           "type": "string"
         },
+        "external_health_check": {
+          "description": "Checks this container's readiness from outside it, over the project's own Docker network — for an image with no shell or check tooling of its own. Ratect runs the check from a generated companion container, so nothing has to be published to the host. Mutually exclusive with `health_check`, `run_to_completion` and `setup_commands`.",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "expected_status": {
+                  "description": "The HTTP status code that means ready. Defaults to 200.",
+                  "maximum": 999,
+                  "minimum": 100,
+                  "type": "integer"
+                },
+                "interval": {
+                  "description": "How long to wait between attempts, in Batect's Go-style duration format (\"2s\", \"500ms\"). Defaults to \"1s\".",
+                  "type": "string"
+                },
+                "path": {
+                  "description": "The path to request. Defaults to \"/\".",
+                  "type": "string"
+                },
+                "port": {
+                  "description": "The port to request, as the container itself listens on it — not a published host port.",
+                  "maximum": 65535,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "retries": {
+                  "description": "How many attempts to make before failing the task. Defaults to 30.",
+                  "type": "integer"
+                },
+                "timeout": {
+                  "description": "How long one attempt may take before it counts as a failure. Defaults to \"5s\".",
+                  "type": "string"
+                },
+                "type": {
+                  "const": "http"
+                }
+              },
+              "required": [
+                "type",
+                "port"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "interval": {
+                  "description": "How long to wait between attempts, in Batect's Go-style duration format (\"2s\", \"500ms\"). Defaults to \"1s\".",
+                  "type": "string"
+                },
+                "port": {
+                  "description": "The port to open a connection to, as the container itself listens on it — not a published host port.",
+                  "maximum": 65535,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "retries": {
+                  "description": "How many attempts to make before failing the task. Defaults to 30.",
+                  "type": "integer"
+                },
+                "timeout": {
+                  "description": "How long one attempt may take before it counts as a failure. Defaults to \"5s\".",
+                  "type": "string"
+                },
+                "type": {
+                  "const": "tcp"
+                }
+              },
+              "required": [
+                "type",
+                "port"
+              ],
+              "type": "object"
+            }
+          ]
+        },
         "health_check": {
           "anyOf": [
             {

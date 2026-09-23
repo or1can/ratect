@@ -69,6 +69,12 @@ fn setup_command_run_in_fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/setup-command-run-in.toml")
 }
 
+/// `external_health_check` (ratect#98) — native-only, so its own fixture
+/// lives here too, for the same reason as `run_to_completion` above.
+fn external_health_check_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/external-health-check.toml")
+}
+
 /// A unique, empty temp directory to stand up a small project in.
 fn unique_project_dir() -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1094,6 +1100,71 @@ fn a_setup_command_with_run_in_execs_into_its_dependency_via_docker() {
         "the task should only run once the setup command succeeded inside \
          'db-seed-client':\n{}",
         String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// `external_health_check` (ratect#98), end to end, both kinds at once:
+/// `app` depends on `api` (HTTP) and `socket` (TCP), neither of which could
+/// possibly check itself — `traefik/whoami` is a `scratch` image with no
+/// shell. Proves the acceptance criterion directly: the dependents start
+/// only once the checks pass, and nothing ran inside the checked containers
+/// to make that happen. Requires a running Docker daemon with network access
+/// to pull `traefik/whoami:v1.10.2`, `alpine:3.18.2` and the companion's own
+/// `curlimages/curl`. Run explicitly with `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn external_health_checks_gate_a_dependent_via_docker() {
+    let _guard = serial_docker();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(external_health_check_fixture_path())
+        .args(["run", "start"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("app-started"),
+        "the task should only run once both external health checks passed:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// The failure half of the fixture above: `unreachable`'s TCP check targets
+/// a port nothing listens on, so it exhausts its retries and fails the run
+/// before the dependent container ever starts. The error names the companion
+/// container, whose name carries the checked container's own — the only
+/// thread back to the configuration a user wrote, so it is asserted rather
+/// than assumed.
+#[test]
+#[ignore]
+fn a_failing_external_health_check_fails_the_run_via_docker() {
+    let _guard = serial_docker();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(external_health_check_fixture_path())
+        .args(["run", "start-with-unreachable-dependency"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        !output.status.success(),
+        "an external health check that never passes should fail the run"
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("should-not-run"),
+        "the task must never run when its external health check fails:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unreachable"),
+        "the error should name the checked container:\n{}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 

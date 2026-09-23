@@ -452,6 +452,94 @@ different problem: staying *inside* one task's own dependency graph, sharing
 its network with siblings (a `cache`, a long-running `app`) that must keep
 running while it finishes.
 
+## `external_health_check`: checking a container from outside it
+
+A [`health_check`](dependency-readiness.md#the-two-gates) runs *inside* the
+container it checks, so it needs a shell and a tool (`curl`, `wget`,
+`pg_isready`) to be present in that image. A distroless or `scratch` image has
+neither, and the usual workaround is to add tooling that exists for no reason
+but to be health-checked with. `external_health_check` checks such a container
+from outside instead:
+
+```toml
+[containers.api]
+image = "my-repo/api:1.0.0"   # scratch-based: no shell, no curl
+
+[containers.api.external_health_check]
+type = "http"
+port = 8080
+path = "/healthz"
+
+[containers.app]
+image = "my-repo/app:1.0.0"
+dependencies = ["api"]
+```
+
+`app` now starts only once `GET http://api:8080/healthz` answers `200`, with
+nothing at all having run inside `api`.
+
+Two kinds of check are supported:
+
+| `type` | Checks | Fields |
+| --- | --- | --- |
+| `http` | The response status of a request to `path` on `port` | `port` (required), `path` (defaults to `/`), `expected_status` (defaults to `200`) |
+| `tcp` | That a connection to `port` is accepted | `port` (required) |
+
+Both also take `interval`, `retries` and `timeout`, meaning exactly what they
+mean on a [`health_check`](ratect-compat-config-reference.md#dependency-readiness) —
+how long to wait between attempts, how many attempts to make before failing
+the task, and how long one attempt may take. The difference is what an omitted
+one does: a `health_check` inherits the image's own value, and there is no
+image to inherit from here, so Ratect's own defaults apply (`interval = "1s"`,
+`retries = 30`, `timeout = "5s"`). The first attempt is made immediately
+rather than after `interval` has elapsed. A `port`, `timeout` or `retries` of
+zero is rejected when the file loads rather than taken literally — nothing
+listens on port 0, zero attempts would never check at all, and the tools the
+check is made with read a zero timeout as *no* timeout. So is an
+`expected_status` that isn't three digits, which no HTTP response can carry.
+A checked container's own name has to be a plain hostname — letters, digits,
+`-`, `_`, `.`, and starting with a letter or digit — since the check reaches
+it by that name.
+
+- **Over the project's own network, never a published port.** The check
+  reaches the container by its container-config name — the same network alias
+  its siblings use — so `port` is the port the container *listens* on, and
+  nothing has to appear in `ports`. Two isolated instances of one project
+  (concurrent CI jobs on a single host) therefore never contend over a host
+  port to check each other.
+- **Ratect runs the check from a companion container.** Declaring one
+  generates a container named `ratect-health-check-<container>` running
+  `curlimages/curl`, which loops the check and exits 0 or non-zero — an
+  ordinary [`run_to_completion`](#run_to_completion-init-containers)
+  dependency, so the waiting happens in the dependency graph rather than
+  anywhere new. You will see it start and complete in the output, and a check
+  that never passes fails the run naming *that* container:
+  `Container 'ratect-health-check-api' (a run-to-completion dependency) exited
+  with code 1`. The companion's own logs say which check failed and what it
+  last saw, so a run that fails this way is worth repeating with
+  [`--no-cleanup-after-failure`](ratect-cli.md#run-options).
+- **The generated name is reserved.** While `api` has an external check,
+  anything in the project that declares or refers to a container called
+  `ratect-health-check-api` — another container's `dependencies`, a task's
+  `run.container` or `dependencies` — is rejected when the file loads, naming
+  what referred to it. Nothing is silently replaced or quietly repurposed.
+- **No `health_check`, no `run_to_completion`, no `setup_commands`.** All
+  three are rejected alongside it when the file loads. The first would be two
+  answers to one question; the second has already exited by the time anything
+  could connect to it; and the third has no ordering available to it — the
+  companion is a *sibling* of the checked container rather than a gate on it,
+  so a setup command would run against exactly the service the check is
+  waiting for. Put such a step in a container of its own that depends on the
+  checked one, where it waits for the check like anything else.
+- **Inert on a task's own container**, exactly as `health_check` is — nothing
+  waits on a task's own container becoming ready, because running it *is* the
+  task. Unlike `run_to_completion`, this isn't rejected: the field changes
+  nothing about how the container runs, so the same container can be one
+  task's main container and another task's checked dependency.
+- **`ratect`-native only**, like `run_to_completion`: `batect.yml` has no
+  equivalent concept, so a container using it is rejected when the file loads
+  rather than silently ignored.
+
 ## Field reference
 
 Every container and task field from [`ratect-compat-config-reference.md`](ratect-compat-config-reference.md)
@@ -470,6 +558,7 @@ The container fields, by area:
 | Networking | `ports`, `additional_hostnames`, `additional_hosts`, `dependencies` | [Ports](ratect-compat-config-reference.md#port-mappings), [readiness](dependency-readiness.md) |
 | Readiness | `health_check`, `setup_commands` | [Dependency Readiness](dependency-readiness.md). A setup command also takes [`run_in`](#run_in-setup-commands-in-another-container) *(native only)* |
 | Init containers | `run_to_completion` | [above](#run_to_completion-init-containers) *(native only)* |
+| External checks | `external_health_check` | [above](#external_health_check-checking-a-container-from-outside-it) *(native only)* |
 | User | `run_as_current_user` | [User mapping](ratect-compat-config-reference.md#user-mapping) |
 | Inheritance | `extends` | [above](#extends-inheritance-instead-of-yaml-anchors) *(native only)* |
 
@@ -549,6 +638,7 @@ so it also works as a CI gate.
 | Reuse | anchors / aliases / merge keys | [`extends`](#extends-inheritance-instead-of-yaml-anchors) |
 | Cross-project cache | — | [`scope = "shared"`](#shared-caches) on a `cache` mount |
 | Init containers | — | [`run_to_completion`](#run_to_completion-init-containers) on a dependency |
+| Health check from outside | — | [`external_health_check`](#external_health_check-checking-a-container-from-outside-it) on a container |
 | Setup command target | always the declaring container | [`run_in`](#run_in-setup-commands-in-another-container) on a setup command |
 | List entries | string shorthand *or* object | object (inline table or `[[...]]`) |
 | Local overrides | `batect.local.yml` | `ratect.local.toml` |
@@ -557,8 +647,8 @@ so it also works as a CI gate.
 
 Most field *meanings* are unchanged; the spelling and the format-level rules
 above are the bulk of the difference. The exceptions are the native-only
-fields (`extends`, a cache's `scope`, a dependency's `run_to_completion`, a
-setup command's `run_in`) and the handful of behaviours in [Where
+fields (`extends`, a cache's `scope`, a dependency's `run_to_completion` or
+`external_health_check`, a setup command's `run_in`) and the handful of behaviours in [Where
 the semantics differ](#where-the-semantics-differ), which exist because
 `extends` gives some combinations a meaning `batect.yml` has no way to
 express.

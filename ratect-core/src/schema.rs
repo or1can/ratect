@@ -339,7 +339,110 @@ fn make_native(json: &mut serde_json::Value) {
                                 Mutually exclusive with `health_check`/`setup_commands`.",
             }),
         );
+        // Add the native-only `external_health_check` field, same reasoning
+        // as `run_to_completion` above. Spelled out here rather than derived:
+        // the two forms differ in which fields they accept, which `schemars`
+        // would render from the `ExternalHealthCheckFields` wire struct (one
+        // flat object accepting `path` on a `tcp` check) rather than from the
+        // two-form type the `TryFrom` actually enforces.
+        let mut http = external_health_check_timing();
+        http.insert("type".to_string(), serde_json::json!({ "const": "http" }));
+        http.insert(
+            "port".to_string(),
+            serde_json::json!({
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535,
+                "description": "The port to request, as the container itself listens on \
+                                it — not a published host port.",
+            }),
+        );
+        http.insert(
+            "path".to_string(),
+            serde_json::json!({
+                "type": "string",
+                "description": "The path to request. Defaults to \"/\".",
+            }),
+        );
+        http.insert(
+            "expected_status".to_string(),
+            serde_json::json!({
+                "type": "integer",
+                "minimum": 100,
+                "maximum": 999,
+                "description": "The HTTP status code that means ready. Defaults to 200.",
+            }),
+        );
+        let mut tcp = external_health_check_timing();
+        tcp.insert("type".to_string(), serde_json::json!({ "const": "tcp" }));
+        tcp.insert(
+            "port".to_string(),
+            serde_json::json!({
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535,
+                "description": "The port to open a connection to, as the container itself \
+                                listens on it — not a published host port.",
+            }),
+        );
+        properties.insert(
+            "external_health_check".to_string(),
+            serde_json::json!({
+                "description": "Checks this container's readiness from outside it, over the \
+                                project's own Docker network — for an image with no shell or \
+                                check tooling of its own. Ratect runs the check from a \
+                                generated companion container, so nothing has to be published \
+                                to the host. Mutually exclusive with `health_check`, \
+                                `run_to_completion` and `setup_commands`.",
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["type", "port"],
+                        "properties": http,
+                    },
+                    {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["type", "port"],
+                        "properties": tcp,
+                    },
+                ],
+            }),
+        );
     }
+}
+
+/// The `interval`/`retries`/`timeout` triple both forms of
+/// `external_health_check` carry, built once rather than written out twice —
+/// the two forms differ only in what they check, never in how often.
+fn external_health_check_timing() -> serde_json::Map<String, serde_json::Value> {
+    let mut timing = serde_json::Map::new();
+    timing.insert(
+        "interval".to_string(),
+        serde_json::json!({
+            "type": "string",
+            "description": "How long to wait between attempts, in Batect's Go-style \
+                            duration format (\"2s\", \"500ms\"). Defaults to \"1s\".",
+        }),
+    );
+    timing.insert(
+        "retries".to_string(),
+        serde_json::json!({
+            "type": "integer",
+            "description": "How many attempts to make before failing the task. \
+                            Defaults to 30.",
+        }),
+    );
+    timing.insert(
+        "timeout".to_string(),
+        serde_json::json!({
+            "type": "string",
+            "description": "How long one attempt may take before it counts as a \
+                            failure. Defaults to \"5s\".",
+        }),
+    );
+    timing
 }
 
 /// Adds a native-only `property` to the one form of a tagged `oneOf` whose

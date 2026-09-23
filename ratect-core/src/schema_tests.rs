@@ -225,8 +225,11 @@ fn the_native_schema_adds_extends_and_drops_the_string_shorthands() {
 /// The native counterpart of
 /// [`every_config_ratect_accepts_validates_against_the_schema`], for TOML:
 /// the repository's real native configs — the root `ratect.toml` dev
-/// config (object-form volumes and caches) and the `native.toml` fixture
-/// (which uses `extends`) — must not be flagged by the native schema.
+/// config (object-form volumes and caches), the `native.toml` fixture
+/// (which uses `extends`) and the `external-health-check.toml` one (whose
+/// field is described by hand rather than derived, so nothing else would
+/// notice the description drifting from what the loader accepts) — must not
+/// be flagged by the native schema.
 #[test]
 fn every_native_config_validates_against_the_native_schema() {
     let validator = jsonschema::draft7::new(&native_config_file_schema())
@@ -234,7 +237,11 @@ fn every_native_config_validates_against_the_native_schema() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("ratect-core always has a parent directory");
-    for relative in ["ratect.toml", "ratect/tests/fixtures/native.toml"] {
+    for relative in [
+        "ratect.toml",
+        "ratect/tests/fixtures/native.toml",
+        "ratect/tests/fixtures/external-health-check.toml",
+    ] {
         let path = root.join(relative);
         let text = std::fs::read_to_string(&path).expect("failed to read a native config");
         let document: serde_json::Value =
@@ -246,6 +253,38 @@ fn every_native_config_validates_against_the_native_schema() {
             );
         }
     }
+}
+
+/// The other half of the hand-written `external_health_check` schema: it has
+/// two forms, and the fields of one are not the fields of the other. The
+/// loader rejects `path` on a `tcp` check
+/// (`a_tcp_external_health_check_rejects_http_only_fields`); an editor
+/// consuming the schema has to agree, or it autocompletes a config that
+/// will not load.
+#[test]
+fn the_native_schema_rejects_http_only_external_health_check_fields_on_a_tcp_check() {
+    let validator = jsonschema::draft7::new(&native_config_file_schema())
+        .expect("the generated native schema should itself be a valid draft-07 schema");
+    let document: serde_json::Value = toml::from_str(
+        r#"
+project_name = "demo"
+
+[containers.db]
+image = "postgres:16"
+[containers.db.external_health_check]
+type = "tcp"
+port = 5432
+path = "/healthz"
+
+[tasks.t]
+run = { container = "db" }
+"#,
+    )
+    .expect("the test document is valid TOML");
+    assert!(
+        validator.validate(&document).is_err(),
+        "the schema should reject 'path' on a tcp external health check"
+    );
 }
 
 fn native_committed_path() -> std::path::PathBuf {

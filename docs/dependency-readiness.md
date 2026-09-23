@@ -80,6 +80,17 @@ dependency's); the only difference is what "ready" means for it. What it
 rejects, and why it isn't a substitute for `prerequisites`, is in that field's
 own section.
 
+A `ratect.toml` container can also be checked *from outside itself*:
+[`external_health_check`](ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it)
+(`ratect`-native only) makes an HTTP request or a bare TCP connection to the
+container over the project's own network, for an image with no shell and no
+check tooling to run gate 1 with — a distroless or `scratch` build. It is
+config-level sugar over `run_to_completion` rather than a third kind of gate:
+declaring one generates a companion container that loops the check and exits
+0 or non-zero, and everything that depended on the checked container depends
+on that companion too. So the resolution described below is unchanged; the
+checked container simply has one more node waiting alongside it.
+
 ## How Docker reaches its verdict
 
 This is Docker's own behavior, not Ratect's, but it's what actually determines

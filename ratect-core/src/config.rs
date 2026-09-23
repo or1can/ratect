@@ -138,7 +138,12 @@ pub struct Config {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// `Default` is what lets `expand_external_health_checks` build its generated
+// companion from the handful of fields that actually matter to it, rather
+// than spelling out every field of a struct this wide. Sound because every
+// field is an `Option`: the default is "nothing set", which is exactly what
+// an omitted field already means everywhere else here.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Container {
     /// Inherit every field from another container by name, then override only
@@ -284,6 +289,26 @@ pub struct Container {
     /// `dependencies` of its own to place this on in the first place.
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub run_to_completion: Option<bool>,
+    /// Checks this container's readiness from *outside* it, for an image
+    /// with no shell or check tooling of its own — see
+    /// [`ExternalHealthCheck`], which is also where the mechanism (a
+    /// generated `run_to_completion` companion, not a new readiness path)
+    /// is described. Mutually exclusive with `health_check` (two answers to
+    /// one question), `run_to_completion` (which has already exited by the
+    /// time anything could connect to it) and `setup_commands` (which would
+    /// run before the check had passed, since the companion is a sibling of
+    /// this container rather than a gate on it). `ratect`-native only, like
+    /// `run_to_completion` — Batect has no equivalent, so `ratect-compat`
+    /// rejects it.
+    ///
+    /// Inert on a task's own `run.container`, exactly as `health_check` is:
+    /// nothing waits on a task's own container becoming ready, since
+    /// running it *is* the task. Unlike `run_to_completion`, that is not
+    /// rejected — the field changes nothing about how the container runs,
+    /// so the same container being one task's main container and another
+    /// task's checked dependency is an ordinary thing to write.
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub external_health_check: Option<ExternalHealthCheck>,
     /// Overrides the image's own `WORKDIR`. A plain string, not an
     /// [expression](#expressions) — matching Batect's own `String` (not
     /// `Expression`) typing for this field. Overridden by the task-level
@@ -1229,6 +1254,273 @@ pub struct HealthCheckConfig {
     pub timeout: Option<std::time::Duration>,
 }
 
+/// The image the generated external-health-check companion container runs
+/// (see [`ExternalHealthCheck`]). Deliberately Ratect's own choice rather
+/// than a config field: the check tool belongs in *this* image, not in
+/// Ratect's binary (no HTTP client is linked into `ratect-core` for it) and
+/// not in the checked container, whose whole problem is having no tooling.
+///
+/// `curlimages/curl` is curl's own published image and is Alpine-based, so
+/// one image covers both check kinds: `curl` for the HTTP form, BusyBox's
+/// `nc` for the TCP form, and `/bin/sh` for the retry loop around either.
+/// Pinned rather than floating, for the reason `ratect doctor` warns about
+/// floating tags — the same configuration must not start checking
+/// differently next week.
+pub const EXTERNAL_HEALTH_CHECK_IMAGE: &str = "curlimages/curl:8.11.1";
+
+/// The prefix every generated external-health-check companion's name
+/// carries — see [`external_health_check_container_name`].
+const EXTERNAL_HEALTH_CHECK_PREFIX: &str = "ratect-health-check-";
+
+/// The reserved name of the companion container generated for a container's
+/// [`ExternalHealthCheck`]. Deterministic, so the same config always
+/// produces the same graph, and rejected as a collision by
+/// [`expand_external_health_checks`] if the project declares a container of
+/// its own under it.
+pub fn external_health_check_container_name(container: &str) -> String {
+    format!("{EXTERNAL_HEALTH_CHECK_PREFIX}{container}")
+}
+
+/// Checks a container's readiness *from outside it*, for an image with no
+/// shell and no check tooling of its own — a distroless or `scratch` build,
+/// where the only way to satisfy [`HealthCheckConfig`] is to bloat the image
+/// with a `curl` that exists solely to be health-checked with.
+///
+/// Config-level sugar over `run_to_completion` ([`Container::run_to_completion`],
+/// ratect#97), not a second readiness mechanism: a container declaring this
+/// gets a generated companion container ([`external_health_check_container_name`])
+/// that loops the check and exits 0 or non-zero, and every dependent of the
+/// checked container gains that companion as a dependency too. The engine
+/// sees nothing new — see [`expand_external_health_checks`], which is the
+/// whole of it.
+///
+/// The check runs over the project's own Docker network, reaching the
+/// checked container by its container-config name (its network alias), so
+/// nothing has to be published to the host and two isolated instances of one
+/// project — concurrent CI jobs on a single host — never contend for a port.
+///
+/// `ratect`-native only: Batect has no equivalent, so `ratect-compat`
+/// rejects it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    try_from = "ExternalHealthCheckFields",
+    into = "ExternalHealthCheckFields"
+)]
+pub struct ExternalHealthCheck {
+    /// What is actually checked — an HTTP request or a bare TCP connection.
+    pub kind: ExternalHealthCheckKind,
+    /// How long to wait between attempts. Unlike [`HealthCheckConfig`]'s own
+    /// `interval`, there is no image to inherit an omitted value from, so
+    /// Ratect supplies its own default
+    /// ([`ExternalHealthCheck::DEFAULT_INTERVAL`]).
+    #[serde(default, with = "duration_string")]
+    pub interval: Option<std::time::Duration>,
+    /// How many attempts to make before giving up and failing the task —
+    /// the same meaning [`HealthCheckConfig::retries`] has, counted the same
+    /// way. Defaults to [`ExternalHealthCheck::DEFAULT_RETRIES`].
+    pub retries: Option<u32>,
+    /// How long one attempt may take before it counts as a failure.
+    /// Defaults to [`ExternalHealthCheck::DEFAULT_TIMEOUT`].
+    #[serde(default, with = "duration_string")]
+    pub timeout: Option<std::time::Duration>,
+}
+
+/// The two kinds of [`ExternalHealthCheck`], selected by its `type` field —
+/// the same tagged-object idiom [`VolumeMount`] uses, for the same reason:
+/// one shape per entry, with the accepted types named in the error when the
+/// tag is something else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExternalHealthCheckKind {
+    /// `type = "http"`: request `path` on `port` and compare the response's
+    /// status code against `expected_status`.
+    Http {
+        port: u16,
+        path: String,
+        expected_status: u16,
+    },
+    /// `type = "tcp"`: open a connection to `port` and close it again.
+    /// Everything a check can assert without knowing the protocol.
+    Tcp { port: u16 },
+}
+
+impl ExternalHealthCheck {
+    /// Applied when `interval` is omitted. Deliberately not Docker's own 30s
+    /// `HEALTHCHECK` default: nothing *inherits* here (there is no image to
+    /// take a value from), so this is a value Ratect chooses outright, and a
+    /// service that is ready in two seconds should not be waited on for
+    /// thirty.
+    pub const DEFAULT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+    /// Applied when `retries` is omitted. With [`Self::DEFAULT_INTERVAL`]
+    /// that is about thirty seconds of *waiting* before a check is declared
+    /// failed — plus however long the attempts themselves take, which for a
+    /// service that never answers at all is [`Self::DEFAULT_TIMEOUT`] each.
+    pub const DEFAULT_RETRIES: u32 = 30;
+    /// Applied when `timeout` is omitted.
+    pub const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// The `sh -c` script the companion container runs, as a `command`
+    /// string for [`Container::command`] — already tokenizer-quoted, since
+    /// that field is split by `docker.rs`'s `tokenize_command_line` rather
+    /// than by a shell.
+    ///
+    /// The whole script is wrapped in **single** quotes, which that
+    /// tokenizer takes completely literally, so the script itself uses
+    /// double quotes throughout and contains no `'` of its own. That is what
+    /// makes `path` interpolation safe, and why
+    /// [`validate_external_health_check_path`] rejects a path that could
+    /// introduce one.
+    ///
+    /// The first attempt is made immediately rather than after `interval`
+    /// elapses — Docker's in-container checks wait first, but there is no
+    /// third `starting` state to occupy here, and a container that is
+    /// already up should not be waited on for nothing.
+    fn command(&self, container: &str) -> String {
+        let retries = self.retries.unwrap_or(Self::DEFAULT_RETRIES);
+        let interval = self.interval.unwrap_or(Self::DEFAULT_INTERVAL);
+        let timeout = self.timeout.unwrap_or(Self::DEFAULT_TIMEOUT);
+        let interval = format_seconds(interval);
+        let (attempt, failure) = match &self.kind {
+            ExternalHealthCheckKind::Http {
+                port,
+                path,
+                expected_status,
+            } => (
+                format!(
+                    "code=$(curl -s -o /dev/null -w %{{http_code}} -m {} \"http://{container}:{port}{path}\"); \
+                     if [ \"$code\" = \"{expected_status}\" ]; then exit 0; fi",
+                    format_seconds(timeout)
+                ),
+                format!(
+                    "echo \"ratect: external health check of {container} failed after {retries} \
+                     attempt(s): last HTTP status $code from http://{container}:{port}{path}, \
+                     wanted {expected_status}\" >&2"
+                ),
+            ),
+            // `nc -w` is whole seconds only, and reads 0 as "no timeout" —
+            // so a sub-second `timeout` rounds *up* to 1 rather than
+            // truncating into a check that can never time out.
+            ExternalHealthCheckKind::Tcp { port } => (
+                format!(
+                    "if nc -z -w {} {container} {port}; then exit 0; fi",
+                    timeout.as_secs().max(1)
+                ),
+                format!(
+                    "echo \"ratect: external health check of {container} failed after {retries} \
+                     attempt(s): no TCP connection to {container}:{port}\" >&2"
+                ),
+            ),
+        };
+        format!(
+            "-c 'i=0; while [ \"$i\" -lt {retries} ]; do \
+             if [ \"$i\" -gt 0 ]; then sleep {interval}; fi; {attempt}; i=$((i+1)); done; \
+             {failure}; exit 1'"
+        )
+    }
+}
+
+/// A duration as a plain number of seconds for BusyBox `sleep`/curl `-m`,
+/// both of which accept a fraction. Trimmed to whole seconds where it is
+/// one, so the generated script reads as `sleep 1` rather than `sleep 1.000`.
+///
+/// A non-zero duration never formats as `0`, whatever the rounding would
+/// otherwise do with it: `curl -m 0` is not an immediate timeout but *no*
+/// timeout, so a `timeout = "1ns"` that rounded down would produce a check
+/// that can hang forever — the opposite of what was asked for. (A zero
+/// duration can't reach here: `expand_external_health_checks` rejects one.)
+fn format_seconds(duration: std::time::Duration) -> String {
+    const SMALLEST: &str = "0.001";
+    if duration.subsec_nanos() == 0 {
+        duration.as_secs().to_string()
+    } else if duration < std::time::Duration::from_millis(1) {
+        SMALLEST.to_string()
+    } else {
+        format!("{:.3}", duration.as_secs_f64())
+    }
+}
+
+/// The flat, tagged form [`ExternalHealthCheck`] is written in and parsed
+/// from — one struct rather than a hand-written `Visitor`, so
+/// `deny_unknown_fields` and the per-field duration parsing are still
+/// derived; the `type`-dependent rules (which fields belong to which form,
+/// and what they default to) are the `TryFrom` below.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExternalHealthCheckFields {
+    r#type: String,
+    port: u16,
+    path: Option<String>,
+    expected_status: Option<u16>,
+    #[serde(default, with = "duration_string")]
+    interval: Option<std::time::Duration>,
+    retries: Option<u32>,
+    #[serde(default, with = "duration_string")]
+    timeout: Option<std::time::Duration>,
+}
+
+impl TryFrom<ExternalHealthCheckFields> for ExternalHealthCheck {
+    type Error = String;
+
+    fn try_from(fields: ExternalHealthCheckFields) -> std::result::Result<Self, Self::Error> {
+        let kind = match fields.r#type.as_str() {
+            "http" => ExternalHealthCheckKind::Http {
+                port: fields.port,
+                path: fields.path.unwrap_or_else(|| "/".to_string()),
+                expected_status: fields.expected_status.unwrap_or(200),
+            },
+            "tcp" => {
+                // Accepting these on a `tcp` check would read as though the
+                // path were being requested, and silently check nothing of
+                // the sort.
+                if fields.path.is_some() {
+                    return Err(
+                        "Field 'path' is only permitted for an 'http' external health check."
+                            .to_string(),
+                    );
+                }
+                if fields.expected_status.is_some() {
+                    return Err("Field 'expected_status' is only permitted for an 'http' \
+                     external health check."
+                        .to_string());
+                }
+                ExternalHealthCheckKind::Tcp { port: fields.port }
+            }
+            other => {
+                return Err(format!(
+                    "Unknown external health check type '{other}'. It must be 'http' or 'tcp'."
+                ))
+            }
+        };
+        Ok(ExternalHealthCheck {
+            kind,
+            interval: fields.interval,
+            retries: fields.retries,
+            timeout: fields.timeout,
+        })
+    }
+}
+
+impl From<ExternalHealthCheck> for ExternalHealthCheckFields {
+    fn from(check: ExternalHealthCheck) -> Self {
+        let (r#type, port, path, expected_status) = match check.kind {
+            ExternalHealthCheckKind::Http {
+                port,
+                path,
+                expected_status,
+            } => ("http", port, Some(path), Some(expected_status)),
+            ExternalHealthCheckKind::Tcp { port } => ("tcp", port, None, None),
+        };
+        ExternalHealthCheckFields {
+            r#type: r#type.to_string(),
+            port,
+            path,
+            expected_status,
+            interval: check.interval,
+            retries: check.retries,
+            timeout: check.timeout,
+        }
+    }
+}
+
 /// One entry in a container's `setup_commands` list: a command run inside
 /// the started container after it becomes healthy but before its dependents
 /// start. Runs with the container's own environment and user/group.
@@ -2135,8 +2427,8 @@ impl ConfigFormat {
     /// unconditionally from [`load_project_impl`], before expression
     /// resolution — load-bearing for [`reject_image_expressions_in_compat`],
     /// which inspects an `image`'s literal text and must judge what was
-    /// written rather than what an expression resolved to; the other five
-    /// checks presence/shape of fields expression resolution never touches,
+    /// written rather than what an expression resolved to; the other six
+    /// check presence/shape of fields expression resolution never touches,
     /// so the ordering is inert for them but still correct. `Native` has
     /// nothing to reject here: every field below is native's own.
     fn reject_incompatible_fields(&self, config: &Config) -> Result<()> {
@@ -2144,6 +2436,7 @@ impl ConfigFormat {
             ConfigFormat::Compat => {
                 reject_extends_in_compat(config)?;
                 reject_run_to_completion_in_compat(config)?;
+                reject_external_health_check_in_compat(config)?;
                 reject_setup_command_run_in_compat(config)?;
                 reject_shared_caches_in_compat(config)?;
                 validate_image_sources_in_compat(&config.containers)?;
@@ -2327,6 +2620,29 @@ impl LoadedConfig {
 }
 
 impl Config {
+    /// The containers this project actually declares — the ones Ratect
+    /// generated for it excluded.
+    ///
+    /// Today that means an [`ExternalHealthCheck`]'s companion, and it is
+    /// what any count or listing shown *back to the user* should be built
+    /// from: they didn't write those containers, and telling them their
+    /// five-container project has eight is a question with no answer in
+    /// their own file. Anything reasoning about what will actually run
+    /// wants `containers` itself, companions and all.
+    ///
+    /// Derived rather than flagged, and unambiguously so:
+    /// [`expand_external_health_checks`] refuses to load a project that
+    /// declares or refers to a companion's name itself, so a container
+    /// matching one can only ever be the generated one.
+    pub fn declared_containers(&self) -> impl Iterator<Item = (&String, &Container)> {
+        self.containers.iter().filter(|(name, _)| {
+            !name
+                .strip_prefix(EXTERNAL_HEALTH_CHECK_PREFIX)
+                .and_then(|checked| self.containers.get(checked))
+                .is_some_and(|checked| checked.external_health_check.is_some())
+        })
+    }
+
     /// Like [`load_from_file_with_git_cache`](Self::load_from_file_with_git_cache),
     /// using the production Git include cache (`~/.ratect/incl`, the real
     /// `git` binary) — see that method for the full behavior. Split out so
@@ -2952,7 +3268,17 @@ impl Config {
                              a run-to-completion dependency has no health check of its own"
                         );
                     }
-                    if container.setup_commands.is_some() {
+                    // An explicitly empty list is how an `extends` child
+                    // *clears* an inherited one (`child.take().or(parent)`
+                    // in `inherit_container_fields`), so it declares no
+                    // setup commands rather than declaring none-of-them —
+                    // exactly what this demands. Rejecting it would leave a
+                    // child inheriting `setup_commands` no way to opt in.
+                    if container
+                        .setup_commands
+                        .as_ref()
+                        .is_some_and(|commands| !commands.is_empty())
+                    {
                         anyhow::bail!(
                             "has 'run_to_completion' set, but also has 'setup_commands' — \
                              a run-to-completion dependency has no setup commands of its own"
@@ -3397,6 +3723,14 @@ async fn load_project_impl(
     // declaring container's *effective* `dependencies`, which `extends` may
     // have supplied.
     validate_setup_command_targets(&config)?;
+    // Last, and native-only: it *writes* to the config (the generated
+    // companion containers and the dependency edges onto them), so
+    // everything above judges what the user actually wrote. After `extends`
+    // for the usual reason — a check reached only by inheritance still needs
+    // its companion.
+    if format.allows_extends() {
+        expand_external_health_checks(&mut config)?;
+    }
     Ok(LoadedProject {
         config,
         project_directory,
@@ -3508,6 +3842,28 @@ fn reject_run_to_completion_in_compat(config: &Config) -> Result<()> {
     if let Some(name) = offenders.first() {
         anyhow::bail!(
             "The container '{name}' uses 'run_to_completion', which is a ratect-native \
+             field not supported in Batect-compatible configuration."
+        );
+    }
+    Ok(())
+}
+
+/// `external_health_check` is a `ratect`-native field (ratect#98); a
+/// `batect.yml` that uses it is rejected rather than silently ignored, same
+/// reasoning as [`reject_run_to_completion_in_compat`] — and with more at
+/// stake, since silently ignoring it would leave the dependents of a
+/// container that cannot health-check itself starting against nothing.
+fn reject_external_health_check_in_compat(config: &Config) -> Result<()> {
+    let mut offenders: Vec<&str> = config
+        .containers
+        .iter()
+        .filter(|(_, container)| container.external_health_check.is_some())
+        .map(|(name, _)| name.as_str())
+        .collect();
+    offenders.sort_unstable();
+    if let Some(name) = offenders.first() {
+        anyhow::bail!(
+            "The container '{name}' uses 'external_health_check', which is a ratect-native \
              field not supported in Batect-compatible configuration."
         );
     }
@@ -3917,6 +4273,275 @@ fn resolve_container_extends(
     Ok(())
 }
 
+/// Rejects a path that could escape the `sh -c` script
+/// [`ExternalHealthCheck::command`] interpolates it into.
+///
+/// The script is single-quoted for `docker.rs`'s `tokenize_command_line` and
+/// double-quoted for the shell inside the companion, so a `'`, a `"` or a
+/// space in the path would end an argument or a string early — and `$`, a
+/// backtick or a backslash would be expanded by that shell rather than
+/// requested from the checked container. Rejecting the characters outright
+/// is both the safe answer and the honest one: none of them can appear
+/// unescaped in a URL path anyway, so a path containing one was already
+/// wrong before it was dangerous.
+fn validate_external_health_check_path(container: &str, path: &str) -> Result<()> {
+    if !path.starts_with('/') {
+        anyhow::bail!(
+            "Container '{container}' has an invalid 'external_health_check.path': \
+             '{path}' must start with '/'"
+        );
+    }
+    if let Some(bad) = path
+        .chars()
+        .find(|c| c.is_whitespace() || c.is_control() || "\'\"\\`$".contains(*c))
+    {
+        anyhow::bail!(
+            "Container '{container}' has an invalid 'external_health_check.path': \
+             '{path}' contains {bad:?}, which a URL path cannot hold unescaped"
+        );
+    }
+    Ok(())
+}
+
+/// Turns every container's [`ExternalHealthCheck`] into a generated
+/// `run_to_completion` companion container plus the dependency edges that
+/// make anything waiting on the checked container wait on the check too.
+///
+/// This is the entire feature. Nothing downstream — not `engine.rs`, not
+/// `docker.rs` — knows an external health check exists: by the time the
+/// config leaves here it is an ordinary dependency graph with one more node
+/// in it, and that node's readiness is `run_to_completion`'s (ratect#97),
+/// already built. Deliberately so, rather than a second place where
+/// "ready" is decided.
+///
+/// The companion depends on the checked container and is depended on by
+/// whatever depended on the checked container — every *other* container's
+/// `dependencies`, and every task's. Not the checked container's own, which
+/// would be a cycle. A task whose own `run.container` is the checked
+/// container gains nothing, because nothing waits on a task's own container
+/// in the first place (see [`Container::external_health_check`]).
+fn expand_external_health_checks(config: &mut Config) -> Result<()> {
+    // Sorted before anything is judged, not after: every check below can
+    // fail, and iterating a `HashMap` would report whichever offender its
+    // hashing happened to reach first — a different one run to run, for the
+    // same file.
+    let mut names: Vec<&String> = config.containers.keys().collect();
+    names.sort_unstable();
+
+    let mut checked: Vec<(String, ExternalHealthCheck)> = Vec::new();
+    for name in names {
+        let container = &config.containers[name];
+        let Some(check) = &container.external_health_check else {
+            continue;
+        };
+        if container.health_check.is_some() {
+            anyhow::bail!(
+                "Container '{name}' has 'external_health_check' set, but also has \
+                 'health_check' — a container is checked from inside or from outside, \
+                 not both"
+            );
+        }
+        if container.run_to_completion.unwrap_or(false) {
+            anyhow::bail!(
+                "Container '{name}' has 'external_health_check' set, but also has \
+                 'run_to_completion' — a run-to-completion dependency has already exited \
+                 by the time anything could connect to it"
+            );
+        }
+        // The companion is a *sibling* of the checked container, not a gate
+        // on it, so there is no ordering that could put a setup command
+        // after the check: `setup_commands` run once the checked container
+        // is healthy, and a container with no `health_check` is healthy the
+        // instant it starts. A setup command here would therefore run
+        // against exactly the not-yet-ready service the check exists to wait
+        // for — quietly, and only sometimes. Rejected rather than
+        // documented, since "sometimes" is the worst kind of contract.
+        // Empty means none, not "none, explicitly" — see the same check
+        // under `run_to_completion`.
+        if container
+            .setup_commands
+            .as_ref()
+            .is_some_and(|commands| !commands.is_empty())
+        {
+            anyhow::bail!(
+                "Container '{name}' has 'external_health_check' set, but also has \
+                 'setup_commands' — they would run before the external check has passed, \
+                 against a container that isn't ready yet"
+            );
+        }
+        // The name is interpolated into the companion's `sh -c` script, and
+        // nothing else in this file constrains what a container may be
+        // called — so a `'` would end the script's own quoting and a `$(…)`
+        // would be run by that shell. Only imposed on a container that is
+        // actually checked; the same characters remain legal (if unwise)
+        // elsewhere, where nothing interpolates them into a shell.
+        if let Some(bad) = name
+            .chars()
+            .find(|c| !c.is_ascii_alphanumeric() && !"-_.".contains(*c))
+        {
+            anyhow::bail!(
+                "Container '{name}' has an 'external_health_check', but its own name \
+                 contains {bad:?} — a checked container's name is used as a hostname and \
+                 must hold only letters, digits, '-', '_' and '.'"
+            );
+        }
+        // And must *start* with one of the letters or digits: the name is a
+        // bare argument to `nc -z -w 5 <name> <port>`, so a leading '-' is
+        // read as an option rather than a host, and the check would fail
+        // reporting a host it never contacted.
+        if !name.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+            anyhow::bail!(
+                "Container '{name}' has an 'external_health_check', but its own name \
+                 does not start with a letter or digit — the check passes it as a \
+                 hostname, and a leading '{}' would be read as an option instead",
+                name.chars().next().unwrap_or_default()
+            );
+        }
+        if let ExternalHealthCheckKind::Http { path, .. } = &check.kind {
+            validate_external_health_check_path(name, path)?;
+        }
+        // Nothing listens on port 0 — it is the kernel's "pick one for me"
+        // sentinel, so a check aimed at it can never pass. The committed
+        // schema says `minimum: 1`; this is the loader agreeing with it.
+        let port = match check.kind {
+            ExternalHealthCheckKind::Http { port, .. } | ExternalHealthCheckKind::Tcp { port } => {
+                port
+            }
+        };
+        if port == 0 {
+            anyhow::bail!(
+                "Container '{name}' has an 'external_health_check.port' of zero, which \
+                 nothing can listen on"
+            );
+        }
+        // Same "can never pass" class as the port above: curl's
+        // `%{http_code}` is always three digits, so anything below 100 —
+        // `0` most plausibly, and `000` is what curl reports for a
+        // connection that failed outright — can never equal it.
+        if let ExternalHealthCheckKind::Http {
+            expected_status, ..
+        } = check.kind
+        {
+            if !(100..=999).contains(&expected_status) {
+                anyhow::bail!(
+                    "Container '{name}' has an 'external_health_check.expected_status' of \
+                     {expected_status}, which no HTTP response can carry — a status code is \
+                     three digits"
+                );
+            }
+        }
+        // `curl -m 0` and `nc -w 0` both mean "no timeout at all" — the
+        // exact opposite of what writing `timeout = "0"` looks like it
+        // asks for, and a check that can then hang forever. `retries = 0`
+        // is the mirror image: a check that never runs, and a dependency
+        // that is therefore never ready.
+        if check.timeout == Some(std::time::Duration::ZERO) {
+            anyhow::bail!(
+                "Container '{name}' has an 'external_health_check.timeout' of zero, which \
+                 would disable the timeout rather than make it immediate — omit it for the \
+                 default, or set a positive duration"
+            );
+        }
+        if check.retries == Some(0) {
+            anyhow::bail!(
+                "Container '{name}' has an 'external_health_check.retries' of zero, which \
+                 would never run the check at all — omit it for the default, or set a \
+                 positive count"
+            );
+        }
+        checked.push((name.clone(), check.clone()));
+    }
+
+    // Every reference the *user* could have written to a name this is about
+    // to generate, checked before a single one exists. Declaring a container
+    // under the name is the obvious case; naming it as a task's own
+    // `run.container` is the one that bites hardest, since after expansion
+    // it resolves to a real container and runs the check script with the
+    // task's command spliced into it. A `customise` entry needs nothing
+    // here: its keys are validated against the task's own graph above, while
+    // no companion exists, so one naming a companion is already rejected.
+    for (name, _) in &checked {
+        let companion = external_health_check_container_name(name);
+        let reserved = |what: &str| {
+            anyhow::anyhow!(
+                "{what} '{companion}', which is reserved for the container Ratect \
+                 generates for the 'external_health_check' on container '{name}' — \
+                 rename it"
+            )
+        };
+        if config.containers.contains_key(&companion) {
+            return Err(reserved("The configuration declares a container named"));
+        }
+        for (other, container) in &config.containers {
+            if container
+                .dependencies
+                .iter()
+                .flatten()
+                .any(|d| d == &companion)
+            {
+                return Err(reserved(&format!("Container '{other}' depends on")));
+            }
+        }
+        for (task_name, task) in &config.tasks {
+            if task
+                .run
+                .as_ref()
+                .is_some_and(|run| run.container == companion)
+            {
+                return Err(reserved(&format!("Task '{task_name}' runs")));
+            }
+            if task.dependencies.iter().flatten().any(|d| d == &companion) {
+                return Err(reserved(&format!("Task '{task_name}' depends on")));
+            }
+        }
+    }
+
+    for (name, check) in &checked {
+        let companion = external_health_check_container_name(name);
+        config.containers.insert(
+            companion.clone(),
+            Container {
+                image: Some(EXTERNAL_HEALTH_CHECK_IMAGE.to_string()),
+                // The image's own `ENTRYPOINT` is `curl`; the check is a
+                // retry loop around it, so the shell is the entrypoint and
+                // curl is something the loop calls.
+                entrypoint: Some("sh".to_string()),
+                command: Some(check.command(name)),
+                dependencies: Some(vec![name.clone()]),
+                run_to_completion: Some(true),
+                ..Container::default()
+            },
+        );
+    }
+
+    for (name, _) in &checked {
+        let companion = external_health_check_container_name(name);
+        for (other, container) in config.containers.iter_mut() {
+            if other == name || other == &companion {
+                continue;
+            }
+            add_dependency_after(&mut container.dependencies, name, &companion);
+        }
+        for task in config.tasks.values_mut() {
+            add_dependency_after(&mut task.dependencies, name, &companion);
+        }
+    }
+    Ok(())
+}
+
+/// Adds `companion` to a `dependencies` list that names `target`, leaving
+/// every other list untouched. Idempotent, so a list already naming the
+/// companion (impossible to write by hand — the name is reserved — but
+/// cheap to be sure of) gains no duplicate.
+fn add_dependency_after(dependencies: &mut Option<Vec<String>>, target: &str, companion: &str) {
+    let Some(dependencies) = dependencies else {
+        return;
+    };
+    if dependencies.iter().any(|d| d == target) && !dependencies.iter().any(|d| d == companion) {
+        dependencies.push(companion.to_string());
+    }
+}
+
 /// Fills every field the `child` left unset from `parent` — the shallow,
 /// per-field half of [`resolve_extends`]. `parent` is owned (a resolved clone)
 /// so each field moves in without a further clone; `extends` itself is never
@@ -3945,6 +4570,7 @@ fn inherit_container_fields(child: &mut Container, parent: Container) {
         health_check,
         setup_commands,
         run_to_completion,
+        external_health_check,
         working_directory,
         command,
         entrypoint,
@@ -3976,6 +4602,7 @@ fn inherit_container_fields(child: &mut Container, parent: Container) {
     child.health_check = child.health_check.take().or(health_check);
     child.setup_commands = child.setup_commands.take().or(setup_commands);
     child.run_to_completion = child.run_to_completion.take().or(run_to_completion);
+    child.external_health_check = child.external_health_check.take().or(external_health_check);
     child.working_directory = child.working_directory.take().or(working_directory);
     child.command = child.command.take().or(command);
     child.entrypoint = child.entrypoint.take().or(entrypoint);

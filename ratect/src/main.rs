@@ -1223,7 +1223,7 @@ async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> 
             findings.push(Finding::Fine(format!(
                 "{} loads ({} container(s), {} task(s))",
                 global.config_file.display(),
-                project.config.containers.len(),
+                project.config.declared_containers().count(),
                 project.config.tasks.len()
             )));
             findings.extend(config_findings(&project.config));
@@ -1303,7 +1303,7 @@ async fn validate_config(
             findings.push(Finding::Fine(format!(
                 "{} loads ({} container(s), {} task(s))",
                 global.config_file.display(),
-                project.config.containers.len(),
+                project.config.declared_containers().count(),
                 project.config.tasks.len()
             )));
             findings.extend(config_findings(&project.config));
