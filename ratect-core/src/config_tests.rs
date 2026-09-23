@@ -505,8 +505,8 @@ tasks:
 }
 
 #[test]
-fn resolve_expressions_errors_when_customise_targets_a_container_outside_the_tasks_graph() {
-    let mut config = parse(
+fn customise_targeting_a_container_outside_the_tasks_graph_is_rejected() {
+    let config = parse(
         r#"
 project_name: demo
 containers:
@@ -524,12 +524,10 @@ tasks:
 "#,
     );
 
-    let result = config.resolve_expressions_with(
-        Path::new("/base"),
-        &HashMap::new(),
-        &HashMap::new(),
-        no_host_env,
-    );
+    // The rule's own function rather than the expression pass it used to
+    // live in: membership walks container `dependencies`, which `extends`
+    // can supply, so it runs after inheritance.
+    let result = reject_customisations_outside_the_task_graph(&config);
 
     assert!(format!("{:#}", result.unwrap_err()).contains(
         "Task 'test' has customisations for container 'unrelated', but the container \
@@ -2379,6 +2377,7 @@ fn container_with_build(build_directory: &str, build_args: HashMap<String, Strin
         health_check: None,
         setup_commands: None,
         run_to_completion: None,
+        external_health_check: None,
         working_directory: None,
         command: None,
         entrypoint: None,
@@ -2623,7 +2622,7 @@ fn image_container() -> Container {
 /// container the user wrote. Previously it surfaced from the Docker layer
 /// against a 64-hex container id.
 #[test]
-fn resolve_expressions_rejects_a_relative_cache_path_under_run_as_current_user() {
+fn a_relative_cache_path_under_run_as_current_user_is_rejected_naming_the_container() {
     let mut container = container_with_run_as_current_user(true, Some("/home/x"));
     container.volumes = Some(vec![VolumeMount::Cache(CacheVolumeMount {
         name: "c".to_string(),
@@ -2631,7 +2630,7 @@ fn resolve_expressions_rejects_a_relative_cache_path_under_run_as_current_user()
         options: None,
         scope: Default::default(),
     })]);
-    let mut config = Config {
+    let config = Config {
         project_name: "demo".to_string(),
         containers: HashMap::from([("build-env".to_string(), container)]),
         tasks: HashMap::new(),
@@ -2639,14 +2638,11 @@ fn resolve_expressions_rejects_a_relative_cache_path_under_run_as_current_user()
         forbid_telemetry: None,
     };
 
-    let err = config
-        .resolve_expressions_with(
-            Path::new("/base"),
-            &HashMap::new(),
-            &HashMap::new(),
-            no_host_env,
-        )
-        .unwrap_err();
+    // The rule's own function rather than the expression pass it used to
+    // live in: it spans `volumes` and `run_as_current_user`, so it runs
+    // after `extends` (see that function, and the sibling test covering an
+    // inherited split).
+    let err = reject_relative_cache_mounts_under_user_mapping(&config).unwrap_err();
 
     let message = format!("{err:#}");
     assert!(
@@ -3165,6 +3161,7 @@ fn container_with_run_as_current_user(enabled: bool, home_directory: Option<&str
         health_check: None,
         setup_commands: None,
         run_to_completion: None,
+        external_health_check: None,
         working_directory: None,
         command: None,
         entrypoint: None,
@@ -4983,8 +4980,12 @@ run_to_completion = true
 [containers.migrate.health_check]
 command = "true"
 
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["migrate"]
+
 [tasks.t]
-run = { container = "migrate" }
+run = { container = "app" }
 "#,
     )
     .await
@@ -5006,8 +5007,12 @@ image = "alpine:3.18"
 run_to_completion = true
 setup_commands = [{ command = "./migrate.sh" }]
 
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["migrate"]
+
 [tasks.t]
-run = { container = "migrate" }
+run = { container = "app" }
 "#,
     )
     .await
@@ -5165,6 +5170,1132 @@ run = { container = "migrate" }
             && format!("{err:#}").contains("'t'"),
         "expected the error to name the task and its (inheriting) main container, got: {err:#}"
     );
+}
+
+/// `external_health_check` (ratect#98): the HTTP form parses into
+/// [`ExternalHealthCheckKind::Http`], with `path`/`expected_status` taking
+/// their defaults when omitted.
+#[tokio::test]
+async fn parses_an_http_external_health_check() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.api]
+image = "my-org/api:1.0.0"
+[containers.api.external_health_check]
+type = "http"
+port = 8080
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["api"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    let check = project.config.containers["api"]
+        .external_health_check
+        .as_ref()
+        .unwrap();
+    assert!(matches!(
+        check.kind,
+        ExternalHealthCheckKind::Http {
+            port: 8080,
+            ref path,
+            expected_status: 200,
+        } if path == "/"
+    ));
+}
+
+/// The TCP form needs nothing but a port, and carries the same
+/// `interval`/`retries`/`timeout` as the HTTP one.
+#[tokio::test]
+async fn parses_a_tcp_external_health_check() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.db]
+image = "postgres:16"
+[containers.db.external_health_check]
+type = "tcp"
+port = 5432
+interval = "2s"
+retries = 5
+timeout = "500ms"
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["db"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    let check = project.config.containers["db"]
+        .external_health_check
+        .as_ref()
+        .unwrap();
+    assert!(matches!(
+        check.kind,
+        ExternalHealthCheckKind::Tcp { port: 5432 }
+    ));
+    assert_eq!(check.interval, Some(std::time::Duration::from_secs(2)));
+    assert_eq!(check.retries, Some(5));
+    assert_eq!(check.timeout, Some(std::time::Duration::from_millis(500)));
+}
+
+/// The whole mechanism: a checked container gets a generated
+/// `run_to_completion` companion (ratect#97), depending on the checked
+/// container, and every *dependent* of the checked container gains the
+/// companion as a dependency too — so the wait happens through the existing
+/// dependency graph rather than a second readiness path.
+#[tokio::test]
+async fn an_external_health_check_generates_a_run_to_completion_companion() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.api]
+image = "my-org/api:1.0.0"
+[containers.api.external_health_check]
+type = "http"
+port = 8080
+path = "/healthz"
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["api"]
+
+[tasks.t]
+run = { container = "app" }
+dependencies = ["api"]
+"#,
+    )
+    .await
+    .unwrap();
+
+    let companion = external_health_check_container_name("api");
+    let generated = &project.config.containers[&companion];
+    assert_eq!(generated.run_to_completion, Some(true));
+    assert_eq!(generated.dependencies, Some(vec!["api".to_string()]));
+    assert_eq!(
+        generated.image.as_deref(),
+        Some(EXTERNAL_HEALTH_CHECK_IMAGE)
+    );
+    assert!(
+        project.config.containers["app"]
+            .dependencies
+            .as_ref()
+            .unwrap()
+            .contains(&companion),
+        "a dependent of the checked container must wait on the companion too"
+    );
+    assert!(
+        project.config.tasks["t"]
+            .dependencies
+            .as_ref()
+            .unwrap()
+            .contains(&companion),
+        "a task-level dependency on the checked container must wait on the companion too"
+    );
+}
+
+/// The generated command is what actually performs the check, so it is
+/// asserted directly rather than only end-to-end: it reaches the checked
+/// container by its own network alias (no published host port), asks for the
+/// configured path, and compares the configured status.
+#[tokio::test]
+async fn the_generated_http_command_checks_over_the_internal_network() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.api]
+image = "my-org/api:1.0.0"
+[containers.api.external_health_check]
+type = "http"
+port = 8080
+path = "/healthz"
+expected_status = 204
+retries = 3
+interval = "2s"
+timeout = "1s"
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["api"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    let command = project.config.containers[&external_health_check_container_name("api")]
+        .command
+        .clone()
+        .unwrap();
+    assert!(
+        command.contains("http://api:8080/healthz"),
+        "got: {command}"
+    );
+    assert!(command.contains("= \"204\""), "got: {command}");
+    assert!(command.contains("-lt 3"), "got: {command}");
+    assert!(command.contains("sleep 2"), "got: {command}");
+    assert!(command.contains("-m 1"), "got: {command}");
+    // A `\`-continued Rust string literal is one accidental keystroke away
+    // from baking its own source indentation into the script — invisible in
+    // the source, obvious in `docker logs`.
+    assert!(
+        !command.contains("  "),
+        "the script must carry no run of source indentation: {command}"
+    );
+    // Single-quoted for `tokenize_command_line`, so a stray `'` anywhere in
+    // the script would split the argument rather than being passed to `sh`.
+    assert!(
+        !command
+            .trim_start_matches("-c '")
+            .trim_end_matches('\'')
+            .contains('\''),
+        "the script must contain no single quote of its own: {command}"
+    );
+}
+
+/// The TCP form's command uses `nc`, whose `-w` takes whole seconds — a
+/// sub-second `timeout` rounds up to 1 rather than truncating to 0, which
+/// `nc` reads as "no timeout".
+#[tokio::test]
+async fn the_generated_tcp_command_rounds_a_sub_second_timeout_up() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.db]
+image = "postgres:16"
+[containers.db.external_health_check]
+type = "tcp"
+port = 5432
+timeout = "100ms"
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["db"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    let command = project.config.containers[&external_health_check_container_name("db")]
+        .command
+        .clone()
+        .unwrap();
+    assert!(command.contains("nc -z -w 1 db 5432"), "got: {command}");
+}
+
+#[tokio::test]
+async fn external_health_check_rejects_a_health_check() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.api]
+image = "my-org/api:1.0.0"
+health_check = { command = "true" }
+[containers.api.external_health_check]
+type = "tcp"
+port = 8080
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["api"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("'external_health_check' set, but also has 'health_check'"),
+        "got: {err:#}"
+    );
+}
+
+/// A `run_to_completion` dependency has already exited by the time anything
+/// could connect to it, so an external check on one could never pass.
+#[tokio::test]
+async fn external_health_check_rejects_run_to_completion() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.migrate]
+image = "my-org/migrate:1.0.0"
+run_to_completion = true
+[containers.migrate.external_health_check]
+type = "tcp"
+port = 8080
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["migrate"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}")
+            .contains("'external_health_check' set, but also has 'run_to_completion'"),
+        "got: {err:#}"
+    );
+}
+
+/// The companion's name is reserved: a container the user declared under it
+/// would otherwise be silently replaced by the generated one.
+#[tokio::test]
+async fn external_health_check_rejects_a_companion_name_collision() {
+    let err = load_native_toml(&format!(
+        r#"
+project_name = "demo"
+
+[containers.api]
+image = "my-org/api:1.0.0"
+[containers.api.external_health_check]
+type = "tcp"
+port = 8080
+
+[containers."{}"]
+image = "alpine:3.18"
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["api"]
+
+[tasks.t]
+run = {{ container = "app" }}
+"#,
+        external_health_check_container_name("api")
+    ))
+    .await
+    .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(
+        message.contains(&external_health_check_container_name("api")) && message.contains("'api'"),
+        "expected the error to name both the collision and the checked container, got: {message}"
+    );
+}
+
+/// Native-only, same reasoning as `run_to_completion`: Batect has no
+/// equivalent, so a `batect.yml` using it is rejected rather than silently
+/// ignored.
+#[tokio::test]
+async fn external_health_check_is_rejected_in_compat_mode() {
+    let dir = unique_temp_dir();
+    let path = dir.join("batect.yml");
+    std::fs::write(
+        &path,
+        "project_name: demo\ncontainers:\n  api:\n    image: alpine\n    external_health_check:\n      type: tcp\n      port: 8080\ntasks: {}\n",
+    )
+    .unwrap();
+    let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(
+        format!("{err:#}").contains("uses 'external_health_check'"),
+        "expected a compat rejection, got: {err:#}"
+    );
+}
+
+/// Expansion runs after `extends`, so a check reached only by inheritance
+/// still generates its companion.
+#[tokio::test]
+async fn external_health_check_is_inherited_via_extends() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.base]
+image = "my-org/api:1.0.0"
+[containers.base.external_health_check]
+type = "tcp"
+port = 8080
+
+[containers.api]
+extends = "base"
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["api"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        project
+            .config
+            .containers
+            .contains_key(&external_health_check_container_name("api")),
+        "the inheriting container should have its own companion"
+    );
+    assert!(project.config.containers["app"]
+        .dependencies
+        .as_ref()
+        .unwrap()
+        .contains(&external_health_check_container_name("api")));
+}
+
+/// The path is interpolated into a `sh -c` script inside the companion, so
+/// a quote or a space in it would break out of that script rather than
+/// being requested as a URL.
+#[tokio::test]
+async fn external_health_check_rejects_an_unsafe_path() {
+    for path in [r#"/health"; rm -rf /; echo ""#, "/health check", "healthz"] {
+        let err = load_native_toml(&format!(
+            r#"
+project_name = "demo"
+
+[containers.api]
+image = "my-org/api:1.0.0"
+[containers.api.external_health_check]
+type = "http"
+port = 8080
+path = {path:?}
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["api"]
+
+[tasks.t]
+run = {{ container = "app" }}
+"#
+        ))
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("'external_health_check.path'"),
+            "expected {path:?} to be rejected, got: {err:#}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn external_health_check_rejects_an_unknown_type() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.api]
+image = "my-org/api:1.0.0"
+[containers.api.external_health_check]
+type = "grpc"
+port = 8080
+
+[tasks.t]
+run = { container = "api" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("'http'") && format!("{err:#}").contains("'tcp'"),
+        "expected the error to list the accepted types, got: {err:#}"
+    );
+}
+
+/// The reserved name is reserved against every way a config can *refer* to
+/// it, not only against declaring a container under it. The `run.container`
+/// case is the one with teeth: by the time a task is run the companion is a
+/// real container, so without this the task would run the check script with
+/// its own command spliced in, failing with a shell error about a config it
+/// never wrote.
+///
+/// A `customise` entry isn't here because it cannot reach this check:
+/// `customise` keys are validated against the task's own graph *before*
+/// expansion, when no companion exists at all, so one naming a companion is
+/// already rejected as a container "not started as part of the task".
+#[tokio::test]
+async fn external_health_check_rejects_every_reference_to_its_reserved_name() {
+    let companion = external_health_check_container_name("api");
+    let cases = [
+        format!("[containers.other]\nimage = \"alpine:3.18\"\ndependencies = [\"{companion}\"]"),
+        format!("[tasks.other]\nrun = {{ container = \"{companion}\" }}"),
+        format!("[tasks.other]\nrun = {{ container = \"app\" }}\ndependencies = [\"{companion}\"]"),
+    ];
+    for case in cases {
+        let err = load_native_toml(&format!(
+            r#"
+project_name = "demo"
+
+[containers.api]
+image = "my-org/api:1.0.0"
+[containers.api.external_health_check]
+type = "tcp"
+port = 8080
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["api"]
+
+[tasks.t]
+run = {{ container = "app" }}
+
+{case}
+"#
+        ))
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains(&companion) && format!("{err:#}").contains("reserved"),
+            "expected {case:?} to be rejected as a reserved-name reference, got: {err:#}"
+        );
+    }
+}
+
+/// A count or listing shown back to the user is built from the containers
+/// they wrote, so the generated companion is excluded from it — while
+/// `containers` itself still carries it, since it genuinely runs.
+#[tokio::test]
+async fn declared_containers_excludes_the_generated_companion() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.api]
+image = "my-org/api:1.0.0"
+[containers.api.external_health_check]
+type = "tcp"
+port = 8080
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["api"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(project.config.containers.len(), 3);
+    let mut declared: Vec<&str> = project
+        .config
+        .declared_containers()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    declared.sort_unstable();
+    assert_eq!(declared, ["api", "app"]);
+}
+
+/// The companion is a sibling of the checked container, not a gate on it,
+/// so a setup command cannot be ordered after the check — it would run
+/// against the very service the check exists to wait for.
+#[tokio::test]
+async fn external_health_check_rejects_setup_commands() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.api]
+image = "my-org/api:1.0.0"
+setup_commands = [{ command = "./seed.sh" }]
+[containers.api.external_health_check]
+type = "tcp"
+port = 8080
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["api"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("'external_health_check' set, but also has 'setup_commands'"),
+        "got: {err:#}"
+    );
+}
+
+/// The checked container's own name reaches the companion's `sh -c` script,
+/// and nothing else in this file constrains what a container may be called.
+#[tokio::test]
+async fn external_health_check_rejects_a_shell_unsafe_container_name() {
+    for name in ["api$(id)", "api'x", "api space"] {
+        let err = load_native_toml(&format!(
+            r#"
+project_name = "demo"
+
+[containers."{name}"]
+image = "my-org/api:1.0.0"
+[containers."{name}".external_health_check]
+type = "tcp"
+port = 8080
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["{name}"]
+
+[tasks.t]
+run = {{ container = "app" }}
+"#
+        ))
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("must hold only letters"),
+            "expected {name:?} to be rejected, got: {err:#}"
+        );
+    }
+}
+
+/// Nothing listens on port 0, and the committed schema already says
+/// `minimum: 1` — the loader has to agree, or an editor accepts what will
+/// never pass.
+#[tokio::test]
+async fn external_health_check_rejects_a_zero_port() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.api]
+image = "my-org/api:1.0.0"
+[containers.api.external_health_check]
+type = "tcp"
+port = 0
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["api"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("'external_health_check.port' of zero"),
+        "got: {err:#}"
+    );
+}
+
+/// The other half of that filter, and the half a careless simplification
+/// would lose: the name alone doesn't make a container generated. A project
+/// may legitimately declare `ratect-health-check-foo` itself as long as
+/// `foo` has no external check to generate one — nothing collides, so
+/// nothing is rejected, and it is the user's own container to be counted.
+/// A bare `starts_with` would silently under-report such a project while
+/// keeping the exclusion test above green.
+#[tokio::test]
+async fn declared_containers_counts_a_user_container_that_merely_looks_generated() {
+    let project = load_native_toml(&format!(
+        r#"
+project_name = "demo"
+
+[containers.foo]
+image = "alpine:3.18"
+
+[containers."{}"]
+image = "alpine:3.18"
+
+[tasks.t]
+run = {{ container = "foo" }}
+"#,
+        external_health_check_container_name("foo")
+    ))
+    .await
+    .unwrap();
+
+    let mut declared: Vec<&str> = project
+        .config
+        .declared_containers()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    declared.sort_unstable();
+    assert_eq!(
+        declared,
+        ["foo", external_health_check_container_name("foo").as_str()],
+        "a container Ratect did not generate is the user's own, whatever it is called"
+    );
+}
+
+/// Pins the *order* of two load steps, which is otherwise only a line
+/// position: `reject_customisations_outside_the_task_graph` has to run
+/// before `expand_external_health_checks`, or a `customise` entry keyed on a
+/// generated companion's reserved name is judged against a graph that
+/// already contains it — and is accepted, reaching into a container the user
+/// never wrote. The reserved-name check deliberately has no `customise` arm
+/// *because* of this ordering, so nothing else would notice it changing.
+#[tokio::test]
+async fn a_customise_entry_cannot_reach_a_generated_health_check_companion() {
+    let err = load_native_toml(&format!(
+        r#"
+project_name = "demo"
+
+[containers.api]
+image = "my-org/api:1.0.0"
+[containers.api.external_health_check]
+type = "tcp"
+port = 8080
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["api"]
+
+[tasks.t]
+run = {{ container = "app", command = "true" }}
+[tasks.t.customise."{companion}"]
+environment = {{ A = "b" }}
+"#,
+        companion = external_health_check_container_name("api")
+    ))
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains(&external_health_check_container_name("api")),
+        "got: {err:#}"
+    );
+}
+
+/// The third rule of this class, and the only one that was wrong in the
+/// *rejecting* direction: membership comes from `container_names_in_task`,
+/// which walks container `dependencies`, so a task customising a dependency
+/// its container inherited failed to load even though the task does start
+/// it.
+#[tokio::test]
+async fn a_customised_container_reached_through_an_inherited_dependency_is_accepted() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.db]
+image = "alpine:3.18"
+
+[containers.base]
+image = "alpine:3.18"
+dependencies = ["db"]
+
+[containers.app]
+extends = "base"
+
+[tasks.t]
+run = { container = "app", command = "true" }
+[tasks.t.customise.db]
+environment = { A = "b" }
+"#,
+    )
+    .await
+    .expect("the task does start 'db', through an inherited dependencies list");
+    assert!(project.config.tasks["t"]
+        .customise
+        .as_ref()
+        .unwrap()
+        .contains_key("db"));
+}
+
+/// A container the task genuinely never starts is still rejected — the rule
+/// moved, it did not weaken.
+#[tokio::test]
+async fn a_customised_container_outside_the_task_graph_is_still_rejected() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.nowhere]
+image = "alpine:3.18"
+
+[containers.app]
+image = "alpine:3.18"
+
+[tasks.t]
+run = { container = "app", command = "true" }
+[tasks.t.customise.nowhere]
+environment = { A = "b" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("will not be started as part of the task"),
+        "got: {err:#}"
+    );
+}
+
+/// The same class as the `run_to_completion` conflict below: a rule
+/// spanning `volumes` and `run_as_current_user` cannot run before
+/// `extends`, because either side can be inherited. Both directions load
+/// cleanly if it does, and the relative path then surfaces from the Docker
+/// layer identified only by a container id — the failure the rule exists to
+/// prevent.
+#[tokio::test]
+async fn a_relative_cache_mount_is_rejected_however_extends_splits_the_two_fields() {
+    let volumes = r#"volumes = [{ type = "cache", name = "c", container = "relative/path" }]"#;
+    let user = r#"run_as_current_user = { enabled = true, home_directory = "/home/u" }"#;
+    for (base, child) in [(volumes, user), (user, volumes)] {
+        let err = load_native_toml(&format!(
+            r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+{base}
+
+[containers.app]
+extends = "base"
+{child}
+
+[tasks.t]
+run = {{ container = "app", command = "true" }}
+"#
+        ))
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("is not an absolute path")
+                && format!("{err:#}").contains("'app'"),
+            "expected the inherited combination to be rejected, naming the container, \
+             got: {err:#}"
+        );
+    }
+}
+
+/// The conflict rules are about a container's *effective* configuration, so
+/// they have to run after `extends` has supplied it. This is the gap that
+/// existed while the check sat in `resolve_expressions_with_boundaries`: the
+/// child's own `setup_commands`/`health_check` were still unset at that
+/// point, so the config loaded and `engine.rs` then returned at the
+/// run-to-completion branch, dropping the inherited setup commands in
+/// silence.
+#[tokio::test]
+async fn run_to_completion_conflicts_are_judged_after_extends_resolves() {
+    for inherited in [
+        "setup_commands = [{ command = \"echo seeding\" }]",
+        "health_check = { command = \"true\" }",
+    ] {
+        let err = load_native_toml(&format!(
+            r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+{inherited}
+
+[containers.migrate]
+extends = "base"
+run_to_completion = true
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["migrate"]
+
+[tasks.t]
+run = {{ container = "app" }}
+"#
+        ))
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("'migrate'")
+                && format!("{err:#}").contains("'run_to_completion' set, but also has"),
+            "an inherited {inherited} must be judged too, got: {err:#}"
+        );
+    }
+}
+
+/// An explicitly empty `setup_commands` is how an `extends` child *clears*
+/// an inherited one, so it declares no setup commands rather than declaring
+/// none-of-them. Rejecting it would leave a child that inherits
+/// `setup_commands` no way to opt into either of the two fields that forbid
+/// them.
+#[tokio::test]
+async fn an_empty_setup_commands_list_does_not_count_as_declaring_any() {
+    for field in [
+        "run_to_completion = true",
+        "external_health_check = { type = \"tcp\", port = 8080 }",
+    ] {
+        let project = load_native_toml(&format!(
+            r#"
+project_name = "demo"
+
+[containers.base]
+image = "my-org/api:1.0.0"
+setup_commands = [{{ command = "./seed.sh" }}]
+
+[containers.api]
+extends = "base"
+setup_commands = []
+{field}
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["api"]
+
+[tasks.t]
+run = {{ container = "app" }}
+"#
+        ))
+        .await
+        .unwrap_or_else(|error| panic!("{field} with a cleared list should load: {error:#}"));
+        assert_eq!(
+            project.config.containers["api"]
+                .setup_commands
+                .as_ref()
+                .map(Vec::len),
+            Some(0),
+            "the child's empty list must win over the inherited one"
+        );
+    }
+}
+
+/// '-' earns its own test separately from the unreachable names above,
+/// because it fails in a worse way than not resolving: the name is a bare
+/// argument to `nc -z -w 5 <name> <port>`, where it parses as an option, so
+/// the check would fail reporting a host it never contacted.
+#[tokio::test]
+async fn external_health_check_rejects_a_container_name_starting_with_a_dash() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers."-api"]
+image = "my-org/api:1.0.0"
+[containers."-api".external_health_check]
+type = "tcp"
+port = 8080
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["-api"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("starts with '-' or '.'"),
+        "got: {err:#}"
+    );
+}
+
+/// Only the names the real tools actually choke on. Measured, not assumed:
+/// Docker resolves a `_api` alias and both `curl` and `nc` reach it, so
+/// `_api` must *load* — the sibling test below. `.api` resolves nowhere
+/// (`curl` reports `000`, `nc` says "bad address") and `-api` is read by
+/// `nc` as an option; an empty name has no host at all.
+#[tokio::test]
+async fn external_health_check_rejects_only_unreachable_leading_characters() {
+    for name in [".api", ""] {
+        let err = load_native_toml(&format!(
+            r#"
+project_name = "demo"
+
+[containers."{name}"]
+image = "my-org/api:1.0.0"
+[containers."{name}".external_health_check]
+type = "tcp"
+port = 8080
+
+[tasks.t]
+run = {{ container = "{name}" }}
+"#
+        ))
+        .await
+        .unwrap_err();
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("starts with '-' or '.'"),
+            "expected {name:?} to be rejected, got: {message}"
+        );
+        // An empty name has no first character to quote; interpolating one
+        // previously put a raw NUL byte in the message.
+        assert!(
+            !message.contains('\0'),
+            "an empty name has no character to quote: {message:?}"
+        );
+    }
+}
+
+/// The half that stops the rule drifting back to "must start alphanumeric":
+/// a leading '_' is reachable in practice, so rejecting it would refuse a
+/// configuration that works.
+#[tokio::test]
+async fn an_underscore_leading_container_name_may_be_externally_checked() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers._api]
+image = "my-org/api:1.0.0"
+[containers._api.external_health_check]
+type = "tcp"
+port = 8080
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["_api"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .expect("a leading underscore resolves for both curl and nc");
+    assert!(project
+        .config
+        .containers
+        .contains_key(&external_health_check_container_name("_api")));
+}
+
+/// The same "can never pass" class as a zero port: curl's `%{http_code}` is
+/// always three digits, so nothing below 100 can ever equal it — and `000`
+/// is what curl reports for a connection that failed outright.
+#[tokio::test]
+async fn external_health_check_rejects_an_impossible_expected_status() {
+    for status in ["0", "99", "1000"] {
+        let err = load_native_toml(&format!(
+            r#"
+project_name = "demo"
+
+[containers.api]
+image = "my-org/api:1.0.0"
+[containers.api.external_health_check]
+type = "http"
+port = 8080
+expected_status = {status}
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["api"]
+
+[tasks.t]
+run = {{ container = "app" }}
+"#
+        ))
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("'external_health_check.expected_status'"),
+            "expected {status} to be rejected, got: {err:#}"
+        );
+    }
+}
+
+/// `curl -m 0` and `nc -w 0` both mean "no timeout", so a zero `timeout`
+/// would produce the opposite of what it reads as — and zero `retries` a
+/// check that never runs. Both are rejected rather than clamped, since
+/// either clamp would be a guess at what was meant.
+#[tokio::test]
+async fn external_health_check_rejects_a_zero_timeout_or_retry_count() {
+    for (field, value) in [("timeout", "\"0\""), ("retries", "0")] {
+        let err = load_native_toml(&format!(
+            r#"
+project_name = "demo"
+
+[containers.api]
+image = "my-org/api:1.0.0"
+[containers.api.external_health_check]
+type = "tcp"
+port = 8080
+{field} = {value}
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["api"]
+
+[tasks.t]
+run = {{ container = "app" }}
+"#
+        ))
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains(&format!("'external_health_check.{field}'")),
+            "expected a zero {field} to be rejected, got: {err:#}"
+        );
+    }
+}
+
+/// A `timeout` too small to survive the script's own three-decimal
+/// formatting must not round down to `0`, which `curl` reads as no timeout
+/// at all — the same hazard the zero check above rejects outright, reached
+/// by arithmetic rather than by writing it.
+#[tokio::test]
+async fn a_sub_millisecond_timeout_does_not_round_down_to_no_timeout() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.api]
+image = "my-org/api:1.0.0"
+[containers.api.external_health_check]
+type = "http"
+port = 8080
+timeout = "1ns"
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["api"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    let command = project.config.containers[&external_health_check_container_name("api")]
+        .command
+        .clone()
+        .unwrap();
+    assert!(command.contains("-m 0.001"), "got: {command}");
+}
+
+/// `path`/`expected_status` belong to the HTTP form only — accepting them on
+/// a TCP check would silently do nothing.
+#[tokio::test]
+async fn a_tcp_external_health_check_rejects_http_only_fields() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.db]
+image = "postgres:16"
+[containers.db.external_health_check]
+type = "tcp"
+port = 5432
+path = "/healthz"
+
+[tasks.t]
+run = { container = "db" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("'path'"), "got: {err:#}");
 }
 
 /// `load_project` is the whole load-resolve sequence both binaries use,
@@ -7367,6 +8498,7 @@ fn container_with_environment(environment: HashMap<String, String>) -> Container
         health_check: None,
         setup_commands: None,
         run_to_completion: None,
+        external_health_check: None,
         working_directory: None,
         command: None,
         entrypoint: None,

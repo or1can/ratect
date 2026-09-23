@@ -1,0 +1,57 @@
+# A native `ratect.toml` fixture proving `external_health_check` (ratect#98)
+# against a real Docker daemon. Native-only — Batect has no equivalent, so
+# this fixture, unlike most engine/Docker behaviour proven under
+# `ratect-compat/tests/fixtures/`, can only be expressed here (see AGENTS.md's
+# fixture-layer guideline).
+#
+# `traefik/whoami` is the point of the fixture, not an arbitrary web server:
+# it is a `scratch`-based image with no shell and no HTTP client of its own,
+# so `docker exec`ing a check into it is impossible and an in-container
+# `health_check` could never be written for it. Anything that becomes ready
+# here did so from outside, over the project's own network, with nothing at
+# all having run inside the checked container.
+project_name = "ratect-external-health-check-test"
+
+[containers.api]
+image = "traefik/whoami:v1.10.2"
+[containers.api.external_health_check]
+type = "http"
+port = 80
+path = "/health"
+interval = "1s"
+retries = 20
+timeout = "2s"
+
+[containers.socket]
+image = "traefik/whoami:v1.10.2"
+[containers.socket.external_health_check]
+type = "tcp"
+port = 80
+interval = "1s"
+retries = 20
+
+# Port 9999 is not listened on, so this check exhausts its (deliberately
+# small) retry budget and exits non-zero.
+[containers.unreachable]
+image = "traefik/whoami:v1.10.2"
+[containers.unreachable.external_health_check]
+type = "tcp"
+port = 9999
+interval = "1s"
+retries = 2
+
+[containers.app]
+image = "alpine:3.18.2"
+dependencies = ["api", "socket"]
+
+[containers.app-with-unreachable-dependency]
+image = "alpine:3.18.2"
+dependencies = ["unreachable"]
+
+[tasks.start]
+description = "Runs once both external health checks have passed"
+run = { container = "app", command = "echo app-started" }
+
+[tasks.start-with-unreachable-dependency]
+description = "Must fail before its container ever runs"
+run = { container = "app-with-unreachable-dependency", command = "echo should-not-run" }

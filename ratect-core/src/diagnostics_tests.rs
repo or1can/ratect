@@ -126,6 +126,61 @@ tasks:
     );
 }
 
+/// The warning above is about a *health check* deciding readiness, so it is
+/// false of the two dependencies whose readiness is decided some other way —
+/// and worse than noise, since neither is allowed a `health_check` at all:
+/// telling either to add one is telling it to write a config that will not
+/// load.
+#[tokio::test]
+async fn doctor_does_not_ask_for_a_health_check_a_dependency_cannot_have() {
+    let config = config_with(
+        r#"
+project_name: demo
+containers:
+  migrate:
+    image: alpine:3.18.2
+    run_to_completion: true
+  api:
+    image: alpine:3.18.2
+    external_health_check:
+      type: tcp
+      port: 8080
+  app:
+    image: alpine:3.18.2
+    dependencies:
+      - migrate
+      - api
+tasks:
+  test:
+    run:
+      container: app
+      command: echo hi
+"#,
+    )
+    .await;
+
+    let messages: Vec<String> = config_findings(&config)
+        .iter()
+        .map(|finding| finding.render().trim().to_string())
+        .collect();
+
+    for name in ["migrate", "api"] {
+        assert!(
+            !messages
+                .iter()
+                .any(|m| m.contains(&format!("'{name}'")) && m.contains("health_check")),
+            "'{name}' decides readiness without a health check: {messages:?}"
+        );
+    }
+    // The companion generated for `api`'s external check is a
+    // `run_to_completion` dependency too, so it is covered by the same rule
+    // — and it is the one the user could do nothing about even if told.
+    assert!(
+        !messages.iter().any(|m| m.contains("health_check")),
+        "nothing in this config should be asked for a health check: {messages:?}"
+    );
+}
+
 /// The marker Batect's authors put near the top of both wrapper forms
 /// — the thing that tells a still-runs-Batect script from one already
 /// repointed at Ratect.

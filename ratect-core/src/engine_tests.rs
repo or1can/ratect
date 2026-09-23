@@ -808,6 +808,7 @@ fn container(image: &str, dependencies: Option<Vec<String>>) -> Container {
         health_check: None,
         setup_commands: None,
         run_to_completion: None,
+        external_health_check: None,
     }
 }
 
@@ -865,6 +866,7 @@ fn config_with_cycle() -> Config {
             health_check: None,
             setup_commands: None,
             run_to_completion: None,
+            external_health_check: None,
         },
     );
 
@@ -963,6 +965,7 @@ fn config_with_shared_prerequisite() -> Config {
             health_check: None,
             setup_commands: None,
             run_to_completion: None,
+            external_health_check: None,
         },
     );
 
@@ -1497,6 +1500,7 @@ fn container_with_run_as_current_user(
         health_check: None,
         setup_commands: None,
         run_to_completion: None,
+        external_health_check: None,
     }
 }
 
@@ -1977,6 +1981,7 @@ async fn run_as_current_user_explicitly_disabled_reaches_the_container_with_no_m
             health_check: None,
             setup_commands: None,
             run_to_completion: None,
+            external_health_check: None,
         },
     );
     let mut tasks = HashMap::new();
@@ -2037,6 +2042,7 @@ fn container_with_build_directory(
         health_check: None,
         setup_commands: None,
         run_to_completion: None,
+        external_health_check: None,
     }
 }
 
@@ -2642,6 +2648,7 @@ async fn container_without_image_or_build_directory_errors() {
             health_check: None,
             setup_commands: None,
             run_to_completion: None,
+            external_health_check: None,
         },
     );
     let mut tasks = HashMap::new();
@@ -5036,6 +5043,7 @@ async fn dependency_without_image_or_build_directory_errors() {
             health_check: None,
             setup_commands: None,
             run_to_completion: None,
+            external_health_check: None,
         },
     );
     containers.insert(

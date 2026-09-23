@@ -80,13 +80,22 @@ pub fn config_findings(config: &Config) -> Vec<Finding> {
     // starts, which is where "connection refused" on the first run comes
     // from. Ratect can't see whether the *image* defines one, so this is
     // phrased as something to check rather than something wrong.
+    //
+    // A `health_check` is only one of the three ways a dependency's
+    // readiness can be decided, though, and the warning is simply false of
+    // the other two: a `run_to_completion` dependency is ready when it
+    // exits 0 (and cannot have a health check at all), and one with an
+    // `external_health_check` is ready when a check Ratect runs from
+    // outside it passes. Both would otherwise be told to add a field they
+    // are forbidden from having.
     let mut unguarded: Vec<&str> = dependency_names(config)
         .into_iter()
         .filter(|name| {
-            config
-                .containers
-                .get(*name)
-                .is_some_and(|container| container.health_check.is_none())
+            config.containers.get(*name).is_some_and(|container| {
+                container.health_check.is_none()
+                    && container.external_health_check.is_none()
+                    && !container.run_to_completion.unwrap_or(false)
+            })
         })
         .collect();
     unguarded.sort_unstable();

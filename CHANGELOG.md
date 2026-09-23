@@ -33,9 +33,12 @@ history, from when it was the only binary.
 - [Migrating a Batect Project to Ratect](docs/migrating-batect-project.md): a staged path from `ratect-compat` against an unmodified `batect.yml`, through mixed `.yml`/`.toml` includes, to a fully native `ratect.toml`.
 - `run_in` on a `setup_commands` entry (ratect only): a setup command can run inside another container instead of the one that declares it — one of that container's own `dependencies`, so a setup step can use tooling from an image the container itself doesn't carry. Rejected when the file loads if the named container isn't one of those dependencies, or is a `run_to_completion` one. See [Config Reference](docs/ratect-config-reference.md#run_in-setup-commands-in-another-container).
 - `run_to_completion` (ratect only): a dependency can be marked to run to completion — started, run to exit, and considered ready once it exits with status 0 — instead of staying detached behind a health check and `setup_commands`. Kubernetes-style init-container behavior, expressed as a plain node in the existing dependency graph. See [Config Reference](docs/ratect-config-reference.md#run_to_completion-init-containers).
+- `external_health_check` (ratect only): a container can be checked for readiness from *outside* itself — an HTTP request or a bare TCP connection made over the project's own network — for an image with no shell or check tooling to run a `health_check` inside. Rejected alongside `health_check`, `run_to_completion` or `setup_commands` on the same container. See [Config Reference](docs/ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it).
 
 ### Fixed
 
+- A task's `customise` entry naming a container reached through an *inherited* `dependencies` list failed to load, reporting that the container would not be started as part of the task — when the task does start it (ratect only, since `extends` is native-only).
+- A relative `cache` mount path on a container with `run_as_current_user` enabled was accepted when `extends` supplied the two across a base and a child, instead of being rejected as it is when both are written on one container. The path then failed from Docker, naming a container id rather than the container you wrote (ratect only, since `extends` is native-only).
 - The documentation site now renders its Mermaid diagrams (dependency graphs and sequence diagrams on the Task Lifecycle page); they were shown as diagram source.
 
 ### Changed

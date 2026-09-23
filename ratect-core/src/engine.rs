@@ -2151,10 +2151,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     // A `customise` entry for this container specifically —
                     // applied on top of its own base config, same precedence
                     // as a task's `run` overriding its own main container
-                    // (see `Config::resolve_expressions_with_boundaries` for
-                    // the validation ensuring this can never target the main
-                    // task container or a container outside this task's own
-                    // graph).
+                    // (see `Config::resolve_expressions_with_boundaries`
+                    // for the validation ensuring this can never target the
+                    // main task container, and
+                    // `config::reject_customisations_outside_the_task_graph`
+                    // — which runs after `extends` — for one outside this
+                    // task's own graph).
                     let customisation = customisations.and_then(|c| c.get(name));
 
                     let image = self.resolve_image(name, dependency_config).await?;
@@ -2220,7 +2222,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     // different readiness gate entirely: it has no health
                     // check and no `setup_commands` of its own — mutually
                     // exclusive at config-load time (see
-                    // `Config::resolve_expressions_with_boundaries`) — so
+                    // `config::reject_run_to_completion_conflicts`, which
+                    // runs after `extends` has resolved — this branch is
+                    // exactly what silently dropped an *inherited*
+                    // `setup_commands` while that check ran too early) — so
                     // instead it must simply run to completion and exit 0.
                     // No watcher is spawned below for it either: its exit is
                     // the readiness signal itself, not a later surprise.
