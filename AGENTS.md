@@ -394,6 +394,38 @@ for — note that in `TODO.md` instead.
 
     **Squash merging is disabled**, both in the ruleset and at the repo level — it flattens a branch's own commit history into one, discarding whatever story separate commits told (see guideline 13's own reasoning for keeping genuinely separable behaviors as separate commits in the first place). Use a merge commit or rebase merge instead; squashing individual commits *on a branch* before opening a PR, to tell a cleaner story, is still fine and encouraged — the distinction is who does the squashing and when, not whether a tidy history matters.
 13. **Commit Packaging**: a release that's one theme (like most 0.x releases so far) lands as a single `feat:` commit. A release bundling several genuinely separable behaviors (e.g. 0.6.0's networking + proxy work) should instead split into one `feat:` commit per behavior, each with its own tests and doc updates — easier to review and to `git bisect`/`git revert` than one large commit. The version bump and any docs-only release summary stay separate commits either way (see 8).
+
+    **Atomic within a PR.** A PR is usually one change, so a commit inside it
+    that *corrects* another commit inside it is not history — it is a draft
+    left in the record. Fold it. The test: does understanding one change
+    require reading a later commit that changes the story? A `feat:` describing
+    a contract three later commits revise fails it; so does a doc commit
+    asserting an invariant the next two correct. Across PRs and over time,
+    corrections to earlier work are expected and stay separate — that is
+    ordinary history, not a draft. What stays separate *within* a PR is
+    genuinely discrete work: ratect#98 carried three unrelated pre-existing
+    bugs found on the way, each its own commit, each independently revertable.
+    A commit's `CHANGELOG.md` entry travels with it and has to stand alone — a
+    bullet saying "same reason" breaks the moment the bullet it referred to
+    lands in a different commit.
+
+    **Every commit must build and pass its tests**, which is what `bisect`
+    actually needs and what "easier to bisect" above silently assumes. The
+    trap, met while restructuring ratect#98: folding a review fix into the
+    feature pulled in a test calling a function a *later* commit introduced,
+    so that commit compiled nowhere. Check it rather than assume it — a loop
+    of `git checkout <sha> && cargo check --workspace --all-targets` over
+    `git rev-list main..HEAD` is a minute's work, and it is how that one was
+    caught before it shipped.
+
+    **Restructuring is verifiable, so verify it.** Branch the old head first;
+    the rewritten branch's final tree should then equal the pre-rewrite one
+    (`git diff <backup> HEAD` empty), or differ only by changes you can
+    enumerate and justify. `git rebase -i` drives fine non-interactively with
+    a scripted `GIT_SEQUENCE_EDITOR` — a two-line script that `cat`s a
+    prepared todo into `$1` — so reordering and folding need no terminal, and
+    "interactive rebase isn't available" is not a reason to leave a history
+    unsplit.
 14. **Architecture Decision Records** ([`decisions/`](decisions/)): the home for a decision's rationale is decided by whether it's **cross-cutting or version-scoped**. A decision referenced from more than one place — the two-binary split, the labels namespace, the native config format — becomes an ADR — a new `decisions/NNNN-slug.md`<!-- example --> file (`NNNN` the next number in sequence) with `Status`, `Context`, `Decision`, `Alternatives considered`, and `Consequences` sections; `RELEASES.md`'s own entry for that release then just links to it, same as it links to the release's Milestone. A decision that belongs to one release stays **inline** in that release's own GitHub issue (its "Implementation Decisions" section — see [decisions/0008](decisions/0008-tracking-release-scope-with-github-issues.md)) — don't extract it. Practical trigger: a decision earns an ADR the moment it's about to be referenced from a *second* place; most never cross that line. ADRs are append-only like the versioned lists — supersede and link forward, never delete. See [`decisions/README.md`](decisions/README.md) for the full convention.
 15. **Review before committing, not after.** Run a review pass over the working
     diff (`/code-review`) *before* each commit, not over a run of commits
