@@ -259,11 +259,16 @@ impl EventSink for InterleavedEventLogger {
                 command,
                 index,
                 total,
+                run_in,
             } => {
+                // The line is already prefixed with `container`, so only the
+                // container it runs *in* needs naming, and only when that
+                // isn't the same one.
+                let elsewhere = run_in.map_or(String::new(), |run_in| format!(" in {run_in}"));
                 self.print_for_container(
                     &state,
                     &container,
-                    &format!("Running setup command {command} ({index} of {total})..."),
+                    &format!("Running setup command {command} ({index} of {total}){elsewhere}..."),
                 );
             }
             TaskEvent::SetupCommandOutput {

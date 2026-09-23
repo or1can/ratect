@@ -2981,10 +2981,12 @@ async fn dependency_becomes_healthy_and_runs_setup_commands_before_the_task_star
             crate::config::SetupCommand {
                 command: "./apply-migrations.sh".to_string(),
                 working_directory: Some("/setup".to_string()),
+                run_in: None,
             },
             crate::config::SetupCommand {
                 command: "./seed-data.sh".to_string(),
                 working_directory: None,
+                run_in: None,
             },
         ]);
     });
@@ -3047,6 +3049,7 @@ async fn setup_commands_run_with_the_containers_own_environment() {
         database.setup_commands = Some(vec![crate::config::SetupCommand {
             command: "./apply-migrations.sh".to_string(),
             working_directory: None,
+            run_in: None,
         }]);
     });
 
@@ -3072,6 +3075,7 @@ async fn setup_command_falls_back_to_the_containers_own_working_directory() {
         database.setup_commands = Some(vec![crate::config::SetupCommand {
             command: "./apply-migrations.sh".to_string(),
             working_directory: None,
+            run_in: None,
         }]);
     });
 
@@ -3091,6 +3095,7 @@ async fn setup_commands_own_working_directory_overrides_the_containers() {
         database.setup_commands = Some(vec![crate::config::SetupCommand {
             command: "./apply-migrations.sh".to_string(),
             working_directory: Some("/from-setup-command".to_string()),
+            run_in: None,
         }]);
     });
 
@@ -3101,6 +3106,201 @@ async fn setup_commands_own_working_directory_overrides_the_containers() {
 
     let (working_directory, _, _) = docker.exec_for("./apply-migrations.sh").unwrap();
     assert_eq!(working_directory.as_deref(), Some("/from-setup-command"));
+}
+
+/// `run_in` (ratect#111): the declaring container's readiness gate runs the
+/// command, but Docker's `exec` targets the named dependency's container —
+/// the whole point being that the tooling lives in a different image.
+#[tokio::test]
+async fn a_setup_command_with_run_in_execs_into_the_named_dependency() {
+    let mut config = config_with_database_dependency(|database| {
+        database.dependencies = Some(vec!["seed-client".to_string()]);
+        database.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./seed.sh".to_string(),
+            working_directory: None,
+            run_in: Some("seed-client".to_string()),
+        }]);
+    });
+    config.containers.insert(
+        "seed-client".to_string(),
+        container("my-org/db-tools", None),
+    );
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let events = docker.events();
+    assert!(
+        events
+            .iter()
+            .any(|e| e == "exec:sidecar-id-seed-client:./seed.sh"),
+        "the setup command should have run in 'seed-client', not 'database': {events:?}"
+    );
+
+    // Still ordered by the *declaring* container's gate: its own health
+    // check comes first, and the task container only starts afterwards.
+    let ordered_positions: Vec<usize> = [
+        "sidecar-start:seed-client:",
+        "wait-healthy:sidecar-id-database",
+        "exec:sidecar-id-seed-client:./seed.sh",
+        "run:app:",
+    ]
+    .iter()
+    .map(|prefix| {
+        events
+            .iter()
+            .position(|e| e.starts_with(prefix))
+            .unwrap_or_else(|| panic!("expected an event starting '{prefix}': {events:?}"))
+    })
+    .collect();
+    assert!(
+        ordered_positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "readiness steps out of order: {events:?}"
+    );
+}
+
+/// The declaring container's environment, user and working directory are
+/// deliberately *not* forwarded to a `run_in` target — Docker's `exec`
+/// inherits all three from whichever container it runs in, and the
+/// declaring container's would be the wrong ones to send. The setup
+/// command's own `working_directory` still applies.
+#[tokio::test]
+async fn a_run_in_setup_command_does_not_carry_the_declaring_containers_environment() {
+    let mut config = config_with_database_dependency(|database| {
+        let mut environment = HashMap::new();
+        environment.insert("POSTGRES_PASSWORD".to_string(), "secret".to_string());
+        database.environment = Some(environment);
+        database.working_directory = Some("/from-database".to_string());
+        database.dependencies = Some(vec!["seed-client".to_string()]);
+        database.setup_commands = Some(vec![
+            crate::config::SetupCommand {
+                command: "./seed.sh".to_string(),
+                working_directory: None,
+                run_in: Some("seed-client".to_string()),
+            },
+            crate::config::SetupCommand {
+                command: "./seed-elsewhere.sh".to_string(),
+                working_directory: Some("/from-setup-command".to_string()),
+                run_in: Some("seed-client".to_string()),
+            },
+        ]);
+    });
+    config.containers.insert(
+        "seed-client".to_string(),
+        container("my-org/db-tools", None),
+    );
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let (working_directory, environment, _) = docker.exec_for("./seed.sh").unwrap();
+    assert_eq!(working_directory, None);
+    assert_eq!(environment, None);
+    let (working_directory, _, _) = docker.exec_for("./seed-elsewhere.sh").unwrap();
+    assert_eq!(working_directory.as_deref(), Some("/from-setup-command"));
+}
+
+/// `run_in` naming the declaring container itself is what omitting it means,
+/// so both spellings must behave identically — including carrying that
+/// container's own environment and working directory, which a command
+/// running elsewhere does not.
+#[tokio::test]
+async fn run_in_naming_the_declaring_container_behaves_exactly_like_omitting_it() {
+    let config = config_with_database_dependency(|database| {
+        let mut environment = HashMap::new();
+        environment.insert("POSTGRES_PASSWORD".to_string(), "secret".to_string());
+        database.environment = Some(environment);
+        database.working_directory = Some("/from-database".to_string());
+        database.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./apply-migrations.sh".to_string(),
+            working_directory: None,
+            run_in: Some("database".to_string()),
+        }]);
+    });
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    assert!(
+        docker
+            .events()
+            .iter()
+            .any(|e| e == "exec:sidecar-id-database:./apply-migrations.sh"),
+        "expected the exec to target the declaring container: {:?}",
+        docker.events()
+    );
+    let (working_directory, environment, _) = docker.exec_for("./apply-migrations.sh").unwrap();
+    assert_eq!(working_directory.as_deref(), Some("/from-database"));
+    assert_eq!(
+        environment
+            .unwrap()
+            .get("POSTGRES_PASSWORD")
+            .map(String::as_str),
+        Some("secret")
+    );
+}
+
+/// A failing `run_in` setup command names both containers: the one it ran
+/// in, and the one whose readiness gate declared it. Naming only the
+/// declaring container would point at the wrong place to go looking.
+#[tokio::test]
+async fn a_failing_run_in_setup_command_names_both_containers() {
+    let mut config = config_with_database_dependency(|database| {
+        database.dependencies = Some(vec!["seed-client".to_string()]);
+        database.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./seed.sh".to_string(),
+            working_directory: None,
+            run_in: Some("seed-client".to_string()),
+        }]);
+    });
+    config.containers.insert(
+        "seed-client".to_string(),
+        container("my-org/db-tools", None),
+    );
+
+    let docker = FakeContainerRuntime::default().with_failing_setup_command("./seed.sh");
+    let engine = engine(config, docker.clone());
+
+    let err = engine.run_task("start", &[]).await.unwrap_err();
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("in container 'seed-client' (a setup command of container 'database')"),
+        "got: {message}"
+    );
+}
+
+/// The task's own container can use `run_in` too — its setup commands run
+/// through the same gate, and its dependencies are equally guaranteed ready
+/// by the time they do.
+#[tokio::test]
+async fn the_task_containers_own_run_in_setup_command_execs_into_its_dependency() {
+    let mut config = config_with_database_dependency(|_| {});
+    config.containers.get_mut("app").unwrap().setup_commands =
+        Some(vec![crate::config::SetupCommand {
+            command: "./warm-cache.sh".to_string(),
+            working_directory: None,
+            run_in: Some("database".to_string()),
+        }]);
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    assert!(
+        docker
+            .events()
+            .iter()
+            .any(|e| e == "exec:sidecar-id-database:./warm-cache.sh"),
+        "expected the exec to target 'database': {:?}",
+        docker.events()
+    );
 }
 
 #[tokio::test]
@@ -3652,10 +3852,12 @@ async fn failing_setup_command_fails_the_task_and_still_cleans_up() {
             crate::config::SetupCommand {
                 command: "./apply-migrations.sh".to_string(),
                 working_directory: None,
+                run_in: None,
             },
             crate::config::SetupCommand {
                 command: "./seed-data.sh".to_string(),
                 working_directory: None,
+                run_in: None,
             },
         ]);
     });
@@ -3777,6 +3979,7 @@ async fn task_containers_own_setup_commands_run() {
     app.setup_commands = Some(vec![crate::config::SetupCommand {
         command: "./migrate.sh".to_string(),
         working_directory: None,
+        run_in: None,
     }]);
     containers.insert("app".to_string(), app);
     let mut tasks = HashMap::new();
@@ -3810,6 +4013,7 @@ async fn failing_setup_command_on_the_tasks_own_container_fails_the_task() {
     app.setup_commands = Some(vec![crate::config::SetupCommand {
         command: "./migrate.sh".to_string(),
         working_directory: None,
+        run_in: None,
     }]);
     containers.insert("app".to_string(), app);
     let mut tasks = HashMap::new();
@@ -3956,6 +4160,7 @@ fn config_with_failing_task_container_setup_command() -> Config {
     app.setup_commands = Some(vec![crate::config::SetupCommand {
         command: "./migrate.sh".to_string(),
         working_directory: None,
+        run_in: None,
     }]);
     containers.insert("app".to_string(), app);
     let mut tasks = HashMap::new();
@@ -3984,6 +4189,7 @@ async fn task_containers_own_setup_commands_run_concurrently_with_its_main_comma
     app.setup_commands = Some(vec![crate::config::SetupCommand {
         command: "./migrate.sh".to_string(),
         working_directory: None,
+        run_in: None,
     }]);
     containers.insert("app".to_string(), app);
     let mut tasks = HashMap::new();
@@ -4471,11 +4677,13 @@ async fn max_parallelism_of_one_serializes_independent_setup_command_execution()
         Some(vec![crate::config::SetupCommand {
             command: "setup-a".to_string(),
             working_directory: None,
+            run_in: None,
         }]);
     config.containers.get_mut("dep-b").unwrap().setup_commands =
         Some(vec![crate::config::SetupCommand {
             command: "setup-b".to_string(),
             working_directory: None,
+            run_in: None,
         }]);
 
     let delay = std::time::Duration::from_millis(100);
@@ -7238,6 +7446,7 @@ async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
     database.setup_commands = Some(vec![crate::config::SetupCommand {
         command: "./init.sh".to_string(),
         working_directory: None,
+        run_in: None,
     }]);
     containers.insert("database".to_string(), database);
     let mut tasks = HashMap::new();
@@ -7310,6 +7519,7 @@ async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
             command: "./init.sh".into(),
             index: 1,
             total: 1,
+            run_in: None,
         },
         TaskEvent::SetupCommandsCompleted {
             container: "database".into(),
@@ -7514,6 +7724,7 @@ async fn setup_command_output_only_posts_when_the_sink_wants_progress_detail() {
         database.setup_commands = Some(vec![crate::config::SetupCommand {
             command: "./seed-data.sh".to_string(),
             working_directory: None,
+            run_in: None,
         }]);
     });
     let docker = FakeContainerRuntime::default().with_failing_setup_command("./seed-data.sh");
@@ -7539,6 +7750,7 @@ async fn setup_command_output_only_posts_when_the_sink_wants_progress_detail() {
         database.setup_commands = Some(vec![crate::config::SetupCommand {
             command: "./seed-data.sh".to_string(),
             working_directory: None,
+            run_in: None,
         }]);
     });
     let docker = FakeContainerRuntime::default().with_failing_setup_command("./seed-data.sh");

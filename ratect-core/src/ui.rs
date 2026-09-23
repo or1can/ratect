@@ -189,11 +189,18 @@ pub enum TaskEvent {
     },
     /// One of a dependency's `setup_commands` is about to run. `index` is
     /// 1-based, for rendering as "(n of total)".
+    ///
+    /// `container` is always the container whose readiness gate this is —
+    /// the one that *declared* the command. `run_in` (ratect#111) is the
+    /// container it actually runs inside, and is `Some` only when the two
+    /// differ; every renderer has to name it, since otherwise the line
+    /// reads as though the command ran somewhere it didn't.
     RunningSetupCommand {
         container: String,
         command: String,
         index: usize,
         total: usize,
+        run_in: Option<String>,
     },
     /// Every one of the dependency's `setup_commands` succeeded — only
     /// posted when it had some.

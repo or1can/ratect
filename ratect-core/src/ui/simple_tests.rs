@@ -60,6 +60,7 @@ fn renders_lifecycle_milestones_as_plain_lines() {
         command: "./init.sh".into(),
         index: 1,
         total: 2,
+        run_in: None,
     });
     logger.post(TaskEvent::SetupCommandsCompleted {
         container: "db".into(),
@@ -81,6 +82,26 @@ fn renders_lifecycle_milestones_as_plain_lines() {
              Running setup command ./init.sh (1 of 2) in db...\n\
              db has completed all setup commands.\n\
              Running cargo test in app...\n"
+    );
+}
+
+/// A `run_in` setup command (ratect#111) runs in a container other than the
+/// one whose gate declared it. This line is flat — no per-container prefix
+/// to carry the declaring container — so it has to name both, or it reads as
+/// though the command ran in the wrong place.
+#[test]
+fn a_run_in_setup_command_names_the_container_it_runs_in_and_the_one_that_declared_it() {
+    let (logger, buffer) = logger();
+    logger.post(TaskEvent::RunningSetupCommand {
+        container: "db".into(),
+        command: "./seed.sh".into(),
+        index: 1,
+        total: 1,
+        run_in: Some("db-seed-client".into()),
+    });
+    assert_eq!(
+        buffer.contents(),
+        "Running setup command ./seed.sh (1 of 1) in db-seed-client, for db...\n"
     );
 }
 
@@ -177,6 +198,7 @@ fn readiness_milestones_are_dropped_for_the_tasks_own_container_only() {
             command: "./init.sh".into(),
             index: 1,
             total: 1,
+            run_in: None,
         });
         logger.post(TaskEvent::SetupCommandsCompleted {
             container: container.into(),

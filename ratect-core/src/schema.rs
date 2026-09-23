@@ -229,6 +229,41 @@ fn make_native(json: &mut serde_json::Value) {
         );
     }
 
+    // Add the native-only `run_in` field to a setup command — skipped from
+    // the compat schema (`SetupCommand::run_in`'s `schemars(skip)`, since
+    // `ratect-compat` rejects it), same reasoning as `extends` below.
+    if let Some(properties) = definitions
+        .get_mut("SetupCommand")
+        .and_then(|setup_command| setup_command.get_mut("properties"))
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        // Corrects, rather than adds: the shared description says the
+        // fallback is the declaring container's `working_directory`, which
+        // is the whole truth only where `run_in` is rejected.
+        properties.insert(
+            "working_directory".to_string(),
+            serde_json::json!({
+                "type": ["string", "null"],
+                "description": "Falls back to the `working_directory` of whichever container \
+                                the command runs in — the one declaring it, or the one named \
+                                by `run_in` — and then to that image's own default when \
+                                neither is set.",
+            }),
+        );
+        properties.insert(
+            "run_in".to_string(),
+            serde_json::json!({
+                "type": ["string", "null"],
+                "description": "Runs this command inside another container instead of the \
+                                one that declares it — for a setup step whose tooling lives \
+                                in a different image, such as seeding a database from a \
+                                client container. Must name one of the declaring container's \
+                                own dependencies, or the declaring container itself (which is \
+                                what omitting it means).",
+            }),
+        );
+    }
+
     // Add the native-only `extends` field to a container — skipped from the
     // compat schema (`Container::extends`'s `schemars(skip)`, since
     // `ratect-compat` rejects it), but valid and worth completing here.

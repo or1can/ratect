@@ -332,6 +332,71 @@ The field is rejected in a `batect.yml` rather than ignored, value and all:
 setting `allow_nested_git_includes` to false there would claim a restriction
 that format never applies.
 
+## `run_in`: setup commands in another container
+
+A `setup_commands` entry normally runs inside the container that declares it.
+Sometimes the tooling isn't there: seeding a database means running a client,
+and a `postgres:16` image is not where your migration tool lives. `run_in`
+names another container to run the command in, while leaving *when* it runs
+alone — it is still part of the declaring container's readiness gate, so
+nothing that depends on that container starts until the command has succeeded.
+
+```toml
+[containers.db-seed-client]
+image = "my-org/db-tools:latest"
+# Stays alive, so there is a live process for the command to run alongside.
+command = "sleep infinity"
+
+[containers.db]
+image = "postgres:16"
+dependencies = ["db-seed-client"]
+health_check = { command = "pg_isready -U postgres" }
+setup_commands = [
+  { command = "psql -h db -U postgres -f /seed/schema.sql", run_in = "db-seed-client" },
+]
+
+[containers.app]
+image = "my-org/app:latest"
+dependencies = ["db"]
+```
+
+`app` starts once `db` is healthy *and* the seeding command has exited 0 —
+exactly as it would if that command ran inside `db` itself.
+
+- **The target must be one of the declaring container's own `dependencies`**
+  (or the declaring container itself, which is what leaving `run_in` out
+  means). Anything else is rejected when the file loads, naming the container
+  you asked for. This is the rule that makes the ordering safe rather than
+  merely likely: a dependency has already been through its *own* full
+  readiness gate before the container declaring it even starts, so it is
+  running when the command arrives. A sibling has no ordering edge to this
+  container at all, and a container that depends on *this* one structurally
+  cannot have started yet — either would be a race with no fix, so neither is
+  offered. A `dependencies` entry inherited via [`extends`](#extends-inheritance-instead-of-yaml-anchors)
+  counts, since the check runs after inheritance resolves. A *task's* own
+  `dependencies` does not, even for that task's main container: it orders the
+  target ahead of this container for one task only, and the same container
+  used by another task would silently lose that ordering — so the dependency
+  has to be declared on the container, where it holds everywhere.
+- **The command runs with the target container's environment, user and
+  working directory**, not the declaring container's — it is running over
+  there, so those are the ones that apply. That includes the fallback a
+  setup command with no `working_directory` of its own gets: the *target's*
+  `working_directory`, not the declaring container's. The entry's own
+  `working_directory` still overrides. In the example above, that is why the
+  command reaches the database over the network (`-h db`) rather than through
+  a local socket.
+- **The target must stay running.** It is `docker exec`, so there has to be a
+  live container to exec into — hence `sleep infinity` above. A
+  [`run_to_completion`](#run_to_completion-init-containers) dependency has
+  already exited by the time it counts as ready, so naming one is rejected
+  when the file loads rather than failing mid-run.
+- **`ratect`-native only.** Batect has no equivalent —
+  [batect#286](https://github.com/batect/batect/issues/286) asked for this in
+  2018 and was never built — so a `batect.yml` using it is rejected when the
+  file loads rather than quietly running the command in the declaring
+  container instead.
+
 ## `run_to_completion`: init containers
 
 A dependency normally starts detached, waits for a health check (immediate if
@@ -403,7 +468,7 @@ The container fields, by area:
 | Mounts | `volumes` (host / `cache` / `tmpfs`) | [Volumes](ratect-compat-config-reference.md#volume-path-resolution), [caches](ratect-compat-config-reference.md#cache-volumes), [tmpfs](ratect-compat-config-reference.md#tmpfs-mounts). A cache also takes [`scope`](#shared-caches) *(native only)* — the linked section describes project-keyed storage, which `scope = "shared"` deliberately does not use. |
 | Runtime | `command`, `entrypoint`, `working_directory`, `environment`, `enable_init_process`, `privileged`, `shm_size`, `capabilities_to_add`, `capabilities_to_drop`, `devices`, `labels`, `log_driver`, `log_options` | [Container](ratect-compat-config-reference.md#container) |
 | Networking | `ports`, `additional_hostnames`, `additional_hosts`, `dependencies` | [Ports](ratect-compat-config-reference.md#port-mappings), [readiness](dependency-readiness.md) |
-| Readiness | `health_check`, `setup_commands` | [Dependency Readiness](dependency-readiness.md) |
+| Readiness | `health_check`, `setup_commands` | [Dependency Readiness](dependency-readiness.md). A setup command also takes [`run_in`](#run_in-setup-commands-in-another-container) *(native only)* |
 | Init containers | `run_to_completion` | [above](#run_to_completion-init-containers) *(native only)* |
 | User | `run_as_current_user` | [User mapping](ratect-compat-config-reference.md#user-mapping) |
 | Inheritance | `extends` | [above](#extends-inheritance-instead-of-yaml-anchors) *(native only)* |
@@ -484,6 +549,7 @@ so it also works as a CI gate.
 | Reuse | anchors / aliases / merge keys | [`extends`](#extends-inheritance-instead-of-yaml-anchors) |
 | Cross-project cache | — | [`scope = "shared"`](#shared-caches) on a `cache` mount |
 | Init containers | — | [`run_to_completion`](#run_to_completion-init-containers) on a dependency |
+| Setup command target | always the declaring container | [`run_in`](#run_in-setup-commands-in-another-container) on a setup command |
 | List entries | string shorthand *or* object | object (inline table or `[[...]]`) |
 | Local overrides | `batect.local.yml` | `ratect.local.toml` |
 | Git bundle default | `batect-bundle.yml` | `ratect-bundle.toml`, then `batect-bundle.yml` |
@@ -491,8 +557,8 @@ so it also works as a CI gate.
 
 Most field *meanings* are unchanged; the spelling and the format-level rules
 above are the bulk of the difference. The exceptions are the native-only
-fields (`extends`, a cache's `scope`, a dependency's `run_to_completion`) and
-the handful of behaviours in [Where
+fields (`extends`, a cache's `scope`, a dependency's `run_to_completion`, a
+setup command's `run_in`) and the handful of behaviours in [Where
 the semantics differ](#where-the-semantics-differ), which exist because
 `extends` gives some combinations a meaning `batect.yml` has no way to
 express.

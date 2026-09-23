@@ -1,0 +1,42 @@
+# A native `ratect.toml` fixture proving `setup_commands`' `run_in`
+# (ratect#111) against a real Docker daemon: `db`'s setup command runs inside
+# `db-seed-client`, a dependency of `db`, rather than inside `db` itself —
+# the "seed a database from a client image that has the tooling" case.
+# Native-only — Batect has no equivalent (batect#286 is unbuilt), so this
+# fixture, unlike most of the engine/Docker behaviour proven under
+# `ratect-compat/tests/fixtures/`, can only be expressed here (see AGENTS.md's
+# fixture-layer guideline).
+#
+# `alpine` stands in for both images: what matters is *where* the command
+# runs, and the two containers prove that by disagreeing about one
+# environment variable. The setup command asserts it sees
+# `db-seed-client`'s value, so it exits non-zero — failing the whole run —
+# if it were exec'd into `db` instead, or if `db`'s own environment were
+# forwarded to the target. `app` echoing is what proves the gate passed.
+project_name = "ratect-setup-command-run-in-test"
+
+[containers.db-seed-client]
+image = "alpine:3.18.2"
+# Stays alive so `docker exec` has a live process to target — the shape any
+# `run_in` target has to have.
+command = "sleep 300"
+environment = { SEED_MARKER = "from-seed-client" }
+
+[containers.db]
+image = "alpine:3.18.2"
+command = "sleep 300"
+dependencies = ["db-seed-client"]
+environment = { SEED_MARKER = "from-db" }
+# Runs in `db-seed-client`, and with *that* container's environment: the
+# command fails unless both are true.
+setup_commands = [
+  { command = "sh -c 'test \"$SEED_MARKER\" = from-seed-client'", run_in = "db-seed-client" },
+]
+
+[containers.app]
+image = "alpine:3.18.2"
+dependencies = ["db"]
+
+[tasks.start]
+description = "Runs once db's setup command has succeeded inside db-seed-client"
+run = { container = "app", command = "echo app-started" }

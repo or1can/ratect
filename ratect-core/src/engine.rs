@@ -115,6 +115,50 @@ fn is_read_only(options: &Option<String>) -> bool {
         .is_some_and(|o| o.split(',').any(|flag| flag.trim() == "ro"))
 }
 
+/// What one container's setup-command gate needs that isn't in the commands
+/// themselves — the declaring container, and what it takes to `exec` into it.
+/// Bundled rather than passed as six parameters, matching
+/// `container_spec::ContainerSpecInputs`'s own convention.
+struct SetupCommandContext<'a> {
+    /// The container declaring these setup commands — the one whose
+    /// readiness gate this is, and the one every event/error names, whether
+    /// or not a command actually runs somewhere else.
+    name: &'a str,
+    /// The declaring container's own id: where a command without `run_in`
+    /// runs.
+    container_id: &'a str,
+    /// The declaring container's effective working directory, the fallback
+    /// for a command that sets none of its own. Derived differently by each
+    /// caller (see [`TaskEngine::run_setup_commands`]), so it arrives
+    /// resolved rather than being recomputed there.
+    working_directory: Option<&'a str>,
+    /// The declaring container's environment and user, passed to `exec` for
+    /// a command running in that same container. Both are deliberately
+    /// *not* forwarded to a `run_in` target — see [`ExecTarget`].
+    environment: Option<&'a HashMap<String, String>>,
+    user_mapping: Option<&'a crate::docker::UserMapping>,
+    /// Container name -> id, for the dependencies this container was gated
+    /// on, all of them already ready. The lookup a `run_in` target resolves
+    /// through (ratect#111), and the reason the config loader restricts a
+    /// target to exactly this set.
+    dependency_ids: &'a HashMap<String, String>,
+}
+
+/// Where one setup command actually runs, once `run_in` has been resolved:
+/// either the declaring container (with its own resolved environment/user
+/// passed along) or a dependency of it (with neither, since Docker's `exec`
+/// inherits both from whichever container it runs in — and the declaring
+/// container's would be the wrong ones to send).
+struct ExecTarget<'a> {
+    container_id: &'a str,
+    /// The quoted container name for an error message — with, when the
+    /// command ran somewhere other than where it was declared, both names.
+    description: String,
+    working_directory: Option<&'a str>,
+    environment: Option<&'a HashMap<String, String>>,
+    user_mapping: Option<&'a crate::docker::UserMapping>,
+}
+
 /// The outcome of a memoized async operation (an image pull/build, or a
 /// dependency container reaching "ready") shared across every concurrent
 /// caller that reaches the same cache key. `anyhow::Error` isn't `Clone`, so
@@ -739,6 +783,160 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         }
     }
 
+    /// Runs one container's `setup_commands` in declared order — the second
+    /// of the two readiness gates (see docs/dependency-readiness.md), shared
+    /// by [`Self::run_task_container_readiness`] and the dependency gate
+    /// inside [`Self::ensure_container_ready`]. Those two functions stay
+    /// separate on purpose (a dependency's gate also handles
+    /// `customise`/cache-key/dedup concerns the one task container has no
+    /// use for), but this loop is identical between them, and `run_in`
+    /// (ratect#111) is the sort of thing that would otherwise have to be
+    /// written — and kept right — twice.
+    ///
+    /// Everything that *does* differ between the two callers arrives in
+    /// [`SetupCommandContext`]: the task container and a dependency derive
+    /// their default working directory from different places (deliberately —
+    /// a task's own `run.working_directory` is not a setup command's
+    /// fallback), so neither is recomputed here.
+    async fn run_setup_commands(
+        &self,
+        setup_commands: &[crate::config::SetupCommand],
+        context: &SetupCommandContext<'_>,
+    ) -> Result<()> {
+        let name = context.name;
+        for (setup_command_index, setup_command) in setup_commands.iter().enumerate() {
+            // Where the command actually runs. `run_in` naming the declaring
+            // container itself is spelled out as valid (it is what omitting
+            // the field means), so both spellings land on the same branch
+            // rather than the explicit one taking a different path.
+            let elsewhere = setup_command
+                .run_in
+                .as_deref()
+                .filter(|target| *target != name);
+            // The config loader has already refused any target outside the
+            // declaring container's own dependencies
+            // (`validate_setup_command_targets`), and every one of those has
+            // been resolved to ready before this runs — so a miss here is a
+            // bug in this file, not a user's configuration, and says so.
+            let target = match elsewhere {
+                Some(target) => {
+                    let container_id = context.dependency_ids.get(target).with_context(|| {
+                        format!(
+                            "Setup command '{}' on container '{name}' names 'run_in' \
+                                 container '{target}', which was not started as one of its \
+                                 dependencies",
+                            setup_command.command
+                        )
+                    })?;
+                    // The target container's own environment, user and
+                    // working directory come with it — Docker's `exec`
+                    // inherits all three from the container it runs in, so
+                    // sending the *declaring* container's resolved values
+                    // along would be actively wrong. The setup command's own
+                    // `working_directory` still overrides.
+                    ExecTarget {
+                        container_id,
+                        description: format!("'{target}' (a setup command of container '{name}')"),
+                        working_directory: setup_command.working_directory.as_deref(),
+                        environment: None,
+                        user_mapping: None,
+                    }
+                }
+                None => ExecTarget {
+                    container_id: context.container_id,
+                    description: format!("'{name}'"),
+                    working_directory: setup_command
+                        .working_directory
+                        .as_deref()
+                        .or(context.working_directory),
+                    environment: context.environment,
+                    user_mapping: context.user_mapping,
+                },
+            };
+
+            // The user-facing setup-command line is the event sink's job now
+            // (see `crate::ui`) — `debug` so `RUST_LOG=info` doesn't
+            // duplicate it on stderr.
+            tracing::debug!(
+                container = name,
+                command = setup_command.command.as_str(),
+                "Running setup command"
+            );
+            self.event_sink.post(TaskEvent::RunningSetupCommand {
+                container: name.to_string(),
+                command: setup_command.command.clone(),
+                index: setup_command_index + 1,
+                total: setup_commands.len(),
+                run_in: elsewhere.map(str::to_string),
+            });
+            let result = {
+                let _permit = self.acquire_parallelism_permit().await;
+                self.docker
+                    .exec_in_container(
+                        target.container_id,
+                        &setup_command.command,
+                        target.working_directory,
+                        target.environment,
+                        target.user_mapping,
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Failed to run setup command '{}' in container {}",
+                            setup_command.command, target.description
+                        )
+                    })?
+            };
+            // The command's output, line by line — exec output arrives
+            // collected rather than streamed, so this posts after completion
+            // (success or failure; a failure's output additionally lands in
+            // the error below). Only the `all` output mode renders these —
+            // skipped entirely otherwise (see
+            // `EventSink::wants_progress_detail`) rather than allocating and
+            // posting one event per line only to have every other mode
+            // immediately discard it.
+            //
+            // `.lines()` + `trim_end_matches('\r')` re-implements a shape of
+            // `crate::ui::interleaved::LineBuffer`'s own framing rule, and
+            // not quite identically: on `"a\r\r\n"`, this produces one line,
+            // `"a"`, where `LineBuffer` now produces two, `"a"` and `""`
+            // (ratect#74 made it flush on a lone `\r` too). Switching this
+            // over would trade an owned `String` for `LineBuffer`'s
+            // bytes-plus-`FnMut`-closure shape — more ceremony than the few
+            // lines here — so this stays a real but shallow duplication, not
+            // unified.
+            if self.event_sink.wants_progress_detail() {
+                for line in result.output.lines() {
+                    self.event_sink.post(TaskEvent::SetupCommandOutput {
+                        container: name.to_string(),
+                        index: setup_command_index + 1,
+                        line: line.trim_end_matches('\r').to_string(),
+                    });
+                }
+            }
+            if result.exit_code != 0 {
+                let output = if result.output.trim().is_empty() {
+                    ", and did not produce any output".to_string()
+                } else {
+                    format!(", with output:\n{}", result.output.trim())
+                };
+                anyhow::bail!(
+                    "Setup command '{}' in container {} exited with code {}{}",
+                    setup_command.command,
+                    target.description,
+                    result.exit_code,
+                    output
+                );
+            }
+        }
+        if !setup_commands.is_empty() {
+            self.event_sink.post(TaskEvent::SetupCommandsCompleted {
+                container: name.to_string(),
+            });
+        }
+        Ok(())
+    }
+
     /// Runs one cleanup step, giving up on it if the user interrupts again.
     ///
     /// `false` means the step lost the race and was dropped mid-flight —
@@ -796,6 +994,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         container_config: &crate::config::Container,
         environment: Option<&HashMap<String, String>>,
         user_mapping: Option<&crate::docker::UserMapping>,
+        dependency_ids: &HashMap<String, String>,
     ) -> Result<()> {
         self.docker
             .wait_for_container_healthy(container_id)
@@ -805,73 +1004,21 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             container: name.to_string(),
         });
 
-        let setup_command_total = container_config.setup_commands.as_ref().map_or(0, Vec::len);
-        for (setup_command_index, setup_command) in
-            container_config.setup_commands.iter().flatten().enumerate()
-        {
-            tracing::debug!(
-                container = name,
-                command = setup_command.command.as_str(),
-                "Running setup command"
-            );
-            self.event_sink.post(TaskEvent::RunningSetupCommand {
-                container: name.to_string(),
-                command: setup_command.command.clone(),
-                index: setup_command_index + 1,
-                total: setup_command_total,
-            });
-            let result = {
-                let _permit = self.acquire_parallelism_permit().await;
-                self.docker
-                    .exec_in_container(
-                        container_id,
-                        &setup_command.command,
-                        setup_command
-                            .working_directory
-                            .as_deref()
-                            .or(container_config.working_directory.as_deref()),
-                        environment,
-                        user_mapping,
-                    )
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "Failed to run setup command '{}' in container '{}'",
-                            setup_command.command, name
-                        )
-                    })?
-            };
-            if self.event_sink.wants_progress_detail() {
-                for line in result.output.lines() {
-                    self.event_sink.post(TaskEvent::SetupCommandOutput {
-                        container: name.to_string(),
-                        index: setup_command_index + 1,
-                        line: line.trim_end_matches('\r').to_string(),
-                    });
-                }
-            }
-            if result.exit_code != 0 {
-                let output = if result.output.trim().is_empty() {
-                    ", and did not produce any output".to_string()
-                } else {
-                    format!(", with output:\n{}", result.output.trim())
-                };
-                anyhow::bail!(
-                    "Setup command '{}' in container '{}' exited with code {}{}",
-                    setup_command.command,
-                    name,
-                    result.exit_code,
-                    output
-                );
-            }
-        }
-        if setup_command_total > 0 {
-            self.event_sink.post(TaskEvent::SetupCommandsCompleted {
-                container: name.to_string(),
-            });
-        }
-
-        Ok(())
+        self.run_setup_commands(
+            container_config
+                .setup_commands
+                .as_deref()
+                .unwrap_or_default(),
+            &SetupCommandContext {
+                name,
+                container_id,
+                working_directory: container_config.working_directory.as_deref(),
+                environment,
+                user_mapping,
+                dependency_ids,
+            },
+        )
+        .await
     }
 
     #[cfg(test)]
@@ -1546,20 +1693,31 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // `ensure_container_ready` call still waits on its dependencies
             // first (see that function) — matching Batect's own within-task
             // container concurrency (see docs/task-lifecycle.md).
-            futures::future::try_join_all(root_dependencies.iter().map(|dependency_name| {
-                self.ensure_container_ready(
-                    dependency_name,
-                    &graph,
-                    &network_name,
-                    &ready_cells,
-                    &running_sidecars,
-                    &no_proxy_entries,
-                    task.customise.as_ref(),
-                    &run_labels,
-                    &dependency_watchers,
-                )
-            }))
-            .await?;
+            // Kept for the same reason as the fan-out inside
+            // `ensure_container_ready`: the task container's own `run_in`
+            // setup commands (ratect#111) resolve through it. `graph`'s root
+            // adjacency is the union of the container's own `dependencies`
+            // and the task's, so it is a superset of what the config loader
+            // allows as a target.
+            let dependency_ids: HashMap<String, String> =
+                futures::future::try_join_all(root_dependencies.iter().map(|dependency_name| {
+                    self.ensure_container_ready(
+                        dependency_name,
+                        &graph,
+                        &network_name,
+                        &ready_cells,
+                        &running_sidecars,
+                        &no_proxy_entries,
+                        task.customise.as_ref(),
+                        &run_labels,
+                        &dependency_watchers,
+                    )
+                }))
+                .await?
+                .into_iter()
+                .zip(root_dependencies.iter())
+                .map(|(id, dependency_name)| (dependency_name.clone(), id))
+                .collect();
 
             let image = self.resolve_image(&run.container, container_config).await?;
             self.event_sink.post(TaskEvent::ImageResolved {
@@ -1658,6 +1816,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     container_config,
                     spec.shared.environment.as_ref(),
                     spec.shared.user_mapping.as_ref(),
+                    &dependency_ids,
                 )
                 .await
             };
@@ -1957,20 +2116,31 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 let outcome: Result<String> = async {
                     let empty = Vec::new();
                     let dependencies = graph.get(name).unwrap_or(&empty);
-                    futures::future::try_join_all(dependencies.iter().map(|dependency_name| {
-                        self.ensure_container_ready(
-                            dependency_name,
-                            graph,
-                            network,
-                            cells,
-                            running,
-                            no_proxy_entries,
-                            customisations,
-                            run_labels,
-                            dependency_watchers,
-                        )
-                    }))
-                    .await?;
+                    // Kept, rather than discarded: a `run_in` setup command
+                    // (ratect#111) resolves its target through exactly this
+                    // set, which is why the config loader restricts it to
+                    // one of `name`'s own dependencies — every id here
+                    // belongs to a container already through its own full
+                    // readiness gate.
+                    let dependency_ids: HashMap<String, String> =
+                        futures::future::try_join_all(dependencies.iter().map(|dependency_name| {
+                            self.ensure_container_ready(
+                                dependency_name,
+                                graph,
+                                network,
+                                cells,
+                                running,
+                                no_proxy_entries,
+                                customisations,
+                                run_labels,
+                                dependency_watchers,
+                            )
+                        }))
+                        .await?
+                        .into_iter()
+                        .zip(dependencies.iter())
+                        .map(|(id, dependency_name)| (dependency_name.clone(), id))
+                        .collect();
 
                     let dependency_config = self
                         .config
@@ -2090,101 +2260,21 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         container: name.to_string(),
                     });
 
-                    let setup_command_total = dependency_config
-                        .setup_commands
-                        .as_ref()
-                        .map_or(0, Vec::len);
-                    for (setup_command_index, setup_command) in dependency_config
-                        .setup_commands
-                        .iter()
-                        .flatten()
-                        .enumerate()
-                    {
-                        // The user-facing setup-command line is the event
-                        // sink's job now (see `crate::ui`) — `debug` so
-                        // `RUST_LOG=info` doesn't duplicate it on stderr.
-                        tracing::debug!(
-                            container = name,
-                            command = setup_command.command.as_str(),
-                            "Running setup command"
-                        );
-                        self.event_sink.post(TaskEvent::RunningSetupCommand {
-                            container: name.to_string(),
-                            command: setup_command.command.clone(),
-                            index: setup_command_index + 1,
-                            total: setup_command_total,
-                        });
-                        let result = {
-                            let _permit = self.acquire_parallelism_permit().await;
-                            self.docker
-                                .exec_in_container(
-                                    &container_id,
-                                    &setup_command.command,
-                                    setup_command.working_directory.as_deref().or(spec
-                                        .shared
-                                        .options
-                                        .working_directory
-                                        .as_deref()),
-                                    spec.shared.environment.as_ref(),
-                                    user_mapping.as_ref(),
-                                )
-                                .await
-                                .with_context(|| {
-                                    format!(
-                                        "Failed to run setup command '{}' in container '{}'",
-                                        setup_command.command, name
-                                    )
-                                })?
-                        };
-                        // The command's output, line by line — exec output
-                        // arrives collected rather than streamed, so this
-                        // posts after completion (success or failure; a
-                        // failure's output additionally lands in the error
-                        // below). Only the `all` output mode renders these —
-                        // skipped entirely otherwise (see
-                        // `EventSink::wants_progress_detail`) rather than
-                        // allocating and posting one event per line only to
-                        // have every other mode immediately discard it.
-                        //
-                        // `.lines()` + `trim_end_matches('\r')` re-implements
-                        // a shape of `crate::ui::interleaved::LineBuffer`'s
-                        // own framing rule, and not quite identically: on
-                        // `"a\r\r\n"`, this produces one line, `"a"`, where
-                        // `LineBuffer` now produces two, `"a"` and `""`
-                        // (ratect#74 made it flush on a lone `\r` too).
-                        // Switching this over would trade an owned `String`
-                        // for `LineBuffer`'s bytes-plus-`FnMut`-closure shape
-                        // — more ceremony than the few lines here — so this
-                        // stays a real but shallow duplication, not unified.
-                        if self.event_sink.wants_progress_detail() {
-                            for line in result.output.lines() {
-                                self.event_sink.post(TaskEvent::SetupCommandOutput {
-                                    container: name.to_string(),
-                                    index: setup_command_index + 1,
-                                    line: line.trim_end_matches('\r').to_string(),
-                                });
-                            }
-                        }
-                        if result.exit_code != 0 {
-                            let output = if result.output.trim().is_empty() {
-                                ", and did not produce any output".to_string()
-                            } else {
-                                format!(", with output:\n{}", result.output.trim())
-                            };
-                            anyhow::bail!(
-                                "Setup command '{}' in container '{}' exited with code {}{}",
-                                setup_command.command,
-                                name,
-                                result.exit_code,
-                                output
-                            );
-                        }
-                    }
-                    if setup_command_total > 0 {
-                        self.event_sink.post(TaskEvent::SetupCommandsCompleted {
-                            container: name.to_string(),
-                        });
-                    }
+                    self.run_setup_commands(
+                        dependency_config
+                            .setup_commands
+                            .as_deref()
+                            .unwrap_or_default(),
+                        &SetupCommandContext {
+                            name,
+                            container_id: &container_id,
+                            working_directory: spec.shared.options.working_directory.as_deref(),
+                            environment: spec.shared.environment.as_ref(),
+                            user_mapping: user_mapping.as_ref(),
+                            dependency_ids: &dependency_ids,
+                        },
+                    )
+                    .await?;
 
                     // Now, and only now: ready is the point after which an
                     // exit is news rather than expected (still starting, or
