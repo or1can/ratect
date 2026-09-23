@@ -33,7 +33,7 @@ between the two formats is tabulated in the `ratect.toml` reference — [at a
 glance](ratect-config-reference.md#differences-from-batectyml-at-a-glance) and
 [where the semantics differ](ratect-config-reference.md#where-the-semantics-differ)
 — and between the two binaries in the [`ratect` CLI
-reference](ratect-cli.md#differences-from-ratect-compat-today).
+reference](ratect-cli.md#differences-from-ratect-compat).
 
 ### Path A: convert everything in one pass
 

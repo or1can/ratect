@@ -131,10 +131,10 @@ If a Gradle build under Docker Desktop looks hung or dies without a message,
 the ceiling is usually Docker's own, not Ratect's — see the
 [FAQ](faq.md#how-do-i-raise-docker-desktops-resource-limits).
 
-## Not yet covered
+## Not covered
 
 Batect's own equivalent pages also cover .NET Core and Ruby — both
 caching-only concerns there, no correctness gotcha like Gradle's or Node's.
-Ratect has no example project for either ecosystem yet, so there's nothing
+Ratect has no example project for either ecosystem, so there's nothing
 real to ground a section in here without inventing untested config; a real
 worked example for either is its own, larger undertaking than this page.

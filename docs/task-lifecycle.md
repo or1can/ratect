@@ -173,9 +173,9 @@ colliding.
   a one-shot migration script) against a container that's really built for
   something else, a long-running service. That override is what actually
   starts the instant the container starts. It is never gated on the
-  container's own `health_check`/`setup_commands` — since 0.21.0 the task's
-  own container goes through that same readiness gate a dependency always
-  has (health-check wait, then `setup_commands`, in order), but run
+  container's own `health_check`/`setup_commands` — the task's own container
+  goes through the same readiness gate a dependency does (health-check wait,
+  then `setup_commands`, in order), but run
   *concurrently* with the main command rather than blocking it, because
   nothing else in the graph depends on the task container's own readiness. A
   setup command or health-check failure still fails the task even if the
@@ -205,7 +205,7 @@ colliding.
   simplification — Batect doesn't parallelize independent prerequisite tasks either.
   Running independent prerequisites concurrently remains a possible Rust-specific
   enhancement beyond Batect, tracked under [Rust
-  Enhancements](../ROADMAP.md#rust-enhancements), not something planned currently.
+  Enhancements](../ROADMAP.md#rust-enhancements), not something planned.
 - **Minimal networking.** The network created here exists only to make dependency
   containers reachable by name for the duration of one task (or, with
   `--use-network`, an existing network you reuse instead). It's not the

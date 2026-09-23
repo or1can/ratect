@@ -8,10 +8,10 @@ one. If you haven't run a task yet, [Getting Started](getting-started.md) runs a
 first one end to end, and the [worked examples](worked-examples.md) show a real
 project per language.
 
-> **Status.** From 0.3.0 `ratect` reads its own **native TOML configuration**
+> **Configuration.** `ratect` reads its own **native TOML configuration**
 > (`ratect.toml` by default) rather than sharing `ratect-compat`'s `batect.yml` —
-> see [Releases](../RELEASES.md#ratect) and
-> [decisions/0003](../decisions/0003-ratect-native-config-format.md). Its full
+> see [decisions/0003](../decisions/0003-ratect-native-config-format.md) for
+> why. Its full
 > schema is the [`ratect.toml` reference](ratect-config-reference.md); it's the
 > same schema [Configuration Reference](ratect-compat-config-reference.md) documents for
 > `batect.yml`, re-spelled in TOML, with `extends` in place of YAML anchors. A
@@ -337,9 +337,9 @@ anchors/aliases/merge keys are expanded inline, `include`d files (Git bundles to
 flattened into the one result, and comments are dropped — so the output carries a
 header and is a *starting point to review*, not a blind drop-in. Before writing, the
 conversion is checked to round-trip losslessly back to the same configuration, so
-whatever it produces is guaranteed to behave identically to the original. (This first
-version emits the compact `"8080:80"` / `.:/code` string forms for `ports`/`volumes`
-rather than the object form; both are valid, and reformatting is a review step.)
+whatever it produces is guaranteed to behave identically to the original. (It emits
+the compact `"8080:80"` / `.:/code` string forms for `ports`/`volumes` rather than
+the object form; both are valid, and reformatting is a review step.)
 
 ## `doctor`
 
@@ -443,7 +443,7 @@ report it, `ratect`'s version and platform, and a reminder to re-run with
 [`ratect-compat`'s own note on this](ratect-compat-cli.md#exit-codes-and-error-reporting),
 which applies identically here.
 
-## Differences from `ratect-compat` today
+## Differences from `ratect-compat`
 
 | | `ratect-compat` | `ratect` |
 | --- | --- | --- |

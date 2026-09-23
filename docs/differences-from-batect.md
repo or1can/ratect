@@ -17,7 +17,7 @@ works — [config reference](ratect-compat-config-reference.md)/[CLI reference](
 only says what's *different* and points there for the rest.
 
 > **Unrecognized fields fail closed**: Ratect's YAML parsing rejects unknown keys —
-> a typo'd field name, or (now unlikely, since Batect's own `include` `type`s beyond
+> a typo'd field name, or (unlikely, since Batect's own `include` `type`s beyond
 > `file`/`git` are the only thing left genuinely unsupported here) a real gap —
 > fails config loading with an error naming it, rather than silently ignoring it.
 > There's no partial/best-effort mode.
@@ -80,7 +80,7 @@ list. The exceptions:
 | `--no-color` | A superset, not a gap: Batect rejects `-o fancy --no-color` at parse time (its console couples color and cursor movement under one flag); Ratect's keeps them independent, so that combination renders colorless fancy instead. |
 | `--no-cleanup`, `--no-cleanup-after-failure`, `--no-cleanup-after-success` | Batect's own `DontCleanup` still stops a started container, just skips removing it; Ratect leaves it genuinely running (not just present-but-stopped) for investigation. |
 | `--docker-cert-path`, `--docker-tls`, `--docker-tls-verify`, `--docker-tls-ca-cert`, `--docker-tls-cert`, `--docker-tls-key` | Batect's bare `--docker-tls` (without `-verify`) disables *all* server certificate verification, not just hostname matching. Ratect doesn't support that mode at all — `--docker-tls` and `--docker-tls-verify` behave identically here, the daemon's certificate always fully verified. See [TLS with a private certificate authority](ratect-compat-cli.md#tls-with-a-private-certificate-authority) for the supported alternative (your own CA). |
-| `--cache-type` | Unlike Batect, not forced to `directory` for Windows containers — Ratect has no Windows support to special-case yet. |
+| `--cache-type` | Unlike Batect, not forced to `directory` for Windows containers — Ratect has no Windows support to special-case. |
 | `--max-parallelism` | Batect's flag caps *every* setup/cleanup step via a step-scheduling model Ratect doesn't have. Ratect's caps a narrower set — image pulls/builds, a dependency's create+start, and setup commands — the resource-intensive operations; health-check waits and cleanup teardown are deliberately excluded, and the task's own container's run is never gated, matching Batect's own exemption for it. |
 | `--log-file` | Batect's own default (no `--log-file`) is a silent `NullLogSink`, nothing anywhere; Ratect always logs to stderr regardless, so `--log-file` here tees into a file *in addition to* stderr, not instead of it. |
 | `--no-update-notification`, `--upgrade`, `--no-wrapper-cache-cleanup` | Recognized, no effect — permanently inapplicable, since Ratect is a single native binary with no self-updating wrapper script to disable notifications for, clean caches for, or upgrade. Recognized rather than rejected so an existing Batect invocation carrying one doesn't hard-fail outright. See [CLI reference](ratect-compat-cli.md#recognized-for-batect-compatibility-no-effect). |
@@ -95,8 +95,8 @@ tables above:
 
   - **Ratect also traps `SIGTERM` and `SIGHUP`**, down the same cleanup path — a task
     runner is stopped by more than a keystroke (an editor closing its subprocess,
-    `docker stop`, `systemd`, most CI cancel buttons), and each was previously a
-    leaked container and network.
+    `docker stop`, `systemd`, most CI cancel buttons), and under Batect each
+    leaks a container and network.
   - **The exit code names the signal**: 128 + the signal's own number (`130`/`143`/`129`
     for Ctrl+C/`SIGTERM`/`SIGHUP`). Batect returns `-1`/255 for every failure alike.
   - **A second signal during cleanup stops the cleanup itself**, immediately — Batect
@@ -147,6 +147,6 @@ tables above:
   all until the stream ends, then dumps everything as one giant concatenated
   line. A deliberate divergence: Ratect flushes on a lone `\r` (one not
   immediately followed by `\n` — a CRLF pair still folds to a single line
-  break) the same way it already does on `\n`, so a real progress bar now
+  break) the same way it already does on `\n`, so a real progress bar
   prints one interleaved line per redraw tick instead of staying silent —
   spammier, but never silent-then-dumped.
