@@ -53,6 +53,7 @@ fn sample_container() -> Container {
         setup_commands: None,
         run_to_completion: None,
         external_health_check: None,
+        reports_readiness_for: None,
     }
 }
 

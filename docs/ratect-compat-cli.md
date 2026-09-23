@@ -108,11 +108,7 @@ styles are Batect's own four, all implemented, and each is shown below from the
 — so you compare styles rather than projects. That's the `ratect` binary
 against a native `ratect.toml`, not `ratect-compat` (`examples/full-stack` has
 no `batect.yml` counterpart), but the rendering is the exact same code either
-way. One consequence to read past: the `ratect-health-check-app` container in
-these transcripts is a native-only
-[`external_health_check`](ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it)'s
-companion — `ratect-compat` rejects that field, so a `batect.yml` run
-produces no such container. See
+way — see
 [`ui.rs`](https://github.com/or1can/ratect/blob/main/ratect-core/src/ui.rs).
 
 When `--output` isn't given, Ratect auto-selects: `fancy` on an interactive

@@ -116,6 +116,9 @@ struct FakeContainerRuntime {
     // resolves, matching a dependency that just keeps running until
     // something else stops it.
     dependency_exits: Arc<Mutex<HashMap<String, (std::time::Duration, i64)>>>,
+    /// What `container_output` returns per container id — an external
+    /// health check's companion diagnoses its own failure there.
+    container_outputs: Arc<Mutex<HashMap<String, String>>>,
     /// When set, every `stop_and_remove_container` records an interrupt
     /// *before* doing its own work — the only way to land one in the
     /// middle of cleanup deterministically, since cleanup against this
@@ -145,6 +148,7 @@ impl Default for FakeContainerRuntime {
             health_check_delays: Default::default(),
             run_delays: Default::default(),
             dependency_exits: Default::default(),
+            container_outputs: Default::default(),
             interrupt_on_stop: Default::default(),
         }
     }
@@ -301,6 +305,16 @@ impl FakeContainerRuntime {
             .lock()
             .unwrap()
             .insert(format!("sidecar-id-{name}"), (delay, exit_code));
+        self
+    }
+
+    /// What that container's `container_output` returns — keyed the same
+    /// way `with_dependency_exit` keys its own map.
+    fn with_container_output(self, name: &str, output: &str) -> Self {
+        self.container_outputs
+            .lock()
+            .unwrap()
+            .insert(format!("sidecar-id-{name}"), output.to_string());
         self
     }
 
@@ -616,6 +630,16 @@ impl ContainerRuntime for FakeContainerRuntime {
         Ok(())
     }
 
+    async fn container_output(&self, container_id: &str) -> Result<String> {
+        Ok(self
+            .container_outputs
+            .lock()
+            .unwrap()
+            .get(container_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
     async fn wait_for_container_exit(&self, container_id: &str) -> Result<i64> {
         let configured = self
             .dependency_exits
@@ -809,6 +833,7 @@ fn container(image: &str, dependencies: Option<Vec<String>>) -> Container {
         setup_commands: None,
         run_to_completion: None,
         external_health_check: None,
+        reports_readiness_for: None,
     }
 }
 
@@ -867,6 +892,7 @@ fn config_with_cycle() -> Config {
             setup_commands: None,
             run_to_completion: None,
             external_health_check: None,
+            reports_readiness_for: None,
         },
     );
 
@@ -966,6 +992,7 @@ fn config_with_shared_prerequisite() -> Config {
             setup_commands: None,
             run_to_completion: None,
             external_health_check: None,
+            reports_readiness_for: None,
         },
     );
 
@@ -1501,6 +1528,7 @@ fn container_with_run_as_current_user(
         setup_commands: None,
         run_to_completion: None,
         external_health_check: None,
+        reports_readiness_for: None,
     }
 }
 
@@ -1982,6 +2010,7 @@ async fn run_as_current_user_explicitly_disabled_reaches_the_container_with_no_m
             setup_commands: None,
             run_to_completion: None,
             external_health_check: None,
+            reports_readiness_for: None,
         },
     );
     let mut tasks = HashMap::new();
@@ -2043,6 +2072,7 @@ fn container_with_build_directory(
         setup_commands: None,
         run_to_completion: None,
         external_health_check: None,
+        reports_readiness_for: None,
     }
 }
 
@@ -2649,6 +2679,7 @@ async fn container_without_image_or_build_directory_errors() {
             setup_commands: None,
             run_to_completion: None,
             external_health_check: None,
+            reports_readiness_for: None,
         },
     );
     let mut tasks = HashMap::new();
@@ -3427,6 +3458,131 @@ async fn run_to_completion_dependency_posts_dependency_completed() {
         ),
         "a run-to-completion dependency has no health check, so no ContainerBecameHealthy \
          event should post for it: {events:?}"
+    );
+}
+
+/// A config shaped the way `expand_external_health_checks` produces one:
+/// `database` carries an `external_health_check`, and its companion is
+/// marked as reporting `database`'s readiness rather than its own. Built by
+/// hand rather than through the loader — this is the engine's half of
+/// ratect#202, and the config half has its own tests.
+fn config_with_an_external_health_check() -> Config {
+    let mut database = container("postgres:16", None);
+    database.external_health_check = Some(crate::config::ExternalHealthCheck {
+        kind: crate::config::ExternalHealthCheckKind::Tcp { port: 5432 },
+        interval: None,
+        retries: None,
+        timeout: None,
+    });
+    let mut companion = container("curlimages/curl", Some(vec!["database".to_string()]));
+    companion.run_to_completion = Some(true);
+    companion.reports_readiness_for = Some("database".to_string());
+
+    let mut containers = HashMap::new();
+    containers.insert("database".to_string(), database);
+    containers.insert(COMPANION.to_string(), companion);
+    containers.insert(
+        "app".to_string(),
+        container(
+            "alpine:3.18",
+            Some(vec!["database".to_string(), COMPANION.to_string()]),
+        ),
+    );
+    let mut tasks = HashMap::new();
+    tasks.insert("start".to_string(), task("app", "echo hi"));
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+const COMPANION: &str = "ratect-health-check-database";
+
+/// The whole of ratect#202: an external health check is reported as a health
+/// check on the container it checks. The companion narrates nothing of its
+/// own — not its start, not its completion, not even its removal at cleanup
+/// — and the checked container's `ContainerBecameHealthy` is the companion's
+/// success, not the empty Docker gate it skipped on the way past.
+#[tokio::test]
+async fn an_external_health_checks_companion_reports_the_checked_containers_readiness() {
+    let docker = FakeContainerRuntime::default().with_dependency_exit(
+        COMPANION,
+        std::time::Duration::ZERO,
+        0,
+    );
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        config_with_an_external_health_check(),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let events = sink.events();
+    let healthy: Vec<&TaskEvent> = events
+        .iter()
+        .filter(|e| matches!(e, TaskEvent::ContainerBecameHealthy { container } if container == "database"))
+        .collect();
+    assert_eq!(
+        healthy.len(),
+        1,
+        "'database' should be reported healthy exactly once — when its check \
+         passed, not when its empty Docker gate was skipped: {events:?}"
+    );
+    for event in &events {
+        let named = match event {
+            TaskEvent::DependencyStarting { container }
+            | TaskEvent::DependencyStarted { container }
+            | TaskEvent::DependencyCompleted { container }
+            | TaskEvent::ContainerRemoved { container }
+            | TaskEvent::ImageResolved { container }
+            | TaskEvent::ContainerBecameHealthy { container } => container.as_str(),
+            _ => continue,
+        };
+        assert_ne!(
+            named, COMPANION,
+            "the companion narrates nothing of its own: {events:?}"
+        );
+    }
+}
+
+/// A failed external check is a failure of the container it checks, in that
+/// container's name — carrying what the check actually saw, which only the
+/// companion's own output knows, and naming the companion so it can still be
+/// found afterwards.
+#[tokio::test]
+async fn a_failing_external_health_check_fails_in_the_checked_containers_name() {
+    let docker = FakeContainerRuntime::default()
+        .with_dependency_exit(COMPANION, std::time::Duration::ZERO, 1)
+        .with_container_output(
+            COMPANION,
+            "no TCP connection to database:5432 after 30 attempt(s)",
+        );
+    let engine = TaskEngine::new(
+        config_with_an_external_health_check(),
+        docker,
+        Arc::new(RecordingEventSink::default()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    let error = format!("{:#}", engine.run_task("start", &[]).await.unwrap_err());
+
+    assert!(
+        error.contains("Container 'database' did not become healthy"),
+        "the failure belongs to the checked container: {error}"
+    );
+    assert!(
+        error.contains("no TCP connection to database:5432 after 30 attempt(s)"),
+        "the check's own diagnosis has to survive the container it ran in: {error}"
+    );
+    assert!(
+        error.contains(COMPANION),
+        "the companion is named so it can be inspected afterwards: {error}"
     );
 }
 
@@ -5044,6 +5200,7 @@ async fn dependency_without_image_or_build_directory_errors() {
             setup_commands: None,
             run_to_completion: None,
             external_health_check: None,
+            reports_readiness_for: None,
         },
     );
     containers.insert(

@@ -516,19 +516,25 @@ both tools the check uses reach it.)
   nothing has to appear in `ports`. Two isolated instances of one project
   (concurrent CI jobs on a single host) therefore never contend over a host
   port to check each other.
-- **Ratect runs the check from a companion container.** Declaring one
-  generates a container named `ratect-health-check-<container>` running
-  `curlimages/curl` (pinned by digest, not by tag — you did not write that
-  reference, so it must not resolve to something different later), which loops
-  the check and exits 0 or non-zero — an
-  ordinary [`run_to_completion`](#run_to_completion-init-containers)
-  dependency, so the waiting happens in the dependency graph rather than
-  anywhere new. You will see it start and complete in the output, and a check
-  that never passes fails the run naming *that* container:
-  `Container 'ratect-health-check-api' (a run-to-completion dependency) exited
-  with code 1`. The companion's own logs say which check failed and what it
-  last saw, so a run that fails this way is worth repeating with
-  [`--no-cleanup-after-failure`](ratect-cli.md#run-options).
+- **Reported as an ordinary health check, because that is what it is.** The
+  output says `api has become healthy.` when the check passes — the same line
+  a `health_check` produces, at the same point in the run. A check that never
+  passes fails it the same way too, naming the container you wrote:
+  `Container 'api' did not become healthy: last status 000 from
+  http://api:8080/healthz after 30 attempt(s), wanted 200`.
+- **Ratect runs the check from a companion container, which you don't see.**
+  Declaring one generates a container named `ratect-health-check-<container>`
+  running `curlimages/curl` (pinned by digest, not by tag — you did not write
+  that reference, so it must not resolve to something different later), which
+  loops the check and exits 0 or non-zero — an ordinary
+  [`run_to_completion`](#run_to_completion-init-containers) dependency, so the
+  waiting happens in the dependency graph rather than anywhere new. It
+  narrates nothing of its own in any output style: it is how the check runs,
+  not something you declared. It is still a real container, so
+  [`ratect resources`](ratect-cli.md#resources-options) and `docker ps` see
+  it, and a failure names it so
+  [`--no-cleanup-after-failure`](ratect-cli.md#run-options) leaves you
+  something to inspect.
 - **The generated name is reserved.** While `api` has an external check,
   anything in the project that declares or refers to a container called
   `ratect-health-check-api` — another container's `dependencies`, a task's

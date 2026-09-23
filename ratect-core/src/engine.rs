@@ -1669,8 +1669,23 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // `TaskEvent::TaskGraphResolved`). A node missing from config
             // can't happen for a graph that just built successfully, but
             // degrade to bare info rather than panic if it somehow does.
+            // A container whose readiness is reported as another's gets no
+            // line of its own, and is not something anything is shown
+            // waiting for (ratect#202) — an `external_health_check`'s
+            // companion is an implementation detail of the container it
+            // checks. Dropping its name from a dependent's list loses
+            // nothing: `expand_external_health_checks` only ever adds a
+            // companion beside the container it checks, which is therefore
+            // still in that list and is what the display drains on.
+            let narrated = |name: &String| {
+                self.config
+                    .containers
+                    .get(name)
+                    .is_none_or(|container| container.reports_readiness_for.is_none())
+            };
             let container_infos = graph
                 .iter()
+                .filter(|(name, _)| narrated(name))
                 .map(|(name, dependencies)| {
                     let container_config = self.config.containers.get(name);
                     crate::ui::TaskContainerInfo {
@@ -1679,7 +1694,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         build_tag: container_config
                             .and_then(|c| c.build_directory.as_ref())
                             .map(|_| format!("{}-{}", self.config.project_name, name)),
-                        dependencies: dependencies.clone(),
+                        dependencies: dependencies
+                            .iter()
+                            .filter(|dependency| narrated(dependency))
+                            .cloned()
+                            .collect(),
                         is_task_container: name == &run.container,
                     }
                 })
@@ -1991,8 +2010,19 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 if abandoned {
                     break;
                 }
+                // Removed like any other, but not narrated: a container
+                // whose readiness is reported as another's has contributed
+                // no line all run, and appearing for the first time at
+                // cleanup would name it exactly once, with nothing to
+                // attach it to (ratect#202).
+                let narrate = self
+                    .config
+                    .containers
+                    .get(name)
+                    .is_none_or(|container| container.reports_readiness_for.is_none());
                 let removal = async {
                     match self.docker.stop_and_remove_container(container_id).await {
+                        Ok(()) if !narrate => {}
                         Ok(()) => self.event_sink.post(TaskEvent::ContainerRemoved {
                             container: name.clone(),
                         }),
@@ -2160,9 +2190,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     let customisation = customisations.and_then(|c| c.get(name));
 
                     let image = self.resolve_image(name, dependency_config).await?;
-                    self.event_sink.post(TaskEvent::ImageResolved {
-                        container: name.to_string(),
-                    });
+                    if dependency_config.reports_readiness_for.is_none() {
+                        self.event_sink.post(TaskEvent::ImageResolved {
+                            container: name.to_string(),
+                        });
+                    }
                     let user_mapping = self.resolve_user_mapping(dependency_config).await?;
                     let proxy = self.proxy_environment(no_proxy_entries);
                     // A dependency is never interactive — see
@@ -2170,9 +2202,17 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     // interleaved-policy override this still picks up.
                     let term_var = self.term_environment_variable(false);
 
-                    self.event_sink.post(TaskEvent::DependencyStarting {
-                        container: name.to_string(),
-                    });
+                    // Derived once, and consumed everywhere this container's
+                    // own lifecycle would otherwise be narrated: a
+                    // companion is an implementation detail of the
+                    // container it checks, so it contributes no lines of
+                    // its own (ratect#202).
+                    let reports_readiness_for = dependency_config.reports_readiness_for.as_deref();
+                    if reports_readiness_for.is_none() {
+                        self.event_sink.post(TaskEvent::DependencyStarting {
+                            container: name.to_string(),
+                        });
+                    }
                     let (container_id, spec) = {
                         // Held only around the actual create+start call —
                         // matching `resolve_image`'s own placement, not the
@@ -2205,9 +2245,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         let container_id = self.docker.start_background_container(&spec).await?;
                         (container_id, spec)
                     };
-                    self.event_sink.post(TaskEvent::DependencyStarted {
-                        container: name.to_string(),
-                    });
+                    if reports_readiness_for.is_none() {
+                        self.event_sink.post(TaskEvent::DependencyStarted {
+                            container: name.to_string(),
+                        });
+                    }
 
                     // Registered for cleanup *before* the readiness gate
                     // below — a dependency that starts but never becomes
@@ -2238,6 +2280,31 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                                 format!("Container '{}' did not run to completion", name)
                             })?;
                         if exit_code != 0 {
+                            // An external health check's companion diagnoses
+                            // its own failure on stderr — which attempt,
+                            // what it last saw. Reported in the *checked*
+                            // container's name, because that is the
+                            // container the user asked about; the companion
+                            // is named only so `--no-cleanup-after-failure`
+                            // leaves something findable.
+                            if let Some(checked) = reports_readiness_for {
+                                let detail = self
+                                    .docker
+                                    .container_output(&container_id)
+                                    .await
+                                    .unwrap_or_default();
+                                let detail = detail.trim();
+                                anyhow::bail!(
+                                    "Container '{checked}' did not become healthy: {}. The \
+                                     external check ran in container '{name}' — \
+                                     --no-cleanup-after-failure keeps it for inspection",
+                                    if detail.is_empty() {
+                                        "its external health check failed".to_string()
+                                    } else {
+                                        detail.to_string()
+                                    }
+                                );
+                            }
                             anyhow::bail!(
                                 "Container '{}' (a run-to-completion dependency) exited with \
                                  code {}",
@@ -2245,9 +2312,19 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                                 exit_code
                             );
                         }
-                        self.event_sink.post(TaskEvent::DependencyCompleted {
-                            container: name.to_string(),
-                        });
+                        // A companion's success *is* the checked container's
+                        // readiness, and is reported as such — see
+                        // `Container::reports_readiness_for`.
+                        match reports_readiness_for {
+                            Some(checked) => {
+                                self.event_sink.post(TaskEvent::ContainerBecameHealthy {
+                                    container: checked.to_string(),
+                                })
+                            }
+                            None => self.event_sink.post(TaskEvent::DependencyCompleted {
+                                container: name.to_string(),
+                            }),
+                        }
                         return Ok(container_id);
                     }
 
@@ -2261,9 +2338,18 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         .wait_for_container_healthy(&container_id)
                         .await
                         .with_context(|| format!("Container '{}' did not become healthy", name))?;
-                    self.event_sink.post(TaskEvent::ContainerBecameHealthy {
-                        container: name.to_string(),
-                    });
+                    // Not for a container whose readiness is an
+                    // `external_health_check`: this gate is empty for it
+                    // (no Docker `HEALTHCHECK` to wait on), so the event
+                    // would claim a verdict nothing reached, and would
+                    // arrive before the check it appears to report had even
+                    // started. Its companion posts it instead, when the
+                    // check actually passes.
+                    if dependency_config.external_health_check.is_none() {
+                        self.event_sink.post(TaskEvent::ContainerBecameHealthy {
+                            container: name.to_string(),
+                        });
+                    }
 
                     self.run_setup_commands(
                         dependency_config

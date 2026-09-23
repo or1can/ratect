@@ -1349,6 +1349,17 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     ///   by anything; its exit code is what readiness is decided on.
     async fn wait_for_container_exit(&self, container_id: &str) -> Result<i64>;
 
+    /// Everything `container_id` has written to stdout and stderr, for a
+    /// container that has already exited.
+    ///
+    /// The counterpart of [`unhealthy_details`](DockerClient::unhealthy_details)
+    /// for a check Ratect runs itself rather than Docker: an
+    /// `external_health_check`'s companion diagnoses its own failure on
+    /// stderr (which attempt, what it last saw), and without this that
+    /// diagnosis dies with the container. Not a streaming call — the
+    /// container is finished by the time anything asks.
+    async fn container_output(&self, container_id: &str) -> Result<String>;
+
     /// Runs `command` inside the already-running `container_id` — used for
     /// `setup_commands`. Tokenized into literal argv via
     /// `tokenize_command_line`, the same as `command`/`entrypoint` — no
@@ -2545,6 +2556,23 @@ impl ContainerRuntime for DockerClient {
                 other.unwrap_or("<none>")
             )),
         }
+    }
+
+    async fn container_output(&self, container_id: &str) -> Result<String> {
+        let options = bollard::query_parameters::LogsOptionsBuilder::default()
+            .follow(false)
+            .stdout(true)
+            .stderr(true)
+            .build();
+        let mut stream = self.docker.logs(container_id, Some(options));
+        let mut output = String::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.with_context(|| {
+                format!("Failed to read the output of container '{container_id}'")
+            })?;
+            output.push_str(&chunk.to_string());
+        }
+        Ok(output)
     }
 
     async fn wait_for_container_exit(&self, container_id: &str) -> Result<i64> {

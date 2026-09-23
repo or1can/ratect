@@ -309,6 +309,23 @@ pub struct Container {
     /// task's checked dependency is an ordinary thing to write.
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub external_health_check: Option<ExternalHealthCheck>,
+    /// This container's readiness is reported as the named container's,
+    /// not its own — set only on the companion
+    /// `expand_external_health_checks` generates, naming the container that
+    /// companion checks.
+    ///
+    /// Never written in a config file and never read from one
+    /// (`serde(skip)`): a user declaring it would be claiming another
+    /// container's readiness. It exists because the *engine* has to know —
+    /// the whole point of ratect#202 is that an external health check is
+    /// reported as a health check on the container it checks, so the
+    /// companion's own lifecycle is an implementation detail no output
+    /// style should narrate. Deliberately phrased as "reported as", not "is
+    /// generated": it says what the engine must do, so nothing downstream
+    /// has to reason about where the container came from.
+    #[serde(skip)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub reports_readiness_for: Option<String>,
     /// Overrides the image's own `WORKDIR`. A plain string, not an
     /// [expression](#expressions) — matching Batect's own `String` (not
     /// `Expression`) typing for this field. Overridden by the task-level
@@ -1421,9 +1438,8 @@ impl ExternalHealthCheck {
                     format_seconds(timeout)
                 ),
                 format!(
-                    "echo \"ratect: external health check of {container} failed after {retries} \
-                     attempt(s): last HTTP status $code from http://{container}:{port}{path}, \
-                     wanted {expected_status}\" >&2"
+                    "echo \"last status $code from http://{container}:{port}{path} after \
+                     {retries} attempt(s), wanted {expected_status}\" >&2"
                 ),
             ),
             // `nc -w` is whole seconds only, and reads 0 as "no timeout" —
@@ -1435,8 +1451,8 @@ impl ExternalHealthCheck {
                     timeout.as_secs().max(1)
                 ),
                 format!(
-                    "echo \"ratect: external health check of {container} failed after {retries} \
-                     attempt(s): no TCP connection to {container}:{port}\" >&2"
+                    "echo \"no TCP connection to {container}:{port} after {retries} \
+                     attempt(s)\" >&2"
                 ),
             ),
         };
@@ -4662,6 +4678,7 @@ fn expand_external_health_checks(config: &mut Config) -> Result<()> {
                 command: Some(check.command(name)),
                 dependencies: Some(vec![name.clone()]),
                 run_to_completion: Some(true),
+                reports_readiness_for: Some(name.clone()),
                 ..Container::default()
             },
         );
@@ -4705,6 +4722,9 @@ fn add_dependency_after(dependencies: &mut Option<Vec<String>>, target: &str, co
 fn inherit_container_fields(child: &mut Container, parent: Container) {
     let Container {
         extends: _,
+        // Set only on a generated companion, which is created after
+        // inheritance has run and can never be an `extends` parent.
+        reports_readiness_for: _,
         image,
         image_pull_policy,
         build_directory,

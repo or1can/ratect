@@ -24,8 +24,8 @@ entry once it's healthy:
 and the `journey-test` task depends on `app` and, again, on `cache`. `app`
 itself is checked a third way — an
 [`external_health_check`](ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it)
-requesting `/healthz` from outside it — which is what the
-`ratect-health-check-app` container in the transcript below is. `ratect run
+requesting `/healthz` from outside it, which reports exactly as the other two
+do. `ratect run
 journey-test -o simple`, captured on a terminal in `examples/full-stack`:
 
 ```ansi
@@ -34,11 +34,8 @@ journey-test -o simple`, captured on a terminal in `examples/full-stack`:
 
 The recording on the [homepage](index.md) is the same command in `fancy` mode.
 `db` takes longer than `cache` because it's genuinely seeding that table before
-its health check can pass, not because anything is padded. `app has become
-healthy.` arrives immediately because `app` has no *Docker* health check to
-wait for — that gate is empty for it, and the wait that matters is the
-companion below it. The rest of this page is what the lines between `Starting
-db...` and `Starting app...` mean.
+its health check can pass, not because anything is padded. The rest of this page
+is what the lines between `Starting db...` and `Starting app...` mean.
 
 ## The two gates
 
@@ -105,8 +102,10 @@ once, from outside, with no opinion about the container's health afterwards.
 config-level sugar over `run_to_completion` rather than a third kind of gate:
 declaring one generates a companion container that loops the check and exits
 0 or non-zero, and everything that depended on the checked container depends
-on that companion too. So the resolution described below is unchanged; the
-checked container simply has one more node waiting alongside it.
+on that companion too. None of that surfaces — the companion narrates nothing
+of its own, and the checked container reports `has become healthy.` when the
+check passes, exactly as it would for a `health_check`. So the resolution
+described below is unchanged.
 
 ## How Docker reaches its verdict
 
