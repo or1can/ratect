@@ -16,7 +16,18 @@ volumes = [
 # on the container itself rather than repeated on every task that uses it.
 dependencies = ["db", "cache"]
 command = "sh -c 'npm ci && npm start'"
-health_check = { command = "node -e \"fetch('http://127.0.0.1:8080/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"", interval = "1s", retries = 20 }
+# Checked from outside, over the project's own network, instead of by the
+# `node -e` one-liner this used to be — escaping quotes inside a TOML string
+# to make a single HTTP request. `node:22` is a full Debian image and could
+# run that check itself; the field exists for images that can't (distroless,
+# `scratch`), and is used here because the declarative form says what is
+# actually meant. Nothing runs inside `app` to prove it is ready.
+[containers.app.external_health_check]
+type = "http"
+port = 8080
+path = "/healthz"
+interval = "1s"
+retries = 20
 
 # ANCHOR: readiness-db
 [containers.db]
@@ -50,10 +61,16 @@ volumes = [
 command = "sh -c 'npm ci && node test.js'"
 # ANCHOR_END: homepage-demo
 
-# `app`'s own health_check applies to *any* task run in that container —
-# including a one-shot `npm ci`, which would exit long before a server on
-# port 8080 ever exists for the check to find. `build`/`unit-test`/`lint`/
-# `shell` run here instead, on the same image with no health check to race.
+# The same image as `app`, without the stack's runtime wiring: `app` carries
+# `dependencies` on `db`/`cache` and publishes 8080, so a one-shot `npm ci`
+# run there would start Postgres and Redis and take the port for nothing.
+# `build`/`unit-test`/`lint`/`shell` run here instead.
+#
+# It used to be a health-check race as well — `app`'s old in-container
+# `health_check` gated *any* task run in that container, including a
+# `npm ci` that exits long before port 8080 serves anything. An
+# `external_health_check` doesn't: nothing waits on a task's own container
+# becoming ready, because running it is the task.
 [containers.dev]
 image = "node:22"
 working_directory = "/code"

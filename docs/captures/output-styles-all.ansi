@@ -1,235 +1,266 @@
-[37m[1mjourney-test[0m[0m | Running [1mjourney-test[0m...
-[32m[1mdb          [0m[0m | Starting container...
-[36m[1mcache       [0m[0m | Starting container...
-[32m[1mdb          [0m[0m | Container started.
-[32m[1mdb          [0m[0m | ********************************************************************************
-[32m[1mdb          [0m[0m | WARNING: POSTGRES_HOST_AUTH_METHOD has been set to "trust". This will allow
-[32m[1mdb          [0m[0m |          anyone with access to the Postgres port to access your database without
-[32m[1mdb          [0m[0m |          a password, even if POSTGRES_PASSWORD is set. See PostgreSQL
-[32m[1mdb          [0m[0m |          documentation about "trust":
-[32m[1mdb          [0m[0m |          https://www.postgresql.org/docs/current/auth-trust.html
-[32m[1mdb          [0m[0m |          In Docker's default configuration, this is effectively any other
-[32m[1mdb          [0m[0m |          container on the same system.
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m |          It is not recommended to use POSTGRES_HOST_AUTH_METHOD=trust. Replace
-[32m[1mdb          [0m[0m |          it with "-e POSTGRES_PASSWORD=password" instead to set a password in
-[32m[1mdb          [0m[0m |          "docker run".
-[32m[1mdb          [0m[0m | ********************************************************************************
-[32m[1mdb          [0m[0m | The files belonging to this database system will be owned by user "postgres".
-[32m[1mdb          [0m[0m | This user must also own the server process.
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | The database cluster will be initialized with locale "en_US.utf8".
-[32m[1mdb          [0m[0m | The default database encoding has accordingly been set to "UTF8".
-[32m[1mdb          [0m[0m | The default text search configuration will be set to "english".
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | Data page checksums are disabled.
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | fixing permissions on existing directory /var/lib/postgresql/data ... ok
-[32m[1mdb          [0m[0m | creating subdirectories ... ok
-[32m[1mdb          [0m[0m | selecting dynamic shared memory implementation ... posix
-[36m[1mcache       [0m[0m | Container started.
-[36m[1mcache       [0m[0m | 1:C 22 Sep 2026 18:50:30.822 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
-[36m[1mcache       [0m[0m | 1:C 22 Sep 2026 18:50:30.823 * Redis version=7.4.11, bits=64, commit=00000000, modified=0, pid=1, just started
-[36m[1mcache       [0m[0m | 1:C 22 Sep 2026 18:50:30.823 # Warning: no config file specified, using the default config. In order to specify a config file use redis-server /path/to/redis.conf
-[36m[1mcache       [0m[0m | 1:M 22 Sep 2026 18:50:30.823 * monotonic clock: POSIX clock_gettime
-[36m[1mcache       [0m[0m | 1:M 22 Sep 2026 18:50:30.823 * Running mode=standalone, port=6379.
-[36m[1mcache       [0m[0m | 1:M 22 Sep 2026 18:50:30.823 * Server initialized
-[36m[1mcache       [0m[0m | 1:M 22 Sep 2026 18:50:30.823 * Ready to accept connections tcp
-[32m[1mdb          [0m[0m | selecting default max_connections ... 100
-[32m[1mdb          [0m[0m | selecting default shared_buffers ... 128MB
-[32m[1mdb          [0m[0m | selecting default time zone ... Etc/UTC
-[32m[1mdb          [0m[0m | creating configuration files ... ok
-[32m[1mdb          [0m[0m | running bootstrap script ... ok
-[32m[1mdb          [0m[0m | performing post-bootstrap initialization ... ok
-[32m[1mdb          [0m[0m | syncing data to disk ... ok
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | Success. You can now start the database server using:
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m |     pg_ctl -D /var/lib/postgresql/data -l logfile start
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | initdb: warning: enabling "trust" authentication for local connections
-[32m[1mdb          [0m[0m | initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
-[32m[1mdb          [0m[0m | waiting for server to start....2026-09-22 18:50:31.684 UTC [48] LOG:  starting PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:31.689 UTC [48] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:31.691 UTC [51] LOG:  database system was shut down at 2026-09-22 18:50:31 UTC
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:31.693 UTC [48] LOG:  database system is ready to accept connections
-[32m[1mdb          [0m[0m |  done
-[32m[1mdb          [0m[0m | server started
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | /usr/local/bin/docker-entrypoint.sh: running /docker-entrypoint-initdb.d/01-schema.sql
-[32m[1mdb          [0m[0m | CREATE TABLE
-[36m[1mcache       [0m[0m | Container became healthy.
-[32m[1mdb          [0m[0m | INSERT 0 1000000
-[32m[1mdb          [0m[0m | CREATE INDEX
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | waiting for server to shut down...2026-09-22 18:50:33.117 UTC [48] LOG:  received fast shutdown request
-[32m[1mdb          [0m[0m | .2026-09-22 18:50:33.118 UTC [48] LOG:  aborting any active transactions
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:33.119 UTC [48] LOG:  background worker "logical replication launcher" (PID 54) exited with exit code 1
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:33.120 UTC [49] LOG:  shutting down
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:33.120 UTC [49] LOG:  checkpoint starting: shutdown immediate
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:33.258 UTC [49] LOG:  checkpoint complete: wrote 10152 buffers (62.0%); 0 WAL file(s) added, 0 removed, 10 recycled; write=0.086 s, sync=0.039 s, total=0.138 s; sync files=45, longest=0.021 s, average=0.001 s; distance=174130 kB, estimate=174130 kB; lsn=0/BEFF470, redo lsn=0/BEFF470
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:33.263 UTC [48] LOG:  database system is shut down
-[32m[1mdb          [0m[0m |  done
-[32m[1mdb          [0m[0m | server stopped
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | PostgreSQL init process complete; ready for start up.
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:33.331 UTC [1] LOG:  starting PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:33.332 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:33.332 UTC [1] LOG:  listening on IPv6 address "::", port 5432
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:33.333 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:33.335 UTC [77] LOG:  database system was shut down at 2026-09-22 18:50:33 UTC
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:33.336 UTC [1] LOG:  database system is ready to accept connections
-[32m[1mdb          [0m[0m | Container became healthy.
-[32m[1mdb          [0m[0m | Running setup command psql -U postgres -c "ANALYZE visits;" (1 of 1)...
-[32m[1mdb          [0m[0m | Setup command 1 | ANALYZE
-[32m[1mdb          [0m[0m | Container has completed all setup commands.
-[34m[1mapp         [0m[0m | Starting container...
-[34m[1mapp         [0m[0m | Container started.
-[34m[1mapp         [0m[0m | 
-[34m[1mapp         [0m[0m | added 100 packages, and audited 101 packages in 1s
-[34m[1mapp         [0m[0m | 
-[34m[1mapp         [0m[0m | 18 packages are looking for funding
-[34m[1mapp         [0m[0m |   run `npm fund` for details
-[34m[1mapp         [0m[0m | 
-[34m[1mapp         [0m[0m | found 0 vulnerabilities
-[34m[1mapp         [0m[0m | 
-[34m[1mapp         [0m[0m | > full-stack-app@1.0.0 start
-[34m[1mapp         [0m[0m | > node server.js
-[34m[1mapp         [0m[0m | 
-[34m[1mapp         [0m[0m | Listening on port 8080
-[34m[1mapp         [0m[0m | Container became healthy.
-[35m[1mjourney-test[0m[0m | Running sh -c 'npm ci && node test.js'...
-[35m[1mjourney-test[0m[0m | Container became healthy.
-[35m[1mjourney-test[0m[0m | 
-[35m[1mjourney-test[0m[0m | added 7 packages, and audited 8 packages in 1s
-[35m[1mjourney-test[0m[0m | 
-[35m[1mjourney-test[0m[0m | found 0 vulnerabilities
-[35m[1mjourney-test[0m[0m | app responded: {"message":"Hello from Ratect!","visit_id":1000001,"total_visits":1000001,"count_source":"database"}
-[35m[1mjourney-test[0m[0m | cache holds visits:count=1000001, confirming app and this container share the same cache
-[35m[1mjourney-test[0m[0m | journey test passed
-[37m[1mjourney-test[0m[0m | Cleaning up...
-[35m[1mjourney-test[0m[0m | Container removed.
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:38.041 UTC [1] LOG:  received fast shutdown request
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:38.042 UTC [1] LOG:  aborting any active transactions
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:38.043 UTC [108] FATAL:  terminating connection due to administrator command
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:38.045 UTC [1] LOG:  background worker "logical replication launcher" (PID 80) exited with exit code 1
-[34m[1mapp         [0m[0m | Postgres pool error: error: terminating connection due to administrator command
-[34m[1mapp         [0m[0m |     at parseErrorMessage (/code/node_modules/pg-protocol/dist/parser.js:306:11)
-[34m[1mapp         [0m[0m |     at Parser.handlePacket (/code/node_modules/pg-protocol/dist/parser.js:143:27)
-[34m[1mapp         [0m[0m |     at Parser.parse (/code/node_modules/pg-protocol/dist/parser.js:37:38)
-[34m[1mapp         [0m[0m |     at Socket.<anonymous> (/code/node_modules/pg-protocol/dist/index.js:12:42)
-[34m[1mapp         [0m[0m |     at Socket.emit (node:events:519:28)
-[34m[1mapp         [0m[0m |     at addChunk (node:internal/streams/readable:561:12)
-[34m[1mapp         [0m[0m |     at readableAddChunkPushByteMode (node:internal/streams/readable:512:3)
-[34m[1mapp         [0m[0m |     at Readable.push (node:internal/streams/readable:392:5)
-[34m[1mapp         [0m[0m |     at TCP.onStreamRead (node:internal/stream_base_commons:189:23) {
-[34m[1mapp         [0m[0m |   length: 116,
-[34m[1mapp         [0m[0m |   severity: 'FATAL',
-[34m[1mapp         [0m[0m |   code: '57P01',
-[34m[1mapp         [0m[0m |   detail: undefined,
-[34m[1mapp         [0m[0m |   hint: undefined,
-[34m[1mapp         [0m[0m |   position: undefined,
-[34m[1mapp         [0m[0m |   internalPosition: undefined,
-[34m[1mapp         [0m[0m |   internalQuery: undefined,
-[34m[1mapp         [0m[0m |   where: undefined,
-[34m[1mapp         [0m[0m |   schema: undefined,
-[34m[1mapp         [0m[0m |   table: undefined,
-[34m[1mapp         [0m[0m |   column: undefined,
-[34m[1mapp         [0m[0m |   dataType: undefined,
-[34m[1mapp         [0m[0m |   constraint: undefined,
-[34m[1mapp         [0m[0m |   file: 'postgres.c',
-[34m[1mapp         [0m[0m |   line: '3286',
-[34m[1mapp         [0m[0m |   routine: 'ProcessInterrupts',
-[34m[1mapp         [0m[0m |   client: Client {
-[34m[1mapp         [0m[0m |     _events: [Object: null prototype] { error: [Function (anonymous)] },
-[34m[1mapp         [0m[0m |     _eventsCount: 1,
-[34m[1mapp         [0m[0m |     _maxListeners: undefined,
-[34m[1mapp         [0m[0m |     connectionParameters: ConnectionParameters {
-[34m[1mapp         [0m[0m |       user: 'postgres',
-[34m[1mapp         [0m[0m |       database: 'postgres',
-[34m[1mapp         [0m[0m |       port: 5432,
-[34m[1mapp         [0m[0m |       host: 'db',
-[34m[1mapp         [0m[0m |       binary: false,
-[34m[1mapp         [0m[0m |       options: undefined,
-[34m[1mapp         [0m[0m |       ssl: false,
-[34m[1mapp         [0m[0m |       sslnegotiation: undefined,
-[34m[1mapp         [0m[0m |       client_encoding: '',
-[34m[1mapp         [0m[0m |       replication: undefined,
-[34m[1mapp         [0m[0m |       isDomainSocket: false,
-[34m[1mapp         [0m[0m |       application_name: undefined,
-[34m[1mapp         [0m[0m |       fallback_application_name: undefined,
-[34m[1mapp         [0m[0m |       statement_timeout: false,
-[34m[1mapp         [0m[0m |       lock_timeout: false,
-[34m[1mapp         [0m[0m |       idle_in_transaction_session_timeout: false,
-[34m[1mapp         [0m[0m |       query_timeout: false,
-[34m[1mapp         [0m[0m |       connect_timeout: 0
-[34m[1mapp         [0m[0m |     },
-[34m[1mapp         [0m[0m |     user: 'postgres',
-[34m[1mapp         [0m[0m |     database: 'postgres',
-[34m[1mapp         [0m[0m |     port: 5432,
-[34m[1mapp         [0m[0m |     host: 'db',
-[34m[1mapp         [0m[0m |     replication: undefined,
-[34m[1mapp         [0m[0m |     _Promise: [Function: Promise],
-[34m[1mapp         [0m[0m |     _types: TypeOverrides { _types: [Object], text: {}, binary: {} },
-[34m[1mapp         [0m[0m |     _ending: true,
-[34m[1mapp         [0m[0m |     _ended: false,
-[34m[1mapp         [0m[0m |     _connecting: false,
-[34m[1mapp         [0m[0m |     _connected: true,
-[34m[1mapp         [0m[0m |     _connectionError: false,
-[34m[1mapp         [0m[0m |     _queryable: false,
-[34m[1mapp         [0m[0m |     _activeQuery: null,
-[34m[1mapp         [0m[0m |     _txStatus: 'I',
-[34m[1mapp         [0m[0m |     enableChannelBinding: false,
-[34m[1mapp         [0m[0m |     scramMaxIterations: 100000,
-[34m[1mapp         [0m[0m |     connection: Connection {
-[34m[1mapp         [0m[0m |       _events: [Object: null prototype],
-[34m[1mapp         [0m[0m |       _eventsCount: 23,
-[34m[1mapp         [0m[0m |       _maxListeners: undefined,
-[34m[1mapp         [0m[0m |       stream: [Socket],
-[34m[1mapp         [0m[0m |       _keepAlive: false,
-[34m[1mapp         [0m[0m |       _keepAliveInitialDelayMillis: 0,
-[34m[1mapp         [0m[0m |       parsedStatements: {},
-[34m[1mapp         [0m[0m |       submittedNamedStatements: {},
-[34m[1mapp         [0m[0m |       ssl: false,
-[34m[1mapp         [0m[0m |       sslNegotiation: 'postgres',
-[34m[1mapp         [0m[0m |       _ending: true,
-[34m[1mapp         [0m[0m |       _emitMessage: false,
-[34m[1mapp         [0m[0m |       _connecting: true,
-[34m[1mapp         [0m[0m |       [Symbol(shapeMode)]: false,
-[34m[1mapp         [0m[0m |       [Symbol(kCapture)]: false
-[34m[1mapp         [0m[0m |     },
-[34m[1mapp         [0m[0m |     _queryQueue: [],
-[34m[1mapp         [0m[0m |     _sentQueryQueue: [],
-[34m[1mapp         [0m[0m |     pipeline: false,
-[34m[1mapp         [0m[0m |     binary: false,
-[34m[1mapp         [0m[0m |     processID: 108,
-[34m[1mapp         [0m[0m |     secretKey: 1895173923,
-[34m[1mapp         [0m[0m |     ssl: false,
-[34m[1mapp         [0m[0m |     sslNegotiation: 'postgres',
-[34m[1mapp         [0m[0m |     _connectionTimeoutMillis: 0,
-[34m[1mapp         [0m[0m |     _connectionCallback: null,
-[34m[1mapp         [0m[0m |     release: [Function (anonymous)],
-[34m[1mapp         [0m[0m |     readyForQuery: true,
-[34m[1mapp         [0m[0m |     hasExecuted: true,
-[34m[1mapp         [0m[0m |     _poolUseCount: 4,
-[34m[1mapp         [0m[0m |     [Symbol(shapeMode)]: false,
-[34m[1mapp         [0m[0m |     [Symbol(kCapture)]: false
-[34m[1mapp         [0m[0m |   }
-[34m[1mapp         [0m[0m | }
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:38.046 UTC [75] LOG:  shutting down
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:38.049 UTC [75] LOG:  checkpoint starting: shutdown immediate
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:38.076 UTC [75] LOG:  checkpoint complete: wrote 14 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.019 s, total=0.030 s; sync files=12, longest=0.003 s, average=0.002 s; distance=20 kB, estimate=20 kB; lsn=0/BF044B0, redo lsn=0/BF044B0
-[32m[1mdb          [0m[0m | 2026-09-22 18:50:38.078 UTC [1] LOG:  database system is shut down
-[32m[1mdb          [0m[0m | Container removed.
-[34m[1mapp         [0m[0m | Container removed.
-[36m[1mcache       [0m[0m | 1:signal-handler (1790103038) Received SIGTERM scheduling shutdown...
-[36m[1mcache       [0m[0m | 1:M 22 Sep 2026 18:50:38.464 * User requested shutdown...
-[36m[1mcache       [0m[0m | 1:M 22 Sep 2026 18:50:38.464 * Saving the final RDB snapshot before exiting.
-[36m[1mcache       [0m[0m | 1:M 22 Sep 2026 18:50:38.468 * DB saved on disk
-[36m[1mcache       [0m[0m | 1:M 22 Sep 2026 18:50:38.468 # Redis is now ready to exit, bye bye...
-[36m[1mcache       [0m[0m | Container removed.
-[37m[1mjourney-test[0m[0m | Removing task network...
-[37m[1mjourney-test[0m[0m | journey-test finished with exit code [32m0[0m in 8.0s.
+[37m[1mjourney-test           [0m[0m | Running [1mjourney-test[0m...
+[36m[1mcache                  [0m[0m | Starting container...
+[32m[1mdb                     [0m[0m | Starting container...
+[32m[1mdb                     [0m[0m | Container started.
+[36m[1mcache                  [0m[0m | Container started.
+[32m[1mdb                     [0m[0m | ********************************************************************************
+[32m[1mdb                     [0m[0m | WARNING: POSTGRES_HOST_AUTH_METHOD has been set to "trust". This will allow
+[32m[1mdb                     [0m[0m |          anyone with access to the Postgres port to access your database without
+[32m[1mdb                     [0m[0m |          a password, even if POSTGRES_PASSWORD is set. See PostgreSQL
+[32m[1mdb                     [0m[0m |          documentation about "trust":
+[32m[1mdb                     [0m[0m |          https://www.postgresql.org/docs/current/auth-trust.html
+[32m[1mdb                     [0m[0m |          In Docker's default configuration, this is effectively any other
+[32m[1mdb                     [0m[0m |          container on the same system.
+[32m[1mdb                     [0m[0m | 
+[32m[1mdb                     [0m[0m |          It is not recommended to use POSTGRES_HOST_AUTH_METHOD=trust. Replace
+[32m[1mdb                     [0m[0m |          it with "-e POSTGRES_PASSWORD=password" instead to set a password in
+[32m[1mdb                     [0m[0m |          "docker run".
+[32m[1mdb                     [0m[0m | ********************************************************************************
+[36m[1mcache                  [0m[0m | 1:C 23 Sep 2026 20:29:45.673 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+[36m[1mcache                  [0m[0m | 1:C 23 Sep 2026 20:29:45.673 * Redis version=7.4.11, bits=64, commit=00000000, modified=0, pid=1, just started
+[36m[1mcache                  [0m[0m | 1:C 23 Sep 2026 20:29:45.673 # Warning: no config file specified, using the default config. In order to specify a config file use redis-server /path/to/redis.conf
+[36m[1mcache                  [0m[0m | 1:M 23 Sep 2026 20:29:45.673 * monotonic clock: POSIX clock_gettime
+[36m[1mcache                  [0m[0m | 1:M 23 Sep 2026 20:29:45.674 * Running mode=standalone, port=6379.
+[36m[1mcache                  [0m[0m | 1:M 23 Sep 2026 20:29:45.674 * Server initialized
+[36m[1mcache                  [0m[0m | 1:M 23 Sep 2026 20:29:45.674 * Ready to accept connections tcp
+[32m[1mdb                     [0m[0m | The files belonging to this database system will be owned by user "postgres".
+[32m[1mdb                     [0m[0m | This user must also own the server process.
+[32m[1mdb                     [0m[0m | 
+[32m[1mdb                     [0m[0m | The database cluster will be initialized with locale "en_US.utf8".
+[32m[1mdb                     [0m[0m | The default database encoding has accordingly been set to "UTF8".
+[32m[1mdb                     [0m[0m | The default text search configuration will be set to "english".
+[32m[1mdb                     [0m[0m | 
+[32m[1mdb                     [0m[0m | Data page checksums are disabled.
+[32m[1mdb                     [0m[0m | 
+[32m[1mdb                     [0m[0m | fixing permissions on existing directory /var/lib/postgresql/data ... ok
+[32m[1mdb                     [0m[0m | creating subdirectories ... ok
+[32m[1mdb                     [0m[0m | selecting dynamic shared memory implementation ... posix
+[32m[1mdb                     [0m[0m | selecting default max_connections ... 100
+[32m[1mdb                     [0m[0m | selecting default shared_buffers ... 128MB
+[32m[1mdb                     [0m[0m | selecting default time zone ... Etc/UTC
+[32m[1mdb                     [0m[0m | creating configuration files ... ok
+[32m[1mdb                     [0m[0m | running bootstrap script ... ok
+[32m[1mdb                     [0m[0m | performing post-bootstrap initialization ... ok
+[36m[1mcache                  [0m[0m | Container became healthy.
+[32m[1mdb                     [0m[0m | initdb: warning: enabling "trust" authentication for local connections
+[32m[1mdb                     [0m[0m | initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+[32m[1mdb                     [0m[0m | syncing data to disk ... ok
+[32m[1mdb                     [0m[0m | 
+[32m[1mdb                     [0m[0m | 
+[32m[1mdb                     [0m[0m | Success. You can now start the database server using:
+[32m[1mdb                     [0m[0m | 
+[32m[1mdb                     [0m[0m |     pg_ctl -D /var/lib/postgresql/data -l logfile start
+[32m[1mdb                     [0m[0m | 
+[32m[1mdb                     [0m[0m | waiting for server to start....2026-09-23 20:29:46.762 UTC [54] LOG:  starting PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:46.763 UTC [54] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:46.765 UTC [57] LOG:  database system was shut down at 2026-09-23 20:29:45 UTC
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:46.767 UTC [54] LOG:  database system is ready to accept connections
+[32m[1mdb                     [0m[0m |  done
+[32m[1mdb                     [0m[0m | server started
+[32m[1mdb                     [0m[0m | 
+[32m[1mdb                     [0m[0m | /usr/local/bin/docker-entrypoint.sh: running /docker-entrypoint-initdb.d/01-schema.sql
+[32m[1mdb                     [0m[0m | CREATE TABLE
+[32m[1mdb                     [0m[0m | INSERT 0 1000000
+[32m[1mdb                     [0m[0m | CREATE INDEX
+[32m[1mdb                     [0m[0m | 
+[32m[1mdb                     [0m[0m | 
+[32m[1mdb                     [0m[0m | waiting for server to shut down....2026-09-23 20:29:48.246 UTC [54] LOG:  received fast shutdown request
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:48.247 UTC [54] LOG:  aborting any active transactions
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:48.249 UTC [54] LOG:  background worker "logical replication launcher" (PID 60) exited with exit code 1
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:48.249 UTC [55] LOG:  shutting down
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:48.251 UTC [55] LOG:  checkpoint starting: shutdown immediate
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:48.404 UTC [55] LOG:  checkpoint complete: wrote 10152 buffers (62.0%); 0 WAL file(s) added, 0 removed, 10 recycled; write=0.078 s, sync=0.061 s, total=0.155 s; sync files=45, longest=0.022 s, average=0.002 s; distance=174130 kB, estimate=174130 kB; lsn=0/BEFF470, redo lsn=0/BEFF470
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:48.410 UTC [54] LOG:  database system is shut down
+[32m[1mdb                     [0m[0m |  done
+[32m[1mdb                     [0m[0m | server stopped
+[32m[1mdb                     [0m[0m | 
+[32m[1mdb                     [0m[0m | PostgreSQL init process complete; ready for start up.
+[32m[1mdb                     [0m[0m | 
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:48.465 UTC [1] LOG:  starting PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:48.465 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:48.465 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:48.468 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:48.470 UTC [77] LOG:  database system was shut down at 2026-09-23 20:29:48 UTC
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:48.473 UTC [1] LOG:  database system is ready to accept connections
+[32m[1mdb                     [0m[0m | Container became healthy.
+[32m[1mdb                     [0m[0m | Running setup command psql -U postgres -c "ANALYZE visits;" (1 of 1)...
+[32m[1mdb                     [0m[0m | Setup command 1 | ANALYZE
+[32m[1mdb                     [0m[0m | Container has completed all setup commands.
+[34m[1mapp                    [0m[0m | Starting container...
+[34m[1mapp                    [0m[0m | Container started.
+[34m[1mapp                    [0m[0m | Container became healthy.
+[33m[1mratect-health-check-app[0m[0m | Starting container...
+[33m[1mratect-health-check-app[0m[0m | Container started.
+[34m[1mapp                    [0m[0m | 
+[34m[1mapp                    [0m[0m | added 100 packages, and audited 101 packages in 1s
+[34m[1mapp                    [0m[0m | 
+[34m[1mapp                    [0m[0m | 18 packages are looking for funding
+[34m[1mapp                    [0m[0m |   run `npm fund` for details
+[34m[1mapp                    [0m[0m | 
+[34m[1mapp                    [0m[0m | found 0 vulnerabilities
+[34m[1mapp                    [0m[0m | 
+[34m[1mapp                    [0m[0m | > full-stack-app@1.0.0 start
+[34m[1mapp                    [0m[0m | > node server.js
+[34m[1mapp                    [0m[0m | 
+[34m[1mapp                    [0m[0m | Listening on port 8080
+[33m[1mratect-health-check-app[0m[0m | Container ran to completion.
+[35m[1mjourney-test           [0m[0m | Running sh -c 'npm ci && node test.js'...
+[35m[1mjourney-test           [0m[0m | Container became healthy.
+[35m[1mjourney-test           [0m[0m | 
+[35m[1mjourney-test           [0m[0m | added 7 packages, and audited 8 packages in 1s
+[35m[1mjourney-test           [0m[0m | 
+[35m[1mjourney-test           [0m[0m | found 0 vulnerabilities
+[35m[1mjourney-test           [0m[0m | app responded: {"message":"Hello from Ratect!","visit_id":1000001,"total_visits":1000001,"count_source":"database"}
+[35m[1mjourney-test           [0m[0m | cache holds visits:count=1000001, confirming app and this container share the same cache
+[35m[1mjourney-test           [0m[0m | journey test passed
+[37m[1mjourney-test           [0m[0m | Cleaning up...
+[35m[1mjourney-test           [0m[0m | Container removed.
+[36m[1mcache                  [0m[0m | 1:signal-handler (1790195392) Received SIGTERM scheduling shutdown...
+[36m[1mcache                  [0m[0m | 1:M 23 Sep 2026 20:29:53.034 * User requested shutdown...
+[36m[1mcache                  [0m[0m | 1:M 23 Sep 2026 20:29:53.034 * Saving the final RDB snapshot before exiting.
+[36m[1mcache                  [0m[0m | 1:M 23 Sep 2026 20:29:53.039 * DB saved on disk
+[36m[1mcache                  [0m[0m | 1:M 23 Sep 2026 20:29:53.039 # Redis is now ready to exit, bye bye...
+[34m[1mapp                    [0m[0m | Redis client error: SocketClosedUnexpectedlyError: Socket closed unexpectedly
+[34m[1mapp                    [0m[0m |     at Socket.<anonymous> (/code/node_modules/@redis/client/dist/lib/client/socket.js:307:33)
+[34m[1mapp                    [0m[0m |     at Object.onceWrapper (node:events:634:26)
+[34m[1mapp                    [0m[0m |     at Socket.emit (node:events:519:28)
+[34m[1mapp                    [0m[0m |     at TCP.<anonymous> (node:net:347:12)
+[34m[1mapp                    [0m[0m | Redis client error: Error: connect ECONNREFUSED 192.168.107.2:6379
+[34m[1mapp                    [0m[0m |     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1638:16) {
+[34m[1mapp                    [0m[0m |   errno: -111,
+[34m[1mapp                    [0m[0m |   code: 'ECONNREFUSED',
+[34m[1mapp                    [0m[0m |   syscall: 'connect',
+[34m[1mapp                    [0m[0m |   address: '192.168.107.2',
+[34m[1mapp                    [0m[0m |   port: 6379
+[34m[1mapp                    [0m[0m | }
+[36m[1mcache                  [0m[0m | Container removed.
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:53.223 UTC [1] LOG:  received fast shutdown request
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:53.226 UTC [1] LOG:  aborting any active transactions
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:53.226 UTC [108] FATAL:  terminating connection due to administrator command
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:53.227 UTC [1] LOG:  background worker "logical replication launcher" (PID 80) exited with exit code 1
+[34m[1mapp                    [0m[0m | Postgres pool error: error: terminating connection due to administrator command
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:53.227 UTC [75] LOG:  shutting down
+[34m[1mapp                    [0m[0m |     at parseErrorMessage (/code/node_modules/pg-protocol/dist/parser.js:306:11)
+[34m[1mapp                    [0m[0m |     at Parser.handlePacket (/code/node_modules/pg-protocol/dist/parser.js:143:27)
+[34m[1mapp                    [0m[0m |     at Parser.parse (/code/node_modules/pg-protocol/dist/parser.js:37:38)
+[34m[1mapp                    [0m[0m |     at Socket.<anonymous> (/code/node_modules/pg-protocol/dist/index.js:12:42)
+[34m[1mapp                    [0m[0m |     at Socket.emit (node:events:519:28)
+[34m[1mapp                    [0m[0m |     at addChunk (node:internal/streams/readable:561:12)
+[34m[1mapp                    [0m[0m |     at readableAddChunkPushByteMode (node:internal/streams/readable:512:3)
+[34m[1mapp                    [0m[0m |     at Readable.push (node:internal/streams/readable:392:5)
+[34m[1mapp                    [0m[0m |     at TCP.onStreamRead (node:internal/stream_base_commons:189:23) {
+[34m[1mapp                    [0m[0m |   length: 116,
+[34m[1mapp                    [0m[0m |   severity: 'FATAL',
+[34m[1mapp                    [0m[0m |   code: '57P01',
+[34m[1mapp                    [0m[0m |   detail: undefined,
+[34m[1mapp                    [0m[0m |   hint: undefined,
+[34m[1mapp                    [0m[0m |   position: undefined,
+[34m[1mapp                    [0m[0m |   internalPosition: undefined,
+[34m[1mapp                    [0m[0m |   internalQuery: undefined,
+[34m[1mapp                    [0m[0m |   where: undefined,
+[34m[1mapp                    [0m[0m |   schema: undefined,
+[34m[1mapp                    [0m[0m |   table: undefined,
+[34m[1mapp                    [0m[0m |   column: undefined,
+[34m[1mapp                    [0m[0m |   dataType: undefined,
+[34m[1mapp                    [0m[0m |   constraint: undefined,
+[34m[1mapp                    [0m[0m |   file: 'postgres.c',
+[34m[1mapp                    [0m[0m |   line: '3286',
+[34m[1mapp                    [0m[0m |   routine: 'ProcessInterrupts',
+[34m[1mapp                    [0m[0m |   client: Client {
+[34m[1mapp                    [0m[0m |     _events: [Object: null prototype] { error: [Function (anonymous)] },
+[34m[1mapp                    [0m[0m |     _eventsCount: 1,
+[34m[1mapp                    [0m[0m |     _maxListeners: undefined,
+[34m[1mapp                    [0m[0m |     connectionParameters: ConnectionParameters {
+[34m[1mapp                    [0m[0m |       user: 'postgres',
+[34m[1mapp                    [0m[0m |       database: 'postgres',
+[34m[1mapp                    [0m[0m |       port: 5432,
+[34m[1mapp                    [0m[0m |       host: 'db',
+[34m[1mapp                    [0m[0m |       binary: false,
+[34m[1mapp                    [0m[0m |       options: undefined,
+[34m[1mapp                    [0m[0m |       ssl: false,
+[34m[1mapp                    [0m[0m |       sslnegotiation: undefined,
+[34m[1mapp                    [0m[0m |       client_encoding: '',
+[34m[1mapp                    [0m[0m |       replication: undefined,
+[34m[1mapp                    [0m[0m |       isDomainSocket: false,
+[34m[1mapp                    [0m[0m |       application_name: undefined,
+[34m[1mapp                    [0m[0m |       fallback_application_name: undefined,
+[34m[1mapp                    [0m[0m |       statement_timeout: false,
+[34m[1mapp                    [0m[0m |       lock_timeout: false,
+[34m[1mapp                    [0m[0m |       idle_in_transaction_session_timeout: false,
+[34m[1mapp                    [0m[0m |       query_timeout: false,
+[34m[1mapp                    [0m[0m |       connect_timeout: 0
+[34m[1mapp                    [0m[0m |     },
+[34m[1mapp                    [0m[0m |     user: 'postgres',
+[34m[1mapp                    [0m[0m |     database: 'postgres',
+[34m[1mapp                    [0m[0m |     port: 5432,
+[34m[1mapp                    [0m[0m |     host: 'db',
+[34m[1mapp                    [0m[0m |     replication: undefined,
+[34m[1mapp                    [0m[0m |     _Promise: [Function: Promise],
+[34m[1mapp                    [0m[0m |     _types: TypeOverrides { _types: [Object], text: {}, binary: {} },
+[34m[1mapp                    [0m[0m |     _ending: true,
+[34m[1mapp                    [0m[0m |     _ended: false,
+[34m[1mapp                    [0m[0m |     _connecting: false,
+[34m[1mapp                    [0m[0m |     _connected: true,
+[34m[1mapp                    [0m[0m |     _connectionError: false,
+[34m[1mapp                    [0m[0m |     _queryable: false,
+[34m[1mapp                    [0m[0m |     _activeQuery: null,
+[34m[1mapp                    [0m[0m |     _txStatus: 'I',
+[34m[1mapp                    [0m[0m |     enableChannelBinding: false,
+[34m[1mapp                    [0m[0m |     scramMaxIterations: 100000,
+[34m[1mapp                    [0m[0m |     connection: Connection {
+[34m[1mapp                    [0m[0m |       _events: [Object: null prototype],
+[34m[1mapp                    [0m[0m |       _eventsCount: 23,
+[34m[1mapp                    [0m[0m |       _maxListeners: undefined,
+[34m[1mapp                    [0m[0m |       stream: [Socket],
+[34m[1mapp                    [0m[0m |       _keepAlive: false,
+[34m[1mapp                    [0m[0m |       _keepAliveInitialDelayMillis: 0,
+[34m[1mapp                    [0m[0m |       parsedStatements: {},
+[34m[1mapp                    [0m[0m |       submittedNamedStatements: {},
+[34m[1mapp                    [0m[0m |       ssl: false,
+[34m[1mapp                    [0m[0m |       sslNegotiation: 'postgres',
+[34m[1mapp                    [0m[0m |       _ending: true,
+[34m[1mapp                    [0m[0m |       _emitMessage: false,
+[34m[1mapp                    [0m[0m |       _connecting: true,
+[34m[1mapp                    [0m[0m |       [Symbol(shapeMode)]: false,
+[34m[1mapp                    [0m[0m |       [Symbol(kCapture)]: false
+[34m[1mapp                    [0m[0m |     },
+[34m[1mapp                    [0m[0m |     _queryQueue: [],
+[34m[1mapp                    [0m[0m |     _sentQueryQueue: [],
+[34m[1mapp                    [0m[0m |     pipeline: false,
+[34m[1mapp                    [0m[0m |     binary: false,
+[34m[1mapp                    [0m[0m |     processID: 108,
+[34m[1mapp                    [0m[0m |     secretKey: 1540131539,
+[34m[1mapp                    [0m[0m |     ssl: false,
+[34m[1mapp                    [0m[0m |     sslNegotiation: 'postgres',
+[34m[1mapp                    [0m[0m |     _connectionTimeoutMillis: 0,
+[34m[1mapp                    [0m[0m |     _connectionCallback: null,
+[34m[1mapp                    [0m[0m |     release: [Function (anonymous)],
+[34m[1mapp                    [0m[0m |     readyForQuery: true,
+[34m[1mapp                    [0m[0m |     hasExecuted: true,
+[34m[1mapp                    [0m[0m |     _poolUseCount: 3,
+[34m[1mapp                    [0m[0m |     [Symbol(shapeMode)]: false,
+[34m[1mapp                    [0m[0m |     [Symbol(kCapture)]: false
+[34m[1mapp                    [0m[0m |   }
+[34m[1mapp                    [0m[0m | }
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:53.229 UTC [75] LOG:  checkpoint starting: shutdown immediate
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:53.253 UTC [75] LOG:  checkpoint complete: wrote 14 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.017 s, total=0.026 s; sync files=12, longest=0.002 s, average=0.002 s; distance=20 kB, estimate=20 kB; lsn=0/BF044A8, redo lsn=0/BF044A8
+[32m[1mdb                     [0m[0m | 2026-09-23 20:29:53.255 UTC [1] LOG:  database system is shut down
+[34m[1mapp                    [0m[0m | Redis client error: Error: getaddrinfo ENOTFOUND cache
+[34m[1mapp                    [0m[0m |     at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26) {
+[34m[1mapp                    [0m[0m |   errno: -3008,
+[34m[1mapp                    [0m[0m |   code: 'ENOTFOUND',
+[34m[1mapp                    [0m[0m |   syscall: 'getaddrinfo',
+[34m[1mapp                    [0m[0m |   hostname: 'cache'
+[34m[1mapp                    [0m[0m | }
+[34m[1mapp                    [0m[0m | Redis client error: Error: getaddrinfo ENOTFOUND cache
+[34m[1mapp                    [0m[0m |     at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26) {
+[34m[1mapp                    [0m[0m |   errno: -3008,
+[34m[1mapp                    [0m[0m |   code: 'ENOTFOUND',
+[34m[1mapp                    [0m[0m |   syscall: 'getaddrinfo',
+[34m[1mapp                    [0m[0m |   hostname: 'cache'
+[34m[1mapp                    [0m[0m | }
+[32m[1mdb                     [0m[0m | Container removed.
+[34m[1mapp                    [0m[0m | Container removed.
+[33m[1mratect-health-check-app[0m[0m | Container removed.
+[37m[1mjourney-test           [0m[0m | Removing task network...
+[37m[1mjourney-test           [0m[0m | journey-test finished with exit code [32m0[0m in 8.3s.
