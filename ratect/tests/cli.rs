@@ -63,6 +63,12 @@ fn run_to_completion_fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run-to-completion.toml")
 }
 
+/// `setup_commands`' `run_in` (ratect#111) — native-only, so its own fixture
+/// lives here too, for the same reason as `run_to_completion` above.
+fn setup_command_run_in_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/setup-command-run-in.toml")
+}
+
 /// A unique, empty temp directory to stand up a small project in.
 fn unique_project_dir() -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1055,6 +1061,38 @@ fn run_to_completion_dependency_runs_before_the_task_container_via_docker() {
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("app-started"),
         "the task should only run once its run-to-completion dependency exited 0:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// `setup_commands`' `run_in` (ratect#111), end to end: `db`'s setup command
+/// execs into `db-seed-client` — one of `db`'s own dependencies — rather than
+/// into `db`. It asserts on an environment variable the two containers
+/// disagree about, so it exits non-zero (failing the run) if it lands in the
+/// wrong container or is handed the declaring container's environment.
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn a_setup_command_with_run_in_execs_into_its_dependency_via_docker() {
+    let _guard = serial_docker();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(setup_command_run_in_fixture_path())
+        .args(["run", "start"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("app-started"),
+        "the task should only run once the setup command succeeded inside \
+         'db-seed-client':\n{}",
         String::from_utf8_lossy(&output.stdout)
     );
 }

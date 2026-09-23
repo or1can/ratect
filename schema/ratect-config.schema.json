@@ -605,14 +605,21 @@
     },
     "SetupCommand": {
       "additionalProperties": false,
-      "description": "One entry in a container's `setup_commands` list: a command run inside the started container after it becomes healthy but before its dependents start. Runs with the container's own environment and user/group. Tokenized into literal argv the same way `command`/`entrypoint` are (see `tokenize_command_line` in `docker.rs`) — no shell involved, matching Batect's own `SetupCommand.command` exactly (typed `Command`, the same type as `Container.command`/`entrypoint`, and passed to Docker's exec API as already-parsed argv — confirmed by reading `RunContainerSetupCommandsStepRunner.runSetupCommand`, not assumed from Batect's docs). A command relying on shell operators (`&&`, `$VAR` expansion, etc.) needs an explicit `sh -c '...'` wrapper, same as `command`/`entrypoint`.",
+      "description": "One entry in a container's `setup_commands` list: a command run after the container becomes healthy but before its dependents start — inside that container, or, with `run_in`, inside one of its dependencies. Runs with the environment and user/group of whichever container it runs in. Tokenized into literal argv the same way `command`/`entrypoint` are — no shell involved, so a command relying on shell operators (`&&`, `$VAR` expansion, etc.) needs an explicit `sh -c '...'` wrapper.",
       "properties": {
         "command": {
           "description": "The command to run, tokenized into arguments rather than run through a shell — wrap it in `sh -c '...'` to use shell operators.",
           "type": "string"
         },
+        "run_in": {
+          "description": "Runs this command inside another container instead of the one that declares it — for a setup step whose tooling lives in a different image, such as seeding a database from a client container. Must name one of the declaring container's own dependencies, or the declaring container itself (which is what omitting it means).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "working_directory": {
-          "description": "Falls back to the container's own `working_directory` (`Container::working_directory`) when omitted, and then to the image's own default when neither is set — matching Batect.",
+          "description": "Falls back to the `working_directory` of whichever container the command runs in — the one declaring it, or the one named by `run_in` — and then to that image's own default when neither is set.",
           "type": [
             "string",
             "null"

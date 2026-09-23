@@ -4725,6 +4725,232 @@ run = { container = "app" }
     );
 }
 
+/// `run_in` (ratect#111): a setup command can name one of the declaring
+/// container's own dependencies to exec into instead of the container that
+/// declares it.
+#[tokio::test]
+async fn parses_setup_command_run_in() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.db-seed-client]
+image = "my-org/db-tools:latest"
+command = "sleep infinity"
+
+[containers.db]
+image = "postgres:16"
+dependencies = ["db-seed-client"]
+setup_commands = [{ command = "./seed.sh", run_in = "db-seed-client" }]
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["db"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        project.config.containers["db"]
+            .setup_commands
+            .as_ref()
+            .unwrap()[0]
+            .run_in
+            .as_deref(),
+        Some("db-seed-client")
+    );
+}
+
+/// A sibling is exactly the case the dependency restriction exists to
+/// refuse: nothing orders it against the declaring container, so the target
+/// may not be running when the command would exec into it.
+#[tokio::test]
+async fn setup_command_run_in_rejects_a_container_that_is_not_a_dependency() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.db-seed-client]
+image = "my-org/db-tools:latest"
+
+[containers.db]
+image = "postgres:16"
+setup_commands = [{ command = "./seed.sh", run_in = "db-seed-client" }]
+
+[tasks.t]
+run = { container = "db" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("'run_in' set to 'db-seed-client'")
+            && message.contains("not one of that container's own dependencies"),
+        "got: {message}"
+    );
+}
+
+/// A *task's* own `dependencies` is refused too, even though it genuinely
+/// does order the target ahead of that task's main container. The ordering
+/// holds for one task, and a container is not owned by one task — the same
+/// one used as an ordinary dependency elsewhere would silently lose it. This
+/// pins the judgement, so the next reader finds it deliberate rather than
+/// assuming the runtime simply couldn't resolve the target.
+#[tokio::test]
+async fn setup_command_run_in_rejects_a_task_level_dependency() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.db-seed-client]
+image = "my-org/db-tools:latest"
+
+[containers.db]
+image = "postgres:16"
+setup_commands = [{ command = "./seed.sh", run_in = "db-seed-client" }]
+
+[tasks.t]
+dependencies = ["db-seed-client"]
+run = { container = "db" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("not one of that container's own dependencies")
+            && message.contains("Ordering it from a task's own 'dependencies' is not enough"),
+        "got: {message}"
+    );
+}
+
+/// Naming the declaring container itself is what omitting `run_in` means, so
+/// it has to be accepted rather than caught by the dependency rule.
+#[tokio::test]
+async fn setup_command_run_in_may_name_the_declaring_container_itself() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.db]
+image = "postgres:16"
+setup_commands = [{ command = "./seed.sh", run_in = "db" }]
+
+[tasks.t]
+run = { container = "db" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        project.config.containers["db"]
+            .setup_commands
+            .as_ref()
+            .unwrap()[0]
+            .run_in
+            .as_deref(),
+        Some("db")
+    );
+}
+
+/// A `run_to_completion` dependency has already exited by the time it counts
+/// as ready, so there is no live process for `docker exec` to target — a
+/// load-time error rather than an obscure Docker one mid-run.
+#[tokio::test]
+async fn setup_command_run_in_rejects_a_run_to_completion_dependency() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.migrate]
+image = "alpine:3.18"
+run_to_completion = true
+
+[containers.db]
+image = "postgres:16"
+dependencies = ["migrate"]
+setup_commands = [{ command = "./seed.sh", run_in = "migrate" }]
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["db"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("'run_in' set to 'migrate'")
+            && message.contains("run-to-completion dependency"),
+        "got: {message}"
+    );
+}
+
+/// The `dependencies` a `run_in` target has to be in may have been inherited
+/// — which is why the check runs after `extends` resolution, not during the
+/// per-container validation pass that precedes it.
+#[tokio::test]
+async fn setup_command_run_in_counts_dependencies_inherited_via_extends() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.db-seed-client]
+image = "my-org/db-tools:latest"
+
+[containers.base-db]
+image = "postgres:16"
+dependencies = ["db-seed-client"]
+
+[containers.db]
+extends = "base-db"
+setup_commands = [{ command = "./seed.sh", run_in = "db-seed-client" }]
+
+[tasks.t]
+run = { container = "db" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        project.config.containers["db"].dependencies.as_deref(),
+        Some(&["db-seed-client".to_string()][..])
+    );
+}
+
+/// `run_in` is native-only, same reasoning as `run_to_completion` below:
+/// Batect has no equivalent (batect#286 is still unbuilt), so a `batect.yml`
+/// using it is rejected rather than quietly running the command in the
+/// declaring container instead.
+#[tokio::test]
+async fn setup_command_run_in_is_rejected_in_compat_mode() {
+    let dir = unique_temp_dir();
+    let path = dir.join("batect.yml");
+    std::fs::write(
+        &path,
+        "project_name: demo\ncontainers:\n  seed-client:\n    image: alpine\n  db:\n    \
+         image: postgres\n    dependencies: [seed-client]\n    setup_commands:\n      - \
+         command: ./seed.sh\n        run_in: seed-client\ntasks: {}\n",
+    )
+    .unwrap();
+    let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(
+        format!("{err:#}").contains("has a setup command using 'run_in'"),
+        "expected a compat rejection, got: {err:#}"
+    );
+}
+
 /// `run_to_completion` is native-only, same reasoning as `extends`: a
 /// `batect.yml` using it is rejected rather than silently ignored, since
 /// Batect has no such concept.

@@ -129,12 +129,20 @@ impl EventSink for SimpleEventLogger {
                 command,
                 index,
                 total,
+                run_in,
             } => {
                 if self.is_task_container(&container) {
                     return;
                 }
+                // Both names when they differ: this line is flat, with no
+                // per-container prefix to say whose gate it belongs to, so
+                // dropping either one loses something.
+                let location = match run_in {
+                    Some(run_in) => format!("{run_in}, for {container}"),
+                    None => container,
+                };
                 self.console.println(&format!(
-                    "Running setup command {command} ({index} of {total}) in {container}..."
+                    "Running setup command {command} ({index} of {total}) in {location}..."
                 ));
             }
             TaskEvent::SetupCommandsCompleted { container } => {

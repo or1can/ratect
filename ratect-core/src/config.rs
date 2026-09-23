@@ -1241,6 +1241,12 @@ pub struct HealthCheckConfig {
 /// Batect's docs). A command relying on shell operators (`&&`, `$VAR`
 /// expansion, etc.) needs an explicit `sh -c '...'` wrapper, same as
 /// `command`/`entrypoint`.
+///
+/// The first paragraph above is what the generated JSON schemas describe,
+/// *both* of them — so it stays true of a `batect.yml`, where [`Self::run_in`]
+/// (the one way a setup command runs somewhere other than the container
+/// declaring it) is rejected outright. That divergence is documented on the
+/// field itself, which the compat schema skips.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1251,7 +1257,46 @@ pub struct SetupCommand {
     /// Falls back to the container's own `working_directory`
     /// ([`Container::working_directory`]) when omitted, and then to the
     /// image's own default when neither is set — matching Batect.
+    ///
+    /// The first paragraph is what the *compat* schema describes, where it
+    /// is the whole truth. Under [`Self::run_in`] the fallback is the
+    /// **target** container's `working_directory`, not the declaring
+    /// container's — and comes from Docker rather than from here (see that
+    /// field). `schema::make_native` corrects the native schema's
+    /// description to say so, the same way it corrects `Include`'s `path`.
     pub working_directory: Option<String>,
+    /// Runs this command inside another container instead of the one that
+    /// declares it — for a setup step whose tooling lives in a different
+    /// image, such as seeding a database from a client container the
+    /// database's own image has no room for. Must name one of the declaring
+    /// container's own `dependencies`, or the declaring container itself
+    /// (which is what omitting it means). `ratect`-native only — Batect has
+    /// no equivalent, so `ratect-compat` rejects it.
+    ///
+    /// The dependency restriction is what makes the ordering safe, and it is
+    /// load-bearing rather than merely tidy: a dependency has already been
+    /// through its own full readiness gate by the time the declaring
+    /// container's setup commands run, so the target is guaranteed to exist
+    /// and be running. A sibling has no ordering edge to this container at
+    /// all, and a *dependent* structurally cannot have started yet — either
+    /// would be a race. Validated in `validate_setup_command_targets`,
+    /// after `resolve_extends`, so an inherited `dependencies` list counts.
+    ///
+    /// Deliberately the *container's* own `dependencies` and not a task's:
+    /// a task-level `dependencies` entry does order the target ahead of that
+    /// task's own container, but only for that one task, and a container is
+    /// not owned by one task — the same one used as an ordinary dependency
+    /// elsewhere would have no such ordering. Accepting it would make
+    /// whether a config is sound depend on which task you run. Declaring the
+    /// dependency on the container is how you make it hold everywhere.
+    ///
+    /// A command with this set runs with the **target** container's own
+    /// environment, user and working directory, all three inherited from
+    /// that container by Docker's own `exec` rather than passed explicitly
+    /// (the declaring container's resolved values would be the wrong ones to
+    /// send somewhere else). `working_directory` above still overrides.
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub run_in: Option<String>,
 }
 
 /// Parses Batect's duration string format (itself Go-style): one or more
@@ -2090,7 +2135,7 @@ impl ConfigFormat {
     /// unconditionally from [`load_project_impl`], before expression
     /// resolution — load-bearing for [`reject_image_expressions_in_compat`],
     /// which inspects an `image`'s literal text and must judge what was
-    /// written rather than what an expression resolved to; the other four
+    /// written rather than what an expression resolved to; the other five
     /// checks presence/shape of fields expression resolution never touches,
     /// so the ordering is inert for them but still correct. `Native` has
     /// nothing to reject here: every field below is native's own.
@@ -2099,6 +2144,7 @@ impl ConfigFormat {
             ConfigFormat::Compat => {
                 reject_extends_in_compat(config)?;
                 reject_run_to_completion_in_compat(config)?;
+                reject_setup_command_run_in_compat(config)?;
                 reject_shared_caches_in_compat(config)?;
                 validate_image_sources_in_compat(&config.containers)?;
                 reject_image_expressions_in_compat(config)?;
@@ -3347,6 +3393,10 @@ async fn load_project_impl(
     // Same reasoning, same placement: a container's effective
     // `run_to_completion` isn't known until `extends` has resolved it.
     reject_run_to_completion_on_main_container(&config)?;
+    // Same reasoning again: a `run_in` target has to be checked against the
+    // declaring container's *effective* `dependencies`, which `extends` may
+    // have supplied.
+    validate_setup_command_targets(&config)?;
     Ok(LoadedProject {
         config,
         project_directory,
@@ -3460,6 +3510,117 @@ fn reject_run_to_completion_in_compat(config: &Config) -> Result<()> {
             "The container '{name}' uses 'run_to_completion', which is a ratect-native \
              field not supported in Batect-compatible configuration."
         );
+    }
+    Ok(())
+}
+
+/// Rejects a `setup_commands` entry using `run_in`, which names another
+/// container to exec into — `ratect`-native only, same reasoning as
+/// [`reject_run_to_completion_in_compat`]: Batect has no equivalent
+/// ([batect#286](https://github.com/batect/batect/issues/286) is still
+/// unbuilt), so a `batect.yml` using it is rejected rather than silently
+/// running the command in the declaring container instead, which would look
+/// like it worked.
+fn reject_setup_command_run_in_compat(config: &Config) -> Result<()> {
+    let mut offenders: Vec<&str> = config
+        .containers
+        .iter()
+        .filter(|(_, container)| {
+            container
+                .setup_commands
+                .iter()
+                .flatten()
+                .any(|setup_command| setup_command.run_in.is_some())
+        })
+        .map(|(name, _)| name.as_str())
+        .collect();
+    offenders.sort_unstable();
+    if let Some(name) = offenders.first() {
+        anyhow::bail!(
+            "The container '{name}' has a setup command using 'run_in', which is a \
+             ratect-native field not supported in Batect-compatible configuration."
+        );
+    }
+    Ok(())
+}
+
+/// Rejects a `setup_commands` entry whose `run_in` names anything other than
+/// the declaring container itself or one of its own `dependencies`.
+///
+/// That set is exactly the set of containers Ratect can guarantee are
+/// already running when the declaring container's setup-command gate runs,
+/// *whichever task is running it*: `engine.rs`'s `ensure_container_ready`
+/// resolves every dependency to *ready* before it starts the container that
+/// declares them, so a dependency is running and past its own gate by then.
+/// A sibling has no ordering edge to this container at all, and a dependent
+/// structurally cannot have started yet — naming either would be a race with
+/// no fix, so it is refused here rather than half-supported.
+///
+/// A task-level `dependencies` entry is refused too, and that one is a
+/// judgement rather than a necessity: it *does* order the target ahead of
+/// that task's own container (`run_task_internal` unions it into the graph's
+/// root adjacency, which is why `engine.rs` could resolve it), but only for
+/// that task. Validation here is per-container and has no task in hand — and
+/// a container is not owned by one task, so the same container used as an
+/// ordinary dependency by another would silently lose the ordering. Refusing
+/// it keeps "is this configuration sound?" a question about the
+/// configuration rather than about which task you happen to run.
+///
+/// A `run_to_completion` dependency (ratect#97) is refused for the opposite
+/// reason: it has *already exited* by the time it counts as ready, so there
+/// is no live process for `docker exec` to target. Only checked when the
+/// named target actually exists as a container — a `dependencies` entry
+/// naming nothing is already caught by `build_dependency_graph` when a task
+/// that uses it runs, and tightening that into a load-time error here would
+/// reject configurations that work today.
+///
+/// Runs *after* [`resolve_extends`], for the same reason
+/// [`reject_run_to_completion_on_main_container`] does: a container's
+/// effective `dependencies` (and its target's effective
+/// `run_to_completion`) aren't known until inheritance has resolved them.
+fn validate_setup_command_targets(config: &Config) -> Result<()> {
+    let mut names: Vec<&String> = config.containers.keys().collect();
+    names.sort_unstable();
+    for name in names {
+        let container = &config.containers[name];
+        for setup_command in container.setup_commands.iter().flatten() {
+            let Some(target) = setup_command.run_in.as_deref() else {
+                continue;
+            };
+            if target == name {
+                continue;
+            }
+            let is_dependency = container
+                .dependencies
+                .iter()
+                .flatten()
+                .any(|dependency| dependency == target);
+            if !is_dependency {
+                anyhow::bail!(
+                    "The setup command '{}' on container '{name}' has 'run_in' set to \
+                     '{target}', which is not one of that container's own dependencies. A \
+                     setup command can only run in the container that declares it or in one \
+                     of that container's dependencies — add '{target}' to the 'dependencies' \
+                     of '{name}' to order it ahead of this command. Ordering it from a \
+                     task's own 'dependencies' is not enough: that holds for one task, and \
+                     this container may be used by others.",
+                    setup_command.command
+                );
+            }
+            if config
+                .containers
+                .get(target)
+                .is_some_and(|target_config| target_config.run_to_completion.unwrap_or(false))
+            {
+                anyhow::bail!(
+                    "The setup command '{}' on container '{name}' has 'run_in' set to \
+                     '{target}', which is a run-to-completion dependency. It has already \
+                     exited by the time it is considered ready, so there is nothing left to \
+                     run a command in.",
+                    setup_command.command
+                );
+            }
+        }
     }
     Ok(())
 }

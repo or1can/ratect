@@ -135,6 +135,9 @@ enum Stage {
         command: String,
         index: usize,
         total: usize,
+        /// The container it runs inside, when that isn't the one whose row
+        /// this is — see [`TaskEvent::RunningSetupCommand`]'s own `run_in`.
+        run_in: Option<String>,
     },
     /// A dependency's terminal state: healthy, setup commands done.
     Ready,
@@ -190,7 +193,15 @@ impl ContainerLine {
                 command,
                 index,
                 total,
-            } => format!("running setup command {command} ({index} of {total})..."),
+                run_in,
+            } => {
+                // This row already names the declaring container, so only
+                // a command running somewhere else names anything more.
+                let elsewhere = run_in
+                    .as_ref()
+                    .map_or(String::new(), |run_in| format!(" in {run_in}"));
+                format!("running setup command {command} ({index} of {total}){elsewhere}...")
+            }
             Stage::Ready => "ready".to_string(),
             Stage::RunningCommand(Some(command)) => format!("running {command}"),
             Stage::RunningCommand(None) => "running".to_string(),
@@ -699,6 +710,7 @@ impl EventSink for FancyEventLogger {
                 command,
                 index,
                 total,
+                run_in,
             } => {
                 if !state.keep_updating_startup {
                     return;
@@ -708,6 +720,7 @@ impl EventSink for FancyEventLogger {
                         command,
                         index,
                         total,
+                        run_in,
                     };
                 }
                 self.repaint_startup(&mut state);

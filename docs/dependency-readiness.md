@@ -55,6 +55,16 @@ that depends on it (another dependency, or the task's own container) starts:
    postgres -c "ANALYZE visits;" (1 of 1) in db...` is this gate, and `Starting
    app...` doesn't appear until `db has completed all setup commands.`
 
+A `ratect.toml` setup command can run *somewhere else*:
+[`run_in`](ratect-config-reference.md#run_in-setup-commands-in-another-container)
+(`ratect`-native only) names one of the declaring container's own dependencies
+to exec into instead, for the case where the tooling a setup step needs lives in
+a different image — seeding a database from a client container, say. When it
+runs is unchanged: it is still gate 2 of the container that declares it, so
+nothing depending on that container starts until it has succeeded. The
+restriction to that container's own dependencies is what makes it safe, and is
+explained in that field's own section.
+
 Whichever gate fails, the task fails, and already-started containers are still
 cleaned up as usual.
 

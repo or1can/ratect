@@ -80,6 +80,7 @@ fn readiness_milestones_are_reported_for_the_tasks_own_container_too() {
         command: "./init.sh".into(),
         index: 1,
         total: 1,
+        run_in: None,
     });
     logger.post(TaskEvent::SetupCommandsCompleted {
         container: "app".into(),
@@ -90,6 +91,36 @@ fn readiness_milestones_are_reported_for_the_tasks_own_container_too() {
              app  | Container became healthy.\n\
              app  | Running setup command ./init.sh (1 of 1)...\n\
              app  | Container has completed all setup commands.\n"
+    );
+}
+
+/// A `run_in` setup command (ratect#111): the prefix already names the
+/// container whose gate this is, so only the container it actually runs in
+/// is added — and only because it differs.
+#[test]
+fn a_run_in_setup_command_names_the_container_it_runs_in() {
+    let (logger, buffer) = logger();
+    start_task(
+        &logger,
+        vec![
+            TaskContainerInfo {
+                is_task_container: true,
+                ..info("app", Some("alpine:3"), None)
+            },
+            info("db", Some("postgres:16"), None),
+        ],
+    );
+    logger.post(TaskEvent::RunningSetupCommand {
+        container: "db".into(),
+        command: "./seed.sh".into(),
+        index: 1,
+        total: 1,
+        run_in: Some("db-seed-client".into()),
+    });
+    assert_eq!(
+        buffer.contents(),
+        "test | Running test...\n\
+             db   | Running setup command ./seed.sh (1 of 1) in db-seed-client...\n"
     );
 }
 
