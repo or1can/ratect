@@ -103,11 +103,11 @@ as the site groups them:
 
 **New to Ratect**
 
+- [How Ratect Compares to Other Tools](docs/comparison.md)
 - [Installation](docs/installation.md)
 - [Getting Started](docs/getting-started.md)
 - [Worked Examples](docs/worked-examples.md)
 - [Using Ratect With Language Ecosystems](docs/using-ratect-with.md)
-- [How Ratect Compares to Other Tools](docs/comparison.md)
 
 **Coming from Batect**
 

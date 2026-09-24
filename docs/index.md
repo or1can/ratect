@@ -92,6 +92,10 @@ when you're ready to move.
   Batect](differences-from-batect.md) for what to expect.
 - Weighing Ratect against Docker Compose, Make, Task, Earthly, Dagger or
   `just`? See [How Ratect Compares to Other Tools](comparison.md).
+- Already running tasks and want to know what a run actually does, or why a
+  dependency counts as ready? [Task Lifecycle](task-lifecycle.md) and
+  [Dependency Readiness](dependency-readiness.md), then the [FAQ](faq.md)
+  and [Includes](includes.md) as the questions come up.
 - Looking for a specific flag or config field? Jump to a reference:
   [`ratect` CLI](ratect-cli.md) · [`ratect.toml`](ratect-config-reference.md) ·
   [`ratect-compat` CLI](ratect-compat-cli.md) · [`batect.yml`](ratect-compat-config-reference.md).

@@ -156,8 +156,9 @@ not restated here:
    to go next, and the section's last page hands to the next section.
    Purpose: mdBook's previous/next buttons make `docs/SUMMARY.md`'s order a
    reading order, so a page without a hand-off strands the reader at a
-   button. Model: `docs/getting-started.md`'s "Next steps" section; no section's
-   last page hands off yet, so the second clause has no model.
+   button. Model: `docs/getting-started.md`'s "Next steps" section for the
+   first clause; for the second, `docs/using-ratect-with.md`'s, which ends
+   New to Ratect by handing to Using Ratect.
 
 ## Around `docs/`
 

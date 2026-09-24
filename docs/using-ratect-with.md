@@ -139,3 +139,14 @@ Gradle's or Node's.
 Ratect has no example project for either ecosystem, so there's nothing
 real to ground a section in here without inventing untested config; a real
 worked example for either is its own, larger undertaking than this page.
+
+## Next steps
+
+From here, [Task Lifecycle](task-lifecycle.md) is the step-by-step account of
+what `ratect run` actually does — task ordering, per-task setup and cleanup —
+and [Dependency Readiness](dependency-readiness.md) is when a dependency counts
+as ready and how several dependencies' waits combine; the [FAQ](faq.md)
+collects the questions that come up first. When a second project wants the
+same containers and tasks, [Includes](includes.md) covers pulling in a shared
+file or a Git bundle, and [Reusable Pipeline Building
+Blocks](reusable-building-blocks.md) why you'd want to.

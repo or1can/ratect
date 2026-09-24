@@ -128,3 +128,10 @@ would re-spell directly into `ratect.toml` with no behavior change (run
 [`ratect config convert`](ratect-cli.md#config) to generate one), see
 [`extends`/list-entry shape](ratect-config-reference.md#one-shape-per-list-entry)
 for the syntax differences you'd see in the result.
+
+## Next steps
+
+Every example above declares a `cache` volume or two. [Using Ratect With
+Language Ecosystems](using-ratect-with.md) says which directories each
+toolchain needs cached and why, plus the couple of correctness gotchas per
+ecosystem that aren't a caching question at all.

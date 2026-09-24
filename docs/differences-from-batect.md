@@ -150,3 +150,12 @@ tables above:
   break) the same way it already does on `\n`, so a real progress bar
   prints one interleaved line per redraw tick instead of staying silent —
   spammier, but never silent-then-dumped.
+
+## Next steps
+
+The behaviour both binaries share is documented in its own right rather
+than against Batect: [Task Lifecycle](task-lifecycle.md)
+for what a run does step by step, [Dependency
+Readiness](dependency-readiness.md) for when a dependency counts as ready,
+[Includes](includes.md) for how included files combine and what a Git bundle
+may do, and the [FAQ](faq.md).

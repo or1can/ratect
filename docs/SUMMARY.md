@@ -4,11 +4,11 @@
 
 # New to Ratect
 
+- [How Ratect Compares to Other Tools](comparison.md)
 - [Installation](installation.md)
 - [Getting Started](getting-started.md)
 - [Worked Examples](worked-examples.md)
 - [Using Ratect With Language Ecosystems](using-ratect-with.md)
-- [How Ratect Compares to Other Tools](comparison.md)
 
 # Coming from Batect
 
