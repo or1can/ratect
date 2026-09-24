@@ -81,7 +81,7 @@ use std::path::{Path, PathBuf};
 /// boolean toggle for this either — disabling verification means
 /// implementing its own `ServerCertVerifier` trait from scratch, a
 /// deliberate hurdle against careless misuse, not a config flag. See
-/// [CLI reference](../../../docs/ratect-compat-cli.md#tls-with-a-private-certificate-authority)
+/// [Connecting to Docker](../../../docs/connecting-to-docker.md#tls-with-a-private-certificate-authority)
 /// for the supported (verified) alternative. Re-exported from `docker.rs`
 /// (`pub use`) so this module's existence is an implementation detail, not a
 /// path change.

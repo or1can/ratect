@@ -90,8 +90,8 @@ The captured-output rules (settled on #158; the tooling landed in #161):
    `{{#include}}`d step by step by anchor, so its transcripts are captures
    and the `worked-examples` job proves the tutorial still runs.
 
-Captured so far (#161, then #166's sweep): `simple`/`quiet`/`all` on
-`docs/ratect-compat-cli.md` (`fancy` is the recording, per rule 2; each
+Captured so far (#161, then #166's sweep): `simple`/`quiet`/`all` on `docs/output-styles.md`
+(`fancy` is the recording, per rule 2; each
 style is one subsection — clarifying prose beside its capture, not a
 description of every style followed by a gallery of them), Getting Started's first run, `docs/ratect-cli.md`'s
 `caches`/`includes`/`resources`/`doctor` blocks, and

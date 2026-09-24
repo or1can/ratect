@@ -57,17 +57,22 @@ listed under.
 
 ### Docker connection
 
+Which daemon these reach, their `DOCKER_*` environment-variable defaults, and
+TLS with a private certificate authority are on [Connecting to
+Docker](connecting-to-docker.md), shared with `ratect`. Every invocation
+accepts them; they're used only when it actually connects.
+
 | Flag | Short | Default | Description |
 |---|---|---|---|
-| `--docker-host <HOST>` | — | — | Docker host to connect to, e.g. `unix:///var/run/docker.sock` or `tcp://1.2.3.4:5678`. Defaults to the `DOCKER_HOST` environment variable, then Docker's own platform default (a Unix socket or Windows named pipe). Cannot be combined with `--docker-context`. |
-| `--docker-context <NAME>` | — | — | Docker CLI context to connect through — read from the Docker CLI's own context store (`~/.docker/contexts/`, or `--docker-config`'s directory). Defaults to the `DOCKER_CONTEXT` environment variable, then the Docker CLI's own active context (`~/.docker/config.json`'s `currentContext`). Cannot be combined with `--docker-host`. Errors clearly if the named context doesn't exist in the store. |
-| `--docker-config <PATH>` | — | — | Directory containing the Docker CLI's own configuration files (context store, `config.json`). Defaults to the `DOCKER_CONFIG` environment variable, then `~/.docker`. |
-| `--docker-tls` | — | — | Use TLS when connecting to the Docker host. Behaves identically to `--docker-tls-verify` — the daemon's certificate is always fully verified; there is no way to skip verification. Cannot be combined with `--docker-context`. |
-| `--docker-tls-verify` | — | — | Use TLS when connecting to the Docker host, verifying its certificate. Defaults to the `DOCKER_TLS_VERIFY` environment variable. Cannot be combined with `--docker-context`. |
-| `--docker-cert-path <PATH>` | — | — | Directory containing `ca.pem`/`cert.pem`/`key.pem` to authenticate to the Docker host and verify it, unless overridden individually by `--docker-tls-ca-cert`/`-cert`/`-key`. Defaults to the `DOCKER_CERT_PATH` environment variable, then `~/.docker`. Cannot be combined with `--docker-context`. |
-| `--docker-tls-ca-cert <PATH>` | — | — | Path to the TLS CA certificate file used to verify the Docker host's own certificate. Defaults to `ca.pem` in `--docker-cert-path`'s directory. Cannot be combined with `--docker-context`. |
-| `--docker-tls-cert <PATH>` | — | — | Path to the TLS certificate file used to authenticate to the Docker host. Defaults to `cert.pem` in `--docker-cert-path`'s directory. Cannot be combined with `--docker-context`. |
-| `--docker-tls-key <PATH>` | — | — | Path to the TLS key file used to authenticate to the Docker host. Defaults to `key.pem` in `--docker-cert-path`'s directory. Cannot be combined with `--docker-context`. |
+| `--docker-host <HOST>` | — | `DOCKER_HOST` | Docker host to connect to — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-context <NAME>` | — | `DOCKER_CONTEXT`, then the active context | Docker CLI context to connect through — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-config <PATH>` | — | `DOCKER_CONFIG`, then `~/.docker` | Directory containing the Docker CLI's own configuration — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-tls` | — | — | Use TLS, identically to `--docker-tls-verify` — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-tls-verify` | — | `DOCKER_TLS_VERIFY` | Use TLS, verifying the daemon's certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-cert-path <PATH>` | — | `DOCKER_CERT_PATH`, then `~/.docker` | Directory containing `ca.pem`/`cert.pem`/`key.pem` — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-tls-ca-cert <PATH>` | — | `ca.pem` in `--docker-cert-path` | The TLS CA certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-tls-cert <PATH>` | — | `cert.pem` in `--docker-cert-path` | The TLS client certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-tls-key <PATH>` | — | `key.pem` in `--docker-cert-path` | The TLS client key — see [Connecting to Docker](connecting-to-docker.md#options). |
 
 ### Cache management
 
@@ -80,8 +85,8 @@ listed under.
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
-| `--output <STYLE>` | `-o` | auto | Forces a particular output style for Ratect's own progress reporting: `fancy` (a live-updating status block, one line per container), `simple` (plain, append-only milestone lines), `quiet` (error messages only, and a machine-readable `--list-tasks` format), or `all` (line-by-line output from *every* container, prefixed with its name — the only style that changes what the task command's own output looks like; the others never touch it) — see [Output styles](#output-styles). Unset means auto-select: `fancy` on an interactive console, `simple` otherwise. |
-| `--no-color` | — | — | Disables colored output from Ratect itself (task command output is never affected). Colors are already skipped automatically when stdout isn't a terminal, so this only matters on an interactive console — unless [`CLICOLOR_FORCE`](#environment-variables) is also set, which forces them past that check regardless. Also makes `simple` the auto-selected output style. The [`NO_COLOR`](#environment-variables) environment variable has exactly the same effect, if set, and always wins over `CLICOLOR_FORCE`. |
+| `--output <STYLE>` | `-o` | auto | `fancy`, `simple`, `quiet` or `all`; unset auto-selects `fancy` on an interactive console, `simple` otherwise — see [Output Styles](output-styles.md). |
+| `--no-color` | — | — | No color in Ratect's own output (a task's own output is never affected), and `simple` becomes the auto-selected style — see [Colour](output-styles.md#colour) for how it combines with `NO_COLOR`/`CLICOLOR_FORCE`. |
 | `--log-file <PATH>` | — | — | Writes Ratect's own internal logs to this file, in addition to stderr (both still governed by `RUST_LOG` — see [Environment variables](#environment-variables)). Plain text, no ANSI color codes, regardless of stderr's own coloring. |
 
 ### Recognized, no effect
@@ -101,166 +106,16 @@ message at all.
 
 ## Output styles
 
-`--output`/`-o` controls how Ratect reports its own progress on stdout — never what
-the task's command itself prints, which always streams through unmodified. The
-styles are Batect's own four, all implemented, and each is shown below from the
-*same* real run — `ratect run journey-test` against
-[`examples/full-stack`](https://github.com/or1can/ratect/tree/main/examples/full-stack)
-— so you compare styles rather than projects. That's the `ratect` binary
-against a native `ratect.toml`, not `ratect-compat` (`examples/full-stack` has
-no `batect.yml` counterpart), but the rendering is the exact same code either
-way — see
-[`ui.rs`](https://github.com/or1can/ratect/blob/main/ratect-core/src/ui.rs).
-
-When `--output` isn't given, Ratect auto-selects: `fancy` on an interactive
-console (stdout a real terminal, `TERM` set and not `dumb`, terminal size
-queryable, no `--no-color`); `simple` otherwise. `quiet` and `all` are never
-auto-selected.
-
-### `fancy`
-
-The same real recording as [the homepage](index.md), unedited — static text
-can't convey an in-place repaint:
-
-<div id="demo-player-cli"></div>
-<script>
-window.addEventListener('DOMContentLoaded', function () {
-  AsciinemaPlayer.create('demo.cast', document.getElementById('demo-player-cli'), {
-    autoPlay: false,
-    cols: 80,
-    rows: 24,
-  });
-});
-</script>
-
-What the recording can't tell you: there is no spinner — the animation is
-purely rewriting changed lines, exactly like Batect — and lines are clipped to
-the terminal's current width. Because it repaints, it requires an interactive
-console: an explicit `-o fancy` without one fails up front with a clear error
-(Batect instead accepts it and crashes on the first repaint). Works with
-[`--no-color`](#options) — the repaint stays; bold/color go — a combination
-Batect rejects.
-
-### `simple`
-
-`ratect run journey-test -o simple`, captured on a terminal in
-`examples/full-stack`:
-
-```ansi
-{{#include captures/output-styles-simple.ansi}}
-```
-
-Append-only, with no live-updating progress detail at all, so it is safe for
-CI logs and redirected output. The health/setup-command milestones are shown
-for *dependency* containers only: the task's own container's readiness runs
-concurrently with its command (see [task
-lifecycle](task-lifecycle.md#known-limitations)), so
-printing them would drop a line into the middle of that command's own output
-— [`all`](#all) shows them. A readiness *failure* is still reported, on stderr,
-in every style.
-
-### `quiet`
-
-`ratect run journey-test -o quiet`, captured the same way:
-
-```ansi
-{{#include captures/output-styles-quiet.ansi}}
-```
-
-Stdout is exactly the containers' own output, so it's safe to pipe; error
-reporting stays on stderr, unchanged. Nothing from `app`/`db`/`cache` — a
-dependency's own stdout is never shown outside `all`, whatever the style.
-`quiet` also switches `--list-tasks` to a machine-readable format: one task
-per line, sorted by name, as `name` alone or `name<TAB>description` — no
-header, no [grouping](ratect-compat-config-reference.md#list-tasks-output).
-
-### `all`
-
-`ratect run journey-test -o all`, captured the same way — long, because every
-line `db`, `cache` and `app` wrote during the run is here too:
-
-```ansi
-{{#include captures/output-styles-all.ansi}}
-```
-
-The only style that shows *dependency* containers' stdout/stderr,
-setup-command output, and full image-build output (`Image build | ...`) —
-everything the other styles discard. In exchange, no container is interactive
-in this mode: the task container gets no TTY and no stdin, and every container
-gets `TERM=dumb` (matching Batect — a full-screen program can't render into
-line-prefixed output). That is why, next to `simple`'s capture, npm draws no
-spinner here.
-
-Nothing in `examples/` builds from a `Dockerfile` (every container uses a
-prebuilt `image`), so `Image build | ...` output has no real capture to
-point at here.
+The four styles (`fancy`, `simple`, `quiet`, `all`), their captures and the
+auto-selection rule are on [Output Styles](output-styles.md), shared with
+`ratect` — the rendering is the same code in both binaries.
 
 ## TLS with a private certificate authority
 
-`--docker-tls`/`--docker-tls-verify` always fully verify the Docker daemon's
-certificate — there is no flag or environment variable that skips verification, unlike
-Batect's own bare `--docker-tls` (which sets Go's `tls.Config.InsecureSkipVerify`,
-disabling chain-of-trust, expiry, *and* hostname checks all at once, not just the
-hostname check). This isn't just inherited from a missing feature: `rustls`, the
-library Ratect's TLS support is built on, takes the same position deliberately —
-there's no boolean toggle for skipping verification in `rustls` either, only a
-`dangerous()` accessor that requires implementing the `ServerCertVerifier` trait from
-scratch to bypass it. Ratect doesn't reach for that. If you reach for `--docker-tls`
-(skip-verify) because your daemon's certificate is self-signed —
-including for local development or CI — the fix isn't to skip verification, it's to
-make the certificate verifiable: run your own certificate authority, and trust *that*,
-rather than trusting nothing.
-
-The daemon side of this (configuring `dockerd` to require TLS, generating its
-server certificate) is standard Docker documentation, not Ratect-specific — see
-[Protect the Docker daemon socket](https://docs.docker.com/engine/security/protect-access/).
-What follows is the client side: a self-contained, worked example of generating a
-private root CA, signing a server certificate for the daemon with it, and pointing
-Ratect at the result.
-
-1. **Create a root CA.** This is the one certificate you'll trust from now on — keep
-   `ca-key.pem` private; it's the only thing standing between "verified" and "not".
-
-   ```bash
-   openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
-     -keyout ca-key.pem -out ca.pem -subj "/CN=my-docker-ca"
-   ```
-
-2. **Generate and sign the daemon's own certificate**, naming every hostname/IP
-   clients will actually connect through as a Subject Alternative Name (SAN) —
-   verification checks this, not the certificate's `CN`:
-
-   ```bash
-   openssl req -newkey rsa:4096 -sha256 -nodes \
-     -keyout server-key.pem -out server-req.pem -subj "/CN=docker-daemon"
-   openssl x509 -req -in server-req.pem -CA ca.pem -CAkey ca-key.pem -CAcreateserial \
-     -out server-cert.pem -days 3650 -sha256 \
-     -extfile <(printf "subjectAltName=DNS:docker-daemon.example.com,IP:203.0.113.10")
-   ```
-
-3. **Configure `dockerd`** to require TLS with this certificate (`/etc/docker/daemon.json`
-   or the equivalent `dockerd` flags — see the Docker documentation linked above),
-   using `ca.pem`/`server-cert.pem`/`server-key.pem` from steps 1–2.
-
-4. **Point Ratect at the CA** (client certificate/key are only needed if the daemon
-   itself also requires client auth — generate a second cert signed by the same CA
-   for that, following step 2's pattern):
-
-   ```bash
-   ratect-compat --docker-host tcp://docker-daemon.example.com:2376 \
-     --docker-tls-verify \
-     --docker-tls-ca-cert ./ca.pem \
-     test
-   ```
-
-   Or set `--docker-cert-path` to a directory containing `ca.pem` (and
-   `cert.pem`/`key.pem`, if the daemon requires client auth) instead of naming each
-   file individually — see [Options](#options).
-
-If verification fails, the error names the problem (expired, wrong host, untrusted
-issuer) rather than silently connecting anyway — that's the entire point of not
-supporting skip-verify. Regenerate whichever certificate is actually at fault, rather
-than reaching for a flag Ratect doesn't have.
+Why Ratect never skips certificate verification, and the worked example of
+running your own CA instead, are on [Connecting to
+Docker](connecting-to-docker.md#tls-with-a-private-certificate-authority),
+shared with `ratect`.
 
 ## Positional arguments
 
@@ -331,7 +186,7 @@ doesn't distinguish "nothing to do" from "success":
   [how it works](how-it-works.md#5-logging-vs-output)): a fatal error is the reason the
   process is about to exit non-zero, not an optional diagnostic, so it stays visible
   even under `RUST_LOG=off` or a filter that excludes Ratect's own target — including
-  under [`-o quiet`](#output-styles), whose whole contract is "only error messages".
+  under [`-o quiet`](output-styles.md#quiet), whose whole contract is "only error messages".
 - A misspelled task name (whether given directly on the command line, or as a
   [`prerequisites`](ratect-compat-config-reference.md#task) entry) gets a `Did you mean 'x'?`
   suggestion appended to the error, for every existing task name within a Levenshtein
@@ -366,14 +221,14 @@ doesn't distinguish "nothing to do" from "success":
 | Variable | Effect |
 |---|---|
 | `RUST_LOG` | Controls log verbosity on stderr (`error`, `warn`, `info` [default], `debug`, `trace`) — and, if `--log-file` is given, the same file too. See [how it works](how-it-works.md#5-logging-vs-output). Unlike Batect, Ratect always logs to stderr regardless of `--log-file`; Batect's own default with no `--log-file` is silent. See [Differences from Batect](differences-from-batect.md#cli-flags). |
-| `DOCKER_HOST` | Docker host to connect to — see `--docker-host`. |
-| `DOCKER_CONTEXT` | Docker CLI context to connect through — see `--docker-context`. |
-| `DOCKER_CONFIG` | Directory containing the Docker CLI's own configuration files — see `--docker-config`. |
-| `DOCKER_CERT_PATH` | Directory containing `ca.pem`/`cert.pem`/`key.pem` for TLS — see `--docker-cert-path`. |
-| `DOCKER_TLS_VERIFY` | Enables TLS (fully verified — see [TLS with a private certificate authority](#tls-with-a-private-certificate-authority)) — see `--docker-tls-verify`. |
+| `DOCKER_HOST` | The default for `--docker-host` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |
+| `DOCKER_CONTEXT` | The default for `--docker-context` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |
+| `DOCKER_CONFIG` | The default for `--docker-config` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |
+| `DOCKER_CERT_PATH` | The default for `--docker-cert-path` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |
+| `DOCKER_TLS_VERIFY` | The default for `--docker-tls-verify` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |
 | `DOCKER_BUILDKIT` | Forces the image builder on (`1`/`true`) or off (`0`/`false`) — see `--enable-buildkit` and [config reference](ratect-compat-config-reference.md#image-building). |
-| `NO_COLOR` | If set (to anything — see [no-color.org](https://no-color.org)), has exactly the same effect as `--no-color`: disables colored output and makes `simple` the auto-selected output style. |
-| `CLICOLOR_FORCE` | If set to anything other than `0`, forces colored output even when stdout isn't a terminal (e.g. a CI log viewer that renders ANSI despite the pipe) — but never affects output *style* selection, and never wins over `--no-color`/`NO_COLOR` if either is also set. |
+| `NO_COLOR` | If set, exactly the same effect as `--no-color` — see [Colour](output-styles.md#colour). |
+| `CLICOLOR_FORCE` | Forces colored output even when stdout isn't a terminal, unless `--no-color`/`NO_COLOR` is set — see [Colour](output-styles.md#colour). |
 
 Ratect supports interpolating host environment variables and config variables into
 `environment` values, volume host paths, `build_directory`, `build_args`,

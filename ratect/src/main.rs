@@ -428,8 +428,8 @@ struct RunArgs {
     #[arg(long = "no-cleanup-after-failure")]
     no_cleanup_after_failure: bool,
 
-    /// Maximum number of image pulls/builds to run in parallel. Unset means
-    /// unbounded.
+    /// Maximum number of image pulls/builds, dependency container starts and
+    /// setup commands to run in parallel. Unset means unbounded.
     #[arg(long = "max-parallelism", value_parser = clap::value_parser!(u32).range(1..))]
     max_parallelism: Option<u32>,
 
