@@ -120,6 +120,8 @@ as the site groups them:
 - [Dependency Readiness](docs/dependency-readiness.md)
 - [Includes](docs/includes.md)
 - [Reusable Pipeline Building Blocks](docs/reusable-building-blocks.md)
+- [Output Styles](docs/output-styles.md)
+- [Connecting to Docker](docs/connecting-to-docker.md)
 - [FAQ](docs/faq.md)
 - [How It Works](docs/how-it-works.md)
 

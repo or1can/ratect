@@ -242,7 +242,7 @@ caps it: at most `N` of those specific operations run at a time,
 invocation-wide. The health-check wait itself is deliberately *not* capped (it's
 a polling wait, not real work), so two dependencies can still become healthy at
 the same time even under a low cap — only the pull/build/start/setup-command
-steps queue up behind it. See [CLI reference](ratect-compat-cli.md#options) and
+steps queue up behind it. See [CLI reference](ratect-compat-cli.md#task-execution) and
 [differences from Batect](differences-from-batect.md#cli-flags) for exactly
 what's covered.
 

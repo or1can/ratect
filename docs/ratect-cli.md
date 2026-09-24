@@ -20,41 +20,11 @@ project per language.
 
 ## The native config format
 
-`ratect.toml` is [`batect.yml`](ratect-compat-config-reference.md)'s schema in TOML: named
-containers and tasks become tables, and list entries (`volumes`, `ports`,
-`devices`) become inline tables or `[[...]]` blocks. A small example:
-
-```toml
-project_name = "my-app"
-
-[containers.base]
-image = "rust:1.90"
-volumes = [{ local = ".", container = "/code" }]
-
-[containers.build-env]
-extends = "base"
-working_directory = "/code"
-
-[tasks.build]
-run = { container = "build-env", command = "cargo build" }
-```
-
-The native additions over `batect.yml` are **`extends`** — a container inherits
-one named parent's fields (shallow, per-field, single-parent), replacing YAML
-anchors — and **mixed includes**: each `include` is parsed by its extension
-(`.toml` native, `.yml`/`.yaml` as YAML), and a pathless `type: git` bundle
-prefers `ratect-bundle.toml` over `batect-bundle.yml`. The full schema — the TOML
-spelling of every field, the `extends` rules, object shapes, includes, and local
-overrides — is the [`ratect.toml` reference](ratect-config-reference.md).
-
-### Local overrides
-
-A **`ratect.local.toml`** beside your config file is loaded automatically when
-present — no `--config-vars-file` needed — supplying [config
-variable](ratect-compat-config-reference.md#configvariable) *values* (a flat `name = "value"`
-map) for the current developer or machine. Gitignore it. See
-[the reference](ratect-config-reference.md#local-overrides) for precedence and
-the reasoning.
+The format itself — the TOML spelling of every field, `extends`, includes, and
+the auto-loaded `ratect.local.toml` — is the [`ratect.toml`
+reference](ratect-config-reference.md) ([the
+file](ratect-config-reference.md#the-file), [local
+overrides](ratect-config-reference.md#local-overrides)).
 
 ## Commands
 
@@ -127,48 +97,54 @@ and `ratect run build -f custom.yml` are the same invocation.
 | Option | Default | Description |
 | --- | --- | --- |
 | `-f`, `--config-file <PATH>` | `ratect.toml` | The configuration file. Parsed by extension — `.toml` as the native format, `.yml`/`.yaml` as Batect-format YAML — so `-f batect.yml` keeps reading a Batect config while migrating. `caches` uses it only to locate the project *directory* — it never reads the contents. |
-| `-o`, `--output <STYLE>` | auto | `fancy`, `simple`, `all` or `quiet` — see [output styles](ratect-compat-cli.md#output-styles), which behave identically here. |
-| `--no-color` | — | No color in Ratect's own output (never affects a task's own output). The [`NO_COLOR`](https://no-color.org) environment variable has exactly the same effect, if set. The `CLICOLOR_FORCE` environment variable does the opposite — forces color even when stdout isn't a terminal, without affecting which output style is auto-selected — but `NO_COLOR`/`--no-color` always win over it if either is also set. |
+| `-o`, `--output <STYLE>` | auto | `fancy`, `simple`, `quiet` or `all`; unset auto-selects `fancy` on an interactive console, `simple` otherwise — see [Output Styles](output-styles.md). |
+| `--no-color` | — | No color in Ratect's own output (never affects a task's own output), and `simple` becomes the auto-selected style — see [Colour](output-styles.md#colour) for how it combines with `NO_COLOR`/`CLICOLOR_FORCE`. |
 
 Narrower options attach to the commands that actually use them, rather than being
 global: a flag that's accepted and then ignored reads as a promise. So the
 config-variable options below belong to `run` and `tasks list` (the commands that read
-configuration), and the Docker connection options to `run` and `caches` (the ones that
-reach a daemon).
+configuration), and the Docker connection options to `run`, `caches`, `resources` and `doctor` (the
+ones that reach a daemon).
 
 | Option | Applies to | Description |
 | --- | --- | --- |
 | `--config-var <NAME=VALUE>` | `run`, `tasks list` | Sets a [config variable](ratect-compat-config-reference.md#configvariable). Repeatable; wins over `--config-vars-file` and the variable's own default. |
-| `--config-vars-file <PATH>` | `run`, `tasks list` | A file of config variable values (a flat `NAME = VALUE` map), parsed as TOML or YAML by extension. Defaults to an auto-discovered [`ratect.local.toml`](#local-overrides) beside the config file, when present. |
+| `--config-vars-file <PATH>` | `run`, `tasks list` | A file of config variable values (a flat `NAME = VALUE` map), parsed as TOML or YAML by extension. Defaults to an auto-discovered [`ratect.local.toml`](ratect-config-reference.md#local-overrides) beside the config file, when present. |
 
 ## Docker connection options
 
-Taken by `run` and by `caches` (whose default storage is Docker volumes); never by
-`tasks list`, which reaches no daemon at all.
+Taken by `run`, `caches`, `resources` and `doctor` — every command that reaches a
+daemon — and never by `tasks list`, `includes` or `config`, which don't. Which
+daemon they reach, their `DOCKER_*` environment-variable defaults, and TLS with a
+private certificate authority are on [Connecting to
+Docker](connecting-to-docker.md), shared with `ratect-compat`.
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `--docker-host <HOST>` | `DOCKER_HOST`, then Docker's default | The daemon to connect to. Mutually exclusive with `--docker-context`. |
-| `--docker-context <NAME>` | `DOCKER_CONTEXT`, then the CLI's active context | The Docker CLI context to connect through. |
-| `--docker-config <PATH>` | `DOCKER_CONFIG`, then `~/.docker` | Where the Docker CLI's own configuration lives. |
-| `--docker-tls`, `--docker-tls-verify` | — | Connect over TLS, always verifying the daemon's certificate — see [TLS with a private CA](ratect-compat-cli.md#tls-with-a-private-certificate-authority). |
-| `--docker-cert-path <PATH>` | `DOCKER_CERT_PATH`, then `~/.docker` | Directory holding `ca.pem`/`cert.pem`/`key.pem`. |
-| `--docker-tls-ca-cert`, `--docker-tls-cert`, `--docker-tls-key` | from `--docker-cert-path` | Individual TLS file overrides. |
+| `--docker-host <HOST>` | `DOCKER_HOST` | Docker host to connect to — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-context <NAME>` | `DOCKER_CONTEXT`, then the active context | Docker CLI context to connect through — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-config <PATH>` | `DOCKER_CONFIG`, then `~/.docker` | Directory containing the Docker CLI's own configuration — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-tls` | — | Use TLS, identically to `--docker-tls-verify` — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-tls-verify` | `DOCKER_TLS_VERIFY` | Use TLS, verifying the daemon's certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-cert-path <PATH>` | `DOCKER_CERT_PATH`, then `~/.docker` | Directory containing `ca.pem`/`cert.pem`/`key.pem` — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-tls-ca-cert <PATH>` | `ca.pem` in `--docker-cert-path` | The TLS CA certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-tls-cert <PATH>` | `cert.pem` in `--docker-cert-path` | The TLS client certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-tls-key <PATH>` | `key.pem` in `--docker-cert-path` | The TLS client key — see [Connecting to Docker](connecting-to-docker.md#options). |
 
 ## `run` options
 
 | Option | Default | Description |
 | --- | --- | --- |
 | `--enable-buildkit` | — | Force BuildKit for image builds, over the daemon's default and `DOCKER_BUILDKIT`. Only `run` builds images, so only `run` takes it. |
-| `--use-network <NAME>` | — | Reuse an existing Docker network instead of creating one for the task. |
-| `--disable-ports` | — | Never bind container ports on the host. |
-| `--no-proxy-vars` | — | Don't propagate [proxy environment variables](ratect-compat-config-reference.md#proxy-environment-variables). |
-| `--skip-prerequisites` | — | Run the task alone, without its `prerequisites`. |
-| `--override-image <CONTAINER=IMAGE>` | — | Replace a container's image. Repeatable. |
-| `--tag-image <CONTAINER=TAG>` | — | Extra tag for an image a container builds. Repeatable. |
-| `--no-cleanup`, `--no-cleanup-after-success`, `--no-cleanup-after-failure` | — | Leave containers running for investigation. |
-| `--max-parallelism <N>` | unbounded | Cap concurrent image pulls/builds. |
-| `--cache-type <TYPE>` | `volume` | `volume` or `directory` — see [cache volumes](ratect-compat-config-reference.md#cache-volumes). |
+| `--use-network <NAME>` | — | Reuse an existing Docker network for every task in this invocation instead of creating one per task — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution). |
+| `--disable-ports` | — | Never bind container ports on the host — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution). |
+| `--no-proxy-vars` | — | Don't propagate [proxy environment variables](ratect-compat-config-reference.md#proxy-environment-variables) — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution). |
+| `--skip-prerequisites` | — | Run the task alone, without its `prerequisites` — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution). |
+| `--override-image <CONTAINER=IMAGE>` | — | Replace a container's image. Repeatable — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution) for what it replaces and when it errors. |
+| `--tag-image <CONTAINER=TAG>` | — | Extra tag for an image a container builds. Repeatable — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution) for when it errors. |
+| `--no-cleanup`, `--no-cleanup-after-success`, `--no-cleanup-after-failure` | — | Leave the task's containers and network in place, running, after success (the task's own container ran, whatever its exit code), after failure (something failed before it could), or both — see [`ratect-compat`'s description](ratect-compat-cli.md#cleanup-after-a-run). |
+| `--max-parallelism <N>` | unbounded | Cap concurrent image pulls/builds, dependency container starts and setup commands — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution). |
+| `--cache-type <TYPE>` | `volume` | `volume` or `directory` — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution) and [cache volumes](ratect-compat-config-reference.md#cache-volumes). |
 
 ## `caches` options
 

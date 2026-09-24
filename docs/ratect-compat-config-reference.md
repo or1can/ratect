@@ -294,7 +294,7 @@ task's own container, as a dependency, or by more than one task) — but never r
   likewise untouched by Ratect. Matches Batect exactly — its `BuildImageStepRunner`/
   `CleanupStagePlanner` have no cache-control flag or image-removal step either.
 - How much of a build's output you see depends on the
-  [output style](ratect-compat-cli.md#output-styles): `-o all` streams every
+  [output style](output-styles.md): `-o all` streams every
   build log line as `<container> | Image build | ...`; `fancy` shows the latest
   line in the container's status row; `simple` prints only `Building
   <container>...` and `Built <container>.`; `quiet` prints nothing. Independently
@@ -745,7 +745,7 @@ Utilities:
 - shell: Start a shell in the build environment
 ```
 
-With [`--output quiet`](ratect-compat-cli.md#output-styles), both forms are replaced by
+With [`--output quiet`](output-styles.md#quiet), both forms are replaced by
 a machine-readable listing instead — one task per line, sorted by name, as `name`
 alone or `name<TAB>description`, with no header and no grouping — the same project
 again:
@@ -785,7 +785,7 @@ sidecar's; only the task actually named on the command line is ever eligible —
 gets its stdin forwarded and the host's `TERM` environment variable propagated into its
 own environment (see [below](#term-propagation)), independent of whether Ratect's own
 stdin/stdout are real terminals. The one exception is
-[`--output all`](ratect-compat-cli.md#output-styles), whose line-prefixed output can't
+[`--output all`](output-styles.md#all), whose line-prefixed output can't
 host an interactive session: under it no container gets a TTY or stdin, and every
 container gets `TERM=dumb` instead — matching Batect. A real Docker TTY (raw mode locally, live terminal
 resizing) is additionally allocated when *both* Ratect's own stdin *and* stdout are

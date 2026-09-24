@@ -53,8 +53,7 @@ exactly as it would be in a shell. Everything else is Ratect's own framing. A se
 
 On a terminal, `ratect` defaults to its `fancy` output style, which draws the same
 milestones in place as they happen rather than one line at a time; the capture
-above asked for `simple` so it could be shown on a page. See the `-o` option in the
-[CLI reference](ratect-cli.md#global-options) for the other styles.
+above asked for `simple` so it could be shown on a page. See [Output Styles](output-styles.md) for the others.
 
 ## 3. Prerequisites
 

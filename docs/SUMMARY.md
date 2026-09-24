@@ -21,6 +21,8 @@
 - [Dependency Readiness](dependency-readiness.md)
 - [Includes](includes.md)
 - [Reusable Pipeline Building Blocks](reusable-building-blocks.md)
+- [Output Styles](output-styles.md)
+- [Connecting to Docker](connecting-to-docker.md)
 - [FAQ](faq.md)
 - [How It Works](how-it-works.md)
 

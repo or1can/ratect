@@ -203,7 +203,7 @@ Ratect keeps two channels deliberately separate:
   Batect puts them. Internally these progress lines are typed events
   (`ratect-core/src/ui/`): `engine.rs` and `docker.rs` post task-execution
   milestones to an event sink instead of printing, and the selected
-  [output style](ratect-compat-cli.md#output-styles) (`--output`/`-o`) decides what
+  [output style](output-styles.md) (`--output`/`-o`) decides what
   each event renders as — `fancy`'s live per-container status block on an
   interactive terminal, `simple`'s plain append-only lines otherwise, nothing at
   all under `quiet` (whose stdout is then exactly the containers' own output,
@@ -216,10 +216,11 @@ Ratect keeps two channels deliberately separate:
   exit non-zero), which `main.rs` prints directly (`Error: <message>`) rather than
   through `tracing::error!`: it must stay visible even when `RUST_LOG` suppresses
   everything else, since there'd otherwise be no visible explanation at all for the
-  failure under `RUST_LOG=off` combined with [`-o quiet`](ratect-compat-cli.md#output-styles).
+  failure under `RUST_LOG=off` combined with [`-o quiet`](output-styles.md#quiet).
 
-Colors (e.g. the exit code in the task summary line) are only emitted when stdout is
-actually a terminal — piped or redirected output gets plain text.
+Colors (e.g. the exit code in the task summary line) are, by default, only emitted
+when stdout is actually a terminal — see [Colour](output-styles.md#colour) for the
+controls that change that.
 
 ### Filtering `RUST_LOG`
 
