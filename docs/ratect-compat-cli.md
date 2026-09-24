@@ -220,7 +220,7 @@ doesn't distinguish "nothing to do" from "success":
 
 | Variable | Effect |
 |---|---|
-| `RUST_LOG` | Controls log verbosity on stderr (`error`, `warn`, `info` [default], `debug`, `trace`) — and, if `--log-file` is given, the same file too. See [how it works](how-it-works.md#5-logging-vs-output). Unlike Batect, Ratect always logs to stderr regardless of `--log-file`; Batect's own default with no `--log-file` is silent. See [Differences from Batect](differences-from-batect.md#cli-flags). |
+| `RUST_LOG` | Controls log verbosity on stderr (`error`, `warn`, `info` [default], `debug`, `trace`) — and, if `--log-file` is given, the same file too. See [Filtering `RUST_LOG`](troubleshooting.md#filtering-rust_log) for scoping it to Ratect's own targets. Unlike Batect, Ratect always logs to stderr regardless of `--log-file`; Batect's own default with no `--log-file` is silent. See [Differences from Batect](differences-from-batect.md#cli-flags). |
 | `DOCKER_HOST` | The default for `--docker-host` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |
 | `DOCKER_CONTEXT` | The default for `--docker-context` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |
 | `DOCKER_CONFIG` | The default for `--docker-config` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |

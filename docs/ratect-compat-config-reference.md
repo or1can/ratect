@@ -300,7 +300,7 @@ task's own container, as a dependency, or by more than one task) — but never r
   <container>...` and `Built <container>.`; `quiet` prints nothing. Independently
   of the style, each build log line is also emitted at `debug` level (set
   `RUST_LOG=info,ratect_core=debug` for a live transcript without unrelated
-  dependency noise — see [filtering `RUST_LOG`](how-it-works.md#filtering-rust_log)),
+  dependency noise — see [filtering `RUST_LOG`](troubleshooting.md#filtering-rust_log)),
   and if the build fails, the *entire* transcript is included in the error Ratect
   reports — not just Docker's one-line failure summary — so a failing `RUN` step's
   own output is always visible, under every output style, without needing

@@ -184,13 +184,9 @@ The module's own comment carries the gotchas — where each path calls Docker's
 this.
 
 Container creation/start/removal events are logged at `debug` level via `tracing` (see
-below) — not shown by default, but useful with `RUST_LOG=debug`. This includes each
-`setup_commands` exec's raw output, which is whatever the command itself printed — so
-if a setup command's own output could include something sensitive (a failed connection
-string, a verbose HTTP client dumping request headers), that ends up in the debug log
-too. Treat `RUST_LOG=debug` (or narrower `ratect_core=debug`) output with the same care
-you'd give the command's own output before pasting it into a support ticket, chat
-message, or CI log.
+below), as is each `setup_commands` exec's raw output — which is why
+[Troubleshooting](troubleshooting.md#filtering-rust_log) warns about pasting a `debug`
+log anywhere.
 
 ## 5. Logging vs. output
 
@@ -223,32 +219,6 @@ controls that change that.
 
 ### Filtering `RUST_LOG`
 
-`RUST_LOG` isn't just an on/off level switch — `tracing-subscriber`'s
-[`EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)
-syntax lets you scope it to specific modules (`target=level` directives, comma-separated).
-This matters in practice once you turn on `debug` for anything build-related (e.g. to see
-a live [image build](ratect-compat-config-reference.md#image-building) transcript): `bollard` (the Docker
-API client Ratect is built on) also logs at `debug`, and a bare `RUST_LOG=debug` includes
-*all* of its raw API traffic — usually far more noise than signal.
-
-A directive with no target (e.g. `RUST_LOG=debug`) applies everywhere, including
-dependencies like `bollard`. Scoping to a specific target instead — `ratect_core` covers
-everything Ratect itself logs — excludes anything not matched, including `bollard`,
-without needing to name it:
-
-```sh
-# Only ratect_core's own logs, at debug — no bollard noise at all.
-RUST_LOG=ratect_core=debug ratect-compat -f batect.yml build
-
-# Keep the normal `info` default everywhere else, but add ratect_core's debug-level
-# output on top (e.g. build transcripts) — usually the more useful combination.
-RUST_LOG=info,ratect_core=debug ratect-compat -f batect.yml build
-
-# Narrower still: just the Docker/build/container-runtime module, not task
-# orchestration (`ratect_core::engine`) as well.
-RUST_LOG=ratect_core::docker=debug ratect-compat -f batect.yml build
-```
-
-If you do want a blanket `debug` sweep across everything (including `bollard`) but need to
-silence one specific dependency, add it as its own `=off` directive instead:
-`RUST_LOG=debug,bollard=off`.
+Scoping `RUST_LOG` to Ratect's own targets (`ratect_core`, `ratect_core::docker`)
+rather than every dependency's is on
+[Troubleshooting](troubleshooting.md#filtering-rust_log), which owns it.

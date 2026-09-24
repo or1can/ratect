@@ -141,7 +141,9 @@ RUST_LOG=debug ratect run hello
 ```
 
 `debug` also surfaces low-level Docker API activity (container create/start/remove),
-which is useful when troubleshooting.
+which is useful when troubleshooting — see [Filtering
+`RUST_LOG`](troubleshooting.md#filtering-rust_log) for scoping it to Ratect's own
+output.
 
 ## Next steps
 

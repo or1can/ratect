@@ -124,6 +124,7 @@ as the site groups them:
 - [Connecting to Docker](docs/connecting-to-docker.md)
 - [Interactive Mode](docs/interactive-mode.md)
 - [Proxies](docs/proxies.md)
+- [Troubleshooting](docs/troubleshooting.md)
 - [FAQ](docs/faq.md)
 - [How It Works](docs/how-it-works.md)
 
