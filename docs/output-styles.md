@@ -93,10 +93,10 @@ line `db`, `cache` and `app` wrote during the run is here too:
 
 The only style that shows *dependency* containers' stdout/stderr,
 setup-command output, and full image-build output (`Image build | ...`) —
-everything the other styles discard. In exchange, no container is interactive
-in this mode: the task container gets no TTY and no stdin, and every container
-gets `TERM=dumb` (matching Batect — a full-screen program can't render into
-line-prefixed output). That is why, next to `simple`'s capture, npm draws no
+everything the other styles discard. In exchange, no container is
+[interactive](interactive-mode.md) in this mode: the task container gets no
+TTY and no stdin, and every container gets `TERM=dumb` (matching Batect — a
+full-screen program can't render into line-prefixed output). That is why, next to `simple`'s capture, npm draws no
 spinner here.
 
 Nothing in `examples/` builds from a `Dockerfile` (every container uses a

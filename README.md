@@ -122,6 +122,8 @@ as the site groups them:
 - [Reusable Pipeline Building Blocks](docs/reusable-building-blocks.md)
 - [Output Styles](docs/output-styles.md)
 - [Connecting to Docker](docs/connecting-to-docker.md)
+- [Interactive Mode](docs/interactive-mode.md)
+- [Proxies](docs/proxies.md)
 - [FAQ](docs/faq.md)
 - [How It Works](docs/how-it-works.md)
 

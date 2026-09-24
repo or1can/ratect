@@ -15,7 +15,7 @@
 //! Wraps `bollard` for all Docker daemon interaction
 //! — pulling/building images, running a task's own container, per-task networks,
 //! sidecar/dependency containers, the interactive-mode TTY attach path
-//! ([docs](https://github.com/or1can/ratect/blob/main/docs/ratect-compat-config-reference.md#interactive-mode)), and the user-mapping upload
+//! ([docs](https://github.com/or1can/ratect/blob/main/docs/interactive-mode.md)), and the user-mapping upload
 //! path ([docs](https://github.com/or1can/ratect/blob/main/docs/ratect-compat-config-reference.md#user-mapping)). Exposes a `ContainerRuntime`
 //! trait so the engine can be tested against a fake instead of a live daemon. Gotchas
 //! worth knowing before touching it: `run_container`'s three actual start/attach

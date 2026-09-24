@@ -107,7 +107,9 @@ description = "Run eslint"
 group = "Checks"
 run = { container = "dev", command = "sh -c 'npm ci && npm run lint'" }
 
+# ANCHOR: shell
 [tasks.shell]
 description = "Start a shell in the app's environment"
 group = "Utilities"
 run = { container = "dev", command = "bash" }
+# ANCHOR_END: shell

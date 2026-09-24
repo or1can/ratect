@@ -23,6 +23,8 @@
 - [Reusable Pipeline Building Blocks](reusable-building-blocks.md)
 - [Output Styles](output-styles.md)
 - [Connecting to Docker](connecting-to-docker.md)
+- [Interactive Mode](interactive-mode.md)
+- [Proxies](proxies.md)
 - [FAQ](faq.md)
 - [How It Works](how-it-works.md)
 

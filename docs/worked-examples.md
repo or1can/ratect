@@ -5,7 +5,7 @@ Node.js, Python, and the JVM — each with `build`, `test`, `run`, `lint`, and
 `shell`
 tasks using that ecosystem's own usual tooling and base image. `shell` starts an
 interactive shell in the build environment — no config needed beyond the task
-itself, since [interactive mode](ratect-compat-config-reference.md#interactive-mode) is
+itself, since [interactive mode](interactive-mode.md) is
 automatic. It's the fastest way to poke around when a build environment isn't
 behaving as expected. The config below each intro is included directly from
 the actual project, checked into this repository under

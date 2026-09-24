@@ -138,7 +138,7 @@ Docker](connecting-to-docker.md), shared with `ratect-compat`.
 | `--enable-buildkit` | — | Force BuildKit for image builds, over the daemon's default and `DOCKER_BUILDKIT`. Only `run` builds images, so only `run` takes it. |
 | `--use-network <NAME>` | — | Reuse an existing Docker network for every task in this invocation instead of creating one per task — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution). |
 | `--disable-ports` | — | Never bind container ports on the host — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution). |
-| `--no-proxy-vars` | — | Don't propagate [proxy environment variables](ratect-compat-config-reference.md#proxy-environment-variables) — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution). |
+| `--no-proxy-vars` | — | Don't propagate proxy environment variables to image builds or containers — see [Proxies](proxies.md). |
 | `--skip-prerequisites` | — | Run the task alone, without its `prerequisites` — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution). |
 | `--override-image <CONTAINER=IMAGE>` | — | Replace a container's image. Repeatable — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution) for what it replaces and when it errors. |
 | `--tag-image <CONTAINER=TAG>` | — | Extra tag for an image a container builds. Repeatable — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution) for when it errors. |
