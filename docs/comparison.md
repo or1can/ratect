@@ -187,3 +187,6 @@ local runner (GitLab CI, CircleCI), and Vagrant — reasonable choices when it
 was written. Of those, Docker Compose and Earthly are the two this page also
 covers. To move a `batect.yml` project over, see [Migrating a Batect Project
 to Ratect](migrating-batect-project.md).
+
+Starting fresh rather than from a `batect.yml`? [Installation](installation.md)
+is next.

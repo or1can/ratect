@@ -110,3 +110,9 @@ copying the relevant `[containers...]`/`[tasks...]` tables out of its output
 into a new `.toml` file. Swap that one `include` entry from `.yml` to `.toml`,
 and move on whenever you're ready — there's no deadline, and a project can
 stay a mix of both formats indefinitely.
+
+## Next steps
+
+Wherever you stopped, [Differences from Batect](differences-from-batect.md)
+is what behaves differently from `batect` itself — the exceptions Step 1
+pointed at, in full.

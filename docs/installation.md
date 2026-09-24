@@ -168,3 +168,10 @@ cargo run -p ratect-compat -- --list-tasks
 
 See [`AGENTS.md`](../AGENTS.md) for the full contributor-facing tooling setup (formatting,
 linting, tests, coverage, dependency auditing).
+
+## Next steps
+
+With a binary on your `PATH`, [Getting Started](getting-started.md) walks
+through writing a first `ratect.toml` and running a task from it. If your
+project is in Rust, Go, Node.js, Python or the JVM, the [worked
+example](worked-examples.md) for it is a config you can copy instead.
