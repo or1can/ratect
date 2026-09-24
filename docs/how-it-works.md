@@ -134,8 +134,8 @@ completion after another, even when independent — while **one task's dependenc
 startup is concurrent**, with independent branches of its graph pulling, building,
 starting and health-waiting at the same time, gated only on each container's own
 `dependencies` being ready. Running independent prerequisites concurrently too is
-a possible Rust-specific enhancement beyond Batect — see the
-[roadmap](../ROADMAP.md#rust-enhancements) — and
+a possible Rust-specific enhancement beyond Batect — tracked as
+[ratect#102](https://github.com/or1can/ratect/issues/102) — and
 [Dependency Readiness](dependency-readiness.md#resolution-order) has the detail.
 
 ### Testability

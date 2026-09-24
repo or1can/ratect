@@ -12,10 +12,9 @@ does not repeat them: for what a given field actually does, follow the links int
 [`ratect-compat-config-reference.md`](ratect-compat-config-reference.md). What's covered here is the parts
 that are genuinely different — the TOML spelling, and the native-only rules.
 
-> The native format is `ratect`'s alone. `ratect-compat` reads `batect.yml`
-> (YAML) permanently, for Batect compatibility — see
-> [Two Binaries](../ROADMAP.md#two-binaries-ratect-and-ratect-compat). To migrate
-> an existing `batect.yml`, run [`ratect config convert`](ratect-cli.md#config).
+> The native format is `ratect`'s alone — `ratect-compat` reads `batect.yml`
+> only (see [Two binaries, two formats](index.md#two-binaries-two-formats)). To
+> migrate an existing `batect.yml`, run [`ratect config convert`](ratect-cli.md#config).
 
 ## The file
 
@@ -441,9 +440,7 @@ dependencies = ["migrate"]
   concept, so a container using it is rejected when the file loads rather than
   silently ignored.
 
-**Not a substitute for `prerequisites`.** A `prerequisites` entry (and
-[ROADMAP.md](../ROADMAP.md#future-vision)'s unbuilt "container declares a task
-as its own prerequisite" sugar over it, ported from Batect's own roadmap) runs
+**Not a substitute for `prerequisites`.** A `prerequisites` entry runs
 as a fully separate task execution — own network, own containers, own
 cleanup — strictly sequential relative to whatever named it, whether or not it
 ran concurrently with anything else. That isolation is the point when the two

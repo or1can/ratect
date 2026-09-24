@@ -68,6 +68,22 @@ got cached — see [Dependency Readiness](dependency-readiness.md)
 for the full model behind all of it. Every container is removed afterwards
 regardless of how the task ends.
 
+## Two binaries, two formats
+
+Ratect ships two binaries. **`ratect`** reads its own `ratect.toml` format and is
+the one to install if you're starting fresh — it's the forward-looking CLI, free
+to add things Batect never had. **`ratect-compat`** reads a `batect.yml`
+unchanged, as a drop-in replacement for the (now unmaintained) `batect` binary,
+and stays `batect.yml`-only permanently — pick it if you already have a Batect
+project and want a maintained tool without editing any YAML. Both run the same
+engine and exit with the same codes, are versioned and released independently,
+and can be mixed: `ratect -f batect.yml` reads a Batect config too, a
+`ratect.toml` project can `include` a `batect.yml` fragment as-is, and
+[`ratect config convert`](ratect-cli.md#config) translates a whole `batect.yml`
+when you're ready to move.
+
+## Where to go next
+
 - New here? Start with [Installation](installation.md) and
   [Getting Started](getting-started.md), or jump straight to a [worked
   example](worked-examples.md) for your language.

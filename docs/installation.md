@@ -13,8 +13,8 @@ binaries as GitHub Release assets, for five platforms:
 | `x86_64-apple-darwin` | Intel macOS |
 | `aarch64-apple-darwin` | Apple Silicon macOS |
 
-`ratect-compat` and `ratect` are tagged and released independently (see
-[`ROADMAP.md`](../ROADMAP.md#versioning--releases)), so they're listed as
+`ratect-compat` and `ratect` are tagged and released independently (see [Two
+binaries, two formats](index.md#two-binaries-two-formats)), so they're listed as
 separate entries on the [Releases page](https://github.com/or1can/ratect/releases)
 — tags look like `ratect-compat/vX.Y.Z` and `ratect/vX.Y.Z`. Find the most
 recent tag for the binary you want, then download the archive matching
@@ -120,11 +120,9 @@ without a prebuilt binary.
 ### Build from source
 
 Clone the repository, then build release binaries. The workspace has two binary
-crates (see [Roadmap](../ROADMAP.md#two-binaries-ratect-and-ratect-compat)):
-`ratect`, which reads its own `ratect.toml` format, and `ratect-compat`, the
-drop-in replacement for Batect that reads a `batect.yml` unchanged. [Getting
-Started](getting-started.md) says which to pick; building both costs little
-extra, since they share almost all of their code:
+crates, `ratect` and `ratect-compat` — [Two binaries, two
+formats](index.md#two-binaries-two-formats) says which to pick. Building both
+costs little extra, since they share almost all of their code:
 
 ```bash
 git clone https://github.com/or1can/ratect.git

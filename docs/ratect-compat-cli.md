@@ -10,7 +10,8 @@ every Batect CLI flag is supported, flag-for-flag, unless listed in
 
 This is the **`ratect-compat`** binary, whose interface deliberately matches Batect's.
 The forward-looking `ratect` binary has its own, subcommand-based interface — see the
-[`ratect` CLI reference](ratect-cli.md).
+[`ratect` CLI reference](ratect-cli.md), and [Two binaries, two
+formats](index.md#two-binaries-two-formats) for which to pick.
 
 ## Options
 

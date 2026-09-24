@@ -3,14 +3,15 @@
 This walks through defining and running your first task with Ratect. It assumes you've
 already [installed Ratect](installation.md) and have Docker running.
 
-**Which binary?** Ratect ships two. `ratect` reads its own `ratect.toml` format and
-is the one this page uses — if you're new here, it's the one to install. If you
-already have a `batect.yml`, `ratect-compat` runs it unchanged: see [Migrating a
-Batect Project to Ratect](migrating-batect-project.md) instead, since this page
-assumes you're starting from nothing. Nothing below assumes a brand-new codebase
-either: writing a `ratect.toml` doesn't touch any of your existing code, build
-scripts, or CI — it's one new file describing how to run what you already have
-in a container, alongside whatever else the project does today.
+**Which binary?** This page uses `ratect` and its `ratect.toml` format — the one
+to install if you're new here (see [Two binaries, two
+formats](index.md#two-binaries-two-formats)). If you already have a `batect.yml`,
+see [Migrating a Batect Project to Ratect](migrating-batect-project.md) instead,
+since this page assumes you're starting from nothing. Nothing below assumes a
+brand-new codebase either: writing a `ratect.toml` doesn't touch any of your
+existing code, build scripts, or CI — it's one new file describing how to run
+what you already have in a container, alongside whatever else the project does
+today.
 
 Every file and transcript on this page comes from a real project checked into this
 repository, [`examples/getting-started`](https://github.com/or1can/ratect/tree/main/examples/getting-started)
