@@ -4,7 +4,7 @@ This document outlines the planned journey for Ratect, from achieving parity wit
 
 ## Batect Parity
 
-The primary goal is to support the core features of Batect to ensure a seamless transition for existing users. This work targets the [`ratect-compat` binary](#two-binaries-ratect-and-ratect-compat) specifically — the `ratect` binary is not expected to maintain 1:1 Batect parity.
+The primary goal is to support the core features of Batect to ensure a seamless transition for existing users. This work targets the [`ratect-compat` binary](decisions/0001-two-binaries.md) specifically — the `ratect` binary is not expected to maintain 1:1 Batect parity.
 
 **Feature parity is done.** Every Batect configuration field and CLI flag is either
 supported or a deliberate, documented divergence — see [Differences from
@@ -21,34 +21,6 @@ Batect's 29 — only `windows-container` remains, out of reach until cross-platf
 work starts (see [Rust Enhancements](#rust-enhancements)). Staying green there, not
 the field/flag tables, is what [`ratect-compat`'s 1.0.0](RELEASES.md#ratect-compat)
 actually gates on.
-
-## Two Binaries: `ratect` and `ratect-compat`
-
-A Cargo workspace with a shared core library and two thin binary crates:
-`ratect-compat` (strict Batect compatibility — where all [Batect
-Parity](#batect-parity) work lands) and `ratect` (forward-looking, free to
-diverge). Full rationale, alternatives, and consequences:
-[decisions/0001](decisions/0001-two-binaries.md).
-
-## Versioning & Releases
-
-`ratect-compat` and `ratect` are versioned independently, sharing a release
-process — see [decisions/0001](decisions/0001-two-binaries.md#consequences)
-for why (independent version lines, tag prefixes, the shared `CHANGELOG.md`,
-per-cycle crate bumps), and [AGENTS.md](AGENTS.md)'s Version Lifecycle
-guideline for the actual release-cutting process — the `-dev` cycle, tagging,
-and what pushing a tag triggers.
-
-### `ratect-compat`
-
-Moved to [`RELEASES.md`](RELEASES.md#ratect-compat). This heading stays so that
-links written before the split still resolve.
-
-### `ratect`
-
-Moved to [`RELEASES.md`](RELEASES.md#ratect). This heading stays so that links
-written before the split still resolve.
-
 
 ## Rust Enhancements
 
@@ -119,7 +91,7 @@ Improving the developer experience through better tools and feedback.
   `docs/` (see [`docs/SUMMARY.md`](docs/SUMMARY.md) for the current list) is in
   good enough shape to be worth freezing per release —
   and needs its own answer for `ratect-compat`/`ratect` sitting on [independent
-  version lines](#versioning--releases), which a naive "docs for vX.Y.Z" scheme
+  version lines](decisions/0001-two-binaries.md#consequences), which a naive "docs for vX.Y.Z" scheme
   doesn't map onto cleanly.
 
 ## Future Vision
@@ -175,3 +147,29 @@ for parity, same reasoning as `allow_nested_git_includes` (shipped `ratect`
 - **A language server for the config formats**: substantially answered already by the two committed JSON schemas (`schema/batect-config.schema.json`, `schema/ratect-config.schema.json`), which give autocompletion, hover documentation and invalid-field warnings in any editor with YAML or TOML language support — recorded here so that's understood as the deliberate answer rather than an accident. A real language server would add what a schema structurally cannot: resolving `include`s to validate cross-file references, go-to-definition on a container or prerequisite name, and flagging a dependency cycle. Worth it only on evidence that the schema's ceiling is being hit.
 - **Verifying the images Ratect pulls**: Ratect checks no signature or provenance attestation on any image it pulls — neither one a user declares nor the `curlimages/curl` companion an [`external_health_check`](docs/ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it) generates. That companion is the sharper case, and the reason this is worth writing down: the user did not write that reference and cannot review what it resolves to, so Ratect is pulling on their behalf. It is pinned by digest, which fixes *mutability* — the same config can no longer get a different image later — but digest-pinning answers "is this the same bytes as before?", never "should those bytes be trusted?". Note the asymmetry this leaves: Ratect's own release pipeline attests every binary, SBOM and checksums manifest it publishes ([decisions/0010](decisions/0010-release-binary-distribution.md)) while verifying nothing it consumes. Distinct from the scanning item below, which is about known vulnerabilities in an image rather than whether the image is the one its publisher signed. Open questions: which verification a task runner should do by default versus on request; whether a policy belongs in config at all, or whether this is the container runtime's job (Docker's own content trust, a signed-image admission policy) that Ratect should document rather than reimplement; and what an air-gapped or mirrored-registry project does with either answer.
 - **Built-in security scanning of the images Ratect builds and runs**: report known vulnerabilities in a task's images — as its own verb, and optionally as a gate that fails a task on findings above a threshold. Distinct from CI dependency scanning (Ratect's own `cargo audit`) in that it covers what a *user's* tasks pull and build, which is usually the larger and less-examined surface. The design question is whether Ratect should embed this at all: today it's already achievable by running a scanner as a container, which is what Ratect is for — indeed the real-world bundle that motivated [decisions/0004](decisions/0004-git-include-host-path-trust.md) was doing exactly that, with a Trivy cache under the home directory. So the honest framing is that scanning already *works* via a bundle, and this item is about whether making it first-class (image discovery from the config, a consistent report across output modes, a threshold to fail on) earns its keep over a well-written bundle that any project can already use.
+
+## Retired headings
+
+Nothing below is roadmap. Each heading once held a section that has since
+shipped or moved, and stays only so that links written before then — in the
+append-only `CHANGELOG.md` and `RELEASES.md` — still resolve.
+
+### Two Binaries: `ratect` and `ratect-compat`
+
+Shipped in 0.20.0 — [decisions/0001](decisions/0001-two-binaries.md) for the
+rationale, [Two binaries, two formats](docs/index.md#two-binaries-two-formats)
+for the user-facing summary.
+
+### Versioning & Releases
+
+Settled — [decisions/0001](decisions/0001-two-binaries.md#consequences) for
+the independent version lines and tag prefixes, [AGENTS.md](AGENTS.md)'s
+Version Lifecycle guideline for how a release is cut.
+
+### `ratect-compat`
+
+Moved to [`RELEASES.md`](RELEASES.md#ratect-compat).
+
+### `ratect`
+
+Moved to [`RELEASES.md`](RELEASES.md#ratect).

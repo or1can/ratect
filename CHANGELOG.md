@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Ratect ships [two binaries on independent version lines](ROADMAP.md#versioning--releases),
+Ratect ships [two binaries on independent version lines](decisions/0001-two-binaries.md#consequences),
 `ratect-compat` and `ratect`, sharing one core — so most changes here reach both, and
 one changelog is the honest shape for that. Two conventions follow from it:
 
