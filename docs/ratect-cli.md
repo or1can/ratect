@@ -4,21 +4,19 @@ This documents the **`ratect`** binary — the forward-looking CLI, with its own
 subcommand-based interface. For the compatibility binary, see the
 [`ratect-compat` CLI reference](ratect-compat-cli.md) instead; the two are described
 separately because they are deliberately different interfaces, not two spellings of
-one. If you haven't run a task yet, [Getting Started](getting-started.md) runs a
+one ([Two binaries, two formats](index.md#two-binaries-two-formats) says which to
+pick). If you haven't run a task yet, [Getting Started](getting-started.md) runs a
 first one end to end, and the [worked examples](worked-examples.md) show a real
 project per language.
 
 > **Configuration.** `ratect` reads its own **native TOML configuration**
-> (`ratect.toml` by default) rather than sharing `ratect-compat`'s `batect.yml` —
-> see [decisions/0003](../decisions/0003-ratect-native-config-format.md) for
-> why. Its full
-> schema is the [`ratect.toml` reference](ratect-config-reference.md); it's the
+> (`ratect.toml` by default) — see
+> [decisions/0003](../decisions/0003-ratect-native-config-format.md) for why. Its
+> full schema is the [`ratect.toml` reference](ratect-config-reference.md); it's the
 > same schema [Configuration Reference](ratect-compat-config-reference.md) documents for
 > `batect.yml`, re-spelled in TOML, with `extends` in place of YAML anchors. A
 > `batect.yml` is still readable by naming it with `-f`, so a project can migrate
 > incrementally — [`ratect config convert`](#config) translates one automatically.
-> The native format is `ratect`'s alone — `ratect-compat` stays `batect.yml`-only,
-> permanently.
 
 ## The native config format
 

@@ -190,8 +190,8 @@ colliding.
   own behavior (`TaskExecutionOrderResolver`/`SessionRunner`), not a Ratect
   simplification — Batect doesn't parallelize independent prerequisite tasks either.
   Running independent prerequisites concurrently remains a possible Rust-specific
-  enhancement beyond Batect, tracked under [Rust
-  Enhancements](../ROADMAP.md#rust-enhancements), not something planned.
+  enhancement beyond Batect, tracked as
+  [ratect#102](https://github.com/or1can/ratect/issues/102), not something planned.
 - **Minimal networking.** The network created here exists only to make dependency
   containers reachable by name for the duration of one task (or, with
   `--use-network`, an existing network you reuse instead). It's not the

@@ -16,9 +16,9 @@ the whole directory to run one yourself, or copy the config and adjust the
 commands to your own scripts.
 
 Four of the five are `ratect.toml`; the same containers and tasks work
-identically as `batect.yml` with `ratect-compat` (see [`ratect config
-convert`](ratect-cli.md#config) to translate one to the other) — the JVM
-example below is `batect.yml` itself, for reasons its own section explains.
+identically as `batect.yml` with `ratect-compat` (see [Two binaries, two
+formats](index.md#two-binaries-two-formats)) — the JVM example below is
+`batect.yml` itself, for reasons its own section explains.
 See the
 [configuration reference](ratect-config-reference.md) for what each field
 does, and [Getting Started](getting-started.md) if you haven't run a task

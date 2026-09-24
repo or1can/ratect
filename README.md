@@ -35,20 +35,13 @@ The itemized, per-field and per-flag status — including known divergences — 
 [Differences from Batect](docs/differences-from-batect.md), the direction in the
 [Roadmap](ROADMAP.md), and the release history in [Releases](RELEASES.md).
 
-The workspace is
-[two binaries sharing one core](ROADMAP.md#two-binaries-ratect-and-ratect-compat):
-**`ratect-compat`**, a strict, flag-for-flag and field-for-field drop-in replacement
-for the (now-unmaintained) `batect` binary — where all of the parity work above
-lands — and **`ratect`**, a forward-looking CLI free to diverge from Batect's
-interface. `ratect` has its own subcommand surface (`ratect run <task>`,
-`ratect tasks list`, and verbs `ratect-compat` has no equivalent of — see the
-[`ratect` CLI reference](docs/ratect-cli.md)) and its own configuration format:
-`-f` defaults to `ratect.toml` (see the
-[`ratect.toml` reference](docs/ratect-config-reference.md)), and it still reads a
-`batect.yml` if pointed at one, which `ratect config convert` migrates. Ratect
-deliberately does not ship a binary literally named `batect` — anyone who wants
-their existing `./batect` wrapper script to keep working symlinks or renames
-`ratect-compat` themselves.
+The workspace is two binaries sharing one core — `ratect-compat`, where all of
+the parity work above lands, and `ratect`, with its own interface and its own
+`ratect.toml` format; [Two binaries, two
+formats](docs/index.md#two-binaries-two-formats) says which reads what and which
+to pick. Ratect deliberately does not ship a binary literally named `batect` —
+anyone who wants their existing `./batect` wrapper script to keep working
+symlinks or renames `ratect-compat` themselves.
 
 ## Getting Started
 

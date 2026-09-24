@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Ratect ships [two binaries on independent version lines](ROADMAP.md#versioning--releases),
+Ratect ships [two binaries on independent version lines](decisions/0001-two-binaries.md#consequences),
 `ratect-compat` and `ratect`, sharing one core — so most changes here reach both, and
 one changelog is the honest shape for that. Two conventions follow from it:
 
@@ -48,6 +48,7 @@ history, from when it was the only binary.
 - The Using Ratect concept pages ([Task Lifecycle](docs/task-lifecycle.md), [Dependency Readiness](docs/dependency-readiness.md), [Reusable Pipeline Building Blocks](docs/reusable-building-blocks.md), and the [FAQ](docs/faq.md)) show their examples in `ratect.toml` and their commands as `ratect run <task>`, as [Includes](docs/includes.md) already did.
 - The two `ratect-compat` reference pages are renamed to say which binary they document: [`docs/ratect-compat-cli.md`](docs/ratect-compat-cli.md) (was `cli-reference.md`) and [`docs/ratect-compat-config-reference.md`](docs/ratect-compat-config-reference.md) (was `config-reference.md`). The old URLs on the documentation site redirect, and a browser keeps the section anchor across the redirect.
 - [Task Lifecycle](docs/task-lifecycle.md)'s "Known simplifications relative to Batect" section is now "Known limitations", and the [`ratect-compat` CLI reference](docs/ratect-compat-cli.md)'s "Recognized for Batect compatibility, no effect" is now "Recognized, no effect"; both anchors change to match. The pages outside Coming from Batect no longer open by comparing themselves to a Batect page.
+- The docs homepage gains a [Two binaries, two formats](docs/index.md#two-binaries-two-formats) section — which binary reads which format, and which to pick. The pages that each restated this now link it instead, and no page under `docs/` links `ROADMAP.md` or `RELEASES.md` any more: the two references to parallel prerequisites as a possible enhancement link its issue, ratect#102.
 
 ## [ratect-compat 0.30.0 · ratect 0.9.0] - 2026-09-18
 

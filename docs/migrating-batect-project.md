@@ -6,7 +6,8 @@ into a project that doesn't use Batect at all.
 
 Most task runners assume a clean slate — convert everything, or don't bother.
 Ratect doesn't: `ratect-compat` reads an existing `batect.yml` unchanged, and a
-native `ratect.toml` project can `include` a `batect.yml` fragment as-is. That
+native `ratect.toml` project can `include` a `batect.yml` fragment as-is (see
+[Two binaries, two formats](index.md#two-binaries-two-formats)). That
 makes migration a series of independent, optional steps rather than one
 all-or-nothing conversion — stop at whichever one matches how much of the
 tool you actually want.
