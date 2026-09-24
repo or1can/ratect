@@ -116,9 +116,9 @@ tables above:
   whether its output is a real terminal; Ratect's requires *both* stdin and stdout
   to be real terminals. Live terminal-resize tracking is also Unix-only — synced
   once at session start elsewhere, not tracked further. See [Interactive
-  mode](ratect-compat-config-reference.md#interactive-mode).
-- **Proxy support**: two deliberate differences — see [Proxy environment
-  variables](ratect-compat-config-reference.md#proxy-environment-variables) for the full mechanics.
+  Mode](interactive-mode.md).
+- **Proxy support**: two deliberate differences — see [Proxies](proxies.md)
+  for the full mechanics.
 
   - **A `localhost` proxy is rewritten on Linux too.** Batect rewrites on
     macOS/Windows only; on Linux it propagates the URL verbatim, where `localhost`

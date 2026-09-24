@@ -113,10 +113,9 @@ where that lives and stays current.
    [`image_pull_policy`](ratect-compat-config-reference.md#container)) or building, or
    erroring if neither is set — and is used identically for the task's own
    container and for dependencies. The container then runs with the task's
-   `command`, joined to the task's network, its environment layered host `TERM` →
-   [proxy variables](ratect-compat-config-reference.md#proxy-environment-variables) → the
-   container's `environment` → the task's `run.environment`, each winning over the
-   last. Everything else on the container — ports, hostnames, working directory,
+   `command`, joined to the task's network, its environment layered as
+   [Environment precedence](ratect-compat-config-reference.md#environment-precedence)
+   states. Everything else on the container — ports, hostnames, working directory,
    entrypoint, capabilities, devices, and the rest — is assembled here from the
    config and handed to `docker.rs` as plain values; the [config
    reference](ratect-compat-config-reference.md) is the list of what those fields mean, and which
@@ -159,7 +158,7 @@ unit-tested with a fake implementation instead of a real Docker daemon.
 - **`run_container`**: creates, starts and streams the task's own container until
   it exits. Three start/attach paths sit behind it — fully non-interactive,
   stdin-forwarding, and a real TTY with raw mode and live resize — chosen by
-  whether the task is [interactive](ratect-compat-config-reference.md#interactive-mode)-eligible
+  whether the task is [interactive](interactive-mode.md#which-container-is-eligible)-eligible
   and whether Ratect's own stdin *and* stdout are terminals. It does **not** remove
   the container: the engine's cleanup stage removes everything a task created, its
   own container included, so `--no-cleanup-*` is interpreted in exactly one place.

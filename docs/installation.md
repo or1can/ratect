@@ -111,7 +111,7 @@ without a prebuilt binary.
   any recent Docker install works with no extra configuration. 20.10 (December
   2020) is Ratect's own floor below that negotiation — the oldest release its
   *features* actually require, for the `host-gateway` sentinel behind [proxy
-  support](ratect-compat-config-reference.md#proxy-environment-variables) — and a daemon
+  support](proxies.md#a-proxy-on-localhost) — and a daemon
   older than that is refused with a clear error naming both its version and
   the one required, rather than some later request failing for an unexplained
   reason. Check yours with `docker version --format '{{.Server.APIVersion}}'`

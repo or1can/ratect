@@ -165,7 +165,7 @@ containers:
 | `build_target` | string | no | The build stage to stop at (Docker's own `--target` mechanism), for a multi-stage `FROM ... AS <name>` Dockerfile. Only meaningful alongside `build_directory`. No expression support. |
 | `volumes` | list of strings/objects | no | Host bind mounts (`local`), named cache volumes (`cache`), and in-memory tmpfs mounts (`tmpfs`) — see [Volume path resolution](#volume-path-resolution), [Cache volumes](#cache-volumes), and [Tmpfs mounts](#tmpfs-mounts) below. |
 | `dependencies` | list of strings | no | Names of other containers to start (recursively, if they themselves have dependencies) before this one, reachable by name over a Docker network created for the duration of the task. Each dependency must become *ready* — healthy, with all its `setup_commands` completed — before its dependents start; see [Dependency Readiness](dependency-readiness.md) for the full model, and [Dependency readiness](#dependency-readiness) below for the two fields it rests on. |
-| `environment` | map of string → string | no | Environment variables to set in the container, e.g. `FOO: bar`. Values support [expressions](#expressions) (`$VAR`, `${VAR:-default}`, `<name`). A non-string scalar value (`PORT: 8080`, `DEBUG: true`) is accepted and coerced to its string form, matching Batect. A dependency container only ever gets its own `environment` — see [TaskRun](#taskrun) for how a task's own container's `environment` combines with `run.environment`. |
+| `environment` | map of string → string | no | Environment variables to set in the container, e.g. `FOO: bar`. Values support [expressions](#expressions) (`$VAR`, `${VAR:-default}`, `<name`). A non-string scalar value (`PORT: 8080`, `DEBUG: true`) is accepted and coerced to its string form, matching Batect. For what overrides these, and what they override, see [Environment precedence](#environment-precedence). |
 | `run_as_current_user` | object (`enabled`, `home_directory`) | no | Runs this container as the host's own user/group instead of the image's default (see [User mapping](#user-mapping) below). |
 | `additional_hostnames` | list of strings | no | Extra network aliases this container is reachable by, beyond its own name. No [expression](#expressions) support. |
 | `additional_hosts` | map of string → string | no | Extra `/etc/hosts` entries in this container, `hostname: ip`, Docker's own `--add-host` mechanism. No expression support. |
@@ -694,7 +694,7 @@ tasks:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `environment` | map of string → string | no | Merged with the container's own `environment` (see [Container](#container)): the container's values apply first, and this overrides them on a key collision. Values support the same [expressions](#expressions) as `environment` does. |
+| `environment` | map of string → string | no | Merged with the container's own `environment` — see [Environment precedence](#environment-precedence) for the order. Values support the same [expressions](#expressions) as `environment` does. |
 | `ports` | list of strings/objects | no | *Added* to the container's own `ports`, not an override — see [Port mappings](#port-mappings). |
 | `working_directory` | string | no | Overrides the container's own `working_directory`. No [expression](#expressions) support. |
 
@@ -768,137 +768,39 @@ the three different `$`-syntaxes that resemble each other, see the [FAQ](faq.md#
 |---|---|---|---|
 | `container` | string | yes | Name of a container defined under `containers`. |
 | `command` | string | no | Overrides the container's own `command` for this task's run specifically (see [Container](#container)). Tokenized the same way. If neither this nor the container's own `command` is set, the image's own default `CMD` runs instead. Any `-- ADDITIONAL_ARGS` from the CLI are appended as further literal argv entries — see [CLI reference](ratect-compat-cli.md#using-additional_args-in-a-task-command). |
-| `environment` | map of string → string | no | Environment variables to set for this task's run specifically. Merged with the container's own `environment` (see [Container](#container)): the container's values apply first, and `run.environment` overrides them on a key collision. Values support the same [expressions](#expressions) as `environment` does. |
+| `environment` | map of string → string | no | Environment variables to set for this task's run specifically. Merged with the container's own `environment` — see [Environment precedence](#environment-precedence) below for the order. Values support the same [expressions](#expressions) as `environment` does. |
 | `ports` | list of strings/objects | no | Additional port mappings for this task's run specifically — see [Port mappings](#port-mappings). *Added* to the container's own `ports`, not an override — there's no concept of one replacing an entry from the other. |
 | `working_directory` | string | no | Overrides the container's own `working_directory` for this task's run specifically (see [Container](#container)). No [expression](#expressions) support. |
 | `entrypoint` | string | no | Overrides the container's own `entrypoint` for this task's run specifically (see [Container](#container)). Tokenized the same way. No [expression](#expressions) support. |
 
+### Environment precedence
+
+A container's environment is assembled from up to four layers, each
+overriding the one before it on a key collision:
+
+1. `TERM` — Ratect's own, for the invoked task's own container only; or
+   `dumb`, for every container, under [`--output all`](output-styles.md#all).
+   See [`TERM` propagation](interactive-mode.md#term-propagation).
+2. [Proxy variables](proxies.md), when any are set where Ratect runs.
+3. The container's own `environment`.
+4. The task's `run.environment`, for the task's own container — or its
+   `customise.<container>.environment`, for a dependency (see
+   [TaskContainerCustomisation](#taskcontainercustomisation)).
+
+An image build layers the same way with what applies to a build: proxy
+variables, then the container's own `build_args`.
+
 ## Interactive mode
 
-There's no config field for this — it's automatic, matching Batect's own behavior:
-running a task whose command drops you into a shell or otherwise needs your input
-(`command: sh`, for example) just works, with no `interactive: true` to remember to
-set anywhere.
-
-The invoked task's own container — never a prerequisite's, a dependency's, or a
-sidecar's; only the task actually named on the command line is ever eligible — always
-gets its stdin forwarded and the host's `TERM` environment variable propagated into its
-own environment (see [below](#term-propagation)), independent of whether Ratect's own
-stdin/stdout are real terminals. The one exception is
-[`--output all`](output-styles.md#all), whose line-prefixed output can't
-host an interactive session: under it no container gets a TTY or stdin, and every
-container gets `TERM=dumb` instead — matching Batect. A real Docker TTY (raw mode locally, live terminal
-resizing) is additionally allocated when *both* Ratect's own stdin *and* stdout are
-genuinely connected to a real terminal — piped output, a redirected non-terminal, or
-running in CI fall back to plain (non-TTY) stdin forwarding and streamed output instead,
-but stdin still reaches the container either way. Nothing extra to configure for either
-case.
-
-The container's TTY, when one is allocated, stays in sync with the local terminal's
-size for the whole session (not just once at the start) — a local resize is forwarded
-live via a `SIGWINCH` handler. This tracking is Unix-only; on other platforms the size
-is still synced once, at the start of the session, but not tracked further (interactive
-mode itself works cross-platform either way).
-
-One known, deliberate divergence from Batect remains: Batect's own real-TTY gate checks
-only whether its output is a real terminal; Ratect's requires *both* stdin and stdout to
-be real terminals before allocating one.
-
-### `TERM` propagation
-
-Ratect's own `TERM` environment variable is copied into the invoked task's own
-container's environment automatically, whenever that container is eligible (the
-top-level task, as above) — not gated on a real TTY actually being allocated, matching
-Batect's own unconditional behavior. Never applied to a prerequisite's, a dependency's,
-or a sidecar's container, and never applied to an image build. A container's own
-explicit `environment`, or a task's `run.environment`, both still override it on a key
-collision (see [TaskRun](#taskrun) for how those two combine with each other) — `TERM`
-is the lowest-precedence layer, the same tier [proxy environment
-variables](#proxy-environment-variables) occupy.
+Which container is eligible, what it gets, when a real TTY is allocated, and
+`TERM` propagation are on [Interactive Mode](interactive-mode.md), shared
+with `ratect`.
 
 ## Proxy environment variables
 
-There's no config field for this either — like [interactive mode](#interactive-mode),
-it's automatic, matching Batect's own behavior. Whenever `http_proxy`, `https_proxy`,
-`ftp_proxy`, or `no_proxy` (in either case, e.g. `HTTP_PROXY` too) are set in the
-environment `ratect` itself runs in, they're injected into every container's
-environment and every image build's `build_args` — so a task or a build that needs to
-reach the network through a proxy just works, without repeating proxy settings in
-`environment`/`build_args` by hand.
-
-A few details worth knowing:
-
-- **Precedence**: injected proxy variables are the lowest-precedence layer — a
-  container's own `environment`, and a task's `run.environment`, both override a
-  proxy-derived value on a key collision (see [TaskRun](#taskrun) for how those two
-  combine with each other). `build_args` works the same way for builds.
-- **`no_proxy` is extended automatically**: every container sharing a task's network
-  (the task's own container and each of its dependencies) has its own name appended to
-  `no_proxy`/`NO_PROXY`, so traffic between them isn't sent through the proxy. Not done
-  for image builds — nothing's running yet during a build, so there's nothing to
-  exempt.
-- **`localhost` rewriting**: `http_proxy`/`https_proxy`/`ftp_proxy` values that point at
-  `localhost`, `127.0.0.1`, or `::1` are rewritten to `host.docker.internal`, since
-  `localhost` from *inside* a container refers to the container itself, not the host
-  machine running a proxy. A value that isn't a `http`/`https` URL, or doesn't refer to
-  the local machine, is left unchanged.
-
-  On every platform, including Linux — where, unlike under Docker Desktop,
-  nothing supplies `host.docker.internal` by itself.
-
-  So a run that rewrote a URL also adds `host.docker.internal:host-gateway` to
-  every container it starts and every image it builds, using Docker's own
-  `--add-host` mechanism, which the daemon resolves to the machine running it.
-  That entry is added on **every** platform too, not only the one that needs it:
-  on macOS and Windows it names the same gateway Desktop would have answered
-  with, so it is a new `/etc/hosts` line rather than a change in what the
-  container can reach. What gates it is the rewrite, not the platform — no
-  rewrite, no entry — and a container's own [`additional_hosts`](#container)
-  entry for that name always wins over it.
-
-  Rewriting the URL can't make an unreachable proxy reachable. A proxy bound only
-  to `127.0.0.1` — which is what `cntlm` and similar default to — still refuses a
-  connection from a container, so on Linux Ratect checks `/proc/net/tcp`/`tcp6`
-  and warns, once per run and naming the port:
-
-  > The proxy on port 3333 is listening on loopback addresses only, so containers
-  > in this run cannot reach it even though its URL now names the host. Bind the
-  > proxy to 0.0.0.0 to make it reachable — which also exposes it to anything else
-  > that can reach this machine, so do that only on a network you trust. Use
-  > `--no-proxy-vars` if this run doesn't need the proxy.
-
-  It's a warning, not a failure: the run may never use the proxy. Note the security
-  cost it names — binding a proxy to `0.0.0.0` opens it to everything that can reach
-  the machine, so weigh that rather than applying it reflexively. Some proxies offer
-  the same thing as a narrower setting: [`cntlm`](https://manpages.debian.org/trixie/cntlm/cntlm.1.en.html),
-  for instance, binds `127.0.0.1:3128` by default and listens on every interface
-  only under its `Gateway` option.
-
-  A host firewall can block the container's traffic even when the proxy is bound
-  wide enough, and that case Ratect can't detect — so if the warning doesn't fire
-  and the proxy still isn't reachable, check there next.
-
-  What to look for: the connection arrives on the bridge interface of the
-  *user-defined* network the run is using, never Docker's default `docker0`
-  bridge, so a firewall rule written for `docker0` won't cover it. Ratect creates
-  a network per task, or uses the one
-  [`--use-network`](ratect-compat-cli.md#task-execution) names — and a run can't fall
-  back to the default bridge even if you point `--use-network` at it, because
-  Ratect gives every container a network-scoped alias and Docker only allows
-  those on user-defined networks (`docker run` refuses with `network-scoped
-  aliases are only supported for user-defined networks`).
-
-  Match the rule on that network's **subnet**, which `docker network inspect
-  <network>` reports under `IPAM.Config`. Its interface name is generally not in
-  that output — Docker only records one there when the network was created with
-  `com.docker.network.bridge.name`, which is how `docker0` itself gets its
-  name — so a rule pinned to an interface is both harder to write and easier to
-  get wrong.
-- **`--no-proxy-vars`** disables all of this. See [CLI reference](ratect-compat-cli.md).
-
-See also: [`TERM` propagation](#term-propagation) — a similarly automatic,
-lowest-precedence-layer environment injection for the invoked task's own container, but
-gated on interactive eligibility rather than `--no-proxy-vars`.
+Which variables are propagated, how `no_proxy` is extended, `localhost`
+rewriting and the `host-gateway` entry, the loopback-bound warning, and
+`--no-proxy-vars` are on [Proxies](proxies.md), shared with `ratect`.
 
 ## ConfigVariable
 
