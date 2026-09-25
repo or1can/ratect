@@ -452,6 +452,30 @@ pub struct Container {
     /// `ConfigFormat::batect_shaped_containers`).
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub ulimits: Option<Vec<Ulimit>>,
+    /// Nameservers for this container — Docker's `--dns`. Each must be an IP
+    /// address, checked when the file loads by `validate_dns_servers`:
+    /// Docker's API rejects anything else too, but only at container
+    /// creation, as a JSON decoding error that names no field. Plain strings
+    /// here rather than `IpAddr`, so that check runs after a Batect-format
+    /// file's own native-only rejection rather than pre-empting it. On the
+    /// task's own network Docker's embedded resolver stays the container's
+    /// nameserver and forwards to these, so inter-container name resolution
+    /// is unaffected. `None` leaves the
+    /// daemon's own choice alone. Container level only, like `devices` (no
+    /// task-level `run` or `customise` override — DNS is an environment
+    /// concern, not one that varies by which task uses the container).
+    /// `ratect`-native only, like `ulimits` above (ratect#105).
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub dns: Option<Vec<String>>,
+    /// Search domains for this container — Docker's `--dns-search`. Same
+    /// scope and native-only status as `dns` above; forwarded verbatim.
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub dns_search: Option<Vec<String>>,
+    /// `resolv.conf` options for this container (`"ndots:2"`, …) — Docker's
+    /// `--dns-option`. Same scope and native-only status as `dns` above;
+    /// forwarded verbatim.
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub dns_options: Option<Vec<String>>,
 }
 
 /// One entry in a container's `devices` list — a host device path made
@@ -2782,6 +2806,7 @@ impl ConfigFormat {
         reject_stop_signal_in_compat(&shaped)?;
         reject_stop_grace_period_in_compat(&shaped)?;
         reject_ulimits_in_compat(&shaped)?;
+        reject_dns_in_compat(&shaped)?;
         validate_image_sources_in_compat(&shaped)?;
         reject_image_expressions_in_compat(&shaped)?;
         Ok(())
@@ -4074,6 +4099,9 @@ async fn load_project_impl(
         &loaded.container_origins,
         &loaded.container_boundaries,
     )?;
+    // After the native-only rejection, so a Batect-format file's `dns` is
+    // refused as a field it may not use at all rather than for its syntax.
+    validate_dns_servers(&loaded.config)?;
     let base_path = base_path_for(config_file);
     let project_directory = project_directory_path(base_path)?;
     loaded.resolve_expressions(base_path, config_var_overrides)?;
@@ -4300,6 +4328,52 @@ fn reject_ulimits_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
              not supported in Batect-compatible configuration."
             ),
         ));
+    }
+    Ok(())
+}
+
+/// `dns`/`dns_search`/`dns_options` are `ratect`-native fields (ratect#105),
+/// same reasoning as [`reject_stop_signal_in_compat`] — Batect has no such
+/// fields.
+fn reject_dns_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
+    for entry in containers {
+        let container = entry.container;
+        let field = if container.dns.is_some() {
+            "dns"
+        } else if container.dns_search.is_some() {
+            "dns_search"
+        } else if container.dns_options.is_some() {
+            "dns_options"
+        } else {
+            continue;
+        };
+        let name = entry.name;
+        return Err(native_field_rejection(
+            entry,
+            format!(
+                "The container '{name}' uses '{field}', which is a ratect-native field \
+             not supported in Batect-compatible configuration."
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Every `dns` entry must be an IP address (IPv4 or IPv6) — see
+/// [`Container::dns`]. The error names the container, the field and the
+/// entry, none of which Docker's own rejection would.
+fn validate_dns_servers(config: &Config) -> Result<()> {
+    let mut names: Vec<&String> = config.containers.keys().collect();
+    names.sort_unstable();
+    for name in names {
+        for server in config.containers[name].dns.iter().flatten() {
+            if server.parse::<std::net::IpAddr>().is_err() {
+                anyhow::bail!(
+                    "The container '{name}' has a 'dns' entry, '{server}', that is not an IP \
+                     address."
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -5179,6 +5253,9 @@ fn inherit_container_fields(child: &mut Container, parent: Container) {
         stop_signal,
         stop_grace_period,
         ulimits,
+        dns,
+        dns_search,
+        dns_options,
     } = parent;
     child.image = child.image.take().or(image);
     child.image_pull_policy = child.image_pull_policy.take().or(image_pull_policy);
@@ -5214,6 +5291,9 @@ fn inherit_container_fields(child: &mut Container, parent: Container) {
     child.stop_signal = child.stop_signal.take().or(stop_signal);
     child.stop_grace_period = child.stop_grace_period.take().or(stop_grace_period);
     child.ulimits = child.ulimits.take().or(ulimits);
+    child.dns = child.dns.take().or(dns);
+    child.dns_search = child.dns_search.take().or(dns_search);
+    child.dns_options = child.dns_options.take().or(dns_options);
 }
 
 #[cfg(test)]

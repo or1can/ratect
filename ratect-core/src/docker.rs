@@ -55,10 +55,12 @@
 //! options)` pairs come from the same `volumes` config field `resolve_volumes`
 //! already handles, just pulled out separately (`engine.rs`'s `tmpfs_mounts`)
 //! since a tmpfs mount can't be expressed as a bind string. `ulimits`
-//! (ratect#95) is the latest of the same pattern, onto bollard's
+//! (ratect#95) followed the same pattern, onto bollard's
 //! `HostConfig.ulimits` (`build_ulimits`, pure/unit-testable, same shape as
 //! `build_devices`) — `(name, soft, hard)` triples, `None`/absent leaving
-//! the daemon's own defaults alone. `stop_signal`/`stop_grace_period`
+//! the daemon's own defaults alone. `dns`/`dns_search`/`dns_options` (ratect#105)
+//! follow it too, as plain string lists passed straight onto bollard's
+//! `HostConfig` fields of the same names — no builder needed. `stop_signal`/`stop_grace_period`
 //! (ratect#112) are the one per-container pair that does *not* live in
 //! `ContainerOptions`: they take effect when a container is *stopped*, not
 //! created, so they are parameters of `stop_and_remove_container`
@@ -2474,6 +2476,9 @@ impl ContainerRuntime for DockerClient {
             ),
             tmpfs: build_tmpfs_mounts(options.tmpfs.as_ref()),
             ulimits: build_ulimits(options.ulimits.as_ref()),
+            dns: options.dns.clone(),
+            dns_search: options.dns_search.clone(),
+            dns_options: options.dns_options.clone(),
             ..Default::default()
         };
 
@@ -2754,6 +2759,9 @@ impl ContainerRuntime for DockerClient {
             ),
             tmpfs: build_tmpfs_mounts(options.tmpfs.as_ref()),
             ulimits: build_ulimits(options.ulimits.as_ref()),
+            dns: options.dns.clone(),
+            dns_search: options.dns_search.clone(),
+            dns_options: options.dns_options.clone(),
             ..Default::default()
         };
 

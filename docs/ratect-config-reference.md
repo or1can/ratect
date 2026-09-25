@@ -626,6 +626,38 @@ Entries are objects, like every other native list entry — and objects only:
 unlike [`volumes`, `ports` and `devices`](#one-shape-per-list-entry), this
 field has no compact string form at all.
 
+## `dns`/`dns_search`/`dns_options`: name resolution
+
+A container can set its own nameservers, search domains and `resolv.conf`
+options — Docker's own `--dns`, `--dns-search` and `--dns-option`, per
+container:
+
+```toml
+[containers.build-env]
+image = "rust:1.90"
+dns = ["10.0.0.53"]
+dns_search = ["corp.example.com"]
+dns_options = ["ndots:2"]
+```
+
+- **Each is a list of strings, and each is independent.** Set any one, two
+  or all three; one left unset keeps whatever the daemon would otherwise
+  have chosen.
+- **`dns` entries are IP addresses** (IPv4 or IPv6), checked when the file
+  loads. Docker's API rejects anything else too, but only once the
+  container is being created, as `invalid JSON: ParseAddr(...)`, which
+  names no field.
+- **Containers still resolve each other by name.** On the task's own
+  network, Docker's embedded resolver stays each container's nameserver and
+  forwards to the `dns` servers for everything else — unlike mounting your
+  own `/etc/resolv.conf`, which replaces it.
+- **Fixed on the container's own definition.** Neither a task's `run` block
+  nor a dependency's `customise` overlay accepts these fields: DNS is a
+  property of the environment a container runs in, not of which task
+  happens to use it. A dependency's settings apply to the dependency alone.
+- **Purely additive.** A container that sets none of the three is created
+  exactly as before.
+
 ## Field reference
 
 Every container and task field from [`ratect-compat-config-reference.md`](ratect-compat-config-reference.md)
@@ -643,6 +675,7 @@ The container fields, by area:
 | Runtime | `command`, `entrypoint`, `working_directory`, `environment`, `enable_init_process`, `privileged`, `shm_size`, `capabilities_to_add`, `capabilities_to_drop`, `devices`, `labels`, `log_driver`, `log_options` | [Container](ratect-compat-config-reference.md#container) |
 | Graceful shutdown | `stop_signal`, `stop_grace_period` | [above](#stop_signalstop_grace_period-graceful-shutdown) *(native only)* |
 | Resource limits | `ulimits` | [above](#ulimits-per-resource-limits) *(native only)* |
+| Name resolution | `dns`, `dns_search`, `dns_options` | [above](#dnsdns_searchdns_options-name-resolution) *(native only)* |
 | Networking | `ports`, `additional_hostnames`, `additional_hosts`, `dependencies` | [Ports](ratect-compat-config-reference.md#port-mappings), [readiness](dependency-readiness.md) |
 | Readiness | `health_check`, `setup_commands` | [Dependency Readiness](dependency-readiness.md). A setup command also takes [`run_in`](#run_in-setup-commands-in-another-container) *(native only)* |
 | Init containers | `run_to_completion` | [above](#run_to_completion-init-containers) *(native only)* |
@@ -676,6 +709,7 @@ project.
 | A container with **neither** `image` nor `build_directory` | Rejected when the file loads | Allowed — a container used only as an `extends` base needs neither; the requirement is enforced when a task actually runs a container, so no `abstract` marker is needed |
 | Setting **`stop_signal`/`stop_grace_period`** on a container | Rejected when the file loads — Batect has no equivalent field | Overrides Docker's own default stop signal/timeout during cleanup — see [above](#stop_signalstop_grace_period-graceful-shutdown) |
 | Setting **`ulimits`** on a container | Rejected when the file loads — Batect has no equivalent field | Sets that container's own resource limits — see [above](#ulimits-per-resource-limits) |
+| Setting **`dns`/`dns_search`/`dns_options`** on a container | Rejected when the file loads — Batect has no equivalent field | Sets that container's own name resolution — see [above](#dnsdns_searchdns_options-name-resolution) |
 | `image` alongside a build-only field (`build_args`, `build_target`, `dockerfile`, `build_secrets`, `build_ssh`) | Rejected when the file loads | Allowed and **ignored**, for the same inheritance reason — a child overriding a build with an `image` still carries the parent's build fields |
 
 The last row is the one to watch: setting `build_secrets` or `build_ssh` on a
@@ -738,6 +772,7 @@ so it also works as a CI gate.
 | Health check from outside | — | [`external_health_check`](#external_health_check-checking-a-container-from-outside-it) on a container |
 | Graceful shutdown | — | [`stop_signal`/`stop_grace_period`](#stop_signalstop_grace_period-graceful-shutdown) on a container |
 | Resource limits | — | [`ulimits`](#ulimits-per-resource-limits) on a container |
+| Name resolution | — | [`dns`/`dns_search`/`dns_options`](#dnsdns_searchdns_options-name-resolution) on a container |
 | Setup command target | always the declaring container | [`run_in`](#run_in-setup-commands-in-another-container) on a setup command |
 | List entries | string shorthand *or* object | object (inline table or `[[...]]`) |
 | Local overrides | `batect.local.yml` | `ratect.local.toml` |
@@ -748,7 +783,8 @@ Most field *meanings* are unchanged; the spelling and the format-level rules
 above are the bulk of the difference. The exceptions are the native-only
 fields (`extends`, a cache's `scope`, a dependency's `run_to_completion` or
 `external_health_check`, a setup command's `run_in`, a container's
-`stop_signal`/`stop_grace_period` or `ulimits`) and the handful of behaviours in [Where
+`stop_signal`/`stop_grace_period`, `ulimits` or
+`dns`/`dns_search`/`dns_options`) and the handful of behaviours in [Where
 the semantics differ](#where-the-semantics-differ), which exist because
 `extends` gives some combinations a meaning `batect.yml` has no way to
 express.

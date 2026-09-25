@@ -861,6 +861,9 @@ fn container(image: &str, dependencies: Option<Vec<String>>) -> Container {
         stop_signal: None,
         stop_grace_period: None,
         ulimits: None,
+        dns: None,
+        dns_search: None,
+        dns_options: None,
     }
 }
 
@@ -923,6 +926,9 @@ fn config_with_cycle() -> Config {
             stop_signal: None,
             stop_grace_period: None,
             ulimits: None,
+            dns: None,
+            dns_search: None,
+            dns_options: None,
         },
     );
 
@@ -1026,6 +1032,9 @@ fn config_with_shared_prerequisite() -> Config {
             stop_signal: None,
             stop_grace_period: None,
             ulimits: None,
+            dns: None,
+            dns_search: None,
+            dns_options: None,
         },
     );
 
@@ -1565,6 +1574,9 @@ fn container_with_run_as_current_user(
         stop_signal: None,
         stop_grace_period: None,
         ulimits: None,
+        dns: None,
+        dns_search: None,
+        dns_options: None,
     }
 }
 
@@ -2050,6 +2062,9 @@ async fn run_as_current_user_explicitly_disabled_reaches_the_container_with_no_m
             stop_signal: None,
             stop_grace_period: None,
             ulimits: None,
+            dns: None,
+            dns_search: None,
+            dns_options: None,
         },
     );
     let mut tasks = HashMap::new();
@@ -2115,6 +2130,9 @@ fn container_with_build_directory(
         stop_signal: None,
         stop_grace_period: None,
         ulimits: None,
+        dns: None,
+        dns_search: None,
+        dns_options: None,
     }
 }
 
@@ -2725,6 +2743,9 @@ async fn container_without_image_or_build_directory_errors() {
             stop_signal: None,
             stop_grace_period: None,
             ulimits: None,
+            dns: None,
+            dns_search: None,
+            dns_options: None,
         },
     );
     let mut tasks = HashMap::new();
@@ -5282,6 +5303,9 @@ async fn dependency_without_image_or_build_directory_errors() {
             stop_signal: None,
             stop_grace_period: None,
             ulimits: None,
+            dns: None,
+            dns_search: None,
+            dns_options: None,
         },
     );
     containers.insert(

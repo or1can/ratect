@@ -152,6 +152,15 @@ pub struct ContainerOptions {
     /// depend on config types (same conversion boundary as `devices`
     /// above). `None` leaves the daemon's own defaults alone.
     pub ulimits: Option<Vec<(String, i64, i64)>>,
+    /// Nameservers — Docker's `--dns`, already checked to be IP addresses
+    /// when the config loaded. `None` leaves the daemon's own choice alone.
+    pub dns: Option<Vec<String>>,
+    /// Search domains — Docker's `--dns-search`. `None` leaves the daemon's
+    /// own alone.
+    pub dns_search: Option<Vec<String>>,
+    /// `resolv.conf` options — Docker's `--dns-option`. `None` leaves the
+    /// daemon's own alone.
+    pub dns_options: Option<Vec<String>>,
 }
 
 /// A container's `health_check` override, applied at container creation on
@@ -439,6 +448,9 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
         log_options: container_config.log_options.clone(),
         tmpfs: tmpfs_mounts(container_config.volumes.as_ref()),
         ulimits: ulimit_triples(container_config.ulimits.as_ref()),
+        dns: container_config.dns.clone(),
+        dns_search: container_config.dns_search.clone(),
+        dns_options: container_config.dns_options.clone(),
     };
     let labels = run_labels.for_container(name, role, container_config.labels.as_ref());
 

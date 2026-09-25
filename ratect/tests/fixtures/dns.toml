@@ -1,0 +1,41 @@
+# A native `ratect.toml` fixture proving per-container `dns`/`dns_search`/
+# `dns_options` (ratect#105) against a real Docker daemon. Native-only —
+# Batect has no equivalent field, so this fixture, unlike most of the
+# engine/Docker behaviour proven under `ratect-compat/tests/fixtures/`, can
+# only be expressed here (see AGENTS.md's fixture-layer guideline).
+#
+# `configured-dependency` and `unconfigured-app` each check their own
+# /etc/resolv.conf from the inside and exit non-zero if it isn't what their
+# own fields asked for, so a setting that never reached Docker fails the run
+# rather than needing output parsing. `peer` exists only to be resolved.
+project_name = "ratect-dns-test"
+
+[containers.peer]
+image = "alpine:3.18.2"
+command = "sleep 300"
+
+[containers.configured-dependency]
+image = "alpine:3.18.2"
+run_to_completion = true
+dependencies = ["peer"]
+# Docker's embedded resolver stays the container's own nameserver on the
+# task's network — the configured one becomes its upstream, which Docker
+# records in a resolv.conf comment rather than a `nameserver` line, so the
+# check is for the address anywhere in the file. 192.0.2.53 is a
+# documentation address that answers nothing: resolving `peer` proves the
+# embedded resolver still does, and the trailing dot (skipping the search
+# domain) and A-only query keep the lookup from waiting on that upstream.
+dns = ["192.0.2.53"]
+dns_search = ["corp.example.com"]
+dns_options = ["ndots:3"]
+command = "sh -c 'grep -q 192.0.2.53 /etc/resolv.conf && grep -q \"^search corp.example.com\" /etc/resolv.conf && grep -q ndots:3 /etc/resolv.conf && nslookup -type=a peer. >/dev/null'"
+
+[containers.unconfigured-app]
+image = "alpine:3.18.2"
+# Declares none of the three: the dependency's settings are not its own.
+dependencies = ["configured-dependency"]
+command = "sh -c '! grep -q 192.0.2.53 /etc/resolv.conf && ! grep -q corp.example.com /etc/resolv.conf && ! grep -q ndots:3 /etc/resolv.conf && echo app-unaffected'"
+
+[tasks.per-container]
+description = "A dependency's DNS settings apply to it alone, and leave name resolution between containers working"
+run = { container = "unconfigured-app" }

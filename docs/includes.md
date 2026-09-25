@@ -79,7 +79,8 @@ first](#a-grant-goes-on-the-entry-that-reaches-the-file-first) rests on.
 A file's own **format** decides which fields and which rules apply to the
 containers it declares — not the project that includes it. A `.yml` is
 Batect's format, so a container written in one may use no `ratect`-native
-field (`extends`, `ulimits`, `stop_signal`, `run_to_completion`,
+field (`extends`, `ulimits`, `stop_signal`, `dns`/`dns_search`/`dns_options`,
+`run_to_completion`,
 `external_health_check`, a cache's `scope`, a setup command's `run_in`) and
 gets Batect's own semantics: no expressions resolved in `image`, and exactly
 one of `image`/`build_directory`. That holds even when a `ratect.toml`

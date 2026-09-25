@@ -242,6 +242,7 @@ fn every_native_config_validates_against_the_native_schema() {
         "ratect/tests/fixtures/native.toml",
         "ratect/tests/fixtures/external-health-check.toml",
         "ratect/tests/fixtures/ulimits.toml",
+        "ratect/tests/fixtures/dns.toml",
     ] {
         let path = root.join(relative);
         let text = std::fs::read_to_string(&path).expect("failed to read a native config");
@@ -285,6 +286,33 @@ run = { container = "db" }
     assert!(
         validator.validate(&document).is_err(),
         "the schema should reject 'path' on a tcp external health check"
+    );
+}
+
+/// The loader rejects a `dns` entry that isn't an IP address
+/// (`a_dns_entry_that_is_not_an_ip_address_is_rejected`); the schema has to
+/// agree, for the same reason as the check above — and accept both address
+/// families the loader does.
+#[test]
+fn the_native_schema_accepts_only_ip_addresses_as_dns_entries() {
+    let validator = jsonschema::draft7::new(&native_config_file_schema())
+        .expect("the generated native schema should itself be a valid draft-07 schema");
+    let document = |dns: &str| -> serde_json::Value {
+        toml::from_str(&format!(
+            "project_name = \"demo\"\n\n[containers.app]\nimage = \"alpine\"\n\
+             dns = [\"{dns}\"]\n\n[tasks.t]\nrun = {{ container = \"app\" }}\n"
+        ))
+        .expect("the test document is valid TOML")
+    };
+    assert!(validator.validate(&document("1.1.1.1")).is_ok());
+    assert!(validator
+        .validate(&document("2606:4700:4700::1111"))
+        .is_ok());
+    assert!(
+        validator
+            .validate(&document("resolver.example.com"))
+            .is_err(),
+        "the schema should reject a dns entry that isn't an IP address"
     );
 }
 

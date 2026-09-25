@@ -217,6 +217,61 @@
             "null"
           ]
         },
+        "dns": {
+          "description": "Nameserver IP addresses for this container — Docker's --dns. On the task's network Docker's embedded resolver forwards to these, so containers still resolve each other by name. The daemon's own choice applies when unset.",
+          "examples": [
+            [
+              "1.1.1.1",
+              "2606:4700:4700::1111"
+            ]
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "format": "ipv4"
+              },
+              {
+                "format": "ipv6"
+              }
+            ],
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "dns_options": {
+          "description": "resolv.conf options for this container — Docker's --dns-option. The daemon's own choice applies when unset.",
+          "examples": [
+            [
+              "ndots:2",
+              "timeout:3"
+            ]
+          ],
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "dns_search": {
+          "description": "DNS search domains for this container — Docker's --dns-search. The daemon's own choice applies when unset.",
+          "examples": [
+            [
+              "corp.example.com"
+            ]
+          ],
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "dockerfile": {
           "description": "The Dockerfile to build, as a path relative to `build_directory`'s own root — Batect's `dockerfile` field. Defaults to `\"Dockerfile\"` at `build_directory`'s root when omitted, matching Batect and Docker's own default. A plain string, not an expression — matching Batect's own `String` (not `Expression`) typing for this field, unlike `build_directory` itself. Only meaningful alongside `build_directory`; like `build_args`, silently ignored for an `image` container (see `TaskEngine::resolve_image`).",
           "type": [

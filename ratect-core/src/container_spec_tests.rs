@@ -57,6 +57,9 @@ fn sample_container() -> Container {
         stop_signal: None,
         stop_grace_period: None,
         ulimits: None,
+        dns: None,
+        dns_search: None,
+        dns_options: None,
     }
 }
 
@@ -416,4 +419,80 @@ fn derive_spec_leaves_ulimits_unset_when_the_container_declares_none() {
     });
 
     assert_eq!(spec.shared.options.ulimits, None);
+}
+
+/// A container's `dns`/`dns_search`/`dns_options` (ratect#105) reach
+/// `ContainerOptions` unchanged — and the task's `run` overlay has no say in
+/// them.
+#[test]
+fn derive_spec_carries_the_containers_own_dns_settings() {
+    let mut container_config = sample_container();
+    container_config.dns = Some(vec![
+        "1.1.1.1".to_string(),
+        "2606:4700:4700::1111".to_string(),
+    ]);
+    container_config.dns_search = Some(vec!["corp.example.com".to_string()]);
+    container_config.dns_options = Some(vec!["ndots:2".to_string()]);
+    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+
+    let spec = derive_spec(ContainerSpecInputs {
+        name: "app",
+        container_config: &container_config,
+        overlay: Overlay::Run(&empty_run()),
+        image: "alpine:3.18",
+        network: "ratect-run-id",
+        interactive: false,
+        additional_args: &[],
+        user_mapping: None,
+        volumes: None,
+        term_var: None,
+        proxy: None,
+        publish_ports: true,
+        role: ContainerRole::Task,
+        run_labels: &run_labels,
+    });
+
+    let options = &spec.shared.options;
+    assert_eq!(
+        options.dns,
+        Some(vec![
+            "1.1.1.1".to_string(),
+            "2606:4700:4700::1111".to_string()
+        ])
+    );
+    assert_eq!(
+        options.dns_search,
+        Some(vec!["corp.example.com".to_string()])
+    );
+    assert_eq!(options.dns_options, Some(vec!["ndots:2".to_string()]));
+}
+
+/// A container that sets none of the three leaves all three `None`, so
+/// container creation is byte-for-byte what it was before ratect#105.
+#[test]
+fn derive_spec_leaves_dns_unset_when_the_container_declares_none() {
+    let container_config = sample_container();
+    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+
+    let spec = derive_spec(ContainerSpecInputs {
+        name: "app",
+        container_config: &container_config,
+        overlay: Overlay::Run(&empty_run()),
+        image: "alpine:3.18",
+        network: "ratect-run-id",
+        interactive: false,
+        additional_args: &[],
+        user_mapping: None,
+        volumes: None,
+        term_var: None,
+        proxy: None,
+        publish_ports: true,
+        role: ContainerRole::Task,
+        run_labels: &run_labels,
+    });
+
+    let options = &spec.shared.options;
+    assert_eq!(options.dns, None);
+    assert_eq!(options.dns_search, None);
+    assert_eq!(options.dns_options, None);
 }
