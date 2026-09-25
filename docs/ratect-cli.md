@@ -410,7 +410,8 @@ for `SIGTERM`, `129` for `SIGHUP`), anything else that fails exits `1`, and the 
 always reaches stderr — in every output style, including `quiet`. Any of those three
 signals abandons the run and then cleans up after it; a second one *during* that cleanup
 stops the cleanup too, and `ratect resources list` finds whatever that leaves. `RUST_LOG` controls Ratect's own internal
-logging (default `info`, on stderr). Unlike `ratect-compat` there's no `--log-file`;
+logging (default `info`, on stderr — see [Filtering
+`RUST_LOG`](troubleshooting.md#filtering-rust_log)). Unlike `ratect-compat` there's no `--log-file`;
 redirect stderr if you want one. A crash (a genuine bug) exits `101` and prints where to
 report it, `ratect`'s version and platform, and a reminder to re-run with
 `RUST_BACKTRACE=1` if it isn't already set — see

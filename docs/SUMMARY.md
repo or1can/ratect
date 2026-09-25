@@ -25,6 +25,7 @@
 - [Connecting to Docker](connecting-to-docker.md)
 - [Interactive Mode](interactive-mode.md)
 - [Proxies](proxies.md)
+- [Troubleshooting](troubleshooting.md)
 - [FAQ](faq.md)
 - [How It Works](how-it-works.md)
 
