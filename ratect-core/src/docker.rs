@@ -54,7 +54,16 @@
 //! `build_log_config`) — unlike `devices`/`log_options`, its `(container_path,
 //! options)` pairs come from the same `volumes` config field `resolve_volumes`
 //! already handles, just pulled out separately (`engine.rs`'s `tmpfs_mounts`)
-//! since a tmpfs mount can't be expressed as a bind string. `build_image` also
+//! since a tmpfs mount can't be expressed as a bind string. `ulimits`
+//! (ratect#95) is the latest of the same pattern, onto bollard's
+//! `HostConfig.ulimits` (`build_ulimits`, pure/unit-testable, same shape as
+//! `build_devices`) — `(name, soft, hard)` triples, `None`/absent leaving
+//! the daemon's own defaults alone. `stop_signal`/`stop_grace_period`
+//! (ratect#112) are the one per-container pair that does *not* live in
+//! `ContainerOptions`: they take effect when a container is *stopped*, not
+//! created, so they are parameters of `stop_and_remove_container`
+//! (`ResourceInventory`'s, hence `resources.rs`'s trait) and are `None` for
+//! a leftover found by label scan, which has no config to read. `build_image` also
 //! gained a `force_pull: bool` parameter (0.19.0, both the classic and
 //! BuildKit paths' `BuildImageOptionsBuilder::pull("true")`) — Batect's
 //! second, distinct use of `image_pull_policy` on a `build_directory`
