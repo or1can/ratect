@@ -160,6 +160,12 @@ not restated here:
    first clause; for the second, `docs/using-ratect-with.md`'s, which ends
    New to Ratect by handing to Using Ratect.
 
+A new page also goes in `README.md`'s Documentation list, which mirrors
+`docs/SUMMARY.md` group for group and page for page —
+`tools/check-readme-docs-list.py` (run by CI's Tools Tests job) fails with a
+diff on any drift between the two; the list fell behind the sidebar twice
+before it existed.
+
 ## Around `docs/`
 
 The [`decisions/`](../decisions/) directory holds Architecture Decision Records — the **cross-cutting** decisions that get referenced from more than one place (the two-binary split, the runtime-ownership labels, the native config format, trusting a Git include's host paths). Its [`README.md`](../decisions/README.md) states the convention; see `AGENTS.md`'s guideline 14 for when to write one.

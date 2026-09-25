@@ -129,6 +129,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: python3 -m unittest discover -s tools -p 'test_*.py' -v
+      # README.md's Documentation list mirrors docs/SUMMARY.md by hand; this
+      # prints the diff when it has drifted (see the script's own docstring).
+      - run: python3 tools/check-readme-docs-list.py
 
   docker-integration:
     name: Docker Integration Test
