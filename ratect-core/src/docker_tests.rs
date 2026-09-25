@@ -1187,6 +1187,51 @@ fn should_use_tty_is_false_when_stdout_is_not_a_terminal() {
     assert!(!should_use_tty(true, true, false));
 }
 
+/// Piped stdin without a TTY still has to close the container's stdin when
+/// it ends (ratect#220): Docker only does that for a `stdin_once` container,
+/// so `stdin_once` follows stdin being attached at all, not the TTY — as
+/// `docker run -i` and Batect's own docker-client both set it.
+#[test]
+fn stdin_flags_close_the_containers_stdin_once_piped_input_ends() {
+    assert_eq!(
+        stdin_flags(true, false),
+        StdinFlags {
+            tty: None,
+            open_stdin: Some(true),
+            attach_stdin: Some(true),
+            stdin_once: Some(true),
+        }
+    );
+}
+
+#[test]
+fn stdin_flags_allocate_a_tty_only_when_one_is_used() {
+    assert_eq!(
+        stdin_flags(true, true),
+        StdinFlags {
+            tty: Some(true),
+            open_stdin: Some(true),
+            attach_stdin: Some(true),
+            stdin_once: Some(true),
+        }
+    );
+}
+
+/// A container that isn't the top-level task's own gets no stdin at all,
+/// leaving every flag at Docker's own default.
+#[test]
+fn stdin_flags_are_all_unset_when_not_interactive() {
+    assert_eq!(
+        stdin_flags(false, false),
+        StdinFlags {
+            tty: None,
+            open_stdin: None,
+            attach_stdin: None,
+            stdin_once: None,
+        }
+    );
+}
+
 fn user_mapping_fixture() -> UserMapping {
     UserMapping {
         user: crate::user::CurrentUser {

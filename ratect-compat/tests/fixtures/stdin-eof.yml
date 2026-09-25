@@ -1,0 +1,14 @@
+# Proves piped stdin's end reaches the task's own container (ratect#220) — see
+# `piped_stdin_eof_ends_a_non_tty_task_container` in tests/cli.rs. `cat` only
+# exits when its stdin closes, so if the end of Ratect's own stdin never
+# reaches the container, the task never finishes. Its own project name keeps
+# that test's leftover checks from matching any other test's containers.
+project_name: ratect-stdin-eof-test
+containers:
+  echo:
+    image: alpine:3.18.2
+tasks:
+  echo:
+    run:
+      container: echo
+      command: cat

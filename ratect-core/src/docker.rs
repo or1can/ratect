@@ -136,7 +136,8 @@ use std::fmt;
 use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
-use tokio::io::AsyncWriteExt;
+use std::pin::Pin;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 /// The task's own container ran to completion, but its command exited with a
 /// non-zero status. Distinct from other errors (Docker API failures, missing
@@ -918,6 +919,49 @@ fn build_output_suffix(output: &str) -> String {
 /// non-interactive run isn't supported yet.
 fn should_use_tty(interactive: bool, stdin_is_tty: bool, stdout_is_tty: bool) -> bool {
     interactive && stdin_is_tty && stdout_is_tty
+}
+
+/// Copies the local process's stdin into a container's attach input, then
+/// shuts that input down at local EOF — the half-close (Batect's own
+/// `CloseWrite()`) that tells Docker the input has ended, so a `stdin_once`
+/// container (see [`StdinFlags`]) gets its own stdin closed in turn
+/// (ratect#220). Explicit rather than left to dropping `attach_input`: that
+/// is a write half split from the same connection as the output stream, and
+/// dropping it closes nothing while the output half is still being read.
+/// Errors are dropped — the pump is best-effort, and the container's exit is
+/// what ends the session either way.
+async fn forward_stdin(mut attach_input: Pin<Box<dyn AsyncWrite + Send>>) {
+    let mut stdin = tokio::io::stdin();
+    let _ = tokio::io::copy(&mut stdin, &mut attach_input).await;
+    let _ = attach_input.shutdown().await;
+}
+
+/// The stdin half of a task container's creation config. `open_stdin`/
+/// `attach_stdin` follow `interactive` alone — wider than `use_tty` — so
+/// piping input into a task works even when no TTY is allocated (Ratect's
+/// own stdout redirected to a file, say), matching Batect's unconditional
+/// stdin forwarding for the task's own container. `stdin_once` follows them,
+/// not the TTY: it is what makes Docker close the container's stdin when the
+/// attach connection's input ends, and without it piped input reaching its
+/// end never reaches the container, so a process that runs until its input
+/// ends never exits (ratect#220). `docker run -i` and Batect's docker-client
+/// both set it whenever stdin is attached. Only `tty` itself — pty
+/// allocation — stays `use_tty`-gated.
+#[derive(Debug, PartialEq, Eq)]
+struct StdinFlags {
+    tty: Option<bool>,
+    open_stdin: Option<bool>,
+    attach_stdin: Option<bool>,
+    stdin_once: Option<bool>,
+}
+
+fn stdin_flags(interactive: bool, use_tty: bool) -> StdinFlags {
+    StdinFlags {
+        tty: use_tty.then_some(true),
+        open_stdin: interactive.then_some(true),
+        attach_stdin: interactive.then_some(true),
+        stdin_once: interactive.then_some(true),
+    }
 }
 
 /// Puts the local terminal into raw mode for the duration of an interactive
@@ -2002,7 +2046,7 @@ impl DockerClient {
             .build();
         let AttachContainerResults {
             output: mut attach_output,
-            input: mut attach_input,
+            input: attach_input,
         } = self
             .docker
             .attach_container(container_id, Some(attach_options))
@@ -2032,14 +2076,10 @@ impl DockerClient {
         #[cfg(not(unix))]
         let resize_listener: Option<tokio::task::JoinHandle<()>> = None;
 
-        // Local stdin has no natural end of its own here — the attach
-        // output stream ending (the container exiting) is what ends the
-        // session, so this pump is aborted once that happens rather than
-        // awaited to completion.
-        let stdin_pump = tokio::spawn(async move {
-            let mut stdin = tokio::io::stdin();
-            let _ = tokio::io::copy(&mut stdin, &mut attach_input).await;
-        });
+        // The attach output stream ending (the container exiting) is what
+        // ends the session, so this pump is aborted once that happens rather
+        // than awaited to completion.
+        let stdin_pump = tokio::spawn(forward_stdin(attach_input));
 
         let mut stdout = tokio::io::stdout();
         let output_result: Result<()> = async {
@@ -2138,7 +2178,7 @@ impl DockerClient {
             .stream(true)
             .build();
         let AttachContainerResults {
-            input: mut attach_input,
+            input: attach_input,
             ..
         } = self
             .docker
@@ -2146,13 +2186,9 @@ impl DockerClient {
             .await
             .context("Failed to attach to container")?;
 
-        // Same "no natural end of its own" rationale as the interactive
-        // path's stdin pump — aborted once output-following ends, not
-        // awaited to completion.
-        let stdin_pump = tokio::spawn(async move {
-            let mut stdin = tokio::io::stdin();
-            let _ = tokio::io::copy(&mut stdin, &mut attach_input).await;
-        });
+        // Same as the interactive path's stdin pump — aborted once
+        // output-following ends, not awaited to completion.
+        let stdin_pump = tokio::spawn(forward_stdin(attach_input));
 
         let result = self
             .start_and_stream_logs(container_name, container_id, started)
@@ -2699,6 +2735,7 @@ impl ContainerRuntime for DockerClient {
             .map(tokenize_command_line)
             .transpose()?;
         let port_config = build_port_config(shared.network_options.ports.as_ref());
+        let stdin = stdin_flags(interactive, use_tty);
 
         let host_config = HostConfig {
             binds: shared.volumes.clone(),
@@ -2731,18 +2768,10 @@ impl ContainerRuntime for DockerClient {
             exposed_ports: port_config.as_ref().map(|(exposed, _)| exposed.clone()),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
-            tty: use_tty.then_some(true),
-            // `open_stdin`/`attach_stdin` are gated on `interactive` alone —
-            // deliberately wider than `use_tty` — so piping input into a
-            // task still works even when a real TTY isn't allocated (e.g.
-            // Ratect's own stdout is redirected to a file), matching
-            // Batect's own unconditional stdin forwarding for the task's
-            // own container. `tty`/`stdin_once` stay TTY-only: those control
-            // pty allocation itself, which still requires both stdin and
-            // stdout to be real terminals (`should_use_tty`, unchanged).
-            open_stdin: interactive.then_some(true),
-            attach_stdin: interactive.then_some(true),
-            stdin_once: use_tty.then_some(true),
+            tty: stdin.tty,
+            open_stdin: stdin.open_stdin,
+            attach_stdin: stdin.attach_stdin,
+            stdin_once: stdin.stdin_once,
             user: shared
                 .user_mapping
                 .as_ref()

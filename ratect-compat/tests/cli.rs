@@ -3045,6 +3045,99 @@ fn piped_stdin_reaches_a_non_tty_task_container() {
 }
 
 /// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// The end of piped stdin has to reach the task's own container (ratect#220),
+/// or a process that runs until its input ends — a stdio server, `cat` —
+/// never exits, and neither does Ratect, leaving its container and network
+/// behind when whatever launched it gives up. Unlike
+/// `piped_stdin_reaches_a_non_tty_task_container` above, nothing here tells
+/// the container to exit: closing stdin is the only signal it gets. Asserts
+/// the daemon's own state afterwards, not just the exit code, and removes
+/// anything the run left behind whether or not it passed.
+#[test]
+#[ignore]
+fn piped_stdin_eof_ends_a_non_tty_task_container() {
+    use std::process::Stdio;
+
+    let project_filter = "label=eu.orican.ratect.project=ratect-stdin-eof-test";
+    fn ids(kind: &str, filter: &str) -> Vec<String> {
+        let mut arguments = vec![kind, "ls", "-q", "--filter", filter];
+        if kind == "container" {
+            arguments.insert(2, "-a");
+        }
+        let output = Command::new("docker")
+            .args(&arguments)
+            .output()
+            .expect("failed to run docker ls");
+        assert!(output.status.success(), "docker {kind} ls failed");
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    let mut child = ratect_command()
+        .arg("-f")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/stdin-eof.yml"))
+        .arg("echo")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn ratect");
+
+    let mut stdin = child.stdin.take().expect("child should have piped stdin");
+    let marker = "ratect-stdin-eof-test-marker";
+    writeln!(stdin, "{marker}").expect("failed to write to piped stdin");
+    drop(stdin);
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("failed to poll ratect") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    if status.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let mut output = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let _ = stdout.read_to_string(&mut output);
+    }
+    let containers = ids("container", project_filter);
+    let networks = ids("network", project_filter);
+    for id in &containers {
+        let _ = Command::new("docker").args(["rm", "-fv", id]).output();
+    }
+    for id in &networks {
+        let _ = Command::new("docker").args(["network", "rm", id]).output();
+    }
+
+    let status = status.expect("ratect did not exit after its stdin was closed");
+    assert!(
+        status.success(),
+        "ratect should exit successfully once the container's input ends: {status:?}"
+    );
+    assert!(
+        output.contains(marker),
+        "expected the marker to round-trip through the container: {output:?}"
+    );
+    assert!(
+        containers.is_empty(),
+        "the run's container should have been removed: {containers:?}"
+    );
+    assert!(
+        networks.is_empty(),
+        "the run's network should have been removed: {networks:?}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
 /// `alpine:3.18.2`, and runs against the real host user (this doesn't need a
 /// TTY, unlike the interactive test above — `run_as_current_user` and
 /// interactive mode are independent features). Run explicitly with

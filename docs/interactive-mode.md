@@ -30,7 +30,9 @@ only usefully attach to one container.
 Always, independent of whether Ratect's own stdin and stdout are terminals:
 
 - **Its stdin forwarded** from Ratect's own, so piped input reaches the
-  container.
+  container — including its end: when Ratect's own stdin closes, so does the
+  container's, and a process that reads until end of input (`cat`, a stdio
+  server) exits.
 - **The host's `TERM`** propagated into its environment — see [`TERM`
   propagation](#term-propagation) below.
 
