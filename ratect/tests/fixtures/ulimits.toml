@@ -9,11 +9,6 @@
 # reached Docker fails the run rather than needing output parsing.
 project_name = "ratect-ulimits-test"
 
-# The compact string form belongs to the included YAML fragment: it is what
-# a `.yml` include of a native project may still write, and the native
-# format's own canonical shape is the object one below.
-include = [{ path = "ulimits-string-form.yml" }]
-
 [containers.object-form]
 image = "alpine:3.18.2"
 ulimits = [{ name = "nofile", soft = 1024, hard = 2048 }]

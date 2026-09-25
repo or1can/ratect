@@ -1767,36 +1767,6 @@ fn ulimits_in_the_object_form_reach_the_container_via_docker() {
     );
 }
 
-/// The same, written in Docker's own compact `name=soft:hard` string form,
-/// in the `.yml` fragment `ulimits.toml` includes — the one place that
-/// shorthand is meant to be written, since the native format's own
-/// canonical shape is the object form. Requires a running Docker daemon
-/// with network access to pull `alpine:3.18.2`. Run explicitly with
-/// `cargo test -- --ignored`.
-#[test]
-#[ignore]
-fn ulimits_in_the_compact_string_form_reach_the_container_via_docker() {
-    let _guard = serial_docker();
-    let output = ratect_command()
-        .arg("-f")
-        .arg(ulimits_fixture_path())
-        .args(["run", "string-form"])
-        .output()
-        .expect("failed to run ratect");
-
-    assert!(
-        output.status.success(),
-        "stdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&output.stdout).contains("string-form-ok"),
-        "the container should have seen the limits its string-form entry asked for:\n{}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-}
-
 /// A container's `ulimits` apply to that container alone: the
 /// `limited-dependency` runs to completion and fails the run unless *it*
 /// got its own 3000 `nofile` soft limit, while `unlimited-app`, which

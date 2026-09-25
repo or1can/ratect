@@ -21,6 +21,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Breaking
+
+- A container declared in a **YAML file** now follows Batect's rules wherever it is included, instead of the including project's. A `ratect`-native field on such a container (`extends`, `ulimits`, `stop_signal`, `stop_grace_period`, `run_to_completion`, `external_health_check`, a cache's `scope`, a setup command's `run_in`) is rejected, and Batect's own semantics apply to it: no expressions resolved in `image`, and exactly one of `image`/`build_directory`. This holds for a native project's `.yml` include and for a YAML root file (`ratect -f batect.yml`). Accepting these was a bug, not a feature; to use a native field, move that container into a `.toml` file — nothing else in the project has to move with it. The rejection now names the file that declared it. See [Includes](docs/includes.md#which-fields-a-file-may-use).
+
 ### Added
 
 - A rendered, searchable documentation site (mdBook), built from the existing `docs/` tree and published to GitHub Pages on every push to `main`. Pull requests that touch `docs/` build the same site and link-check it, without publishing. Adds `robots.txt` and a generated `sitemap.xml`.
@@ -35,7 +39,7 @@ history, from when it was the only binary.
 - `run_to_completion` (ratect only): a dependency can be marked to run to completion — started, run to exit, and considered ready once it exits with status 0 — instead of staying detached behind a health check and `setup_commands`. Kubernetes-style init-container behavior, expressed as a plain node in the existing dependency graph. See [Config Reference](docs/ratect-config-reference.md#run_to_completion-init-containers).
 - `external_health_check` (ratect only): a container can be checked for readiness from *outside* itself — an HTTP request or a bare TCP connection made over the project's own network — for an image with no shell or check tooling to run a `health_check` inside. Rejected alongside `health_check`, `run_to_completion` or `setup_commands` on the same container. See [Config Reference](docs/ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it). Reported exactly as a `health_check` is — the container itself is what becomes healthy, and the companion Ratect runs the check from narrates nothing of its own.
 - `stop_signal`/`stop_grace_period` (ratect only): a container can set the signal cleanup sends to stop it, and/or how long to wait before Docker escalates to a forceful kill — Docker Compose's own field names for the same concept. Purely additive: a container that sets neither behaves exactly as before, Docker's own default signal and timeout. See [Config Reference](docs/ratect-config-reference.md#stop_signalstop_grace_period-graceful-shutdown).
-- `ulimits` (ratect only): a container can set its own resource limits — Docker's own `--ulimit`, one entry per resource (`nofile`, `nproc`, …) with a soft limit and an optional hard limit, applied to that container alone. The resource name is checked when the file loads, against the set `docker run --ulimit` documents. Purely additive: a container that sets none is created exactly as before, on whatever the daemon's own defaults are. See [Config Reference](docs/ratect-config-reference.md#ulimits-per-resource-limits).
+- `ulimits` (ratect only): a container can set its own resource limits — Docker's own `--ulimit`, one object per resource (`{ name, soft, hard }`, `hard` optional) applied to that container alone. The resource name is checked when the file loads, against the set `docker run --ulimit` documents. Purely additive: a container that sets none is created exactly as before, on whatever the daemon's own defaults are. See [Config Reference](docs/ratect-config-reference.md#ulimits-per-resource-limits).
 
 ### Fixed
 

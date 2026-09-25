@@ -1234,19 +1234,35 @@ tasks:
     assert_eq!(container.devices, None);
 }
 
+/// One ulimit entry, parsed the only way one can now be written — the
+/// object form, in a native file (ratect#214 removed the compact string,
+/// which had no legal home once native fields became TOML-only).
+fn parse_ulimit(entry: &str) -> Result<Ulimit> {
+    toml::from_str::<Ulimit>(entry).map_err(anyhow::Error::from)
+}
+
 #[test]
-fn ulimit_parse_string_handles_dockers_own_format() {
+fn a_ulimit_sets_both_limits_when_hard_is_omitted() {
     assert_eq!(
-        Ulimit::parse_string("nofile=1024:2048").unwrap(),
+        parse_ulimit(
+            r#"name = "nofile"
+soft = 1024
+hard = 2048"#
+        )
+        .unwrap(),
         Ulimit {
             name: UlimitResource::Nofile,
             soft: 1024,
             hard: 2048,
         }
     );
-    // One value sets both limits, matching `docker run --ulimit`.
+    // One value sets both limits, matching `docker run --ulimit name=limit`.
     assert_eq!(
-        Ulimit::parse_string("nproc=512").unwrap(),
+        parse_ulimit(
+            r#"name = "nproc"
+soft = 512"#
+        )
+        .unwrap(),
         Ulimit {
             name: UlimitResource::Nproc,
             soft: 512,
@@ -1255,7 +1271,12 @@ fn ulimit_parse_string_handles_dockers_own_format() {
     );
     // -1 is Docker's own "unlimited".
     assert_eq!(
-        Ulimit::parse_string("core=-1:-1").unwrap(),
+        parse_ulimit(
+            r#"name = "core"
+soft = -1
+hard = -1"#
+        )
+        .unwrap(),
         Ulimit {
             name: UlimitResource::Core,
             soft: -1,
@@ -1264,22 +1285,17 @@ fn ulimit_parse_string_handles_dockers_own_format() {
     );
 }
 
+/// Docker's own soft-below-hard rule, including its -1 handling: an
+/// unlimited hard limit permits any soft limit, but an unlimited soft limit
+/// under a finite hard one does not. Checked here because the daemon
+/// doesn't check it — such a pair reaches the runtime and fails there,
+/// naming a number rather than the field you wrote.
 #[test]
-fn ulimit_parse_string_rejects_invalid_input() {
-    assert!(Ulimit::parse_string("").is_err());
-    assert!(Ulimit::parse_string("nofile").is_err());
-    assert!(Ulimit::parse_string("=1024:2048").is_err());
-    assert!(Ulimit::parse_string("nofile=").is_err());
-    assert!(Ulimit::parse_string("nofile=abc").is_err());
-    assert!(Ulimit::parse_string("nofile=1024:2048:4096").is_err());
-    // Docker's own soft-below-hard rule, including its -1 handling: an
-    // unlimited hard limit permits any soft limit, but an unlimited soft
-    // limit under a finite hard one does not. Checked here because the
-    // daemon doesn't check it.
-    assert!(Ulimit::parse_string("nofile=2048:1024").is_err());
-    assert!(Ulimit::parse_string("nofile=-1:1024").is_err());
+fn a_ulimit_soft_limit_above_its_hard_limit_is_rejected() {
+    assert!(parse_ulimit("name = \"nofile\"\nsoft = 2048\nhard = 1024").is_err());
+    assert!(parse_ulimit("name = \"nofile\"\nsoft = -1\nhard = 1024").is_err());
     assert_eq!(
-        Ulimit::parse_string("nofile=1024:-1").unwrap(),
+        parse_ulimit("name = \"nofile\"\nsoft = 1024\nhard = -1").unwrap(),
         Ulimit {
             name: UlimitResource::Nofile,
             soft: 1024,
@@ -1288,34 +1304,31 @@ fn ulimit_parse_string_rejects_invalid_input() {
     );
 }
 
-/// The object form is what `ratect.toml` writes; the string form exists for
-/// a `.yml` [include] of a native project, exactly like `devices`.
-#[test]
-fn parses_ulimits_as_strings_and_objects() {
-    let config = parse(
+/// The object form is the only form: a container's `ulimits` may only be
+/// written in a native file, where objects are canonical (ratect#214).
+#[tokio::test]
+async fn parses_ulimits_as_objects() {
+    let project = load_native_toml(
         r#"
-project_name: demo
-containers:
-  build-env:
-    image: alpine:3.18
-    ulimits:
-      - nofile=1024:2048
-      - name: nproc
-        soft: 512
-        hard: 1024
-      - name: core
-        soft: 0
-tasks:
-  test:
-    run:
-      container: build-env
-      command: echo hi
-"#,
-    );
+project_name = "demo"
 
-    let container = config.containers.get("build-env").unwrap();
+[containers.build-env]
+image = "alpine:3.18"
+ulimits = [
+    { name = "nofile", soft = 1024, hard = 2048 },
+    { name = "nproc", soft = 512, hard = 1024 },
+    { name = "core", soft = 0 },
+]
+
+[tasks.test]
+run = { container = "build-env", command = "echo hi" }
+"#,
+    )
+    .await
+    .unwrap();
+
     assert_eq!(
-        container.ulimits,
+        project.config.containers["build-env"].ulimits,
         Some(vec![
             Ulimit {
                 name: UlimitResource::Nofile,
@@ -1342,30 +1355,13 @@ tasks:
 /// unknown name is accepted at container *creation* and only fails when the
 /// container starts, as `wrong rlimit value: RLIMIT_BOGUS` out of runc.
 #[test]
-fn an_unknown_ulimit_resource_is_rejected_in_both_forms() {
-    let error = Ulimit::parse_string("bogus=10:20").unwrap_err().to_string();
+fn an_unknown_ulimit_resource_is_rejected() {
+    let error = parse_ulimit("name = \"bogus\"\nsoft = 10")
+        .expect_err("'bogus' is not a resource Docker supports")
+        .to_string();
     assert!(
         error.contains("bogus") && error.contains("nofile"),
         "the error should name the unknown resource and the accepted ones: {error}"
-    );
-
-    let yaml = r#"
-project_name: demo
-containers:
-  build-env:
-    image: alpine:3.18
-    ulimits:
-      - name: bogus
-        soft: 10
-tasks:
-  test:
-    run:
-      container: build-env
-"#;
-    let result: Result<Config, _> = noyalib::from_reader(Cursor::new(yaml.as_bytes()));
-    assert!(
-        result.is_err(),
-        "the object form should reject an unknown resource too"
     );
 }
 
@@ -1375,7 +1371,7 @@ tasks:
 /// accepted here either.
 #[test]
 fn the_deprecated_as_resource_is_not_accepted() {
-    assert!(Ulimit::parse_string("as=10:20").is_err());
+    assert!(parse_ulimit("name = \"as\"\nsoft = 10").is_err());
 }
 
 /// Every name `docker run --ulimit` documents round-trips: parsed from its
@@ -1399,7 +1395,7 @@ fn every_documented_ulimit_resource_parses_and_renders_unchanged() {
         "sigpending",
         "stack",
     ] {
-        let ulimit = Ulimit::parse_string(&format!("{name}=1"))
+        let ulimit = parse_ulimit(&format!("name = \"{name}\"\nsoft = 1"))
             .unwrap_or_else(|error| panic!("'{name}' should be an accepted resource: {error}"));
         assert_eq!(ulimit.name.as_str(), name);
     }
@@ -2747,7 +2743,7 @@ fn compat_rejects_build_only_fields_alongside_an_image() {
         mutate(&mut container);
         let containers = HashMap::from([("app".to_string(), container)]);
 
-        let err = validate_image_sources_in_compat(&containers)
+        let err = validate_image_sources_in_compat(&batect_shaped_for_test(&containers))
             .expect_err("{field} alongside 'image' should be rejected");
 
         assert!(
@@ -2765,7 +2761,7 @@ fn compat_rejects_a_container_with_both_image_and_build_directory() {
     container.build_directory = Some("./docker".to_string());
     let containers = HashMap::from([("app".to_string(), container)]);
 
-    let err = validate_image_sources_in_compat(&containers)
+    let err = validate_image_sources_in_compat(&batect_shaped_for_test(&containers))
         .expect_err("both an image and a build directory should be rejected");
 
     assert!(
@@ -2784,7 +2780,7 @@ fn compat_rejects_a_container_with_neither_image_nor_build_directory() {
     container.image = None;
     let containers = HashMap::from([("app".to_string(), container)]);
 
-    let err = validate_image_sources_in_compat(&containers)
+    let err = validate_image_sources_in_compat(&batect_shaped_for_test(&containers))
         .expect_err("a container with no image source should be rejected");
 
     assert!(
@@ -4744,6 +4740,253 @@ run = { container = "app" }
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// The slice `validate_image_sources_in_compat` and its siblings now take
+/// (ratect#214), for a test that builds containers by hand rather than
+/// loading a file: no origin, so every one is judged — which is what a
+/// hand-built `Config` means.
+fn batect_shaped_for_test(containers: &HashMap<String, Container>) -> Vec<BatectShaped<'_>> {
+    let mut shaped: Vec<BatectShaped<'_>> = containers
+        .iter()
+        .map(|(name, container)| BatectShaped {
+            name: name.as_str(),
+            container,
+            origin: None,
+        })
+        .collect();
+    shaped.sort_unstable_by_key(|entry| entry.name);
+    shaped
+}
+
+/// A native project whose root `ratect.toml` includes one fragment — the
+/// shape ratect#214's rule is about: the *file* a container is declared in
+/// decides which fields and semantics apply to it, not the project that
+/// includes it. Returns the fragment's own path so a test can assert the
+/// error names it.
+async fn load_native_including(
+    fragment_name: &str,
+    fragment: &str,
+) -> (std::path::PathBuf, Result<LoadedProject>) {
+    let dir = unique_temp_dir();
+    let fragment_path = dir.join(fragment_name);
+    std::fs::write(&fragment_path, fragment).unwrap();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        format!(
+            "project_name = \"demo\"\ninclude = [{{ path = \"{fragment_name}\" }}]\n\n\
+             [tasks.t]\nrun = {{ container = \"app\" }}\n"
+        ),
+    )
+    .unwrap();
+    let result = load_project_native(&dir.join("ratect.toml"), &HashMap::new()).await;
+    std::fs::remove_dir_all(&dir).ok();
+    (fragment_path, result)
+}
+
+/// A `.yml` file is Batect-shaped wherever it is included (ratect#214): a
+/// native-only field declared in one is rejected even though the project
+/// including it is native, because the file — not the project — is what
+/// decides. [decisions/0003](../../decisions/0003-ratect-native-config-format.md)
+/// says as much of `extends` ("never the reverse"); this covers every
+/// native-only field, and the error must name the file that declared it,
+/// which is the only way to find it among several includes.
+#[tokio::test]
+async fn native_only_fields_are_rejected_in_a_yaml_include_of_a_native_project() {
+    for (field, declaration) in [
+        ("extends", "    extends: base\n"),
+        ("run_to_completion", "    run_to_completion: true\n"),
+        (
+            "external_health_check",
+            "    external_health_check:\n      type: tcp\n      port: 8080\n",
+        ),
+        ("stop_signal", "    stop_signal: SIGINT\n"),
+        ("stop_grace_period", "    stop_grace_period: 30s\n"),
+        (
+            "ulimits",
+            "    ulimits:\n      - name: nofile\n        soft: 10\n",
+        ),
+        (
+            "scope",
+            "    volumes:\n      - type: cache\n        name: c\n        container: /c\n        \
+             scope: shared\n",
+        ),
+        (
+            "run_in",
+            "    setup_commands:\n      - command: echo hi\n        run_in: other\n",
+        ),
+    ] {
+        let fragment =
+            format!("containers:\n  app:\n    image: alpine:3.18\n{declaration}  base:\n    image: alpine:3.18\n  other:\n    image: alpine:3.18\n");
+        let (path, result) = load_native_including("frag.yml", &fragment).await;
+        let error = format!(
+            "{:#}",
+            result.err().unwrap_or_else(|| panic!(
+                "'{field}' is native-only and must be rejected in a YAML include"
+            ))
+        );
+        assert!(
+            error.contains(field),
+            "the error for '{field}' should name the field: {error}"
+        );
+        assert!(
+            error.contains(&path.display().to_string()),
+            "the error for '{field}' should name the file that declared it: {error}"
+        );
+    }
+}
+
+/// A rejection has to name a file the reader can go and edit. For a
+/// Git-included container that is the bundle, not the `~/.ratect/incl`
+/// clone-cache path Ratect actually read — the same identity
+/// `include_trust`'s own refusals use (ratect#214).
+#[test]
+fn a_git_included_file_is_named_by_its_bundle_not_the_clone_cache() {
+    let boundary = ungranted_git_boundary_at(PathBuf::from("/cache/abc123"));
+    let described = describe_origin(
+        Path::new("/cache/abc123/containers/base.yml"),
+        Some(&boundary),
+    );
+
+    assert_eq!(
+        described,
+        "'containers/base.yml', from the bundle 'https://example.com/bundle.git' at 'v1.0.0'"
+    );
+    assert!(
+        !described.contains("/cache/abc123"),
+        "the clone-cache path is not somewhere anyone can edit: {described}"
+    );
+}
+
+/// A locally-included file is its own path — there is no bundle to name,
+/// and the path is exactly where to go.
+#[test]
+fn a_local_file_is_named_by_its_own_path() {
+    assert_eq!(
+        describe_origin(Path::new("/project/frag.yml"), None),
+        "\"/project/frag.yml\""
+    );
+}
+
+/// The rule reaches a native project's *root* file too, not only its
+/// includes: `ratect -f batect.yml` reads a Batect file, so it reads it as
+/// one. The docs and changelog both promise this case specifically.
+#[tokio::test]
+async fn a_yaml_root_file_is_batect_shaped_even_under_the_native_binary() {
+    let dir = unique_temp_dir();
+    let path = dir.join("batect.yml");
+    std::fs::write(
+        &path,
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    \
+         stop_signal: SIGINT\ntasks:\n  t:\n    run:\n      container: app\n",
+    )
+    .unwrap();
+    let error = load_project_native(&path, &HashMap::new())
+        .await
+        .expect_err("a YAML root file keeps Batect's rules");
+    let error = format!("{error:#}");
+    std::fs::remove_dir_all(&dir).ok();
+
+    assert!(
+        error.contains("stop_signal"),
+        "the error should name the field: {error}"
+    );
+    assert!(
+        error.contains(&path.display().to_string()),
+        "the error should name the file that declared it: {error}"
+    );
+}
+
+/// An abstract `extends` base needs a native file: it has neither `image`
+/// nor `build_directory`, which is Batect's own one-image-source rule, and
+/// a YAML file has no `extends` to justify the exception.
+#[tokio::test]
+async fn an_abstract_base_declared_in_a_yaml_include_is_rejected() {
+    let (_, result) = load_native_including(
+        "frag.yml",
+        "containers:\n  base:\n    working_directory: /code\n  app:\n    image: alpine:3.18\n",
+    )
+    .await;
+    let error = format!(
+        "{:#}",
+        result.expect_err("a YAML file may not declare a container with no image source")
+    );
+    assert!(
+        error.contains("base") && error.contains("neither 'image' nor 'build_directory'"),
+        "the error should name the base and what it lacks: {error}"
+    );
+    assert!(
+        error.contains("frag.yml"),
+        "the error should name the file that declared it: {error}"
+    );
+}
+
+/// The semantic half of the same rule: `batect.yml` resolves no expression
+/// in `image`, so a container declared in a `.yml` doesn't either, however
+/// native the project including it is.
+#[tokio::test]
+async fn an_image_expression_is_rejected_in_a_yaml_include_of_a_native_project() {
+    let (_, result) = load_native_including(
+        "frag.yml",
+        "containers:\n  app:\n    image: \"alpine:${TAG:-3.18}\"\n",
+    )
+    .await;
+    let error = format!(
+        "{:#}",
+        result.expect_err("a YAML file resolves no image expression")
+    );
+    assert!(
+        error.contains("image"),
+        "the error should name the field: {error}"
+    );
+}
+
+/// And the other semantic divergence: exactly one of `image`/
+/// `build_directory` is Batect's rule, and a `.yml` file keeps it. The
+/// native relaxation exists only because `extends` needs a way to override
+/// an inherited build — and a YAML file has no `extends` to begin with.
+#[tokio::test]
+async fn a_yaml_included_container_with_both_image_and_build_directory_is_rejected() {
+    let (_, result) = load_native_including(
+        "frag.yml",
+        "containers:\n  app:\n    image: alpine:3.18\n    build_directory: ctx\n",
+    )
+    .await;
+    let error = format!(
+        "{:#}",
+        result.expect_err("a YAML file keeps Batect's one-image-source rule")
+    );
+    assert!(
+        error.contains("app"),
+        "the error should name the container: {error}"
+    );
+}
+
+/// The control: the very same fields in a `.toml` fragment of the same
+/// project are fine. Without this, the rule above could be "native fields
+/// are rejected in any included file", which is not the rule.
+#[tokio::test]
+async fn the_same_native_fields_are_accepted_in_a_toml_include() {
+    let (_, result) = load_native_including(
+        "frag.toml",
+        r#"
+[containers.app]
+image = "alpine:${TAG:-3.18}"
+stop_signal = "SIGINT"
+ulimits = [{ name = "nofile", soft = 10 }]
+"#,
+    )
+    .await;
+    let project = result.expect("a TOML fragment of a native project keeps native rules");
+    assert_eq!(
+        project.config.containers["app"].stop_signal.as_deref(),
+        Some("SIGINT")
+    );
+    assert_eq!(
+        project.config.containers["app"].image.as_deref(),
+        Some("alpine:3.18"),
+        "a TOML-declared container still resolves expressions in image"
+    );
+}
+
 /// `extends` reaches across the *format* boundary: a native container
 /// inherits from one defined in an included YAML file, because the
 /// container namespace is flat once includes are merged (ADR-0003's
@@ -5331,7 +5574,7 @@ async fn ulimits_are_rejected_in_compat_mode() {
     let path = dir.join("batect.yml");
     std::fs::write(
         &path,
-        "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    ulimits:\n      - nofile=1024:2048\ntasks: {}\n",
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    ulimits:\n      - name: nofile\n        soft: 1024\ntasks: {}\n",
     )
     .unwrap();
     let err = load_project(&path, &HashMap::new()).await.unwrap_err();

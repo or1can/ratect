@@ -74,6 +74,36 @@ the *first* entry to reach a file is the one whose settings that file is
 loaded with, which is what [a grant goes on the entry that reaches the file
 first](#a-grant-goes-on-the-entry-that-reaches-the-file-first) rests on.
 
+## Which fields a file may use
+
+A file's own **format** decides which fields and which rules apply to the
+containers it declares — not the project that includes it. A `.yml` is
+Batect's format, so a container written in one may use no `ratect`-native
+field (`extends`, `ulimits`, `stop_signal`, `run_to_completion`,
+`external_health_check`, a cache's `scope`, a setup command's `run_in`) and
+gets Batect's own semantics: no expressions resolved in `image`, and exactly
+one of `image`/`build_directory`. That holds even when a `ratect.toml`
+project is what pulled the file in, and it holds for a YAML *root* file too
+— `ratect -f batect.yml` reads a Batect file, and reads it as one.
+
+To use a native field on a container, move that container into a `.toml`
+file. Incremental migration exists so a project needn't be converted in one
+go (see [Migrating a Batect
+project](migrating-batect-project.md)), not so a YAML file can grow native
+features — and the unit you convert is a container, which is smaller than a
+file.
+
+The flow between them is one-way, which is what makes this workable: a
+native container may [`extends`](ratect-config-reference.md#extends-inheritance-instead-of-yaml-anchors)
+a container declared in a YAML file, because the container namespace is flat
+once includes are merged. The reverse — a YAML-declared container extending
+anything — is the rejected case above.
+
+For a bundle author, the same rule is why a Git bundle can ship
+`ratect-bundle.toml` and `batect-bundle.yml` side by side (see [Two kinds of
+include](#two-kinds-of-include)): the YAML one stays consumable by Batect
+and `ratect-compat`, and the TOML one is free to use native fields.
+
 ## Where relative paths resolve
 
 A relative path *within a container* — a volume's host path, `build_directory`,

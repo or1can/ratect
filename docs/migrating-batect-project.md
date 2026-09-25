@@ -111,6 +111,13 @@ into a new `.toml` file. Swap that one `include` entry from `.yml` to `.toml`,
 and move on whenever you're ready — there's no deadline, and a project can
 stay a mix of both formats indefinitely.
 
+What decides *when* a piece has to move is the feature you want. A container
+still declared in a `.yml` is a Batect container wherever it is included, so
+it can use no `ratect`-native field — see [Which fields a file may
+use](includes.md#which-fields-a-file-may-use). Reaching for `ulimits`,
+`extends` or `stop_signal` on a container is therefore the signal to convert
+*that container* to TOML; nothing else in the project has to move with it.
+
 ## Next steps
 
 Wherever you stopped, [Differences from Batect](differences-from-batect.md)

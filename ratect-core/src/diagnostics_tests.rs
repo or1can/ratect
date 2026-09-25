@@ -23,6 +23,17 @@ use std::collections::HashMap;
 /// also means `build_directory` paths are resolved exactly as they will be
 /// at run time, which one of these checks depends on.
 async fn config_with(yaml: &str) -> Config {
+    config_from("batect.yml", yaml).await
+}
+
+/// The same, for a test whose config needs a `ratect`-native field: those
+/// may only be written in a native (TOML) file, whichever project loads it
+/// (ratect#214), so a YAML fixture using one no longer loads at all.
+async fn native_config_with(toml: &str) -> Config {
+    config_from("ratect.toml", toml).await
+}
+
+async fn config_from(file_name: &str, text: &str) -> Config {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let directory = std::env::temp_dir().join(format!(
@@ -35,8 +46,8 @@ async fn config_with(yaml: &str) -> Config {
         count
     ));
     std::fs::create_dir_all(&directory).unwrap();
-    let path = directory.join("batect.yml");
-    std::fs::write(&path, yaml).unwrap();
+    let path = directory.join(file_name);
+    std::fs::write(&path, text).unwrap();
 
     let project = crate::config::load_project_native(&path, &HashMap::new())
         .await
@@ -133,28 +144,24 @@ tasks:
 /// load.
 #[tokio::test]
 async fn doctor_does_not_ask_for_a_health_check_a_dependency_cannot_have() {
-    let config = config_with(
+    let config = native_config_with(
         r#"
-project_name: demo
-containers:
-  migrate:
-    image: alpine:3.18.2
-    run_to_completion: true
-  api:
-    image: alpine:3.18.2
-    external_health_check:
-      type: tcp
-      port: 8080
-  app:
-    image: alpine:3.18.2
-    dependencies:
-      - migrate
-      - api
-tasks:
-  test:
-    run:
-      container: app
-      command: echo hi
+project_name = "demo"
+
+[containers.migrate]
+image = "alpine:3.18.2"
+run_to_completion = true
+
+[containers.api]
+image = "alpine:3.18.2"
+external_health_check = { type = "tcp", port = 8080 }
+
+[containers.app]
+image = "alpine:3.18.2"
+dependencies = ["migrate", "api"]
+
+[tasks.test]
+run = { container = "app", command = "echo hi" }
 "#,
     )
     .await;
