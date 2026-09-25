@@ -473,6 +473,52 @@
             "null"
           ]
         },
+        "ulimits": {
+          "description": "Per-resource limits for this container — Docker's --ulimit. Each entry names a resource without its RLIMIT_ prefix (\"nofile\", \"nproc\", \"core\", ...), with a soft limit and an optional hard limit (defaulting to the soft one); -1 means unlimited. The daemon's own defaults apply when unset.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "hard": {
+                "description": "The hard limit, a ceiling the process cannot raise. Defaults to the soft limit; -1 means unlimited.",
+                "type": "integer"
+              },
+              "name": {
+                "description": "The resource to limit, without its RLIMIT_ prefix — for example \"nofile\" or \"nproc\". One of the names `docker run --ulimit` documents.",
+                "enum": [
+                  "core",
+                  "cpu",
+                  "data",
+                  "fsize",
+                  "locks",
+                  "memlock",
+                  "msgqueue",
+                  "nice",
+                  "nofile",
+                  "nproc",
+                  "rss",
+                  "rtprio",
+                  "rttime",
+                  "sigpending",
+                  "stack"
+                ],
+                "type": "string"
+              },
+              "soft": {
+                "description": "The soft limit, which the process may raise up to the hard limit. -1 means unlimited.",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "soft"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "volumes": {
           "description": "Host bind mounts (`local`) and/or named cache volumes (`cache`) — see `VolumeMount`. A `local` mount's host path is resolved in `Config::resolve_expressions_with`; a `cache` mount's Docker volume name/host directory is resolved later, once `--cache-type` and the project's own cache key are known — see `crate::cache`.",
           "items": {

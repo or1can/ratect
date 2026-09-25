@@ -1,0 +1,43 @@
+# A native `ratect.toml` fixture proving per-container `ulimits` (ratect#95)
+# against a real Docker daemon. Native-only — Batect has no equivalent
+# field, so this fixture, unlike most of the engine/Docker behaviour proven
+# under `ratect-compat/tests/fixtures/`, can only be expressed here (see
+# AGENTS.md's fixture-layer guideline).
+#
+# Every container checks its own limits from the inside and exits non-zero
+# if they aren't what its own `ulimits` asked for, so a limit that never
+# reached Docker fails the run rather than needing output parsing.
+project_name = "ratect-ulimits-test"
+
+# The compact string form belongs to the included YAML fragment: it is what
+# a `.yml` include of a native project may still write, and the native
+# format's own canonical shape is the object one below.
+include = [{ path = "ulimits-string-form.yml" }]
+
+[containers.object-form]
+image = "alpine:3.18.2"
+ulimits = [{ name = "nofile", soft = 1024, hard = 2048 }]
+command = "sh -c 'test $(ulimit -Sn) -eq 1024 && test $(ulimit -Hn) -eq 2048 && echo object-form-ok'"
+
+[containers.limited-dependency]
+image = "alpine:3.18.2"
+run_to_completion = true
+ulimits = [{ name = "nofile", soft = 3000, hard = 3000 }]
+# Run to completion, so a dependency that didn't get its own limit fails
+# the run before the task's own container ever starts.
+command = "sh -c 'test $(ulimit -Sn) -eq 3000'"
+
+[containers.unlimited-app]
+image = "alpine:3.18.2"
+# Declares no `ulimits` of its own: whatever the daemon's defaults are,
+# they are not the dependency's 3000.
+dependencies = ["limited-dependency"]
+command = "sh -c 'test $(ulimit -Sn) -ne 3000 && echo app-unaffected'"
+
+[tasks.object-form]
+description = "A container whose ulimits are written as objects"
+run = { container = "object-form" }
+
+[tasks.per-container]
+description = "A dependency's ulimits apply to it alone, not to the task's own container"
+run = { container = "unlimited-app" }

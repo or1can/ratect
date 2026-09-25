@@ -241,6 +241,7 @@ fn every_native_config_validates_against_the_native_schema() {
         "ratect.toml",
         "ratect/tests/fixtures/native.toml",
         "ratect/tests/fixtures/external-health-check.toml",
+        "ratect/tests/fixtures/ulimits.toml",
     ] {
         let path = root.join(relative);
         let text = std::fs::read_to_string(&path).expect("failed to read a native config");

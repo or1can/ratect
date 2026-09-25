@@ -56,6 +56,7 @@ fn sample_container() -> Container {
         reports_readiness_for: None,
         stop_signal: None,
         stop_grace_period: None,
+        ulimits: None,
     }
 }
 
@@ -342,4 +343,77 @@ fn derive_build_spec_merges_proxy_vars_and_carries_the_host_gateway() {
             address: "host-gateway",
         })
     );
+}
+
+/// A container's `ulimits` reach `ContainerOptions` as plain
+/// `(name, soft, hard)` triples, config types left behind at this boundary
+/// exactly as `devices` are (ratect#95).
+#[test]
+fn derive_spec_carries_ulimits_as_plain_triples() {
+    let mut container_config = sample_container();
+    container_config.ulimits = Some(vec![
+        crate::config::Ulimit {
+            name: crate::config::UlimitResource::Nofile,
+            soft: 1024,
+            hard: 2048,
+        },
+        crate::config::Ulimit {
+            name: crate::config::UlimitResource::Core,
+            soft: -1,
+            hard: -1,
+        },
+    ]);
+    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+
+    let spec = derive_spec(ContainerSpecInputs {
+        name: "app",
+        container_config: &container_config,
+        overlay: Overlay::Run(&empty_run()),
+        image: "alpine:3.18",
+        network: "ratect-run-id",
+        interactive: false,
+        additional_args: &[],
+        user_mapping: None,
+        volumes: None,
+        term_var: None,
+        proxy: None,
+        publish_ports: true,
+        role: ContainerRole::Task,
+        run_labels: &run_labels,
+    });
+
+    assert_eq!(
+        spec.shared.options.ulimits,
+        Some(vec![
+            ("nofile".to_string(), 1024, 2048),
+            ("core".to_string(), -1, -1),
+        ])
+    );
+}
+
+/// A container with no `ulimits` leaves the field `None`, so container
+/// creation is byte-for-byte what it was before ratect#95.
+#[test]
+fn derive_spec_leaves_ulimits_unset_when_the_container_declares_none() {
+    let container_config = sample_container();
+    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+
+    let spec = derive_spec(ContainerSpecInputs {
+        name: "app",
+        container_config: &container_config,
+        overlay: Overlay::Run(&empty_run()),
+        image: "alpine:3.18",
+        network: "ratect-run-id",
+        interactive: false,
+        additional_args: &[],
+        user_mapping: None,
+        volumes: None,
+        term_var: None,
+        proxy: None,
+        publish_ports: true,
+        role: ContainerRole::Task,
+        run_labels: &run_labels,
+    });
+
+    assert_eq!(spec.shared.options.ulimits, None);
 }

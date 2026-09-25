@@ -107,7 +107,7 @@ use bollard::container::AttachContainerResults;
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use bollard::models::{
     ContainerCreateBody as Config, DeviceMapping, EndpointSettings, HealthConfig,
-    NetworkConnectRequest, NetworkCreateRequest, PortBinding, PortMap,
+    NetworkConnectRequest, NetworkCreateRequest, PortBinding, PortMap, ResourcesUlimits,
 };
 use bollard::query_parameters::AttachContainerOptionsBuilder;
 use bollard::query_parameters::BuildImageOptionsBuilder;
@@ -338,6 +338,25 @@ fn build_devices(
                 // bollard talks to the API directly, so Ratect has to
                 // apply that same default itself.
                 cgroup_permissions: Some(options.clone().unwrap_or_else(|| "rwm".to_string())),
+            })
+            .collect(),
+    )
+}
+
+/// Builds Docker's `HostConfig.ulimits` from already-expanded
+/// `(name, soft, hard)` triples — pure, unit-testable without a daemon.
+/// `None` when `ulimits` itself is `None`, so a container that declares
+/// none is created exactly as it was before ratect#95. The resource name is
+/// forwarded verbatim; the daemon is what rejects one it doesn't know.
+fn build_ulimits(ulimits: Option<&Vec<(String, i64, i64)>>) -> Option<Vec<ResourcesUlimits>> {
+    let ulimits = ulimits?;
+    Some(
+        ulimits
+            .iter()
+            .map(|(name, soft, hard)| ResourcesUlimits {
+                name: Some(name.clone()),
+                soft: Some(*soft),
+                hard: Some(*hard),
             })
             .collect(),
     )
@@ -2411,6 +2430,7 @@ impl ContainerRuntime for DockerClient {
                 options.log_options.as_ref(),
             ),
             tmpfs: build_tmpfs_mounts(options.tmpfs.as_ref()),
+            ulimits: build_ulimits(options.ulimits.as_ref()),
             ..Default::default()
         };
 
@@ -2689,6 +2709,7 @@ impl ContainerRuntime for DockerClient {
                 options.log_options.as_ref(),
             ),
             tmpfs: build_tmpfs_mounts(options.tmpfs.as_ref()),
+            ulimits: build_ulimits(options.ulimits.as_ref()),
             ..Default::default()
         };
 

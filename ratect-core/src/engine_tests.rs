@@ -860,6 +860,7 @@ fn container(image: &str, dependencies: Option<Vec<String>>) -> Container {
         reports_readiness_for: None,
         stop_signal: None,
         stop_grace_period: None,
+        ulimits: None,
     }
 }
 
@@ -921,6 +922,7 @@ fn config_with_cycle() -> Config {
             reports_readiness_for: None,
             stop_signal: None,
             stop_grace_period: None,
+            ulimits: None,
         },
     );
 
@@ -1023,6 +1025,7 @@ fn config_with_shared_prerequisite() -> Config {
             reports_readiness_for: None,
             stop_signal: None,
             stop_grace_period: None,
+            ulimits: None,
         },
     );
 
@@ -1561,6 +1564,7 @@ fn container_with_run_as_current_user(
         reports_readiness_for: None,
         stop_signal: None,
         stop_grace_period: None,
+        ulimits: None,
     }
 }
 
@@ -2045,6 +2049,7 @@ async fn run_as_current_user_explicitly_disabled_reaches_the_container_with_no_m
             reports_readiness_for: None,
             stop_signal: None,
             stop_grace_period: None,
+            ulimits: None,
         },
     );
     let mut tasks = HashMap::new();
@@ -2109,6 +2114,7 @@ fn container_with_build_directory(
         reports_readiness_for: None,
         stop_signal: None,
         stop_grace_period: None,
+        ulimits: None,
     }
 }
 
@@ -2718,6 +2724,7 @@ async fn container_without_image_or_build_directory_errors() {
             reports_readiness_for: None,
             stop_signal: None,
             stop_grace_period: None,
+            ulimits: None,
         },
     );
     let mut tasks = HashMap::new();
@@ -5274,6 +5281,7 @@ async fn dependency_without_image_or_build_directory_errors() {
             reports_readiness_for: None,
             stop_signal: None,
             stop_grace_period: None,
+            ulimits: None,
         },
     );
     containers.insert(

@@ -435,6 +435,56 @@ fn make_native(json: &mut serde_json::Value) {
                 "examples": ["30s", "1m30s", "500ms", "0"],
             }),
         );
+        // Add the native-only `ulimits` field, same reasoning as
+        // `stop_signal` above. Spelled out here rather than derived: the
+        // parser also accepts Docker's compact `"name=soft:hard"` string
+        // (for a `.yml` include), but the native format's canonical shape
+        // is the object form — the same object-only narrowing `make_native`
+        // applies to `volumes`/`ports`/`devices`.
+        properties.insert(
+            "ulimits".to_string(),
+            serde_json::json!({
+                "type": ["array", "null"],
+                "description": "Per-resource limits for this container — Docker's \
+                                --ulimit. Each entry names a resource without its RLIMIT_ \
+                                prefix (\"nofile\", \"nproc\", \"core\", ...), with a soft \
+                                limit and an optional hard limit (defaulting to the soft \
+                                one); -1 means unlimited. The daemon's own defaults apply \
+                                when unset.",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["name", "soft"],
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            // The same list `config::UlimitResource` accepts, read
+                            // from it rather than retyped, so an editor and the
+                            // loader can't disagree about which names exist.
+                            "enum": crate::config::UlimitResource::ALL
+                                .iter()
+                                .map(|resource| resource.as_str())
+                                .collect::<Vec<_>>(),
+                            "description": "The resource to limit, without its RLIMIT_ \
+                                            prefix — for example \"nofile\" or \"nproc\". \
+                                            One of the names `docker run --ulimit` \
+                                            documents.",
+                        },
+                        "soft": {
+                            "type": "integer",
+                            "description": "The soft limit, which the process may raise up \
+                                            to the hard limit. -1 means unlimited.",
+                        },
+                        "hard": {
+                            "type": "integer",
+                            "description": "The hard limit, a ceiling the process cannot \
+                                            raise. Defaults to the soft limit; -1 means \
+                                            unlimited.",
+                        },
+                    },
+                },
+            }),
+        );
     }
 }
 
