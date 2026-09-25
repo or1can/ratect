@@ -909,14 +909,12 @@ fn build_output_suffix(output: &str) -> String {
     }
 }
 
-/// Whether a container run should actually get a real Docker TTY and its
-/// stdin forwarded. `interactive` is eligibility — this is the top-level
-/// requested task's own container, see `TaskEngine::run_task_internal` — not
-/// a guarantee: it's further gated on the local process's own stdin *and*
-/// stdout genuinely being connected to a terminal. Deliberately not decoupled
-/// (unlike Batect, which always forwards stdin to the task container
-/// regardless of whether a TTY is allocated) — piping input into a
-/// non-interactive run isn't supported yet.
+/// Whether a container run should actually get a real Docker TTY.
+/// `interactive` is eligibility — this is the top-level requested task's own
+/// container, see `TaskEngine::run_task_internal` — not a guarantee: it's
+/// further gated on the local process's own stdin *and* stdout genuinely
+/// being connected to a terminal. Stdin forwarding is not gated on this —
+/// see [`StdinFlags`].
 fn should_use_tty(interactive: bool, stdin_is_tty: bool, stdout_is_tty: bool) -> bool {
     interactive && stdin_is_tty && stdout_is_tty
 }
