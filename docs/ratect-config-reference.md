@@ -245,9 +245,6 @@ sweeps this project's caches and never a shared one — discarding storage other
 projects are still using should not be a side effect. See
 [the `caches` options](ratect-cli.md#caches-options).
 
-`batect.yml` has no equivalent, so `scope` is rejected there rather than
-ignored — see [Differences](#differences-from-batectyml-at-a-glance) below.
-
 ## Expressions in `image`
 
 A container's `image` takes [expressions](ratect-compat-config-reference.md#expressions), so a
@@ -390,11 +387,6 @@ exactly as it would if that command ran inside `db` itself.
   [`run_to_completion`](#run_to_completion-init-containers) dependency has
   already exited by the time it counts as ready, so naming one is rejected
   when the file loads rather than failing mid-run.
-- **`ratect`-native only.** Batect has no equivalent —
-  [batect#286](https://github.com/batect/batect/issues/286) asked for this in
-  2018 and was never built — so a `batect.yml` using it is rejected when the
-  file loads rather than quietly running the command in the declaring
-  container instead.
 
 ## `run_to_completion`: init containers
 
@@ -436,9 +428,6 @@ dependencies = ["migrate"]
   rather than silently doing nothing. The same container can still be
   `run_to_completion` when used as a *dependency* by another task — only
   being a task's own main container while the flag is set is rejected.
-- **`ratect`-native only**, like `extends`: `batect.yml` has no equivalent
-  concept, so a container using it is rejected when the file loads rather than
-  silently ignored.
 
 **Not a substitute for `prerequisites`.** A `prerequisites` entry runs
 as a fully separate task execution — own network, own containers, own
@@ -550,9 +539,6 @@ both tools the check uses reach it.)
   task. Unlike `run_to_completion`, this isn't rejected: the field changes
   nothing about how the container runs, so the same container can be one
   task's main container and another task's checked dependency.
-- **`ratect`-native only**, like `run_to_completion`: `batect.yml` has no
-  equivalent concept, so a container using it is rejected when the file loads
-  rather than silently ignored.
 
 Because the two are separate concepts, `interval`, `retries` and `timeout` do
 not quite mean the same thing in both, despite the shared names — which is why
@@ -635,15 +621,10 @@ ulimits = [
   is no task-level or project-wide default.
 - **Purely additive.** A container that sets no `ulimits` is created exactly
   as before — whatever the daemon's own defaults are.
-- **`ratect`-native only**, like [`stop_signal`](#stop_signalstop_grace_period-graceful-shutdown):
-  `batect.yml` has no equivalent field, so a container using it is rejected
-  when the file loads rather than silently ignored.
 
-Entries are objects, like every other native list entry — and objects
-only. `devices` and friends also accept a compact string because a
-`batect.yml` may legitimately write one; `ulimits` is native-only, so it has
-no such file (see [Which fields a file may
-use](includes.md#which-fields-a-file-may-use)) and no shorthand to keep.
+Entries are objects, like every other native list entry — and objects only:
+unlike [`volumes`, `ports` and `devices`](#one-shape-per-list-entry), this
+field has no compact string form at all.
 
 ## Field reference
 
