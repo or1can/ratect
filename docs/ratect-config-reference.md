@@ -582,12 +582,15 @@ stop_grace_period = "30s"
   without the other only changes that half: `stop_signal` alone still waits
   Docker's own default timeout, and `stop_grace_period` alone still sends
   Docker's own default signal.
-- **Only changes what cleanup sends.** Nothing else in Ratect stops a
-  container, so these fields have nothing to affect outside a task's own
-  cleanup.
+- **Only changes what a task's own cleanup sends.** The other place Ratect
+  stops a container — [`ratect resources clean`](ratect-cli.md#resources-options),
+  which removes what an interrupted run left behind — finds its containers
+  by a label scan, with no configuration to read, so it keeps Docker's own
+  default signal and timeout whatever a container asked for here.
 - **Durations use Batect's Go-style string format**: `"2s"`, `"1m30s"`,
-  `"500ms"`, `"0"` — the same format `health_check`'s `interval`/`timeout`
-  use.
+  `"0"` — the same format `health_check`'s `interval`/`timeout` use. Docker's
+  own stop timeout is whole seconds, so anything finer is rounded *up* to the
+  next second: `"500ms"` waits one second, never less than asked for.
 - **A second interrupt during cleanup still abandons cleanup immediately.**
   `stop_grace_period` only bounds how long the first interrupt's cleanup
   waits on Docker; pressing Ctrl+C again abandons cleanup exactly as it does
@@ -757,8 +760,8 @@ so it also works as a CI gate.
 Most field *meanings* are unchanged; the spelling and the format-level rules
 above are the bulk of the difference. The exceptions are the native-only
 fields (`extends`, a cache's `scope`, a dependency's `run_to_completion` or
-`external_health_check`, a setup command's `run_in`, a container's `ulimits`)
-and the handful of behaviours in [Where
+`external_health_check`, a setup command's `run_in`, a container's
+`stop_signal`/`stop_grace_period` or `ulimits`) and the handful of behaviours in [Where
 the semantics differ](#where-the-semantics-differ), which exist because
 `extends` gives some combinations a meaning `batect.yml` has no way to
 express.

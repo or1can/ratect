@@ -431,8 +431,10 @@ fn make_native(json: &mut serde_json::Value) {
                 "pattern": DURATION_PATTERN,
                 "description": "How long to wait, after the stop signal, before Docker \
                                 escalates to a forceful kill during cleanup — e.g. \"30s\", \
-                                \"1m30s\". Docker's own default timeout applies when unset.",
-                "examples": ["30s", "1m30s", "500ms", "0"],
+                                \"1m30s\". Rounded up to whole seconds, Docker's own \
+                                granularity for this. Docker's own default timeout applies \
+                                when unset.",
+                "examples": ["30s", "1m30s", "2m", "0"],
             }),
         );
         // Add the native-only `ulimits` field, same reasoning as

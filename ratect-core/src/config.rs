@@ -415,7 +415,9 @@ pub struct Container {
     /// The signal sent when stopping this container during cleanup, instead
     /// of Docker's own default signal (usually `SIGTERM`) — Docker
     /// Compose's own `stop_signal` field name. Only changes what a task's
-    /// own cleanup sends; nothing else in Ratect stops a container. `None`
+    /// own cleanup sends: the other place Ratect stops a container,
+    /// [`crate::resources::remove`], works from a label scan with no
+    /// `Container` config to read, so it keeps Docker's own defaults. `None`
     /// leaves Docker's own default signal alone, unchanged from today's
     /// behavior. `ratect`-native only, like `run_to_completion` — Batect
     /// has no equivalent field, so `ratect-compat` rejects it.
@@ -429,8 +431,10 @@ pub struct Container {
     /// second interrupt during cleanup still abandons cleanup immediately
     /// regardless of this value (`TaskEngine::until_interrupted` races the
     /// removal itself, not this timeout). Durations use Batect's Go-style
-    /// string format: `"2s"`, `"1m30s"`, `"500ms"`, `"0"`. `ratect`-native
-    /// only, like `stop_signal` above — Batect has no equivalent field.
+    /// string format: `"2s"`, `"1m30s"`, `"500ms"`, `"0"` — rounded *up* to
+    /// whole seconds, which is the granularity Docker's own stop timeout
+    /// has. `ratect`-native only, like `stop_signal` above — Batect has no
+    /// equivalent field.
     #[cfg_attr(feature = "schema", schemars(skip))]
     #[serde(default, with = "duration_string")]
     pub stop_grace_period: Option<std::time::Duration>,
