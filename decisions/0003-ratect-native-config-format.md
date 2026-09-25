@@ -97,6 +97,23 @@ support both tools at once (ship both; `ratect` prefers the TOML, Batect/
 `ratect-compat` take the YAML). `extends` flows one way — a native container can
 `extends` one from a YAML bundle (flat post-merge namespace), never the reverse.
 
+**Generalized (ratect#214).** The `extends` sentence above is one instance of
+a rule that holds for every native addition *to a container*: its **file** decides
+which fields and which semantics apply to it, not the project that includes
+it. A `.yml` is Batect's format, so a container declared in one may use no
+native field and keeps Batect's own semantics (no expressions resolved in
+`image`; exactly one of `image`/`build_directory`) — including when the file
+is a native project's include, or its root (`ratect -f batect.yml`). To use a
+native field, convert that container to TOML: incremental migration exists so
+a project needn't be converted in one go, not so a YAML file can grow native
+features. It is container-scoped: an `include` entry's own native field
+(`allow_nested_git_includes`) is still governed by the *project's* format,
+since an entry is the including file's statement about a bundle rather than
+the bundle's about itself. Accepting native fields on a YAML-declared
+container was how this shipped originally and was a bug, fixed rather than
+kept; see
+[Which fields a file may use](../docs/includes.md#which-fields-a-file-may-use).
+
 Both new behaviours (per-extension selection and the `ratect-bundle.toml`-first
 order) are **native-only** — a caller-supplied format/bundle policy — so
 `ratect-compat` stays byte-compatible with Batect (YAML-only, `batect-bundle.yml`).

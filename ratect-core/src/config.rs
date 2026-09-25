@@ -26,7 +26,8 @@
 //! pathless git include, and the object-only *documented* schema (the parser
 //! itself stays string-tolerant, which is what lets one set of hand-written
 //! `Deserialize` impls serve both formats). **`extends`** (native only; a
-//! `batect.yml` using it is *rejected*, not ignored) is a final pass *after*
+//! container declared in a YAML file using it is *rejected*, not ignored — see
+//! `ConfigFormat::batect_shaped_containers`) is a final pass *after*
 //! expression/path resolution — mechanically `child.or(parent)` over the
 //! already-`Option` fields, so a set field replaces and an unset one inherits,
 //! single-parent, transitive, cycle-checked. `inherit_container_fields`
@@ -154,8 +155,10 @@ pub struct Container {
     /// taken from the named container. Single-parent, and may chain (`a`
     /// extends `b` extends `c`). Resolved after path/expression resolution, so
     /// an inherited relative path stays anchored to the *parent's* own file.
-    /// `ratect`-native only — not accepted in a `batect.yml`, and skipped from
-    /// the committed schema, which is `batect.yml`'s. See
+    /// `ratect`-native only — a YAML-declared container may not use it,
+    /// whichever project includes it (ratect#214; see
+    /// `ConfigFormat::batect_shaped_containers`) — and skipped from the
+    /// committed schema, which is `batect.yml`'s. See
     /// [decisions/0003](../../decisions/0003-ratect-native-config-format.md).
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub extends: Option<String>,
@@ -276,30 +279,31 @@ pub struct Container {
     /// either.
     pub setup_commands: Option<Vec<SetupCommand>>,
     /// Runs this dependency to completion instead of leaving it detached —
-    /// Kubernetes-style init-container behavior, expressed as a plain node
-    /// in the existing dependency graph rather than a separate concept. A
+    /// Kubernetes-style init-container behavior, expressed as a plain node in
+    /// the existing dependency graph rather than a separate concept. A
     /// dependency with this set to `true` is started, run to completion (not
-    /// detached), and considered ready once it exits with status 0; a
-    /// non-zero exit fails the task run the same way a health-check or
-    /// `setup_commands` failure does today. Mutually exclusive with
+    /// detached), and considered ready once it exits with status 0; a non-zero
+    /// exit fails the task run the same way a health-check or `setup_commands`
+    /// failure does today. Mutually exclusive with
     /// `health_check`/`setup_commands` — neither concept applies once a
-    /// dependency runs to completion. `ratect`-native only, like `extends` —
-    /// Batect has no equivalent, so `ratect-compat` rejects it — and, unlike
-    /// `extends`, meaningless on a task's own `run` block, which has no
+    /// dependency runs to completion. `ratect`-native only, like `extends` — a
+    /// YAML-declared container may not use it, whichever project includes it
+    /// (ratect#214; see `ConfigFormat::batect_shaped_containers`) — and,
+    /// unlike `extends`, meaningless on a task's own `run` block, which has no
     /// `dependencies` of its own to place this on in the first place.
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub run_to_completion: Option<bool>,
-    /// Checks this container's readiness from *outside* it, for an image
-    /// with no shell or check tooling of its own — see
-    /// [`ExternalHealthCheck`], which is also where the mechanism (a
-    /// generated `run_to_completion` companion, not a new readiness path)
-    /// is described. Mutually exclusive with `health_check` (two answers to
-    /// one question), `run_to_completion` (which has already exited by the
-    /// time anything could connect to it) and `setup_commands` (which would
-    /// run before the check had passed, since the companion is a sibling of
-    /// this container rather than a gate on it). `ratect`-native only, like
-    /// `run_to_completion` — Batect has no equivalent, so `ratect-compat`
-    /// rejects it.
+    /// Checks this container's readiness from *outside* it, for an image with
+    /// no shell or check tooling of its own — see [`ExternalHealthCheck`],
+    /// which is also where the mechanism (a generated `run_to_completion`
+    /// companion, not a new readiness path) is described. Mutually exclusive
+    /// with `health_check` (two answers to one question), `run_to_completion`
+    /// (which has already exited by the time anything could connect to it) and
+    /// `setup_commands` (which would run before the check had passed, since
+    /// the companion is a sibling of this container rather than a gate on it).
+    /// `ratect`-native only, like `run_to_completion` — a YAML-declared
+    /// container may not use it, whichever project includes it (ratect#214;
+    /// see `ConfigFormat::batect_shaped_containers`).
     ///
     /// Inert on a task's own `run.container`, exactly as `health_check` is:
     /// nothing waits on a task's own container becoming ready, since
@@ -412,15 +416,16 @@ pub struct Container {
     /// Container level only, matching Batect (no task-level `run` override
     /// in either).
     pub log_options: Option<HashMap<String, String>>,
-    /// The signal sent when stopping this container during cleanup, instead
-    /// of Docker's own default signal (usually `SIGTERM`) — Docker
-    /// Compose's own `stop_signal` field name. Only changes what a task's
-    /// own cleanup sends: the other place Ratect stops a container,
-    /// [`crate::resources::remove`], works from a label scan with no
-    /// `Container` config to read, so it keeps Docker's own defaults. `None`
-    /// leaves Docker's own default signal alone, unchanged from today's
-    /// behavior. `ratect`-native only, like `run_to_completion` — Batect
-    /// has no equivalent field, so `ratect-compat` rejects it.
+    /// The signal sent when stopping this container during cleanup, instead of
+    /// Docker's own default signal (usually `SIGTERM`) — Docker Compose's own
+    /// `stop_signal` field name. Only changes what a task's own cleanup sends:
+    /// the other place Ratect stops a container, [`crate::resources::remove`],
+    /// works from a label scan with no `Container` config to read, so it keeps
+    /// Docker's own defaults. `None` leaves Docker's own default signal alone,
+    /// unchanged from today's behavior. `ratect`-native only, like
+    /// `run_to_completion` — a YAML-declared container may not use it,
+    /// whichever project includes it (ratect#214; see
+    /// `ConfigFormat::batect_shaped_containers`).
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub stop_signal: Option<String>,
     /// How long to wait, after the stop signal, before Docker escalates to
@@ -433,8 +438,7 @@ pub struct Container {
     /// removal itself, not this timeout). Durations use Batect's Go-style
     /// string format: `"2s"`, `"1m30s"`, `"500ms"`, `"0"` — rounded *up* to
     /// whole seconds, which is the granularity Docker's own stop timeout
-    /// has. `ratect`-native only, like `stop_signal` above — Batect has no
-    /// equivalent field.
+    /// has. `ratect`-native only, like `stop_signal` above.
     #[cfg_attr(feature = "schema", schemars(skip))]
     #[serde(default, with = "duration_string")]
     pub stop_grace_period: Option<std::time::Duration>,
@@ -442,8 +446,10 @@ pub struct Container {
     /// [`Ulimit`] per resource. `None`/absent leaves the daemon's own
     /// defaults alone, which is what every container got before this field
     /// existed. Container level only, like `devices` (no task-level `run`
-    /// override). `ratect`-native only, like `stop_signal` above — Batect
-    /// has no equivalent field, so `ratect-compat` rejects it.
+    /// override). `ratect`-native only, like `stop_signal` above — a container
+    /// declared in a Batect-format (YAML) file may not use it, whichever
+    /// project includes it (ratect#214,
+    /// `ConfigFormat::batect_shaped_containers`).
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub ulimits: Option<Vec<Ulimit>>,
 }
@@ -656,38 +662,22 @@ impl UlimitResource {
         UlimitResource::Sigpending,
         UlimitResource::Stack,
     ];
-
-    /// The inverse of [`as_str`](Self::as_str), for the compact string form.
-    fn parse(name: &str) -> Result<Self> {
-        UlimitResource::ALL
-            .into_iter()
-            .find(|resource| resource.as_str() == name)
-            .ok_or_else(|| {
-                let accepted: Vec<&str> = UlimitResource::ALL
-                    .iter()
-                    .map(UlimitResource::as_str)
-                    .collect();
-                anyhow::anyhow!(
-                    "'{name}' is not a ulimit resource Docker supports. It must be one of: {}.",
-                    accepted.join(", ")
-                )
-            })
-    }
 }
 
 /// One entry in a container's `ulimits` list — a per-resource limit applied
 /// to that container alone (Docker's `--ulimit`, which becomes
 /// `HostConfig.Ulimits`). `-1` is Docker's own "unlimited".
 ///
-/// Accepts the object form (`{name, soft, hard}`) the native format treats
-/// as canonical, and Docker's own compact `"name=soft:hard"` string — which
-/// is what a `.yml` [include](#includes) of a native project can keep using,
-/// the same reason [`DeviceMapping`] accepts both. A single value
-/// (`"name=limit"`, or an object with no `hard`) sets both limits, matching
-/// `docker run --ulimit`.
+/// The object form (`{name, soft, hard}`) only — unlike [`DeviceMapping`],
+/// which also accepts Docker's compact string because a `batect.yml` may
+/// legitimately write one. This field has no such file: it is native-only,
+/// and a native field may only be written in a TOML file (ratect#214), where
+/// the object form is canonical. An object with no `hard` sets both limits
+/// to `soft`, matching `docker run --ulimit name=limit`.
 ///
-/// `ratect`-native only, like [`Container::stop_signal`] — Batect has no
-/// equivalent field, so `ratect-compat` rejects it.
+/// `ratect`-native only, like [`Container::stop_signal`] — a YAML-declared
+/// container may not use it, whichever project includes it (ratect#214; see
+/// `ConfigFormat::batect_shaped_containers`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Ulimit {
     pub name: UlimitResource,
@@ -696,29 +686,8 @@ pub struct Ulimit {
 }
 
 impl Ulimit {
-    /// Parses Docker's own `"name=soft[:hard]"` string form (`docker run
-    /// --ulimit`'s), the shape a `.yml` include can still write.
-    fn parse_string(value: &str) -> Result<Self> {
-        let invalid = || {
-            anyhow::anyhow!(
-                "Ulimit definition '{value}' is invalid. It must be in the form \
-                 'name=limit' or 'name=soft:hard'."
-            )
-        };
-        let (name, limits) = value.split_once('=').ok_or_else(invalid)?;
-        let name = UlimitResource::parse(name)?;
-        let (soft, hard) = match limits.split_once(':') {
-            Some((soft, hard)) => (soft, hard),
-            // One value sets both limits, matching Docker's own CLI.
-            None => (limits, limits),
-        };
-        let soft: i64 = soft.parse().map_err(|_| invalid())?;
-        let hard: i64 = hard.parse().map_err(|_| invalid())?;
-        Self::new(name, soft, hard)
-    }
-
-    /// Both forms land here, so the soft-below-hard rule can't be enforced
-    /// on one and forgotten on the other. The rule is the one `docker run
+    /// The soft-below-hard rule, applied wherever a `Ulimit` is built. The
+    /// rule is the one `docker run
     /// --ulimit` enforces (`go-units`' `ParseUlimit`), including its `-1`
     /// handling: an unlimited *hard* limit permits any soft limit, but an
     /// unlimited soft limit under a finite hard one is a contradiction.
@@ -756,17 +725,7 @@ impl<'de> Deserialize<'de> for Ulimit {
             type Value = Ulimit;
 
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str(
-                    "a ulimit string ('name=limit' or 'name=soft:hard') or an object with \
-                     'name'/'soft'/'hard' fields",
-                )
-            }
-
-            fn visit_str<E>(self, v: &str) -> std::result::Result<Ulimit, E>
-            where
-                E: serde::de::Error,
-            {
-                Ulimit::parse_string(v).map_err(serde::de::Error::custom)
+                f.write_str("an object with 'name'/'soft'/'hard' fields")
             }
 
             fn visit_map<A>(self, mut map: A) -> std::result::Result<Ulimit, A::Error>
@@ -798,7 +757,7 @@ impl<'de> Deserialize<'de> for Ulimit {
             }
         }
 
-        deserializer.deserialize_any(UlimitVisitor)
+        deserializer.deserialize_map(UlimitVisitor)
     }
 }
 
@@ -838,8 +797,9 @@ pub struct CacheVolumeMount {
     pub container: String,
     pub options: Option<String>,
     /// Whether this cache belongs to one project or is shared across every
-    /// project on the machine — see [`CacheScope`]. `ratect.toml` only;
-    /// Batect has no equivalent, so a `batect.yml` using it is rejected.
+    /// project on the machine — see [`CacheScope`]. `ratect`-native only; a
+    /// YAML-declared container may not use it, whichever project includes it
+    /// (ratect#214; see `ConfigFormat::batect_shaped_containers`).
     ///
     /// `None` means the field was absent, which is not the same as
     /// `Some(Project)`: `ratect-compat` has to reject the *field*, since
@@ -1610,8 +1570,9 @@ pub fn external_health_check_container_name(container: &str) -> String {
 /// nothing has to be published to the host and two isolated instances of one
 /// project — concurrent CI jobs on a single host — never contend for a port.
 ///
-/// `ratect`-native only: Batect has no equivalent, so `ratect-compat`
-/// rejects it.
+/// `ratect`-native only: a YAML-declared container may not use it, whichever
+/// project includes it (ratect#214; see
+/// `ConfigFormat::batect_shaped_containers`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     try_from = "ExternalHealthCheckFields",
@@ -1872,8 +1833,9 @@ pub struct SetupCommand {
     /// image, such as seeding a database from a client container the
     /// database's own image has no room for. Must name one of the declaring
     /// container's own `dependencies`, or the declaring container itself
-    /// (which is what omitting it means). `ratect`-native only — Batect has
-    /// no equivalent, so `ratect-compat` rejects it.
+    /// (which is what omitting it means). `ratect`-native only — a
+    /// YAML-declared container may not use it, whichever project includes it
+    /// (ratect#214; see `ConfigFormat::batect_shaped_containers`).
     ///
     /// The dependency restriction is what makes the ordering safe, and it is
     /// load-bearing rather than merely tidy: a dependency has already been
@@ -2741,32 +2703,138 @@ impl ConfigFormat {
         matches!(self, ConfigFormat::Native)
     }
 
-    /// The full set of fields a `batect.yml` may not use — every
-    /// `ratect`-native addition Batect itself has no equivalent for. Called
-    /// unconditionally from [`load_project_impl`], before expression
-    /// resolution — load-bearing for [`reject_image_expressions_in_compat`],
-    /// which inspects an `image`'s literal text and must judge what was
-    /// written rather than what an expression resolved to; the other six
-    /// check presence/shape of fields expression resolution never touches,
-    /// so the ordering is inert for them but still correct. `Native` has
-    /// nothing to reject here: every field below is native's own.
-    fn reject_incompatible_fields(&self, config: &Config) -> Result<()> {
-        match self {
-            ConfigFormat::Compat => {
-                reject_extends_in_compat(config)?;
-                reject_run_to_completion_in_compat(config)?;
-                reject_external_health_check_in_compat(config)?;
-                reject_setup_command_run_in_compat(config)?;
-                reject_shared_caches_in_compat(config)?;
-                reject_stop_signal_in_compat(config)?;
-                reject_stop_grace_period_in_compat(config)?;
-                reject_ulimits_in_compat(config)?;
-                validate_image_sources_in_compat(&config.containers)?;
-                reject_image_expressions_in_compat(config)?;
-                Ok(())
-            }
-            ConfigFormat::Native => Ok(()),
+    /// Which of a project's containers must be judged by Batect's own
+    /// rules: the ones declared in a **YAML file**, whichever project
+    /// included it (ratect#214). A `.yml` is Batect's format, so a
+    /// container written in one may use no `ratect`-native field and gets
+    /// Batect's own semantics — even when a `ratect.toml` project is what
+    /// pulled the file in. To use a native field, convert that container to
+    /// TOML; incremental migration exists so a project needn't be
+    /// refactored in one go, not so a YAML file can grow native features.
+    /// See [decisions/0003](../../decisions/0003-ratect-native-config-format.md),
+    /// whose "`extends` flows one way — never the reverse" is this same
+    /// rule stated of one field.
+    ///
+    /// Derived **once**, here, rather than re-decided at each of the ten
+    /// checks below — the same reasoning as `include_trust::restricting`:
+    /// a rule that depends on which format you are in needs one derived
+    /// value, or the next check added is unguarded by default.
+    ///
+    /// `Compat` is every container, whatever a file is named: that format
+    /// parses each file as YAML regardless of extension, so every container
+    /// in such a project is Batect-shaped by construction. Sorted by name,
+    /// so a project with several offenders always reports the same one
+    /// rather than whichever the hash order surfaced — which is why no
+    /// check below sorts for itself.
+    fn batect_shaped_containers<'a>(
+        &self,
+        config: &'a Config,
+        origins: &'a HashMap<String, PathBuf>,
+        boundaries: &HashMap<String, Boundary>,
+    ) -> Vec<BatectShaped<'a>> {
+        let mut shaped: Vec<BatectShaped<'a>> = config
+            .containers
+            .iter()
+            .filter_map(|(name, container)| {
+                let origin = origins.get(name).map(PathBuf::as_path);
+                let batect_shaped = match self {
+                    ConfigFormat::Compat => true,
+                    ConfigFormat::Native => origin.is_some_and(|origin| {
+                        matches!(config_file_format(origin), Ok(FileFormat::Yaml))
+                    }),
+                };
+                batect_shaped.then_some(BatectShaped {
+                    name: name.as_str(),
+                    container,
+                    origin: origin.map(|origin| describe_origin(origin, boundaries.get(name))),
+                })
+            })
+            .collect();
+        shaped.sort_unstable_by_key(|entry| entry.name);
+        shaped
+    }
+
+    /// The full set of fields a Batect-format file may not use — every
+    /// `ratect`-native addition Batect itself has no equivalent for — plus
+    /// the two places its *semantics* differ. Called unconditionally from
+    /// [`load_project_impl`], before expression resolution — load-bearing
+    /// for [`reject_image_expressions_in_compat`], which inspects an
+    /// `image`'s literal text and must judge what was written rather than
+    /// what an expression resolved to; the others check presence/shape of
+    /// fields expression resolution never touches, so the ordering is inert
+    /// for them but still correct.
+    ///
+    /// Every check takes the same [`batect_shaped_containers`](Self::batect_shaped_containers)
+    /// slice, so a `Native` project runs them too — against its YAML-declared
+    /// containers only, and against nothing at all when it has none.
+    fn reject_incompatible_fields(
+        &self,
+        config: &Config,
+        origins: &HashMap<String, PathBuf>,
+        boundaries: &HashMap<String, Boundary>,
+    ) -> Result<()> {
+        let shaped = self.batect_shaped_containers(config, origins, boundaries);
+        reject_extends_in_compat(&shaped)?;
+        reject_run_to_completion_in_compat(&shaped)?;
+        reject_external_health_check_in_compat(&shaped)?;
+        reject_setup_command_run_in_compat(&shaped)?;
+        reject_shared_caches_in_compat(&shaped)?;
+        reject_stop_signal_in_compat(&shaped)?;
+        reject_stop_grace_period_in_compat(&shaped)?;
+        reject_ulimits_in_compat(&shaped)?;
+        validate_image_sources_in_compat(&shaped)?;
+        reject_image_expressions_in_compat(&shaped)?;
+        Ok(())
+    }
+}
+
+/// One container that must be judged by Batect's own rules, with the file
+/// that declared it — see [`ConfigFormat::batect_shaped_containers`].
+struct BatectShaped<'a> {
+    name: &'a str,
+    container: &'a Container,
+    /// How to name the file this container was declared in — see
+    /// [`describe_origin`]. `None` only for a `Config` assembled without
+    /// going through the loader (tests, and `expand_external_health_checks`'
+    /// generated companions, which are added after these checks have run).
+    origin: Option<String>,
+}
+
+/// How to name the file a container was declared in, for a message the
+/// reader has to act on. A local file is its own path. A **Git-included**
+/// one is named by the bundle that carries it — its remote and ref, plus
+/// the path within it — because the path Ratect actually read is inside the
+/// `~/.ratect/incl` clone cache, which is neither where the file is
+/// maintained nor anywhere worth editing. Same identity, and the same
+/// reasoning, as [`crate::include_trust::hide_clone_detail`]'s own
+/// refusals.
+fn describe_origin(origin: &Path, boundary: Option<&Boundary>) -> String {
+    match boundary {
+        Some(boundary) => {
+            let within = origin
+                .strip_prefix(&boundary.repo_dir)
+                .unwrap_or(origin)
+                .display();
+            format!(
+                "'{within}', from the bundle '{}' at '{}'",
+                boundary.bundle.id.remote, boundary.bundle.id.git_ref
+            )
         }
+        None => format!("{origin:?}"),
+    }
+}
+
+/// The rejection a native-only field raises, with the declaring file
+/// appended. Two things only the file can tell you: *which* of several
+/// included files to go and edit, and why a native project is talking
+/// about Batect compatibility at all (ratect#214).
+fn native_field_rejection(entry: &BatectShaped<'_>, message: String) -> anyhow::Error {
+    match &entry.origin {
+        Some(origin) => anyhow::anyhow!(
+            "{message} It is declared in {origin}, and a container declared in a \
+             Batect-format (YAML) file follows Batect's rules wherever it is included."
+        ),
+        None => anyhow::anyhow!("{message}"),
     }
 }
 
@@ -2913,6 +2981,16 @@ pub struct LoadedConfig {
     /// project tree and has no such restriction, matching the trust model
     /// local includes already had.
     container_boundaries: HashMap<String, Boundary>,
+    /// The file each container was declared in. Retained — rather than
+    /// dropped once the merge's own duplicate-definition check is done —
+    /// because a container's *file* is what decides which fields and which
+    /// semantics apply to it (ratect#214): a container declared in a YAML
+    /// file follows Batect's rules wherever it is included, so
+    /// [`ConfigFormat::batect_shaped_containers`] needs to know where each
+    /// one came from. Also what lets a rejection name the offending file,
+    /// which a project with several includes otherwise leaves you hunting
+    /// for.
+    container_origins: HashMap<String, PathBuf>,
 }
 
 impl LoadedConfig {
@@ -3254,6 +3332,7 @@ impl Config {
             },
             container_base_paths,
             container_boundaries,
+            container_origins,
         })
     }
 
@@ -3990,7 +4069,11 @@ async fn load_project_impl(
     };
     // Before `resolve_expressions` below — see
     // `ConfigFormat::reject_incompatible_fields`'s own doc comment for why.
-    format.reject_incompatible_fields(&loaded.config)?;
+    format.reject_incompatible_fields(
+        &loaded.config,
+        &loaded.container_origins,
+        &loaded.container_boundaries,
+    )?;
     let base_path = base_path_for(config_file);
     let project_directory = project_directory_path(base_path)?;
     loaded.resolve_expressions(base_path, config_var_overrides)?;
@@ -4047,41 +4130,54 @@ async fn load_project_impl(
 /// nothing at all. Configuring a build secret and having it ignored without
 /// a word is the failure this exists to prevent.
 ///
-/// **Compat-only, and this one really is a format difference rather than a
-/// convenience.** `ratect`'s native format has `extends`, which gives every
-/// combination here a defined meaning it lacks in a `batect.yml`: a base
+/// **Batect-format files only, and this one really is a format difference
+/// rather than a convenience.** The native format has `extends`, which gives
+/// every combination here a defined meaning it lacks in Batect's: a base
 /// container legitimately has *neither* field (ADR-0003's "no `abstract`
 /// marker needed" — pinned by `ratect`'s own
 /// `a_base_only_container_needs_no_image_and_validates`), and because
 /// inheritance is `child.or(parent)` with no way to unset, `image` on a
 /// child is the *only* way to override a parent's `build_directory`, which
-/// necessarily leaves both set. Applying these checks there would forbid the
-/// format's headline reuse pattern to gain a diagnostic. Native keeps
-/// today's lazy behaviour: the requirement is enforced when a task actually
-/// runs a container.
+/// necessarily leaves both set. Applying these checks to a native container
+/// would forbid the format's headline reuse pattern to gain a diagnostic, so
+/// a TOML-declared container keeps the lazy behaviour: the requirement is
+/// enforced when a task actually runs it.
+///
+/// Since ratect#214 the *file* decides, so this runs over a native project's
+/// YAML-declared containers too.
 ///
 /// Errors name the container, where Batect names a line and column instead
 /// — it keeps positions on its parsed nodes and Ratect doesn't, and the
 /// container name is what the rest of Ratect's config errors identify.
-fn validate_image_sources_in_compat(containers: &HashMap<String, Container>) -> Result<()> {
-    // Sorted, so a project with more than one offending container always
-    // reports the same one rather than whichever the hash order surfaced.
-    let mut names: Vec<&String> = containers.keys().collect();
-    names.sort_unstable();
-
-    for name in names {
-        let container = &containers[name];
+fn validate_image_sources_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
+    // Already sorted by name, so a project with more than one offending
+    // container always reports the same one — see
+    // `ConfigFormat::batect_shaped_containers`.
+    for entry in containers {
+        let name = entry.name;
+        let container = entry.container;
         match (&container.image, &container.build_directory) {
-            (Some(_), Some(_)) => anyhow::bail!(
-                "Container '{name}' has both 'image' and 'build_directory', but only one of \
-                 the two can be given."
-            ),
+            (Some(_), Some(_)) => {
+                return Err(native_field_rejection(
+                    entry,
+                    format!(
+                        "Container '{name}' has both 'image' and 'build_directory', but only \
+                         one of the two can be given."
+                    ),
+                ))
+            }
             // Deliberately the same wording as `engine.rs`'s own lazy check,
             // which still fires for the native format (and for a `Config`
             // built without going through `load_project`). One condition
             // should read the same however it was reached.
             (None, None) => {
-                anyhow::bail!("Container '{name}' has neither 'image' nor 'build_directory' set")
+                return Err(native_field_rejection(
+                    entry,
+                    // The leading sentence is deliberately `engine.rs`'s own
+                    // lazy check word for word — one condition should read
+                    // the same however it was reached.
+                    format!("Container '{name}' has neither 'image' nor 'build_directory' set"),
+                ));
             }
             _ => {}
         }
@@ -4097,10 +4193,13 @@ fn validate_image_sources_in_compat(containers: &HashMap<String, Container>) -> 
             ("build_ssh", container.build_ssh.is_some()),
         ];
         if let Some((field, _)) = build_only.iter().find(|(_, present)| *present) {
-            anyhow::bail!(
-                "Container '{name}' has '{field}', which cannot be used with 'image' — it \
-                 only applies to a container built from a 'build_directory'."
-            );
+            return Err(native_field_rejection(
+                entry,
+                format!(
+                    "Container '{name}' has '{field}', which cannot be used with 'image' — it \
+                     only applies to a container built from a 'build_directory'."
+                ),
+            ));
         }
     }
     Ok(())
@@ -4109,19 +4208,19 @@ fn validate_image_sources_in_compat(containers: &HashMap<String, Container>) -> 
 /// `extends` is a `ratect`-native field; a `batect.yml` that uses it is
 /// rejected rather than silently ignored, keeping `ratect-compat` a faithful
 /// Batect replacement (Batect has no such field).
-fn reject_extends_in_compat(config: &Config) -> Result<()> {
-    let mut offenders: Vec<&str> = config
-        .containers
+fn reject_extends_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
+    if let Some(entry) = containers
         .iter()
-        .filter(|(_, container)| container.extends.is_some())
-        .map(|(name, _)| name.as_str())
-        .collect();
-    offenders.sort_unstable();
-    if let Some(name) = offenders.first() {
-        anyhow::bail!(
-            "The container '{name}' uses 'extends', which is a ratect-native field \
-             not supported in Batect-compatible configuration."
-        );
+        .find(|entry| entry.container.extends.is_some())
+    {
+        let name = entry.name;
+        return Err(native_field_rejection(
+            entry,
+            format!(
+                "The container '{name}' uses 'extends', which is a ratect-native field \
+                 not supported in Batect-compatible configuration."
+            ),
+        ));
     }
     Ok(())
 }
@@ -4130,19 +4229,19 @@ fn reject_extends_in_compat(config: &Config) -> Result<()> {
 /// a `batect.yml` that uses it is rejected rather than silently ignored,
 /// same reasoning as [`reject_extends_in_compat`] — Batect has no such
 /// concept.
-fn reject_run_to_completion_in_compat(config: &Config) -> Result<()> {
-    let mut offenders: Vec<&str> = config
-        .containers
+fn reject_run_to_completion_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
+    if let Some(entry) = containers
         .iter()
-        .filter(|(_, container)| container.run_to_completion.unwrap_or(false))
-        .map(|(name, _)| name.as_str())
-        .collect();
-    offenders.sort_unstable();
-    if let Some(name) = offenders.first() {
-        anyhow::bail!(
-            "The container '{name}' uses 'run_to_completion', which is a ratect-native \
-             field not supported in Batect-compatible configuration."
-        );
+        .find(|entry| entry.container.run_to_completion.unwrap_or(false))
+    {
+        let name = entry.name;
+        return Err(native_field_rejection(
+            entry,
+            format!(
+                "The container '{name}' uses 'run_to_completion', which is a ratect-native \
+                 field not supported in Batect-compatible configuration."
+            ),
+        ));
     }
     Ok(())
 }
@@ -4150,57 +4249,57 @@ fn reject_run_to_completion_in_compat(config: &Config) -> Result<()> {
 /// `stop_signal` is a `ratect`-native field (ratect#112); a `batect.yml`
 /// that uses it is rejected rather than silently ignored, same reasoning as
 /// [`reject_extends_in_compat`] — Batect has no such field.
-fn reject_stop_signal_in_compat(config: &Config) -> Result<()> {
-    let mut offenders: Vec<&str> = config
-        .containers
+fn reject_stop_signal_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
+    if let Some(entry) = containers
         .iter()
-        .filter(|(_, container)| container.stop_signal.is_some())
-        .map(|(name, _)| name.as_str())
-        .collect();
-    offenders.sort_unstable();
-    if let Some(name) = offenders.first() {
-        anyhow::bail!(
-            "The container '{name}' uses 'stop_signal', which is a ratect-native field \
+        .find(|entry| entry.container.stop_signal.is_some())
+    {
+        let name = entry.name;
+        return Err(native_field_rejection(
+            entry,
+            format!(
+                "The container '{name}' uses 'stop_signal', which is a ratect-native field \
              not supported in Batect-compatible configuration."
-        );
+            ),
+        ));
     }
     Ok(())
 }
 
 /// `stop_grace_period` is a `ratect`-native field (ratect#112), same
 /// reasoning as [`reject_stop_signal_in_compat`].
-fn reject_stop_grace_period_in_compat(config: &Config) -> Result<()> {
-    let mut offenders: Vec<&str> = config
-        .containers
+fn reject_stop_grace_period_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
+    if let Some(entry) = containers
         .iter()
-        .filter(|(_, container)| container.stop_grace_period.is_some())
-        .map(|(name, _)| name.as_str())
-        .collect();
-    offenders.sort_unstable();
-    if let Some(name) = offenders.first() {
-        anyhow::bail!(
-            "The container '{name}' uses 'stop_grace_period', which is a ratect-native \
+        .find(|entry| entry.container.stop_grace_period.is_some())
+    {
+        let name = entry.name;
+        return Err(native_field_rejection(
+            entry,
+            format!(
+                "The container '{name}' uses 'stop_grace_period', which is a ratect-native \
              field not supported in Batect-compatible configuration."
-        );
+            ),
+        ));
     }
     Ok(())
 }
 
 /// `ulimits` is a `ratect`-native field (ratect#95), same reasoning as
 /// [`reject_stop_signal_in_compat`] — Batect has no such field.
-fn reject_ulimits_in_compat(config: &Config) -> Result<()> {
-    let mut offenders: Vec<&str> = config
-        .containers
+fn reject_ulimits_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
+    if let Some(entry) = containers
         .iter()
-        .filter(|(_, container)| container.ulimits.is_some())
-        .map(|(name, _)| name.as_str())
-        .collect();
-    offenders.sort_unstable();
-    if let Some(name) = offenders.first() {
-        anyhow::bail!(
-            "The container '{name}' uses 'ulimits', which is a ratect-native field \
+        .find(|entry| entry.container.ulimits.is_some())
+    {
+        let name = entry.name;
+        return Err(native_field_rejection(
+            entry,
+            format!(
+                "The container '{name}' uses 'ulimits', which is a ratect-native field \
              not supported in Batect-compatible configuration."
-        );
+            ),
+        ));
     }
     Ok(())
 }
@@ -4210,19 +4309,19 @@ fn reject_ulimits_in_compat(config: &Config) -> Result<()> {
 /// reasoning as [`reject_run_to_completion_in_compat`] — and with more at
 /// stake, since silently ignoring it would leave the dependents of a
 /// container that cannot health-check itself starting against nothing.
-fn reject_external_health_check_in_compat(config: &Config) -> Result<()> {
-    let mut offenders: Vec<&str> = config
-        .containers
+fn reject_external_health_check_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
+    if let Some(entry) = containers
         .iter()
-        .filter(|(_, container)| container.external_health_check.is_some())
-        .map(|(name, _)| name.as_str())
-        .collect();
-    offenders.sort_unstable();
-    if let Some(name) = offenders.first() {
-        anyhow::bail!(
-            "The container '{name}' uses 'external_health_check', which is a ratect-native \
-             field not supported in Batect-compatible configuration."
-        );
+        .find(|entry| entry.container.external_health_check.is_some())
+    {
+        let name = entry.name;
+        return Err(native_field_rejection(
+            entry,
+            format!(
+                "The container '{name}' uses 'external_health_check', which is a \
+                 ratect-native field not supported in Batect-compatible configuration."
+            ),
+        ));
     }
     Ok(())
 }
@@ -4231,28 +4330,26 @@ fn reject_external_health_check_in_compat(config: &Config) -> Result<()> {
 /// container to exec into — `ratect`-native only, same reasoning as
 /// [`reject_run_to_completion_in_compat`]: Batect has no equivalent
 /// ([batect#286](https://github.com/batect/batect/issues/286) is still
-/// unbuilt), so a `batect.yml` using it is rejected rather than silently
-/// running the command in the declaring container instead, which would look
-/// like it worked.
-fn reject_setup_command_run_in_compat(config: &Config) -> Result<()> {
-    let mut offenders: Vec<&str> = config
-        .containers
-        .iter()
-        .filter(|(_, container)| {
-            container
-                .setup_commands
-                .iter()
-                .flatten()
-                .any(|setup_command| setup_command.run_in.is_some())
-        })
-        .map(|(name, _)| name.as_str())
-        .collect();
-    offenders.sort_unstable();
-    if let Some(name) = offenders.first() {
-        anyhow::bail!(
-            "The container '{name}' has a setup command using 'run_in', which is a \
-             ratect-native field not supported in Batect-compatible configuration."
-        );
+/// unbuilt), so a container declared in a YAML file using it is rejected
+/// rather than silently running the command in the declaring container
+/// instead, which would look like it worked.
+fn reject_setup_command_run_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
+    if let Some(entry) = containers.iter().find(|entry| {
+        entry
+            .container
+            .setup_commands
+            .iter()
+            .flatten()
+            .any(|setup_command| setup_command.run_in.is_some())
+    }) {
+        let name = entry.name;
+        return Err(native_field_rejection(
+            entry,
+            format!(
+                "The container '{name}' has a setup command using 'run_in', which is a \
+                 ratect-native field not supported in Batect-compatible configuration."
+            ),
+        ));
     }
     Ok(())
 }
@@ -4403,30 +4500,28 @@ fn validate_cache_name(name: &str) -> Result<()> {
 /// but the cost is real and is recorded in CHANGELOG.md rather than papered
 /// over here. Whole-file is also what [`validate_image_sources_in_compat`]
 /// does, for the same reason.
-fn reject_image_expressions_in_compat(config: &Config) -> Result<()> {
-    let mut offenders: Vec<(&str, &str)> = config
-        .containers
-        .iter()
-        .filter_map(|(container_name, container)| {
-            let image = container.image.as_deref()?;
-            crate::expressions::contains_expression(image)
-                .then_some((container_name.as_str(), image))
-        })
-        .collect();
-    // Sorted on the whole pair, so a project with several always reports the
-    // same one — `containers` is a `HashMap` whose order varies between runs.
-    offenders.sort_unstable();
-    if let Some((container_name, image)) = offenders.first() {
-        anyhow::bail!(
+fn reject_image_expressions_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
+    // Already sorted by name — see `ConfigFormat::batect_shaped_containers`.
+    let offender = containers.iter().find_map(|entry| {
+        let image = entry.container.image.as_deref()?;
+        crate::expressions::contains_expression(image).then_some((entry, image))
+    });
+    if let Some((entry, image)) = offender {
+        let container_name = entry.name;
+        return Err(native_field_rejection(
+            entry,
+            format!(
             // Names what to do, not a flag that would fix this file: the
             // check runs at load, so '--override-image' does not get past it
             // — the expression has to go first.
             "Container '{container_name}' uses an expression in its 'image' ('{image}'), which \
-             is a ratect-native feature not supported in Batect-compatible configuration. \
-             Batect resolves no expression there, so a file using one would stop working under \
-             'batect' itself. Write a fixed image here; '--override-image {container_name}=...' \
-             is how this binary chooses one per run."
-        );
+                 is a ratect-native feature not supported in Batect-compatible \
+                 configuration. Batect resolves no expression there, so a file using one \
+                 would stop working under 'batect' itself. Write a fixed image here; \
+                 '--override-image {container_name}=...' is how this binary chooses one \
+                 per run."
+            ),
+        ));
     }
     Ok(())
 }
@@ -4436,33 +4531,33 @@ fn reject_image_expressions_in_compat(config: &Config) -> Result<()> {
 /// it would let a config be written here that real `batect` refuses. The
 /// default (`Project`) is Batect's only behaviour, so nothing is lost —
 /// this only rejects a file that asked for the native one.
-fn reject_shared_caches_in_compat(config: &Config) -> Result<()> {
-    let mut offenders: Vec<(&str, &str)> = config
-        .containers
-        .iter()
-        .flat_map(|(container_name, container)| {
-            container
-                .volumes
-                .iter()
-                .flatten()
-                .filter_map(move |volume| match volume {
-                    // Presence, not value: real `batect` rejects any unknown
-                    // property, so `scope: project` is just as unloadable
-                    // there as `scope: shared`.
-                    VolumeMount::Cache(cache) if cache.scope.is_some() => {
-                        Some((container_name.as_str(), cache.name.as_str()))
-                    }
-                    _ => None,
-                })
-        })
-        .collect();
-    offenders.sort_unstable();
-    if let Some((container_name, cache_name)) = offenders.first() {
-        anyhow::bail!(
-            "The container '{container_name}' declares the cache '{cache_name}' with a \
-             'scope', which is a ratect-native field not supported in \
-             Batect-compatible configuration."
-        );
+fn reject_shared_caches_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
+    let offender = containers.iter().find_map(|entry| {
+        entry
+            .container
+            .volumes
+            .iter()
+            .flatten()
+            .find_map(|volume| match volume {
+                // Presence, not value: real `batect` rejects any unknown
+                // property, so `scope: project` is just as unloadable
+                // there as `scope: shared`.
+                VolumeMount::Cache(cache) if cache.scope.is_some() => {
+                    Some((entry, cache.name.as_str()))
+                }
+                _ => None,
+            })
+    });
+    if let Some((entry, cache_name)) = offender {
+        let container_name = entry.name;
+        return Err(native_field_rejection(
+            entry,
+            format!(
+                "The container '{container_name}' declares the cache '{cache_name}' with a \
+                 'scope', which is a ratect-native field not supported in \
+                 Batect-compatible configuration."
+            ),
+        ));
     }
     Ok(())
 }

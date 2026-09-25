@@ -639,12 +639,11 @@ ulimits = [
   `batect.yml` has no equivalent field, so a container using it is rejected
   when the file loads rather than silently ignored.
 
-Entries are objects, like every other native list entry. The parser also
-accepts Docker's own compact `"nofile=1024:2048"` (or `"nofile=1024"`)
-string, for the same reason [`devices`](#one-shape-per-list-entry) still
-accepts its shorthand — a `.yml` [include](#includes) can keep using it —
-but the object form is what this format, the schema and [`config
-validate`](ratect-cli.md#config) treat as canonical.
+Entries are objects, like every other native list entry — and objects
+only. `devices` and friends also accept a compact string because a
+`batect.yml` may legitimately write one; `ulimits` is native-only, so it has
+no such file (see [Which fields a file may
+use](includes.md#which-fields-a-file-may-use)) and no shorthand to keep.
 
 ## Field reference
 
@@ -679,6 +678,13 @@ a meaning it cannot have in a `batect.yml`, which has no inheritance; places
 where this format is deliberately **stricter**, having no Batect
 compatibility to preserve; and one place where it does **more** than Batect,
 which `batect.yml` then has to refuse rather than quietly accept.
+
+Every row below about a **container** is decided by the format of the file
+that declares it, not by the project — a container written in a `.yml` takes
+the left-hand column even inside a native project (see [Which fields a file
+may use](includes.md#which-fields-a-file-may-use)). The first two rows are
+about an `include` entry rather than a container, and those follow the
+project.
 
 | Behaviour | `batect.yml` (`ratect-compat`) | `ratect.toml` (`ratect`) |
 | --- | --- | --- |

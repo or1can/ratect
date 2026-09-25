@@ -438,11 +438,12 @@ fn make_native(json: &mut serde_json::Value) {
             }),
         );
         // Add the native-only `ulimits` field, same reasoning as
-        // `stop_signal` above. Spelled out here rather than derived: the
-        // parser also accepts Docker's compact `"name=soft:hard"` string
-        // (for a `.yml` include), but the native format's canonical shape
-        // is the object form — the same object-only narrowing `make_native`
-        // applies to `volumes`/`ports`/`devices`.
+        // `stop_signal` above. Spelled out here rather than derived, since
+        // `schemars` never sees a skipped field. Objects only — and unlike
+        // `volumes`/`ports`/`devices`, that is not a narrowing `make_native`
+        // applies: the parser has no string form for this field to accept,
+        // because a native field may only be written in a TOML file
+        // (ratect#214), where the object form is canonical.
         properties.insert(
             "ulimits".to_string(),
             serde_json::json!({
