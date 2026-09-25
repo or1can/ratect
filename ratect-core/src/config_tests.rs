@@ -2391,6 +2391,8 @@ fn container_with_build(build_directory: &str, build_args: HashMap<String, Strin
         enable_init_process: None,
         log_driver: None,
         log_options: None,
+        stop_signal: None,
+        stop_grace_period: None,
     }
 }
 
@@ -3176,6 +3178,8 @@ fn container_with_run_as_current_user(enabled: bool, home_directory: Option<&str
         enable_init_process: None,
         log_driver: None,
         log_options: None,
+        stop_signal: None,
+        stop_grace_period: None,
     }
 }
 
@@ -5052,6 +5056,76 @@ run = { container = "app" }
     assert_eq!(
         project.config.containers["migrate"].run_to_completion,
         Some(true)
+    );
+}
+
+/// `stop_signal` is native-only (ratect#112), same reasoning as `extends`: a
+/// `batect.yml` using it is rejected rather than silently ignored, since
+/// Batect has no such field.
+#[tokio::test]
+async fn stop_signal_is_rejected_in_compat_mode() {
+    let dir = unique_temp_dir();
+    let path = dir.join("batect.yml");
+    std::fs::write(
+        &path,
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    stop_signal: SIGINT\ntasks: {}\n",
+    )
+    .unwrap();
+    let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(
+        format!("{err:#}").contains("uses 'stop_signal'"),
+        "expected a compat rejection, got: {err:#}"
+    );
+}
+
+/// `stop_grace_period` is native-only (ratect#112), same reasoning as
+/// `stop_signal` above.
+#[tokio::test]
+async fn stop_grace_period_is_rejected_in_compat_mode() {
+    let dir = unique_temp_dir();
+    let path = dir.join("batect.yml");
+    std::fs::write(
+        &path,
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    stop_grace_period: 30s\ntasks: {}\n",
+    )
+    .unwrap();
+    let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(
+        format!("{err:#}").contains("uses 'stop_grace_period'"),
+        "expected a compat rejection, got: {err:#}"
+    );
+}
+
+#[tokio::test]
+async fn stop_signal_and_stop_grace_period_are_inherited_via_extends() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+stop_signal = "SIGINT"
+stop_grace_period = "30s"
+
+[containers.app]
+extends = "base"
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        project.config.containers["app"].stop_signal,
+        Some("SIGINT".to_string())
+    );
+    assert_eq!(
+        project.config.containers["app"].stop_grace_period,
+        Some(std::time::Duration::from_secs(30))
     );
 }
 
@@ -8514,6 +8588,8 @@ fn container_with_environment(environment: HashMap<String, String>) -> Container
         enable_init_process: None,
         log_driver: None,
         log_options: None,
+        stop_signal: None,
+        stop_grace_period: None,
     }
 }
 

@@ -51,6 +51,10 @@ type ExecValue = (
     Option<(u32, u32)>,
 );
 type CapturedExecs = Arc<Mutex<HashMap<String, ExecValue>>>;
+/// `(stop_signal, stop_grace_period)` a prior `stop_and_remove_container`
+/// call for a given container id was given — see `stop_options_for`.
+type StopOptionsValue = (Option<String>, Option<std::time::Duration>);
+type CapturedStopOptions = Arc<Mutex<HashMap<String, StopOptionsValue>>>;
 
 #[derive(Clone)]
 struct FakeContainerRuntime {
@@ -71,6 +75,10 @@ struct FakeContainerRuntime {
     // The options a prior `exec_in_container` call for a given command
     // was given (see `exec_for`).
     execs: CapturedExecs,
+    // The `stop_signal`/`stop_grace_period` a prior `stop_and_remove_container`
+    // call for a given container id was given (see `stop_options_for`,
+    // ratect#112).
+    stop_options: CapturedStopOptions,
     // Container id whose `wait_for_container_healthy` reports unhealthy
     // (see `with_unhealthy_container`).
     unhealthy_container: Arc<Mutex<Option<String>>>,
@@ -137,6 +145,7 @@ impl Default for FakeContainerRuntime {
             network_exists_result: Arc::new(Mutex::new(true)),
             network_labels: Default::default(),
             execs: Default::default(),
+            stop_options: Default::default(),
             unhealthy_container: Default::default(),
             failing_setup_command: Default::default(),
             fail_container_creation: Default::default(),
@@ -447,6 +456,12 @@ impl FakeContainerRuntime {
     /// `exec_in_container` call for `command` was given.
     fn exec_for(&self, command: &str) -> Option<ExecValue> {
         self.execs.lock().unwrap().get(command).cloned()
+    }
+
+    /// The `stop_signal`/`stop_grace_period` a prior `stop_and_remove_container`
+    /// call for `container_id` was given (ratect#112).
+    fn stop_options_for(&self, container_id: &str) -> Option<StopOptionsValue> {
+        self.stop_options.lock().unwrap().get(container_id).cloned()
     }
 
     /// The `options.working_directory` a prior `run_container`/
@@ -766,7 +781,16 @@ impl ResourceInventory for FakeContainerRuntime {
         Ok(())
     }
 
-    async fn stop_and_remove_container(&self, container_id: &str) -> Result<()> {
+    async fn stop_and_remove_container(
+        &self,
+        container_id: &str,
+        stop_signal: Option<&str>,
+        stop_grace_period: Option<std::time::Duration>,
+    ) -> Result<()> {
+        self.stop_options.lock().unwrap().insert(
+            container_id.to_string(),
+            (stop_signal.map(str::to_string), stop_grace_period),
+        );
         let interrupt = self.interrupt_on_stop.lock().unwrap().clone();
         if let Some(interrupt) = interrupt {
             interrupt.record();
@@ -834,6 +858,8 @@ fn container(image: &str, dependencies: Option<Vec<String>>) -> Container {
         run_to_completion: None,
         external_health_check: None,
         reports_readiness_for: None,
+        stop_signal: None,
+        stop_grace_period: None,
     }
 }
 
@@ -893,6 +919,8 @@ fn config_with_cycle() -> Config {
             run_to_completion: None,
             external_health_check: None,
             reports_readiness_for: None,
+            stop_signal: None,
+            stop_grace_period: None,
         },
     );
 
@@ -993,6 +1021,8 @@ fn config_with_shared_prerequisite() -> Config {
             run_to_completion: None,
             external_health_check: None,
             reports_readiness_for: None,
+            stop_signal: None,
+            stop_grace_period: None,
         },
     );
 
@@ -1529,6 +1559,8 @@ fn container_with_run_as_current_user(
         run_to_completion: None,
         external_health_check: None,
         reports_readiness_for: None,
+        stop_signal: None,
+        stop_grace_period: None,
     }
 }
 
@@ -2011,6 +2043,8 @@ async fn run_as_current_user_explicitly_disabled_reaches_the_container_with_no_m
             run_to_completion: None,
             external_health_check: None,
             reports_readiness_for: None,
+            stop_signal: None,
+            stop_grace_period: None,
         },
     );
     let mut tasks = HashMap::new();
@@ -2073,6 +2107,8 @@ fn container_with_build_directory(
         run_to_completion: None,
         external_health_check: None,
         reports_readiness_for: None,
+        stop_signal: None,
+        stop_grace_period: None,
     }
 }
 
@@ -2680,6 +2716,8 @@ async fn container_without_image_or_build_directory_errors() {
             run_to_completion: None,
             external_health_check: None,
             reports_readiness_for: None,
+            stop_signal: None,
+            stop_grace_period: None,
         },
     );
     let mut tasks = HashMap::new();
@@ -2954,6 +2992,39 @@ fn config_with_database_dependency(configure: impl FnOnce(&mut Container)) -> Co
         config_variables: None,
         forbid_telemetry: None,
     }
+}
+
+/// Cleanup must forward *each* container's own `stop_signal`/
+/// `stop_grace_period` to Docker — `app`'s own value, not `database`'s, and
+/// vice versa — at both cleanup call sites in `run_task_internal`: the
+/// task's own container and a dependency. Proves this at the unit level
+/// rather than relying solely on the real-Docker `_via_docker` tests in
+/// `ratect/tests/cli.rs`, which don't run in the default `cargo test`
+/// suite (ratect#112).
+#[tokio::test]
+async fn cleanup_passes_each_containers_own_stop_signal_and_grace_period_to_docker() {
+    let mut config = config_with_database_dependency(|database| {
+        database.stop_grace_period = Some(std::time::Duration::from_secs(30));
+    });
+    config.containers.get_mut("app").unwrap().stop_signal = Some("SIGINT".to_string());
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    assert_eq!(
+        docker.stop_options_for("sidecar-id-app"),
+        Some((Some("SIGINT".to_string()), None)),
+        "the task's own container should stop with its own configured stop_signal, \
+         and no configured stop_grace_period"
+    );
+    assert_eq!(
+        docker.stop_options_for("sidecar-id-database"),
+        Some((None, Some(std::time::Duration::from_secs(30)))),
+        "the dependency should stop with its own configured stop_grace_period, \
+         and no configured stop_signal"
+    );
 }
 
 /// The class of bug this proves isn't happening: a fake that can only
@@ -5201,6 +5272,8 @@ async fn dependency_without_image_or_build_directory_errors() {
             run_to_completion: None,
             external_health_check: None,
             reports_readiness_for: None,
+            stop_signal: None,
+            stop_grace_period: None,
         },
     );
     containers.insert(

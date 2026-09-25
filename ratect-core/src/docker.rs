@@ -2835,9 +2835,32 @@ impl ResourceInventory for DockerClient {
         Ok(())
     }
 
-    async fn stop_and_remove_container(&self, container_id: &str) -> Result<()> {
+    async fn stop_and_remove_container(
+        &self,
+        container_id: &str,
+        stop_signal: Option<&str>,
+        stop_grace_period: Option<std::time::Duration>,
+    ) -> Result<()> {
+        // `None` when neither is set, so this call is byte-for-byte what it
+        // was before ratect#112 — no default-flip for a container that
+        // configures neither field.
+        let stop_options = (stop_signal.is_some() || stop_grace_period.is_some()).then(|| {
+            let mut builder = bollard::query_parameters::StopContainerOptionsBuilder::new();
+            if let Some(signal) = stop_signal {
+                builder = builder.signal(signal);
+            }
+            if let Some(grace_period) = stop_grace_period {
+                // Docker's `t` is whole seconds; round up rather than
+                // truncate, so a sub-second grace period (e.g. "500ms",
+                // one of `stop_grace_period`'s own documented examples)
+                // never becomes a *shorter* wait than configured.
+                let seconds = grace_period.as_secs() + u64::from(grace_period.subsec_nanos() > 0);
+                builder = builder.t(seconds.min(i32::MAX as u64) as i32);
+            }
+            builder.build()
+        });
         self.docker
-            .stop_container(container_id, None)
+            .stop_container(container_id, stop_options)
             .await
             .with_context(|| format!("Failed to stop container '{}'", container_id))?;
         self.docker

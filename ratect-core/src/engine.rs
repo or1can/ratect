@@ -1992,8 +1992,15 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // case where there is anything to remove. Before the sidecars it
             // depends on, matching Batect's own dependency-ordered cleanup.
             if let Some(container_id) = task_container_id.as_ref() {
+                let container_config = self.config.containers.get(&run.container);
+                let stop_signal = container_config.and_then(|c| c.stop_signal.as_deref());
+                let stop_grace_period = container_config.and_then(|c| c.stop_grace_period);
                 let removal = async {
-                    match self.docker.stop_and_remove_container(container_id).await {
+                    match self
+                        .docker
+                        .stop_and_remove_container(container_id, stop_signal, stop_grace_period)
+                        .await
+                    {
                         Ok(()) => self.event_sink.post(TaskEvent::ContainerRemoved {
                             container: run.container.clone(),
                         }),
@@ -2010,18 +2017,22 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 if abandoned {
                     break;
                 }
+                let container_config = self.config.containers.get(name);
                 // Removed like any other, but not narrated: a container
                 // whose readiness is reported as another's has contributed
                 // no line all run, and appearing for the first time at
                 // cleanup would name it exactly once, with nothing to
                 // attach it to (ratect#202).
-                let narrate = self
-                    .config
-                    .containers
-                    .get(name)
+                let narrate = container_config
                     .is_none_or(|container| container.reports_readiness_for.is_none());
+                let stop_signal = container_config.and_then(|c| c.stop_signal.as_deref());
+                let stop_grace_period = container_config.and_then(|c| c.stop_grace_period);
                 let removal = async {
-                    match self.docker.stop_and_remove_container(container_id).await {
+                    match self
+                        .docker
+                        .stop_and_remove_container(container_id, stop_signal, stop_grace_period)
+                        .await
+                    {
                         Ok(()) if !narrate => {}
                         Ok(()) => self.event_sink.post(TaskEvent::ContainerRemoved {
                             container: name.clone(),

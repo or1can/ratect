@@ -1,0 +1,47 @@
+# A native `ratect.toml` fixture proving `stop_signal`/`stop_grace_period`
+# (ratect#112) against a real Docker daemon. Native-only — Batect never
+# built this, so this fixture, unlike most of the engine/Docker behaviour
+# proven under `ratect-compat/tests/fixtures/`, can only be expressed here
+# (see AGENTS.md's fixture-layer guideline).
+#
+# Both dependency containers run as PID 1 with no explicit `SIGTERM` trap —
+# the kernel gives PID 1 an ignore-disposition for a signal it hasn't
+# installed a handler for, so each one only ever stops via Docker's own
+# forceful kill after the stop timeout elapses, unless the configured
+# `stop_signal` is something it *does* trap.
+project_name = "ratect-stop-signal-test"
+
+[containers.traps-usr1]
+image = "alpine:3.18.2"
+# Traps only SIGUSR1; SIGTERM is left with PID 1's kernel ignore-disposition.
+# A prompt exit on stop proves `stop_signal` reached the process, rather
+# than Docker's own default signal, which this command never handles.
+command = "sh -c 'trap \"exit 0\" USR1; while true; do sleep 1; done'"
+stop_signal = "SIGUSR1"
+
+[containers.ignores-term]
+image = "alpine:3.18.2"
+# Traps nothing at all, so a stop can only succeed via Docker's own
+# forceful kill once the (short, here) grace period elapses — proving
+# `stop_grace_period` is actually observed rather than left at Docker's
+# own ~10s default.
+command = "sh -c 'while true; do sleep 1; done'"
+stop_grace_period = "1s"
+
+[containers.app-with-custom-signal]
+image = "alpine:3.18.2"
+command = "true"
+dependencies = ["traps-usr1"]
+
+[containers.app-with-short-grace-period]
+image = "alpine:3.18.2"
+command = "true"
+dependencies = ["ignores-term"]
+
+[tasks.stop-signal]
+description = "Cleanup stops 'traps-usr1' with SIGUSR1 instead of the default signal"
+run = { container = "app-with-custom-signal" }
+
+[tasks.stop-grace-period]
+description = "Cleanup stops 'ignores-term' after its own 1s grace period, not Docker's default"
+run = { container = "app-with-short-grace-period" }

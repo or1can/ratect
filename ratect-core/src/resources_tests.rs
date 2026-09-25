@@ -131,7 +131,12 @@ impl ResourceInventory for FakeRuntime {
         Ok(self.networks.clone())
     }
 
-    async fn stop_and_remove_container(&self, container_id: &str) -> Result<()> {
+    async fn stop_and_remove_container(
+        &self,
+        container_id: &str,
+        _stop_signal: Option<&str>,
+        _stop_grace_period: Option<std::time::Duration>,
+    ) -> Result<()> {
         self.remove(container_id)
     }
 

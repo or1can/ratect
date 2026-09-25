@@ -20,6 +20,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 fn ratect_command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ratect"))
@@ -73,6 +74,12 @@ fn setup_command_run_in_fixture_path() -> PathBuf {
 /// lives here too, for the same reason as `run_to_completion` above.
 fn external_health_check_fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/external-health-check.toml")
+}
+
+/// `stop_signal`/`stop_grace_period` (ratect#112) — native-only, so its own
+/// fixture lives here too, for the same reason as `run_to_completion` above.
+fn stop_signal_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/stop-signal.toml")
 }
 
 /// A unique, empty temp directory to stand up a small project in.
@@ -1648,4 +1655,79 @@ fn a_run_creates_a_shared_cache_that_only_a_scoped_clean_removes() {
         String::from_utf8_lossy(&removed.stderr)
     );
     assert!(gone, "the scoped clean should have removed the volume");
+}
+
+/// `stop_signal` (ratect#112), end to end: `traps-usr1` traps only
+/// `SIGUSR1` and ignores everything else (as PID 1, with no explicit
+/// `SIGTERM` handler installed, the kernel gives it an ignore-disposition
+/// for `SIGTERM` — the classic reason a plain shell script as PID 1 needs
+/// `--init` or a trap to shut down promptly). Cleanup stops it as soon as
+/// `app-with-custom-signal`'s own `true` command exits. If `stop_signal`
+/// reached the container, the trap fires and it exits almost immediately;
+/// if the default signal were sent instead (the bug this proves the fix
+/// for), the container would ignore it and only stop once Docker's own
+/// ~10s default timeout escalates to a forceful kill. Asserting well under
+/// that default, rather than a tight bound, is what keeps this from being
+/// a race against real daemon scheduling. Requires a running Docker daemon
+/// with network access to pull `alpine:3.18.2`. Run explicitly with `cargo
+/// test -- --ignored`.
+#[test]
+#[ignore]
+fn stop_signal_reaches_the_configured_signal_via_docker() {
+    let _guard = serial_docker();
+    let start = Instant::now();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(stop_signal_fixture_path())
+        .args(["run", "stop-signal"])
+        .output()
+        .expect("failed to run ratect");
+    let elapsed = start.elapsed();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        elapsed < Duration::from_secs(8),
+        "cleanup should have stopped 'traps-usr1' promptly via its trapped stop_signal, \
+         not waited out Docker's own ~10s default timeout for a signal it never traps: \
+         took {elapsed:?}"
+    );
+}
+
+/// `stop_grace_period` (ratect#112), end to end: `ignores-term` traps no
+/// signal at all — same PID 1 kernel ignore-disposition as the test above
+/// — so it can only be stopped by Docker's own forceful kill once the
+/// grace period elapses. Its `stop_grace_period = "1s"` is far shorter
+/// than Docker's own ~10s default, so a total run well under that default
+/// proves the configured grace period was actually used rather than
+/// ignored. Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn stop_grace_period_shortens_the_wait_before_a_forceful_kill_via_docker() {
+    let _guard = serial_docker();
+    let start = Instant::now();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(stop_signal_fixture_path())
+        .args(["run", "stop-grace-period"])
+        .output()
+        .expect("failed to run ratect");
+    let elapsed = start.elapsed();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        elapsed < Duration::from_secs(6),
+        "cleanup should have force-killed 'ignores-term' after its own 1s stop_grace_period, \
+         not Docker's own ~10s default: took {elapsed:?}"
+    );
 }
