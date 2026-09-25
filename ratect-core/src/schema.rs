@@ -410,6 +410,31 @@ fn make_native(json: &mut serde_json::Value) {
                 ],
             }),
         );
+        // Add the native-only `stop_signal`/`stop_grace_period` fields —
+        // skipped from the compat schema (`Container::stop_signal`'s and
+        // `Container::stop_grace_period`'s `schemars(skip)`, since
+        // `ratect-compat` rejects them), same reasoning as `extends` above.
+        properties.insert(
+            "stop_signal".to_string(),
+            serde_json::json!({
+                "type": ["string", "null"],
+                "description": "The signal sent when stopping this container during \
+                                cleanup, instead of Docker's own default signal (usually \
+                                SIGTERM) — e.g. \"SIGINT\". Docker's own default applies \
+                                when unset.",
+            }),
+        );
+        properties.insert(
+            "stop_grace_period".to_string(),
+            serde_json::json!({
+                "type": ["string", "null"],
+                "pattern": DURATION_PATTERN,
+                "description": "How long to wait, after the stop signal, before Docker \
+                                escalates to a forceful kill during cleanup — e.g. \"30s\", \
+                                \"1m30s\". Docker's own default timeout applies when unset.",
+                "examples": ["30s", "1m30s", "500ms", "0"],
+            }),
+        );
     }
 }
 
@@ -585,6 +610,14 @@ fn strip_intra_doc_links(text: &str) -> String {
     output
 }
 
+/// The grammar [`parse_duration`](crate::config::parse_duration) actually
+/// accepts, stated declaratively — shared between [`duration_schema`] (the
+/// schemars-derived path every field but `stop_grace_period` reaches) and
+/// `make_native`'s own hand-added `stop_grace_period` entry (native-only,
+/// so `schemars` never sees it), so the two can't drift apart if the
+/// grammar ever changes.
+const DURATION_PATTERN: &str = r"^\+?(0|([0-9]*\.?[0-9]+(ns|us|µs|μs|ms|s|m|h))+)$";
+
 /// Batect's Go-style duration strings (`health_check`'s `interval`/
 /// `start_period`/`timeout`) — see [`crate::config::parse_duration`], which
 /// is what actually enforces this. The `pattern` here is the same grammar
@@ -595,7 +628,7 @@ fn strip_intra_doc_links(text: &str) -> String {
 pub(crate) fn duration_schema(_: &mut SchemaGenerator) -> Schema {
     json_schema!({
         "type": "string",
-        "pattern": r"^\+?(0|([0-9]*\.?[0-9]+(ns|us|µs|μs|ms|s|m|h))+)$",
+        "pattern": DURATION_PATTERN,
         "description": "A duration, in Batect's Go-style format: one or more \
                         <number><unit> components, where a unit is one of ns, us (or µs/μs), \
                         ms, s, m, h — for example \"500ms\", \"2s\", \"1m30s\", \"1.5h\". A \

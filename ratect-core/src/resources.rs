@@ -87,7 +87,16 @@ pub trait ResourceInventory {
     async fn remove_network(&self, name: &str) -> Result<()>;
 
     /// Stops and removes a container started with `start_background_container`.
-    async fn stop_and_remove_container(&self, container_id: &str) -> Result<()>;
+    /// `stop_signal`/`stop_grace_period` override Docker's own default stop
+    /// signal/timeout — `None` for either leaves that half of Docker's own
+    /// default behavior alone (see `config::Container::stop_signal`/
+    /// `stop_grace_period`, ratect#112).
+    async fn stop_and_remove_container(
+        &self,
+        container_id: &str,
+        stop_signal: Option<&str>,
+        stop_grace_period: Option<std::time::Duration>,
+    ) -> Result<()>;
 }
 
 /// One leftover, with the labels already pulled out of the map — reporting
@@ -207,8 +216,12 @@ where
         let result = if leftover.is_network {
             docker.remove_network(&leftover.resource.id).await
         } else {
+            // No `Container` config is available for a leftover — it's found
+            // by label scan, not loaded from a project's own file — so this
+            // always uses Docker's own default stop behavior, same as
+            // before ratect#112 added the two fields.
             docker
-                .stop_and_remove_container(&leftover.resource.id)
+                .stop_and_remove_container(&leftover.resource.id, None, None)
                 .await
         };
         if result.is_ok() {

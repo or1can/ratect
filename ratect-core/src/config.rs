@@ -412,6 +412,28 @@ pub struct Container {
     /// Container level only, matching Batect (no task-level `run` override
     /// in either).
     pub log_options: Option<HashMap<String, String>>,
+    /// The signal sent when stopping this container during cleanup, instead
+    /// of Docker's own default signal (usually `SIGTERM`) — Docker
+    /// Compose's own `stop_signal` field name. Only changes what a task's
+    /// own cleanup sends; nothing else in Ratect stops a container. `None`
+    /// leaves Docker's own default signal alone, unchanged from today's
+    /// behavior. `ratect`-native only, like `run_to_completion` — Batect
+    /// has no equivalent field, so `ratect-compat` rejects it.
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub stop_signal: Option<String>,
+    /// How long to wait, after the stop signal, before Docker escalates to
+    /// a forceful kill during cleanup — Docker Compose's own
+    /// `stop_grace_period` field name. `None` leaves Docker's own default
+    /// timeout alone, unchanged from today's behavior — this is purely
+    /// additive, not a change to what an unconfigured container does. A
+    /// second interrupt during cleanup still abandons cleanup immediately
+    /// regardless of this value (`TaskEngine::until_interrupted` races the
+    /// removal itself, not this timeout). Durations use Batect's Go-style
+    /// string format: `"2s"`, `"1m30s"`, `"500ms"`, `"0"`. `ratect`-native
+    /// only, like `stop_signal` above — Batect has no equivalent field.
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    #[serde(default, with = "duration_string")]
+    pub stop_grace_period: Option<std::time::Duration>,
 }
 
 /// One entry in a container's `devices` list — a host device path made
@@ -2494,6 +2516,8 @@ impl ConfigFormat {
                 reject_external_health_check_in_compat(config)?;
                 reject_setup_command_run_in_compat(config)?;
                 reject_shared_caches_in_compat(config)?;
+                reject_stop_signal_in_compat(config)?;
+                reject_stop_grace_period_in_compat(config)?;
                 validate_image_sources_in_compat(&config.containers)?;
                 reject_image_expressions_in_compat(config)?;
                 Ok(())
@@ -3880,6 +3904,45 @@ fn reject_run_to_completion_in_compat(config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// `stop_signal` is a `ratect`-native field (ratect#112); a `batect.yml`
+/// that uses it is rejected rather than silently ignored, same reasoning as
+/// [`reject_extends_in_compat`] — Batect has no such field.
+fn reject_stop_signal_in_compat(config: &Config) -> Result<()> {
+    let mut offenders: Vec<&str> = config
+        .containers
+        .iter()
+        .filter(|(_, container)| container.stop_signal.is_some())
+        .map(|(name, _)| name.as_str())
+        .collect();
+    offenders.sort_unstable();
+    if let Some(name) = offenders.first() {
+        anyhow::bail!(
+            "The container '{name}' uses 'stop_signal', which is a ratect-native field \
+             not supported in Batect-compatible configuration."
+        );
+    }
+    Ok(())
+}
+
+/// `stop_grace_period` is a `ratect`-native field (ratect#112), same
+/// reasoning as [`reject_stop_signal_in_compat`].
+fn reject_stop_grace_period_in_compat(config: &Config) -> Result<()> {
+    let mut offenders: Vec<&str> = config
+        .containers
+        .iter()
+        .filter(|(_, container)| container.stop_grace_period.is_some())
+        .map(|(name, _)| name.as_str())
+        .collect();
+    offenders.sort_unstable();
+    if let Some(name) = offenders.first() {
+        anyhow::bail!(
+            "The container '{name}' uses 'stop_grace_period', which is a ratect-native \
+             field not supported in Batect-compatible configuration."
+        );
+    }
+    Ok(())
+}
+
 /// `external_health_check` is a `ratect`-native field (ratect#98); a
 /// `batect.yml` that uses it is rejected rather than silently ignored, same
 /// reasoning as [`reject_run_to_completion_in_compat`] — and with more at
@@ -4756,6 +4819,8 @@ fn inherit_container_fields(child: &mut Container, parent: Container) {
         enable_init_process,
         log_driver,
         log_options,
+        stop_signal,
+        stop_grace_period,
     } = parent;
     child.image = child.image.take().or(image);
     child.image_pull_policy = child.image_pull_policy.take().or(image_pull_policy);
@@ -4788,6 +4853,8 @@ fn inherit_container_fields(child: &mut Container, parent: Container) {
     child.enable_init_process = child.enable_init_process.take().or(enable_init_process);
     child.log_driver = child.log_driver.take().or(log_driver);
     child.log_options = child.log_options.take().or(log_options);
+    child.stop_signal = child.stop_signal.take().or(stop_signal);
+    child.stop_grace_period = child.stop_grace_period.take().or(stop_grace_period);
 }
 
 #[cfg(test)]

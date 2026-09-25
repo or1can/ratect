@@ -560,6 +560,39 @@ they are not one field under a `type` tag. Docker's `retries` counts
 *consecutive failures before flipping to unhealthy*, cushioned by a
 `start_period` that has no meaning out here; this one counts *attempts*.
 
+## `stop_signal`/`stop_grace_period`: graceful shutdown
+
+Cleanup stops every container the same way by default — Docker's own
+default signal (usually `SIGTERM`), then a fixed ~10-second timeout before
+escalating to a forceful kill. That is fine for most containers, but not for
+one where an abrupt stop can corrupt something, such as a database with data
+shared between invocations. `stop_signal` and `stop_grace_period` — Docker
+Compose's own field names for the same concept — let a container opt into
+different behavior:
+
+```toml
+[containers.database]
+image = "postgres:16"
+stop_signal = "SIGINT"
+stop_grace_period = "30s"
+```
+
+- **Purely additive.** A container that sets neither field behaves exactly
+  as today — Docker's own default signal and timeout, unchanged. Setting one
+  without the other only changes that half: `stop_signal` alone still waits
+  Docker's own default timeout, and `stop_grace_period` alone still sends
+  Docker's own default signal.
+- **Only changes what cleanup sends.** Nothing else in Ratect stops a
+  container, so these fields have nothing to affect outside a task's own
+  cleanup.
+- **Durations use Batect's Go-style string format**: `"2s"`, `"1m30s"`,
+  `"500ms"`, `"0"` — the same format `health_check`'s `interval`/`timeout`
+  use.
+- **A second interrupt during cleanup still abandons cleanup immediately.**
+  `stop_grace_period` only bounds how long the first interrupt's cleanup
+  waits on Docker; pressing Ctrl+C again abandons cleanup exactly as it does
+  today, regardless of any container's configured grace period.
+
 ## Field reference
 
 Every container and task field from [`ratect-compat-config-reference.md`](ratect-compat-config-reference.md)
@@ -575,6 +608,7 @@ The container fields, by area:
 | Image | `image`, `image_pull_policy`, `build_directory`, `dockerfile`, `build_target`, `build_args`, `build_secrets`, `build_ssh` | [Image building](ratect-compat-config-reference.md#image-building) |
 | Mounts | `volumes` (host / `cache` / `tmpfs`) | [Volumes](ratect-compat-config-reference.md#volume-path-resolution), [caches](ratect-compat-config-reference.md#cache-volumes), [tmpfs](ratect-compat-config-reference.md#tmpfs-mounts). A cache also takes [`scope`](#shared-caches) *(native only)* — the linked section describes project-keyed storage, which `scope = "shared"` deliberately does not use. |
 | Runtime | `command`, `entrypoint`, `working_directory`, `environment`, `enable_init_process`, `privileged`, `shm_size`, `capabilities_to_add`, `capabilities_to_drop`, `devices`, `labels`, `log_driver`, `log_options` | [Container](ratect-compat-config-reference.md#container) |
+| Graceful shutdown | `stop_signal`, `stop_grace_period` | [above](#stop_signalstop_grace_period-graceful-shutdown) *(native only)* |
 | Networking | `ports`, `additional_hostnames`, `additional_hosts`, `dependencies` | [Ports](ratect-compat-config-reference.md#port-mappings), [readiness](dependency-readiness.md) |
 | Readiness | `health_check`, `setup_commands` | [Dependency Readiness](dependency-readiness.md). A setup command also takes [`run_in`](#run_in-setup-commands-in-another-container) *(native only)* |
 | Init containers | `run_to_completion` | [above](#run_to_completion-init-containers) *(native only)* |
@@ -599,6 +633,7 @@ which `batect.yml` then has to refuse rather than quietly accept.
 | An **expression in `image`** | Rejected when the file loads — Batect resolves nothing there | Resolved like any other expression — see [Expressions in `image`](#expressions-in-image) |
 | A container with **both** `image` and `build_directory` | Rejected when the file loads, matching Batect | Allowed — `image` wins, and this is the only way to override a `build_directory` inherited from an `extends` parent, since inheritance is per-field with no way to unset one |
 | A container with **neither** `image` nor `build_directory` | Rejected when the file loads | Allowed — a container used only as an `extends` base needs neither; the requirement is enforced when a task actually runs a container, so no `abstract` marker is needed |
+| Setting **`stop_signal`/`stop_grace_period`** on a container | Rejected when the file loads — Batect has no equivalent field | Overrides Docker's own default stop signal/timeout during cleanup — see [above](#stop_signalstop_grace_period-graceful-shutdown) |
 | `image` alongside a build-only field (`build_args`, `build_target`, `dockerfile`, `build_secrets`, `build_ssh`) | Rejected when the file loads | Allowed and **ignored**, for the same inheritance reason — a child overriding a build with an `image` still carries the parent's build fields |
 
 The last row is the one to watch: setting `build_secrets` or `build_ssh` on a
@@ -659,6 +694,7 @@ so it also works as a CI gate.
 | Cross-project cache | — | [`scope = "shared"`](#shared-caches) on a `cache` mount |
 | Init containers | — | [`run_to_completion`](#run_to_completion-init-containers) on a dependency |
 | Health check from outside | — | [`external_health_check`](#external_health_check-checking-a-container-from-outside-it) on a container |
+| Graceful shutdown | — | [`stop_signal`/`stop_grace_period`](#stop_signalstop_grace_period-graceful-shutdown) on a container |
 | Setup command target | always the declaring container | [`run_in`](#run_in-setup-commands-in-another-container) on a setup command |
 | List entries | string shorthand *or* object | object (inline table or `[[...]]`) |
 | Local overrides | `batect.local.yml` | `ratect.local.toml` |

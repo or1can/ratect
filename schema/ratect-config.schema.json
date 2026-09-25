@@ -452,6 +452,27 @@
             }
           ]
         },
+        "stop_grace_period": {
+          "description": "How long to wait, after the stop signal, before Docker escalates to a forceful kill during cleanup — e.g. \"30s\", \"1m30s\". Docker's own default timeout applies when unset.",
+          "examples": [
+            "30s",
+            "1m30s",
+            "500ms",
+            "0"
+          ],
+          "pattern": "^\\+?(0|([0-9]*\\.?[0-9]+(ns|us|µs|μs|ms|s|m|h))+)$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stop_signal": {
+          "description": "The signal sent when stopping this container during cleanup, instead of Docker's own default signal (usually SIGTERM) — e.g. \"SIGINT\". Docker's own default applies when unset.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "volumes": {
           "description": "Host bind mounts (`local`) and/or named cache volumes (`cache`) — see `VolumeMount`. A `local` mount's host path is resolved in `Config::resolve_expressions_with`; a `cache` mount's Docker volume name/host directory is resolved later, once `--cache-type` and the project's own cache key are known — see `crate::cache`.",
           "items": {

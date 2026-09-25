@@ -54,6 +54,8 @@ fn sample_container() -> Container {
         run_to_completion: None,
         external_health_check: None,
         reports_readiness_for: None,
+        stop_signal: None,
+        stop_grace_period: None,
     }
 }
 
