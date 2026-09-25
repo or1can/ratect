@@ -82,6 +82,12 @@ fn stop_signal_fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/stop-signal.toml")
 }
 
+/// `ulimits` (ratect#95) — native-only, so its own fixture lives here too,
+/// for the same reason as `run_to_completion` above.
+fn ulimits_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ulimits.toml")
+}
+
 /// A unique, empty temp directory to stand up a small project in.
 fn unique_project_dir() -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1729,5 +1735,94 @@ fn stop_grace_period_shortens_the_wait_before_a_forceful_kill_via_docker() {
         elapsed < Duration::from_secs(6),
         "cleanup should have force-killed 'ignores-term' after its own 1s stop_grace_period, \
          not Docker's own ~10s default: took {elapsed:?}"
+    );
+}
+
+/// `ulimits` (ratect#95), end to end: `object-form` asks for a `nofile`
+/// soft/hard limit of 1024/2048 and checks both from inside itself, so the
+/// run fails if the limits never reached Docker. Requires a running Docker
+/// daemon with network access to pull `alpine:3.18.2`. Run explicitly with
+/// `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn ulimits_in_the_object_form_reach_the_container_via_docker() {
+    let _guard = serial_docker();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(ulimits_fixture_path())
+        .args(["run", "object-form"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("object-form-ok"),
+        "the container should have seen its own configured nofile limits:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// The same, written in Docker's own compact `name=soft:hard` string form,
+/// in the `.yml` fragment `ulimits.toml` includes — the one place that
+/// shorthand is meant to be written, since the native format's own
+/// canonical shape is the object form. Requires a running Docker daemon
+/// with network access to pull `alpine:3.18.2`. Run explicitly with
+/// `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn ulimits_in_the_compact_string_form_reach_the_container_via_docker() {
+    let _guard = serial_docker();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(ulimits_fixture_path())
+        .args(["run", "string-form"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("string-form-ok"),
+        "the container should have seen the limits its string-form entry asked for:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// A container's `ulimits` apply to that container alone: the
+/// `limited-dependency` runs to completion and fails the run unless *it*
+/// got its own 3000 `nofile` soft limit, while `unlimited-app`, which
+/// declares none, fails unless its own limit is something else. Requires a
+/// running Docker daemon with network access to pull `alpine:3.18.2`. Run
+/// explicitly with `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn each_container_gets_only_its_own_ulimits_via_docker() {
+    let _guard = serial_docker();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(ulimits_fixture_path())
+        .args(["run", "per-container"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("app-unaffected"),
+        "a dependency's ulimits must not reach the task's own container:\n{}",
+        String::from_utf8_lossy(&output.stdout)
     );
 }

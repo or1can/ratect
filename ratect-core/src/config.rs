@@ -415,7 +415,9 @@ pub struct Container {
     /// The signal sent when stopping this container during cleanup, instead
     /// of Docker's own default signal (usually `SIGTERM`) — Docker
     /// Compose's own `stop_signal` field name. Only changes what a task's
-    /// own cleanup sends; nothing else in Ratect stops a container. `None`
+    /// own cleanup sends: the other place Ratect stops a container,
+    /// [`crate::resources::remove`], works from a label scan with no
+    /// `Container` config to read, so it keeps Docker's own defaults. `None`
     /// leaves Docker's own default signal alone, unchanged from today's
     /// behavior. `ratect`-native only, like `run_to_completion` — Batect
     /// has no equivalent field, so `ratect-compat` rejects it.
@@ -429,11 +431,21 @@ pub struct Container {
     /// second interrupt during cleanup still abandons cleanup immediately
     /// regardless of this value (`TaskEngine::until_interrupted` races the
     /// removal itself, not this timeout). Durations use Batect's Go-style
-    /// string format: `"2s"`, `"1m30s"`, `"500ms"`, `"0"`. `ratect`-native
-    /// only, like `stop_signal` above — Batect has no equivalent field.
+    /// string format: `"2s"`, `"1m30s"`, `"500ms"`, `"0"` — rounded *up* to
+    /// whole seconds, which is the granularity Docker's own stop timeout
+    /// has. `ratect`-native only, like `stop_signal` above — Batect has no
+    /// equivalent field.
     #[cfg_attr(feature = "schema", schemars(skip))]
     #[serde(default, with = "duration_string")]
     pub stop_grace_period: Option<std::time::Duration>,
+    /// Per-resource limits for this container — Docker's `--ulimit`, one
+    /// [`Ulimit`] per resource. `None`/absent leaves the daemon's own
+    /// defaults alone, which is what every container got before this field
+    /// existed. Container level only, like `devices` (no task-level `run`
+    /// override). `ratect`-native only, like `stop_signal` above — Batect
+    /// has no equivalent field, so `ratect-compat` rejects it.
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub ulimits: Option<Vec<Ulimit>>,
 }
 
 /// One entry in a container's `devices` list — a host device path made
@@ -557,6 +569,236 @@ impl Serialize for DeviceMapping {
             }
             None => serializer.serialize_str(&format!("{}:{}", self.local, self.container)),
         }
+    }
+}
+
+/// The resource a [`Ulimit`] entry limits — the name Docker's `--ulimit`
+/// takes, without its `RLIMIT_` prefix — validated at config-parse time,
+/// the same treatment (and for the same reason) as [`Capability`]: an
+/// unknown name is rejected with a clear error rather than reaching
+/// Docker's API to fail there. It *would* fail there, but late and
+/// obscurely — the daemon's API validates none of this, so an unknown name
+/// is accepted at container creation and only reported when the container
+/// starts, as runc's `wrong rlimit value: RLIMIT_BOGUS`. Only `docker run
+/// --ulimit` itself checks the name (`go-units`' `ParseUlimit`), and
+/// Ratect talks to the API.
+///
+/// The list is the one Docker's own `docker container run` reference
+/// documents, which is also `go-units`' `ulimitNameMapping`. `as` is
+/// deliberately absent from both — Docker's documentation calls it
+/// deprecated, and `go-units` keeps it commented out as unusable with the
+/// way Docker initializes a container — so it isn't accepted here either.
+/// `serde`'s `lowercase` rename matches every variant to its Docker name
+/// unchanged; [`UlimitResource::as_str`] gives the same string back for
+/// building Docker's own `HostConfig.Ulimits` entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UlimitResource {
+    Core,
+    Cpu,
+    Data,
+    Fsize,
+    Locks,
+    Memlock,
+    Msgqueue,
+    Nice,
+    Nofile,
+    Nproc,
+    Rss,
+    Rtprio,
+    Rttime,
+    Sigpending,
+    Stack,
+}
+
+impl UlimitResource {
+    /// The exact Docker resource name (e.g. `"nofile"`) — what `docker.rs`
+    /// sends as a `HostConfig.Ulimits` entry's `Name`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            UlimitResource::Core => "core",
+            UlimitResource::Cpu => "cpu",
+            UlimitResource::Data => "data",
+            UlimitResource::Fsize => "fsize",
+            UlimitResource::Locks => "locks",
+            UlimitResource::Memlock => "memlock",
+            UlimitResource::Msgqueue => "msgqueue",
+            UlimitResource::Nice => "nice",
+            UlimitResource::Nofile => "nofile",
+            UlimitResource::Nproc => "nproc",
+            UlimitResource::Rss => "rss",
+            UlimitResource::Rtprio => "rtprio",
+            UlimitResource::Rttime => "rttime",
+            UlimitResource::Sigpending => "sigpending",
+            UlimitResource::Stack => "stack",
+        }
+    }
+
+    /// Every accepted name, in the order they're listed above — for the
+    /// error the string form raises, and the native schema's own `enum`.
+    /// The string form can't lean on `serde`'s "unknown variant, expected
+    /// one of …" message, since it parses the name out of `name=soft:hard`
+    /// itself.
+    pub const ALL: [UlimitResource; 15] = [
+        UlimitResource::Core,
+        UlimitResource::Cpu,
+        UlimitResource::Data,
+        UlimitResource::Fsize,
+        UlimitResource::Locks,
+        UlimitResource::Memlock,
+        UlimitResource::Msgqueue,
+        UlimitResource::Nice,
+        UlimitResource::Nofile,
+        UlimitResource::Nproc,
+        UlimitResource::Rss,
+        UlimitResource::Rtprio,
+        UlimitResource::Rttime,
+        UlimitResource::Sigpending,
+        UlimitResource::Stack,
+    ];
+
+    /// The inverse of [`as_str`](Self::as_str), for the compact string form.
+    fn parse(name: &str) -> Result<Self> {
+        UlimitResource::ALL
+            .into_iter()
+            .find(|resource| resource.as_str() == name)
+            .ok_or_else(|| {
+                let accepted: Vec<&str> = UlimitResource::ALL
+                    .iter()
+                    .map(UlimitResource::as_str)
+                    .collect();
+                anyhow::anyhow!(
+                    "'{name}' is not a ulimit resource Docker supports. It must be one of: {}.",
+                    accepted.join(", ")
+                )
+            })
+    }
+}
+
+/// One entry in a container's `ulimits` list — a per-resource limit applied
+/// to that container alone (Docker's `--ulimit`, which becomes
+/// `HostConfig.Ulimits`). `-1` is Docker's own "unlimited".
+///
+/// Accepts the object form (`{name, soft, hard}`) the native format treats
+/// as canonical, and Docker's own compact `"name=soft:hard"` string — which
+/// is what a `.yml` [include](#includes) of a native project can keep using,
+/// the same reason [`DeviceMapping`] accepts both. A single value
+/// (`"name=limit"`, or an object with no `hard`) sets both limits, matching
+/// `docker run --ulimit`.
+///
+/// `ratect`-native only, like [`Container::stop_signal`] — Batect has no
+/// equivalent field, so `ratect-compat` rejects it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Ulimit {
+    pub name: UlimitResource,
+    pub soft: i64,
+    pub hard: i64,
+}
+
+impl Ulimit {
+    /// Parses Docker's own `"name=soft[:hard]"` string form (`docker run
+    /// --ulimit`'s), the shape a `.yml` include can still write.
+    fn parse_string(value: &str) -> Result<Self> {
+        let invalid = || {
+            anyhow::anyhow!(
+                "Ulimit definition '{value}' is invalid. It must be in the form \
+                 'name=limit' or 'name=soft:hard'."
+            )
+        };
+        let (name, limits) = value.split_once('=').ok_or_else(invalid)?;
+        let name = UlimitResource::parse(name)?;
+        let (soft, hard) = match limits.split_once(':') {
+            Some((soft, hard)) => (soft, hard),
+            // One value sets both limits, matching Docker's own CLI.
+            None => (limits, limits),
+        };
+        let soft: i64 = soft.parse().map_err(|_| invalid())?;
+        let hard: i64 = hard.parse().map_err(|_| invalid())?;
+        Self::new(name, soft, hard)
+    }
+
+    /// Both forms land here, so the soft-below-hard rule can't be enforced
+    /// on one and forgotten on the other. The rule is the one `docker run
+    /// --ulimit` enforces (`go-units`' `ParseUlimit`), including its `-1`
+    /// handling: an unlimited *hard* limit permits any soft limit, but an
+    /// unlimited soft limit under a finite hard one is a contradiction.
+    /// Docker's own `--ulimit` documentation states neither, and the
+    /// daemon's API checks neither — a container created that way starts
+    /// far enough to fail in runc, as `error setting rlimit type 7:
+    /// invalid argument` (the kernel's `EINVAL`), which names a number
+    /// rather than the field you wrote.
+    fn new(name: UlimitResource, soft: i64, hard: i64) -> Result<Self> {
+        if hard != -1 {
+            let resource = name.as_str();
+            anyhow::ensure!(
+                soft != -1,
+                "The ulimit '{resource}' has an unlimited (-1) soft limit under a hard \
+                 limit of {hard}."
+            );
+            anyhow::ensure!(
+                soft <= hard,
+                "The ulimit '{resource}' has a soft limit ({soft}) above its hard limit \
+                 ({hard})."
+            );
+        }
+        Ok(Self { name, soft, hard })
+    }
+}
+
+impl<'de> Deserialize<'de> for Ulimit {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct UlimitVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for UlimitVisitor {
+            type Value = Ulimit;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(
+                    "a ulimit string ('name=limit' or 'name=soft:hard') or an object with \
+                     'name'/'soft'/'hard' fields",
+                )
+            }
+
+            fn visit_str<E>(self, v: &str) -> std::result::Result<Ulimit, E>
+            where
+                E: serde::de::Error,
+            {
+                Ulimit::parse_string(v).map_err(serde::de::Error::custom)
+            }
+
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<Ulimit, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut name: Option<UlimitResource> = None;
+                let mut soft: Option<i64> = None;
+                let mut hard: Option<i64> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "name" => name = Some(map.next_value()?),
+                        "soft" => soft = Some(map.next_value()?),
+                        "hard" => hard = Some(map.next_value()?),
+                        other => {
+                            return Err(serde::de::Error::unknown_field(
+                                other,
+                                &["name", "soft", "hard"],
+                            ))
+                        }
+                    }
+                }
+                let name = name.ok_or_else(|| serde::de::Error::missing_field("name"))?;
+                let soft = soft.ok_or_else(|| serde::de::Error::missing_field("soft"))?;
+                // Omitted `hard` means "both limits", same as the string
+                // form's single value.
+                let hard = hard.unwrap_or(soft);
+                Ulimit::new(name, soft, hard).map_err(serde::de::Error::custom)
+            }
+        }
+
+        deserializer.deserialize_any(UlimitVisitor)
     }
 }
 
@@ -2518,6 +2760,7 @@ impl ConfigFormat {
                 reject_shared_caches_in_compat(config)?;
                 reject_stop_signal_in_compat(config)?;
                 reject_stop_grace_period_in_compat(config)?;
+                reject_ulimits_in_compat(config)?;
                 validate_image_sources_in_compat(&config.containers)?;
                 reject_image_expressions_in_compat(config)?;
                 Ok(())
@@ -3943,6 +4186,25 @@ fn reject_stop_grace_period_in_compat(config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// `ulimits` is a `ratect`-native field (ratect#95), same reasoning as
+/// [`reject_stop_signal_in_compat`] — Batect has no such field.
+fn reject_ulimits_in_compat(config: &Config) -> Result<()> {
+    let mut offenders: Vec<&str> = config
+        .containers
+        .iter()
+        .filter(|(_, container)| container.ulimits.is_some())
+        .map(|(name, _)| name.as_str())
+        .collect();
+    offenders.sort_unstable();
+    if let Some(name) = offenders.first() {
+        anyhow::bail!(
+            "The container '{name}' uses 'ulimits', which is a ratect-native field \
+             not supported in Batect-compatible configuration."
+        );
+    }
+    Ok(())
+}
+
 /// `external_health_check` is a `ratect`-native field (ratect#98); a
 /// `batect.yml` that uses it is rejected rather than silently ignored, same
 /// reasoning as [`reject_run_to_completion_in_compat`] — and with more at
@@ -4821,6 +5083,7 @@ fn inherit_container_fields(child: &mut Container, parent: Container) {
         log_options,
         stop_signal,
         stop_grace_period,
+        ulimits,
     } = parent;
     child.image = child.image.take().or(image);
     child.image_pull_policy = child.image_pull_policy.take().or(image_pull_policy);
@@ -4855,6 +5118,7 @@ fn inherit_container_fields(child: &mut Container, parent: Container) {
     child.log_options = child.log_options.take().or(log_options);
     child.stop_signal = child.stop_signal.take().or(stop_signal);
     child.stop_grace_period = child.stop_grace_period.take().or(stop_grace_period);
+    child.ulimits = child.ulimits.take().or(ulimits);
 }
 
 #[cfg(test)]

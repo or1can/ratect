@@ -277,6 +277,35 @@ fn build_devices_is_none_when_devices_is_absent() {
     assert_eq!(build_devices(None), None);
 }
 
+#[test]
+fn build_ulimits_maps_name_soft_and_hard() {
+    let ulimits = vec![
+        ("nofile".to_string(), 1024, 2048),
+        ("core".to_string(), -1, -1),
+    ];
+
+    assert_eq!(
+        build_ulimits(Some(&ulimits)),
+        Some(vec![
+            ResourcesUlimits {
+                name: Some("nofile".to_string()),
+                soft: Some(1024),
+                hard: Some(2048),
+            },
+            ResourcesUlimits {
+                name: Some("core".to_string()),
+                soft: Some(-1),
+                hard: Some(-1),
+            },
+        ])
+    );
+}
+
+#[test]
+fn build_ulimits_is_none_when_ulimits_is_absent() {
+    assert_eq!(build_ulimits(None), None);
+}
+
 /// Docker ANDs the values under one filter name, which is what makes
 /// `project=x` plus `run=y` mean "both" rather than "either" — the
 /// difference between finding one run's resources and finding every

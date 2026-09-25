@@ -1235,6 +1235,197 @@ tasks:
 }
 
 #[test]
+fn ulimit_parse_string_handles_dockers_own_format() {
+    assert_eq!(
+        Ulimit::parse_string("nofile=1024:2048").unwrap(),
+        Ulimit {
+            name: UlimitResource::Nofile,
+            soft: 1024,
+            hard: 2048,
+        }
+    );
+    // One value sets both limits, matching `docker run --ulimit`.
+    assert_eq!(
+        Ulimit::parse_string("nproc=512").unwrap(),
+        Ulimit {
+            name: UlimitResource::Nproc,
+            soft: 512,
+            hard: 512,
+        }
+    );
+    // -1 is Docker's own "unlimited".
+    assert_eq!(
+        Ulimit::parse_string("core=-1:-1").unwrap(),
+        Ulimit {
+            name: UlimitResource::Core,
+            soft: -1,
+            hard: -1,
+        }
+    );
+}
+
+#[test]
+fn ulimit_parse_string_rejects_invalid_input() {
+    assert!(Ulimit::parse_string("").is_err());
+    assert!(Ulimit::parse_string("nofile").is_err());
+    assert!(Ulimit::parse_string("=1024:2048").is_err());
+    assert!(Ulimit::parse_string("nofile=").is_err());
+    assert!(Ulimit::parse_string("nofile=abc").is_err());
+    assert!(Ulimit::parse_string("nofile=1024:2048:4096").is_err());
+    // Docker's own soft-below-hard rule, including its -1 handling: an
+    // unlimited hard limit permits any soft limit, but an unlimited soft
+    // limit under a finite hard one does not. Checked here because the
+    // daemon doesn't check it.
+    assert!(Ulimit::parse_string("nofile=2048:1024").is_err());
+    assert!(Ulimit::parse_string("nofile=-1:1024").is_err());
+    assert_eq!(
+        Ulimit::parse_string("nofile=1024:-1").unwrap(),
+        Ulimit {
+            name: UlimitResource::Nofile,
+            soft: 1024,
+            hard: -1,
+        }
+    );
+}
+
+/// The object form is what `ratect.toml` writes; the string form exists for
+/// a `.yml` [include] of a native project, exactly like `devices`.
+#[test]
+fn parses_ulimits_as_strings_and_objects() {
+    let config = parse(
+        r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    ulimits:
+      - nofile=1024:2048
+      - name: nproc
+        soft: 512
+        hard: 1024
+      - name: core
+        soft: 0
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+    );
+
+    let container = config.containers.get("build-env").unwrap();
+    assert_eq!(
+        container.ulimits,
+        Some(vec![
+            Ulimit {
+                name: UlimitResource::Nofile,
+                soft: 1024,
+                hard: 2048,
+            },
+            Ulimit {
+                name: UlimitResource::Nproc,
+                soft: 512,
+                hard: 1024,
+            },
+            Ulimit {
+                name: UlimitResource::Core,
+                soft: 0,
+                hard: 0,
+            },
+        ])
+    );
+}
+
+/// The resource name is checked when the file loads, against the set
+/// `docker run --ulimit` documents — the same treatment `capabilities_to_add`
+/// gets, and for the same reason. Docker's own API doesn't check it: an
+/// unknown name is accepted at container *creation* and only fails when the
+/// container starts, as `wrong rlimit value: RLIMIT_BOGUS` out of runc.
+#[test]
+fn an_unknown_ulimit_resource_is_rejected_in_both_forms() {
+    let error = Ulimit::parse_string("bogus=10:20").unwrap_err().to_string();
+    assert!(
+        error.contains("bogus") && error.contains("nofile"),
+        "the error should name the unknown resource and the accepted ones: {error}"
+    );
+
+    let yaml = r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    ulimits:
+      - name: bogus
+        soft: 10
+tasks:
+  test:
+    run:
+      container: build-env
+"#;
+    let result: Result<Config, _> = noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+    assert!(
+        result.is_err(),
+        "the object form should reject an unknown resource too"
+    );
+}
+
+/// `as` is the one name Docker deliberately does *not* support (its own
+/// documentation calls it deprecated, and `go-units` has it commented out
+/// as unusable with the way Docker initializes a container), so it isn't
+/// accepted here either.
+#[test]
+fn the_deprecated_as_resource_is_not_accepted() {
+    assert!(Ulimit::parse_string("as=10:20").is_err());
+}
+
+/// Every name `docker run --ulimit` documents round-trips: parsed from its
+/// own spelling, and rendered back as exactly what Docker's API expects.
+#[test]
+fn every_documented_ulimit_resource_parses_and_renders_unchanged() {
+    for name in [
+        "core",
+        "cpu",
+        "data",
+        "fsize",
+        "locks",
+        "memlock",
+        "msgqueue",
+        "nice",
+        "nofile",
+        "nproc",
+        "rss",
+        "rtprio",
+        "rttime",
+        "sigpending",
+        "stack",
+    ] {
+        let ulimit = Ulimit::parse_string(&format!("{name}=1"))
+            .unwrap_or_else(|error| panic!("'{name}' should be an accepted resource: {error}"));
+        assert_eq!(ulimit.name.as_str(), name);
+    }
+}
+
+#[test]
+fn ulimits_defaults_to_none() {
+    let config = parse(
+        r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi
+"#,
+    );
+
+    let container = config.containers.get("build-env").unwrap();
+    assert_eq!(container.ulimits, None);
+}
+
+#[test]
 fn parses_enable_init_process() {
     let config = parse(
         r#"
@@ -2393,6 +2584,7 @@ fn container_with_build(build_directory: &str, build_args: HashMap<String, Strin
         log_options: None,
         stop_signal: None,
         stop_grace_period: None,
+        ulimits: None,
     }
 }
 
@@ -3180,6 +3372,7 @@ fn container_with_run_as_current_user(enabled: bool, home_directory: Option<&str
         log_options: None,
         stop_signal: None,
         stop_grace_period: None,
+        ulimits: None,
     }
 }
 
@@ -5126,6 +5319,89 @@ run = { container = "app" }
     assert_eq!(
         project.config.containers["app"].stop_grace_period,
         Some(std::time::Duration::from_secs(30))
+    );
+}
+
+/// `ulimits` is native-only (ratect#95), same reasoning as `stop_signal`
+/// above: Batect has no such field, so a `batect.yml` using it is rejected
+/// rather than silently ignored.
+#[tokio::test]
+async fn ulimits_are_rejected_in_compat_mode() {
+    let dir = unique_temp_dir();
+    let path = dir.join("batect.yml");
+    std::fs::write(
+        &path,
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    ulimits:\n      - nofile=1024:2048\ntasks: {}\n",
+    )
+    .unwrap();
+    let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(
+        format!("{err:#}").contains("uses 'ulimits'"),
+        "expected a compat rejection, got: {err:#}"
+    );
+}
+
+#[tokio::test]
+async fn ulimits_parse_from_the_native_object_form_and_are_inherited_via_extends() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+ulimits = [{ name = "nofile", soft = 1024, hard = 2048 }]
+
+[containers.app]
+extends = "base"
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        project.config.containers["app"].ulimits,
+        Some(vec![Ulimit {
+            name: UlimitResource::Nofile,
+            soft: 1024,
+            hard: 2048,
+        }])
+    );
+}
+
+/// A child's own `ulimits` replaces the inherited list outright, like every
+/// other `extends` field — no per-resource merging.
+#[tokio::test]
+async fn a_childs_own_ulimits_replace_the_inherited_list() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+ulimits = [{ name = "nofile", soft = 1024, hard = 2048 }]
+
+[containers.app]
+extends = "base"
+ulimits = [{ name = "nproc", soft = 512, hard = 512 }]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        project.config.containers["app"].ulimits,
+        Some(vec![Ulimit {
+            name: UlimitResource::Nproc,
+            soft: 512,
+            hard: 512,
+        }])
     );
 }
 
@@ -8590,6 +8866,7 @@ fn container_with_environment(environment: HashMap<String, String>) -> Container
         log_options: None,
         stop_signal: None,
         stop_grace_period: None,
+        ulimits: None,
     }
 }
 

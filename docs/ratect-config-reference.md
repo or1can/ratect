@@ -582,16 +582,69 @@ stop_grace_period = "30s"
   without the other only changes that half: `stop_signal` alone still waits
   Docker's own default timeout, and `stop_grace_period` alone still sends
   Docker's own default signal.
-- **Only changes what cleanup sends.** Nothing else in Ratect stops a
-  container, so these fields have nothing to affect outside a task's own
-  cleanup.
+- **Only changes what a task's own cleanup sends.** The other place Ratect
+  stops a container — [`ratect resources clean`](ratect-cli.md#resources-options),
+  which removes what an interrupted run left behind — finds its containers
+  by a label scan, with no configuration to read, so it keeps Docker's own
+  default signal and timeout whatever a container asked for here.
 - **Durations use Batect's Go-style string format**: `"2s"`, `"1m30s"`,
-  `"500ms"`, `"0"` — the same format `health_check`'s `interval`/`timeout`
-  use.
+  `"0"` — the same format `health_check`'s `interval`/`timeout` use. Docker's
+  own stop timeout is whole seconds, so anything finer is rounded *up* to the
+  next second: `"500ms"` waits one second, never less than asked for.
 - **A second interrupt during cleanup still abandons cleanup immediately.**
   `stop_grace_period` only bounds how long the first interrupt's cleanup
   waits on Docker; pressing Ctrl+C again abandons cleanup exactly as it does
   today, regardless of any container's configured grace period.
+
+## `ulimits`: per-resource limits
+
+A container can raise or lower the resource limits its processes run under —
+Docker's own `--ulimit`, per container:
+
+```toml
+[containers.build-env]
+image = "rust:1.90"
+ulimits = [
+    { name = "nofile", soft = 1024, hard = 2048 },
+    { name = "core", soft = 0 },
+]
+```
+
+- **`name` is one of the resources
+  [`docker run --ulimit`](https://docs.docker.com/reference/cli/docker/container/run/#ulimit)
+  documents**, without its `RLIMIT_` prefix: `core`, `cpu`, `data`, `fsize`,
+  `locks`, `memlock`, `msgqueue`, `nice`, `nofile`, `nproc`, `rss`, `rtprio`,
+  `rttime`, `sigpending`, `stack`. (Not `as`, which Docker documents as
+  deprecated.) A name outside that list is rejected when the file loads,
+  like an unknown
+  [capability](ratect-compat-config-reference.md#container) — Docker's API
+  checks none of this itself, so the alternative is a container that is
+  created happily and then fails to *start*, as `wrong rlimit value:
+  RLIMIT_<NAME>` out of the container runtime.
+- **`hard` defaults to `soft`.** An entry that sets only `soft` sets both
+  limits to that value, matching `docker run --ulimit name=limit`.
+- **`-1` means unlimited.** A soft limit above the hard limit — or an
+  unlimited soft limit under a finite hard one — is rejected when the file
+  loads. That is the rule the `docker` CLI enforces for `--ulimit`, though
+  its documentation doesn't state it; the daemon's API doesn't enforce it
+  either, and a container that gets such a pair fails in the runtime with
+  `error setting rlimit type 7: invalid argument`, which names a number
+  rather than the field you wrote.
+- **Per container, and only that container.** A dependency's `ulimits` apply
+  to the dependency; a task's own container is unaffected by them, and there
+  is no task-level or project-wide default.
+- **Purely additive.** A container that sets no `ulimits` is created exactly
+  as before — whatever the daemon's own defaults are.
+- **`ratect`-native only**, like [`stop_signal`](#stop_signalstop_grace_period-graceful-shutdown):
+  `batect.yml` has no equivalent field, so a container using it is rejected
+  when the file loads rather than silently ignored.
+
+Entries are objects, like every other native list entry. The parser also
+accepts Docker's own compact `"nofile=1024:2048"` (or `"nofile=1024"`)
+string, for the same reason [`devices`](#one-shape-per-list-entry) still
+accepts its shorthand — a `.yml` [include](#includes) can keep using it —
+but the object form is what this format, the schema and [`config
+validate`](ratect-cli.md#config) treat as canonical.
 
 ## Field reference
 
@@ -609,6 +662,7 @@ The container fields, by area:
 | Mounts | `volumes` (host / `cache` / `tmpfs`) | [Volumes](ratect-compat-config-reference.md#volume-path-resolution), [caches](ratect-compat-config-reference.md#cache-volumes), [tmpfs](ratect-compat-config-reference.md#tmpfs-mounts). A cache also takes [`scope`](#shared-caches) *(native only)* — the linked section describes project-keyed storage, which `scope = "shared"` deliberately does not use. |
 | Runtime | `command`, `entrypoint`, `working_directory`, `environment`, `enable_init_process`, `privileged`, `shm_size`, `capabilities_to_add`, `capabilities_to_drop`, `devices`, `labels`, `log_driver`, `log_options` | [Container](ratect-compat-config-reference.md#container) |
 | Graceful shutdown | `stop_signal`, `stop_grace_period` | [above](#stop_signalstop_grace_period-graceful-shutdown) *(native only)* |
+| Resource limits | `ulimits` | [above](#ulimits-per-resource-limits) *(native only)* |
 | Networking | `ports`, `additional_hostnames`, `additional_hosts`, `dependencies` | [Ports](ratect-compat-config-reference.md#port-mappings), [readiness](dependency-readiness.md) |
 | Readiness | `health_check`, `setup_commands` | [Dependency Readiness](dependency-readiness.md). A setup command also takes [`run_in`](#run_in-setup-commands-in-another-container) *(native only)* |
 | Init containers | `run_to_completion` | [above](#run_to_completion-init-containers) *(native only)* |
@@ -634,6 +688,7 @@ which `batect.yml` then has to refuse rather than quietly accept.
 | A container with **both** `image` and `build_directory` | Rejected when the file loads, matching Batect | Allowed — `image` wins, and this is the only way to override a `build_directory` inherited from an `extends` parent, since inheritance is per-field with no way to unset one |
 | A container with **neither** `image` nor `build_directory` | Rejected when the file loads | Allowed — a container used only as an `extends` base needs neither; the requirement is enforced when a task actually runs a container, so no `abstract` marker is needed |
 | Setting **`stop_signal`/`stop_grace_period`** on a container | Rejected when the file loads — Batect has no equivalent field | Overrides Docker's own default stop signal/timeout during cleanup — see [above](#stop_signalstop_grace_period-graceful-shutdown) |
+| Setting **`ulimits`** on a container | Rejected when the file loads — Batect has no equivalent field | Sets that container's own resource limits — see [above](#ulimits-per-resource-limits) |
 | `image` alongside a build-only field (`build_args`, `build_target`, `dockerfile`, `build_secrets`, `build_ssh`) | Rejected when the file loads | Allowed and **ignored**, for the same inheritance reason — a child overriding a build with an `image` still carries the parent's build fields |
 
 The last row is the one to watch: setting `build_secrets` or `build_ssh` on a
@@ -695,6 +750,7 @@ so it also works as a CI gate.
 | Init containers | — | [`run_to_completion`](#run_to_completion-init-containers) on a dependency |
 | Health check from outside | — | [`external_health_check`](#external_health_check-checking-a-container-from-outside-it) on a container |
 | Graceful shutdown | — | [`stop_signal`/`stop_grace_period`](#stop_signalstop_grace_period-graceful-shutdown) on a container |
+| Resource limits | — | [`ulimits`](#ulimits-per-resource-limits) on a container |
 | Setup command target | always the declaring container | [`run_in`](#run_in-setup-commands-in-another-container) on a setup command |
 | List entries | string shorthand *or* object | object (inline table or `[[...]]`) |
 | Local overrides | `batect.local.yml` | `ratect.local.toml` |
@@ -704,7 +760,8 @@ so it also works as a CI gate.
 Most field *meanings* are unchanged; the spelling and the format-level rules
 above are the bulk of the difference. The exceptions are the native-only
 fields (`extends`, a cache's `scope`, a dependency's `run_to_completion` or
-`external_health_check`, a setup command's `run_in`) and the handful of behaviours in [Where
+`external_health_check`, a setup command's `run_in`, a container's
+`stop_signal`/`stop_grace_period` or `ulimits`) and the handful of behaviours in [Where
 the semantics differ](#where-the-semantics-differ), which exist because
 `extends` gives some combinations a meaning `batect.yml` has no way to
 express.

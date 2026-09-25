@@ -146,6 +146,12 @@ pub struct ContainerOptions {
     /// deliberately doesn't depend on config types (same conversion boundary
     /// as `devices` above).
     pub tmpfs: Option<Vec<(String, String)>>,
+    /// Per-resource limits for this container — Docker's `--ulimit`.
+    /// `(name, soft, hard)` triples, `name` the resource without its
+    /// `RLIMIT_` prefix (`"nofile"`, …) — `docker.rs` deliberately doesn't
+    /// depend on config types (same conversion boundary as `devices`
+    /// above). `None` leaves the daemon's own defaults alone.
+    pub ulimits: Option<Vec<(String, i64, i64)>>,
 }
 
 /// A container's `health_check` override, applied at container creation on
@@ -432,6 +438,7 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
         log_driver: container_config.log_driver.clone(),
         log_options: container_config.log_options.clone(),
         tmpfs: tmpfs_mounts(container_config.volumes.as_ref()),
+        ulimits: ulimit_triples(container_config.ulimits.as_ref()),
     };
     let labels = run_labels.for_container(name, role, container_config.labels.as_ref());
 
@@ -603,6 +610,20 @@ fn device_triples(
                     device.options.clone(),
                 )
             })
+            .collect(),
+    )
+}
+
+/// Converts a `ulimits` list of `config::Ulimit` into the plain
+/// `(name, soft, hard)` triples [`ContainerOptions`] expects — same
+/// conversion boundary as `device_triples` above. `None` when the list
+/// itself is `None`, which is what keeps an unconfigured container's
+/// creation byte-for-byte what it was before ratect#95.
+fn ulimit_triples(ulimits: Option<&Vec<crate::config::Ulimit>>) -> Option<Vec<(String, i64, i64)>> {
+    Some(
+        ulimits?
+            .iter()
+            .map(|ulimit| (ulimit.name.as_str().to_string(), ulimit.soft, ulimit.hard))
             .collect(),
     )
 }
