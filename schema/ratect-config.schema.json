@@ -441,6 +441,19 @@
             "null"
           ]
         },
+        "network_mode": {
+          "description": "Takes this container off the task's own network — Docker's --network host, none or container:<name>, where <name> must be one of this container's own dependencies. Unset, the container joins the task's network under its own name.",
+          "examples": [
+            "host",
+            "none",
+            "container:database"
+          ],
+          "pattern": "^(host|none|container:.+)$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "ports": {
           "description": "Publishes container ports to the host. Accepts both of Batect's forms — a `\"local:container/protocol\"` string (with port ranges, `\"from-to:from-to/protocol\"`) and the expanded object form (`{local, container, protocol}`) — see `PortMapping`. Validated (matching ranges, positive ports) at config-parse time, unlike `volumes`, which is never format-checked.",
           "items": {

@@ -243,6 +243,7 @@ fn every_native_config_validates_against_the_native_schema() {
         "ratect/tests/fixtures/external-health-check.toml",
         "ratect/tests/fixtures/ulimits.toml",
         "ratect/tests/fixtures/dns.toml",
+        "ratect/tests/fixtures/network-mode.toml",
     ] {
         let path = root.join(relative);
         let text = std::fs::read_to_string(&path).expect("failed to read a native config");
@@ -314,6 +315,34 @@ fn the_native_schema_accepts_only_ip_addresses_as_dns_entries() {
             .is_err(),
         "the schema should reject a dns entry that isn't an IP address"
     );
+}
+
+/// The loader accepts exactly `host`, `none` and `container:<name>` for
+/// `network_mode` (`a_network_mode_that_is_not_one_of_the_three_forms_is_rejected`);
+/// the schema has to agree.
+#[test]
+fn the_native_schema_accepts_only_the_three_network_modes() {
+    let validator = jsonschema::draft7::new(&native_config_file_schema())
+        .expect("the generated native schema should itself be a valid draft-07 schema");
+    let document = |mode: &str| -> serde_json::Value {
+        toml::from_str(&format!(
+            "project_name = \"demo\"\n\n[containers.app]\nimage = \"alpine\"\n\
+             network_mode = \"{mode}\"\n\n[tasks.t]\nrun = {{ container = \"app\" }}\n"
+        ))
+        .expect("the test document should itself be valid TOML")
+    };
+    for accepted in ["host", "none", "container:peer"] {
+        assert!(
+            validator.validate(&document(accepted)).is_ok(),
+            "'{accepted}' should be accepted"
+        );
+    }
+    for rejected in ["bridge", "container:", "Host"] {
+        assert!(
+            validator.validate(&document(rejected)).is_err(),
+            "'{rejected}' should be rejected"
+        );
+    }
 }
 
 fn native_committed_path() -> std::path::PathBuf {

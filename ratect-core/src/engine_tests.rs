@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::cache::VolumeStore;
-use crate::config::{BuildSecret, Container, PortMapping, Task, TaskRun};
+use crate::config::{BuildSecret, Container, NetworkMode, PortMapping, Task, TaskRun};
 use crate::resources::ResourceInventory;
 use crate::ui::NullEventSink;
 use std::collections::HashMap;
@@ -621,7 +621,10 @@ impl ContainerRuntime for FakeContainerRuntime {
             .lock()
             .unwrap()
             .push((alias.clone(), spec.clone()));
-        self.push(format!("sidecar-start:{alias}:{}", spec.shared.network));
+        self.push(format!(
+            "sidecar-start:{alias}:{}",
+            network_label(&spec.shared.network)
+        ));
         Ok(format!("sidecar-id-{alias}"))
     }
 
@@ -729,7 +732,7 @@ impl ContainerRuntime for FakeContainerRuntime {
             "run:{name}:{}:args=[{}]:{}",
             spec.shared.command.as_deref().unwrap_or_default(),
             spec.additional_args.join(","),
-            spec.shared.network
+            network_label(&spec.shared.network)
         ));
         // Same id convention `start_background_container` uses, so
         // `with_unhealthy_container`/exec-based assertions work
@@ -864,6 +867,7 @@ fn container(image: &str, dependencies: Option<Vec<String>>) -> Container {
         dns: None,
         dns_search: None,
         dns_options: None,
+        network_mode: None,
     }
 }
 
@@ -929,6 +933,7 @@ fn config_with_cycle() -> Config {
             dns: None,
             dns_search: None,
             dns_options: None,
+            network_mode: None,
         },
     );
 
@@ -1035,6 +1040,7 @@ fn config_with_shared_prerequisite() -> Config {
             dns: None,
             dns_search: None,
             dns_options: None,
+            network_mode: None,
         },
     );
 
@@ -1081,6 +1087,19 @@ fn config_with_shared_prerequisite() -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+    }
+}
+
+/// How the fake's event strings spell a container's network: a task
+/// network by its bare name, so every pre-ratect#106 assertion still reads
+/// as it did, and a Docker network mode as Docker's own `--network` would.
+fn network_label(network: &crate::container_spec::ContainerNetwork) -> String {
+    use crate::container_spec::ContainerNetwork;
+    match network {
+        ContainerNetwork::Task(name) => name.clone(),
+        ContainerNetwork::Host => "host".to_string(),
+        ContainerNetwork::None => "none".to_string(),
+        ContainerNetwork::Container(id) => format!("container:{id}"),
     }
 }
 
@@ -1577,6 +1596,7 @@ fn container_with_run_as_current_user(
         dns: None,
         dns_search: None,
         dns_options: None,
+        network_mode: None,
     }
 }
 
@@ -2065,6 +2085,7 @@ async fn run_as_current_user_explicitly_disabled_reaches_the_container_with_no_m
             dns: None,
             dns_search: None,
             dns_options: None,
+            network_mode: None,
         },
     );
     let mut tasks = HashMap::new();
@@ -2133,6 +2154,7 @@ fn container_with_build_directory(
         dns: None,
         dns_search: None,
         dns_options: None,
+        network_mode: None,
     }
 }
 
@@ -2746,6 +2768,7 @@ async fn container_without_image_or_build_directory_errors() {
             dns: None,
             dns_search: None,
             dns_options: None,
+            network_mode: None,
         },
     );
     let mut tasks = HashMap::new();
@@ -2855,6 +2878,73 @@ async fn use_network_reuses_an_existing_network_instead_of_creating_one() {
         "an existing network must not be torn down: {events:?}"
     );
     assert!(events.contains(&"run:build-env:echo hi:args=[]:my-network".to_string()));
+}
+
+/// `network_mode` (ratect#106) takes only the container that sets it off
+/// the task's network — a `container:` target resolved to that dependency's
+/// running id — while one that sets none still joins the task's network,
+/// whether that is the run's own or `--use-network`'s. Readiness is gated
+/// the same way in every mode: a setup command still runs, via `exec`.
+#[tokio::test]
+async fn network_mode_applies_to_its_own_container_alone() {
+    for existing_network in [None, Some("my-network".to_string())] {
+        let mut sharer = container("alpine:3.18", Some(vec!["peer".to_string()]));
+        sharer.network_mode = Some(NetworkMode::Container("peer".to_string()));
+        let mut isolated = container("alpine:3.18", None);
+        isolated.network_mode = Some(NetworkMode::None);
+        isolated.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./seed.sh".to_string(),
+            working_directory: None,
+            run_in: None,
+        }]);
+        let mut app = container(
+            "alpine:3.18",
+            Some(vec!["sharer".to_string(), "isolated".to_string()]),
+        );
+        app.network_mode = Some(NetworkMode::Host);
+        let containers = HashMap::from([
+            ("peer".to_string(), container("alpine:3.18", None)),
+            ("sharer".to_string(), sharer),
+            ("isolated".to_string(), isolated),
+            ("app".to_string(), app),
+        ]);
+        let tasks = HashMap::from([("build".to_string(), task("app", "echo hi"))]);
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+
+        let docker = FakeContainerRuntime::default();
+        let engine = engine(config, docker.clone())
+            .with_settings(TaskEngineSettings {
+                existing_network: existing_network.clone(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        engine.run_task("build", &[]).await.unwrap();
+
+        let events = docker.events();
+        let task_network = existing_network.unwrap_or_else(|| {
+            events
+                .iter()
+                .find_map(|e| e.strip_prefix("network-create:"))
+                .expect("the run's own network is created")
+                .to_string()
+        });
+        for expected in [
+            format!("sidecar-start:peer:{task_network}"),
+            "sidecar-start:sharer:container:sidecar-id-peer".to_string(),
+            "sidecar-start:isolated:none".to_string(),
+            "exec:sidecar-id-isolated:./seed.sh".to_string(),
+            "run:app:echo hi:args=[]:host".to_string(),
+        ] {
+            assert!(events.contains(&expected), "{expected}: {events:?}");
+        }
+    }
 }
 
 #[tokio::test]
@@ -5306,6 +5396,7 @@ async fn dependency_without_image_or_build_directory_errors() {
             dns: None,
             dns_search: None,
             dns_options: None,
+            network_mode: None,
         },
     );
     containers.insert(

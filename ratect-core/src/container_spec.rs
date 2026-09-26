@@ -55,12 +55,68 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
-use crate::config::{BuildSecret, Container, TaskContainerCustomisation, TaskRun};
+use crate::config::{BuildSecret, Container, NetworkMode, TaskContainerCustomisation, TaskRun};
 use crate::docker::UserMapping;
 use crate::labels::{ContainerRole, RunLabels};
 use crate::proxy::ProxyEnvironment;
+
+/// Which network a container is on — derived once, by [`resolve_network`],
+/// from its own `network_mode` and consumed as a whole by `docker.rs`, so
+/// "joins the task's network" and "has a Docker network mode" can never
+/// both be true of one container.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContainerNetwork {
+    /// Joined, after creation, to this task execution's own network (or
+    /// `--use-network`'s), under its own name plus `additional_hostnames` —
+    /// every container with no `network_mode`.
+    Task(String),
+    /// Docker's `host` network mode.
+    Host,
+    /// Docker's `none` network mode.
+    None,
+    /// Docker's `container:<id>` network mode — the running id of the
+    /// dependency `network_mode` named, not its config name.
+    Container(String),
+}
+
+impl ContainerNetwork {
+    /// `true` under `container:`, where the namespace owner's hostname,
+    /// `/etc/hosts` and `resolv.conf` are the ones in use — so Docker
+    /// refuses this container any of its own.
+    pub fn shares_namespace(&self) -> bool {
+        matches!(self, ContainerNetwork::Container(_))
+    }
+}
+
+/// Resolves a container's `network_mode` against this task execution:
+/// unset joins `task_network`, and a `container:<name>` target becomes the
+/// id `dependency_ids` holds for it. The loader restricts that target to one
+/// of the container's own dependencies (`validate_network_modes`), which is
+/// exactly the set both of `engine.rs`'s call sites already hold ids for.
+pub fn resolve_network(
+    network_mode: Option<&NetworkMode>,
+    task_network: &str,
+    dependency_ids: &HashMap<String, String>,
+) -> Result<ContainerNetwork> {
+    Ok(match network_mode {
+        None => ContainerNetwork::Task(task_network.to_string()),
+        Some(NetworkMode::Host) => ContainerNetwork::Host,
+        Some(NetworkMode::None) => ContainerNetwork::None,
+        Some(NetworkMode::Container(target)) => ContainerNetwork::Container(
+            dependency_ids
+                .get(target)
+                .with_context(|| {
+                    format!(
+                        "The container '{target}' named by 'network_mode' has not been \
+                         started as a dependency."
+                    )
+                })?
+                .clone(),
+        ),
+    })
+}
 
 /// Per-container network-facing options shared by `run_container` and
 /// `start_background_container`, nested inside `SharedContainerSpec` as a
@@ -211,8 +267,9 @@ pub struct SharedContainerSpec {
     pub environment: Option<HashMap<String, String>>,
     /// This task execution's own isolated network — every task gets one,
     /// regardless of whether it has dependencies (or `--use-network`'s own
-    /// existing network, when given).
-    pub network: String,
+    /// existing network, when given) — unless the container's own
+    /// `network_mode` takes it off it. See [`ContainerNetwork`].
+    pub network: ContainerNetwork,
     /// `Some` when this container's own `run_as_current_user` is enabled.
     /// When present: any of `volumes`' host paths that don't exist yet are
     /// created first (as the current host user, so Docker's daemon doesn't
@@ -329,7 +386,8 @@ pub struct ContainerSpecInputs<'a> {
     pub overlay: Overlay<'a>,
     /// The already-resolved image name/ID (`TaskEngine::resolve_image`).
     pub image: &'a str,
-    pub network: &'a str,
+    /// From [`resolve_network`].
+    pub network: ContainerNetwork,
     /// `false` for a dependency — see [`ContainerSpec::interactive`].
     pub interactive: bool,
     /// Empty for a dependency — see [`ContainerSpec::additional_args`].
@@ -432,7 +490,11 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
     let network_options = NetworkOptions {
         additional_hostnames: container_config.additional_hostnames.clone(),
         additional_hosts: container_config.additional_hosts.clone(),
-        proxy_host_gateway: proxy.and_then(|proxy| proxy.host_gateway()),
+        // A shared namespace brings its owner's `/etc/hosts`, and Docker
+        // refuses extra hosts alongside `container:`.
+        proxy_host_gateway: proxy
+            .and_then(|proxy| proxy.host_gateway())
+            .filter(|_| !network.shares_namespace()),
         ports: (publish_ports && !expanded_ports.is_empty()).then_some(expanded_ports),
     };
     let container_options = ContainerOptions {
@@ -461,7 +523,7 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
             command: command.map(str::to_string),
             volumes: volumes.cloned(),
             environment,
-            network: network.to_string(),
+            network,
             user_mapping: user_mapping.cloned(),
             network_options,
             health_check: health_check_options(container_config),

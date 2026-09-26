@@ -1714,7 +1714,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // container concurrency (see docs/task-lifecycle.md).
             // Kept for the same reason as the fan-out inside
             // `ensure_container_ready`: the task container's own `run_in`
-            // setup commands (ratect#111) resolve through it. `graph`'s root
+            // setup commands (ratect#111) and `container:` network mode
+            // (ratect#106) resolve through it. `graph`'s root
             // adjacency is the union of the container's own `dependencies`
             // and the task's, so it is a superset of what the config loader
             // allows as a target.
@@ -1787,7 +1788,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     container_config,
                     overlay: crate::container_spec::Overlay::Run(run),
                     image: &image,
-                    network: &network_name,
+                    network: crate::container_spec::resolve_network(
+                        container_config.network_mode.as_ref(),
+                        &network_name,
+                        &dependency_ids,
+                    )?,
                     interactive,
                     additional_args,
                     user_mapping: user_mapping.as_ref(),
@@ -2158,8 +2163,9 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     let empty = Vec::new();
                     let dependencies = graph.get(name).unwrap_or(&empty);
                     // Kept, rather than discarded: a `run_in` setup command
-                    // (ratect#111) resolves its target through exactly this
-                    // set, which is why the config loader restricts it to
+                    // (ratect#111) and a `container:` network mode
+                    // (ratect#106) resolve their target through exactly this
+                    // set, which is why the config loader restricts both to
                     // one of `name`'s own dependencies — every id here
                     // belongs to a container already through its own full
                     // readiness gate.
@@ -2241,7 +2247,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                                 container_config: dependency_config,
                                 overlay: crate::container_spec::Overlay::Customise(customisation),
                                 image: &image,
-                                network,
+                                network: crate::container_spec::resolve_network(
+                                    dependency_config.network_mode.as_ref(),
+                                    network,
+                                    &dependency_ids,
+                                )?,
                                 interactive: false,
                                 additional_args: &[],
                                 user_mapping: user_mapping.as_ref(),

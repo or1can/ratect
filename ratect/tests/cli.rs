@@ -94,6 +94,12 @@ fn dns_fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dns.toml")
 }
 
+/// `network_mode` (ratect#106) — native-only, so its own fixture lives here
+/// too, for the same reason as `run_to_completion` above.
+fn network_mode_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/network-mode.toml")
+}
+
 /// A unique, empty temp directory to stand up a small project in.
 fn unique_project_dir() -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1830,6 +1836,37 @@ fn each_container_gets_only_its_own_dns_settings_via_docker() {
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("app-unaffected"),
         "a dependency's DNS settings must not reach the task's own container:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// `network_mode` (ratect#106), end to end: `shares-peer`, `isolated` and
+/// `on-host` each run to completion and fail the run unless their own
+/// network is the `container:peer`, `none` or `host` one they asked for,
+/// while `app`, which sets none, fails unless it still reaches `peer` by
+/// name on the task's own network. Requires a running Docker daemon with
+/// network access to pull `alpine:3.18.2`. Run explicitly with
+/// `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn each_container_gets_only_its_own_network_mode_via_docker() {
+    let _guard = serial_docker();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(network_mode_fixture_path())
+        .args(["run", "each-mode"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("app-unaffected"),
+        "a dependency's network mode must not reach the task's own container:\n{}",
         String::from_utf8_lossy(&output.stdout)
     );
 }
