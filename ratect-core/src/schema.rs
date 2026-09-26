@@ -488,6 +488,43 @@ fn make_native(json: &mut serde_json::Value) {
                 },
             }),
         );
+        // Add the native-only `dns`/`dns_search`/`dns_options` fields
+        // (ratect#105), same reasoning as `stop_signal` above.
+        properties.insert(
+            "dns".to_string(),
+            serde_json::json!({
+                "type": ["array", "null"],
+                "items": {
+                    "type": "string",
+                    "anyOf": [{ "format": "ipv4" }, { "format": "ipv6" }],
+                },
+                "description": "Nameserver IP addresses for this container — Docker's \
+                                --dns. On the task's network Docker's embedded resolver \
+                                forwards to these, so containers still resolve each other \
+                                by name. The daemon's own choice applies when unset.",
+                "examples": [["1.1.1.1", "2606:4700:4700::1111"]],
+            }),
+        );
+        properties.insert(
+            "dns_search".to_string(),
+            serde_json::json!({
+                "type": ["array", "null"],
+                "items": { "type": "string" },
+                "description": "DNS search domains for this container — Docker's \
+                                --dns-search. The daemon's own choice applies when unset.",
+                "examples": [["corp.example.com"]],
+            }),
+        );
+        properties.insert(
+            "dns_options".to_string(),
+            serde_json::json!({
+                "type": ["array", "null"],
+                "items": { "type": "string" },
+                "description": "resolv.conf options for this container — Docker's \
+                                --dns-option. The daemon's own choice applies when unset.",
+                "examples": [["ndots:2", "timeout:3"]],
+            }),
+        );
     }
 }
 

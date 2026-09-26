@@ -2581,6 +2581,9 @@ fn container_with_build(build_directory: &str, build_args: HashMap<String, Strin
         stop_signal: None,
         stop_grace_period: None,
         ulimits: None,
+        dns: None,
+        dns_search: None,
+        dns_options: None,
     }
 }
 
@@ -3369,6 +3372,9 @@ fn container_with_run_as_current_user(enabled: bool, home_directory: Option<&str
         stop_signal: None,
         stop_grace_period: None,
         ulimits: None,
+        dns: None,
+        dns_search: None,
+        dns_options: None,
     }
 }
 
@@ -4804,6 +4810,9 @@ async fn native_only_fields_are_rejected_in_a_yaml_include_of_a_native_project()
             "ulimits",
             "    ulimits:\n      - name: nofile\n        soft: 10\n",
         ),
+        ("dns", "    dns:\n      - 1.1.1.1\n"),
+        ("dns_search", "    dns_search:\n      - corp.example.com\n"),
+        ("dns_options", "    dns_options:\n      - ndots:2\n"),
         (
             "scope",
             "    volumes:\n      - type: cache\n        name: c\n        container: /c\n        \
@@ -5646,6 +5655,181 @@ run = { container = "app" }
             hard: 512,
         }])
     );
+}
+
+/// `dns`/`dns_search`/`dns_options` (ratect#105) parse from a native
+/// container's own definition, and are inherited via `extends` like every
+/// other field.
+#[tokio::test]
+async fn dns_fields_parse_from_native_and_are_inherited_via_extends() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+dns = ["1.1.1.1", "2606:4700:4700::1111"]
+dns_search = ["corp.example.com"]
+dns_options = ["ndots:2", "timeout:3"]
+
+[containers.app]
+extends = "base"
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    let app = &project.config.containers["app"];
+    assert_eq!(
+        app.dns,
+        Some(vec![
+            "1.1.1.1".to_string(),
+            "2606:4700:4700::1111".to_string(),
+        ])
+    );
+    assert_eq!(app.dns_search, Some(vec!["corp.example.com".to_string()]));
+    assert_eq!(
+        app.dns_options,
+        Some(vec!["ndots:2".to_string(), "timeout:3".to_string()])
+    );
+}
+
+/// Each of the three is independent: setting one leaves the other two unset.
+#[tokio::test]
+async fn dns_fields_are_independent_and_default_to_none() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.app]
+image = "alpine:3.18"
+dns_search = ["corp.example.com"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    let app = &project.config.containers["app"];
+    assert_eq!(app.dns, None);
+    assert_eq!(app.dns_search, Some(vec!["corp.example.com".to_string()]));
+    assert_eq!(app.dns_options, None);
+}
+
+/// A `dns` entry that isn't an IP address is rejected when the file loads.
+/// Docker's API rejects it too, but only at container creation and in terms
+/// of its own JSON decoding (`invalid JSON: ParseAddr("…")`), naming no
+/// field.
+#[tokio::test]
+async fn a_dns_entry_that_is_not_an_ip_address_is_rejected() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.app]
+image = "alpine:3.18"
+dns = ["resolver.example.com"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("'app'")
+            && message.contains("'dns'")
+            && message.contains("'resolver.example.com'")
+            && message.contains("not an IP address"),
+        "the error should name the container, the field and the entry, and say why: \
+         {message}"
+    );
+}
+
+/// In a Batect-format file, any `dns` is rejected as native-only — including
+/// one that isn't an IP address, which must get that same rejection rather
+/// than an address-syntax error naming neither the field nor the container.
+#[tokio::test]
+async fn a_dns_entry_that_is_not_an_ip_address_is_rejected_as_native_only_in_compat_mode() {
+    let dir = unique_temp_dir();
+    let path = dir.join("batect.yml");
+    std::fs::write(
+        &path,
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    dns:\n      - resolver.example.com\ntasks: {}\n",
+    )
+    .unwrap();
+    let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(
+        format!("{err:#}").contains("uses 'dns'"),
+        "expected the native-only rejection, got: {err:#}"
+    );
+}
+
+/// All three are native-only (ratect#105) — Batect's own `Container` has no
+/// equivalent — so a `batect.yml` using any of them is rejected rather than
+/// silently ignored.
+#[tokio::test]
+async fn dns_fields_are_rejected_in_compat_mode() {
+    for (field, declaration) in [
+        ("dns", "    dns:\n      - 1.1.1.1\n"),
+        ("dns_search", "    dns_search:\n      - corp.example.com\n"),
+        ("dns_options", "    dns_options:\n      - ndots:2\n"),
+    ] {
+        let dir = unique_temp_dir();
+        let path = dir.join("batect.yml");
+        std::fs::write(
+            &path,
+            format!(
+                "project_name: demo\ncontainers:\n  app:\n    image: alpine\n{declaration}tasks: {{}}\n"
+            ),
+        )
+        .unwrap();
+        let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(
+            format!("{err:#}").contains(&format!("uses '{field}'")),
+            "expected a compat rejection of '{field}', got: {err:#}"
+        );
+    }
+}
+
+/// Fixed at the container's own definition (ratect#105): neither a task's
+/// `run` block nor a dependency's `customise` overlay has these fields, so
+/// `deny_unknown_fields` rejects them structurally.
+#[tokio::test]
+async fn dns_fields_are_rejected_on_a_tasks_run_block_and_customise_overlay() {
+    for field in ["dns", "dns_search", "dns_options"] {
+        let value = if field == "dns" { "1.1.1.1" } else { "x" };
+        for (place, table) in [
+            ("run", "[tasks.t.run]\ncontainer = \"app\""),
+            (
+                "customise",
+                "[tasks.t]\nrun = { container = \"app\" }\n\n[tasks.t.customise.db]",
+            ),
+        ] {
+            let err = load_native_toml(&format!(
+                "project_name = \"demo\"\n\n\
+                 [containers.app]\nimage = \"alpine:3.18\"\ndependencies = [\"db\"]\n\n\
+                 [containers.db]\nimage = \"alpine:3.18\"\n\n\
+                 {table}\n{field} = [\"{value}\"]\n"
+            ))
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("'{field}' must be rejected on a task's {place}"));
+            let message = format!("{err:#}");
+            assert!(
+                message.contains(&format!("unknown field `{field}`")),
+                "'{field}' on {place} should be an unknown field: {message}"
+            );
+        }
+    }
 }
 
 /// `run_to_completion` exists only on `Container` — a task's own `run` block
@@ -9110,6 +9294,9 @@ fn container_with_environment(environment: HashMap<String, String>) -> Container
         stop_signal: None,
         stop_grace_period: None,
         ulimits: None,
+        dns: None,
+        dns_search: None,
+        dns_options: None,
     }
 }
 

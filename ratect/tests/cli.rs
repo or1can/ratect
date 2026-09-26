@@ -88,6 +88,12 @@ fn ulimits_fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ulimits.toml")
 }
 
+/// `dns`/`dns_search`/`dns_options` (ratect#105) — native-only, so its own
+/// fixture lives here too, for the same reason as `run_to_completion` above.
+fn dns_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dns.toml")
+}
+
 /// A unique, empty temp directory to stand up a small project in.
 fn unique_project_dir() -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1793,6 +1799,37 @@ fn each_container_gets_only_its_own_ulimits_via_docker() {
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("app-unaffected"),
         "a dependency's ulimits must not reach the task's own container:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// `dns`/`dns_search`/`dns_options` (ratect#105), end to end: the
+/// `configured-dependency` runs to completion and fails the run unless its
+/// own `/etc/resolv.conf` carries the nameserver, search domain and option
+/// it asked for and it can still resolve its `peer` by name, while
+/// `unconfigured-app`, which declares none, fails unless its own carries
+/// none of them. Requires a running Docker daemon with network access to
+/// pull `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn each_container_gets_only_its_own_dns_settings_via_docker() {
+    let _guard = serial_docker();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(dns_fixture_path())
+        .args(["run", "per-container"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("app-unaffected"),
+        "a dependency's DNS settings must not reach the task's own container:\n{}",
         String::from_utf8_lossy(&output.stdout)
     );
 }

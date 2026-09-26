@@ -42,8 +42,9 @@
 //! still-growing set of per-container Docker options shared by `run_container`/
 //! `start_background_container` (0.13.0's `working_directory` through
 //! `enable_init_process`) — add new container-level fields there rather than as more
-//! flat parameters, converting from config types to plain values in `engine.rs`
-//! (`docker.rs` deliberately never depends on `config` types directly).
+//! flat parameters, converting from config types to plain values in
+//! `container_spec::derive_spec` (`docker.rs` deliberately never depends on
+//! `config` types directly).
 //! `log_driver`/`log_options` (0.19.0) followed the same pattern onto
 //! bollard's `HostConfig.log_config` (`build_log_config`, pure/unit-testable,
 //! same shape as `build_devices`) — `None`/absent leaves the daemon's own
@@ -53,12 +54,14 @@
 //! (`build_tmpfs_mounts`, pure/unit-testable, same shape as `build_devices`/
 //! `build_log_config`) — unlike `devices`/`log_options`, its `(container_path,
 //! options)` pairs come from the same `volumes` config field `resolve_volumes`
-//! already handles, just pulled out separately (`engine.rs`'s `tmpfs_mounts`)
+//! already handles, just pulled out separately (`container_spec.rs`'s `tmpfs_mounts`)
 //! since a tmpfs mount can't be expressed as a bind string. `ulimits`
-//! (ratect#95) is the latest of the same pattern, onto bollard's
+//! (ratect#95) followed the same pattern, onto bollard's
 //! `HostConfig.ulimits` (`build_ulimits`, pure/unit-testable, same shape as
 //! `build_devices`) — `(name, soft, hard)` triples, `None`/absent leaving
-//! the daemon's own defaults alone. `stop_signal`/`stop_grace_period`
+//! the daemon's own defaults alone. `dns`/`dns_search`/`dns_options` (ratect#105)
+//! follow it too, as plain string lists passed straight onto bollard's
+//! `HostConfig` fields of the same names — no builder needed. `stop_signal`/`stop_grace_period`
 //! (ratect#112) are the one per-container pair that does *not* live in
 //! `ContainerOptions`: they take effect when a container is *stopped*, not
 //! created, so they are parameters of `stop_and_remove_container`
@@ -67,7 +70,7 @@
 //! gained a `force_pull: bool` parameter (0.19.0, both the classic and
 //! BuildKit paths' `BuildImageOptionsBuilder::pull("true")`) — Batect's
 //! second, distinct use of `image_pull_policy` on a `build_directory`
-//! container (`engine.rs`'s `resolve_image` computes it from
+//! container (`container_spec::derive_build_spec` computes it from
 //! `container_config.image_pull_policy == Always`, since `docker.rs` still
 //! doesn't depend on `config` types directly).
 //! `classify_ssh_agent_paths` (0.25.0) turns one `build_ssh` entry's already
@@ -2474,6 +2477,9 @@ impl ContainerRuntime for DockerClient {
             ),
             tmpfs: build_tmpfs_mounts(options.tmpfs.as_ref()),
             ulimits: build_ulimits(options.ulimits.as_ref()),
+            dns: options.dns.clone(),
+            dns_search: options.dns_search.clone(),
+            dns_options: options.dns_options.clone(),
             ..Default::default()
         };
 
@@ -2754,6 +2760,9 @@ impl ContainerRuntime for DockerClient {
             ),
             tmpfs: build_tmpfs_mounts(options.tmpfs.as_ref()),
             ulimits: build_ulimits(options.ulimits.as_ref()),
+            dns: options.dns.clone(),
+            dns_search: options.dns_search.clone(),
+            dns_options: options.dns_options.clone(),
             ..Default::default()
         };
 
