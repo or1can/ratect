@@ -525,6 +525,20 @@ fn make_native(json: &mut serde_json::Value) {
                 "examples": [["ndots:2", "timeout:3"]],
             }),
         );
+        // Add the native-only `network_mode` field (ratect#106), same
+        // reasoning as `stop_signal` above.
+        properties.insert(
+            "network_mode".to_string(),
+            serde_json::json!({
+                "type": ["string", "null"],
+                "pattern": "^(host|none|container:.+)$",
+                "description": "Takes this container off the task's own network — Docker's \
+                                --network host, none or container:<name>, where <name> must \
+                                be one of this container's own dependencies. Unset, the \
+                                container joins the task's network under its own name.",
+                "examples": ["host", "none", "container:database"],
+            }),
+        );
     }
 }
 

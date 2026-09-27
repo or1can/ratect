@@ -113,7 +113,9 @@ where that lives and stays current.
    [`image_pull_policy`](ratect-compat-config-reference.md#container)) or building, or
    erroring if neither is set — and is used identically for the task's own
    container and for dependencies. The container then runs with the task's
-   `command`, joined to the task's network, its environment layered as
+   `command`, joined to the task's network (unless its own
+   [`network_mode`](ratect-config-reference.md#network_mode-leaving-the-tasks-network)
+   says otherwise), its environment layered as
    [Environment precedence](ratect-compat-config-reference.md#environment-precedence)
    states. Everything else on the container — ports, hostnames, working directory,
    entrypoint, capabilities, devices, and the rest — is assembled here from the

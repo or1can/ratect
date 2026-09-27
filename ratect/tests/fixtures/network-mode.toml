@@ -1,0 +1,48 @@
+# A native `ratect.toml` fixture proving per-container `network_mode`
+# (ratect#106) against a real Docker daemon. Native-only — Batect has no
+# network-mode concept, so this fixture, unlike most of the engine/Docker
+# behaviour proven under `ratect-compat/tests/fixtures/`, can only be
+# expressed here (see AGENTS.md's fixture-layer guideline).
+#
+# Each run-to-completion dependency checks its own network from the inside
+# and exits non-zero if it isn't the mode it asked for, so a mode that never
+# reached Docker fails the run rather than needing output parsing.
+project_name = "ratect-network-mode-test"
+
+[containers.peer]
+image = "alpine:3.18.2"
+command = "sleep 300"
+
+# Shares peer's network namespace, and with it peer's hostname.
+[containers.shares-peer]
+image = "alpine:3.18.2"
+run_to_completion = true
+dependencies = ["peer"]
+network_mode = "container:peer"
+command = "sh -c 'test \"$(hostname)\" = peer'"
+
+# Nothing but a loopback interface.
+[containers.isolated]
+image = "alpine:3.18.2"
+run_to_completion = true
+network_mode = "none"
+command = "sh -c 'test \"$(ls /sys/class/net)\" = lo'"
+
+# The daemon host's own interfaces, docker0 among them — no container on a
+# bridge network sees that one.
+[containers.on-host]
+image = "alpine:3.18.2"
+run_to_completion = true
+network_mode = "host"
+command = "sh -c 'test -e /sys/class/net/docker0'"
+
+# Sets no network_mode: still on the task's network, still reaching peer by
+# name.
+[containers.app]
+image = "alpine:3.18.2"
+dependencies = ["peer", "shares-peer", "isolated", "on-host"]
+command = "sh -c 'nslookup -type=a peer. >/dev/null && echo app-unaffected'"
+
+[tasks.each-mode]
+description = "Each container's network_mode applies to it alone"
+run = { container = "app" }

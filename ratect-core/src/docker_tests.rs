@@ -306,6 +306,50 @@ fn build_ulimits_is_none_when_ulimits_is_absent() {
     assert_eq!(build_ulimits(None), None);
 }
 
+/// `network_mode` (ratect#106): only a container off the task's network gets
+/// `HostConfig.network_mode`, spelled as Docker's own `--network` would be;
+/// one on it keeps the daemon's default and is joined afterwards instead.
+#[test]
+fn build_network_mode_spells_each_mode_as_docker_does() {
+    assert_eq!(
+        build_network_mode(&ContainerNetwork::Task("ratect-run".to_string())),
+        None
+    );
+    assert_eq!(
+        build_network_mode(&ContainerNetwork::Host),
+        Some("host".to_string())
+    );
+    assert_eq!(
+        build_network_mode(&ContainerNetwork::None),
+        Some("none".to_string())
+    );
+    assert_eq!(
+        build_network_mode(&ContainerNetwork::Container("abc123".to_string())),
+        Some("container:abc123".to_string())
+    );
+}
+
+/// Docker refuses a hostname alongside `container:` — the namespace owner's
+/// is the one in use — so only that mode goes without.
+#[test]
+fn build_hostname_is_omitted_only_when_sharing_a_namespace() {
+    for network in [
+        ContainerNetwork::Task("ratect-run".to_string()),
+        ContainerNetwork::Host,
+        ContainerNetwork::None,
+    ] {
+        assert_eq!(
+            build_hostname("app", &network),
+            Some("app".to_string()),
+            "{network:?}"
+        );
+    }
+    assert_eq!(
+        build_hostname("app", &ContainerNetwork::Container("abc123".to_string())),
+        None
+    );
+}
+
 /// Docker ANDs the values under one filter name, which is what makes
 /// `project=x` plus `run=y` mean "both" rather than "either" — the
 /// difference between finding one run's resources and finding every

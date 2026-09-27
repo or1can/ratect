@@ -49,6 +49,9 @@ network *before* the task's own container, so the task's container can reach the
 name — and so is anything named in the *task's own* `dependencies` (sidecars scoped
 to this task specifically, distinct from the container-level field — see [config
 reference](ratect-compat-config-reference.md#task)), unioned in alongside the container-level ones.
+(With `ratect.toml`, a container can leave that network with
+[`network_mode`](ratect-config-reference.md#network_mode-leaving-the-tasks-network)
+— it is then not reachable by name — while every other container still joins it.)
 All of this — network, dependencies, and the task's own container — is scoped
 to **this one task execution** and torn down before moving on, regardless of whether
 the task succeeded — unless `--no-cleanup`/`--no-cleanup-after-failure`/

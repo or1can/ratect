@@ -61,8 +61,13 @@
 //! `build_devices`) — `(name, soft, hard)` triples, `None`/absent leaving
 //! the daemon's own defaults alone. `dns`/`dns_search`/`dns_options` (ratect#105)
 //! follow it too, as plain string lists passed straight onto bollard's
-//! `HostConfig` fields of the same names — no builder needed. `stop_signal`/`stop_grace_period`
-//! (ratect#112) are the one per-container pair that does *not* live in
+//! `HostConfig` fields of the same names — no builder needed. `network_mode`
+//! (ratect#106) is the one that changes more than a `HostConfig` field: a
+//! container in a Docker network mode (`build_network_mode`) is never joined
+//! to the task's network afterwards, and under `container:` has no
+//! `hostname` either (`build_hostname`) — both read off the one
+//! [`ContainerNetwork`] value `container_spec::resolve_network` derived.
+//! `stop_signal`/`stop_grace_period` (ratect#112) are the one per-container pair that does *not* live in
 //! `ContainerOptions`: they take effect when a container is *stopped*, not
 //! created, so they are parameters of `stop_and_remove_container`
 //! (`ResourceInventory`'s, hence `resources.rs`'s trait) and are `None` for
@@ -356,6 +361,27 @@ fn build_devices(
     )
 }
 
+/// Builds Docker's `HostConfig.network_mode` — pure, unit-testable without
+/// a daemon. `None` for a container on the task's own network, which is
+/// created on the daemon's default and joined to that network afterwards
+/// (`join_network`), exactly as before ratect#106; otherwise Docker's own
+/// `--network` spelling for the mode.
+fn build_network_mode(network: &ContainerNetwork) -> Option<String> {
+    match network {
+        ContainerNetwork::Task(_) => None,
+        ContainerNetwork::Host => Some("host".to_string()),
+        ContainerNetwork::None => Some("none".to_string()),
+        ContainerNetwork::Container(id) => Some(format!("container:{id}")),
+    }
+}
+
+/// The container's `Config.hostname`: its own name, except when it shares
+/// another container's network namespace, where Docker refuses one — the
+/// namespace owner's hostname is the one in use.
+fn build_hostname(name: &str, network: &ContainerNetwork) -> Option<String> {
+    (!network.shares_namespace()).then(|| name.to_string())
+}
+
 /// Builds Docker's `HostConfig.ulimits` from already-expanded
 /// `(name, soft, hard)` triples — pure, unit-testable without a daemon.
 /// `None` when `ulimits` itself is `None`, so a container that declares
@@ -478,7 +504,7 @@ pub struct LabelledResource {
 }
 
 pub use crate::container_spec::{
-    ContainerOptions, ContainerSpec, HealthCheckOptions, NetworkOptions,
+    ContainerNetwork, ContainerOptions, ContainerSpec, HealthCheckOptions, NetworkOptions,
 };
 
 /// Configures BuildKit-only build features — `build_image` receives one
@@ -1377,8 +1403,9 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// Starts a container in the background (does not wait for it to exit),
     /// joined to `spec.shared.network` with a network alias of
     /// `spec.shared.name` so other containers on the same network can reach
-    /// it by that name. Returns the container id, used later to stop/remove
-    /// it. Used for sidecar/dependency containers — see [`ContainerSpec`]'s
+    /// it by that name — or, when that is a Docker network mode instead
+    /// ([`ContainerNetwork`]), created in that mode and joined to nothing.
+    /// Returns the container id, used later to stop/remove it. Used for sidecar/dependency containers — see [`ContainerSpec`]'s
     /// own field docs for what each part of the spec means; `spec.role` is
     /// always [`crate::labels::ContainerRole::Dependency`] here,
     /// `spec.interactive` always `false`, and `spec.additional_args` always
@@ -1462,8 +1489,11 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// [`start_background_container`](Self::start_background_container),
     /// `spec.role` is always [`crate::labels::ContainerRole::Task`], and
     /// `spec.interactive`/`spec.additional_args` may be set. The container's
-    /// Docker `hostname` is always set to `spec.shared.name` (matching
-    /// Batect), independent of `spec.shared.network_options`.
+    /// Docker `hostname` is set to `spec.shared.name` (matching Batect),
+    /// independent of `spec.shared.network_options` — except under a
+    /// `container:` network mode, where Docker refuses one
+    /// (`build_hostname`). Networking otherwise as for
+    /// [`start_background_container`](Self::start_background_container).
     ///
     /// **This never removes the container it creates.** Everything Ratect
     /// creates is removed by `engine.rs`'s own cleanup stage, under one
@@ -2480,11 +2510,12 @@ impl ContainerRuntime for DockerClient {
             dns: options.dns.clone(),
             dns_search: options.dns_search.clone(),
             dns_options: options.dns_options.clone(),
+            network_mode: build_network_mode(&shared.network),
             ..Default::default()
         };
 
         let config = Config {
-            hostname: Some(shared.name.clone()),
+            hostname: build_hostname(&shared.name, &shared.network),
             image: Some(shared.image.clone()),
             cmd,
             entrypoint,
@@ -2512,13 +2543,15 @@ impl ContainerRuntime for DockerClient {
             self.apply_user_mapping(&container.id, mapping).await?;
         }
 
-        self.join_network(
-            &container.id,
-            &shared.network,
-            &shared.name,
-            shared.network_options.additional_hostnames.as_ref(),
-        )
-        .await?;
+        if let ContainerNetwork::Task(network) = &shared.network {
+            self.join_network(
+                &container.id,
+                network,
+                &shared.name,
+                shared.network_options.additional_hostnames.as_ref(),
+            )
+            .await?;
+        }
 
         self.docker
             .start_container(&container.id, None)
@@ -2763,11 +2796,12 @@ impl ContainerRuntime for DockerClient {
             dns: options.dns.clone(),
             dns_search: options.dns_search.clone(),
             dns_options: options.dns_options.clone(),
+            network_mode: build_network_mode(&shared.network),
             ..Default::default()
         };
 
         let config = Config {
-            hostname: Some(shared.name.clone()),
+            hostname: build_hostname(&shared.name, &shared.network),
             image: Some(shared.image.clone()),
             cmd,
             entrypoint,
@@ -2804,13 +2838,15 @@ impl ContainerRuntime for DockerClient {
             self.apply_user_mapping(&container.id, mapping).await?;
         }
 
-        self.join_network(
-            &container.id,
-            &shared.network,
-            &shared.name,
-            shared.network_options.additional_hostnames.as_ref(),
-        )
-        .await?;
+        if let ContainerNetwork::Task(network) = &shared.network {
+            self.join_network(
+                &container.id,
+                network,
+                &shared.name,
+                shared.network_options.additional_hostnames.as_ref(),
+            )
+            .await?;
+        }
 
         let exit_code = if use_tty {
             self.run_container_interactively(&container.id, started)

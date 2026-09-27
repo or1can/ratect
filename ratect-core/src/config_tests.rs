@@ -2584,6 +2584,7 @@ fn container_with_build(build_directory: &str, build_args: HashMap<String, Strin
         dns: None,
         dns_search: None,
         dns_options: None,
+        network_mode: None,
     }
 }
 
@@ -3375,6 +3376,7 @@ fn container_with_run_as_current_user(enabled: bool, home_directory: Option<&str
         dns: None,
         dns_search: None,
         dns_options: None,
+        network_mode: None,
     }
 }
 
@@ -4813,6 +4815,7 @@ async fn native_only_fields_are_rejected_in_a_yaml_include_of_a_native_project()
         ("dns", "    dns:\n      - 1.1.1.1\n"),
         ("dns_search", "    dns_search:\n      - corp.example.com\n"),
         ("dns_options", "    dns_options:\n      - ndots:2\n"),
+        ("network_mode", "    network_mode: host\n"),
         (
             "scope",
             "    volumes:\n      - type: cache\n        name: c\n        container: /c\n        \
@@ -5829,6 +5832,579 @@ async fn dns_fields_are_rejected_on_a_tasks_run_block_and_customise_overlay() {
                 "'{field}' on {place} should be an unknown field: {message}"
             );
         }
+    }
+}
+
+/// `network_mode` (ratect#106) parses all three of Docker's own spellings
+/// from a native container's definition, and is inherited via `extends`.
+#[tokio::test]
+async fn network_mode_parses_each_form_and_is_inherited_via_extends() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+network_mode = "host"
+
+[containers.inherits]
+extends = "base"
+
+[containers.isolated]
+image = "alpine:3.18"
+network_mode = "none"
+
+[containers.peer]
+image = "alpine:3.18"
+
+[containers.sharer]
+image = "alpine:3.18"
+dependencies = ["peer"]
+network_mode = "container:peer"
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["inherits", "isolated", "sharer"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    let containers = &project.config.containers;
+    assert_eq!(containers["inherits"].network_mode, Some(NetworkMode::Host));
+    assert_eq!(containers["isolated"].network_mode, Some(NetworkMode::None));
+    assert_eq!(
+        containers["sharer"].network_mode,
+        Some(NetworkMode::Container("peer".to_string()))
+    );
+    assert_eq!(containers["app"].network_mode, None);
+}
+
+/// Anything other than `host`, `none` or `container:<name>` — including a
+/// `container:` with no name — is refused, naming the accepted forms.
+#[tokio::test]
+async fn a_network_mode_that_is_not_one_of_the_three_forms_is_rejected() {
+    for value in ["bridge", "container:", "Host"] {
+        let err = load_native_toml(&format!(
+            "project_name = \"demo\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n\
+             network_mode = \"{value}\"\n\n[tasks.t]\nrun = {{ container = \"app\" }}\n"
+        ))
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("'{value}' must be rejected"));
+        let message = format!("{err:#}");
+        assert!(
+            message.contains(&format!("'{value}' is not a network mode"))
+                && message.contains("'container:<name>'"),
+            "the error should name the value and the accepted forms: {message}"
+        );
+    }
+}
+
+/// A `container:<name>` target has to be one of the container's own
+/// `dependencies` — the graph that already orders startup — and that is
+/// judged after `extends`, so an inherited dependency counts.
+#[tokio::test]
+async fn a_network_mode_container_target_must_be_one_of_its_own_dependencies() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.peer]
+image = "alpine:3.18"
+
+[containers.app]
+image = "alpine:3.18"
+network_mode = "container:peer"
+
+[tasks.t]
+run = { container = "app" }
+dependencies = ["peer"]
+"#,
+    )
+    .await
+    .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("'app'")
+            && message.contains("'network_mode'")
+            && message.contains("'peer'")
+            && message.contains("'dependencies'"),
+        "the error should name the container, the field, the target and where it has to be \
+         listed: {message}"
+    );
+
+    load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.peer]
+image = "alpine:3.18"
+
+[containers.base]
+image = "alpine:3.18"
+dependencies = ["peer"]
+
+[containers.app]
+extends = "base"
+network_mode = "container:peer"
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .expect("a dependency supplied by `extends` should satisfy the check");
+}
+
+/// A run-to-completion target has exited by the time it counts as ready, so
+/// there is no namespace left to share.
+#[tokio::test]
+async fn a_network_mode_container_target_may_not_run_to_completion() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.init]
+image = "alpine:3.18"
+run_to_completion = true
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["init"]
+network_mode = "container:init"
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("'app'")
+            && message.contains("'init'")
+            && message.contains("run-to-completion"),
+        "{message}"
+    );
+}
+
+/// Fields that only mean something on the task's own network are refused
+/// alongside any `network_mode` (`ports`, `additional_hostnames`,
+/// `external_health_check`), and the ones Docker refuses to combine with a
+/// shared namespace alongside `container:` only (`additional_hosts` and the
+/// `dns` family) — each naming both fields and saying what to do instead:
+/// under `container:`, set the field on the target, whose network the
+/// container shares; under `host`/`none`, where there is no network of the
+/// task's to apply it to, remove it.
+#[tokio::test]
+async fn fields_that_need_the_tasks_network_are_rejected_alongside_network_mode() {
+    let every_mode = [
+        ("ports", "ports = [{ local = 8080, container = 80 }]"),
+        ("additional_hostnames", "additional_hostnames = [\"other\"]"),
+        (
+            "external_health_check",
+            "external_health_check = { type = \"tcp\", port = 80 }",
+        ),
+    ];
+    for mode in ["host", "none", "container:peer"] {
+        for (field, declaration) in every_mode {
+            let err = load_native_toml(&format!(
+                "project_name = \"demo\"\n\n[containers.peer]\nimage = \"alpine:3.18\"\n\n\
+                 [containers.dep]\nimage = \"alpine:3.18\"\ndependencies = [\"peer\"]\n\
+                 network_mode = \"{mode}\"\n{declaration}\n\n\
+                 [containers.app]\nimage = \"alpine:3.18\"\ndependencies = [\"dep\"]\n\n\
+                 [tasks.t]\nrun = {{ container = \"app\" }}\n"
+            ))
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("'{field}' must be rejected with '{mode}'"));
+            let message = format!("{err:#}");
+            let remedy = if mode.starts_with("container:") {
+                format!("set '{field}' on 'peer'")
+            } else {
+                format!("remove '{field}'")
+            };
+            assert!(
+                message.contains("'dep'")
+                    && message.contains("'network_mode'")
+                    && message.contains(&remedy),
+                "'{field}' with '{mode}' should say to {remedy}: {message}"
+            );
+        }
+    }
+
+    let container_only = [
+        (
+            "additional_hosts",
+            "additional_hosts = { other = \"10.0.0.1\" }",
+        ),
+        ("dns", "dns = [\"1.1.1.1\"]"),
+        ("dns_search", "dns_search = [\"corp.example.com\"]"),
+        ("dns_options", "dns_options = [\"ndots:2\"]"),
+    ];
+    for (field, declaration) in container_only {
+        for mode in ["host", "none"] {
+            load_native_toml(&format!(
+                "project_name = \"demo\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n\
+                 network_mode = \"{mode}\"\n{declaration}\n\n\
+                 [tasks.t]\nrun = {{ container = \"app\" }}\n"
+            ))
+            .await
+            .unwrap_or_else(|err| panic!("'{field}' is fine with '{mode}': {err:#}"));
+        }
+        let err = load_native_toml(&format!(
+            "project_name = \"demo\"\n\n[containers.peer]\nimage = \"alpine:3.18\"\n\n\
+             [containers.app]\nimage = \"alpine:3.18\"\ndependencies = [\"peer\"]\n\
+             network_mode = \"container:peer\"\n{declaration}\n\n\
+             [tasks.t]\nrun = {{ container = \"app\" }}\n"
+        ))
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("'{field}' must be rejected with 'container:'"));
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("'app'")
+                && message.contains("'network_mode'")
+                && message.contains(&format!("set '{field}' on 'peer'")),
+            "'{field}' with 'container:': {message}"
+        );
+    }
+}
+
+/// `ports` reach a container from a task's `run` block or a `customise`
+/// overlay too, so those are refused against a `network_mode` container just
+/// as its own `ports` are — naming the task, the container and both fields,
+/// with the same remedy as the container's own `ports` would get.
+#[tokio::test]
+async fn overlay_ports_are_rejected_on_a_network_mode_container() {
+    for (place, table) in [
+        (
+            "run",
+            "[tasks.t.run]\ncontainer = \"app\"\nports = [{ local = 8080, container = 80 }]\n",
+        ),
+        (
+            "customise",
+            "[tasks.t]\nrun = { container = \"app\" }\n\n[tasks.t.customise.db]\n\
+             ports = [{ local = 8080, container = 80 }]\n",
+        ),
+    ] {
+        let err = load_native_toml(&format!(
+            "project_name = \"demo\"\n\n\
+             [containers.app]\nimage = \"alpine:3.18\"\ndependencies = [\"db\"]\n\
+             network_mode = \"host\"\n\n\
+             [containers.db]\nimage = \"alpine:3.18\"\nnetwork_mode = \"none\"\n\n\
+             {table}"
+        ))
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("'ports' on a task's {place} must be rejected"));
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("'t'")
+                && message.contains("'network_mode'")
+                && message.contains("remove 'ports'"),
+            "'ports' on {place}: {message}"
+        );
+    }
+}
+
+/// Under `container:`, a task's `ports` for the sharing container belong on
+/// the target instead: published there, they reach the namespace both share.
+#[tokio::test]
+async fn overlay_ports_on_a_container_mode_container_point_at_its_target() {
+    for (place, table) in [
+        (
+            "run",
+            "[tasks.t.run]\ncontainer = \"app\"\nports = [{ local = 8080, container = 80 }]\n",
+        ),
+        (
+            "customise",
+            "[tasks.t]\nrun = { container = \"other\" }\n\n[tasks.t.customise.app]\n\
+             ports = [{ local = 8080, container = 80 }]\n",
+        ),
+    ] {
+        let err = load_native_toml(&format!(
+            "project_name = \"demo\"\n\n\
+             [containers.peer]\nimage = \"alpine:3.18\"\n\n\
+             [containers.app]\nimage = \"alpine:3.18\"\ndependencies = [\"peer\"]\n\
+             network_mode = \"container:peer\"\n\n\
+             [containers.other]\nimage = \"alpine:3.18\"\ndependencies = [\"app\"]\n\n\
+             {table}"
+        ))
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("'ports' on a task's {place} must be rejected"));
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("'t'")
+                && message.contains("'app'")
+                && message.contains("set 'ports' for 'peer'"),
+            "'ports' on {place}: {message}"
+        );
+    }
+}
+
+/// A `container:` target can share another container's network in turn.
+/// The remedy then names the container at the end of that chain — the one
+/// whose network they all share — and when that one is on `host` or `none`
+/// itself, a field that needs the task's network can only be removed, while
+/// `additional_hosts` and the `dns` family, which those modes accept, still
+/// go on it.
+#[tokio::test]
+async fn a_network_mode_remedy_follows_a_chain_of_container_targets() {
+    let project = |owner_mode: &str, app_field: &str| {
+        format!(
+            "project_name = \"demo\"\n\n\
+             [containers.db]\nimage = \"alpine:3.18\"\n{owner_mode}\n\n\
+             [containers.peer]\nimage = \"alpine:3.18\"\ndependencies = [\"db\"]\n\
+             network_mode = \"container:db\"\n\n\
+             [containers.app]\nimage = \"alpine:3.18\"\ndependencies = [\"peer\"]\n\
+             network_mode = \"container:peer\"\n{app_field}\n\n\
+             [tasks.t]\nrun = {{ container = \"app\" }}\n"
+        )
+    };
+    for (owner_mode, field, declaration, remedy) in [
+        (
+            "",
+            "ports",
+            "ports = [{ local = 8080, container = 80 }]",
+            "set 'ports' on 'db'",
+        ),
+        (
+            "network_mode = \"host\"",
+            "ports",
+            "ports = [{ local = 8080, container = 80 }]",
+            "remove 'ports'",
+        ),
+        (
+            "network_mode = \"none\"",
+            "additional_hostnames",
+            "additional_hostnames = [\"other\"]",
+            "remove 'additional_hostnames'",
+        ),
+        (
+            "network_mode = \"host\"",
+            "dns",
+            "dns = [\"1.1.1.1\"]",
+            "set 'dns' on 'db'",
+        ),
+    ] {
+        let err = load_native_toml(&project(owner_mode, declaration))
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("'{field}' must be rejected ({owner_mode:?})"));
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("'app'")
+                && message.contains("'db'")
+                && message.contains("'peer'")
+                && message.contains(remedy),
+            "'{field}' with the chain ending at {owner_mode:?} should say to {remedy}: \
+             {message}"
+        );
+    }
+}
+
+/// A task's `ports` follow the same chain.
+#[tokio::test]
+async fn overlay_ports_remedy_follows_a_chain_of_container_targets() {
+    for (owner_mode, remedy) in [
+        ("", "set 'ports' for 'db'"),
+        ("network_mode = \"host\"", "remove 'ports'"),
+    ] {
+        let err = load_native_toml(&format!(
+            "project_name = \"demo\"\n\n\
+             [containers.db]\nimage = \"alpine:3.18\"\n{owner_mode}\n\n\
+             [containers.peer]\nimage = \"alpine:3.18\"\ndependencies = [\"db\"]\n\
+             network_mode = \"container:db\"\n\n\
+             [containers.app]\nimage = \"alpine:3.18\"\ndependencies = [\"peer\"]\n\
+             network_mode = \"container:peer\"\n\n\
+             [tasks.t.run]\ncontainer = \"app\"\nports = [{{ local = 8080, container = 80 }}]\n"
+        ))
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("'ports' must be rejected ({owner_mode:?})"));
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("'t'") && message.contains("'peer'") && message.contains(remedy),
+            "chain ending at {owner_mode:?} should say to {remedy}: {message}"
+        );
+    }
+}
+
+/// Two containers naming each other as `container:` targets form a loop in
+/// which no container has a network of its own to share. Only a task run
+/// would otherwise catch it, as a dependency cycle; the chain walk above
+/// meets it when the file loads, so it is refused there, by name — and must
+/// terminate rather than follow the loop forever.
+#[tokio::test]
+async fn a_network_mode_chain_that_loops_is_rejected_when_the_file_loads() {
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        load_native_toml(
+            "project_name = \"demo\"\n\n\
+             [containers.a]\nimage = \"alpine:3.18\"\ndependencies = [\"b\"]\n\
+             network_mode = \"container:b\"\n\n\
+             [containers.b]\nimage = \"alpine:3.18\"\ndependencies = [\"a\"]\n\
+             network_mode = \"container:a\"\n\n\
+             [tasks.t]\nrun = { container = \"a\" }\n",
+        ),
+    )
+    .await
+    .expect("the loader must not loop following 'container:' targets");
+    let message = format!("{:#}", result.unwrap_err());
+    assert!(
+        message.contains("'network_mode'") && message.contains("loop"),
+        "the loop should be named as one: {message}"
+    );
+}
+
+/// A `container:` target that isn't a container in this project — directly
+/// or further along a chain — is refused when the file loads, before any
+/// advice about moving a field onto it. Listing it in `dependencies` too
+/// must not let it through.
+#[tokio::test]
+async fn a_network_mode_container_target_that_does_not_exist_is_rejected() {
+    for (label, containers, expected) in [
+        (
+            "direct",
+            "[containers.app]\nimage = \"alpine:3.18\"\ndependencies = [\"ghost\"]\n\
+             network_mode = \"container:ghost\"\nports = [{ local = 8080, container = 80 }]\n",
+            "'ghost'",
+        ),
+        (
+            "through a chain",
+            "[containers.b]\nimage = \"alpine:3.18\"\ndependencies = [\"ghost\"]\n\
+             network_mode = \"container:ghost\"\n\n\
+             [containers.app]\nimage = \"alpine:3.18\"\ndependencies = [\"b\"]\n\
+             network_mode = \"container:b\"\ndns = [\"1.1.1.1\"]\n",
+            "'ghost'",
+        ),
+    ] {
+        let err = load_native_toml(&format!(
+            "project_name = \"demo\"\n\n{containers}\n\
+             [tasks.t]\nrun = {{ container = \"app\" }}\n"
+        ))
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("{label}: an undeclared target must be rejected"));
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("'network_mode'")
+                && message.contains(expected)
+                && message.contains("not a container in this project")
+                && !message.contains("instead"),
+            "{label}: {message}"
+        );
+    }
+}
+
+/// The most basic problem is reported first: a target missing from
+/// `dependencies` is named before any advice about a conflicting field,
+/// so fixing what the first error says never uncovers a second.
+#[tokio::test]
+async fn a_missing_dependency_is_reported_before_a_conflicting_field() {
+    let err = load_native_toml(
+        "project_name = \"demo\"\n\n[containers.db]\nimage = \"alpine:3.18\"\n\n\
+         [containers.app]\nimage = \"alpine:3.18\"\nnetwork_mode = \"container:db\"\n\
+         ports = [{ local = 8080, container = 80 }]\n\n\
+         [tasks.t]\nrun = { container = \"app\" }\n",
+    )
+    .await
+    .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("'dependencies'") && !message.contains("'ports'"),
+        "{message}"
+    );
+}
+
+/// A loop is reported by its own members, whether the container being
+/// checked is part of it or only leads into it — and a container naming
+/// itself is a loop of one.
+#[tokio::test]
+async fn a_network_mode_loop_names_its_own_members() {
+    for (label, containers, members) in [
+        (
+            "led into",
+            "[containers.a]\nimage = \"alpine:3.18\"\ndependencies = [\"b\"]\n\
+             network_mode = \"container:b\"\n\n\
+             [containers.b]\nimage = \"alpine:3.18\"\ndependencies = [\"c\"]\n\
+             network_mode = \"container:c\"\n\n\
+             [containers.c]\nimage = \"alpine:3.18\"\ndependencies = [\"b\"]\n\
+             network_mode = \"container:b\"\n",
+            "'b' → 'c' → 'b'",
+        ),
+        (
+            "itself",
+            "[containers.a]\nimage = \"alpine:3.18\"\ndependencies = [\"a\"]\n\
+             network_mode = \"container:a\"\n",
+            "'a' → 'a'",
+        ),
+    ] {
+        let err = load_native_toml(&format!(
+            "project_name = \"demo\"\n\n{containers}\n\
+             [tasks.t]\nrun = {{ container = \"a\" }}\n"
+        ))
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("{label}: a loop must be rejected"));
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("loop") && message.contains(members),
+            "{label}: expected the loop {members}: {message}"
+        );
+    }
+}
+
+/// Native-only (ratect#106) — Batect has no network-mode concept — so a
+/// `batect.yml` using it is rejected rather than silently ignored.
+#[tokio::test]
+async fn network_mode_is_rejected_in_compat_mode() {
+    let dir = unique_temp_dir();
+    let path = dir.join("batect.yml");
+    std::fs::write(
+        &path,
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    network_mode: host\ntasks: {}\n",
+    )
+    .unwrap();
+    let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(
+        format!("{err:#}").contains("uses 'network_mode'"),
+        "expected the native-only rejection, got: {err:#}"
+    );
+}
+
+/// Fixed at the container's own definition, like `dns`: neither a task's
+/// `run` block nor a `customise` overlay has the field.
+#[tokio::test]
+async fn network_mode_is_rejected_on_a_tasks_run_block_and_customise_overlay() {
+    for (place, table) in [
+        ("run", "[tasks.t.run]\ncontainer = \"app\""),
+        (
+            "customise",
+            "[tasks.t]\nrun = { container = \"app\" }\n\n[tasks.t.customise.db]",
+        ),
+    ] {
+        let err = load_native_toml(&format!(
+            "project_name = \"demo\"\n\n\
+             [containers.app]\nimage = \"alpine:3.18\"\ndependencies = [\"db\"]\n\n\
+             [containers.db]\nimage = \"alpine:3.18\"\n\n\
+             {table}\nnetwork_mode = \"host\"\n"
+        ))
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("'network_mode' must be rejected on a task's {place}"));
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("unknown field `network_mode`"),
+            "'network_mode' on {place} should be an unknown field: {message}"
+        );
     }
 }
 
@@ -9297,6 +9873,7 @@ fn container_with_environment(environment: HashMap<String, String>) -> Container
         dns: None,
         dns_search: None,
         dns_options: None,
+        network_mode: None,
     }
 }
 

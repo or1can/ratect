@@ -476,6 +476,63 @@ pub struct Container {
     /// forwarded verbatim.
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub dns_options: Option<Vec<String>>,
+    /// Takes this container off the task's own network — Docker's
+    /// `--network host`, `none` or `container:<name>`, one [`NetworkMode`].
+    /// `None` joins the task's network (or `--use-network`'s) under its own
+    /// name, as every container did before this field existed; setting it
+    /// changes nothing about which network any *other* container joins.
+    /// Checked when the file loads by `validate_network_modes`: a
+    /// `container:<name>` target must be one of this container's own
+    /// `dependencies` (the graph that already orders startup, so no second
+    /// ordering is invented), and the fields that only mean anything on the
+    /// task's network are refused alongside it. Container level only, like
+    /// `dns` above. `ratect`-native only, like `ulimits` above (ratect#106).
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub network_mode: Option<NetworkMode>,
+}
+
+/// A container's [`Container::network_mode`] — written as the one string
+/// Docker's own `--network` takes for each: `"host"`, `"none"` or
+/// `"container:<name>"`, where `<name>` is another container in this config
+/// (not a Docker container name — `engine.rs` swaps in the running
+/// container's id, since Ratect's containers are anonymous).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub enum NetworkMode {
+    /// Shares the host's own network namespace.
+    Host,
+    /// No networking beyond a loopback interface.
+    None,
+    /// Shares the named container's network namespace.
+    Container(String),
+}
+
+impl TryFrom<String> for NetworkMode {
+    type Error = String;
+
+    fn try_from(value: String) -> std::result::Result<Self, Self::Error> {
+        match value.as_str() {
+            "host" => Ok(NetworkMode::Host),
+            "none" => Ok(NetworkMode::None),
+            _ => match value.strip_prefix("container:") {
+                Some(name) if !name.is_empty() => Ok(NetworkMode::Container(name.to_string())),
+                _ => Err(format!(
+                    "'{value}' is not a network mode: expected 'host', 'none' or \
+                     'container:<name>'"
+                )),
+            },
+        }
+    }
+}
+
+impl From<NetworkMode> for String {
+    fn from(mode: NetworkMode) -> Self {
+        match mode {
+            NetworkMode::Host => "host".to_string(),
+            NetworkMode::None => "none".to_string(),
+            NetworkMode::Container(name) => format!("container:{name}"),
+        }
+    }
 }
 
 /// One entry in a container's `devices` list — a host device path made
@@ -2807,6 +2864,7 @@ impl ConfigFormat {
         reject_stop_grace_period_in_compat(&shaped)?;
         reject_ulimits_in_compat(&shaped)?;
         reject_dns_in_compat(&shaped)?;
+        reject_network_mode_in_compat(&shaped)?;
         validate_image_sources_in_compat(&shaped)?;
         reject_image_expressions_in_compat(&shaped)?;
         Ok(())
@@ -4133,6 +4191,11 @@ async fn load_project_impl(
     // declaring container's *effective* `dependencies`, which `extends` may
     // have supplied.
     validate_setup_command_targets(&config)?;
+    // Same reasoning: a `container:` target is judged against effective
+    // `dependencies`, and a conflicting field may be inherited. Before
+    // `expand_external_health_checks`, which would otherwise consume the
+    // `external_health_check` this refuses.
+    validate_network_modes(&config)?;
     // Last, and native-only: it *writes* to the config (the generated
     // companion containers and the dependency edges onto them), so
     // everything above judges what the user actually wrote. After `extends`
@@ -4359,6 +4422,91 @@ fn reject_dns_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
     Ok(())
 }
 
+/// The container whose network namespace `target` ends up in, following
+/// `container:` targets that share another container's in turn — the one a
+/// field refused under `container:` has to be set on instead. Paired with
+/// that container's own mode when it is `host` or `none`, since a field
+/// that needs the task's network can then only be removed.
+///
+/// Refused here, naming `name` (the container whose `network_mode` started
+/// the walk): a chain that reaches a name that isn't a container in this
+/// project, and one that leads back round on itself, in which no container
+/// has a network of its own to share — reported by the loop's own members,
+/// since `name` may only lead into it. A loop is a dependency cycle too,
+/// since each target must be a dependency, but that is only caught once a
+/// task runs — and this walk has to end regardless.
+fn network_namespace_owner<'a>(
+    config: &'a Config,
+    name: &str,
+    target: &'a str,
+) -> Result<(&'a str, Option<String>)> {
+    let mut path: Vec<&str> = Vec::new();
+    let mut owner = target;
+    loop {
+        let Some(owner_config) = config.containers.get(owner) else {
+            let reached = if owner == target {
+                String::new()
+            } else {
+                format!(", which leads to '{owner}'")
+            };
+            anyhow::bail!(
+                "The container '{name}' has 'network_mode' set to share the network of \
+                 '{target}'{reached}, but '{owner}' is not a container in this project."
+            );
+        };
+        if let Some(start) = path.iter().position(|visited| *visited == owner) {
+            let members = path[start..]
+                .iter()
+                .chain(std::iter::once(&owner))
+                .map(|member| format!("'{member}'"))
+                .collect::<Vec<_>>()
+                .join(" → ");
+            anyhow::bail!(
+                "The container '{name}' has 'network_mode' set to share the network of \
+                 '{target}', but that leads into a loop ({members}) in which no container \
+                 has a network of its own to share."
+            );
+        }
+        path.push(owner);
+        match &owner_config.network_mode {
+            Some(NetworkMode::Container(next)) => owner = next,
+            Some(mode @ (NetworkMode::Host | NetworkMode::None)) => {
+                return Ok((owner, Some(String::from(mode.clone()))))
+            }
+            None => return Ok((owner, None)),
+        }
+    }
+}
+
+/// "it shares the network of 'db'", naming the `container:` target it
+/// reached `db` through when that isn't `db` itself.
+fn shared_network_description(owner: &str, target: &str) -> String {
+    if owner == target {
+        format!("it shares the network of '{owner}'")
+    } else {
+        format!("it shares the network of '{owner}' (through '{target}')")
+    }
+}
+
+/// `network_mode` is a `ratect`-native field (ratect#106), same reasoning
+/// as [`reject_stop_signal_in_compat`] — Batect has no network-mode concept.
+fn reject_network_mode_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
+    if let Some(entry) = containers
+        .iter()
+        .find(|entry| entry.container.network_mode.is_some())
+    {
+        let name = entry.name;
+        return Err(native_field_rejection(
+            entry,
+            format!(
+                "The container '{name}' uses 'network_mode', which is a ratect-native field \
+             not supported in Batect-compatible configuration."
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Every `dns` entry must be an IP address (IPv4 or IPv6) — see
 /// [`Container::dns`]. The error names the container, the field and the
 /// entry, none of which Docker's own rejection would.
@@ -4503,6 +4651,161 @@ fn validate_setup_command_targets(config: &Config) -> Result<()> {
                      run a command in.",
                     setup_command.command
                 );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Checks every [`Container::network_mode`]: a `container:<name>` target
+/// must be one of the declaring container's own `dependencies` and must not
+/// run to completion (the same two rules, for the same reasons, as
+/// `validate_setup_command_targets`' `run_in`), and no field may be set that
+/// needs the network the container has left. `ports` (including a task's
+/// `run` or `customise` ones), `additional_hostnames` and
+/// `external_health_check` all belong to the task's network, which no mode
+/// joins; `additional_hosts` and the `dns` family are refused only with
+/// `container:`, where Docker refuses each because the namespace owner's
+/// `/etc/hosts` and `resolv.conf` are the ones in use. Each refusal says
+/// what to do instead: under `container:`, set the field on the container
+/// whose network — and so whose ports, names and resolver — it shares
+/// (`network_namespace_owner`, following a chain of `container:` targets),
+/// unless that one is on `host`/`none` and the field needs the task's
+/// network; under `host`/`none`, and in that case, remove it.
+fn validate_network_modes(config: &Config) -> Result<()> {
+    let mut names: Vec<&String> = config.containers.keys().collect();
+    names.sort_unstable();
+    for name in names {
+        let container = &config.containers[name];
+        let Some(mode) = &container.network_mode else {
+            continue;
+        };
+        let task_network_fields = [
+            ("ports", container.ports.is_some()),
+            (
+                "additional_hostnames",
+                container.additional_hostnames.is_some(),
+            ),
+            (
+                "external_health_check",
+                container.external_health_check.is_some(),
+            ),
+        ];
+        let shared_namespace_fields = [
+            ("additional_hosts", container.additional_hosts.is_some()),
+            ("dns", container.dns.is_some()),
+            ("dns_search", container.dns_search.is_some()),
+            ("dns_options", container.dns_options.is_some()),
+        ];
+        let NetworkMode::Container(target) = mode else {
+            if let Some((field, _)) = task_network_fields.iter().find(|(_, set)| *set) {
+                let mode = String::from(mode.clone());
+                anyhow::bail!(
+                    "The container '{name}' sets both 'network_mode' and '{field}', but with \
+                     'network_mode' set to '{mode}' it is not on the task's own network, which \
+                     '{field}' needs — remove '{field}'."
+                );
+            }
+            continue;
+        };
+        // The target's own validity first — reported before any advice about
+        // moving a field onto it, so fixing one error never uncovers another.
+        let (owner, owner_off_task_network) = network_namespace_owner(config, name, target)?;
+        let is_dependency = container
+            .dependencies
+            .iter()
+            .flatten()
+            .any(|dependency| dependency == target);
+        if !is_dependency {
+            anyhow::bail!(
+                "The container '{name}' has 'network_mode' set to share the network of \
+                 '{target}', which is not one of that container's own dependencies. Add \
+                 '{target}' to the 'dependencies' of '{name}', so it is running before \
+                 '{name}' starts."
+            );
+        }
+        if config
+            .containers
+            .get(target)
+            .is_some_and(|target_config| target_config.run_to_completion.unwrap_or(false))
+        {
+            anyhow::bail!(
+                "The container '{name}' has 'network_mode' set to share the network of \
+                 '{target}', which is a run-to-completion dependency. It has already exited \
+                 by the time it is considered ready, so there is no network left to share."
+            );
+        }
+        let shares = shared_network_description(owner, target);
+        if let Some((field, _)) = task_network_fields.iter().find(|(_, set)| *set) {
+            if let Some(owner_mode) = owner_off_task_network {
+                anyhow::bail!(
+                    "The container '{name}' sets both 'network_mode' and '{field}', but {shares}, \
+                     which has 'network_mode' set to '{owner_mode}' and so is not on the task's \
+                     own network, which '{field}' needs — remove '{field}'."
+                );
+            }
+        }
+        if let Some((field, _)) = task_network_fields
+            .iter()
+            .chain(&shared_namespace_fields)
+            .find(|(_, set)| *set)
+        {
+            anyhow::bail!(
+                "The container '{name}' sets both 'network_mode' and '{field}', but {shares}, \
+                 whose own settings apply to every container sharing it — set '{field}' on \
+                 '{owner}' instead."
+            );
+        }
+    }
+    // A task's `run` block and its `customise` overlays can add `ports` too.
+    let mut task_names: Vec<&String> = config.tasks.keys().collect();
+    task_names.sort_unstable();
+    for task_name in task_names {
+        let task = &config.tasks[task_name];
+        let run = task
+            .run
+            .iter()
+            .map(|run| (&run.container, run.ports.is_some()));
+        let mut customised: Vec<_> = task
+            .customise
+            .iter()
+            .flatten()
+            .map(|(name, customisation)| (name, customisation.ports.is_some()))
+            .collect();
+        customised.sort_unstable();
+        for (name, _) in run.chain(customised).filter(|(_, has_ports)| *has_ports) {
+            match config
+                .containers
+                .get(name)
+                .and_then(|container| container.network_mode.as_ref())
+            {
+                None => {}
+                Some(NetworkMode::Container(target)) => {
+                    let (owner, owner_off_task_network) =
+                        network_namespace_owner(config, name, target)?;
+                    let shares = shared_network_description(owner, target);
+                    if let Some(owner_mode) = owner_off_task_network {
+                        anyhow::bail!(
+                            "The task '{task_name}' sets 'ports' for the container '{name}', \
+                             but {shares}, which has 'network_mode' set to '{owner_mode}' and so \
+                             is not on the task's own network, which 'ports' needs — remove \
+                             'ports'."
+                        );
+                    }
+                    anyhow::bail!(
+                        "The task '{task_name}' sets 'ports' for the container '{name}', but \
+                         {shares} — set 'ports' for '{owner}' instead, where they reach every \
+                         container sharing its network."
+                    );
+                }
+                Some(mode) => {
+                    let mode = String::from(mode.clone());
+                    anyhow::bail!(
+                        "The task '{task_name}' sets 'ports' for the container '{name}', but \
+                         with 'network_mode' set to '{mode}' that container is not on the \
+                         task's own network, which 'ports' needs — remove 'ports'."
+                    );
+                }
             }
         }
     }
@@ -5256,6 +5559,7 @@ fn inherit_container_fields(child: &mut Container, parent: Container) {
         dns,
         dns_search,
         dns_options,
+        network_mode,
     } = parent;
     child.image = child.image.take().or(image);
     child.image_pull_policy = child.image_pull_policy.take().or(image_pull_policy);
@@ -5294,6 +5598,7 @@ fn inherit_container_fields(child: &mut Container, parent: Container) {
     child.dns = child.dns.take().or(dns);
     child.dns_search = child.dns_search.take().or(dns_search);
     child.dns_options = child.dns_options.take().or(dns_options);
+    child.network_mode = child.network_mode.take().or(network_mode);
 }
 
 #[cfg(test)]

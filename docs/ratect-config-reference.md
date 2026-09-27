@@ -658,6 +658,68 @@ dns_options = ["ndots:2"]
 - **Purely additive.** A container that sets none of the three is created
   exactly as before.
 
+## `network_mode`: leaving the task's network
+
+Every container normally joins the task's own network — or `--use-network`'s
+— reachable by its name. A container can leave it instead, with Docker's own
+`--network` modes:
+
+```toml
+[containers.database]
+image = "postgres:16"
+
+[containers.metrics-agent]
+image = "otel/opentelemetry-collector:0.110.0"
+dependencies = ["database"]
+network_mode = "container:database"
+```
+
+- **`host`** shares the Docker host's network namespace; **`none`** gives
+  the container only a loopback interface; **`container:<name>`** shares
+  the network namespace of another container in this config — its
+  interfaces, its hostname, its `/etc/hosts` and `resolv.conf`, and its
+  `localhost`. Anything else is rejected when the file loads.
+- **A `container:<name>` target must be one of the container's own
+  `dependencies`**, so it is already running when this one starts — the
+  dependency graph stays the one thing that orders startup. It may not be a
+  [`run_to_completion`](#run_to_completion-init-containers) container, which
+  has exited by then. The target may share another container's network in
+  turn, but a chain of them that leads back round on itself is rejected:
+  nothing in it has a network of its own.
+- **It applies to that container alone.** Every other container in the task
+  joins the task's network exactly as before, with or without
+  `--use-network`, and health checks and `setup_commands` gate readiness
+  the same way in every mode — neither goes over the network.
+- **Name-based reachability is lost.** A container in any of the three
+  modes has no name on the task's network, so a sibling can't reach it as
+  `<name>`. Ratect doesn't check whether anything tries to — with `host`, a
+  sibling would have to use the host's own address instead, and with
+  `container:<name>`, the target's name reaches both containers.
+- **Containers sharing a namespace share its ports.** Two services in them
+  can't listen on the same port: Docker starts both containers, and the
+  second service's own attempt to listen fails with `Address in use`. What
+  happens then is up to that service — most exit, which fails the run with
+  that container's exit code. Ratect can't check this when the file loads,
+  since nothing in the config says which ports a container listens on
+  (`ports` only says which are published).
+- **Fields that need the task's network are refused alongside it**, when
+  the file loads: `ports` (a task's `run` or `customise` ones too),
+  `additional_hostnames` and `external_health_check` in every mode, and
+  with `container:<name>` also `additional_hosts`, `dns`, `dns_search` and
+  `dns_options`, which Docker refuses there. With `host` or `none` they
+  have nothing to apply to. With `container:<name>` they belong on the
+  target instead, whose settings apply to both containers: `ports`
+  published on the target forward into the namespace the two share, so
+  they reach a port either container listens on, and the target's names
+  and `external_health_check` reach both the same way. If the target
+  shares another container's network in turn, the error names the
+  container at the end of that chain, whose network they all share — and
+  if that one uses `host` or `none` itself, `ports`,
+  `additional_hostnames` and `external_health_check` can only be removed.
+- **Fixed on the container's own definition**, like
+  [`dns`](#dnsdns_searchdns_options-name-resolution): neither a task's `run`
+  block nor a `customise` overlay accepts it.
+
 ## Field reference
 
 Every container and task field from [`ratect-compat-config-reference.md`](ratect-compat-config-reference.md)
@@ -677,6 +739,7 @@ The container fields, by area:
 | Resource limits | `ulimits` | [above](#ulimits-per-resource-limits) *(native only)* |
 | Name resolution | `dns`, `dns_search`, `dns_options` | [above](#dnsdns_searchdns_options-name-resolution) *(native only)* |
 | Networking | `ports`, `additional_hostnames`, `additional_hosts`, `dependencies` | [Ports](ratect-compat-config-reference.md#port-mappings), [readiness](dependency-readiness.md) |
+| Network mode | `network_mode` | [above](#network_mode-leaving-the-tasks-network) *(native only)* |
 | Readiness | `health_check`, `setup_commands` | [Dependency Readiness](dependency-readiness.md). A setup command also takes [`run_in`](#run_in-setup-commands-in-another-container) *(native only)* |
 | Init containers | `run_to_completion` | [above](#run_to_completion-init-containers) *(native only)* |
 | External checks | `external_health_check` | [above](#external_health_check-checking-a-container-from-outside-it) *(native only)* |
@@ -710,6 +773,7 @@ project.
 | Setting **`stop_signal`/`stop_grace_period`** on a container | Rejected when the file loads — Batect has no equivalent field | Overrides Docker's own default stop signal/timeout during cleanup — see [above](#stop_signalstop_grace_period-graceful-shutdown) |
 | Setting **`ulimits`** on a container | Rejected when the file loads — Batect has no equivalent field | Sets that container's own resource limits — see [above](#ulimits-per-resource-limits) |
 | Setting **`dns`/`dns_search`/`dns_options`** on a container | Rejected when the file loads — Batect has no equivalent field | Sets that container's own name resolution — see [above](#dnsdns_searchdns_options-name-resolution) |
+| Setting **`network_mode`** on a container | Rejected when the file loads — Batect has no equivalent field | Takes that container off the task's network — see [above](#network_mode-leaving-the-tasks-network) |
 | `image` alongside a build-only field (`build_args`, `build_target`, `dockerfile`, `build_secrets`, `build_ssh`) | Rejected when the file loads | Allowed and **ignored**, for the same inheritance reason — a child overriding a build with an `image` still carries the parent's build fields |
 
 The last row is the one to watch: setting `build_secrets` or `build_ssh` on a
@@ -773,6 +837,7 @@ so it also works as a CI gate.
 | Graceful shutdown | — | [`stop_signal`/`stop_grace_period`](#stop_signalstop_grace_period-graceful-shutdown) on a container |
 | Resource limits | — | [`ulimits`](#ulimits-per-resource-limits) on a container |
 | Name resolution | — | [`dns`/`dns_search`/`dns_options`](#dnsdns_searchdns_options-name-resolution) on a container |
+| Network mode | always the task's network | [`network_mode`](#network_mode-leaving-the-tasks-network) on a container |
 | Setup command target | always the declaring container | [`run_in`](#run_in-setup-commands-in-another-container) on a setup command |
 | List entries | string shorthand *or* object | object (inline table or `[[...]]`) |
 | Local overrides | `batect.local.yml` | `ratect.local.toml` |
@@ -783,8 +848,8 @@ Most field *meanings* are unchanged; the spelling and the format-level rules
 above are the bulk of the difference. The exceptions are the native-only
 fields (`extends`, a cache's `scope`, a dependency's `run_to_completion` or
 `external_health_check`, a setup command's `run_in`, a container's
-`stop_signal`/`stop_grace_period`, `ulimits` or
-`dns`/`dns_search`/`dns_options`) and the handful of behaviours in [Where
+`stop_signal`/`stop_grace_period`, `ulimits`,
+`dns`/`dns_search`/`dns_options` or `network_mode`) and the handful of behaviours in [Where
 the semantics differ](#where-the-semantics-differ), which exist because
 `extends` gives some combinations a meaning `batect.yml` has no way to
 express.

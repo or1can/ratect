@@ -60,6 +60,7 @@ fn sample_container() -> Container {
         dns: None,
         dns_search: None,
         dns_options: None,
+        network_mode: None,
     }
 }
 
@@ -95,7 +96,7 @@ fn shared_is_identical_between_an_empty_run_overlay_and_no_customise_overlay() {
         container_config: &container_config,
         overlay: Overlay::Run(&run),
         image: "alpine:3.18",
-        network: "ratect-run-id",
+        network: ContainerNetwork::Task("ratect-run-id".to_string()),
         interactive: true,
         additional_args: &["extra".to_string()],
         user_mapping: None,
@@ -112,7 +113,7 @@ fn shared_is_identical_between_an_empty_run_overlay_and_no_customise_overlay() {
         container_config: &container_config,
         overlay: Overlay::Customise(None),
         image: "alpine:3.18",
-        network: "ratect-run-id",
+        network: ContainerNetwork::Task("ratect-run-id".to_string()),
         interactive: false,
         additional_args: &[],
         user_mapping: None,
@@ -163,7 +164,7 @@ fn a_run_overlay_overrides_the_containers_own_fields() {
         container_config: &container_config,
         overlay: Overlay::Run(&run),
         image: "alpine:3.18",
-        network: "ratect-run-id",
+        network: ContainerNetwork::Task("ratect-run-id".to_string()),
         interactive: false,
         additional_args: &[],
         user_mapping: None,
@@ -215,7 +216,7 @@ fn a_customise_overlay_has_no_command_or_entrypoint_override() {
         container_config: &container_config,
         overlay: Overlay::Customise(Some(&customisation)),
         image: "alpine:3.18",
-        network: "ratect-run-id",
+        network: ContainerNetwork::Task("ratect-run-id".to_string()),
         interactive: false,
         additional_args: &[],
         user_mapping: None,
@@ -373,7 +374,7 @@ fn derive_spec_carries_ulimits_as_plain_triples() {
         container_config: &container_config,
         overlay: Overlay::Run(&empty_run()),
         image: "alpine:3.18",
-        network: "ratect-run-id",
+        network: ContainerNetwork::Task("ratect-run-id".to_string()),
         interactive: false,
         additional_args: &[],
         user_mapping: None,
@@ -406,7 +407,7 @@ fn derive_spec_leaves_ulimits_unset_when_the_container_declares_none() {
         container_config: &container_config,
         overlay: Overlay::Run(&empty_run()),
         image: "alpine:3.18",
-        network: "ratect-run-id",
+        network: ContainerNetwork::Task("ratect-run-id".to_string()),
         interactive: false,
         additional_args: &[],
         user_mapping: None,
@@ -440,7 +441,7 @@ fn derive_spec_carries_the_containers_own_dns_settings() {
         container_config: &container_config,
         overlay: Overlay::Run(&empty_run()),
         image: "alpine:3.18",
-        network: "ratect-run-id",
+        network: ContainerNetwork::Task("ratect-run-id".to_string()),
         interactive: false,
         additional_args: &[],
         user_mapping: None,
@@ -479,7 +480,7 @@ fn derive_spec_leaves_dns_unset_when_the_container_declares_none() {
         container_config: &container_config,
         overlay: Overlay::Run(&empty_run()),
         image: "alpine:3.18",
-        network: "ratect-run-id",
+        network: ContainerNetwork::Task("ratect-run-id".to_string()),
         interactive: false,
         additional_args: &[],
         user_mapping: None,
@@ -495,4 +496,106 @@ fn derive_spec_leaves_dns_unset_when_the_container_declares_none() {
     assert_eq!(options.dns, None);
     assert_eq!(options.dns_search, None);
     assert_eq!(options.dns_options, None);
+}
+
+/// `resolve_network` (ratect#106): a container with no `network_mode` joins
+/// the task's network by name; `host`/`none` pass straight through; and
+/// `container:<name>` becomes that dependency's running container id, since
+/// Ratect's containers are anonymous and Docker can't address them by name.
+#[test]
+fn resolve_network_maps_each_mode_onto_what_docker_is_given() {
+    let dependency_ids = HashMap::from([("peer".to_string(), "peer-id".to_string())]);
+
+    assert_eq!(
+        resolve_network(None, "ratect-run-id", &dependency_ids).unwrap(),
+        ContainerNetwork::Task("ratect-run-id".to_string())
+    );
+    assert_eq!(
+        resolve_network(Some(&NetworkMode::Host), "ratect-run-id", &dependency_ids).unwrap(),
+        ContainerNetwork::Host
+    );
+    assert_eq!(
+        resolve_network(Some(&NetworkMode::None), "ratect-run-id", &dependency_ids).unwrap(),
+        ContainerNetwork::None
+    );
+    assert_eq!(
+        resolve_network(
+            Some(&NetworkMode::Container("peer".to_string())),
+            "ratect-run-id",
+            &dependency_ids
+        )
+        .unwrap(),
+        ContainerNetwork::Container("peer-id".to_string())
+    );
+}
+
+/// The loader guarantees a `container:` target is a direct dependency, so
+/// its id is always there — but a missing one is an error naming the
+/// target, not a panic.
+#[test]
+fn resolve_network_errors_when_the_container_target_has_no_running_id() {
+    let err = resolve_network(
+        Some(&NetworkMode::Container("peer".to_string())),
+        "ratect-run-id",
+        &HashMap::new(),
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("'peer'"), "{err:#}");
+}
+
+fn spec_on_network(network: ContainerNetwork) -> ContainerSpec {
+    let mut container_config = sample_container();
+    container_config.additional_hostnames = None;
+    let proxy = crate::proxy::proxy_environment_variables(
+        |name| (name == "http_proxy").then(|| "http://localhost:3333".to_string()),
+        &std::collections::BTreeSet::new(),
+    );
+    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+    derive_spec(ContainerSpecInputs {
+        name: "app",
+        container_config: &container_config,
+        overlay: Overlay::Run(&empty_run()),
+        image: "alpine:3.18",
+        network,
+        interactive: false,
+        additional_args: &[],
+        user_mapping: None,
+        volumes: None,
+        term_var: None,
+        proxy: Some(&proxy),
+        publish_ports: true,
+        role: ContainerRole::Task,
+        run_labels: &run_labels,
+    })
+}
+
+/// A container sharing another's namespace uses that container's
+/// `/etc/hosts`, and Docker refuses extra hosts alongside `container:` — so
+/// the proxy's host-gateway entry is dropped there, and only there.
+#[test]
+fn derive_spec_drops_the_proxy_host_gateway_only_when_sharing_a_namespace() {
+    let gateway = Some(crate::proxy::HostGateway {
+        name: "host.docker.internal",
+        address: "host-gateway",
+    });
+    for network in [
+        ContainerNetwork::Task("ratect-run-id".to_string()),
+        ContainerNetwork::Host,
+        ContainerNetwork::None,
+    ] {
+        assert_eq!(
+            spec_on_network(network.clone())
+                .shared
+                .network_options
+                .proxy_host_gateway,
+            gateway,
+            "{network:?}"
+        );
+    }
+    let spec = spec_on_network(ContainerNetwork::Container("peer-id".to_string()));
+    assert_eq!(spec.shared.network_options.proxy_host_gateway, None);
+    assert_eq!(
+        spec.shared.network,
+        ContainerNetwork::Container("peer-id".to_string())
+    );
 }

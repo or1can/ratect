@@ -80,7 +80,7 @@ bridge, so a firewall rule written for `docker0` won't cover it. Ratect
 creates a network per task, or uses the one
 [`--use-network`](ratect-cli.md#run-options) names — and a
 run can't fall back to the default bridge even if you point `--use-network`
-at it, because Ratect gives every container a network-scoped alias and
+at it, because Ratect gives every container on it a network-scoped alias and
 Docker only allows those on user-defined networks (`docker run` refuses with
 `network-scoped aliases are only supported for user-defined networks`).
 
