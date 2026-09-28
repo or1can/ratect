@@ -157,7 +157,7 @@ own yet.
   `claim-words`/`judgment-agent` (advisory, totalising language and
   architecture-claim review, opt-in via `claims.toml`'s `[claim-words]
   files` — this repo opts in `AGENTS.md`, `CONTEXT.md`, `ROADMAP.md`,
-  `RELEASES.md`, `TODO.md`, `decisions/*.md`, `docs/**/*.md`). The four
+  `RELEASES.md`, `TODO.md`, `decisions/*.md`, `docs/*.md`). The four
   former scripts' own paths and the full migration story are in
   [decisions/0009](decisions/0009-adopt-claims-plugin.md) — not repeated
   here now that they no longer exist to link to.
@@ -168,6 +168,11 @@ own yet.
   `claims.toml` also scopes `stale-claims`'s bare-name module matching to
   `decisions/`/`AGENTS.md` — see its own comment for why — and raises
   `executable-claims`'s timeout past this repo's own cold-build time.
+
+  `claims.toml` also opts `docs/*.md`, `CONTEXT.md`, `agents/*.md` and
+  `README.md` into `temporal-words` (advisory, flags version-dated wording
+  added to reference prose) — deliberately the reverse file set from
+  `claim-words`'s; see its own comment for where the line sits.
 
   Every noise/timeout issue found comparing 0.2.2 against this repo's old
   tooling is now fixed upstream (`decisions/0009` has the detail and issue
