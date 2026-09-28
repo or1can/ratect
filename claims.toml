@@ -15,8 +15,13 @@ module_reference_scope = ["decisions/*.md", "AGENTS.md"]
 # CHANGELOG.md/RELEASES.md/decisions/*.md are this repo's own append-only
 # historical records (AGENTS.md's own rules) — they legitimately cite a path
 # as it existed when that entry was written, even after a later refactor
-# renames or deletes it. Excluded rather than fixed, since "fixing" one would
-# mean rewriting history these files are explicitly meant never to rewrite.
+# renames or deletes it. "Fixing" one would mean rewriting history these
+# files are explicitly meant never to rewrite, so `historical` holds a
+# committed line's paths to the tree at the commit that wrote it, or just
+# before it — the second half is what passes a removal recorded in the
+# commit that makes it, like 0009's entry naming the four `tools/` scripts
+# it deleted (claims 0.13.5, or1can/claims#116). Unlike `exclude`, a new
+# line still gates, and a typo resolves at neither commit.
 #
 # The other false positives this check used to hit here (a `~`/`/`-prefixed
 # path outside the repo, and two hypothetical/template filenames in
@@ -25,20 +30,18 @@ module_reference_scope = ["decisions/*.md", "AGENTS.md"]
 # `<!-- example -->` inline marker (claims#39) covers the other two
 # in-place, right next to each mention.
 [check-file-refs]
-exclude = [
+historical = [
     "CHANGELOG.md",
     "RELEASES.md",
     "decisions/*.md",
 ]
 
-# The same three files, for `check-links` — but *not* excluded, since a
-# changelog's Unreleased section is live and its links should still gate.
-# `historical` instead holds a shipped entry's link to the tree as of the
-# commit that wrote it (the plugin's ADR 0002): a docs page can be renamed
-# or split without editing an entry that links to it, and the rename
-# commit still has to fix every link from a living page. Needs claims
-# 0.10.0 (or1can/claims#51); an older plugin ignores the key, so this is
-# harmless until `claude plugin update` picks that up.
+# The same three files and the same mode, for `check-links` — never
+# `exclude`, since a changelog's Unreleased section is live and its links
+# should still gate. A shipped entry's link resolves against the tree as of
+# the commit that wrote it (the plugin's ADR 0002), so a docs page can be
+# renamed or split without editing an entry that links to it, while the
+# rename commit still has to fix every link from a living page.
 [check-links]
 historical = [
     "CHANGELOG.md",
