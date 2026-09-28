@@ -157,7 +157,7 @@ own yet.
   `claim-words`/`judgment-agent` (advisory, totalising language and
   architecture-claim review, opt-in via `claims.toml`'s `[claim-words]
   files` — this repo opts in `AGENTS.md`, `CONTEXT.md`, `ROADMAP.md`,
-  `RELEASES.md`, `TODO.md`, `decisions/*.md`, `docs/**/*.md`). The four
+  `RELEASES.md`, `TODO.md`, `decisions/*.md`, `docs/*.md`). The four
   former scripts' own paths and the full migration story are in
   [decisions/0009](decisions/0009-adopt-claims-plugin.md) — not repeated
   here now that they no longer exist to link to.
