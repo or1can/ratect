@@ -121,8 +121,9 @@ struct Args {
     docker_host: Option<String>,
 
     /// Docker CLI context to use. Defaults to the DOCKER_CONTEXT
-    /// environment variable, then the Docker CLI's own active context.
-    /// Cannot be used together with --docker-host.
+    /// environment variable, then the Docker CLI's own active context,
+    /// unless a Docker host is set. Cannot be used together with
+    /// --docker-host.
     #[arg(long = "docker-context", help_heading = "Docker connection")]
     docker_context: Option<String>,
 

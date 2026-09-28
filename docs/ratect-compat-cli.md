@@ -65,7 +65,7 @@ accepts them; they're used only when it actually connects.
 | Flag | Short | Default | Description |
 |---|---|---|---|
 | `--docker-host <HOST>` | — | `DOCKER_HOST` | Docker host to connect to — see [Connecting to Docker](connecting-to-docker.md#options). |
-| `--docker-context <NAME>` | — | `DOCKER_CONTEXT`, then the active context | Docker CLI context to connect through — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-context <NAME>` | — | `DOCKER_CONTEXT`, then the active context, unless a host is set | Docker CLI context to connect through — see [Connecting to Docker](connecting-to-docker.md#options). |
 | `--docker-config <PATH>` | — | `DOCKER_CONFIG`, then `~/.docker` | Directory containing the Docker CLI's own configuration — see [Connecting to Docker](connecting-to-docker.md#options). |
 | `--docker-tls` | — | — | Use TLS, identically to `--docker-tls-verify` — see [Connecting to Docker](connecting-to-docker.md#options). |
 | `--docker-tls-verify` | — | `DOCKER_TLS_VERIFY` | Use TLS, verifying the daemon's certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
