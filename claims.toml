@@ -91,3 +91,19 @@ files = [
     # covers both a flat and a nested layout under this matcher.
     "docs/*.md",
 ]
+
+[temporal-words]
+# Opt-in like claim-words, but the opposite file set (the check's own doc
+# draws the line): reference prose meant to be re-read against today's
+# tree. Not CHANGELOG/RELEASES/decisions (dated by design), not
+# ROADMAP/TODO ("not yet" wording is their whole job), and not AGENTS.md
+# (its dated release anecdotes — "found during 0.16.0's review" — are
+# deliberate teaching history). Unlike claim-words' fnmatch above, this
+# check's globs span `/`, so "docs/*.md" also reaches any future nested
+# page.
+files = [
+    "docs/*.md",
+    "CONTEXT.md",
+    "agents/*.md",
+    "README.md",
+]

@@ -169,6 +169,11 @@ own yet.
   `decisions/`/`AGENTS.md` — see its own comment for why — and raises
   `executable-claims`'s timeout past this repo's own cold-build time.
 
+  `claims.toml` also opts `docs/*.md`, `CONTEXT.md`, `agents/*.md` and
+  `README.md` into `temporal-words` (advisory, flags version-dated wording
+  added to reference prose) — deliberately the reverse file set from
+  `claim-words`'s; see its own comment for where the line sits.
+
   Every noise/timeout issue found comparing 0.2.2 against this repo's old
   tooling is now fixed upstream (`decisions/0009` has the detail and issue
   links). `executable-claims` also refuses to run a `<!-- verify: -->`
