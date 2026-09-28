@@ -106,13 +106,22 @@ groups = ["docker", 999]          # passthrough: supplementary groups
 
 Resolved once per connection, from `docker info`:
 
-- **Remapped** — `SecurityOptions` contains `name=rootless` or `name=userns`.
+- **Rootless** — `SecurityOptions` contains `name=rootless`. Container root
+  is the host user, so host ownership already holds (probe result).
+- **userns-remap** — `SecurityOptions` contains `name=userns`. Every container
+  uid, root included, maps to a subordinate host uid (container 0 → e.g.
+  `231072`, *n* → `231072 + n`), so **no** container user is the host user and
+  host ownership of bind-mount writes cannot be delivered by any `--user`
+  value. Docker's own
+  [userns-remap page](https://docs.docker.com/engine/security/userns-remap/)
+  says bind-mount "file ownership must be pre-arranged". That is Docker's
+  documented behaviour; it has not been probed against a real daemon.
+
   Both strings verified against moby's [`info.go`](https://github.com/moby/moby/blob/master/daemon/info.go)
-  (`fillSecurityOptions`); both are bare entries with no `,profile=` suffix,
-  so whole-entry exact match is safe. The `name=userns` (userns-remap)
-  *behavioural* classification is inferred from the daemon's uid mapping, not
-  probed against a real daemon — recorded here so a future probe knows what to
-  check.
+  (`fillSecurityOptions`, where `name=userns` is added whenever the daemon's
+  remapped root pair is not `0:0`); both are bare entries with no
+  `,profile=` suffix, so whole-entry exact match is safe. *Remapped* below
+  means either of these two.
 - **Desktop** — Ratect's own host is macOS or Windows *and* the connection is
   a local socket. This is the heuristic the design owns explicitly: OrbStack,
   Docker Desktop and rootful Ubuntu all report the identical
@@ -147,9 +156,13 @@ and appending or editing — never replacing**:
   fresh named volumes are root-owned and unwritable by the host uid here.
 
 On **desktop** and **remapped** daemons: **`--user` is not applied and nothing
-is chowned.** The ownership outcome already holds (desktop file sharing maps
-it; a remapped daemon delivers it by construction), and under rootless,
-applying `--user` is actively destructive. The home guarantee still holds:
+is chowned.** On desktop and rootless the ownership outcome already holds
+(desktop file sharing maps it; rootless delivers it by construction), and
+under rootless, applying `--user` is actively destructive. On userns-remap it
+cannot be met at all — the host uid maps to a subordinate uid like every
+other — so `--user` would change nothing, and loading such a project emits a
+`tracing::warn!` and `ratect doctor` reports a finding that bind-mount
+ownership has to be pre-arranged on the host. The home guarantee still holds:
 edit the *running* user's passwd entry (the image's default user, usually
 root) so its home field is the configured path, and create that directory.
 One field's edit, and both `pw_dir` consumers (ssh) and `$HOME` consumers
@@ -157,8 +170,10 @@ One field's edit, and both `pw_dir` consumers (ssh) and `$HOME` consumers
 
 ### Passthrough hazards
 
-`user` on a remapped daemon reproduces the unreadable-bind-mount failure the
-probes found. It stays a passthrough — that is what an escape hatch is — but
+A non-root `user` on a remapped daemon does not write as the host user: under
+rootless it reproduces the unreadable-bind-mount failure the probes found, and
+under userns-remap it lands on a subordinate uid like every other container
+user. It stays a passthrough — that is what an escape hatch is — but
 loading such a project emits a `tracing::warn!`, and `ratect doctor` reports a
 finding naming the hazard.
 
@@ -170,7 +185,7 @@ finding naming the hazard.
   *hides* real uid collisions instead of forcing a rule for them. The replace
   path survives in core for `ratect-compat`, so nothing is lost.
 - **Keep the `run_as_current_user` name and shape in the native format.**
-  Rejected: on two of the three daemon classes the resolved behaviour
+  Rejected: on every daemon class except rootful Linux the resolved behaviour
   deliberately does *not* run the process as the current user, so the name
   would describe a mechanism the engine no longer performs — the naming bug
   this design escapes.
@@ -204,6 +219,9 @@ finding naming the hazard.
 - **Never creating group entries.** Rejected narrowly: the entry costs one
   appended line and spares "cannot find name for group ID" noise; Podman's
   either-name-or-gid-exists skip rule keeps it collision-free.
+- **Refusing `identity` on userns-remap**, since half of what it declares
+  cannot be met there. Rejected: it would also withhold the home guarantee,
+  the half that works on every daemon and the one relied on in practice.
 - **Refusing `user` on remapped daemons.** Rejected: a passthrough that
   second-guesses is not an escape hatch. Warn and report via `doctor`, never
   refuse.
@@ -226,10 +244,11 @@ finding naming the hazard.
   digits on a name clash) is expected to meet edges only practice will
   uncover; it is the part of this record most likely to be amended, and
   amending it would not disturb the rest of the decision.
-- The `name=userns` classification is **inferred, not probed**. If a real
-  userns-remap daemon ever disagrees, the safe direction is already taken:
-  the failure mode of wrongly classifying it as remapped is a missing
-  ownership fix-up, not an unreadable mount.
+- **On userns-remap, `identity` delivers only the home guarantee.** Host
+  ownership of bind-mount writes is impossible there by design of the
+  daemon, not something Ratect could fix; the warning and `doctor` finding
+  say so rather than letting the declared intent go quietly unmet. Its
+  behaviour here rests on Docker's documentation, not a probe.
 - Effects on open work: [#107](https://github.com/or1can/ratect/issues/107)
   shrinks to "declare users the image lacks" or closes, since the image's
   users now survive; [#225](https://github.com/or1can/ratect/issues/225)'s
