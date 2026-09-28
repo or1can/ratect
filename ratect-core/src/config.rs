@@ -3739,6 +3739,21 @@ impl Config {
                                 home_directory
                             );
                         }
+                        // The home is *created*, by uploading its leaf into
+                        // its parent (`docker.rs`'s `build_owned_directory_tar`),
+                        // so it needs a leaf as `Path::file_name` sees it on
+                        // the path as written — the same call that function
+                        // makes, so the two agree. `/` and anything ending
+                        // in `..` have none, and used to fail there, after
+                        // the container existed. Not cleaned first:
+                        // `/srv/x/..` cleans to `/srv`, but the raw path is
+                        // what reaches Docker.
+                        if Path::new(home_directory.as_str()).file_name().is_none() {
+                            anyhow::bail!(
+                                "has an invalid 'run_as_current_user.home_directory': \
+                                 '{home_directory}' has no directory name to create"
+                            );
+                        }
                     } else if run_as_current_user.home_directory.is_some() {
                         anyhow::bail!(
                             "has 'run_as_current_user.home_directory' set, but \

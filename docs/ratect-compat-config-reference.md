@@ -508,7 +508,8 @@ file's directory — it names a path *inside* the container, so a relative value
 would be meaningless there and is rejected as not absolute. A `:` or control
 character in the resolved value is also rejected: it is written into the
 generated `/etc/passwd` and `/etc/shadow` entries, where either would corrupt
-the line.
+the line. So is `/` itself, or a path ending in `..`: the directory is
+created by name inside its parent, and neither has a name to create.
 
 A few things happen automatically to make this actually work, not just set `--user`:
 
