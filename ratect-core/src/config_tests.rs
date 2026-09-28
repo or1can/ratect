@@ -4050,6 +4050,31 @@ fn resolve_expressions_errors_when_run_as_current_user_home_directory_is_not_abs
     assert!(format!("{:#}", result.unwrap_err()).contains("is not an absolute path"));
 }
 
+/// The host user's home is created by uploading its leaf into its parent,
+/// so a home with no leaf used to reach Docker and fail there, after the
+/// container existed. Checked on the path as written: `/srv/x/..` cleans
+/// to `/srv`, which has a leaf, but the raw path is what Docker is given.
+#[test]
+fn resolve_expressions_errors_when_run_as_current_user_home_directory_has_no_leaf() {
+    for home in ["/", "/srv/..", "/srv/x/.."] {
+        let mut config =
+            config_with_container(container_with_run_as_current_user(true, Some(home)));
+
+        let result = config.resolve_expressions_with(
+            Path::new("/base"),
+            &HashMap::new(),
+            &HashMap::new(),
+            no_host_env,
+        );
+
+        let message = format!("{:#}", result.unwrap_err());
+        assert!(
+            message.contains(&format!("'{home}' has no directory name to create")),
+            "{home}: got {message}"
+        );
+    }
+}
+
 #[test]
 fn resolve_expressions_errors_when_run_as_current_user_home_directory_contains_a_colon() {
     // SEC-002: a ':' would shift the fields of the colon-delimited
