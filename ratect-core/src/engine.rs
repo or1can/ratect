@@ -973,7 +973,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// Batect, which generates the identical health-check-wait/
     /// `setup_commands` steps for every container, task container
     /// included, and runs them concurrently with that container's own
-    /// command (see docs/task-lifecycle.md's "Known simplifications").
+    /// command (see docs/task-lifecycle.md's "Known limitations").
     ///
     /// `container_id` must already be running: the caller waits for
     /// `run_container`'s own `started` signal before calling here, since

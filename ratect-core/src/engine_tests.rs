@@ -4535,7 +4535,7 @@ async fn task_containers_own_setup_commands_run_concurrently_with_its_main_comma
     // exec means a *sequential* readiness-then-run (or run-then-
     // readiness) model would take roughly their sum, while running them
     // concurrently (matching Batect — see docs/task-lifecycle.md's
-    // "Known simplifications") takes roughly just the one delay.
+    // "Known limitations") takes roughly just the one delay.
     let mut containers = HashMap::new();
     let mut app = container("alpine:3.18", None);
     app.setup_commands = Some(vec![crate::config::SetupCommand {
