@@ -53,6 +53,20 @@ backwards.
 **File syntax** — whether a file is parsed as TOML or YAML. A property of a
 file, independent of its project's dialect.
 
+## Identity
+
+**Host identity** — the uid and gid of the user running Ratect on the host.
+
+**Image identity** — the users and groups an image ships in its own identity
+files.
+
+**Identity** — a container's declared adoption of the host identity, together
+with a stated home directory. What adopting means is resolved against the
+daemon, not fixed by the declaration.
+
+**Passthrough** — a container field handed to the runtime verbatim; Ratect
+neither resolves nor synthesizes anything from it.
+
 ## Cancelling a run
 
 **Termination signal** — any signal Ratect traps so a run cleans up after
