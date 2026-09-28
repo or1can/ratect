@@ -18,7 +18,7 @@ application {
 }
 
 checkstyle {
-    toolVersion = "14.1.0"
+    toolVersion = "14.3.0"
 }
 
 tasks.test {
