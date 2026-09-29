@@ -237,9 +237,11 @@ pub enum TaskEvent {
     /// its own `ContainerCreatedEvent`, which is what its cleanup progress
     /// display counts.
     ///
-    /// Only posted for the task's own container; a dependency's id is known
-    /// synchronously from `start_background_container`, so its
-    /// [`TaskEvent::DependencyStarted`] already serves this purpose.
+    /// Only posted for the task's own container; a dependency's
+    /// [`TaskEvent::DependencyStarted`] already serves this purpose. A
+    /// dependency created but never started — its start failed, or was
+    /// abandoned when a sibling failed — is still removed at cleanup, but was
+    /// never counted, so nothing is left waiting on it.
     TaskContainerCreated {
         container: String,
     },

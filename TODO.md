@@ -84,6 +84,18 @@ Confirmed against GitHub's own `/markdown` API, not assumed.
   `Foo::bar`, not by grepping the source, since only the first paragraph
   ever reaches them.
 
+- **16.** **The task's own container can still be lost to an interrupt
+  between its `created` send and the next poll** (`ratect-core/src/engine.rs`,
+  `readiness_future`) — its receiver is awaited inside a `tokio::join!`
+  with the run, so an interrupt dropping both in that instant drops the id
+  with them, and cleanup never sees the container. Dependencies no longer
+  have this window: ratect#224 parks their receivers in
+  `created_dependencies` and reads them with `try_recv` at cleanup, which
+  sees a value sent by a future since dropped. The same treatment would
+  close it here; left out of #224, whose scope excluded the task
+  container's start path. The ownership labels and `ratect resources`
+  cover it meanwhile.
+
 ## Test coverage
 
 - **4.** **`ratect-compat/tests/cli.rs`'s `task_output` helper weakens ~18 converted e2e

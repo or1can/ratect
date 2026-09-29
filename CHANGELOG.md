@@ -52,6 +52,7 @@ history, from when it was the only binary.
 - A task's `customise` entry naming a container reached through an *inherited* `dependencies` list failed to load, reporting that the container would not be started as part of the task — when the task does start it (ratect only, since `extends` is native-only).
 - A relative `cache` mount path on a container with `run_as_current_user` enabled was accepted when `extends` supplied the two across a base and a child, instead of being rejected as it is when both are written on one container. The path then failed from Docker, naming a container id rather than the container you wrote (ratect only, since `extends` is native-only).
 - The documentation site now renders its Mermaid diagrams (dependency graphs and sequence diagrams on the Task Lifecycle page); they were shown as diagram source.
+- A dependency still starting when another dependency failed could be left running after the run, along with the task's network ("has active endpoints"). So could a dependency whose own start failed after its container was created. Both are now removed at cleanup.
 
 ### Changed
 

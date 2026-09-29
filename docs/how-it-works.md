@@ -169,7 +169,10 @@ unit-tested with a fake implementation instead of a real Docker daemon.
   rather than an unrelated API failure later.
 - **`start_background_container` / `stop_and_remove_container`**: the same, for a
   dependency or sidecar — started and left running alongside the task rather than
-  waited on, so no logs are streamed and no task `command` applies.
+  waited on, so no logs are streamed and no task `command` applies. Like
+  `run_container`, it hands the container's id back the moment Docker creates it,
+  so cleanup removes a dependency whose start failed or was cut short by another
+  dependency failing.
 - **`wait_for_container_healthy` / `exec_in_container`**: the two halves of the
   [dependency readiness gate](dependency-readiness.md#the-two-gates). The first
   blocks on Docker's own event stream, replayed from the beginning so a verdict

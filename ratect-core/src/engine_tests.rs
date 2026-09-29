@@ -102,6 +102,13 @@ struct FakeContainerRuntime {
     // = true)]` test prove two independent operations actually overlap in
     // (virtual) time, rather than just asserting on event order/counts.
     start_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
+    // The same, but waited out *after* the container is created and its id
+    // handed back — the window a start cut short by a sibling's failure
+    // lands in (see `with_start_delay_after_create`, ratect#224).
+    start_delays_after_create: Arc<Mutex<HashMap<String, std::time::Duration>>>,
+    // Container names whose `start_background_container` fails after the
+    // container is created (see `failing_start_after_create`).
+    failing_starts_after_create: Arc<Mutex<HashSet<String>>>,
     pull_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
     // Same idea, for `exec_in_container` (keyed by command) and
     // `wait_for_container_healthy` (keyed by container id) — used to
@@ -152,6 +159,8 @@ impl Default for FakeContainerRuntime {
             fail_image_build: Default::default(),
             locally_present_images: Default::default(),
             start_delays: Default::default(),
+            start_delays_after_create: Default::default(),
+            failing_starts_after_create: Default::default(),
             pull_delays: Default::default(),
             exec_delays: Default::default(),
             health_check_delays: Default::default(),
@@ -241,6 +250,30 @@ impl FakeContainerRuntime {
             .lock()
             .unwrap()
             .insert(name.to_string(), delay);
+        self
+    }
+
+    /// Makes `start_background_container` for container name `name`
+    /// `tokio::time::sleep` for `delay` *after* the container is created and
+    /// its id handed back, before it would have started — so a sibling
+    /// dependency's failure can cut the start short once Docker already has
+    /// a container to clean up.
+    fn with_start_delay_after_create(self, name: &str, delay: std::time::Duration) -> Self {
+        self.start_delays_after_create
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), delay);
+        self
+    }
+
+    /// Makes `start_background_container` for container name `name` fail
+    /// after the container is created and its id handed back — standing in
+    /// for user mapping, joining the network or the start itself failing.
+    fn failing_start_after_create(self, name: &str) -> Self {
+        self.failing_starts_after_create
+            .lock()
+            .unwrap()
+            .insert(name.to_string());
         self
     }
 
@@ -611,6 +644,7 @@ impl ContainerRuntime for FakeContainerRuntime {
     async fn start_background_container(
         &self,
         spec: &crate::container_spec::ContainerSpec,
+        created: tokio::sync::oneshot::Sender<String>,
     ) -> Result<String> {
         let alias = &spec.shared.name;
         let delay = self.start_delays.lock().unwrap().get(alias).copied();
@@ -625,7 +659,26 @@ impl ContainerRuntime for FakeContainerRuntime {
             "sidecar-start:{alias}:{}",
             network_label(&spec.shared.network)
         ));
-        Ok(format!("sidecar-id-{alias}"))
+        let container_id = format!("sidecar-id-{alias}");
+        let _ = created.send(container_id.clone());
+        let delay = self
+            .start_delays_after_create
+            .lock()
+            .unwrap()
+            .get(alias)
+            .copied();
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
+        if self
+            .failing_starts_after_create
+            .lock()
+            .unwrap()
+            .contains(alias)
+        {
+            anyhow::bail!("Failed to connect '{alias}' to network");
+        }
+        Ok(container_id)
     }
 
     async fn wait_for_container_healthy(&self, container_id: &str) -> Result<()> {
@@ -3566,6 +3619,89 @@ async fn unhealthy_dependency_fails_the_task_and_still_cleans_up() {
         events.iter().any(|e| e.starts_with("network-remove:")),
         "the network must still be removed: {events:?}"
     );
+}
+
+/// Two sibling dependencies of `app`, `peer` and `fails`, for the
+/// cut-short-start tests below (ratect#224).
+fn config_with_sibling_dependencies() -> Config {
+    let mut containers = HashMap::new();
+    containers.insert("peer".to_string(), container("alpine:3.18", None));
+    containers.insert("fails".to_string(), container("alpine:3.18", None));
+    containers.insert(
+        "app".to_string(),
+        container(
+            "alpine:3.18",
+            Some(vec!["peer".to_string(), "fails".to_string()]),
+        ),
+    );
+    let mut tasks = HashMap::new();
+    tasks.insert("start".to_string(), task("app", "echo hi"));
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+/// Asserts `container`'s dependency container was stopped and removed, and
+/// before the network — a container still attached when the network goes is
+/// what makes its removal fail with "has active endpoints".
+fn assert_removed_before_network(events: &[String], container: &str) {
+    let stop = events
+        .iter()
+        .position(|e| e == &format!("sidecar-stop:sidecar-id-{container}"))
+        .unwrap_or_else(|| panic!("'{container}' must be cleaned up: {events:?}"));
+    let network = events
+        .iter()
+        .position(|e| e.starts_with("network-remove:"))
+        .unwrap_or_else(|| panic!("the network must be removed: {events:?}"));
+    assert!(
+        stop < network,
+        "'{container}' must be removed before the network: {events:?}"
+    );
+}
+
+/// A sibling whose start is abandoned because another dependency failed is
+/// still removed, as long as Docker had created it: `peer` is created at
+/// once, `fails` is reported unhealthy a second later, and `peer`'s start
+/// would only have returned its id after a minute.
+#[tokio::test(start_paused = true)]
+async fn a_dependency_created_before_a_sibling_fails_is_still_cleaned_up() {
+    let docker = FakeContainerRuntime::default()
+        .with_start_delay_after_create("peer", std::time::Duration::from_secs(60))
+        .with_health_check_delay("fails", std::time::Duration::from_secs(1))
+        .with_unhealthy_container("fails");
+    let engine = engine(config_with_sibling_dependencies(), docker.clone());
+
+    let result = engine.run_task("start", &[]).await;
+
+    let message = format!("{:#}", result.unwrap_err());
+    assert!(
+        message.contains("'fails' did not become healthy"),
+        "the run must report the failing sibling: {message}"
+    );
+    let events = docker.events();
+    assert_removed_before_network(&events, "peer");
+    assert_removed_before_network(&events, "fails");
+}
+
+/// A dependency whose own start fails after Docker created it is removed,
+/// and the start failure is what the run reports.
+#[tokio::test]
+async fn a_dependency_whose_start_fails_after_creation_is_still_cleaned_up() {
+    let docker = FakeContainerRuntime::default().failing_start_after_create("fails");
+    let engine = engine(config_with_sibling_dependencies(), docker.clone());
+
+    let result = engine.run_task("start", &[]).await;
+
+    let message = format!("{:#}", result.unwrap_err());
+    assert!(
+        message.contains("Failed to connect 'fails' to network"),
+        "the run must report the start failure: {message}"
+    );
+    assert_removed_before_network(&docker.events(), "fails");
 }
 
 /// A `run_to_completion` dependency (ratect#97) is started like any other,
