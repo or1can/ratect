@@ -117,7 +117,7 @@ Dependencies are split across the four `Cargo.toml`s along CLI-vs-core lines: `c
 and `tracing-subscriber` are `ratect-compat`-only; `serde`, `serde_json`, `noyalib`,
 `bollard`, `futures`, `async-recursion`, `async-trait`, `uuid`, `tar`, `path-clean`,
 `crossterm`, `nix`, `url`, `sha2`, `toml`, `regex`, `unicode-width`, `rustls`,
-`ssh-key`/`ssh-encoding`/`signature`/`rsa`,
+`hyper-util`, `hyper-rustls`, `rustls-native-certs`, `ssh-key`/`ssh-encoding`/`signature`/`rsa`,
 `schemars`/`jsonschema` (optional, `schema` feature), and the
 local `dockerignore` crate are `ratect-core`-only (`dockerignore` itself depends on
 `regex` and `path-clean` too); `anyhow`, `tracing`, and `tokio` are needed by both

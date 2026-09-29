@@ -1832,10 +1832,14 @@ impl DockerClient {
     }
 
     pub async fn new(connection: &DockerConnectionOptions) -> Result<Self> {
-        let docker = connection::connect(connection)?
+        let connected = connection::connect(connection)?;
+        let docker = connected
+            .docker
+            .clone()
             .negotiate_version()
             .await
-            .context("Failed to negotiate the Docker API version with the daemon")?;
+            .context("Failed to negotiate the Docker API version with the daemon")
+            .map_err(|err| connected.explain_failure(err))?;
         check_api_version_floor(docker.client_version())?;
         let config_directory = connection::docker_config_directory(connection)?;
         Ok(Self {

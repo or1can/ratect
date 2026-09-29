@@ -46,6 +46,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- A Docker context's stored TLS settings (`ca.pem`, `cert.pem`/`key.pem`) are now used, so a context for a TLS-protected daemon connects. Its `SkipTLSVerify` is not honoured: the daemon's certificate is always verified.
 - A `run_as_current_user.home_directory` with no directory name to create (`/`, or a path ending in `..`) is rejected when the file loads, instead of after the container has been created.
 - Piped stdin reaching its end never closed the task container's own stdin, so a process that reads until end of input (`cat`, a stdio server) never exited, and neither did Ratect.
 - `--max-parallelism`'s `--help` text on both binaries now says what the cap covers (image pulls/builds, dependency container starts and setup commands).
