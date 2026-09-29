@@ -280,11 +280,21 @@ nothing unexpected to report.
 
 ## The task's own container
 
-The task's own container goes through this same readiness gate too,
-run concurrently with its main command rather than gating anything on it —
-matching Batect, which runs every container through identical per-container
-steps, task container included. What a failure there means for the task, the
-one race that leaves open, and where Ratect differs from Batect on it are in
-[known
-limitations](task-lifecycle.md#known-limitations)
-and [Differences from Batect](differences-from-batect.md#container-fields).
+Which rules apply depends on the project's dialect: whether `ratect` or
+`ratect-compat` loaded it, not which file declares the container.
+
+- **`ratect` (native): no readiness gate.** Running the task's own container
+  *is* the task, and nothing depends on it becoming ready. Ratect doesn't wait
+  for its health check, whether from `health_check` or the image's own
+  `HEALTHCHECK`, and doesn't run its `setup_commands`. The task's result is the
+  main command's alone. Docker still runs the health check; Ratect doesn't
+  watch it. The fields stay valid on that container, since the same container
+  can be another task's dependency.
+- **`ratect-compat` (Batect-compatible): the same gate as a dependency**, run
+  concurrently with its main command rather than gating anything on it —
+  matching Batect, which runs every container through identical per-container
+  steps, task container included. A failure there fails the task even when the
+  main command succeeded. That, and the one race it leaves open, are in [known
+  limitations](task-lifecycle.md#known-limitations); where Ratect differs from
+  Batect on it is in [Differences from
+  Batect](differences-from-batect.md#container-fields).

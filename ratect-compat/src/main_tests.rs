@@ -33,7 +33,7 @@ const BINARY: &str = "ratect-compat";
 const TASK_ARGUMENTS: &[&str] = &["build"];
 
 fn settings_from(arguments: &[&str]) -> TaskEngineSettings {
-    args(arguments).engine_settings(PathBuf::from("/p"))
+    args(arguments).engine_settings(PathBuf::from("/p"), Dialect::BatectCompatible)
 }
 
 /// One flag (with any value it needs) against the single setting it is
@@ -121,7 +121,8 @@ fn each_flag_changes_only_its_own_setting() {
 /// the default behavior of every run.
 #[test]
 fn no_flags_maps_to_the_engines_own_defaults() {
-    let settings = args(&["ratect-compat", "build"]).engine_settings(PathBuf::from("/p"));
+    let settings = args(&["ratect-compat", "build"])
+        .engine_settings(PathBuf::from("/p"), Dialect::BatectCompatible);
     let defaults = TaskEngineSettings::default();
 
     assert_eq!(settings.existing_network, defaults.existing_network);
@@ -180,7 +181,7 @@ fn every_flag_reaches_its_own_engine_setting() {
         "directory",
         "build",
     ])
-    .engine_settings(PathBuf::from("/projects/demo"));
+    .engine_settings(PathBuf::from("/projects/demo"), Dialect::BatectCompatible);
 
     assert_eq!(
         settings.existing_network.as_deref(),
@@ -223,12 +224,12 @@ fn every_flag_reaches_its_own_engine_setting() {
 #[test]
 fn each_no_cleanup_flag_affects_only_its_own_half() {
     let success = args(&["ratect-compat", "--no-cleanup-after-success", "build"])
-        .engine_settings(PathBuf::from("/p"));
+        .engine_settings(PathBuf::from("/p"), Dialect::BatectCompatible);
     assert!(!success.cleanup_after_success);
     assert!(success.cleanup_after_failure);
 
     let failure = args(&["ratect-compat", "--no-cleanup-after-failure", "build"])
-        .engine_settings(PathBuf::from("/p"));
+        .engine_settings(PathBuf::from("/p"), Dialect::BatectCompatible);
     assert!(failure.cleanup_after_success);
     assert!(!failure.cleanup_after_failure);
 }

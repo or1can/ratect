@@ -2727,6 +2727,24 @@ pub(crate) struct ConfigFile {
     forbid_telemetry: Option<bool>,
 }
 
+/// Which binary's rules govern a project — see `CONTEXT.md`'s **Dialect**.
+/// A property of the *project*, fixed by which loader read it
+/// ([`load_project`] or [`load_project_native`]); never of one file, so a
+/// `.yml` included by a native project is still native here.
+///
+/// Where `ConfigFormat` is the loader's own parsing policy, this is the
+/// one fact about it the rest of the pipeline may read: the engine takes it
+/// through [`crate::engine::TaskEngineSettings`] and derives what differs
+/// from it once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Dialect {
+    /// `ratect-compat`'s: Batect's own semantics.
+    #[default]
+    BatectCompatible,
+    /// `ratect`'s.
+    Native,
+}
+
 /// Which config file format(s) a load accepts, and how a file's extension
 /// maps to a parser. Selected by the *binary*, not the file: `ratect-compat`
 /// is a byte-compatible Batect replacement, so it only ever reads YAML;
@@ -2773,6 +2791,14 @@ impl ConfigFormat {
                 FileFormat::Toml => parse_toml_config_file(path),
                 FileFormat::Yaml => parse_yaml_config_file(path),
             },
+        }
+    }
+
+    /// The project dialect this loading policy is.
+    fn dialect(&self) -> Dialect {
+        match self {
+            ConfigFormat::Compat => Dialect::BatectCompatible,
+            ConfigFormat::Native => Dialect::Native,
         }
     }
 
@@ -3942,6 +3968,9 @@ pub struct LoadedProject {
     /// Needed separately from `config` for cache resolution
     /// ([`crate::engine::TaskEngine::with_settings`]).
     pub project_directory: PathBuf,
+    /// Which loader read the project — for
+    /// [`crate::engine::TaskEngineSettings::dialect`].
+    pub dialect: Dialect,
 }
 
 /// Serializes a merged, *unresolved* [`Config`] to native `ratect.toml` text —
@@ -4222,6 +4251,7 @@ async fn load_project_impl(
     Ok(LoadedProject {
         config,
         project_directory,
+        dialect: format.dialect(),
     })
 }
 

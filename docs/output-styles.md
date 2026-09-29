@@ -55,8 +55,10 @@ Batect rejects.
 
 Append-only, with no live-updating progress detail at all, so it is safe for
 CI logs and redirected output. The health/setup-command milestones are shown
-for *dependency* containers only: the task's own container's readiness runs
-concurrently with its command (see [task
+for *dependency* containers only. Under `ratect` the task's own container has
+no readiness gate to report (see [Dependency
+Readiness](dependency-readiness.md#the-tasks-own-container)); under
+`ratect-compat` its readiness runs concurrently with its command (see [task
 lifecycle](task-lifecycle.md#known-limitations)), so
 printing them would drop a line into the middle of that command's own output
 — [`all`](#all) shows them. A readiness *failure* is still reported, on stderr,

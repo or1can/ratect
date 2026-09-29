@@ -82,6 +82,9 @@ The rules:
   absolute, so an inherited `build_directory` or volume host path stays anchored
   to the file that *declared* it, not the child's location — this matters when
   the parent came from an [included file](#includes).
+- **Clearing an inherited list.** An empty list is a value like any other, so
+  `setup_commands = []` on a child clears the parent's. That is how to reuse a
+  container as a dependency without its setup steps.
 - **Overriding a build with an image.** Because inheritance is per-field with no
   way to *unset* one, setting `image` on a child is how you override a parent's
   `build_directory`: `image` wins, and the inherited `build_directory` is simply
@@ -336,6 +339,8 @@ and a `postgres:16` image is not where your migration tool lives. `run_in`
 names another container to run the command in, while leaving *when* it runs
 alone — it is still part of the declaring container's readiness gate, so
 nothing that depends on that container starts until the command has succeeded.
+On a task's own container, which has no readiness gate, it doesn't run at all
+(see [Dependency Readiness](dependency-readiness.md#the-tasks-own-container)).
 
 ```toml
 [containers.db-seed-client]
@@ -534,9 +539,10 @@ both tools the check uses reach it.)
   so a setup command would run against exactly the service the check is
   waiting for. Put such a step in a container of its own that depends on the
   checked one, where it waits for the check like anything else.
-- **Inert on a task's own container**, exactly as `health_check` is — nothing
-  waits on a task's own container becoming ready, because running it *is* the
-  task. Unlike `run_to_completion`, this isn't rejected: the field changes
+- **Inert on a task's own container**, exactly as `health_check` and
+  `setup_commands` are — nothing waits on a task's own container becoming
+  ready, because running it *is* the task (see [Dependency
+  Readiness](dependency-readiness.md#the-tasks-own-container)). Unlike `run_to_completion`, this isn't rejected: the field changes
   nothing about how the container runs, so the same container can be one
   task's main container and another task's checked dependency.
 
@@ -740,7 +746,7 @@ The container fields, by area:
 | Name resolution | `dns`, `dns_search`, `dns_options` | [above](#dnsdns_searchdns_options-name-resolution) *(native only)* |
 | Networking | `ports`, `additional_hostnames`, `additional_hosts`, `dependencies` | [Ports](ratect-compat-config-reference.md#port-mappings), [readiness](dependency-readiness.md) |
 | Network mode | `network_mode` | [above](#network_mode-leaving-the-tasks-network) *(native only)* |
-| Readiness | `health_check`, `setup_commands` | [Dependency Readiness](dependency-readiness.md). A setup command also takes [`run_in`](#run_in-setup-commands-in-another-container) *(native only)* |
+| Readiness | `health_check`, `setup_commands` | [Dependency Readiness](dependency-readiness.md). Both are inert on a task's own container — see [Where the semantics differ](#where-the-semantics-differ). A setup command also takes [`run_in`](#run_in-setup-commands-in-another-container) *(native only)* |
 | Init containers | `run_to_completion` | [above](#run_to_completion-init-containers) *(native only)* |
 | External checks | `external_health_check` | [above](#external_health_check-checking-a-container-from-outside-it) *(native only)* |
 | User | `run_as_current_user` | [User mapping](ratect-compat-config-reference.md#user-mapping) |
@@ -750,23 +756,26 @@ The container fields, by area:
 
 Almost nothing: the two formats parse into the same model, so a field means
 what [`ratect-compat-config-reference.md`](ratect-compat-config-reference.md) says it means. The
-exceptions fall into three groups: places where `extends` gives a combination
+exceptions fall into four groups: places where `extends` gives a combination
 a meaning it cannot have in a `batect.yml`, which has no inheritance; places
 where this format is deliberately **stricter**, having no Batect
-compatibility to preserve; and one place where it does **more** than Batect,
-which `batect.yml` then has to refuse rather than quietly accept.
+compatibility to preserve; one place where it does **more** than Batect,
+which `batect.yml` then has to refuse rather than quietly accept; and one
+where it deliberately does **less** — a task's own container has no
+readiness gate.
 
 Every row below about a **container** is decided by the format of the file
 that declares it, not by the project — a container written in a `.yml` takes
 the left-hand column even inside a native project (see [Which fields a file
-may use](includes.md#which-fields-a-file-may-use)). The first two rows are
-about an `include` entry rather than a container, and those follow the
-project.
+may use](includes.md#which-fields-a-file-may-use)). The first three rows
+follow the project instead: two are about an `include` entry rather than a
+container, and the third about how a task runs its own container.
 
 | Behaviour | `batect.yml` (`ratect-compat`) | `ratect.toml` (`ratect`) |
 | --- | --- | --- |
 | A Git-included bundle declaring a **`type: git` include of its own** | Always allowed, matching Batect | Refused unless the bundle's own include entry sets [`allow_nested_git_includes`](#nested-git-includes) |
 | A **nested** Git include failing to clone | Reports `git`'s own error | Reports that it failed, with the transport detail behind `RUST_LOG=debug` — see [Nested Git includes](#nested-git-includes) |
+| A **task's own container**'s `health_check`/`setup_commands` | Run alongside the main command, matching Batect; a failure fails the task | Inert: no health wait, no setup commands, and the task's result is the main command's alone — see [Dependency Readiness](dependency-readiness.md#the-tasks-own-container) |
 | An **expression in `image`** | Rejected when the file loads — Batect resolves nothing there | Resolved like any other expression — see [Expressions in `image`](#expressions-in-image) |
 | A container with **both** `image` and `build_directory` | Rejected when the file loads, matching Batect | Allowed — `image` wins, and this is the only way to override a `build_directory` inherited from an `extends` parent, since inheritance is per-field with no way to unset one |
 | A container with **neither** `image` nor `build_directory` | Rejected when the file loads | Allowed — a container used only as an `extends` base needs neither; the requirement is enforced when a task actually runs a container, so no `abstract` marker is needed |
@@ -839,6 +848,7 @@ so it also works as a CI gate.
 | Name resolution | — | [`dns`/`dns_search`/`dns_options`](#dnsdns_searchdns_options-name-resolution) on a container |
 | Network mode | always the task's network | [`network_mode`](#network_mode-leaving-the-tasks-network) on a container |
 | Setup command target | always the declaring container | [`run_in`](#run_in-setup-commands-in-another-container) on a setup command |
+| Task's own container's readiness gate | health check, then setup commands | none — see [Dependency Readiness](dependency-readiness.md#the-tasks-own-container) |
 | List entries | string shorthand *or* object | object (inline table or `[[...]]`) |
 | Local overrides | `batect.local.yml` | `ratect.local.toml` |
 | Git bundle default | `batect-bundle.yml` | `ratect-bundle.toml`, then `batect-bundle.yml` |

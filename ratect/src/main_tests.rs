@@ -201,7 +201,7 @@ fn run_args(arguments: &[&str]) -> RunArgs {
 fn settings_from(flags: &[&str]) -> TaskEngineSettings {
     let mut arguments = vec!["ratect", "run", "build"];
     arguments.extend_from_slice(flags);
-    run_args(&arguments).engine_settings(PathBuf::from("/p"))
+    run_args(&arguments).engine_settings(PathBuf::from("/p"), Dialect::Native)
 }
 
 /// One flag (with any value it needs) against the single setting it is
