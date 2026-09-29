@@ -57,8 +57,9 @@
 //! `ContainerBecameHealthy`/`RunningSetupCommand`/`SetupCommandsCompleted`
 //! lines (0.21.0, `is_task_container` — the same three `if (container ==
 //! taskContainer) return` guards Batect's own `SimpleEventLogger` has): since
-//! the task container's readiness gate now runs *concurrently* with its
-//! command (`engine.rs`), printing them would drop a line into the middle of
+//! the task container's readiness gate, where it has one (the
+//! Batect-compatible dialect; a native project's has none), runs
+//! *concurrently* with its command (`engine.rs`), printing them would drop a line into the middle of
 //! that command's unframed output. `all` mode has no such collision (prefixed,
 //! line-buffered) and reports them for every container, matching Batect's own
 //! `InterleavedEventLogger`; `fancy` never sees them, since its block freezes

@@ -154,26 +154,26 @@ colliding.
 
 ## Known limitations
 
-- **The task's own container's readiness gate can race a fast main command** —
-  and "main command" is usually a task-specific override. A task's
+- **Under `ratect-compat`, the task's own container's readiness gate can
+  race a fast main command** — and "main command" is usually a task-specific
+  override. A task's
   `run.command`/`run.entrypoint` (see [TaskRun](ratect-compat-config-reference.md#taskrun))
   replaces whatever the container's own `command`/`entrypoint`, or the image's
   default `CMD`, would otherwise run — often to run a one-off command (`psql`,
   a one-shot migration script) against a container that's really built for
   something else, a long-running service. That override is what actually
   starts the instant the container starts. It is never gated on the
-  container's own `health_check`/`setup_commands` — the task's own container
-  goes through the same readiness gate a dependency does (health-check wait,
-  then `setup_commands`, in order), but run
+  container's own `health_check`/`setup_commands` — under `ratect-compat` the
+  task's own container goes through the same readiness gate a dependency does
+  (health-check wait, then `setup_commands`, in order), but run
   *concurrently* with the main command rather than blocking it, because
   nothing else in the graph depends on the task container's own readiness. A
   setup command or health-check failure still fails the task even if the
   main command already succeeded — including a `health_check` written for
   the container's usual, non-overridden role, which a one-off command
-  doesn't make go away. Whether that's the right behaviour for a task's own
-  container specifically — nothing in this task's own graph actually depends
-  on its readiness — is an open question, tracked in
-  [ratect#173](https://github.com/or1can/ratect/issues/173).
+  doesn't make go away. `ratect` has none of this: under the native dialect a
+  task's own container has no readiness gate at all (see [Dependency
+  Readiness](dependency-readiness.md#the-tasks-own-container)).
   One race this doesn't close, matching Batect's own (its
   `RunStage` completion is driven purely by the container's exit event, not
   its readiness): a main command that exits very quickly — especially with

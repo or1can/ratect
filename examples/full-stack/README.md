@@ -42,10 +42,12 @@ never serves anything.
 
 It used to have a second reason that no longer applies, which is worth
 knowing if you are reading older Ratect material: `app`'s check was once an
-in-container `health_check`, and a task's own container waits on that, so
-`npm ci` in `app` would have waited forever for a server it never starts.
-An `external_health_check` is inert on a task's own container — nothing
-waits on it, because running the container *is* the task.
+in-container `health_check`, and a task's own container used to wait on
+that, so `npm ci` in `app` would have waited forever for a server it never
+starts. Under `ratect` nothing waits on a task's own container becoming
+ready, whichever check it declares, because running the container *is* the
+task — see [Dependency
+Readiness](../../docs/dependency-readiness.md#the-tasks-own-container).
 
 ## Tasks
 

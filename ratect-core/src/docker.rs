@@ -1530,7 +1530,8 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// succeeds — never sent at all if the container never gets that far.
     /// Lets `engine.rs` run the task container's readiness gate (health-check
     /// wait, then `setup_commands`, via `wait_for_container_healthy`/
-    /// `exec_in_container`) concurrently with this call's own
+    /// `exec_in_container`; Batect-compatible dialect only — a native
+    /// project's task container has none) concurrently with this call's own
     /// attach-and-wait-for-exit — matching Batect, which runs every container
     /// (task container included) through the same per-container steps,
     /// concurrently with that container's own command. Carries no id, unlike

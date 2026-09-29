@@ -68,9 +68,9 @@ command = "sh -c 'npm ci && node test.js'"
 #
 # It used to be a health-check race as well — `app`'s old in-container
 # `health_check` gated *any* task run in that container, including a
-# `npm ci` that exits long before port 8080 serves anything. An
-# `external_health_check` doesn't: nothing waits on a task's own container
-# becoming ready, because running it is the task.
+# `npm ci` that exits long before port 8080 serves anything. No check does
+# now: nothing waits on a task's own container becoming ready, because
+# running it is the task.
 [containers.dev]
 image = "node:22"
 working_directory = "/code"

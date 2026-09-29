@@ -5024,6 +5024,36 @@ ulimits = [{ name = "nofile", soft = 10 }]
     );
 }
 
+/// The dialect is the project's, not the file's: a task container declared
+/// in a `.yml` include of a native project is still run under native rules
+/// (no task-container readiness gate — decisions/0012), even though the
+/// same file keeps Batect's rules for which fields it may use.
+#[tokio::test]
+async fn a_native_project_is_native_whatever_file_declares_its_task_container() {
+    let (_, result) = load_native_including(
+        "frag.yml",
+        "containers:\n  app:\n    image: alpine:3.18\n    setup_commands:\n      - command: ./migrate.sh\n",
+    )
+    .await;
+    let project = result.expect("a YAML fragment of a native project loads");
+    assert_eq!(project.dialect, Dialect::Native);
+}
+
+#[tokio::test]
+async fn a_batect_compatible_project_is_batect_compatible() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n",
+    )
+    .unwrap();
+    let project = load_project(&dir.join("batect.yml"), &HashMap::new())
+        .await
+        .unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    assert_eq!(project.dialect, Dialect::BatectCompatible);
+}
+
 /// `extends` reaches across the *format* boundary: a native container
 /// inherits from one defined in an included YAML file, because the
 /// container namespace is flat once includes are merged (ADR-0003's

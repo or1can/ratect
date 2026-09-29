@@ -15,7 +15,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use ratect_core::config::{
-    format_task_list, format_task_list_quiet, load_project, Config, LoadedProject,
+    format_task_list, format_task_list_quiet, load_project, Config, Dialect, LoadedProject,
 };
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
@@ -247,7 +247,7 @@ impl Args {
     /// perfectly and reverses the flag), and a flag declared but never read
     /// here. Keep the literal exhaustive for that reason. `ratect` has the
     /// same function for the same reasons.
-    fn engine_settings(&self, project_directory: PathBuf) -> TaskEngineSettings {
+    fn engine_settings(&self, project_directory: PathBuf, dialect: Dialect) -> TaskEngineSettings {
         let mut image_tags: HashMap<String, HashSet<String>> = HashMap::new();
         for (container, tag) in &self.tag_image {
             image_tags
@@ -269,6 +269,7 @@ impl Args {
             // Stamped onto every resource this run creates, so it can be
             // identified later — see `ratect_core::labels`.
             ratect_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            dialect,
         }
     }
 }
@@ -477,6 +478,7 @@ async fn run(mut args: Args) -> Result<()> {
     let LoadedProject {
         config,
         project_directory,
+        dialect,
     } = load_project(&args.config_file, &config_var_overrides).await?;
 
     // Gathered once, here, and reused for both the `--list-tasks` quiet-
@@ -521,7 +523,7 @@ async fn run(mut args: Args) -> Result<()> {
             // it can return.
             let event_sink = create_event_sink(requested_style, color_mode, &terminal)?;
             // Built before the connection options consume `args` below.
-            let settings = args.engine_settings(project_directory);
+            let settings = args.engine_settings(project_directory, dialect);
             // Constructed here rather than inside `ratect-core` — a library
             // shouldn't take over a process's signal handling on its own
             // initiative — and armed immediately, since (unlike

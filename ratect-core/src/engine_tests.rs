@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::cache::VolumeStore;
-use crate::config::{BuildSecret, Container, NetworkMode, PortMapping, Task, TaskRun};
+use crate::config::{BuildSecret, Container, Dialect, NetworkMode, PortMapping, Task, TaskRun};
 use crate::resources::ResourceInventory;
 use crate::ui::NullEventSink;
 use std::collections::HashMap;
@@ -4707,6 +4707,153 @@ async fn task_containers_own_setup_commands_run_concurrently_with_its_main_comma
     );
 }
 
+/// Settings for a native-dialect project — the only thing that differs
+/// from the default (Batect-compatible) engine in the tests below.
+fn native_settings() -> TaskEngineSettings {
+    TaskEngineSettings {
+        dialect: Dialect::Native,
+        ..Default::default()
+    }
+}
+
+/// A task whose own container declares both halves of a readiness gate: a
+/// `health_check` and one `setup_commands` entry (`./migrate.sh`).
+fn config_with_a_gated_task_container() -> Config {
+    let mut config = config_with_failing_task_container_setup_command();
+    config.containers.get_mut("app").unwrap().health_check =
+        Some(crate::config::HealthCheckConfig {
+            command: Some("wget -q localhost".to_string()),
+            interval: None,
+            retries: None,
+            start_period: None,
+            timeout: None,
+        });
+    config
+}
+
+/// Under the native dialect a task's own container has no readiness gate
+/// (decisions/0012): nothing waits on its health, no health event posts
+/// for it, and its `setup_commands` never run — while its creation is
+/// still announced and it is still cleaned up.
+#[tokio::test]
+async fn native_task_containers_own_readiness_gate_does_not_run() {
+    let docker = FakeContainerRuntime::default();
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        config_with_a_gated_task_container(),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(native_settings())
+    .unwrap();
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let events = docker.events();
+    assert!(
+        !events.iter().any(|e| e.starts_with("wait-healthy:")),
+        "nothing should wait on the task container's health: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|e| e.starts_with("exec:")),
+        "the task container's setup commands should not run: {events:?}"
+    );
+    assert!(
+        events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+        "the task's own container should still be removed: {events:?}"
+    );
+    let posted = sink.events();
+    assert!(
+        !posted
+            .iter()
+            .any(|e| matches!(e, TaskEvent::ContainerBecameHealthy { .. })),
+        "no health event should post for the task container: {posted:?}"
+    );
+    assert!(
+        posted.iter().any(
+            |e| matches!(e, TaskEvent::TaskContainerCreated { container } if container == "app")
+        ),
+        "the task container's creation should still be announced: {posted:?}"
+    );
+}
+
+#[tokio::test]
+async fn native_task_container_that_would_be_unhealthy_still_succeeds() {
+    let docker = FakeContainerRuntime::default().with_unhealthy_container("app");
+    let engine = engine(config_with_a_gated_task_container(), docker)
+        .with_settings(native_settings())
+        .unwrap();
+
+    engine.run_task("start", &[]).await.unwrap();
+}
+
+#[tokio::test]
+async fn native_task_container_whose_setup_command_would_fail_still_succeeds() {
+    let docker = FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh");
+    let engine = engine(config_with_a_gated_task_container(), docker)
+        .with_settings(native_settings())
+        .unwrap();
+
+    engine.run_task("start", &[]).await.unwrap();
+}
+
+#[tokio::test]
+async fn native_task_container_exiting_nonzero_still_fails_the_task() {
+    let docker = FakeContainerRuntime::default().failing_run();
+    let engine = engine(config_with_a_gated_task_container(), docker)
+        .with_settings(native_settings())
+        .unwrap();
+
+    let err = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert_eq!(
+        err.downcast_ref::<crate::docker::ContainerExitedNonZero>()
+            .map(|exited| exited.exit_code),
+        Some(1),
+        "the main command's own exit code should be the task's: {err:#}"
+    );
+}
+
+/// The dialect only decides the *task's own* container's gate: a
+/// dependency's is what everything after it waits on, so its failure fails
+/// the task in both dialects.
+#[tokio::test]
+async fn a_dependencys_readiness_failure_fails_the_task_in_either_dialect() {
+    for dialect in [Dialect::BatectCompatible, Dialect::Native] {
+        let settings = || TaskEngineSettings {
+            dialect,
+            ..Default::default()
+        };
+
+        let unhealthy = FakeContainerRuntime::default().with_unhealthy_container("database");
+        let unhealthy_engine = engine(config_with_database_dependency(|_| {}), unhealthy)
+            .with_settings(settings())
+            .unwrap();
+        assert!(
+            unhealthy_engine.run_task("start", &[]).await.is_err(),
+            "{dialect:?}: an unhealthy dependency should fail the task"
+        );
+
+        let failing_setup =
+            FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh");
+        let config = config_with_database_dependency(|database| {
+            database.setup_commands = Some(vec![crate::config::SetupCommand {
+                command: "./migrate.sh".to_string(),
+                working_directory: None,
+                run_in: None,
+            }]);
+        });
+        let failing_setup_engine = engine(config, failing_setup)
+            .with_settings(settings())
+            .unwrap();
+        assert!(
+            failing_setup_engine.run_task("start", &[]).await.is_err(),
+            "{dialect:?}: a dependency's failing setup command should fail the task"
+        );
+    }
+}
+
 #[tokio::test]
 async fn task_fails_when_container_exits_nonzero_but_dependencies_are_still_cleaned_up() {
     let mut containers = HashMap::new();
@@ -6545,6 +6692,7 @@ fn with_settings_applies_every_setting() {
             PathBuf::from("/projects/demo"),
         )),
         ratect_version: Some("1.2.3".to_string()),
+        dialect: Dialect::Native,
     };
     let engine = engine(config, FakeContainerRuntime::default())
         .with_settings(settings)
@@ -6572,6 +6720,7 @@ fn with_settings_applies_every_setting() {
     let cache = engine.cache_options.expect("cache options should be set");
     assert_eq!(cache.cache_type, crate::cache::CacheType::Directory);
     assert_eq!(cache.project_directory, PathBuf::from("/projects/demo"));
+    assert!(!engine.task_container_readiness_gate);
 }
 
 /// The default is "no flags given at all", so an engine built from it
@@ -6601,6 +6750,7 @@ fn default_settings_leave_an_engine_in_its_no_flags_state() {
     assert!(engine.max_parallelism.is_none());
     assert!(engine.cache_options.is_none());
     assert!(engine.ratect_version.is_none());
+    assert!(engine.task_container_readiness_gate);
 }
 
 /// The one setting that can fail — `with_settings` returns a `Result`

@@ -53,6 +53,13 @@ backwards.
 **File syntax** — whether a file is parsed as TOML or YAML. A property of a
 file, independent of its project's dialect.
 
+## Readiness
+
+**Readiness gate** — what a container must pass before anything that depends
+on it starts: its health check, then its setup commands (or, for a
+run-to-completion container, exiting 0). A task's own container has none
+under the native dialect.
+
 ## Identity
 
 **Host identity** — the uid and gid of the user running Ratect on the host.

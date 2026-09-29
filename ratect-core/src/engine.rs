@@ -30,14 +30,18 @@
 //! runs `prerequisites` first, then returns early (no error) if the task itself has
 //! no `run` (0.14.0) — everything after can assume `run` is present. `customise`
 //! threads through `start_dependency`'s own recursion unconditionally, so it
-//! reaches its target regardless of depth in the dependency graph. The task's own
-//! container goes through the same readiness gate a dependency always has too
-//! (0.21.0, `run_task_container_readiness`) — health-check wait, then
-//! `setup_commands`, in order — but run *concurrently* with
+//! reaches its target regardless of depth in the dependency graph. Under the
+//! Batect-compatible dialect the task's own container goes through the same
+//! readiness gate a dependency always has too (`run_task_container_readiness`) —
+//! health-check wait, then `setup_commands`, in order — but run *concurrently* with
 //! `ContainerRuntime::run_container`'s own attach-and-wait-for-exit via
 //! `tokio::join!` (the engine's first concurrent-exec path), rather than gating
 //! anything on it, since nothing else in the graph depends on the task container's
-//! own readiness. `run_container` takes two `oneshot::Sender`s for this:
+//! own readiness. Under the native dialect it has no gate at all — running it
+//! *is* the task (decisions/0012) — which `task_container_readiness_gate`, derived
+//! once from the project's dialect, is the only switch for; its creation is still
+//! recorded and announced either way. `run_container` takes two
+//! `oneshot::Sender`s for this:
 //! `created` (the container's id, sent the moment `create_container` returns —
 //! *before* it's started, matching Batect's own `containersCreated` set, which is
 //! what its `CleanupStagePlanner` plans removals from) and `started` (a bare `()`,
@@ -52,8 +56,9 @@
 //! produced a distinct bug in each of three consecutive review rounds. Don't
 //! reintroduce a removal here. See [task
 //! lifecycle](https://github.com/or1can/ratect/blob/main/docs/task-lifecycle.md#known-limitations) for
-//! the one race this still shares with Batect (a near-instant main command with no
-//! `health_check` can still race past a `setup_commands` entry's own `docker exec`)
+//! the one race the Batect-compatible gate still shares with Batect (a
+//! near-instant main command with no `health_check` can still race past a
+//! `setup_commands` entry's own `docker exec`)
 //! and the one deliberate divergence (the main command is never cancelled early
 //! just because the readiness gate fails first, unlike Batect's own coroutine
 //! cancellation).
@@ -486,6 +491,13 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// non-interrupt branch, same as the `None` arm they replace. That was
     /// every unit test before this, and every run before 0.25.0.
     interrupt: Arc<crate::interrupt::Interrupt>,
+    /// Whether the task's own container runs its readiness gate
+    /// (`run_task_container_readiness`) alongside its main command. Derived
+    /// once, in `with_settings`, from the project's
+    /// [`crate::config::Dialect`]: `true` for Batect-compatible (the
+    /// default), `false` for native, where running the container *is* the
+    /// task — see decisions/0012.
+    task_container_readiness_gate: bool,
     /// `false` when `--no-cleanup`/`--no-cleanup-after-success` was given:
     /// the task's own container (regardless of exit code — see
     /// `docker::ContainerRuntime::run_container`'s own doc comment for why
@@ -603,6 +615,8 @@ pub struct TaskEngineSettings {
     /// own, since the core's version isn't what a user sees from
     /// `--version`.
     pub ratect_version: Option<String>,
+    /// The project's dialect — [`crate::config::LoadedProject::dialect`].
+    pub dialect: crate::config::Dialect,
 }
 
 impl Default for TaskEngineSettings {
@@ -619,7 +633,17 @@ impl Default for TaskEngineSettings {
             max_parallelism: None,
             cache: None,
             ratect_version: None,
+            dialect: crate::config::Dialect::default(),
         }
+    }
+}
+
+/// Whether a project of this dialect runs its task container's readiness
+/// gate — see `TaskEngine::task_container_readiness_gate`.
+fn task_container_readiness_gate(dialect: crate::config::Dialect) -> bool {
+    match dialect {
+        crate::config::Dialect::BatectCompatible => true,
+        crate::config::Dialect::Native => false,
     }
 }
 
@@ -662,6 +686,9 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             ratect_version: None,
             cache_key: OnceCell::new(),
             interrupt,
+            task_container_readiness_gate: task_container_readiness_gate(
+                crate::config::Dialect::default(),
+            ),
         }
     }
 
@@ -694,6 +721,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             max_parallelism,
             cache,
             ratect_version,
+            dialect,
         } = settings;
         // Validated up front — matching Batect's own eager validation and
         // error wording exactly — rather than only failing the first time
@@ -725,6 +753,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 },
             );
         self.ratect_version = ratect_version;
+        self.task_container_readiness_gate = task_container_readiness_gate(dialect);
         Ok(self)
     }
 
@@ -966,7 +995,9 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         }
     }
 
-    /// The task's own container's readiness gate: waits for it to report
+    /// The task's own container's readiness gate, run only under the
+    /// Batect-compatible dialect (see `task_container_readiness_gate`;
+    /// the native dialect has none — decisions/0012): waits for it to report
     /// healthy, then runs its `setup_commands` in order — the same two
     /// gates `ensure_container_ready` applies to a dependency, ported here
     /// almost unchanged (this doesn't share that code directly since a
@@ -1773,10 +1804,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             let proxy = self.proxy_environment(&no_proxy_entries);
             let term_var = self.term_environment_variable(interactive);
             let user_mapping = self.resolve_user_mapping(container_config).await?;
-            // The task's own container goes through the same readiness
-            // gate as any dependency (health-check wait, then
-            // `setup_commands`, in order) — matching Batect, which runs
-            // every container through identical per-container steps. Unlike
+            // Under the Batect-compatible dialect, the task's own container
+            // goes through the same readiness gate as any dependency
+            // (health-check wait, then `setup_commands`, in order) —
+            // matching Batect, which runs every container through identical
+            // per-container steps; under the native dialect it has none
+            // (`task_container_readiness_gate`). Unlike
             // a dependency, nothing else in the graph depends on the task
             // container's own readiness, so this runs *concurrently* with
             // its main command instead of gating anything — see
@@ -1819,10 +1852,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 .docker
                 .run_container(&spec, Some(created_tx), Some(started_tx));
             // Two jobs, in order: take ownership of the container as soon as
-            // it exists, then gate on its readiness once it's actually
-            // running. `tokio::join!` below is what drives this concurrently
-            // with `run_future` — without something polling it, neither
-            // channel would ever resolve.
+            // it exists, then — Batect-compatible dialect only — gate on its
+            // readiness once it's actually running. `tokio::join!` below is
+            // what drives this concurrently with `run_future` — without
+            // something polling it, neither channel would ever resolve.
             let readiness_future = async {
                 // A dropped sender means `run_container` failed before
                 // getting this far; its own error is the report, and there
@@ -1841,6 +1874,9 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 self.event_sink.post(TaskEvent::TaskContainerCreated {
                     container: run.container.clone(),
                 });
+                if !self.task_container_readiness_gate {
+                    return Ok(());
+                }
                 if started_rx.await.is_err() {
                     return Ok(());
                 }
