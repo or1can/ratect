@@ -1,11 +1,10 @@
 # 0011 — Container identity: state the intent, add to the image
 
 **Status:** Accepted — planned (ratect 0.12.0). Scope is tracked in the
-[ratect 0.12.0 milestone](https://github.com/or1can/ratect/milestone/12)
-([#227](https://github.com/or1can/ratect/issues/227),
-[#107](https://github.com/or1can/ratect/issues/107),
-[#225](https://github.com/or1can/ratect/issues/225),
-[#226](https://github.com/or1can/ratect/issues/226)). This decision covers
+[ratect 0.12.0 milestone](https://github.com/or1can/ratect/milestone/12),
+as the spec [#233](https://github.com/or1can/ratect/issues/233) and its
+sub-issues; the design round was
+[#227](https://github.com/or1can/ratect/issues/227). This decision covers
 `ratect` (native) only: `ratect-compat` keeps Batect's `run_as_current_user`
 behaviour byte-for-byte, whatever this record says — being a drop-in
 replacement is its compatibility contract.
