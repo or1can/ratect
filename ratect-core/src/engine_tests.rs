@@ -134,12 +134,23 @@ struct FakeContainerRuntime {
     /// What `container_output` returns per container id — an external
     /// health check's companion diagnoses its own failure there.
     container_outputs: Arc<Mutex<HashMap<String, String>>>,
-    /// When set, every `stop_and_remove_container` records an interrupt
-    /// *before* doing its own work — the only way to land one in the
-    /// middle of cleanup deterministically, since cleanup against this
-    /// fake is otherwise instant. See
-    /// `an_interrupt_during_cleanup_abandons_it_even_when_the_run_was_not_interrupted`.
-    interrupt_on_stop: Arc<Mutex<Option<Arc<crate::interrupt::Interrupt>>>>,
+    /// When set, each removal (`stop_and_remove_container` or
+    /// `remove_container_forcibly`, in the order the engine makes them)
+    /// records the next queued signal on the tracker *before* doing its own
+    /// work — the only way to land one in the middle of cleanup
+    /// deterministically, since cleanup against this fake is otherwise
+    /// instant. A queue rather than one signal so a test can choose exactly
+    /// which removal each rung of the cleanup ladder lands on. See
+    /// `a_signal_during_cleanup_escalates_it_even_when_the_run_was_not_interrupted`.
+    #[allow(clippy::type_complexity)]
+    signals_on_removal: Arc<
+        Mutex<
+            Option<(
+                Arc<crate::interrupt::Interrupt>,
+                std::collections::VecDeque<crate::interrupt::TerminationSignal>,
+            )>,
+        >,
+    >,
 }
 
 impl Default for FakeContainerRuntime {
@@ -167,7 +178,7 @@ impl Default for FakeContainerRuntime {
             run_delays: Default::default(),
             dependency_exits: Default::default(),
             container_outputs: Default::default(),
-            interrupt_on_stop: Default::default(),
+            signals_on_removal: Default::default(),
         }
     }
 }
@@ -289,10 +300,36 @@ impl FakeContainerRuntime {
         self
     }
 
-    /// See the `interrupt_on_stop` field.
-    fn interrupting_on_stop(self, interrupt: &Arc<crate::interrupt::Interrupt>) -> Self {
-        *self.interrupt_on_stop.lock().unwrap() = Some(Arc::clone(interrupt));
+    /// See the `signals_on_removal` field.
+    fn signalling_on_removal(
+        self,
+        interrupt: &Arc<crate::interrupt::Interrupt>,
+        signals: &[crate::interrupt::TerminationSignal],
+    ) -> Self {
+        *self.signals_on_removal.lock().unwrap() =
+            Some((Arc::clone(interrupt), signals.iter().copied().collect()));
         self
+    }
+
+    /// Records the next queued signal, if any, and yields so the removal
+    /// that called this is genuinely *in flight* when the engine's race
+    /// next polls — a real removal waits on the daemon (up to Docker's whole
+    /// kill timeout for a container ignoring `SIGTERM`), which is the case
+    /// the race exists for. Returning `Ready` immediately would instead test
+    /// the one situation that can't happen.
+    async fn signal_from_removal(&self) {
+        let recorded = {
+            let mut queued = self.signals_on_removal.lock().unwrap();
+            match queued.as_mut() {
+                Some((interrupt, signals)) => signals.pop_front().map(|signal| {
+                    interrupt.record_signal(signal);
+                }),
+                None => None,
+            }
+        };
+        if recorded.is_some() {
+            tokio::task::yield_now().await;
+        }
     }
 
     /// Makes `pull_image` for `image` artificially `tokio::time::sleep`
@@ -811,6 +848,17 @@ impl ContainerRuntime for FakeContainerRuntime {
         }
         Ok(())
     }
+
+    async fn remove_container_forcibly(&self, container_id: &str) -> Result<()> {
+        self.signal_from_removal().await;
+        // Always in flight for at least one poll, signal or not: the engine
+        // issues forced removals together, and a real one is a daemon
+        // round-trip, so a signal landing on one of them finds the others
+        // pending too — and dropped with it — rather than already done.
+        tokio::task::yield_now().await;
+        self.push(format!("force-remove:{container_id}"));
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -847,17 +895,7 @@ impl ResourceInventory for FakeContainerRuntime {
             container_id.to_string(),
             (stop_signal.map(str::to_string), stop_grace_period),
         );
-        let interrupt = self.interrupt_on_stop.lock().unwrap().clone();
-        if let Some(interrupt) = interrupt {
-            interrupt.record();
-            // Yields so this removal is genuinely *in flight* when the
-            // engine's race next polls — a real `stop_and_remove` waits
-            // on the daemon (up to Docker's whole kill timeout for a
-            // container ignoring `SIGTERM`), which is the case the race
-            // exists for. Returning `Ready` immediately would instead
-            // test the one situation that can't happen.
-            tokio::task::yield_now().await;
-        }
+        self.signal_from_removal().await;
         self.push(format!("sidecar-stop:{container_id}"));
         Ok(())
     }
@@ -4229,17 +4267,25 @@ async fn an_interrupt_removes_the_tasks_own_container_too() {
 
 /// Arming the handler replaces the process's default behaviour for every
 /// trapped signal for the whole run, so a signal Ratect doesn't act on is
-/// one it has silently swallowed. The abandonment rule is therefore relative to the
-/// interrupts already seen when cleanup started — otherwise the first
+/// one it has silently swallowed. The cleanup ladder is therefore relative
+/// to the signals already seen when cleanup started — otherwise the first
 /// Ctrl+C during the cleanup of a run that finished normally would do
 /// nothing at all, which is the common case rather than an exotic one.
+///
+/// What that first signal does is *escalate*: the graceful stop in flight
+/// is dropped and everything left is force-removed instead, so nothing is
+/// left behind — and the run now reports the signal, since the process was
+/// told to stop and its exit code has to say so (ratect#249).
 #[tokio::test]
-async fn an_interrupt_during_cleanup_abandons_it_even_when_the_run_was_not_interrupted() {
+async fn a_signal_during_cleanup_escalates_it_even_when_the_run_was_not_interrupted() {
     let config = config_with_database_dependency(|_| {});
     let interrupt = crate::interrupt::Interrupt::new();
     // Fires as cleanup removes its first container, so the run itself
     // completes entirely uninterrupted.
-    let docker = FakeContainerRuntime::default().interrupting_on_stop(&interrupt);
+    let docker = FakeContainerRuntime::default().signalling_on_removal(
+        &interrupt,
+        &[crate::interrupt::TerminationSignal::Terminate],
+    );
     let engine = TaskEngine::new(
         config,
         docker.clone(),
@@ -4247,41 +4293,116 @@ async fn an_interrupt_during_cleanup_abandons_it_even_when_the_run_was_not_inter
         Arc::clone(&interrupt),
     );
 
-    engine
-        .run_task("start", &[])
-        .await
-        .expect("the run itself was never interrupted, so it should succeed");
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+    let interrupted = error
+        .downcast_ref::<crate::interrupt::TaskInterrupted>()
+        .expect("a signal during cleanup ends the run as interrupted");
+    assert_eq!(
+        interrupted.signal,
+        crate::interrupt::TerminationSignal::Terminate,
+        "the failure names the signal that actually arrived"
+    );
 
     assert_eq!(
         interrupt.count(),
         1,
-        "exactly one interrupt, landing during cleanup"
+        "exactly one signal, landing during cleanup"
     );
     let events = docker.events();
     assert!(
-        !events.iter().any(|e| e.starts_with("network-remove:")),
-        "a single Ctrl+C during an uninterrupted run's cleanup should stop it, \
-             leaving the network in place: {events:?}"
+        !events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+        "the graceful stop in flight when the signal landed is dropped: {events:?}"
+    );
+    assert!(
+        events.contains(&"force-remove:sidecar-id-app".to_string()),
+        "and replaced by a forced removal of the same container: {events:?}"
+    );
+    assert!(
+        events.contains(&"force-remove:sidecar-id-database".to_string()),
+        "everything after it is force-removed too: {events:?}"
+    );
+    assert!(
+        events.iter().any(|e| e.starts_with("network-remove:")),
+        "and the network still goes: {events:?}"
     );
 }
 
-/// A second Ctrl+C means "stop now", including stopping the cleanup the
-/// first one started — cleanup talks to the daemon and can take tens of
-/// seconds when a container ignores `SIGTERM`.
+/// A second signal during cleanup means "faster", not "leave it": a
+/// supervisor escalating `SIGINT` → `SIGTERM` on a fixed timer (Claude
+/// Code's MCP shutdown sends them 100 ms apart, then `SIGKILL` 400 ms
+/// later) never meant to abandon anything, and a person's second Ctrl+C
+/// wants the process gone, which force-removal delivers in a few daemon
+/// round-trips rather than a container's full kill timeout (ratect#249).
 ///
-/// The second interrupt has to land *during* cleanup, not merely be the
-/// second one overall: two presses that both arrive while the run is
-/// still going are one decision ("stop"), and Batect draws the line in
-/// the same place — only an interrupt reaching its cleanup stage switches
-/// it to `PostTaskManualCleanup.Required`.
+/// The signal has to land *during* cleanup, not merely be the second one
+/// overall: two that both arrive while the run is still going are one
+/// decision ("stop").
 #[tokio::test]
-async fn a_second_interrupt_during_cleanup_abandons_it() {
+async fn a_second_signal_during_cleanup_force_removes_what_is_left() {
     let config = config_with_database_dependency(|_| {});
     let interrupt = crate::interrupt::Interrupt::new();
     interrupt.record();
     let docker = FakeContainerRuntime::default()
         .with_run_delay("app", std::time::Duration::from_secs(60))
-        .interrupting_on_stop(&interrupt);
+        .signalling_on_removal(
+            &interrupt,
+            &[crate::interrupt::TerminationSignal::Terminate],
+        );
+    let engine = TaskEngine::new(
+        config,
+        docker.clone(),
+        Arc::new(NullEventSink),
+        Arc::clone(&interrupt),
+    );
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+    let interrupted = error
+        .downcast_ref::<crate::interrupt::TaskInterrupted>()
+        .expect("an interrupted run fails as TaskInterrupted");
+    assert_eq!(
+        interrupted.signal,
+        crate::interrupt::TerminationSignal::Interrupt,
+        "the exit code stays with the signal that ended the run, not the one that \
+         hurried its cleanup"
+    );
+
+    let events = docker.events();
+    // The task's own container is removed first, and it's that removal
+    // which lands the second signal — mid-flight, so it's the one that
+    // gets dropped and force-removed instead.
+    assert!(
+        !events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+        "the removal in flight when the signal landed should be dropped, \
+             not run to completion: {events:?}"
+    );
+    assert!(
+        events.contains(&"force-remove:sidecar-id-app".to_string()),
+        "and force-removed instead: {events:?}"
+    );
+    assert!(
+        !events.contains(&"sidecar-stop:sidecar-id-database".to_string())
+            && events.contains(&"force-remove:sidecar-id-database".to_string()),
+        "the dependency skips the graceful stop entirely: {events:?}"
+    );
+    assert!(
+        events.iter().any(|e| e.starts_with("network-remove:")),
+        "and the network is still removed: {events:?}"
+    );
+}
+
+/// The same for a person's second Ctrl+C — the kind of signal doesn't
+/// decide the rung, the count does.
+#[tokio::test]
+async fn a_second_interrupt_during_cleanup_force_removes_what_is_left() {
+    let config = config_with_database_dependency(|_| {});
+    let interrupt = crate::interrupt::Interrupt::new();
+    interrupt.record();
+    let docker = FakeContainerRuntime::default()
+        .with_run_delay("app", std::time::Duration::from_secs(60))
+        .signalling_on_removal(
+            &interrupt,
+            &[crate::interrupt::TerminationSignal::Interrupt],
+        );
     let engine = TaskEngine::new(
         config,
         docker.clone(),
@@ -4293,21 +4414,141 @@ async fn a_second_interrupt_during_cleanup_abandons_it() {
     assert!(error.is::<crate::interrupt::TaskInterrupted>());
 
     let events = docker.events();
-    // The task's own container is removed first, and it's that removal
-    // which lands the second interrupt — mid-flight, so it's the one that
-    // gets dropped, and nothing after it starts.
     assert!(
-        !events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
-        "the removal in flight when the interrupt landed should be dropped, \
-             not run to completion: {events:?}"
+        events.contains(&"force-remove:sidecar-id-app".to_string())
+            && events.contains(&"force-remove:sidecar-id-database".to_string())
+            && events.iter().any(|e| e.starts_with("network-remove:")),
+        "a double Ctrl+C leaves nothing behind: {events:?}"
     );
+}
+
+/// A `SIGINT` after escalation is the escape hatch: forced removal still
+/// talks to the daemon, and a daemon that has stopped answering would
+/// otherwise hold the process until something untrappable ends it. So the
+/// rung after "faster" is "stop", exactly as the second used to be — for
+/// the one signal only a person sends twice.
+#[tokio::test]
+async fn a_third_interrupt_during_cleanup_abandons_it() {
+    let config = config_with_database_dependency(|_| {});
+    let interrupt = crate::interrupt::Interrupt::new();
+    interrupt.record();
+    let docker = FakeContainerRuntime::default()
+        .with_run_delay("app", std::time::Duration::from_secs(60))
+        .signalling_on_removal(
+            &interrupt,
+            &[
+                crate::interrupt::TerminationSignal::Interrupt,
+                crate::interrupt::TerminationSignal::Interrupt,
+            ],
+        );
+    let engine = TaskEngine::new(
+        config,
+        docker.clone(),
+        Arc::new(NullEventSink),
+        Arc::clone(&interrupt),
+    );
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+    assert!(error.is::<crate::interrupt::TaskInterrupted>());
+
+    let events = docker.events();
+    // The graceful stop lands the second signal and is dropped; the forced
+    // removal that replaces it lands the third and is dropped too, and
+    // nothing after it starts.
+    let removals: Vec<&String> = events
+        .iter()
+        .filter(|e| e.starts_with("sidecar-stop:") || e.starts_with("force-remove:"))
+        .collect();
     assert!(
-        !events.contains(&"sidecar-stop:sidecar-id-database".to_string()),
-        "cleanup should stop rather than pressing on to the dependency: {events:?}"
+        removals.is_empty(),
+        "neither removal of the task's own container runs to completion, and cleanup \
+         stops rather than pressing on to the dependency: {events:?}"
     );
     assert!(
         !events.iter().any(|e| e.starts_with("network-remove:")),
-        "and should stop before removing the network: {events:?}"
+        "and stops before removing the network: {events:?}"
+    );
+}
+
+/// The abandon rung is `SIGINT`-only. A supervisor stopping a run whose
+/// task had already finished — so its cleanup was already under way — sends
+/// `SIGINT` then `SIGTERM` 100 ms apart; the first escalates, and the
+/// second must not abandon the forced removals it just started, or the
+/// leak this ladder exists to close is back for exactly that case.
+#[tokio::test]
+async fn a_supervisors_follow_up_signal_after_escalation_does_not_abandon() {
+    let config = config_with_database_dependency(|_| {});
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default().signalling_on_removal(
+        &interrupt,
+        &[
+            crate::interrupt::TerminationSignal::Interrupt,
+            crate::interrupt::TerminationSignal::Terminate,
+        ],
+    );
+    let engine = TaskEngine::new(
+        config,
+        docker.clone(),
+        Arc::new(NullEventSink),
+        Arc::clone(&interrupt),
+    );
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+    let interrupted = error
+        .downcast_ref::<crate::interrupt::TaskInterrupted>()
+        .expect("a signal during cleanup ends the run as interrupted");
+    assert_eq!(
+        interrupted.signal,
+        crate::interrupt::TerminationSignal::Interrupt
+    );
+
+    let events = docker.events();
+    assert!(
+        events.contains(&"force-remove:sidecar-id-app".to_string())
+            && events.contains(&"force-remove:sidecar-id-database".to_string())
+            && events.iter().any(|e| e.starts_with("network-remove:")),
+        "the SIGTERM hurries nothing further and abandons nothing: {events:?}"
+    );
+}
+
+/// Two signals during the cleanup of a run that finished normally: the
+/// first escalates, a `SIGINT` after it abandons — and the run still
+/// reports the first, since that is the one that turned a finished run
+/// into a stopped one.
+#[tokio::test]
+async fn an_interrupt_after_escalation_of_an_uninterrupted_runs_cleanup_abandons_it() {
+    let config = config_with_database_dependency(|_| {});
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default().signalling_on_removal(
+        &interrupt,
+        &[
+            crate::interrupt::TerminationSignal::Hangup,
+            crate::interrupt::TerminationSignal::Interrupt,
+        ],
+    );
+    let engine = TaskEngine::new(
+        config,
+        docker.clone(),
+        Arc::new(NullEventSink),
+        Arc::clone(&interrupt),
+    );
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+    let interrupted = error
+        .downcast_ref::<crate::interrupt::TaskInterrupted>()
+        .expect("a signal during cleanup ends the run as interrupted");
+    assert_eq!(
+        interrupted.signal,
+        crate::interrupt::TerminationSignal::Hangup
+    );
+
+    let events = docker.events();
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.starts_with("force-remove:sidecar-id-database"))
+            && !events.iter().any(|e| e.starts_with("network-remove:")),
+        "the second signal abandons what the first had hurried: {events:?}"
     );
 }
 

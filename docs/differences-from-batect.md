@@ -101,9 +101,17 @@ tables above:
     leaks a container and network.
   - **The exit code names the signal**: 128 + the signal's own number (`130`/`143`/`129`
     for Ctrl+C/`SIGTERM`/`SIGHUP`). Batect returns `-1`/255 for every failure alike.
-  - **A second signal during cleanup stops the cleanup itself**, immediately — Batect
-    instead switches to printing manual cleanup commands. Whatever's left still carries
-    Ratect's ownership labels, so [`ratect resources
+  - **A further signal during cleanup hurries it, then Ctrl+C stops it**: a second
+    signal of any kind switches whatever is left to forced removal (kill and remove, no
+    grace period), and a `SIGINT` after that abandons cleanup. Batect instead lets
+    cleanup finish and then prints manual cleanup commands. Only `SIGINT` abandons
+    because a keyboard is the one thing that sends it twice — a supervisor's timed
+    follow-up is a `SIGTERM`, which only ever means "exit" — so a supervisor that
+    escalates `SIGINT` → `SIGTERM` → `SIGKILL` on a timer usually gets a finished
+    cleanup before the `SIGKILL`, though a slow daemon can still lose that race. A run
+    that finished normally but was signalled during its cleanup exits
+    128 + that signal's number, as a run the signal ended does. Whatever an abandoned
+    cleanup leaves still carries Ratect's ownership labels, so [`ratect resources
     list`/`clean`](ratect-cli.md#managing-resources) finds it (`ratect`-only;
     `ratect-compat` has no equivalent verb, so from it the sweep is `docker` itself,
     filtering the same labels).

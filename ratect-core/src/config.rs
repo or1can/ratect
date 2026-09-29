@@ -433,9 +433,9 @@ pub struct Container {
     /// `stop_grace_period` field name. `None` leaves Docker's own default
     /// timeout alone, unchanged from today's behavior — this is purely
     /// additive, not a change to what an unconfigured container does. A
-    /// second interrupt during cleanup still abandons cleanup immediately
-    /// regardless of this value (`TaskEngine::until_interrupted` races the
-    /// removal itself, not this timeout). Durations use Batect's Go-style
+    /// further termination signal during cleanup never waits on this value:
+    /// it force-removes the container instead (`TaskEngine::until_interrupted`
+    /// races the graceful removal itself, not this timeout). Durations use Batect's Go-style
     /// string format: `"2s"`, `"1m30s"`, `"500ms"`, `"0"` — rounded *up* to
     /// whole seconds, which is the granularity Docker's own stop timeout
     /// has. `ratect`-native only, like `stop_signal` above.

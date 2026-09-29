@@ -1542,6 +1542,19 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
         created: Option<tokio::sync::oneshot::Sender<String>>,
         started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<()>;
+
+    /// Kills and removes `container_id` in one daemon call, waiting on no
+    /// grace period — Docker's own `rm -f`, the same request
+    /// [`stop_and_remove_container`](ResourceInventory::stop_and_remove_container)
+    /// ends with once its graceful stop has returned. This is the engine's
+    /// *escalated* cleanup (ratect#249): a further termination signal during
+    /// cleanup means "faster", not "leave it", and a supervisor escalating
+    /// `SIGINT` → `SIGTERM` → `SIGKILL` on a fixed timer leaves well under a
+    /// second for the whole of cleanup, which a container ignoring its stop
+    /// signal never fits in gracefully. Safe on a container whose graceful
+    /// stop was cancelled mid-flight — force removal doesn't care what state
+    /// the container is in, or whether the daemon finished that stop anyway.
+    async fn remove_container_forcibly(&self, container_id: &str) -> Result<()>;
 }
 
 /// Container ID -> the background log-follower task
@@ -1571,15 +1584,39 @@ impl LogFollowers {
     /// follower — every non-interleaved run, and the task's own container
     /// (which streams via `start_and_stream_logs` directly, never through a
     /// spawned follower).
+    ///
+    /// Cancelled mid-wait (a graceful removal dropped on the engine's
+    /// escalation rung), the handle goes back into the map rather than
+    /// being dropped: the follower is still running, and the forced removal
+    /// that follows has to be able to wait on it too, or its
+    /// `ContainerRemoved` could be posted with output still flushing.
     async fn await_and_remove(&self, container_id: &str) {
         let follower = self.handles.lock().unwrap().remove(container_id);
         if let Some(follower) = follower {
+            struct Reinsert<'a> {
+                followers: &'a LogFollowers,
+                container_id: &'a str,
+                handle: Option<tokio::task::JoinHandle<()>>,
+            }
+            impl Drop for Reinsert<'_> {
+                fn drop(&mut self) {
+                    if let Some(handle) = self.handle.take() {
+                        self.followers.insert(self.container_id.to_string(), handle);
+                    }
+                }
+            }
+            let mut guard = Reinsert {
+                followers: self,
+                container_id,
+                handle: Some(follower),
+            };
             // A `JoinError` here only means the follower task itself
             // panicked — already-posted events aren't affected, and
             // there's nothing this caller could do about it beyond not
             // hanging, so it's discarded rather than turned into a
             // container-removal failure.
-            let _ = follower.await;
+            let _ = guard.handle.as_mut().expect("set above").await;
+            guard.handle = None;
         }
     }
 }
@@ -2891,6 +2928,38 @@ impl ContainerRuntime for DockerClient {
 
         Ok(())
     }
+
+    async fn remove_container_forcibly(&self, container_id: &str) -> Result<()> {
+        match self
+            .docker
+            .remove_container(container_id, Some(remove_container_options()))
+            .await
+        {
+            Ok(()) => tracing::debug!(container_id, "removed container"),
+            // Already gone (404), or the daemon is already removing it
+            // (409): a graceful stop dropped mid-flight on the escalation
+            // rung may have got that far server-side. Either is the outcome
+            // asked for, not a failure to report.
+            Err(bollard::errors::Error::DockerResponseServerError { status_code, .. })
+                if status_code == 404 || status_code == 409 =>
+            {
+                tracing::debug!(container_id, status_code, "container already removed");
+            }
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("Failed to remove container '{}'", container_id));
+            }
+        }
+
+        // The caller (`engine.rs`) posts `TaskEvent::ContainerRemoved`
+        // right after this returns — interleaved output must never arrive
+        // after that event, so wait for any background log follower to
+        // actually finish flushing first. See `LogFollowers`' own doc
+        // comment.
+        self.log_followers.await_and_remove(container_id).await;
+
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -2989,20 +3058,10 @@ impl ResourceInventory for DockerClient {
             .stop_container(container_id, stop_options)
             .await
             .with_context(|| format!("Failed to stop container '{}'", container_id))?;
-        self.docker
-            .remove_container(container_id, Some(remove_container_options()))
-            .await
-            .with_context(|| format!("Failed to remove container '{}'", container_id))?;
-        tracing::debug!(container_id, "stopped and removed container");
-
-        // The caller (`engine.rs`) posts `TaskEvent::ContainerRemoved`
-        // right after this returns — interleaved output must never arrive
-        // after that event, so wait for any background log follower to
-        // actually finish flushing first. See `LogFollowers`' own doc
-        // comment.
-        self.log_followers.await_and_remove(container_id).await;
-
-        Ok(())
+        // The removal itself is the forced one: the container has just been
+        // stopped, and `force` only means an exit that raced the stop is not
+        // an error (see `remove_container_options`).
+        self.remove_container_forcibly(container_id).await
     }
 }
 

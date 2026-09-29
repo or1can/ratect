@@ -409,7 +409,8 @@ code, a run ended by a signal exits 128 + that signal's number (`130` for Ctrl+C
 for `SIGTERM`, `129` for `SIGHUP`), anything else that fails exits `1`, and the reason
 always reaches stderr — in every output style, including `quiet`. Any of those three
 signals abandons the run and then cleans up after it; a second one *during* that cleanup
-stops the cleanup too, and `ratect resources list` finds whatever that leaves. `RUST_LOG` controls Ratect's own internal
+force-removes whatever is left, a Ctrl+C after that stops the cleanup, and `ratect
+resources list` finds whatever that leaves. `RUST_LOG` controls Ratect's own internal
 logging (default `info`, on stderr — see [Filtering
 `RUST_LOG`](troubleshooting.md#filtering-rust_log)). Unlike `ratect-compat` there's no `--log-file`;
 redirect stderr if you want one. A crash (a genuine bug) exits `101` and prints where to

@@ -60,16 +60,23 @@
 //! # Counting rather than latching
 //!
 //! A single flag would be enough to abandon a run, but not to answer the
-//! second question an interrupted user asks, which is "stop *now*". Cleanup
+//! next question a signalled process is asked, which is "and now?". Cleanup
 //! talks to the daemon and can itself be slow (a container ignoring
-//! `SIGTERM` waits out Docker's ten-second kill timeout), so a second Ctrl+C
-//! during cleanup has to mean something. Batect answers this too, if
-//! indirectly: its signal handler stays registered for the whole run, so a
-//! second interrupt posts a second failure event, and
-//! `TaskStateMachine.handleTaskFailedEvent` sees it is already in the
-//! cleanup stage and switches to `PostTaskManualCleanup.Required`, printing
-//! the commands to remove things by hand. Counting is what lets the engine
-//! distinguish the two.
+//! `SIGTERM` waits out Docker's ten-second kill timeout), so a further
+//! signal during cleanup has to mean something. The engine reads it as a
+//! ladder — one more, of any kind, force-removes what is left; a `SIGINT`
+//! after that abandons cleanup (ratect#249) — and counting is what lets it
+//! tell the rungs apart. `SIGINT` is counted on its own as well
+//! ([`Interrupt::interrupt_count`]) because the abandon rung is the one
+//! place the kind matters: a keyboard is the only thing that sends `SIGINT`
+//! twice, whereas a supervisor's timed follow-up is a `SIGTERM` and never
+//! means "leave it". Batect
+//! counts nothing: its handler stays registered for the whole run, so a
+//! second `SIGINT` posts a second failure event, and
+//! `TaskStateMachine.handleTaskFailedEvent`, seeing it is already in the
+//! cleanup stage, lets cleanup finish and then prints the commands to remove
+//! things by hand (`PostTaskManualCleanup.Required`). The ladder is
+//! Ratect's own.
 //!
 //! The engine's rule is *relative*: it compares against the count when
 //! cleanup started, not a fixed `>= 2`. Arming the handler replaces the
@@ -180,8 +187,8 @@ impl TerminationSignal {
         }
     }
 
-    /// How to ask a second time — the press or signal that abandons the
-    /// cleanup as well as the run.
+    /// How to ask a second time — the press or signal that climbs the
+    /// cleanup ladder's next rung, whichever rung the message is about.
     pub fn send_again(self) -> &'static str {
         match self {
             Self::Interrupt => "Press Ctrl+C again",
@@ -252,6 +259,9 @@ impl std::error::Error for TaskInterrupted {}
 #[derive(Debug, Default)]
 pub struct Interrupt {
     count: AtomicUsize,
+    /// How many of `count` were `SIGINT` — see the module doc on why the
+    /// abandon rung counts that signal alone.
+    interrupts: AtomicUsize,
     /// The most recent signal's [`TerminationSignal::number`], read back
     /// through [`TerminationSignal::from_number`]. Zero — which is what
     /// [`Default`] gives and what a run that was never signalled keeps — is
@@ -359,6 +369,9 @@ impl Interrupt {
     pub fn record_signal(&self, signal: TerminationSignal) {
         self.last_signal
             .store(signal.number() as usize, Ordering::SeqCst);
+        if signal == TerminationSignal::Interrupt {
+            self.interrupts.fetch_add(1, Ordering::SeqCst);
+        }
         self.count.fetch_add(1, Ordering::SeqCst);
         self.notify.notify_waiters();
     }
@@ -370,9 +383,14 @@ impl Interrupt {
         TerminationSignal::from_number(self.last_signal.load(Ordering::SeqCst))
     }
 
-    /// How many interrupts have been recorded so far.
+    /// How many termination signals, of any kind, have been recorded so far.
     pub fn count(&self) -> usize {
         self.count.load(Ordering::SeqCst)
+    }
+
+    /// How many of those were `SIGINT` — never more than [`Interrupt::count`].
+    pub fn interrupt_count(&self) -> usize {
+        self.interrupts.load(Ordering::SeqCst)
     }
 
     /// Whether at least one interrupt has been recorded.
@@ -395,10 +413,20 @@ impl Interrupt {
     /// what stops an interrupt arriving between the two from being missed
     /// and hanging the caller forever.
     pub async fn wait_for(&self, count: usize) {
+        self.wait_until(|| self.count() >= count).await;
+    }
+
+    /// Resolves once at least `count` `SIGINT`s have been recorded, whatever
+    /// else arrived in between — immediately if that many already have.
+    pub async fn wait_for_interrupts(&self, count: usize) {
+        self.wait_until(|| self.interrupt_count() >= count).await;
+    }
+
+    async fn wait_until(&self, reached: impl Fn() -> bool) {
         loop {
             let notified = self.notify.notified();
 
-            if self.count() >= count {
+            if reached() {
                 return;
             }
 
