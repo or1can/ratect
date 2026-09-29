@@ -52,6 +52,24 @@ options only apply to a host connection. Naming one alongside
 `--docker-context` is an error; when step 3 picks the context instead, the TLS
 options are ignored, as in Batect.
 
+A context brings its own TLS settings instead — the ones `docker context create`
+stored for it — used as the Docker CLI uses them:
+
+- The context connects over TLS if it stores a `ca.pem`, a `cert.pem`/`key.pem`
+  pair, or sets `SkipTLSVerify`. Otherwise it connects without TLS.
+- A stored `ca.pem` is the only certificate authority the daemon's certificate is
+  checked against. Without one, the system trust store is used.
+- A stored `cert.pem`/`key.pem` pair is presented as the client certificate. Without
+  one, none is. Storing only one of the two is an error.
+- An encrypted `key.pem`, or one that doesn't match `cert.pem`, is an error naming
+  the context and the file.
+- Only a `tcp://` or `https://` host can be connected to over TLS.
+
+`SkipTLSVerify` is not honoured: the daemon's certificate is always fully verified,
+as with `--docker-tls`. If verification fails for a context that sets it, the error
+says so — see [TLS with a private certificate authority](#tls-with-a-private-certificate-authority)
+for making the certificate verifiable instead.
+
 ## Environment variables
 
 | Variable | Effect |
@@ -123,7 +141,10 @@ Ratect at the result.
    `ratect-compat` takes the same three options, before the task name. Or set
    `--docker-cert-path` to a directory containing `ca.pem` (and
    `cert.pem`/`key.pem`, if the daemon requires client auth) instead of naming each
-   file individually — see [Options](#options).
+   file individually — see [Options](#options). A Docker context created with the
+   same files (`docker context create my-daemon --docker
+   "host=tcp://docker-daemon.example.com:2376,ca=./ca.pem"`) works too, through
+   `--docker-context my-daemon` — see [Which daemon is used](#which-daemon-is-used).
 
 If verification fails, the error names the problem (expired, wrong host, untrusted
 issuer) rather than silently connecting anyway — that's the entire point of not

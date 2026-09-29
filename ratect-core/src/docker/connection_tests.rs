@@ -46,20 +46,46 @@ fn docker_context_id_matches_the_docker_cli_own_hashing() {
 }
 
 fn write_docker_context_meta(config_directory: &Path, context_name: &str, host: &str) {
+    write_docker_context_meta_with_skip(config_directory, context_name, host, false);
+}
+
+/// `write_docker_context_meta`, with the endpoint's `SkipTLSVerify` flag
+/// set as given — the Docker CLI writes the field either way.
+fn write_docker_context_meta_with_skip(
+    config_directory: &Path,
+    context_name: &str,
+    host: &str,
+    skip_tls_verify: bool,
+) {
     let id = docker_context_id(context_name);
     let meta_dir = config_directory.join("contexts").join("meta").join(&id);
     fs::create_dir_all(&meta_dir).unwrap();
     fs::write(
             meta_dir.join("meta.json"),
             format!(
-                r#"{{"Name":"{context_name}","Metadata":{{}},"Endpoints":{{"docker":{{"Host":"{host}","SkipTLSVerify":false}}}}}}"#
+                r#"{{"Name":"{context_name}","Metadata":{{}},"Endpoints":{{"docker":{{"Host":"{host}","SkipTLSVerify":{skip_tls_verify}}}}}}}"#
             ),
         )
         .unwrap();
 }
 
+/// Writes `files` (name, contents) into `context_name`'s TLS directory, the
+/// layout `docker context create --docker ca=…,cert=…,key=…` produces.
+fn write_docker_context_tls_files(
+    config_directory: &Path,
+    context_name: &str,
+    files: &[(&str, &str)],
+) -> PathBuf {
+    let tls_directory = docker_context_tls_directory(config_directory, context_name);
+    fs::create_dir_all(&tls_directory).unwrap();
+    for (name, contents) in files {
+        fs::write(tls_directory.join(name), contents).unwrap();
+    }
+    tls_directory
+}
+
 #[test]
-fn docker_context_host_reads_the_endpoints_docker_host_field() {
+fn docker_context_endpoint_reads_the_endpoints_docker_host_field() {
     let config_directory = unique_temp_dir();
     write_docker_context_meta(
         &config_directory,
@@ -67,19 +93,108 @@ fn docker_context_host_reads_the_endpoints_docker_host_field() {
         "unix:///Users/kevin/.orbstack/run/docker.sock",
     );
 
-    let host = docker_context_host(&config_directory, "orbstack").unwrap();
-    assert_eq!(host, "unix:///Users/kevin/.orbstack/run/docker.sock");
+    let endpoint = docker_context_endpoint(&config_directory, "orbstack").unwrap();
+    assert_eq!(
+        endpoint,
+        ContextEndpoint {
+            host: "unix:///Users/kevin/.orbstack/run/docker.sock".to_string(),
+            tls: None,
+        }
+    );
 }
 
 #[test]
-fn docker_context_host_errors_clearly_when_the_context_does_not_exist() {
+fn docker_context_endpoint_errors_clearly_when_the_context_does_not_exist() {
     let config_directory = unique_temp_dir();
-    let err = docker_context_host(&config_directory, "no-such-context").unwrap_err();
+    let err = docker_context_endpoint(&config_directory, "no-such-context").unwrap_err();
     assert!(
         err.to_string()
             .contains("Docker context 'no-such-context' does not exist"),
         "{err}"
     );
+}
+
+#[test]
+fn docker_context_tls_directory_matches_the_docker_cli_layout() {
+    assert_eq!(
+        docker_context_tls_directory(Path::new("/cfg"), "orbstack"),
+        Path::new("/cfg/contexts/tls")
+            .join("2d89b732b01a00a2d1675ed3cee9fd0f965daadf90603c989dd3afd4569c6896")
+            .join("docker")
+    );
+}
+
+#[test]
+fn docker_context_endpoint_uses_a_stored_ca_certificate_and_key() {
+    let config_directory = unique_temp_dir();
+    write_docker_context_meta(&config_directory, "remote", "tcp://1.2.3.4:2376");
+    let tls_directory = write_docker_context_tls_files(
+        &config_directory,
+        "remote",
+        &[("ca.pem", "ca"), ("cert.pem", "cert"), ("key.pem", "key")],
+    );
+
+    let endpoint = docker_context_endpoint(&config_directory, "remote").unwrap();
+    assert_eq!(
+        endpoint.tls,
+        Some(ContextTls {
+            ca: Some(tls_directory.join("ca.pem")),
+            client: Some(ClientCertificate {
+                cert: tls_directory.join("cert.pem"),
+                key: tls_directory.join("key.pem"),
+            }),
+            skip_verify_requested: false,
+        })
+    );
+}
+
+#[test]
+fn docker_context_endpoint_with_only_a_stored_ca_uses_tls_without_a_client_certificate() {
+    let config_directory = unique_temp_dir();
+    write_docker_context_meta(&config_directory, "remote", "tcp://1.2.3.4:2376");
+    let tls_directory =
+        write_docker_context_tls_files(&config_directory, "remote", &[("ca.pem", "ca")]);
+
+    let endpoint = docker_context_endpoint(&config_directory, "remote").unwrap();
+    assert_eq!(
+        endpoint.tls,
+        Some(ContextTls {
+            ca: Some(tls_directory.join("ca.pem")),
+            client: None,
+            skip_verify_requested: false,
+        })
+    );
+}
+
+#[test]
+fn docker_context_endpoint_with_only_skip_tls_verify_uses_tls_against_the_system_roots() {
+    let config_directory = unique_temp_dir();
+    write_docker_context_meta_with_skip(&config_directory, "remote", "tcp://1.2.3.4:2376", true);
+
+    let endpoint = docker_context_endpoint(&config_directory, "remote").unwrap();
+    assert_eq!(
+        endpoint.tls,
+        Some(ContextTls {
+            ca: None,
+            client: None,
+            skip_verify_requested: true,
+        })
+    );
+}
+
+#[test]
+fn docker_context_endpoint_errors_when_only_half_a_client_key_pair_is_stored() {
+    for (stored, missing) in [("cert.pem", "key.pem"), ("key.pem", "cert.pem")] {
+        let config_directory = unique_temp_dir();
+        write_docker_context_meta(&config_directory, "remote", "tcp://1.2.3.4:2376");
+        write_docker_context_tls_files(&config_directory, "remote", &[(stored, "x")]);
+
+        let err = docker_context_endpoint(&config_directory, "remote").unwrap_err();
+        let message = format!("{err:#}");
+        assert!(message.contains("Docker context 'remote'"), "{message}");
+        assert!(message.contains(stored), "{message}");
+        assert!(message.contains(missing), "{message}");
+    }
 }
 
 #[test]
@@ -392,6 +507,13 @@ struct GeneratedTlsMaterials {
     /// server below (`rustls::ServerConfig` wants DER, not PEM).
     cert_der: rustls::pki_types::CertificateDer<'static>,
     key_der: rustls::pki_types::PrivateKeyDer<'static>,
+    /// The CA in DER, for a server that verifies client certificates
+    /// against it (`serve_one_tls_connection`'s `client_ca`).
+    ca_der: rustls::pki_types::CertificateDer<'static>,
+    /// A client certificate/key pair the same CA signs — what a Docker
+    /// context's `cert.pem`/`key.pem` hold.
+    client_cert_pem: String,
+    client_key_pem: String,
 }
 
 fn generate_test_tls_materials(
@@ -418,6 +540,14 @@ fn generate_test_tls_materials(
     let leaf_key = rcgen::KeyPair::generate().unwrap();
     let leaf_cert = leaf_params.signed_by(&leaf_key, &issuer).unwrap();
 
+    let mut client_params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+    client_params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "ratect-test-client");
+    client_params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ClientAuth];
+    let client_key = rcgen::KeyPair::generate().unwrap();
+    let client_cert = client_params.signed_by(&client_key, &issuer).unwrap();
+
     GeneratedTlsMaterials {
         ca_pem: ca_cert.pem(),
         cert_pem: leaf_cert.pem(),
@@ -426,6 +556,9 @@ fn generate_test_tls_materials(
         key_der: rustls::pki_types::PrivateKeyDer::Pkcs8(
             rustls::pki_types::PrivatePkcs8KeyDer::from(leaf_key.serialize_der()),
         ),
+        ca_der: ca_cert.der().clone(),
+        client_cert_pem: client_cert.pem(),
+        client_key_pem: client_key.serialize_pem(),
     }
 }
 
@@ -438,10 +571,11 @@ fn write_tls_materials(dir: &Path, materials: &GeneratedTlsMaterials) {
 /// Accepts exactly one TCP connection on `listener` and completes a
 /// TLS handshake using `cert`/`key`, then responds to the first HTTP
 /// request with a minimal 200 OK — just enough for `Docker::ping` to
-/// succeed once the handshake itself does. No client-cert auth is
-/// requested: this harness only exercises the *client's* verification
-/// of the *server's* certificate (what `--docker-tls-verify` actually
-/// controls), not Ratect's own client-certificate presentation.
+/// succeed once the handshake itself does. With `client_ca` set, the
+/// handshake also *requires* a client certificate that CA signed, as a
+/// `dockerd --tlsverify` daemon does — so a connection that fails to
+/// present one fails the handshake, rather than passing because nothing
+/// asked. Without it, no client certificate is requested.
 ///
 /// If the handshake itself fails (e.g. the client rejects an expired
 /// certificate), `TlsAcceptor::accept` returns `Err` and this simply
@@ -451,9 +585,22 @@ async fn serve_one_tls_connection(
     listener: tokio::net::TcpListener,
     cert: rustls::pki_types::CertificateDer<'static>,
     key: rustls::pki_types::PrivateKeyDer<'static>,
+    client_ca: Option<rustls::pki_types::CertificateDer<'static>>,
 ) {
-    let config = rustls::ServerConfig::builder()
-        .with_no_client_auth()
+    ensure_crypto_provider_installed();
+    let builder = rustls::ServerConfig::builder();
+    let builder = match client_ca {
+        Some(ca) => {
+            let mut roots = rustls::RootCertStore::empty();
+            roots.add(ca).unwrap();
+            let verifier = rustls::server::WebPkiClientVerifier::builder(roots.into())
+                .build()
+                .unwrap();
+            builder.with_client_cert_verifier(verifier)
+        }
+        None => builder.with_no_client_auth(),
+    };
+    let config = builder
         .with_single_cert(vec![cert], key)
         .expect("valid cert/key pair");
     let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config));
@@ -493,7 +640,10 @@ async fn serve_one_tls_connection(
 ///
 /// The lock can't help across processes, so it relies on these being the
 /// only TLS `connect` callers in one test binary. A new one belongs here
-/// too. (`connect` calls that fail *before* the TLS branch — the
+/// too — which is why the `connect_via_a_context_*` TLS tests take it: a
+/// context with no stored CA loads the same trust store
+/// (`system_trust_roots`), and the rest are TLS `connect` callers all the
+/// same. (`connect` calls that fail *before* the TLS branch — the
 /// context-conflict tests — don't need it, and take no lock.)
 ///
 /// See this module's own doc comment for why this lock doesn't fully
@@ -522,6 +672,7 @@ async fn connect_over_tls_completes_a_real_handshake_against_a_valid_certificate
         listener,
         materials.cert_der.clone(),
         materials.key_der.clone_key(),
+        None,
     ));
 
     let cert_directory = unique_temp_dir();
@@ -538,7 +689,9 @@ async fn connect_over_tls_completes_a_real_handshake_against_a_valid_certificate
     // (which `clippy::await_holding_lock` would flag).
     let docker = {
         let _guard = serial_tls();
-        connect(&options).expect("connecting over TLS should build a client")
+        connect(&options)
+            .expect("connecting over TLS should build a client")
+            .docker
     };
     let result = docker.ping().await;
     server.await.expect("server task should not panic");
@@ -563,6 +716,7 @@ async fn connect_over_tls_rejects_an_expired_certificate() {
         listener,
         materials.cert_der.clone(),
         materials.key_der.clone_key(),
+        None,
     ));
 
     let cert_directory = unique_temp_dir();
@@ -576,7 +730,9 @@ async fn connect_over_tls_rejects_an_expired_certificate() {
 
     let docker = {
         let _guard = serial_tls();
-        connect(&options).expect("connecting over TLS should build a client")
+        connect(&options)
+            .expect("connecting over TLS should build a client")
+            .docker
     };
     let result = docker.ping().await;
     server.await.expect("server task should not panic");
@@ -677,4 +833,288 @@ fn resolve_host_prefers_the_explicit_option_then_the_injected_env_value() {
 fn resolve_host_treats_an_empty_docker_host_as_unset() {
     let options = DockerConnectionOptions::default();
     assert_eq!(resolve_host(&options, Some("")), None);
+}
+
+/// A context named `context_name` in a fresh config directory, pointing at
+/// `127.0.0.1:port` with `SkipTLSVerify` as given and `files` stored in its
+/// TLS directory — plus the options that select it.
+fn tls_context_options(
+    port: u16,
+    context_name: &str,
+    skip_tls_verify: bool,
+    files: &[(&str, &str)],
+) -> DockerConnectionOptions {
+    let config_directory = unique_temp_dir();
+    write_docker_context_meta_with_skip(
+        &config_directory,
+        context_name,
+        &format!("tcp://127.0.0.1:{port}"),
+        skip_tls_verify,
+    );
+    write_docker_context_tls_files(&config_directory, context_name, files);
+    DockerConnectionOptions {
+        context: Some(context_name.to_string()),
+        config_directory: Some(config_directory),
+        ..Default::default()
+    }
+}
+
+/// Connects through `options`' context to a one-shot TLS server presenting
+/// `materials`' leaf certificate (requiring a client certificate its CA
+/// signed when `require_client_cert`), and returns the `ping` result
+/// already passed through `Connection::explain_failure`.
+async fn ping_through_context(
+    options: &DockerConnectionOptions,
+    listener: tokio::net::TcpListener,
+    materials: &GeneratedTlsMaterials,
+    require_client_cert: bool,
+) -> Result<()> {
+    let server = tokio::spawn(serve_one_tls_connection(
+        listener,
+        materials.cert_der.clone(),
+        materials.key_der.clone_key(),
+        require_client_cert.then(|| materials.ca_der.clone()),
+    ));
+    let connection = {
+        let _guard = serial_tls();
+        connect(options).expect("connecting through the context should build a client")
+    };
+    let result = connection
+        .docker
+        .ping()
+        .await
+        .map(|_| ())
+        .map_err(|err| connection.explain_failure(anyhow::Error::new(err)));
+    server.await.expect("server task should not panic");
+    result
+}
+
+fn valid_materials() -> GeneratedTlsMaterials {
+    let now = time::OffsetDateTime::now_utc();
+    generate_test_tls_materials(
+        now - time::Duration::days(1),
+        now + time::Duration::days(365),
+    )
+}
+
+async fn local_listener() -> (tokio::net::TcpListener, u16) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    (listener, port)
+}
+
+#[tokio::test]
+async fn connect_via_a_context_presents_its_stored_client_certificate_to_a_daemon_requiring_one() {
+    let materials = valid_materials();
+    let (listener, port) = local_listener().await;
+    let options = tls_context_options(
+        port,
+        "mtls",
+        false,
+        &[
+            ("ca.pem", &materials.ca_pem),
+            ("cert.pem", &materials.client_cert_pem),
+            ("key.pem", &materials.client_key_pem),
+        ],
+    );
+
+    let result = ping_through_context(&options, listener, &materials, true).await;
+    assert!(result.is_ok(), "expected a verified mTLS ping: {result:?}");
+}
+
+#[tokio::test]
+async fn connect_via_a_context_with_only_a_stored_ca_verifies_the_daemon_without_a_client_certificate(
+) {
+    let materials = valid_materials();
+    let (listener, port) = local_listener().await;
+    let options = tls_context_options(port, "ca-only", false, &[("ca.pem", &materials.ca_pem)]);
+
+    let result = ping_through_context(&options, listener, &materials, false).await;
+    assert!(result.is_ok(), "expected a verified ping: {result:?}");
+}
+
+#[tokio::test]
+async fn connect_via_a_context_with_only_a_stored_ca_is_refused_by_a_daemon_requiring_a_client_certificate(
+) {
+    let materials = valid_materials();
+    let (listener, port) = local_listener().await;
+    let options = tls_context_options(port, "ca-only", false, &[("ca.pem", &materials.ca_pem)]);
+
+    let result = ping_through_context(&options, listener, &materials, true).await;
+    assert!(result.is_err(), "expected the daemon to refuse: {result:?}");
+}
+
+#[tokio::test]
+async fn connect_via_a_context_asking_to_skip_verification_still_verifies_and_says_so() {
+    let materials = valid_materials();
+    // A CA that did not sign the server's certificate.
+    let other_ca = valid_materials().ca_pem;
+    let (listener, port) = local_listener().await;
+    let options = tls_context_options(port, "insecure", true, &[("ca.pem", &other_ca)]);
+
+    let err = ping_through_context(&options, listener, &materials, false)
+        .await
+        .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(message.contains("Docker context 'insecure'"), "{message}");
+    assert!(message.contains("SkipTLSVerify"), "{message}");
+    assert!(message.contains("always verifies"), "{message}");
+}
+
+#[tokio::test]
+async fn connect_via_a_context_with_only_skip_tls_verify_still_verifies() {
+    // The test CA is in no system trust store, so verification fails — the
+    // success half (a daemon certificate a public CA signed) isn't testable
+    // here.
+    let materials = valid_materials();
+    let (listener, port) = local_listener().await;
+    let options = tls_context_options(port, "insecure", true, &[]);
+
+    let err = ping_through_context(&options, listener, &materials, false)
+        .await
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("always verifies"), "{err:#}");
+}
+
+#[tokio::test]
+async fn a_failed_verification_is_not_explained_when_the_context_did_not_ask_to_skip_it() {
+    let materials = valid_materials();
+    let other_ca = valid_materials().ca_pem;
+    let (listener, port) = local_listener().await;
+    let options = tls_context_options(port, "strict", false, &[("ca.pem", &other_ca)]);
+
+    let err = ping_through_context(&options, listener, &materials, false)
+        .await
+        .unwrap_err();
+    assert!(!format!("{err:#}").contains("always verifies"), "{err:#}");
+}
+
+#[tokio::test]
+async fn a_failure_other_than_verification_is_not_explained_as_one() {
+    let materials = valid_materials();
+    // Bound then dropped: nothing listens, so the connection is refused
+    // before any certificate is seen.
+    let (listener, port) = local_listener().await;
+    drop(listener);
+    let options = tls_context_options(port, "insecure", true, &[("ca.pem", &materials.ca_pem)]);
+
+    let connection = {
+        let _guard = serial_tls();
+        connect(&options).unwrap()
+    };
+    let err = connection.explain_failure(anyhow::Error::new(
+        connection.docker.ping().await.unwrap_err(),
+    ));
+    assert!(!format!("{err:#}").contains("always verifies"), "{err:#}");
+}
+
+/// Connects through a context storing `files`, expecting it to fail before
+/// any network I/O, and returns the error text.
+fn context_connect_error(files: &[(&str, &str)]) -> String {
+    let options = tls_context_options(1, "broken", false, files);
+    let err = {
+        let _guard = serial_tls();
+        connect(&options).expect_err("invalid stored material should fail")
+    };
+    format!("{err:#}")
+}
+
+#[test]
+fn connect_via_a_context_errors_naming_the_file_when_its_ca_is_not_valid_pem() {
+    let message = context_connect_error(&[(
+        "ca.pem",
+        "-----BEGIN CERTIFICATE-----\nnot valid base64!!!\n-----END CERTIFICATE-----\n",
+    )]);
+    assert!(message.contains("Docker context 'broken'"), "{message}");
+    assert!(message.contains("ca.pem"), "{message}");
+}
+
+#[test]
+fn connect_via_a_context_errors_naming_the_file_when_its_ca_holds_no_certificate() {
+    let message = context_connect_error(&[("ca.pem", "nothing here")]);
+    assert!(message.contains("Docker context 'broken'"), "{message}");
+    assert!(message.contains("ca.pem"), "{message}");
+}
+
+#[test]
+fn connect_via_a_context_errors_naming_the_file_when_its_key_is_encrypted() {
+    let materials = valid_materials();
+    let message = context_connect_error(&[
+        ("ca.pem", &materials.ca_pem),
+        ("cert.pem", &materials.client_cert_pem),
+        (
+            "key.pem",
+            "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIBAA==\n-----END ENCRYPTED PRIVATE KEY-----\n",
+        ),
+    ]);
+    assert!(message.contains("Docker context 'broken'"), "{message}");
+    assert!(message.contains("key.pem"), "{message}");
+    assert!(message.contains("encrypted"), "{message}");
+}
+
+#[test]
+fn connect_via_a_context_errors_naming_the_files_when_its_key_does_not_match_its_certificate() {
+    let materials = valid_materials();
+    let other = valid_materials();
+    let message = context_connect_error(&[
+        ("ca.pem", &materials.ca_pem),
+        ("cert.pem", &materials.client_cert_pem),
+        ("key.pem", &other.client_key_pem),
+    ]);
+    assert!(message.contains("Docker context 'broken'"), "{message}");
+    assert!(message.contains("key.pem"), "{message}");
+    assert!(message.contains("cert.pem"), "{message}");
+}
+
+#[test]
+fn connect_via_a_context_with_tls_settings_errors_when_its_host_is_not_tcp() {
+    let config_directory = unique_temp_dir();
+    write_docker_context_meta_with_skip(
+        &config_directory,
+        "socket",
+        "unix:///var/run/docker.sock",
+        true,
+    );
+    let options = DockerConnectionOptions {
+        context: Some("socket".to_string()),
+        config_directory: Some(config_directory),
+        ..Default::default()
+    };
+
+    let err = {
+        let _guard = serial_tls();
+        connect(&options).unwrap_err()
+    };
+    let message = format!("{err:#}");
+    assert!(message.contains("Docker context 'socket'"), "{message}");
+    assert!(message.contains("unix:///var/run/docker.sock"), "{message}");
+}
+
+/// `explain_failure` as production reaches it: through `DockerClient::new`,
+/// whose first round trip (`negotiate_version`) is what fails. The only
+/// TLS `connect` caller here without `serial_tls`: `DockerClient::new`
+/// connects and awaits in one call, so the lock would be held across an
+/// `.await` — and with a stored CA, no system trust store is loaded.
+#[tokio::test]
+async fn docker_client_new_explains_a_verification_failure_for_a_context_asking_to_skip_it() {
+    let materials = valid_materials();
+    let other_ca = valid_materials().ca_pem;
+    let (listener, port) = local_listener().await;
+    let options = tls_context_options(port, "insecure", true, &[("ca.pem", &other_ca)]);
+    let server = tokio::spawn(serve_one_tls_connection(
+        listener,
+        materials.cert_der.clone(),
+        materials.key_der.clone_key(),
+        None,
+    ));
+
+    let result = crate::docker::DockerClient::new(&options).await;
+    server.await.expect("server task should not panic");
+
+    let Err(err) = result else {
+        panic!("expected the daemon's certificate to be rejected");
+    };
+    let message = format!("{err:#}");
+    assert!(message.contains("Docker context 'insecure'"), "{message}");
+    assert!(message.contains("always verifies"), "{message}");
 }

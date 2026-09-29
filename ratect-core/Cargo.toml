@@ -157,6 +157,21 @@ unicode-width = "0.2.2"
 # own, even when (as here) that crate is already fully resolved
 # transitively.
 rustls = { version = "0.23", default-features = false }
+# **`hyper-util`**, **`hyper-rustls`**, **`rustls-native-certs`**: the TLS
+# transport `docker/connection.rs` hands `bollard`'s
+# `connect_with_custom_transport` for a Docker context with TLS settings.
+# `bollard`'s own `connect_with_ssl` needs a CA, a client certificate and a
+# key, each as a file, so it can't express what a context may store: a CA
+# with no client certificate, or no CA at all (the system trust store,
+# which is what `rustls-native-certs` loads). The custom transport is
+# `bollard`'s accepted route for a connection it doesn't build itself
+# (fussybeaver/bollard#459). Features are the ones `bollard`'s own `ssl`
+# feature already turns on, and all three are already resolved in
+# `Cargo.lock` through it — no new crates. Could be dropped for a `bollard`
+# constructor taking a `rustls::ClientConfig`, if one ever lands.
+hyper-util = { version = "0.1.5", features = ["client-legacy", "http1", "tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1"] }
+rustls-native-certs = "0.8"
 # Both only ever built under the `schema` feature (below) — see
 # src/schema.rs. `jsonschema` is used by that module's own tests only (it
 # validates every fixture in the repository against the generated schema),
