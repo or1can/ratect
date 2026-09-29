@@ -60,17 +60,18 @@ Leveraging Rust's strengths to provide a superior experience compared to the ori
 Improving the developer experience through better tools and feedback.
 
 - **`ratect doctor`**: shipped — see [CLI reference](docs/ratect-cli.md#doctor) for
-  what it checks today. Still open: host-container permission issues
-  (`run_as_current_user` against the actual uid/gid of a mounted path) need a real
-  filesystem probe rather than a config read; container-level checks that need the
+  what it checks today. Still open: host-container permission issues (the host
+  identity a container runs as against the actual uid/gid of a mounted path) need a
+  real filesystem probe rather than a config read; container-level checks that need the
   *image* (its own `HEALTHCHECK`, whether an `entrypoint` exists) need a pull, so
   they'd belong behind a flag rather than the default run; and four checks from
-  Batect's own unbuilt `doctor` wishlist remain: mounting a directory writable
-  without `run_as_current_user` enabled (the root-owned-files trap that field
-  exists to prevent), mounting a directory over the `run_as_current_user` home
-  directory, a proxy environment variable that isn't a URL or doesn't use an
-  `http`/`https` scheme, and the daemon's own proxy settings not matching the
-  local environment's (readable from the Docker API, so it belongs with the
+  Batect's own unbuilt `doctor` wishlist remain: on a rootful Linux daemon, mounting a
+  directory writable into a container that runs as root (the root-owned-files trap
+  `identity` resolves there — see
+  [decisions/0011](decisions/0011-container-identity.md)), mounting a directory over a
+  parent of the `identity` home directory, a proxy environment variable that isn't a
+  URL or doesn't use an `http`/`https` scheme, and the daemon's own proxy settings
+  not matching the local environment's (readable from the Docker API, so it belongs with the
   daemon-reachability check rather than the config ones). Batect's fifth —
   warning on container/task naming conventions — is deliberately skipped: Ratect
   has no convention to enforce, and inventing one to lint against would be the
@@ -112,7 +113,7 @@ Exploring innovative features that go beyond the original Batect, as well as pla
 - **Configuration Merging/Replacement**: Ability to merge or override containers and tasks when including files.
 - **Image Lifecycle Management**: Tools for building and pushing images independently of task execution, and cleaning up unused images.
 - **OCI annotations on built images**: a config field for build-time image labels (`source`, `revision`, `created` — distinct from `Container.labels`, which applies to the *container*, not the image it builds), as the project's own provenance on an image `build_directory` produces. Today that's a Dockerfile `LABEL`, which already works and needs nothing from Ratect. Ratect shouldn't guess these itself (shelling out to `git` in the build context would be wrong as often as right) — only worth building if someone actually wants the ergonomics. `ratect`-only, since Batect has no such field. Not to be confused with [decisions/0002](decisions/0002-runtime-ownership-labels.md)'s runtime-ownership labels, a different thing on a different object (a running container/network, not the image).
-- **Additional users in the container's `/etc/passwd`**: `run_as_current_user` (`user.rs`, ported from Batect's `RunAsCurrentUserConfigurationProvider`) generates a minimal `/etc/passwd`/`/etc/shadow`/`/etc/group` containing only the host user Ratect runs as (plus `root`, its own special case) — there's no way to add further entries (e.g. a service account a tool inside the container expects to exist). Worth deciding whether this is `run_as_current_user`-specific or a more general per-container "extra passwd entries" field independent of it.
+- **Additional users in the container's `/etc/passwd`**: `ratect-compat`'s `run_as_current_user` (`user.rs`, ported from Batect's `RunAsCurrentUserConfigurationProvider`) replaces the image's `/etc/passwd`/`/etc/shadow`/`/etc/group` with only `root` and the host user, so a service account the image shipped disappears. The native format's `identity`, planned for ratect 0.12.0, adds to the image's own files instead ([decisions/0011](decisions/0011-container-identity.md)), so the image's users survive. What remains is whether declaring users the image lacks is still wanted — undecided until that lands ([#107](https://github.com/or1can/ratect/issues/107)).
 - **Secrets Management**: Integrated support for securely handling sensitive information like API keys and credentials.
 - **Plugin System**: A flexible architecture to allow users to extend Ratect's functionality with custom logic.
 
