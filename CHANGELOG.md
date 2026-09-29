@@ -23,6 +23,7 @@ history, from when it was the only binary.
 
 ### Breaking
 
+- A run that finished normally but is sent a termination signal (Ctrl+C, `SIGTERM`, `SIGHUP`) during its cleanup now exits 128 + that signal's number (`130`/`143`/`129`) and reports the signal, instead of exiting 0.
 - `DOCKER_HOST` now stops a Docker context from being used, as `--docker-host` does: with `DOCKER_HOST` set, `DOCKER_CONTEXT` and the active context are ignored, and `DOCKER_TLS_VERIFY` applies. An empty `DOCKER_HOST` or `DOCKER_CONTEXT` counts as unset. See [Connecting to Docker](docs/connecting-to-docker.md#which-daemon-is-used).
 - A task's own container no longer has a readiness gate (ratect only): Ratect no longer waits on its health check (declared or from the image) or runs its `setup_commands`, so their failure no longer fails the task — its result is the main command's alone. The fields are still accepted, and still apply when the same container is a dependency. `ratect-compat` is unchanged. See [Dependency Readiness](docs/dependency-readiness.md#the-tasks-own-container).
 - A container declared in a **YAML file** was given `ratect`-native fields and semantics whenever the project including it happened to be native (ratect only). The file's own format now decides, so a container declared in a `.yml` follows Batect's rules wherever it is included — no native field (`extends`, `ulimits`, `stop_signal`, `stop_grace_period`, `run_to_completion`, `external_health_check`, a cache's `scope`, a setup command's `run_in`), no expressions resolved in `image`, and exactly one of `image`/`build_directory` — including in a native project's `.yml` include and in a YAML root file (`ratect -f batect.yml`). **A config relying on the old behaviour is now rejected**; move that container into a `.toml` file to use a native field. The rejection now names the file that declared it. See [Includes](docs/includes.md#which-fields-a-file-may-use).
@@ -47,6 +48,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- A second termination signal during cleanup now force-removes whatever is left, with no grace period, instead of abandoning cleanup and leaving the task's container and network behind; a Ctrl+C (`SIGINT`) after that abandons cleanup as any second signal used to. See [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
 - A Docker context's stored TLS settings (`ca.pem`, `cert.pem`/`key.pem`) are now used, so a context for a TLS-protected daemon connects. Its `SkipTLSVerify` is not honoured: the daemon's certificate is always verified.
 - A `run_as_current_user.home_directory` with no directory name to create (`/`, or a path ending in `..`) is rejected when the file loads, instead of after the container has been created.
 - Piped stdin reaching its end never closed the task container's own stdin, so a process that reads until end of input (`cat`, a stdio server) never exited, and neither did Ratect.

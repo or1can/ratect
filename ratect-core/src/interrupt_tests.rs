@@ -36,6 +36,43 @@ fn counts_every_interrupt_rather_than_latching() {
     assert_eq!(interrupt.count(), 2);
 }
 
+/// The abandon rung of the engine's cleanup ladder counts `SIGINT` alone,
+/// so the tracker keeps that count as well as the total.
+#[test]
+fn counts_interrupts_separately_from_every_signal() {
+    let interrupt = Interrupt::new();
+
+    interrupt.record_signal(TerminationSignal::Terminate);
+    interrupt.record();
+    interrupt.record_signal(TerminationSignal::Hangup);
+
+    assert_eq!(interrupt.count(), 3);
+    assert_eq!(interrupt.interrupt_count(), 1);
+}
+
+#[tokio::test]
+async fn wait_for_interrupts_ignores_other_signals() {
+    let interrupt = Interrupt::new();
+    let waiter = Arc::clone(&interrupt);
+
+    let handle = tokio::spawn(async move { waiter.wait_for_interrupts(1).await });
+
+    tokio::task::yield_now().await;
+    interrupt.record_signal(TerminationSignal::Terminate);
+    tokio::task::yield_now().await;
+    assert!(
+        !handle.is_finished(),
+        "a SIGTERM should not satisfy a wait for a SIGINT"
+    );
+
+    interrupt.record();
+
+    tokio::time::timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("wait_for_interrupts(1) should resolve on the SIGINT")
+        .expect("waiter should not panic");
+}
+
 /// Which signal ended the run decides the process's exit code (128 + the
 /// signal's own number), so the tracker has to say *which* one arrived, not
 /// only that one did.

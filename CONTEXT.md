@@ -86,8 +86,17 @@ The distinction is worth writing down because the code says both words with
 one vocabulary: `Interrupt` (the tracker), `interrupted()` and `count()` mean
 any termination signal, while `TerminationSignal::Interrupt` and
 `Interrupt::record()` mean `SIGINT` alone. Reading either as the other gives
-the wrong answer about what a run exits with, and about what a second one
-during cleanup abandons.
+the wrong answer about what a run exits with, and about which rung of the
+cleanup ladder a further one during cleanup reaches.
+
+**Cleanup ladder** — what a termination signal means once cleanup has
+started, counted from how many had arrived when the run ended: one more, of
+any kind, *escalates* (whatever is left is force-removed, with no grace
+period); an interrupt after that *abandons* cleanup. Only the abandon rung
+looks at the kind, because a keyboard is the one thing that sends `SIGINT`
+twice, while a supervisor's timed follow-up is a `SIGTERM` and never means
+"leave it". A run that finished normally but was signalled during its
+cleanup reports that signal, as a run the signal ended does.
 
 ## Caches
 

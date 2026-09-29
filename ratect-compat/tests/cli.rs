@@ -1107,7 +1107,7 @@ static INTERRUPT_PROJECT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[ignore]
 #[cfg(unix)]
 fn interrupting_a_run_cleans_up_via_docker() {
-    signalling_a_run_cleans_up_via_docker("SIGINT", 130);
+    signalling_a_run_cleans_up_via_docker(&["SIGINT"], 130, None);
 }
 
 /// The same for `SIGTERM`, which is what actually bit: `ratect-compat` run as
@@ -1120,7 +1120,28 @@ fn interrupting_a_run_cleans_up_via_docker() {
 #[ignore]
 #[cfg(unix)]
 fn terminating_a_run_cleans_up_via_docker() {
-    signalling_a_run_cleans_up_via_docker("SIGTERM", 143);
+    signalling_a_run_cleans_up_via_docker(&["SIGTERM"], 143, None);
+}
+
+/// A supervisor's escalation — `SIGINT`, then `SIGTERM` 100 ms later, which
+/// is how Claude Code stops a stdio MCP server before sending `SIGKILL` 400 ms
+/// after that — used to abandon cleanup at the second signal and leave the
+/// task's container and network behind on every session end (ratect#249).
+/// The second signal now force-removes what's left instead, so nothing is
+/// left behind, and it does so quickly: both containers here run `sleep` as
+/// PID 1, which ignores `SIGTERM`, so a graceful stop of each takes Docker's
+/// full ten-second kill timeout, and a run that cleaned up gracefully would
+/// take twenty seconds to exit. Exits 130: the exit code belongs to the
+/// signal that ended the run, not the one that hurried its cleanup.
+#[test]
+#[ignore]
+#[cfg(unix)]
+fn a_supervisors_escalation_still_cleans_up_via_docker() {
+    signalling_a_run_cleans_up_via_docker(
+        &["SIGINT", "SIGTERM"],
+        130,
+        Some(Duration::from_secs(8)),
+    );
 }
 
 /// Signalling a real run against a real daemon leaves nothing behind.
@@ -1136,10 +1157,18 @@ fn terminating_a_run_cleans_up_via_docker() {
 /// anyway (see `ratect-core/src/user.rs`), but this one is explicit about it
 /// since the mechanism, not just the environment, is what's unavailable.
 #[cfg(unix)]
-fn signalling_a_run_cleans_up_via_docker(signal: &str, expected_exit_code: i32) {
-    // `kill` names a signal without its `SIG` prefix; every message below
-    // names it the way the docs and the user do.
-    let kill_flag = format!("-{}", signal.trim_start_matches("SIG"));
+///
+/// `signals` are sent 100 ms apart — a supervisor's spacing, and a person's
+/// second Ctrl+C is never faster. `must_exit_within`, when given, is measured
+/// from the first signal and is how the escalation test tells a forced
+/// cleanup from a graceful one that merely finished.
+#[cfg(unix)]
+fn signalling_a_run_cleans_up_via_docker(
+    signals: &[&str],
+    expected_exit_code: i32,
+    must_exit_within: Option<Duration>,
+) {
+    let signal = signals.join(" then ");
     let _shared_project = INTERRUPT_PROJECT
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1212,11 +1241,20 @@ fn signalling_a_run_cleans_up_via_docker(signal: &str, expected_exit_code: i32) 
         panic!("the run never reached two running containers, so nothing was interrupted");
     }
 
-    let signalled = Command::new("kill")
-        .args([&kill_flag, &child.id().to_string()])
-        .status()
-        .expect("failed to run kill");
-    assert!(signalled.success(), "could not send {signal} to ratect");
+    let first_signal_at = Instant::now();
+    for (index, signal) in signals.iter().enumerate() {
+        if index > 0 {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        // `kill` names a signal without its `SIG` prefix; every message here
+        // names it the way the docs and the user do.
+        let kill_flag = format!("-{}", signal.trim_start_matches("SIG"));
+        let signalled = Command::new("kill")
+            .args([&kill_flag, &child.id().to_string()])
+            .status()
+            .expect("failed to run kill");
+        assert!(signalled.success(), "could not send {signal} to ratect");
+    }
 
     // `try_wait` rather than `wait`, so a regression that hangs the process
     // fails this test instead of hanging CI until its own job timeout.
@@ -1232,6 +1270,7 @@ fn signalling_a_run_cleans_up_via_docker(signal: &str, expected_exit_code: i32) 
         panic!("ratect did not exit after {signal}");
     }
     let status = status.expect("exited implies a status");
+    let exit_took = first_signal_at.elapsed();
 
     // Cleanup is synchronous before exit, so by here the daemon should already
     // be clean — but stopping two containers is real work against a real
@@ -1260,6 +1299,13 @@ fn signalling_a_run_cleans_up_via_docker(signal: &str, expected_exit_code: i32) 
         "a run ended by {signal} must remove its containers and network; left behind \
          containers {leftover_containers:?} and networks {leftover_networks:?}"
     );
+    if let Some(limit) = must_exit_within {
+        assert!(
+            exit_took <= limit,
+            "a run ended by {signal} should force-remove rather than wait out each \
+             container's kill timeout, but took {exit_took:?} to exit (limit {limit:?})"
+        );
+    }
 }
 
 /// Requires a running Docker daemon with network access to pull `redis:7-alpine`

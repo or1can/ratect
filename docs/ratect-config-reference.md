@@ -583,10 +583,12 @@ stop_grace_period = "30s"
   `"0"` — the same format `health_check`'s `interval`/`timeout` use. Docker's
   own stop timeout is whole seconds, so anything finer is rounded *up* to the
   next second: `"500ms"` waits one second, never less than asked for.
-- **A second interrupt during cleanup still abandons cleanup immediately.**
-  `stop_grace_period` only bounds how long the first interrupt's cleanup
-  waits on Docker; pressing Ctrl+C again abandons cleanup exactly as it does
-  today, regardless of any container's configured grace period.
+- **A further signal during cleanup never waits on `stop_grace_period`.**
+  It only bounds the graceful stop that cleanup starts with; a second signal
+  (Ctrl+C again, or a supervisor's follow-up `SIGTERM`) force-removes
+  whatever is left with no grace period at all, and a Ctrl+C after that
+  abandons cleanup — see [Differences from
+  Batect](differences-from-batect.md#runtime-behavior-gaps).
 
 ## `ulimits`: per-resource limits
 

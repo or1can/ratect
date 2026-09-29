@@ -972,26 +972,26 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         Ok(())
     }
 
-    /// Runs one cleanup step, giving up on it if the user interrupts again.
+    /// Runs one cleanup step, giving up on it if `rung` resolves first.
     ///
-    /// `false` means the step lost the race and was dropped mid-flight —
-    /// whatever it was removing may still be there. `after` is the interrupt
-    /// count that was already reached when the run ended, so only a *further*
-    /// press counts (see `run_task_internal`).
+    /// `None` means the step lost the race and was dropped mid-flight —
+    /// whatever it was removing may still be there. `rung` is one of the
+    /// cleanup ladder's waits on the interrupt tracker (see
+    /// `run_task_internal`).
     ///
     /// An interrupt nothing has recorded on behaves as though there were no
-    /// tracker at all — `wait_for` never resolves, so `step` always wins —
+    /// tracker at all — its waits never resolve, so `step` always wins —
     /// which is every unit test that doesn't deliberately record one, and
     /// both binaries before 0.25.0.
-    async fn until_interrupted(
+    async fn until_interrupted<T>(
         &self,
-        after: usize,
-        step: impl std::future::Future<Output = ()>,
-    ) -> bool {
+        rung: impl std::future::Future<Output = ()>,
+        step: impl std::future::Future<Output = T>,
+    ) -> Option<T> {
         tokio::select! {
             biased;
-            () = step => true,
-            () = self.interrupt.wait_for(after + 1) => false,
+            output = step => Some(output),
+            () = rung => None,
         }
     }
 
@@ -1981,7 +1981,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // regardless of whether `n` is zero (see `cleanup_after_success`'s
         // doc comment) — `None` means a genuine infrastructure failure
         // (`cleanup_after_failure`'s bucket instead).
-        let exit_code = match &result {
+        let mut exit_code = match &result {
             Ok(()) => Some(0),
             Err(error) => error
                 .downcast_ref::<crate::docker::ContainerExitedNonZero>()
@@ -1993,12 +1993,33 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             self.cleanup_after_failure
         };
 
-        // A second signal during cleanup abandons the cleanup itself.
-        // Cleanup talks to the daemon and isn't instant — a container
-        // ignoring `SIGTERM` waits out Docker's full kill timeout — so
-        // "stop now" has to mean something. Batect lands in the same place:
-        // an interrupt during its cleanup stage switches it to
-        // `PostTaskManualCleanup.Required`.
+        // A further signal during cleanup climbs a ladder: the first one,
+        // of any kind, *escalates* — the graceful stop in flight is dropped
+        // and everything left is force-removed instead — and a `SIGINT`
+        // after that *abandons* cleanup altogether. Cleanup talks to the
+        // daemon and isn't instant (a container ignoring `SIGTERM` waits out
+        // Docker's full kill timeout), so a signal here has to mean
+        // something; what it can't mean is "leave it". A supervisor
+        // escalating `SIGINT` → `SIGTERM` → `SIGKILL` on a fixed timer
+        // (Claude Code stops a stdio MCP server that way, 100 ms then 400 ms
+        // apart) only ever means "exit", and when a second signal used to
+        // abandon, every such session end leaked the task's container and
+        // network until the daemon ran out of address pools (ratect#249).
+        // Force removal is one daemon call per container with no grace
+        // period, so it usually beats the `SIGKILL` that a graceful stop
+        // never could. An abandon rung stays: forced removal still waits on
+        // the daemon, and a daemon that has stopped answering would
+        // otherwise hold the process until something untrappable ended it.
+        // But it is `SIGINT`-only, because the kind is the one thing that
+        // tells a person from a timer: a keyboard is what sends `SIGINT`
+        // twice, and a supervisor's follow-up is a `SIGTERM` — which, when
+        // the run had already finished and its cleanup was what the
+        // supervisor's first signal escalated, would otherwise abandon that
+        // cleanup 100 ms later, the very leak this exists to close.
+        //
+        // Batect never abandons: a second `SIGINT` in its cleanup stage lets
+        // cleanup finish and then prints manual-cleanup commands
+        // (`PostTaskManualCleanup.Required`). Ratect's ladder is its own.
         //
         // Measured against the count when the run *ended* (captured above),
         // not a fixed `>= 2`. Arming the handler replaces the process's
@@ -2007,7 +2028,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // a fixed threshold swallows the first Ctrl+C during the cleanup of a
         // run that was never interrupted (the common case: a task finished,
         // cleanup is slow, the user wants out). Relative to the baseline,
-        // one press abandons cleanup after a normal run and a second does
+        // one press escalates cleanup after a normal run and a second does
         // after an interrupted one, which is the same rule stated once.
         //
         // One press is still absorbed rather than acted on: the one that
@@ -2016,7 +2037,29 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // finished, so there is nothing left to abandon except the cleanup
         // the user probably wants — but it is an absorbed press, not a
         // guarantee that none exist.
-        let abandon_after = interrupts_before_cleanup;
+        let escalate_at = interrupts_before_cleanup + 1;
+        // The abandon rung is a `SIGINT` *after* escalation, so its baseline
+        // is the `SIGINT` count at that moment — `Some` once escalation has
+        // been detected. Before then the rung is reached in two steps:
+        // whatever escalates, then a `SIGINT`.
+        let mut interrupts_at_escalation: Option<usize> = None;
+        let abandon_rung = |interrupts_at_escalation: Option<usize>| async move {
+            let interrupts = match interrupts_at_escalation {
+                Some(interrupts) => interrupts,
+                None => {
+                    self.interrupt.wait_for(escalate_at).await;
+                    self.interrupt.interrupt_count()
+                }
+            };
+            self.interrupt.wait_for_interrupts(interrupts + 1).await;
+        };
+        // The signal that escalated cleanup, once one has — read at the moment
+        // that is detected rather than when the run ended: the run may never
+        // have been signalled at all, and when it was, the signal that hurried
+        // its cleanup can be a different one from the one that ended it. The
+        // tracker keeps only the most recent signal, so two landing in one
+        // window report the later.
+        let mut cleanup_signal: Option<crate::interrupt::TerminationSignal> = None;
 
         if should_cleanup {
             if let Some(signal) = interrupted_by {
@@ -2027,7 +2070,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 // keyboard attached to this process at all.
                 tracing::warn!(
                     task = task_name,
-                    "{}; cleaning up. {} to stop cleaning up.",
+                    "{}; cleaning up. {} to force-remove what's left, and Ctrl+C after \
+                     that to stop cleaning up.",
                     signal.ended_run(),
                     signal.send_again(),
                 );
@@ -2035,18 +2079,50 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             if !created_sidecars.is_empty() || owns_network || task_container_id.is_some() {
                 self.event_sink.post(TaskEvent::CleanupStarting);
             }
-            // Every removal below is raced against the next interrupt rather
+            // Every removal below is raced against the next signal rather
             // than merely checked between removals. Checking between them
-            // misses the case the feature exists for: a container ignoring
+            // misses the case the ladder exists for: a container ignoring
             // `SIGTERM` sits in `stop_and_remove_container` for Docker's full
-            // kill timeout, which is exactly when the user presses Ctrl+C
-            // again — and with one container and `--use-network`, "between
+            // kill timeout, which is exactly when the next signal arrives —
+            // and with one container and `--use-network`, "between
             // removals" never comes around again at all.
             //
-            // Losing the race cancels that removal's request in flight. Docker
-            // may still finish it server-side; either way the container is
-            // reported as possibly left behind, which is the honest reading.
+            // Losing the race cancels that removal's request in flight. On
+            // the escalation rung Docker may still finish the stop
+            // server-side, which the forced removal that replaces it doesn't
+            // mind; on the abandonment rung the container is reported as
+            // possibly left behind, which is the honest reading.
             let mut abandoned = false;
+
+            struct Removal<'a> {
+                name: &'a str,
+                container_id: &'a str,
+                /// A container whose readiness is reported as another's has
+                /// contributed no line all run, and appearing for the first
+                /// time at cleanup would name it exactly once, with nothing
+                /// to attach it to (ratect#202) — removed like any other, but
+                /// not narrated.
+                narrate: bool,
+                is_task_container: bool,
+            }
+            let report = |removal: &Removal<'_>, outcome: Result<()>| match outcome {
+                Ok(()) if removal.narrate => {
+                    self.event_sink.post(TaskEvent::ContainerRemoved {
+                        container: removal.name.to_string(),
+                    });
+                }
+                Ok(()) => {}
+                Err(e) if removal.is_task_container => tracing::warn!(
+                    container = removal.name,
+                    error = ?e,
+                    "Failed to clean up the task's own container"
+                ),
+                Err(e) => tracing::warn!(
+                    dependency = removal.name,
+                    error = ?e,
+                    "Failed to clean up dependency container"
+                ),
+            };
 
             // First, and unconditionally: `run_container` never removes the
             // container it creates, so this is the only place the task's own
@@ -2054,70 +2130,112 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // when Docker got as far as creating one, which is also the only
             // case where there is anything to remove. Before the sidecars it
             // depends on, matching Batect's own dependency-ordered cleanup.
-            if let Some(container_id) = task_container_id.as_ref() {
-                let container_config = self.config.containers.get(&run.container);
-                let stop_signal = container_config.and_then(|c| c.stop_signal.as_deref());
-                let stop_grace_period = container_config.and_then(|c| c.stop_grace_period);
-                let removal = async {
-                    match self
-                        .docker
-                        .stop_and_remove_container(container_id, stop_signal, stop_grace_period)
-                        .await
-                    {
-                        Ok(()) => self.event_sink.post(TaskEvent::ContainerRemoved {
-                            container: run.container.clone(),
-                        }),
-                        Err(e) => tracing::warn!(
-                            container = run.container.as_str(),
-                            error = ?e,
-                            "Failed to clean up the task's own container"
-                        ),
-                    }
-                };
-                abandoned = !self.until_interrupted(abandon_after, removal).await;
+            let mut removals: std::collections::VecDeque<Removal<'_>> =
+                std::collections::VecDeque::new();
+            if let Some(container_id) = task_container_id.as_deref() {
+                removals.push_back(Removal {
+                    name: run.container.as_str(),
+                    container_id,
+                    narrate: true,
+                    is_task_container: true,
+                });
             }
             for (name, container_id) in &created_sidecars {
-                if abandoned {
+                let narrate = self
+                    .config
+                    .containers
+                    .get(name)
+                    .is_none_or(|container| container.reports_readiness_for.is_none());
+                removals.push_back(Removal {
+                    name: name.as_str(),
+                    container_id: container_id.as_str(),
+                    narrate,
+                    is_task_container: false,
+                });
+            }
+
+            // Graceful, one at a time in dependency order, until the ladder's
+            // first rung — reached either by a signal cutting a stop short or
+            // by one landing between two stops, which the count check catches
+            // so no stop is requested only to be dropped at once.
+            while let Some(removal) = removals.pop_front() {
+                if self.interrupt.count() >= escalate_at {
+                    removals.push_front(removal);
                     break;
                 }
-                let container_config = self.config.containers.get(name);
-                // Removed like any other, but not narrated: a container
-                // whose readiness is reported as another's has contributed
-                // no line all run, and appearing for the first time at
-                // cleanup would name it exactly once, with nothing to
-                // attach it to (ratect#202).
-                let narrate = container_config
-                    .is_none_or(|container| container.reports_readiness_for.is_none());
+                let container_config = self.config.containers.get(removal.name);
                 let stop_signal = container_config.and_then(|c| c.stop_signal.as_deref());
                 let stop_grace_period = container_config.and_then(|c| c.stop_grace_period);
-                let removal = async {
-                    match self
-                        .docker
-                        .stop_and_remove_container(container_id, stop_signal, stop_grace_period)
-                        .await
-                    {
-                        Ok(()) if !narrate => {}
-                        Ok(()) => self.event_sink.post(TaskEvent::ContainerRemoved {
-                            container: name.clone(),
-                        }),
-                        Err(e) => tracing::warn!(
-                            dependency = name.as_str(),
-                            error = ?e,
-                            "Failed to clean up dependency container"
-                        ),
+                let graceful = self.docker.stop_and_remove_container(
+                    removal.container_id,
+                    stop_signal,
+                    stop_grace_period,
+                );
+                match self
+                    .until_interrupted(self.interrupt.wait_for(escalate_at), graceful)
+                    .await
+                {
+                    Some(outcome) => report(&removal, outcome),
+                    None => {
+                        removals.push_front(removal);
+                        break;
                     }
-                };
-                abandoned = !self.until_interrupted(abandon_after, removal).await;
+                }
+            }
+            // Forced, all at once: dependency order only mattered for the
+            // graceful stops, and a supervisor's `SIGKILL` is on a timer, so
+            // what is left goes out in one round-trip rather than one each.
+            if !removals.is_empty() {
+                let signal = self.interrupt.last_signal();
+                cleanup_signal = Some(signal);
+                interrupts_at_escalation = Some(self.interrupt.interrupt_count());
+                // Always Ctrl+C: the abandon rung is `SIGINT`-only, and the
+                // only sender it is advice for is a person at a terminal.
+                tracing::warn!(
+                    task = task_name,
+                    "{} during cleanup; force-removing what's left. Press Ctrl+C to stop \
+                     cleaning up.",
+                    signal.ended_run(),
+                );
+                let forced = futures::future::join_all(removals.iter().map(|removal| async {
+                    let outcome = self
+                        .docker
+                        .remove_container_forcibly(removal.container_id)
+                        .await;
+                    report(removal, outcome);
+                }));
+                if self
+                    .until_interrupted(abandon_rung(interrupts_at_escalation), forced)
+                    .await
+                    .is_none()
+                {
+                    abandoned = true;
+                }
             }
             if owns_network && !abandoned {
                 let network_name = network_name.expect("owns_network implies network_name is Some");
                 self.event_sink.post(TaskEvent::RemovingNetwork);
-                let removal = async {
-                    if let Err(e) = self.docker.remove_network(&network_name).await {
+                // A network has no faster removal to escalate to, so it is
+                // raced against the abandonment rung alone; a first signal
+                // landing here is still recorded below, so the run reports
+                // it.
+                let removal = self.docker.remove_network(&network_name);
+                match self
+                    .until_interrupted(abandon_rung(interrupts_at_escalation), removal)
+                    .await
+                {
+                    Some(Ok(())) => {}
+                    Some(Err(e)) => {
                         tracing::warn!(network = network_name.as_str(), error = ?e, "Failed to remove network");
                     }
-                };
-                abandoned = !self.until_interrupted(abandon_after, removal).await;
+                    None => abandoned = true,
+                }
+            }
+            // A signal that landed during cleanup without cutting a removal
+            // short — during the network's, or between two steps — is still
+            // one the process was sent, and the exit code has to say so.
+            if cleanup_signal.is_none() && self.interrupt.count() >= escalate_at {
+                cleanup_signal = Some(self.interrupt.last_signal());
             }
             // Driven by work actually being cut short, not by the raw count:
             // an interrupt arriving once everything is already removed leaves
@@ -2160,6 +2278,27 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 );
             }
         }
+
+        // A run that finished normally but whose cleanup was signalled is
+        // reported as stopped by that signal: the process was told to exit,
+        // and its exit code (128 + the signal) and the failure line have to
+        // say so rather than claiming the task finished. Matches Batect,
+        // where an interrupt in the cleanup stage fails the task. A run the
+        // signal *ended* keeps reporting that one — the exit code belongs to
+        // whatever stopped the task, not to whatever hurried its cleanup.
+        //
+        // Only a run that *succeeded*: a run that failed keeps its own error
+        // and exit code, since the failure is the thing the user needs to see
+        // and the signal during its cleanup is not what went wrong.
+        let result = match (result, cleanup_signal) {
+            (Ok(()), Some(signal)) => {
+                exit_code = None;
+                Err(anyhow::Error::new(crate::interrupt::TaskInterrupted::new(
+                    signal,
+                )))
+            }
+            (result, _) => result,
+        };
 
         // "Finished" means the task's own command ran to completion and
         // reported an exit code — zero (`Ok`) or not (the
