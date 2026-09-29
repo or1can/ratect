@@ -480,7 +480,7 @@ struct DockerArgs {
     #[arg(long = "docker-tls-verify")]
     tls_verify: bool,
 
-    /// Directory containing ca.pem/cert.pem/key.pem, unless overridden
+    /// Directory containing any of ca.pem/cert.pem/key.pem, unless overridden
     /// individually below. Defaults to DOCKER_CERT_PATH, then ~/.docker.
     #[arg(long = "docker-cert-path")]
     cert_path: Option<PathBuf>,

@@ -6,7 +6,10 @@ resolver = "2"
 # `connect_with_ssl` no longer discards every certificate that loaded from the
 # OS trust store just because *some* entry in it errored — see `docker/
 # connection.rs`'s own module doc for the user-facing failure this caused. Raised
-# upstream as https://github.com/fussybeaver/bollard/pull/796. Sshforward dispatch
+# upstream as https://github.com/fussybeaver/bollard/pull/796. Ratect no longer
+# calls `connect_with_ssl` itself, but `bollard`'s `connect_with_host` still does
+# for an `https://` host, or for a `tcp://` one when `DOCKER_TLS_VERIFY` is set
+# (ratect#257), so the fix is still needed. Sshforward dispatch
 # to *named* ssh agents (which `build_ssh`'s multi-agent and `paths` support is
 # built on, decisions/0005), session providers on `build_image`, and `ping_info`
 # were on this branch too, but all three landed upstream (PRs #770, #731, #732)

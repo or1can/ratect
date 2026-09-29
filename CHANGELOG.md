@@ -23,6 +23,8 @@ history, from when it was the only binary.
 
 ### Breaking
 
+- With `--docker-tls`/`--docker-tls-verify`, the CA certificate (`--docker-tls-ca-cert`, or `ca.pem` in the certificate directory) is the only certificate authority the daemon's certificate is checked against, as in the Docker CLI and Batect; the system trust store is no longer trusted as well. A daemon certificate a public certificate authority signed, used alongside an unrelated `ca.pem`, now fails verification.
+- With `--docker-tls`/`--docker-tls-verify`, a file named by `--docker-tls-ca-cert`, `--docker-tls-cert` or `--docker-tls-key` must exist, and so must the certificate directory (`--docker-cert-path`, `DOCKER_CERT_PATH` or `~/.docker`) unless all three files are named. A `--docker-host` that is neither a `tcp://` or `https://` address nor a bare `host:port` is an error when connecting.
 - A run that finished normally but is sent a termination signal (Ctrl+C, `SIGTERM`, `SIGHUP`) during its cleanup now exits 128 + that signal's number (`130`/`143`/`129`) and reports the signal, instead of exiting 0.
 - `DOCKER_HOST` now stops a Docker context from being used, as `--docker-host` does: with `DOCKER_HOST` set, `DOCKER_CONTEXT` and the active context are ignored, and `DOCKER_TLS_VERIFY` applies. An empty `DOCKER_HOST` or `DOCKER_CONTEXT` counts as unset. See [Connecting to Docker](docs/connecting-to-docker.md#which-daemon-is-used).
 - A task's own container no longer has a readiness gate (ratect only): Ratect no longer waits on its health check (declared or from the image) or runs its `setup_commands`, so their failure no longer fails the task — its result is the main command's alone. The fields are still accepted, and still apply when the same container is a dependency. `ratect-compat` is unchanged. See [Dependency Readiness](docs/dependency-readiness.md#the-tasks-own-container).
@@ -48,6 +50,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- With `--docker-tls`/`--docker-tls-verify`, a client certificate or key that is missing, unreadable, encrypted, or doesn't match the other is an error naming the file, instead of the connection being made with no client certificate.
 - A second termination signal during cleanup now force-removes whatever is left, with no grace period, instead of abandoning cleanup and leaving the task's container and network behind; a Ctrl+C (`SIGINT`) after that abandons cleanup as any second signal used to. See [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
 - A Docker context's stored TLS settings (`ca.pem`, `cert.pem`/`key.pem`) are now used, so a context for a TLS-protected daemon connects. Its `SkipTLSVerify` is not honoured: the daemon's certificate is always verified.
 - A `run_as_current_user.home_directory` with no directory name to create (`/`, or a path ending in `..`) is rejected when the file loads, instead of after the container has been created.
@@ -60,6 +63,7 @@ history, from when it was the only binary.
 
 ### Changed
 
+- With `--docker-tls`/`--docker-tls-verify`, a certificate directory with no `ca.pem` is no longer an error: the daemon's certificate is checked against the system trust store, and a verification failure says where a `ca.pem` was looked for. Nor is one with no `cert.pem`/`key.pem`: no client certificate is presented. An empty `DOCKER_CERT_PATH` counts as unset. See [Connecting to Docker](docs/connecting-to-docker.md#tls-through-the-options).
 - [Getting Started](docs/getting-started.md) now teaches `ratect` and `ratect.toml` rather than `ratect-compat` and `batect.yml`, on a real project checked in as `examples/getting-started/`. [Installation](docs/installation.md)'s from-source instructions build and install both binaries.
 - The pages under `docs/` describe the binaries in the present tense: version numbers and "yet"/"used to" framing are gone, and the [`batect.yml` reference](docs/ratect-compat-config-reference.md#image-building) says what each output style shows of an image build in place of a stale note that no `--output` mode existed. The [`ratect` CLI reference](docs/ratect-cli.md)'s comparison table is now headed "Differences from `ratect-compat`" (its anchor drops the `-today`).
 - The Using Ratect concept pages ([Task Lifecycle](docs/task-lifecycle.md), [Dependency Readiness](docs/dependency-readiness.md), [Reusable Pipeline Building Blocks](docs/reusable-building-blocks.md), and the [FAQ](docs/faq.md)) show their examples in `ratect.toml` and their commands as `ratect run <task>`, as [Includes](docs/includes.md) already did.

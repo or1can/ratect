@@ -84,6 +84,13 @@ fn write_docker_context_tls_files(
     tls_directory
 }
 
+fn tls_file(path: impl Into<PathBuf>, named_by: &str) -> TlsFile {
+    TlsFile {
+        path: path.into(),
+        named_by: named_by.to_string(),
+    }
+}
+
 #[test]
 fn docker_context_endpoint_reads_the_endpoints_docker_host_field() {
     let config_directory = unique_temp_dir();
@@ -137,11 +144,14 @@ fn docker_context_endpoint_uses_a_stored_ca_certificate_and_key() {
     let endpoint = docker_context_endpoint(&config_directory, "remote").unwrap();
     assert_eq!(
         endpoint.tls,
-        Some(ContextTls {
-            ca: Some(tls_directory.join("ca.pem")),
+        Some(TlsSettings {
+            ca: Some(tls_file(
+                tls_directory.join("ca.pem"),
+                "Docker context 'remote'"
+            )),
             client: Some(ClientCertificate {
-                cert: tls_directory.join("cert.pem"),
-                key: tls_directory.join("key.pem"),
+                cert: tls_file(tls_directory.join("cert.pem"), "Docker context 'remote'"),
+                key: tls_file(tls_directory.join("key.pem"), "Docker context 'remote'"),
             }),
             skip_verify_requested: false,
         })
@@ -158,8 +168,11 @@ fn docker_context_endpoint_with_only_a_stored_ca_uses_tls_without_a_client_certi
     let endpoint = docker_context_endpoint(&config_directory, "remote").unwrap();
     assert_eq!(
         endpoint.tls,
-        Some(ContextTls {
-            ca: Some(tls_directory.join("ca.pem")),
+        Some(TlsSettings {
+            ca: Some(tls_file(
+                tls_directory.join("ca.pem"),
+                "Docker context 'remote'"
+            )),
             client: None,
             skip_verify_requested: false,
         })
@@ -174,7 +187,7 @@ fn docker_context_endpoint_with_only_skip_tls_verify_uses_tls_against_the_system
     let endpoint = docker_context_endpoint(&config_directory, "remote").unwrap();
     assert_eq!(
         endpoint.tls,
-        Some(ContextTls {
+        Some(TlsSettings {
             ca: None,
             client: None,
             skip_verify_requested: true,
@@ -475,14 +488,246 @@ fn tls_enabled_is_true_for_either_flag_or_the_real_env_var() {
 
 #[test]
 fn docker_cert_directory_prefers_the_explicit_option_over_the_env_var_and_default() {
+    let explicit = unique_temp_dir();
+    let from_env = unique_temp_dir();
     let options = DockerConnectionOptions {
-        cert_path: Some(PathBuf::from("/tmp/explicit-certs")),
+        cert_path: Some(explicit.clone()),
         ..Default::default()
     };
     assert_eq!(
-        docker_cert_directory(&options).unwrap(),
-        PathBuf::from("/tmp/explicit-certs")
+        docker_cert_directory(&options, from_env.to_str()).unwrap(),
+        (explicit, "--docker-cert-path".to_string())
     );
+
+    let options = DockerConnectionOptions::default();
+    assert_eq!(
+        docker_cert_directory(&options, from_env.to_str()).unwrap(),
+        (from_env, "DOCKER_CERT_PATH".to_string())
+    );
+    let home = crate::user::home_directory().unwrap().join(".docker");
+    for unset in [None, Some("")] {
+        assert_eq!(
+            docker_cert_directory(&options, unset).unwrap(),
+            (home.clone(), "~/.docker".to_string())
+        );
+    }
+}
+
+#[test]
+fn flag_tls_settings_errors_naming_what_named_a_cert_directory_that_is_not_there() {
+    let missing = unique_temp_dir().join("typo");
+    for named_by in ["--docker-cert-path", "DOCKER_CERT_PATH", "~/.docker"] {
+        let err =
+            flag_tls_settings(&DockerConnectionOptions::default(), &missing, named_by).unwrap_err();
+        let message = format!("{err:#}");
+        assert!(message.contains(named_by), "{message}");
+        assert!(message.contains("typo"), "{message}");
+    }
+}
+
+/// `DOCKER_CERT_PATH` left over from a directory long gone, with every file
+/// named by a flag, connected before; nothing in the directory is wanted.
+#[test]
+fn flag_tls_settings_ignores_a_cert_directory_that_is_not_there_when_every_file_has_a_flag() {
+    let files = unique_temp_dir();
+    for name in ["ca.pem", "cert.pem", "key.pem"] {
+        fs::write(files.join(name), name).unwrap();
+    }
+    let options = DockerConnectionOptions {
+        tls_ca_cert: Some(files.join("ca.pem")),
+        tls_cert: Some(files.join("cert.pem")),
+        tls_key: Some(files.join("key.pem")),
+        ..Default::default()
+    };
+
+    let settings = flag_tls_settings(
+        &options,
+        &unique_temp_dir().join("gone"),
+        "DOCKER_CERT_PATH",
+    )
+    .unwrap();
+    assert_eq!(
+        settings.client,
+        Some(ClientCertificate {
+            cert: tls_file(files.join("cert.pem"), "--docker-tls-cert"),
+            key: tls_file(files.join("key.pem"), "--docker-tls-key"),
+        })
+    );
+}
+
+#[test]
+fn flag_tls_settings_uses_an_explicit_ca_path_as_named_by_its_flag() {
+    let cert_directory = unique_temp_dir();
+    fs::write(cert_directory.join("ca.pem"), "default").unwrap();
+    let elsewhere = unique_temp_dir().join("my-ca.pem");
+    fs::write(&elsewhere, "explicit").unwrap();
+    let options = DockerConnectionOptions {
+        tls_ca_cert: Some(elsewhere.clone()),
+        ..Default::default()
+    };
+
+    let settings = flag_tls_settings(&options, &cert_directory, "--docker-cert-path").unwrap();
+    assert_eq!(
+        settings,
+        TlsSettings {
+            ca: Some(tls_file(elsewhere, "--docker-tls-ca-cert")),
+            client: None,
+            skip_verify_requested: false,
+        }
+    );
+}
+
+#[test]
+fn flag_tls_settings_uses_the_cert_directory_ca_when_it_is_there() {
+    let cert_directory = unique_temp_dir();
+    fs::write(cert_directory.join("ca.pem"), "ca").unwrap();
+
+    let settings = flag_tls_settings(
+        &DockerConnectionOptions::default(),
+        &cert_directory,
+        "DOCKER_CERT_PATH",
+    )
+    .unwrap();
+    assert_eq!(
+        settings.ca,
+        Some(tls_file(cert_directory.join("ca.pem"), "DOCKER_CERT_PATH"))
+    );
+}
+
+#[test]
+fn flag_tls_settings_with_no_files_at_all_has_no_ca_and_no_client_certificate() {
+    let cert_directory = unique_temp_dir();
+
+    let settings = flag_tls_settings(
+        &DockerConnectionOptions::default(),
+        &cert_directory,
+        "~/.docker",
+    )
+    .unwrap();
+    assert_eq!(
+        settings,
+        TlsSettings {
+            ca: None,
+            client: None,
+            skip_verify_requested: false,
+        }
+    );
+}
+
+#[test]
+fn flag_tls_settings_presents_the_cert_directory_client_pair_when_both_files_are_there() {
+    let cert_directory = unique_temp_dir();
+    fs::write(cert_directory.join("cert.pem"), "cert").unwrap();
+    fs::write(cert_directory.join("key.pem"), "key").unwrap();
+
+    let settings = flag_tls_settings(
+        &DockerConnectionOptions::default(),
+        &cert_directory,
+        "--docker-cert-path",
+    )
+    .unwrap();
+    assert_eq!(settings.ca, None);
+    assert_eq!(
+        settings.client,
+        Some(ClientCertificate {
+            cert: tls_file(cert_directory.join("cert.pem"), "--docker-cert-path"),
+            key: tls_file(cert_directory.join("key.pem"), "--docker-cert-path"),
+        })
+    );
+}
+
+#[test]
+fn flag_tls_settings_errors_when_only_half_a_client_pair_is_in_the_cert_directory() {
+    for (present, missing) in [("cert.pem", "key.pem"), ("key.pem", "cert.pem")] {
+        let cert_directory = unique_temp_dir();
+        fs::write(cert_directory.join(present), "x").unwrap();
+
+        let err = flag_tls_settings(
+            &DockerConnectionOptions::default(),
+            &cert_directory,
+            "--docker-cert-path",
+        )
+        .unwrap_err();
+        let message = format!("{err:#}");
+        assert!(message.contains("--docker-cert-path"), "{message}");
+        assert!(message.contains(present), "{message}");
+        assert!(message.contains(missing), "{message}");
+    }
+}
+
+#[test]
+fn flag_tls_settings_errors_naming_the_flag_when_its_file_does_not_exist() {
+    let cert_directory = unique_temp_dir();
+    fs::write(cert_directory.join("cert.pem"), "cert").unwrap();
+    fs::write(cert_directory.join("key.pem"), "key").unwrap();
+    let missing = cert_directory.join("not-there.pem");
+
+    for (flag, options) in [
+        (
+            "--docker-tls-ca-cert",
+            DockerConnectionOptions {
+                tls_ca_cert: Some(missing.clone()),
+                ..Default::default()
+            },
+        ),
+        (
+            "--docker-tls-cert",
+            DockerConnectionOptions {
+                tls_cert: Some(missing.clone()),
+                ..Default::default()
+            },
+        ),
+        (
+            "--docker-tls-key",
+            DockerConnectionOptions {
+                tls_key: Some(missing.clone()),
+                ..Default::default()
+            },
+        ),
+    ] {
+        let err = flag_tls_settings(&options, &cert_directory, "~/.docker").unwrap_err();
+        let message = format!("{err:#}");
+        assert!(message.contains(flag), "{message}");
+        assert!(message.contains("not-there.pem"), "{message}");
+    }
+}
+
+#[test]
+fn flag_tls_settings_with_one_client_flag_takes_the_other_file_from_the_cert_directory() {
+    let cert_directory = unique_temp_dir();
+    fs::write(cert_directory.join("key.pem"), "key").unwrap();
+    let cert = unique_temp_dir().join("me.pem");
+    fs::write(&cert, "cert").unwrap();
+    let options = DockerConnectionOptions {
+        tls_cert: Some(cert.clone()),
+        ..Default::default()
+    };
+
+    let settings = flag_tls_settings(&options, &cert_directory, "DOCKER_CERT_PATH").unwrap();
+    assert_eq!(
+        settings.client,
+        Some(ClientCertificate {
+            cert: tls_file(cert, "--docker-tls-cert"),
+            key: tls_file(cert_directory.join("key.pem"), "DOCKER_CERT_PATH"),
+        })
+    );
+}
+
+#[test]
+fn flag_tls_settings_with_one_client_flag_errors_when_the_other_file_is_not_in_the_cert_directory()
+{
+    let cert_directory = unique_temp_dir();
+    let cert = unique_temp_dir().join("me.pem");
+    fs::write(&cert, "cert").unwrap();
+    let options = DockerConnectionOptions {
+        tls_cert: Some(cert),
+        ..Default::default()
+    };
+
+    let err = flag_tls_settings(&options, &cert_directory, "DOCKER_CERT_PATH").unwrap_err();
+    let message = format!("{err:#}");
+    assert!(message.contains("DOCKER_CERT_PATH"), "{message}");
+    assert!(message.contains("key.pem"), "{message}");
 }
 
 /// A throwaway self-signed root CA, and a leaf certificate/key pair it
@@ -498,8 +743,8 @@ fn docker_cert_directory_prefers_the_explicit_option_over_the_env_var_and_defaul
 /// `connect_over_tls_rejects_an_expired_certificate`).
 struct GeneratedTlsMaterials {
     /// PEM text for `ca.pem` — what a real `--docker-cert-path`
-    /// directory holds, and what `connect`'s `Docker::connect_with_ssl`
-    /// call reads.
+    /// directory or a Docker context holds, and the only root `connect`
+    /// then trusts.
     ca_pem: String,
     cert_pem: String,
     key_pem: String,
@@ -511,7 +756,8 @@ struct GeneratedTlsMaterials {
     /// against it (`serve_one_tls_connection`'s `client_ca`).
     ca_der: rustls::pki_types::CertificateDer<'static>,
     /// A client certificate/key pair the same CA signs — what a Docker
-    /// context's `cert.pem`/`key.pem` hold.
+    /// context's or a `--docker-cert-path` directory's `cert.pem`/`key.pem`
+    /// hold (see `write_client_tls_materials`).
     client_cert_pem: String,
     client_key_pem: String,
 }
@@ -568,6 +814,15 @@ fn write_tls_materials(dir: &Path, materials: &GeneratedTlsMaterials) {
     fs::write(dir.join("key.pem"), &materials.key_pem).unwrap();
 }
 
+/// `materials`' *client* pair as `dir`'s `cert.pem`/`key.pem` — what a
+/// daemon requiring a client certificate accepts. `write_tls_materials`
+/// writes the *server's* leaf there instead, which loads as a valid pair
+/// but which no test server ever asks for.
+fn write_client_tls_materials(dir: &Path, materials: &GeneratedTlsMaterials) {
+    fs::write(dir.join("cert.pem"), &materials.client_cert_pem).unwrap();
+    fs::write(dir.join("key.pem"), &materials.client_key_pem).unwrap();
+}
+
 /// Accepts exactly one TCP connection on `listener` and completes a
 /// TLS handshake using `cert`/`key`, then responds to the first HTTP
 /// request with a minimal 200 OK — just enough for `Docker::ping` to
@@ -620,34 +875,26 @@ async fn serve_one_tls_connection(
     }
 }
 
-/// Every `connect_over_tls_*` test reaches `connect`'s
-/// `Docker::connect_with_ssl`, which loads the OS trust store
-/// (`rustls-native-certs`) on top of our throwaway test CA. On macOS that
-/// native-cert load intermittently fails ("Could not load native certs")
-/// when two threads hit the Security framework at once — so they take a
-/// shared lock around `connect` instead of running concurrently.
+/// `connect` loads the OS trust store (`rustls-native-certs`, through
+/// `system_trust_roots`) whenever no CA is configured — no `ca.pem` and no
+/// `--docker-tls-ca-cert`, or a context storing none. On macOS that load
+/// intermittently fails ("Could not load native certs"), once thought to
+/// be two threads hitting the Security framework at once — so TLS
+/// `connect` calls take a shared lock instead of running concurrently.
 /// Recovered from poisoning so a failing test reports its own assertion
 /// rather than cascading a `PoisonError`.
 ///
-/// **Every TLS-enabled `connect` in these tests needs this lock, not just
-/// the ones that complete a handshake.** The racy step is the native-cert
-/// load, which happens inside `connect_with_ssl` for a bad certificate
-/// path just as much as a good one — so the two error-path tests below
-/// take it too, even though neither ever opens a socket. Leaving them out
-/// is what made the *handshake* test fail intermittently under a full
-/// `--workspace` run: an unlocked error-path test would race it and the
-/// wrong test would report the failure.
-///
-/// The lock can't help across processes, so it relies on these being the
-/// only TLS `connect` callers in one test binary. A new one belongs here
-/// too — which is why the `connect_via_a_context_*` TLS tests take it: a
-/// context with no stored CA loads the same trust store
-/// (`system_trust_roots`), and the rest are TLS `connect` callers all the
-/// same. (`connect` calls that fail *before* the TLS branch — the
+/// **Every TLS-enabled `connect` in these tests takes this lock, not just
+/// the ones that load the trust store.** Only a connection with no CA
+/// needs it, but it costs nothing, and which tests those are changes as
+/// tests do; one left out would race the rest and the wrong test would
+/// report the failure. The lock can't help across processes, so it relies
+/// on these being the only TLS `connect` callers in one test binary.
+/// (`connect` calls that fail *before* the TLS branch — the
 /// context-conflict tests — don't need it, and take no lock.)
 ///
 /// See this module's own doc comment for why this lock doesn't fully
-/// explain the failure this test still sees from time to time — it's kept
+/// explain the failure these tests still see from time to time — it's kept
 /// because it's still correct given the theory it *was* meant to guard
 /// against, not because it's known to be sufficient.
 static TLS_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -684,9 +931,8 @@ async fn connect_over_tls_completes_a_real_handshake_against_a_valid_certificate
         ..Default::default()
     };
 
-    // The lock spans only `connect` — the synchronous native-cert load is
-    // the racy part, and scoping it here keeps it off the `.await`s below
-    // (which `clippy::await_holding_lock` would flag).
+    // The lock spans only `connect`, which keeps it off the `.await`s
+    // below (which `clippy::await_holding_lock` would flag).
     let docker = {
         let _guard = serial_tls();
         connect(&options)
@@ -770,26 +1016,10 @@ fn connect_over_tls_errors_clearly_when_the_ca_file_is_not_valid_pem() {
         let _guard = serial_tls();
         connect(&options).unwrap_err()
     };
-    assert!(err.to_string().contains("over TLS"), "{err}");
-}
-
-#[test]
-fn connect_over_tls_errors_clearly_when_a_certificate_file_is_missing() {
-    let cert_directory = unique_temp_dir();
-    // No certificate files written.
-
-    let options = DockerConnectionOptions {
-        host: Some("tcp://127.0.0.1:2376".to_string()),
-        tls: true,
-        cert_path: Some(cert_directory),
-        ..Default::default()
-    };
-
-    let err = {
-        let _guard = serial_tls();
-        connect(&options).unwrap_err()
-    };
-    assert!(err.to_string().contains("over TLS"), "{err}");
+    let message = format!("{err:#}");
+    assert!(message.contains("over TLS"), "{message}");
+    assert!(message.contains("--docker-cert-path"), "{message}");
+    assert!(message.contains("ca.pem"), "{message}");
 }
 
 #[test]
@@ -859,11 +1089,11 @@ fn tls_context_options(
     }
 }
 
-/// Connects through `options`' context to a one-shot TLS server presenting
+/// Connects as `options` say to a one-shot TLS server presenting
 /// `materials`' leaf certificate (requiring a client certificate its CA
 /// signed when `require_client_cert`), and returns the `ping` result
 /// already passed through `Connection::explain_failure`.
-async fn ping_through_context(
+async fn ping_over_tls(
     options: &DockerConnectionOptions,
     listener: tokio::net::TcpListener,
     materials: &GeneratedTlsMaterials,
@@ -877,7 +1107,7 @@ async fn ping_through_context(
     ));
     let connection = {
         let _guard = serial_tls();
-        connect(options).expect("connecting through the context should build a client")
+        connect(options).expect("connecting over TLS should build a client")
     };
     let result = connection
         .docker
@@ -918,7 +1148,7 @@ async fn connect_via_a_context_presents_its_stored_client_certificate_to_a_daemo
         ],
     );
 
-    let result = ping_through_context(&options, listener, &materials, true).await;
+    let result = ping_over_tls(&options, listener, &materials, true).await;
     assert!(result.is_ok(), "expected a verified mTLS ping: {result:?}");
 }
 
@@ -929,7 +1159,7 @@ async fn connect_via_a_context_with_only_a_stored_ca_verifies_the_daemon_without
     let (listener, port) = local_listener().await;
     let options = tls_context_options(port, "ca-only", false, &[("ca.pem", &materials.ca_pem)]);
 
-    let result = ping_through_context(&options, listener, &materials, false).await;
+    let result = ping_over_tls(&options, listener, &materials, false).await;
     assert!(result.is_ok(), "expected a verified ping: {result:?}");
 }
 
@@ -940,7 +1170,7 @@ async fn connect_via_a_context_with_only_a_stored_ca_is_refused_by_a_daemon_requ
     let (listener, port) = local_listener().await;
     let options = tls_context_options(port, "ca-only", false, &[("ca.pem", &materials.ca_pem)]);
 
-    let result = ping_through_context(&options, listener, &materials, true).await;
+    let result = ping_over_tls(&options, listener, &materials, true).await;
     assert!(result.is_err(), "expected the daemon to refuse: {result:?}");
 }
 
@@ -952,7 +1182,7 @@ async fn connect_via_a_context_asking_to_skip_verification_still_verifies_and_sa
     let (listener, port) = local_listener().await;
     let options = tls_context_options(port, "insecure", true, &[("ca.pem", &other_ca)]);
 
-    let err = ping_through_context(&options, listener, &materials, false)
+    let err = ping_over_tls(&options, listener, &materials, false)
         .await
         .unwrap_err();
     let message = format!("{err:#}");
@@ -970,7 +1200,7 @@ async fn connect_via_a_context_with_only_skip_tls_verify_still_verifies() {
     let (listener, port) = local_listener().await;
     let options = tls_context_options(port, "insecure", true, &[]);
 
-    let err = ping_through_context(&options, listener, &materials, false)
+    let err = ping_over_tls(&options, listener, &materials, false)
         .await
         .unwrap_err();
     assert!(format!("{err:#}").contains("always verifies"), "{err:#}");
@@ -983,7 +1213,7 @@ async fn a_failed_verification_is_not_explained_when_the_context_did_not_ask_to_
     let (listener, port) = local_listener().await;
     let options = tls_context_options(port, "strict", false, &[("ca.pem", &other_ca)]);
 
-    let err = ping_through_context(&options, listener, &materials, false)
+    let err = ping_over_tls(&options, listener, &materials, false)
         .await
         .unwrap_err();
     assert!(!format!("{err:#}").contains("always verifies"), "{err:#}");
@@ -1011,12 +1241,7 @@ async fn a_failure_other_than_verification_is_not_explained_as_one() {
 /// Connects through a context storing `files`, expecting it to fail before
 /// any network I/O, and returns the error text.
 fn context_connect_error(files: &[(&str, &str)]) -> String {
-    let options = tls_context_options(1, "broken", false, files);
-    let err = {
-        let _guard = serial_tls();
-        connect(&options).expect_err("invalid stored material should fail")
-    };
-    format!("{err:#}")
+    connect_error(&tls_context_options(1, "broken", false, files))
 }
 
 #[test]
@@ -1117,4 +1342,217 @@ async fn docker_client_new_explains_a_verification_failure_for_a_context_asking_
     let message = format!("{err:#}");
     assert!(message.contains("Docker context 'insecure'"), "{message}");
     assert!(message.contains("always verifies"), "{message}");
+}
+
+/// The options for `--docker-host tcp://127.0.0.1:<port> --docker-tls-verify
+/// --docker-cert-path <cert_directory>`.
+fn tls_flag_options(port: u16, cert_directory: &Path) -> DockerConnectionOptions {
+    DockerConnectionOptions {
+        host: Some(format!("tcp://127.0.0.1:{port}")),
+        tls_verify: true,
+        cert_path: Some(cert_directory.to_path_buf()),
+        ..Default::default()
+    }
+}
+
+/// Connects as `options` say, expecting it to fail before any network I/O,
+/// and returns the error text.
+fn connect_error(options: &DockerConnectionOptions) -> String {
+    let err = {
+        let _guard = serial_tls();
+        connect(options).expect_err("invalid TLS material should fail")
+    };
+    format!("{err:#}")
+}
+
+#[tokio::test]
+async fn connect_over_tls_with_only_a_ca_verifies_the_daemon_without_a_client_certificate() {
+    let materials = valid_materials();
+    let (listener, port) = local_listener().await;
+    let cert_directory = unique_temp_dir();
+    fs::write(cert_directory.join("ca.pem"), &materials.ca_pem).unwrap();
+
+    let options = tls_flag_options(port, &cert_directory);
+    let result = ping_over_tls(&options, listener, &materials, false).await;
+    assert!(result.is_ok(), "expected a verified ping: {result:?}");
+}
+
+#[tokio::test]
+async fn connect_over_tls_presents_its_client_certificate_to_a_daemon_requiring_one() {
+    let materials = valid_materials();
+    let (listener, port) = local_listener().await;
+    let cert_directory = unique_temp_dir();
+    fs::write(cert_directory.join("ca.pem"), &materials.ca_pem).unwrap();
+    write_client_tls_materials(&cert_directory, &materials);
+
+    let options = tls_flag_options(port, &cert_directory);
+    let result = ping_over_tls(&options, listener, &materials, true).await;
+    assert!(result.is_ok(), "expected a verified mTLS ping: {result:?}");
+}
+
+#[tokio::test]
+async fn connect_over_tls_with_only_a_ca_is_refused_by_a_daemon_requiring_a_client_certificate() {
+    let materials = valid_materials();
+    let (listener, port) = local_listener().await;
+    let cert_directory = unique_temp_dir();
+    fs::write(cert_directory.join("ca.pem"), &materials.ca_pem).unwrap();
+
+    let options = tls_flag_options(port, &cert_directory);
+    let result = ping_over_tls(&options, listener, &materials, true).await;
+    assert!(result.is_err(), "expected the daemon to refuse: {result:?}");
+}
+
+/// No file at all used to be an error before any connection was made. It is
+/// now a valid configuration — the system trust store, no client
+/// certificate — so what's left to get wrong is a forgotten `ca.pem`, and
+/// the failure has to say where one was looked for.
+///
+/// The test CA is in no system trust store, so verification fails — the
+/// success half (a daemon certificate a public CA signed) isn't testable
+/// here.
+#[tokio::test]
+async fn connect_over_tls_without_a_ca_verifies_against_the_system_trust_store_and_says_so() {
+    let materials = valid_materials();
+    let (listener, port) = local_listener().await;
+    let cert_directory = unique_temp_dir();
+
+    let options = tls_flag_options(port, &cert_directory);
+    let err = ping_over_tls(&options, listener, &materials, false)
+        .await
+        .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(message.contains("system trust store"), "{message}");
+    assert!(
+        message.contains(&cert_directory.join("ca.pem").display().to_string()),
+        "{message}"
+    );
+    assert!(message.contains("--docker-tls-ca-cert"), "{message}");
+    assert!(!message.contains("Docker context"), "{message}");
+}
+
+/// Only weak evidence that `ca.pem` is the *sole* root: the server's
+/// certificate is signed by a throwaway CA that no system trust store holds
+/// either, so this would be rejected even if the OS store were still added
+/// alongside. What it does prove is that a given CA is used, and that the
+/// failure isn't then explained as a missing one.
+#[tokio::test]
+async fn connect_over_tls_rejects_a_daemon_its_ca_did_not_sign() {
+    let materials = valid_materials();
+    let other_ca = valid_materials().ca_pem;
+    let (listener, port) = local_listener().await;
+    let cert_directory = unique_temp_dir();
+    fs::write(cert_directory.join("ca.pem"), other_ca).unwrap();
+
+    let options = tls_flag_options(port, &cert_directory);
+    let err = ping_over_tls(&options, listener, &materials, false)
+        .await
+        .unwrap_err();
+    assert!(
+        !format!("{err:#}").contains("system trust store"),
+        "{err:#}"
+    );
+}
+
+/// Used to mean "present no client certificate", silently: the key was only
+/// loaded during the handshake, by a resolver that swallowed the error.
+#[test]
+fn connect_over_tls_errors_naming_the_file_when_its_key_is_not_a_key() {
+    let materials = valid_materials();
+    let cert_directory = unique_temp_dir();
+    fs::write(cert_directory.join("ca.pem"), &materials.ca_pem).unwrap();
+    fs::write(cert_directory.join("cert.pem"), &materials.client_cert_pem).unwrap();
+    fs::write(cert_directory.join("key.pem"), "not a key").unwrap();
+
+    let message = connect_error(&tls_flag_options(1, &cert_directory));
+    assert!(message.contains("over TLS"), "{message}");
+    assert!(message.contains("--docker-cert-path"), "{message}");
+    assert!(message.contains("key.pem"), "{message}");
+}
+
+#[test]
+fn connect_over_tls_errors_naming_the_files_when_its_key_does_not_match_its_certificate() {
+    let materials = valid_materials();
+    let other = valid_materials();
+    let cert_directory = unique_temp_dir();
+    fs::write(cert_directory.join("ca.pem"), &materials.ca_pem).unwrap();
+    fs::write(cert_directory.join("cert.pem"), &materials.client_cert_pem).unwrap();
+    fs::write(cert_directory.join("key.pem"), &other.client_key_pem).unwrap();
+
+    let message = connect_error(&tls_flag_options(1, &cert_directory));
+    assert!(message.contains("key.pem"), "{message}");
+    assert!(message.contains("cert.pem"), "{message}");
+}
+
+#[test]
+fn connect_over_tls_errors_naming_the_flag_when_its_key_is_encrypted_or_mismatched() {
+    let materials = valid_materials();
+    let other = valid_materials();
+    let encrypted =
+        "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIBAA==\n-----END ENCRYPTED PRIVATE KEY-----\n";
+
+    for (key, expected) in [
+        (encrypted, "encrypted"),
+        (other.client_key_pem.as_str(), "can't be used with"),
+    ] {
+        let cert_directory = unique_temp_dir();
+        write_client_tls_materials(&cert_directory, &materials);
+        let key_path = unique_temp_dir().join("elsewhere.pem");
+        fs::write(&key_path, key).unwrap();
+        let options = DockerConnectionOptions {
+            tls_key: Some(key_path),
+            ..tls_flag_options(1, &cert_directory)
+        };
+
+        let message = connect_error(&options);
+        assert!(message.contains("--docker-tls-key"), "{message}");
+        assert!(message.contains("elsewhere.pem"), "{message}");
+        assert!(message.contains(expected), "{message}");
+    }
+}
+
+/// `bollard`'s `connect_with_ssl` built a client for either without
+/// complaint, which then failed on its first request. Refused before any
+/// file is read: the cert directory named here doesn't exist, and isn't
+/// what the error is about.
+#[test]
+fn connect_over_tls_errors_naming_the_host_when_it_is_not_tcp() {
+    for host in ["unix:///var/run/docker.sock", "http://127.0.0.1:2376"] {
+        let options = DockerConnectionOptions {
+            host: Some(host.to_string()),
+            ..tls_flag_options(1, &unique_temp_dir().join("never-read"))
+        };
+
+        let message = connect_error(&options);
+        assert!(message.contains(host), "{message}");
+        assert!(message.contains("over TLS"), "{message}");
+        assert!(!message.contains("Docker context"), "{message}");
+        assert!(!message.contains("never-read"), "{message}");
+    }
+}
+
+/// What `connect_with_ssl` accepted, so what `--docker-host` with
+/// `--docker-tls` always has.
+#[tokio::test]
+async fn connect_over_tls_accepts_a_host_with_no_scheme() {
+    let materials = valid_materials();
+    let (listener, port) = local_listener().await;
+    let cert_directory = unique_temp_dir();
+    fs::write(cert_directory.join("ca.pem"), &materials.ca_pem).unwrap();
+
+    let options = DockerConnectionOptions {
+        host: Some(format!("127.0.0.1:{port}")),
+        ..tls_flag_options(port, &cert_directory)
+    };
+    let result = ping_over_tls(&options, listener, &materials, false).await;
+    assert!(result.is_ok(), "expected a verified ping: {result:?}");
+}
+
+#[test]
+fn connect_over_tls_errors_naming_the_cert_directory_when_it_is_not_there() {
+    let options = tls_flag_options(1, &unique_temp_dir().join("typo"));
+
+    let message = connect_error(&options);
+    assert!(message.contains("over TLS"), "{message}");
+    assert!(message.contains("--docker-cert-path"), "{message}");
+    assert!(message.contains("typo"), "{message}");
 }

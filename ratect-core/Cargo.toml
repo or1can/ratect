@@ -29,13 +29,13 @@ noyalib = { version = "0.0.51", features = ["compat-serde-yaml"] }
 # `chrono` is required transitively once
 # `buildkit_providerless` is on (BuildKit OAuth token expiry needs a
 # date/time type) — bollard won't compile without it or the `time` feature.
-# `ssl` (added for `--docker-tls`/`-verify`, `ratect-core/src/docker.rs`'s
-# `connect`) turns on `rustls`'s `ring` cryptographic provider feature on
-# top of `ssl_providerless` (already pulled in by `buildkit_providerless`) —
-# `Docker::connect_with_ssl` panics if asked to build a TLS connection
-# before a provider is installed, so `ensure_crypto_provider_installed`
-# calls `rustls::crypto::ring::default_provider().install_default()` once,
-# guarded by a `std::sync::Once`.
+# `ssl` (added for `--docker-tls`/`-verify`) turns on `rustls`'s `ring`
+# cryptographic provider feature on top of `ssl_providerless` (already
+# pulled in by `buildkit_providerless`) — the provider
+# `docker/connection.rs`'s `ensure_crypto_provider_installed` installs, once,
+# before building its own `rustls` configuration. Ratect makes every TLS
+# connection itself (see the `hyper-util` entry below), so `bollard`'s own
+# TLS code is reached only where `connect_with_host` chooses it.
 bollard = { version = "0.22", features = ["buildkit_providerless", "chrono", "ssl"] }
 # **`anyhow`**: Simplified error handling with context.
 anyhow = "1.0"
@@ -142,11 +142,12 @@ unicode-width = "0.2.2"
 rustls = { version = "0.23", default-features = false }
 # **`hyper-util`**, **`hyper-rustls`**, **`rustls-native-certs`**: the TLS
 # transport `docker/connection.rs` hands `bollard`'s
-# `connect_with_custom_transport` for a Docker context with TLS settings.
-# `bollard`'s own `connect_with_ssl` needs a CA, a client certificate and a
-# key, each as a file, so it can't express what a context may store: a CA
-# with no client certificate, or no CA at all (the system trust store,
-# which is what `rustls-native-certs` loads). The custom transport is
+# `connect_with_custom_transport` for every TLS connection, whether
+# `--docker-tls`/`-verify` or a Docker context asked for it. `bollard`'s own
+# `connect_with_ssl` needs a CA, a client certificate and a key, each as a
+# file, so it can't express what either may hold: a CA with no client
+# certificate, or no CA at all (the system trust store, which is what
+# `rustls-native-certs` loads). The custom transport is
 # `bollard`'s accepted route for a connection it doesn't build itself
 # (fussybeaver/bollard#459). Features are the ones `bollard`'s own `ssl`
 # feature already turns on, and all three are already resolved in
