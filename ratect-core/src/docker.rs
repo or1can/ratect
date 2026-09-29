@@ -1412,7 +1412,18 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// empty (only the top-level requested task's own container can receive
     /// `-- ADDITIONAL_ARGS`, via [`run_container`](Self::run_container)
     /// instead).
-    async fn start_background_container(&self, spec: &ContainerSpec) -> Result<String>;
+    ///
+    /// `created` is signaled with the container's id the moment Docker's
+    /// `create_container` returns — before user mapping, joining the network
+    /// or starting it, any of which can fail, and before the caller can
+    /// abandon this call. The same contract as `run_container`'s `created`:
+    /// past that point the caller owns removing the container, whether or
+    /// not this call ever returns its id (ratect#224).
+    async fn start_background_container(
+        &self,
+        spec: &ContainerSpec,
+        created: tokio::sync::oneshot::Sender<String>,
+    ) -> Result<String>;
 
     /// Blocks until `container_id` — already started — reports healthy.
     /// Ported from Batect's `WaitForContainerToBecomeHealthyStepRunner`:
@@ -1512,8 +1523,8 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// before anything else here can fail. That is what makes the paragraph
     /// above safe: past that point the caller can always remove it, so a
     /// failure here can propagate immediately instead of having to be
-    /// carried past a removal. `None` for a dependency/sidecar
-    /// (`start_background_container` returns its id directly).
+    /// carried past a removal. `start_background_container` takes the same
+    /// channel, for the same reason.
     ///
     /// `started`, given, is signaled right after Docker's own `start` call
     /// succeeds — never sent at all if the container never gets that far.
@@ -2474,7 +2485,11 @@ impl ContainerRuntime for DockerClient {
         }
     }
 
-    async fn start_background_container(&self, spec: &ContainerSpec) -> Result<String> {
+    async fn start_background_container(
+        &self,
+        spec: &ContainerSpec,
+        created: tokio::sync::oneshot::Sender<String>,
+    ) -> Result<String> {
         let shared = &spec.shared;
         let options = &shared.options;
         if shared.user_mapping.is_some() {
@@ -2538,6 +2553,10 @@ impl ContainerRuntime for DockerClient {
             .await
             .with_context(|| format!("Failed to create sidecar container '{}'", shared.name))?;
         tracing::debug!(container_id = %container.id, alias = shared.name.as_str(), image = shared.image.as_str(), "created sidecar container");
+        // Handed over the moment the container exists, as `run_container`
+        // does — from here the caller owns removing it, so every `?` below
+        // is safe.
+        let _ = created.send(container.id.clone());
 
         if let Some(mapping) = &shared.user_mapping {
             self.apply_user_mapping(&container.id, mapping).await?;

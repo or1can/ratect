@@ -175,6 +175,12 @@ type SharedResult<T> = Result<T, Arc<anyhow::Error>>;
 /// real Docker call.
 type ReadyCell = Arc<OnceCell<SharedResult<String>>>;
 
+/// Dependency name -> the receiving end of the `created` channel its
+/// `start_background_container` call sends the container's id on — see
+/// `run_task_internal`'s `created_dependencies` for why the receiver is kept rather
+/// than awaited.
+type CreatedDependencies = Mutex<HashMap<String, tokio::sync::oneshot::Receiver<String>>>;
+
 /// Gets (or lazily creates) the shared cell for `key` in `cells`, under a
 /// short synchronous lock — the lock is dropped before the returned cell is
 /// ever `.await`ed on (by the caller, via `.get_or_init`), so it's held only
@@ -1570,14 +1576,18 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // a network it can see was actually created.
         let network_name_cell: Mutex<Option<String>> = Mutex::new(None);
 
-        // Populated concurrently as each dependency starts (before its own
-        // readiness gate — see `ensure_container_ready`), so cleanup below
-        // still tears down every container that got as far as starting, even
-        // one that never became ready. `Mutex`-guarded (rather than owned
-        // `&mut`, pre-0.15.0) since independent branches of the dependency
-        // graph now start concurrently and each registers itself here from
-        // its own task.
-        let running_sidecars: Mutex<HashMap<String, String>> = Mutex::new(HashMap::new());
+        // One receiver per dependency, parked here *before* its
+        // `start_background_container` call, which sends the container's id
+        // the moment Docker creates it. Read only at cleanup, so an id sent
+        // by a start that was then abandoned (a sibling dependency failed,
+        // and `try_join_all` dropped it) or that failed after creating its
+        // container is still here: a oneshot keeps a sent value after its
+        // sender is gone. Awaiting the receiver alongside the start instead
+        // would lose exactly that value if both were dropped between the
+        // send and the next poll (ratect#224). `Mutex`-guarded since
+        // independent branches of the dependency graph start concurrently
+        // and each registers itself here from its own task.
+        let created_dependencies: CreatedDependencies = Mutex::new(HashMap::new());
         // Every dependency-exit watcher `ensure_container_ready` spawns
         // once a dependency reaches `Ready` (see
         // `TaskEvent::DependencyExitedUnexpectedly`), collected so they can
@@ -1651,9 +1661,9 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 }
             };
             // Recorded for the cleanup section below *before* any further
-            // failure in this block — same "register before the readiness
-            // gate" principle `ensure_container_ready` already applies to
-            // `running_sidecars`.
+            // failure in this block — same "register before anything can
+            // fail" principle `ensure_container_ready` already applies to
+            // `created_dependencies`.
             *network_name_cell.lock().unwrap() = Some(network_name.clone());
 
             // Static, up-front cycle check (see `build_dependency_graph`) —
@@ -1726,7 +1736,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         &graph,
                         &network_name,
                         &ready_cells,
-                        &running_sidecars,
+                        &created_dependencies,
                         &no_proxy_entries,
                         task.customise.as_ref(),
                         &run_labels,
@@ -1867,10 +1877,15 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // reading of a tie.
         //
         // The residual race is Batect's too: a container created but not yet
-        // recorded (in `running_sidecars`, or `task_container_id` below) is
-        // dropped before cleanup can see it, and survives. The ownership
-        // labels are the answer to that — `ratect resources` finds exactly
-        // this — rather than an ordering that could avoid it.
+        // recorded is dropped before cleanup can see it, and survives. For a
+        // dependency that is only a create request already with the daemon
+        // when the run is dropped — its id is recorded the moment the create
+        // call returns (`created_dependencies`). The task's own container
+        // has a little more: its id is recorded when `readiness_future`
+        // next polls after the send (`task_container_id`), so a drop in
+        // between loses it too. The ownership labels are the answer to
+        // both — `ratect resources` finds exactly this — rather than an
+        // ordering that could avoid it.
         // Captured in the same expression that ends the run, not further
         // down: every interrupt after this instant is one the *cleanup*
         // should react to, and reading the count later would fold anything
@@ -1896,7 +1911,14 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             .and_then(|error| error.downcast_ref::<crate::interrupt::TaskInterrupted>())
             .map(|interrupted| interrupted.signal);
         let task_container_id = task_container_id.into_inner().unwrap();
-        let running_sidecars = running_sidecars.into_inner().unwrap();
+        // Every dependency Docker created, however its start ended — see
+        // `created_dependencies`.
+        let created_sidecars: HashMap<String, String> = created_dependencies
+            .into_inner()
+            .unwrap()
+            .into_iter()
+            .filter_map(|(name, mut created)| created.try_recv().ok().map(|id| (name, id)))
+            .collect();
         // Stop watching before cleanup below ever stops a container — see
         // `dependency_watchers`' own doc comment for why the ordering
         // matters, not just that it happens. `abort()` only takes effect at
@@ -1974,7 +1996,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     signal.send_again(),
                 );
             }
-            if !running_sidecars.is_empty() || owns_network || task_container_id.is_some() {
+            if !created_sidecars.is_empty() || owns_network || task_container_id.is_some() {
                 self.event_sink.post(TaskEvent::CleanupStarting);
             }
             // Every removal below is raced against the next interrupt rather
@@ -2018,7 +2040,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 };
                 abandoned = !self.until_interrupted(abandon_after, removal).await;
             }
-            for (name, container_id) in &running_sidecars {
+            for (name, container_id) in &created_sidecars {
                 if abandoned {
                     break;
                 }
@@ -2091,11 +2113,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // nothing else deals with it now, so a run kept for
             // investigation says so once, for everything it kept.
             let kept_task_container = task_container_id.as_ref().map(|_| run.container.as_str());
-            if !running_sidecars.is_empty() || owns_network || kept_task_container.is_some() {
+            if !created_sidecars.is_empty() || owns_network || kept_task_container.is_some() {
                 tracing::info!(
                     task = task_name,
                     task_container = kept_task_container,
-                    dependencies = running_sidecars.len(),
+                    dependencies = created_sidecars.len(),
                     network = network_name.as_deref(),
                     "cleanup disabled; leaving containers and the task network in place \
                      for investigation"
@@ -2150,7 +2172,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         graph: &HashMap<String, Vec<String>>,
         network: &str,
         cells: &Mutex<HashMap<String, ReadyCell>>,
-        running: &Mutex<HashMap<String, String>>,
+        created_dependencies: &CreatedDependencies,
         no_proxy_entries: &std::collections::BTreeSet<String>,
         customisations: Option<&HashMap<String, TaskContainerCustomisation>>,
         run_labels: &crate::labels::RunLabels,
@@ -2176,7 +2198,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                                 graph,
                                 network,
                                 cells,
-                                running,
+                                created_dependencies,
                                 no_proxy_entries,
                                 customisations,
                                 run_labels,
@@ -2263,7 +2285,21 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                                 run_labels,
                             },
                         );
-                        let container_id = self.docker.start_background_container(&spec).await?;
+                        // Registered for cleanup before the call, so a
+                        // container Docker creates is removed however the
+                        // start ends — see `created_dependencies`. Before
+                        // the readiness gate below too, so one that never
+                        // becomes healthy (or whose setup command fails) is
+                        // removed as well.
+                        let (created_tx, created_rx) = tokio::sync::oneshot::channel();
+                        created_dependencies
+                            .lock()
+                            .unwrap()
+                            .insert(name.to_string(), created_rx);
+                        let container_id = self
+                            .docker
+                            .start_background_container(&spec, created_tx)
+                            .await?;
                         (container_id, spec)
                     };
                     if reports_readiness_for.is_none() {
@@ -2271,15 +2307,6 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                             container: name.to_string(),
                         });
                     }
-
-                    // Registered for cleanup *before* the readiness gate
-                    // below — a dependency that starts but never becomes
-                    // healthy (or whose setup command fails) still gets
-                    // stopped and removed.
-                    running
-                        .lock()
-                        .unwrap()
-                        .insert(name.to_string(), container_id.clone());
 
                     // A `run_to_completion` dependency (ratect#97) takes a
                     // different readiness gate entirely: it has no health
