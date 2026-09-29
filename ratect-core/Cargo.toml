@@ -22,28 +22,11 @@ serde_json = "1.0"
 noyalib = { version = "0.0.51", features = ["compat-serde-yaml"] }
 # **`bollard`** (`features = ["buildkit_providerless", "chrono", "ssl"]`,
 # **consumed via a `[patch.crates-io]` fork** — see the root `Cargo.toml`):
-# Asynchronous Docker API client. The fork (`or1can/bollard`, branch
-# `feat/ssh-named-agents`) is upstream `master` plus one commit of ours that
-# hasn't landed yet: sshforward dispatch to *named* ssh agents, which
-# `build_ssh`'s multi-agent and `paths` support builds on
-# ([decisions/0005](https://github.com/or1can/ratect/blob/main/decisions/0005-build-ssh-keyring-placement.md)).
-# The two changes the patch originally existed for — session providers on
-# `build_image` ([#731](https://github.com/fussybeaver/bollard/pull/731))
-# and `ping_info` ([#732](https://github.com/fussybeaver/bollard/pull/732))
-# — **have merged upstream** and are on `master` (0.22.0); the patch remains
-# only because the latest crates.io release is still 0.21.0. Dropping it
-# needs *both* 0.22 published and the named-agent change landed, since 0.22
-# alone won't carry `set_ssh_agent`. **Keep the pin on a branch cut from
-# upstream `master`, and rebase it — never merge `master` into it.** The
-# predecessor branch (`feat/build-image-session-providers`) was the #731 PR
-# branch itself; upstream squash-merged and reshaped that work, so branch
-# and master came to express the same feature as different commits touching
-# the same lines. It could then neither raise a pull request (GitHub
-# reported an unmergeable comparison) nor pick up later upstream fixes — a
-# dead end reached without anything visibly breaking, which is why the rule
-# above is a rule. See `ROADMAP.md`'s 0.12.0 entry for the full fork
-# mechanics and PR links, and its 0.25.0 entry for what the named-agent
-# commit unlocked. `chrono` is required transitively once
+# Asynchronous Docker API client. Which branch of the fork (`or1can/bollard`)
+# is pinned, what it still carries that upstream `master` doesn't, and the
+# rules for rebasing it are all in the root `Cargo.toml`'s own comment, beside
+# the pin itself.
+# `chrono` is required transitively once
 # `buildkit_providerless` is on (BuildKit OAuth token expiry needs a
 # date/time type) — bollard won't compile without it or the `time` feature.
 # `ssl` (added for `--docker-tls`/`-verify`, `ratect-core/src/docker.rs`'s
