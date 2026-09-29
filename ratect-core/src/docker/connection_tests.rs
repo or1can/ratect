@@ -120,13 +120,16 @@ fn active_docker_context_is_none_when_current_context_is_unset_or_empty() {
 #[test]
 fn resolve_context_name_prefers_an_explicit_context_over_everything_else() {
     let options = DockerConnectionOptions {
-        host: None,
         context: Some("explicit".to_string()),
-        config_directory: None,
         ..Default::default()
     };
     assert_eq!(
-        resolve_context_name(&options, Some("env-context"), Some("active".to_string())),
+        resolve_context_name(
+            &options,
+            Some("tcp://from-env:2375"),
+            Some("env-context"),
+            Some("active".to_string())
+        ),
         Some("explicit".to_string())
     );
 }
@@ -135,12 +138,35 @@ fn resolve_context_name_prefers_an_explicit_context_over_everything_else() {
 fn resolve_context_name_an_explicit_host_skips_context_resolution_entirely() {
     let options = DockerConnectionOptions {
         host: Some("tcp://1.2.3.4:2375".to_string()),
-        context: None,
-        config_directory: None,
         ..Default::default()
     };
+    let host = resolve_host(&options, None);
     assert_eq!(
-        resolve_context_name(&options, Some("env-context"), Some("active".to_string())),
+        resolve_context_name(
+            &options,
+            host.as_deref(),
+            Some("env-context"),
+            Some("active".to_string())
+        ),
+        None
+    );
+}
+
+#[test]
+fn resolve_context_name_a_host_from_the_environment_skips_context_resolution_too() {
+    let options = DockerConnectionOptions::default();
+    let host = resolve_host(&options, Some("tcp://from-env:2375"));
+    assert_eq!(
+        resolve_context_name(
+            &options,
+            host.as_deref(),
+            Some("env-context"),
+            Some("active".to_string())
+        ),
+        None
+    );
+    assert_eq!(
+        resolve_context_name(&options, host.as_deref(), None, Some("active".to_string())),
         None
     );
 }
@@ -149,25 +175,37 @@ fn resolve_context_name_an_explicit_host_skips_context_resolution_entirely() {
 fn resolve_context_name_falls_back_to_the_env_var_then_the_active_context() {
     let options = DockerConnectionOptions::default();
     assert_eq!(
-        resolve_context_name(&options, Some("env-context"), Some("active".to_string())),
+        resolve_context_name(
+            &options,
+            None,
+            Some("env-context"),
+            Some("active".to_string())
+        ),
         Some("env-context".to_string())
     );
     assert_eq!(
-        resolve_context_name(&options, None, Some("active".to_string())),
+        resolve_context_name(&options, None, None, Some("active".to_string())),
         Some("active".to_string())
     );
-    assert_eq!(resolve_context_name(&options, None, None), None);
+    assert_eq!(resolve_context_name(&options, None, None, None), None);
+}
+
+#[test]
+fn resolve_context_name_treats_an_empty_docker_context_as_unset() {
+    let options = DockerConnectionOptions::default();
+    assert_eq!(
+        resolve_context_name(&options, None, Some(""), Some("active".to_string())),
+        Some("active".to_string())
+    );
 }
 
 #[test]
 fn resolve_context_name_treats_the_default_context_name_as_no_context() {
     let options = DockerConnectionOptions {
-        host: None,
         context: Some("default".to_string()),
-        config_directory: None,
         ..Default::default()
     };
-    assert_eq!(resolve_context_name(&options, None, None), None);
+    assert_eq!(resolve_context_name(&options, None, None, None), None);
 }
 
 #[test]
@@ -633,4 +671,10 @@ fn resolve_host_prefers_the_explicit_option_then_the_injected_env_value() {
         Some("tcp://from-env:2375".to_string())
     );
     assert_eq!(resolve_host(&options, None), None);
+}
+
+#[test]
+fn resolve_host_treats_an_empty_docker_host_as_unset() {
+    let options = DockerConnectionOptions::default();
+    assert_eq!(resolve_host(&options, Some("")), None);
 }

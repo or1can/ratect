@@ -457,8 +457,8 @@ struct DockerArgs {
     host: Option<String>,
 
     /// Docker CLI context to use. Defaults to DOCKER_CONTEXT, then the
-    /// Docker CLI's own active context. Cannot be combined with
-    /// --docker-host.
+    /// Docker CLI's own active context, unless a Docker host is set. Cannot
+    /// be combined with --docker-host.
     #[arg(long = "docker-context")]
     context: Option<String>,
 

@@ -10,18 +10,17 @@ of those options; the [`ratect`](ratect-cli.md#docker-connection-options) and
 [`ratect-compat`](ratect-compat-cli.md#docker-connection) CLI references only
 link here.
 
-With none of them given, Ratect connects through a Docker context if one
-resolves (`DOCKER_CONTEXT`, then the active context), otherwise to
-`DOCKER_HOST` if it is set, otherwise to Docker's own platform default (a Unix
-socket or Windows named pipe) — see [Which daemon is
-used](#which-daemon-is-used).
+With none of them given, Ratect connects to `DOCKER_HOST` if it is set,
+otherwise through a Docker context if one resolves (`DOCKER_CONTEXT`, then the
+active context), otherwise to Docker's own platform default (a Unix socket or
+Windows named pipe) — see [Which daemon is used](#which-daemon-is-used).
 
 ## Options
 
 | Flag | Default | Description |
 |---|---|---|
 | `--docker-host <HOST>` | `DOCKER_HOST` | Docker host to connect to, e.g. `unix:///var/run/docker.sock` or `tcp://1.2.3.4:5678`. Cannot be combined with `--docker-context`. |
-| `--docker-context <NAME>` | `DOCKER_CONTEXT`, then the active context | Docker CLI context to connect through — read from the Docker CLI's own context store (`~/.docker/contexts/`, or `--docker-config`'s directory). The active context is `~/.docker/config.json`'s `currentContext`. Cannot be combined with `--docker-host` or any of the TLS options below. Errors clearly if the named context doesn't exist in the store. |
+| `--docker-context <NAME>` | `DOCKER_CONTEXT`, then the active context, unless a host is set | Docker CLI context to connect through — read from the Docker CLI's own context store (`~/.docker/contexts/`, or `--docker-config`'s directory). The active context is `~/.docker/config.json`'s `currentContext`. Cannot be combined with `--docker-host` or any of the TLS options below. Errors clearly if the named context doesn't exist in the store. |
 | `--docker-config <PATH>` | `DOCKER_CONFIG`, then `~/.docker` | Directory containing the Docker CLI's own configuration files (context store, `config.json`). |
 | `--docker-tls` | — | Use TLS when connecting to the Docker host. Behaves identically to `--docker-tls-verify` — the daemon's certificate is always fully verified; there is no way to skip verification. |
 | `--docker-tls-verify` | `DOCKER_TLS_VERIFY` | Use TLS when connecting to the Docker host, verifying its certificate. Needs a host: `--docker-host` or `DOCKER_HOST`. |
@@ -36,25 +35,29 @@ A flag always wins over its environment variable. Between the two ways of
 naming a daemon, the order is:
 
 1. `--docker-context <NAME>` on the command line, if given.
-2. Otherwise, if `--docker-host` is given on the command line, that host — no
-   context is consulted at all.
+2. Otherwise, a host — `--docker-host`, then `DOCKER_HOST` — if either is set.
+   No context is consulted at all.
 3. Otherwise a context, if one resolves: `DOCKER_CONTEXT`, then the active
    context.
-4. Otherwise `DOCKER_HOST`, then Docker's own platform default.
+4. Otherwise Docker's own platform default.
 
-A context named `default` — from any of the three sources — means "no
-context", as in the Docker CLI, so step 4 applies.
+This is the Docker CLI's own order. A context named `default` — from any of the
+three sources — means "no context", as in the Docker CLI: Ratect connects to
+`DOCKER_HOST` if it is set, otherwise to the platform default. An
+empty `DOCKER_HOST` or `DOCKER_CONTEXT` counts as unset, also as in the Docker
+CLI.
 
 A connection through a context uses the endpoint that context stores; the TLS
-options only apply to a host connection, and naming one alongside
-`--docker-context` is an error.
+options only apply to a host connection. Naming one alongside
+`--docker-context` is an error; when step 3 picks the context instead, the TLS
+options are ignored, as in Batect.
 
 ## Environment variables
 
 | Variable | Effect |
 |---|---|
-| `DOCKER_HOST` | Docker host to connect to — the default for `--docker-host`. |
-| `DOCKER_CONTEXT` | Docker CLI context to connect through — the default for `--docker-context`. |
+| `DOCKER_HOST` | Docker host to connect to — the default for `--docker-host`. Setting it means no context is used unless `--docker-context` is given. Empty counts as unset. |
+| `DOCKER_CONTEXT` | Docker CLI context to connect through — the default for `--docker-context`. Ignored when a host is set. Empty counts as unset. |
 | `DOCKER_CONFIG` | Directory containing the Docker CLI's own configuration files — the default for `--docker-config`. |
 | `DOCKER_CERT_PATH` | Directory containing `ca.pem`/`cert.pem`/`key.pem` for TLS — the default for `--docker-cert-path`. |
 | `DOCKER_TLS_VERIFY` | `1` or `true` (any case) enables TLS, fully verified — the default for `--docker-tls-verify`. Any other value leaves it off. |

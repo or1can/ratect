@@ -23,6 +23,7 @@ history, from when it was the only binary.
 
 ### Breaking
 
+- `DOCKER_HOST` now stops a Docker context from being used, as `--docker-host` does: with `DOCKER_HOST` set, `DOCKER_CONTEXT` and the active context are ignored, and `DOCKER_TLS_VERIFY` applies. An empty `DOCKER_HOST` or `DOCKER_CONTEXT` counts as unset. See [Connecting to Docker](docs/connecting-to-docker.md#which-daemon-is-used).
 - A container declared in a **YAML file** was given `ratect`-native fields and semantics whenever the project including it happened to be native (ratect only). The file's own format now decides, so a container declared in a `.yml` follows Batect's rules wherever it is included — no native field (`extends`, `ulimits`, `stop_signal`, `stop_grace_period`, `run_to_completion`, `external_health_check`, a cache's `scope`, a setup command's `run_in`), no expressions resolved in `image`, and exactly one of `image`/`build_directory` — including in a native project's `.yml` include and in a YAML root file (`ratect -f batect.yml`). **A config relying on the old behaviour is now rejected**; move that container into a `.toml` file to use a native field. The rejection now names the file that declared it. See [Includes](docs/includes.md#which-fields-a-file-may-use).
 
 ### Added

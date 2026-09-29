@@ -64,8 +64,9 @@ use std::path::{Path, PathBuf};
 /// `DockerClient::new` falls back to the real
 /// `DOCKER_HOST`/`DOCKER_CONTEXT`/`DOCKER_CONFIG`/`DOCKER_CERT_PATH`/
 /// `DOCKER_TLS_VERIFY` environment variables and the Docker CLI's own
-/// active-context resolution, exactly matching Batect's own precedence
-/// (`CommandLineOptionsParser.resolveDockerContext`).
+/// active-context resolution, matching Batect's own precedence
+/// (`CommandLineOptionsParser.resolveDockerContext`) except that an empty
+/// `DOCKER_HOST`/`DOCKER_CONTEXT` counts as unset, as in the Docker CLI.
 ///
 /// One deliberate divergence from Batect, documented in
 /// [Differences from Batect](../../../docs/differences-from-batect.md): there's
@@ -165,10 +166,10 @@ struct DockerCliConfig {
 
 /// The Docker CLI's own "currently active" context, from
 /// `<config_directory>/config.json`'s `currentContext` field — consulted
-/// only when neither `--docker-context`/`--docker-host` nor `DOCKER_CONTEXT`
-/// says otherwise. `None` (not an error) when the file doesn't exist or sets
-/// no `currentContext` — both mean the same thing as the Docker CLI's own
-/// fallback: use the `default` context.
+/// only when none of `--docker-context`, `--docker-host`/`DOCKER_HOST` or
+/// `DOCKER_CONTEXT` says otherwise. `None` (not an error) when the file
+/// doesn't exist or sets no `currentContext` — both mean the same thing as
+/// the Docker CLI's own fallback: use the `default` context.
 fn active_docker_context(config_directory: &Path) -> Option<String> {
     let contents = fs::read_to_string(config_directory.join("config.json")).ok()?;
     let config: DockerCliConfig = serde_json::from_str(&contents).ok()?;
@@ -240,22 +241,24 @@ fn ensure_crypto_provider_installed() {
     });
 }
 
-/// The host to connect to once no context applies (step 2's own
-/// resolution, used both for the plain and TLS paths): an explicit
-/// `--docker-host`, else the real `DOCKER_HOST` environment variable, else
-/// `None` (only valid for a plain, non-TLS connection — see `connect`,
-/// which requires an explicit host for TLS). Pure (the environment value is
-/// injected) so it's unit-testable without depending on whichever real
-/// environment variables happen to be set on the machine running the
-/// tests.
+/// The host named by `--docker-host`, else the real `DOCKER_HOST`
+/// environment variable (an empty one counts as unset, as in the Docker CLI),
+/// else `None`. Step 2 of `connect`'s precedence — a host from either source
+/// rules out every context but an explicit `--docker-context` — and then the
+/// host a plain or TLS connection uses once no context applies (`None` only
+/// valid for a plain, non-TLS connection — see `require_host_for_tls`). Pure
+/// (the environment value is injected) so it's unit-testable without
+/// depending on whichever real environment variables happen to be set on the
+/// machine running the tests.
 fn resolve_host(
     options: &DockerConnectionOptions,
     docker_host_env: Option<&str>,
 ) -> Option<String> {
-    options
-        .host
-        .clone()
-        .or_else(|| docker_host_env.map(str::to_string))
+    options.host.clone().or_else(|| {
+        docker_host_env
+            .filter(|host| !host.is_empty())
+            .map(str::to_string)
+    })
 }
 
 /// TLS has no platform-default host to fall back to the way the plain path
@@ -271,12 +274,14 @@ fn require_host_for_tls(host: Option<String>) -> Result<String> {
     })
 }
 
-/// Step 1–3 of `connect`'s own doc comment, as a pure decision: which
+/// Steps 1–4 of `connect`'s own doc comment, as a pure decision: which
 /// context (if any) should be looked up in the store. A `None` return means
-/// "no context — connect via `options.host`/`DOCKER_HOST`/the platform
-/// default instead", covering both an explicit `--docker-host` (which skips
-/// context resolution entirely) and the `default` context name itself
-/// (never looked up in the store — it *means* "no context").
+/// "no context — connect via `host` or the platform default instead",
+/// covering both a resolved host (`host` is `resolve_host`'s result, so
+/// `--docker-host` and `DOCKER_HOST` alike skip context resolution) and the
+/// `default` context name itself (never looked up in the store — it *means*
+/// "no context"). An empty `DOCKER_CONTEXT` counts as unset, as in the
+/// Docker CLI.
 ///
 /// `active_context` is step 4's fallback — reading the store's own "active
 /// context" needs real file I/O, so it's computed by the caller and passed
@@ -284,14 +289,15 @@ fn require_host_for_tls(host: Option<String>) -> Result<String> {
 /// unit-testable without a filesystem) like `select_builder_version`.
 fn resolve_context_name(
     options: &DockerConnectionOptions,
+    host: Option<&str>,
     docker_context_env: Option<&str>,
     active_context: Option<String>,
 ) -> Option<String> {
     let context_name = if let Some(context) = &options.context {
         Some(context.clone())
-    } else if options.host.is_some() {
+    } else if host.is_some() {
         None
-    } else if let Some(context) = docker_context_env {
+    } else if let Some(context) = docker_context_env.filter(|context| !context.is_empty()) {
         Some(context.to_string())
     } else {
         active_context
@@ -327,26 +333,30 @@ fn conflicting_option_with_context(options: &DockerConnectionOptions) -> Option<
 
 /// Resolves and connects to the Docker daemon, matching Batect's own
 /// precedence (`CommandLineOptionsParser.resolveDockerContext`/
-/// `DockerClientConfigurationFactory`) exactly:
+/// `DockerClientConfigurationFactory`) — bar the empty-value rule, see
+/// `resolve_host`/`resolve_context_name`:
 ///
 /// 1. An explicit `--docker-context` is looked up by name in the context
-///    store.
-/// 2. Otherwise, an explicit `--docker-host` connects directly to that host
-///    — bypassing the context store entirely, even if `DOCKER_CONTEXT` or
-///    an active context is also set (Batect's own rule: an explicit host
-///    always means "ignore whatever context would otherwise apply").
+///    store — except `default`, which connects to the host step 2 resolves
+///    (`DOCKER_HOST` alone, since the flag conflicts), else the platform
+///    default.
+/// 2. Otherwise, a host — `--docker-host`, else `DOCKER_HOST` — connects
+///    directly to that host, bypassing the context store entirely, even if
+///    `DOCKER_CONTEXT` or an active context is also set (Batect's and the
+///    Docker CLI's own rule: a host from either source means "ignore
+///    whatever context would otherwise apply").
 /// 3. Otherwise, `DOCKER_CONTEXT` (if set) is looked up the same way as 1.
 /// 4. Otherwise, the Docker CLI's own "active" context
 ///    (`~/.docker/config.json`'s `currentContext`) is looked up the same
-///    way, falling back to connecting via `DOCKER_HOST`/bollard's own
-///    platform default (unix socket/named pipe) when that's unset or names
-///    the `default` context.
+///    way, falling back to bollard's own platform default (unix
+///    socket/named pipe) when that's unset or names the `default` context.
 ///
-/// TLS (`--docker-tls`/`-verify`) only applies once a context is ruled out
-/// — Batect rejects combining it with `--docker-context` at all (see
-/// `conflicting_option_with_context`) — and has no platform-default host to
-/// fall back to the way the plain path does, so an explicit host is
-/// required (see `require_host_for_tls`).
+/// TLS (`--docker-tls`/`-verify`, `DOCKER_TLS_VERIFY`) only applies once a
+/// context is ruled out — Batect rejects combining it with
+/// `--docker-context` at all (see `conflicting_option_with_context`), and
+/// ignores it when step 3 or 4 picks a context, as this does — and has no
+/// platform-default host to fall back to the way the plain path does, so a
+/// host is required (see `require_host_for_tls`).
 pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Docker> {
     if options.context.is_some() {
         if let Some(conflicting) = conflicting_option_with_context(options) {
@@ -355,9 +365,12 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Docker> {
     }
 
     let config_directory = docker_config_directory(options)?;
+    let docker_host_env = std::env::var("DOCKER_HOST").ok();
+    let host = resolve_host(options, docker_host_env.as_deref());
     let docker_context_env = std::env::var("DOCKER_CONTEXT").ok();
     let context_name = resolve_context_name(
         options,
+        host.as_deref(),
         docker_context_env.as_deref(),
         active_docker_context(&config_directory),
     );
@@ -368,9 +381,6 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Docker> {
             format!("Failed to connect to Docker context '{context_name}' (host '{host}')")
         });
     }
-
-    let docker_host_env = std::env::var("DOCKER_HOST").ok();
-    let host = resolve_host(options, docker_host_env.as_deref());
 
     let docker_tls_verify_env = std::env::var("DOCKER_TLS_VERIFY").ok();
     if !tls_enabled(options, docker_tls_verify_env.as_deref()) {
