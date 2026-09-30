@@ -294,7 +294,8 @@ Which rules apply depends on the project's dialect: whether `ratect` or
   concurrently with its main command rather than gating anything on it —
   matching Batect, which runs every container through identical per-container
   steps, task container included. A failure there fails the task even when the
-  main command succeeded. That, and the one race it leaves open, are in [known
+  main command succeeded, and stops a main command that is still running.
+  That, and the one race it leaves open, are in [known
   limitations](task-lifecycle.md#known-limitations); where Ratect differs from
   Batect on it is in [Differences from
   Batect](differences-from-batect.md#container-fields).

@@ -50,6 +50,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- A task container whose own health check or setup command fails while its main command is still running now stops that command and fails the task at once, as Batect does, instead of waiting for the command to exit (ratect-compat only).
 - `DOCKER_TLS_VERIFY` set to a value other than `1`/`true` (`0`, `false`, empty) no longer makes a `tcp://` connection use TLS. It did, through the Docker client library's own reading of the variable, and then failed for want of a `ca.pem` in `DOCKER_CERT_PATH` or `~/.docker`.
 - With `--docker-tls`/`--docker-tls-verify`, a client certificate or key that is missing, unreadable, encrypted, or doesn't match the other is an error naming the file, instead of the connection being made with no client certificate.
 - A second termination signal during cleanup now force-removes whatever is left, with no grace period, instead of abandoning cleanup and leaving the task's container and network behind; a Ctrl+C (`SIGINT`) after that abandons cleanup as any second signal used to. See [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).

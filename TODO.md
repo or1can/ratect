@@ -86,7 +86,7 @@ Confirmed against GitHub's own `/markdown` API, not assumed.
 
 - **16.** **The task's own container can still be lost to an interrupt
   between its `created` send and the next poll** (`ratect-core/src/engine.rs`,
-  `readiness_future`) — its receiver is awaited inside a `tokio::join!`
+  `readiness_future`) — its receiver is awaited inside a `tokio::select!`
   with the run, so an interrupt dropping both in that instant drops the id
   with them, and cleanup never sees the container. Dependencies no longer
   have this window: ratect#224 parks their receivers in

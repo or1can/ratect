@@ -168,10 +168,13 @@ colliding.
   (health-check wait, then `setup_commands`, in order), but run
   *concurrently* with the main command rather than blocking it, because
   nothing else in the graph depends on the task container's own readiness. A
-  setup command or health-check failure still fails the task even if the
-  main command already succeeded — including a `health_check` written for
-  the container's usual, non-overridden role, which a one-off command
-  doesn't make go away. `ratect` has none of this: under the native dialect a
+  setup command or health-check failure while the main command is still
+  running cancels it at once, as Batect does, and fails the task; the
+  container is then stopped and removed like any failed run's. Such a failure fails the
+  task even if the main command already succeeded — including a
+  `health_check` written for the container's usual, non-overridden role,
+  which a one-off command doesn't make go away — though a main command that
+  has already exited non-zero keeps its own exit code. `ratect` has none of this: under the native dialect a
   task's own container has no readiness gate at all (see [Dependency
   Readiness](dependency-readiness.md#the-tasks-own-container)).
   One race this doesn't close, matching Batect's own (its
@@ -184,9 +187,10 @@ colliding.
   that setup command's actual outcome. In practice this only bites a
   near-instant main command; anything taking more than a few tens of
   milliseconds gives the setup command time to run and report its real
-  result. Also unlike Batect: the main command itself is never cancelled
-  early just because the readiness gate fails first — it always runs to
-  completion, and the task is still reported as failed overall either way.
+  result. The same moment has a second effect: a setup command failing
+  because the main command has just exited non-zero can be reported before
+  Docker has marked the container stopped, and the task then fails with the
+  setup command's error rather than the main command's exit code.
 - **Prerequisite tasks stay sequential, matching Batect exactly** — `prerequisites`
   entries run one after another, each to completion, never concurrently with each
   other or with the task that named them (see "Task ordering" above). This is Batect's
