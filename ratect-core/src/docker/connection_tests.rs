@@ -1556,3 +1556,48 @@ fn connect_over_tls_errors_naming_the_cert_directory_when_it_is_not_there() {
     assert!(message.contains("--docker-cert-path"), "{message}");
     assert!(message.contains("typo"), "{message}");
 }
+
+/// An `https://` host is a TLS connection whether or not a flag says so —
+/// through Ratect's own route, with the certificate directory's files, not
+/// `bollard`'s own default paths (which would look in `~/.docker` and fail
+/// here for want of a `ca.pem`).
+#[tokio::test]
+async fn connect_to_an_https_host_uses_the_tls_route_without_a_tls_flag() {
+    let materials = valid_materials();
+    let (listener, port) = local_listener().await;
+    let cert_directory = unique_temp_dir();
+    fs::write(cert_directory.join("ca.pem"), &materials.ca_pem).unwrap();
+    let options = DockerConnectionOptions {
+        host: Some(format!("https://127.0.0.1:{port}")),
+        cert_path: Some(cert_directory),
+        ..Default::default()
+    };
+
+    let result = ping_over_tls(&options, listener, &materials, false).await;
+    assert!(result.is_ok(), "expected a verified ping: {result:?}");
+}
+
+/// A context storing no TLS material but naming an `https://` host also
+/// connects over TLS, against the system trust store (which the test CA is
+/// not in — so verification fails, not the connection setup).
+#[tokio::test]
+async fn connect_via_a_context_with_an_https_host_uses_the_tls_route() {
+    let materials = valid_materials();
+    let (listener, port) = local_listener().await;
+    let config_directory = unique_temp_dir();
+    write_docker_context_meta(
+        &config_directory,
+        "https",
+        &format!("https://127.0.0.1:{port}"),
+    );
+    let options = DockerConnectionOptions {
+        context: Some("https".to_string()),
+        config_directory: Some(config_directory),
+        ..Default::default()
+    };
+
+    let err = ping_over_tls(&options, listener, &materials, false)
+        .await
+        .unwrap_err();
+    assert!(holds_certificate_error(err.as_ref()), "{err:#}");
+}

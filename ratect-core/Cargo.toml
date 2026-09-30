@@ -34,8 +34,8 @@ noyalib = { version = "0.0.51", features = ["compat-serde-yaml"] }
 # pulled in by `buildkit_providerless`) — the provider
 # `docker/connection.rs`'s `ensure_crypto_provider_installed` installs, once,
 # before building its own `rustls` configuration. Ratect makes every TLS
-# connection itself (see the `hyper-util` entry below), so `bollard`'s own
-# TLS code is reached only where `connect_with_host` chooses it.
+# connection itself (see the `hyper-util` entry below), and no longer reaches
+# `bollard`'s own TLS code at all; the feature is kept for the provider.
 bollard = { version = "0.22", features = ["buildkit_providerless", "chrono", "ssl"] }
 # **`anyhow`**: Simplified error handling with context.
 anyhow = "1.0"
