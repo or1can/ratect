@@ -3,7 +3,9 @@
 # fails because the container stopped — the health wait sees it die, or a
 # setup command's exec is refused as "not running" — and fails the task with
 # it. That failure says nothing about the container's readiness, so here the
-# task succeeds.
+# task succeeds. So does one whose setup command is still running when the
+# main command exits 0 (ratect#263): the container's exit kills it, and its
+# exec reports 137.
 project_name: ratect-task-container-stopped-before-gate-test
 containers:
   healthy-later:
@@ -17,6 +19,10 @@ containers:
     image: alpine:3.18.2
     setup_commands:
       - command: "true"
+  set-up-slowly:
+    image: alpine:3.18.2
+    setup_commands:
+      - command: sleep 5
 tasks:
   health-check:
     run:
@@ -26,3 +32,7 @@ tasks:
     run:
       container: set-up-later
       command: "true"
+  setup-command-killed:
+    run:
+      container: set-up-slowly
+      command: sleep 1
