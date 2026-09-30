@@ -111,6 +111,11 @@ fn task_container_gate_failure_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/task-container-gate-failure.yml")
 }
 
+fn task_container_stopped_before_gate_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/task-container-stopped-before-gate.yml")
+}
+
 fn no_image_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/no-image.yml")
 }
@@ -1509,6 +1514,35 @@ fn task_containers_own_setup_commands_run_via_docker() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(task_output(&stdout, "app"), "SETUP-RAN-DURING-TASK");
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// A main command that exits 0 before its own container's readiness gate
+/// reaches a verdict succeeds (ratect#248) — see
+/// `tests/fixtures/task-container-stopped-before-gate.yml`. The health-check
+/// task is the deterministic one; whether the setup command runs or is
+/// refused depends on how fast `true` exits, and either way the task
+/// succeeds.
+#[test]
+#[ignore]
+fn a_main_command_exiting_0_before_its_gate_reaches_a_verdict_succeeds_via_docker() {
+    for task in ["health-check", "setup-command"] {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(task_container_stopped_before_gate_config_path())
+            .arg(task)
+            .output()
+            .expect("failed to run ratect");
+
+        assert!(
+            output.status.success(),
+            "{task}: stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 /// Requires a running Docker daemon with network access to pull

@@ -1483,3 +1483,32 @@ fn ensure_host_volume_directories_exist_skips_special_docker_desktop_paths() {
     // The bug was this returning an error; that it's `Ok` is the fix.
     ensure_host_volume_directories_exist(Some(&volumes)).unwrap();
 }
+
+/// Docker refuses an exec into a container that has stopped with a 409
+/// ("container ... is not running"). That refusal carries
+/// `ContainerStopped`, so the engine can tell a setup command that never ran
+/// from one that failed (ratect#248); every other exec failure does not.
+#[test]
+fn exec_error_marks_only_a_409_as_the_container_having_stopped() {
+    let response = |status_code| bollard::errors::Error::DockerResponseServerError {
+        status_code,
+        message: "container abc is not running".to_string(),
+    };
+
+    let stopped = exec_error(response(409));
+    assert!(
+        stopped.downcast_ref::<ContainerStopped>().is_some(),
+        "a 409 should carry ContainerStopped: {stopped:#}"
+    );
+    assert!(
+        format!("{stopped:#}").contains("container abc is not running"),
+        "Docker's own message should survive: {stopped:#}"
+    );
+    for status_code in [404, 500] {
+        let other = exec_error(response(status_code));
+        assert!(
+            other.downcast_ref::<ContainerStopped>().is_none(),
+            "{status_code} should not carry ContainerStopped: {other:#}"
+        );
+    }
+}
