@@ -137,9 +137,9 @@ struct FakeContainerRuntime {
     // inspect that fails (see `with_running_probe`).
     running_probe: Arc<Mutex<Option<std::result::Result<bool, String>>>>,
     // When set, `wait_for_container_healthy` and `exec_in_container` fail
-    // with `docker::ContainerStopped` on a container `exited_containers`
-    // holds by the time they resolve — Docker's own `die` event and its 409
-    // "is not running" — rather than reaching a verdict. Off by default: a
+    // as Docker does on a container `exited_containers` holds by the time
+    // they resolve — its own `die` event and its 409 "is not running" —
+    // rather than reaching a verdict. Off by default: a
     // run with no delays exits before its gate is first polled, and every
     // test not about that ordering expects the gate's configured verdict
     // (see `with_gate_observing_exits`).
@@ -786,10 +786,7 @@ impl ContainerRuntime for FakeContainerRuntime {
         }
         self.push(format!("wait-healthy:{container_id}"));
         if self.gate_finds_stopped(container_id) {
-            return Err(crate::docker::ContainerStopped(
-                "The container exited before becoming healthy.".to_string(),
-            )
-            .into());
+            anyhow::bail!("The container exited before becoming healthy.");
         }
         if self.unhealthy_container.lock().unwrap().as_deref() == Some(container_id) {
             anyhow::bail!(
@@ -863,10 +860,9 @@ impl ContainerRuntime for FakeContainerRuntime {
         );
         self.push(format!("exec:{container_id}:{command}"));
         if self.gate_finds_stopped(container_id) {
-            return Err(crate::docker::ContainerStopped(format!(
+            anyhow::bail!(
                 "Docker responded with status code 409: container {container_id} is not running"
-            ))
-            .into());
+            );
         }
         let failing = self.failing_setup_command.lock().unwrap().as_deref() == Some(command);
         Ok(crate::docker::ExecResult {
@@ -5344,9 +5340,12 @@ async fn a_gate_verdict_reached_while_the_main_command_runs_fails_the_task() {
         .await
         .unwrap_or_else(|_| panic!("{label}: the gate's failure should cancel the run"))
         .unwrap_err();
+        let verdict = match label {
+            "unhealthy" => "did not indicate that the container was healthy",
+            _ => "exited with code 1",
+        };
         assert!(
-            err.downcast_ref::<crate::docker::ContainerStopped>()
-                .is_none(),
+            format!("{err:#}").contains(verdict),
             "{label}: the gate's own verdict should be the task's error: {err:#}"
         );
     }

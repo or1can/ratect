@@ -165,44 +165,6 @@ impl fmt::Display for ContainerExitedNonZero {
 
 impl std::error::Error for ContainerExitedNonZero {}
 
-/// A readiness check ended without a verdict because the container it was
-/// checking had stopped: the health wait saw Docker's `die` event, or a
-/// setup command's exec was refused because the container was no longer
-/// running. Distinct so the engine can tell "the gate found the container
-/// not ready" from "the gate never got to look", which, for a task
-/// container whose main command exited 0, is the task having finished
-/// rather than failed (ratect#248). The engine looks for it only in the
-/// task container's gate, where it survives the context added on top; a
-/// dependency's readiness error is flattened to text for sharing
-/// (`engine.rs`'s `unshare`), so it doesn't survive there, and needn't —
-/// a dependency that stopped is never ready. Carries the message it is
-/// shown as, so marking a failure adds no line to the reported chain.
-#[derive(Debug)]
-pub(crate) struct ContainerStopped(pub(crate) String);
-
-impl fmt::Display for ContainerStopped {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for ContainerStopped {}
-
-/// An exec call's failure, as `exec_in_container` reports it: Docker's 409
-/// carries `ContainerStopped`. The 409 is Docker's answer for a container
-/// that isn't running, and also for a paused or restarting one — neither of
-/// which a task container can be once its command has exited, since Ratect
-/// sets no restart policy — and the engine only forgives this after that
-/// command has exited 0.
-fn exec_error(error: bollard::errors::Error) -> anyhow::Error {
-    match error {
-        bollard::errors::Error::DockerResponseServerError {
-            status_code: 409, ..
-        } => ContainerStopped(error.to_string()).into(),
-        error => error.into(),
-    }
-}
-
 /// The states `tokenize_command_line`'s character-by-character scan moves
 /// through — outside any quote, inside a `'...'` (literal, no escapes), or
 /// inside a `"..."` (backslash escapes processed).
@@ -1474,8 +1436,7 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     ///   `die`, replayed from the beginning of time so a verdict that
     ///   arrived before this call still counts): reported-healthy returns
     ///   `Ok`; reported-unhealthy fails with the last health-check run's
-    ///   exit code and output; exiting before a verdict fails too, with
-    ///   `ContainerStopped`.
+    ///   exit code and output; exiting before a verdict fails too.
     ///
     /// No Ratect-side timeout, matching Batect — Docker's own
     /// `retries`/`interval` bound how long a verdict can take.
@@ -1532,8 +1493,7 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// as, matching Batect. Failure to *run* the command is an `Err`; the
     /// command running and exiting non-zero is an `Ok` whose
     /// [`ExecResult::exit_code`] says so — the caller decides what a
-    /// non-zero setup command means. Docker refusing the exec because the
-    /// container isn't running carries `ContainerStopped`.
+    /// non-zero setup command means.
     async fn exec_in_container(
         &self,
         container_id: &str,
@@ -2760,10 +2720,9 @@ impl ContainerRuntime for DockerClient {
             Some("health_status: unhealthy") => {
                 Err(anyhow::anyhow!(self.unhealthy_details(container_id).await))
             }
-            Some("die") => Err(ContainerStopped(
-                "The container exited before becoming healthy.".to_string(),
-            )
-            .into()),
+            Some("die") => Err(anyhow::anyhow!(
+                "The container exited before becoming healthy."
+            )),
             other => Err(anyhow::anyhow!(
                 "Unexpected event '{}' received while waiting for the container to become healthy",
                 other.unwrap_or("<none>")
@@ -2828,7 +2787,6 @@ impl ContainerRuntime for DockerClient {
                 },
             )
             .await
-            .map_err(exec_error)
             .with_context(|| format!("Failed to create exec in container '{}'", container_id))?;
 
         let mut output = String::new();
@@ -2838,7 +2796,6 @@ impl ContainerRuntime for DockerClient {
             .docker
             .start_exec(&exec.id, None)
             .await
-            .map_err(exec_error)
             .with_context(|| format!("Failed to start exec in container '{}'", container_id))?
         {
             while let Some(chunk) = stream.next().await {
