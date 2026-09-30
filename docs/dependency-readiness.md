@@ -293,11 +293,11 @@ Which rules apply depends on the project's dialect: whether `ratect` or
 - **`ratect-compat` (Batect-compatible): the same gate as a dependency**, run
   concurrently with its main command rather than gating anything on it —
   matching Batect, which runs every container through identical per-container
-  steps, task container included. A failure there fails the task even when the
-  main command succeeded, and stops a main command that is still running —
-  unless the gate failed only because that command exited 0 and the container
-  stopped with it, which isn't a failure. That, and the races it leaves open,
-  are in [known
+  steps, task container included. A failure there while the main command is
+  still running stops it and fails the task. Once that command has exited 0,
+  whatever the gate was still doing — a health wait, a setup command the
+  container's exit killed — isn't a failure. That, and the race it leaves
+  open, are in [known
   limitations](task-lifecycle.md#known-limitations); where Ratect differs from
   Batect on it is in [Differences from
   Batect](differences-from-batect.md#container-fields).

@@ -1520,15 +1520,17 @@ fn task_containers_own_setup_commands_run_via_docker() {
 /// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
 ///
 /// A main command that exits 0 before its own container's readiness gate
-/// reaches a verdict succeeds (ratect#248) — see
+/// reaches a verdict succeeds (ratect#248, ratect#263) — see
 /// `tests/fixtures/task-container-stopped-before-gate.yml`. The health-check
 /// task is the deterministic one; whether the setup command runs or is
 /// refused depends on how fast `true` exits, and either way the task
-/// succeeds.
+/// succeeds. A setup command still running when the main command exits is
+/// killed with the container, and the task succeeds with nothing left
+/// behind.
 #[test]
 #[ignore]
 fn a_main_command_exiting_0_before_its_gate_reaches_a_verdict_succeeds_via_docker() {
-    for task in ["health-check", "setup-command"] {
+    for task in ["health-check", "setup-command", "setup-command-killed"] {
         let output = ratect_command()
             .arg("-f")
             .arg(task_container_stopped_before_gate_config_path())
@@ -1541,6 +1543,25 @@ fn a_main_command_exiting_0_before_its_gate_reaches_a_verdict_succeeds_via_docke
             "{task}: stdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let project_filter =
+        "label=eu.orican.ratect.project=ratect-task-container-stopped-before-gate-test";
+    for arguments in [
+        ["container", "ls", "-aq", "--filter", project_filter],
+        ["network", "ls", "-q", "--filter", project_filter],
+    ] {
+        let output = Command::new("docker")
+            .args(arguments)
+            .output()
+            .expect("failed to run docker ls");
+        assert!(output.status.success(), "docker {} ls failed", arguments[0]);
+        let left = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            left.trim().is_empty(),
+            "no {} should be left behind: {left}",
+            arguments[0]
         );
     }
 }

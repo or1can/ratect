@@ -170,24 +170,25 @@ colliding.
   nothing else in the graph depends on the task container's own readiness. A
   setup command or health-check failure while the main command is still
   running cancels it at once, as Batect does, and fails the task; the
-  container is then stopped and removed like any failed run's. Such a failure
-  fails the task even if the main command already succeeded — including a
-  `health_check` written for the container's usual, non-overridden role,
-  which a one-off command doesn't make go away — though a main command that
-  has already exited non-zero keeps its own exit code.
-  The exception is a gate that fails only *because* the main command has
-  already exited 0 and the container with it: the health wait sees the
-  container stop before Docker reports a health status, or a setup command
-  can't `docker exec` into it because it is no longer running. That failure
-  says nothing about the container's readiness, so the task succeeds, where
-  Batect fails it. The exception is decided by what the gate reports, not by
-  which finished first. Two cases it doesn't cover: a setup command that was
-  already running when the main command exited 0 is killed with the
-  container, and its non-zero exit (137, typically) fails the task; and a
-  setup command failing because the main command has just exited non-zero
-  can be reported before Docker has marked the container stopped, and the
-  task then fails with the setup command's error rather than the main
-  command's exit code. `ratect` has none of this: under the native dialect a
+  container is then stopped and removed like any failed run's. That
+  includes a `health_check` written for the container's usual,
+  non-overridden role, which a one-off command doesn't make go away.
+  Once the main command has exited, the gate no longer decides anything: a
+  non-zero exit code is the task's result, and an exit 0 succeeds whatever
+  the gate was still doing. The health wait sees the container stop before
+  Docker reports a health status; a setup command can't `docker exec` into
+  a container that has stopped, or is killed with it mid-run (exit code 137,
+  typically). None of those say anything about the container's readiness,
+  so the task succeeds, where Batect fails it. The cost is that a setup
+  command genuinely failing at the same moment the main command exits 0 is
+  forgiven too. One race is left, with either exit code: a setup command
+  that fails because the main command has just exited can be reported
+  before Docker has marked the container stopped. Ratect then takes the main
+  command to be still running and cancels it, so the task fails with the
+  setup command's error instead of the main command's result. That includes
+  a setup command killed by a main command that exited 0 — the case above.
+  The race hasn't been observed on a real daemon, but Docker doesn't
+  guarantee the order that avoids it. `ratect` has none of this: under the native dialect a
   task's own container has no readiness gate at all (see [Dependency
   Readiness](dependency-readiness.md#the-tasks-own-container)).
 - **Prerequisite tasks stay sequential, matching Batect exactly** — `prerequisites`

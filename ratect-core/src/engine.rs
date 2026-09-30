@@ -39,9 +39,10 @@
 //! else in the graph depends on the task container's own readiness. A gate failure
 //! while the main command is still running cancels it, as Batect's does (ratect#260):
 //! the run is dropped exactly as an interrupt drops it, and the ordinary cleanup
-//! stops and removes the container. A gate that failed only because the
-//! container stopped (`docker::ContainerStopped`) after a main command that
-//! exited 0 fails nothing — a listed divergence from Batect (ratect#248).
+//! stops and removes the container. Once the main command has exited 0 the
+//! gate fails nothing — whatever it was still doing is dropped, or forgiven
+//! if it has already failed — a listed divergence from Batect (ratect#248,
+//! ratect#263).
 //! Under the native dialect it has no gate at all — running it
 //! *is* the task (decisions/0012) — which `task_container_readiness_gate`, derived
 //! once from the project's dialect, is the only switch for; its creation is still
@@ -1022,10 +1023,9 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// A failure here while the main command is still running cancels it,
     /// as Batect's coroutine cancellation does: the caller abandons the run
     /// rather than waiting for a command that may itself be waiting on this
-    /// gate's work (ratect#260). A failure that says only that the container
-    /// stopped — the health wait saw it die, or a setup command's exec was
-    /// refused — carries `docker::ContainerStopped`, which the caller
-    /// forgives after a main command that exited 0 (ratect#248).
+    /// gate's work (ratect#260). Once the main command has exited 0, the
+    /// caller drops or forgives whatever this reports (ratect#248,
+    /// ratect#263).
     async fn run_task_container_readiness(
         &self,
         container_id: &str,
@@ -1899,11 +1899,13 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // since that command may be waiting on what the gate would have
             // done (ratect#260). Dropping `run_future` is the same cancel an
             // interrupt makes, and the cleanup below stops and removes the
-            // container `readiness_future` has already recorded. Otherwise
-            // both are driven to completion, as `tokio::join!` would —
-            // `readiness_future` is where the container's id is recorded, so
-            // a run ending first must not drop it (which is also why this
-            // isn't `tokio::try_join!`). `biased` towards the run so a main
+            // container `readiness_future` has already recorded. A run that
+            // exits 0 first drops the gate instead (ratect#263), but only
+            // after polling it once more: `readiness_future` is where the
+            // container's id is recorded, so it must not be dropped unpolled
+            // (which is also why this isn't `tokio::try_join!`). A run that
+            // exits non-zero first still waits for the gate, as
+            // `tokio::join!` would. `biased` towards the run so a main
             // command that has exited keeps its own exit code over a gate
             // failing in the same poll.
             //
@@ -1913,16 +1915,32 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // command has finished, not stalled, so Docker is asked which it
             // is before anything is cancelled, and an exited one is awaited
             // for its exit code. A failed inspect cancels: guessing "still
-            // running" can at worst misreport an exit code, while guessing
+            // running" can at worst misreport the task's result, while guessing
             // "exited" could wait forever. The answer is exact when the
             // health wait saw the container die (Docker marks it stopped
             // before it emits `die`), but a setup command can fail on a
             // process that has exited before Docker marks the container
             // stopped; that one is cancelled, and its exit code lost — the
-            // race docs/task-lifecycle.md's known limitations describe.
+            // race docs/task-lifecycle.md's known limitations describe. That
+            // includes a setup command killed with a container whose main
+            // command exited 0 (ratect#263): on a real daemon its 137 has so
+            // far always arrived after the container was marked stopped,
+            // but nothing guarantees that order.
             let (run_result, readiness_result) = tokio::select! {
                 biased;
-                run_result = &mut run_future => (run_result, readiness_future.await),
+                run_result = &mut run_future => match run_result {
+                    // A main command that exited 0 has ended the gate's
+                    // question: whatever the gate is still doing — a setup
+                    // command the container's exit killed, a health wait —
+                    // is dropped rather than awaited (ratect#263). Polled
+                    // once first, so a container id sent but not yet
+                    // recorded is recorded for the cleanup below.
+                    Ok(()) => {
+                        let _ = futures::FutureExt::now_or_never(readiness_future.as_mut());
+                        (Ok(()), Ok(()))
+                    }
+                    Err(_) => (run_result, readiness_future.await),
+                },
                 readiness_result = &mut readiness_future => match readiness_result {
                     Ok(()) => (run_future.await, Ok(())),
                     Err(error) => {
@@ -1948,28 +1966,25 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // readiness failure that happened alongside it. This is the
             // precedence `run_container` used to apply internally, kept.
             run_result?;
-            // A gate that ended only because the container stopped never
-            // reached a verdict on its readiness — the main command's own
-            // exit ended it — so after that command exited 0 the task has
-            // succeeded (ratect#248, a listed divergence: Batect fails it).
-            // Decided by the failure's cause rather than by which future
-            // resolved first, since the `die` event and the exit report
-            // land together.
-            match readiness_result {
-                Err(error)
-                    if error
-                        .downcast_ref::<crate::docker::ContainerStopped>()
-                        .is_some() =>
-                {
-                    tracing::debug!(
-                        container = run.container.as_str(),
-                        error = format!("{error:#}"),
-                        "readiness gate ended by the task container stopping; ignored"
-                    );
-                    Ok(())
-                }
-                other => other,
+            // Reached with a gate failure only once the main command has
+            // exited 0: a failure while it was running cancelled it above.
+            // By then the gate has no verdict left to give — the
+            // container's exit is what ended it, whether the health wait
+            // saw it die or a setup command was killed with it (137) or
+            // refused an exec — so the task has succeeded (ratect#248,
+            // ratect#263, a listed divergence: Batect fails it). Decided by
+            // the run's own result rather than by the failure's cause,
+            // since a killed setup command's exit code says nothing about
+            // why it was killed. The cost: a setup command genuinely
+            // failing in the same instant is forgiven too.
+            if let Err(error) = readiness_result {
+                tracing::debug!(
+                    container = run.container.as_str(),
+                    error = format!("{error:#}"),
+                    "readiness gate ended by the task container exiting 0; ignored"
+                );
             }
+            Ok(())
         };
 
         // An interrupt abandons the run and falls through to the cleanup

@@ -4754,7 +4754,7 @@ async fn task_containers_own_health_check_reaches_docker_and_is_waited_on() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn unhealthy_task_container_fails_the_task() {
     let mut containers = HashMap::new();
     let mut app = container("alpine:3.18", None);
@@ -4776,15 +4776,17 @@ async fn unhealthy_task_container_fails_the_task() {
         forbid_telemetry: None,
     };
 
-    let docker = FakeContainerRuntime::default().with_unhealthy_container("app");
+    let docker = FakeContainerRuntime::default()
+        .with_run_delay("app", MAIN_COMMAND_THAT_OUTLASTS_ITS_GATE)
+        .with_unhealthy_container("app");
     let engine = engine(config, docker.clone());
 
     let result = engine.run_task("start", &[]).await;
 
     assert!(
         result.is_err(),
-        "an unhealthy task container should fail the task even though its own command \
-             would have succeeded"
+        "an unhealthy task container should fail the task while its own command is \
+             still running"
     );
 }
 
@@ -4822,7 +4824,7 @@ async fn task_containers_own_setup_commands_run() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn failing_setup_command_on_the_tasks_own_container_fails_the_task() {
     let mut containers = HashMap::new();
     let mut app = container("alpine:3.18", None);
@@ -4842,15 +4844,17 @@ async fn failing_setup_command_on_the_tasks_own_container_fails_the_task() {
         forbid_telemetry: None,
     };
 
-    let docker = FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh");
+    let docker = FakeContainerRuntime::default()
+        .with_run_delay("app", MAIN_COMMAND_THAT_OUTLASTS_ITS_GATE)
+        .with_failing_setup_command("./migrate.sh");
     let engine = engine(config, docker.clone());
 
     let result = engine.run_task("start", &[]).await;
 
     assert!(
         result.is_err(),
-        "a failing setup command on the task's own container should fail the task even \
-             though its own command would have succeeded"
+        "a failing setup command on the task's own container should fail the task \
+             while its own command is still running"
     );
 }
 
@@ -4861,10 +4865,12 @@ async fn failing_setup_command_on_the_tasks_own_container_fails_the_task() {
 /// owns the removal; while `run_container` removed its own container it
 /// classified the same error as a completed run and force-removed the
 /// one container the flag existed to preserve.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_readiness_failure_on_the_tasks_own_container_honours_no_cleanup_after_failure() {
     let config = config_with_failing_task_container_setup_command();
-    let docker = FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh");
+    let docker = FakeContainerRuntime::default()
+        .with_run_delay("app", MAIN_COMMAND_THAT_OUTLASTS_ITS_GATE)
+        .with_failing_setup_command("./migrate.sh");
     let engine = engine(config, docker.clone())
         .with_settings(TaskEngineSettings {
             cleanup_after_failure: false,
@@ -4883,10 +4889,12 @@ async fn a_readiness_failure_on_the_tasks_own_container_honours_no_cleanup_after
 
 /// The other side of the same coin — with the flag left alone, that
 /// container is cleaned up like anything else.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_readiness_failure_on_the_tasks_own_container_still_removes_it_by_default() {
     let config = config_with_failing_task_container_setup_command();
-    let docker = FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh");
+    let docker = FakeContainerRuntime::default()
+        .with_run_delay("app", MAIN_COMMAND_THAT_OUTLASTS_ITS_GATE)
+        .with_failing_setup_command("./migrate.sh");
     let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap_err();
@@ -4902,10 +4910,12 @@ async fn a_readiness_failure_on_the_tasks_own_container_still_removes_it_by_defa
 /// it is the flag for keeping a container whose command ran, and this
 /// container's didn't get that far. Pins the two flags apart from each
 /// other on the same scenario as the two tests above.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_readiness_failure_is_unaffected_by_no_cleanup_after_success() {
     let config = config_with_failing_task_container_setup_command();
-    let docker = FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh");
+    let docker = FakeContainerRuntime::default()
+        .with_run_delay("app", MAIN_COMMAND_THAT_OUTLASTS_ITS_GATE)
+        .with_failing_setup_command("./migrate.sh");
     let engine = engine(config, docker.clone())
         .with_settings(TaskEngineSettings {
             cleanup_after_success: false,
@@ -5308,28 +5318,28 @@ async fn a_gate_failed_by_a_failing_main_commands_exit_keeps_its_exit_code() {
     );
 }
 
-/// Only a stopped container is forgiven. A verdict the gate did reach — an
-/// unhealthy status, a setup command exiting non-zero — still fails the
-/// task, whether it lands while the main command is running (cancelling it)
-/// or after that command has exited 0.
+/// A verdict the gate reaches while the main command is still running — an
+/// unhealthy status, a setup command exiting non-zero — fails the task,
+/// cancelling that command, whether or not the gate also observes exits.
 #[tokio::test(start_paused = true)]
-async fn a_gate_verdict_still_fails_the_task_whatever_the_main_command_did() {
+async fn a_gate_verdict_reached_while_the_main_command_runs_fails_the_task() {
     for label in ["unhealthy", "setup command"] {
-        let config = || match label {
-            "unhealthy" => config_with_a_gated_task_container(),
-            _ => config_with_failing_task_container_setup_command(),
+        let (config, docker) = match label {
+            "unhealthy" => (
+                config_with_a_gated_task_container(),
+                FakeContainerRuntime::default().with_unhealthy_container("app"),
+            ),
+            _ => (
+                config_with_failing_task_container_setup_command(),
+                FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh"),
+            ),
         };
-        let docker = || match label {
-            "unhealthy" => FakeContainerRuntime::default().with_unhealthy_container("app"),
-            _ => FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh"),
-        };
-        // While running: the gate observes exits, but the container hasn't.
-        let running = docker()
+        let running = docker
             .with_gate_observing_exits()
             .with_run_delay("app", MAIN_COMMAND_THAT_OUTLASTS_ITS_GATE);
         let err = tokio::time::timeout(
             GATE_FAILURE_DEADLINE,
-            engine(config(), running).run_task("start", &[]),
+            engine(config, running).run_task("start", &[]),
         )
         .await
         .unwrap_or_else(|_| panic!("{label}: the gate's failure should cancel the run"))
@@ -5339,21 +5349,83 @@ async fn a_gate_verdict_still_fails_the_task_whatever_the_main_command_did() {
                 .is_none(),
             "{label}: the gate's own verdict should be the task's error: {err:#}"
         );
-
-        // After a successful exit: the verdict arrives once the main
-        // command has already exited 0, and still fails the task.
-        let after_exit = docker()
-            .with_run_delay("app", std::time::Duration::from_secs(1))
-            .with_health_check_delay("app", std::time::Duration::from_secs(2))
-            .with_exec_delay("./migrate.sh", std::time::Duration::from_secs(2));
-        assert!(
-            engine(config(), after_exit)
-                .run_task("start", &[])
-                .await
-                .is_err(),
-            "{label}: a verdict reached after a successful exit should still fail the task"
-        );
     }
+}
+
+/// Once the main command has exited 0 the gate's outcome no longer counts,
+/// whatever it was doing: a setup command the container's exit killed
+/// reports a non-zero code (137 on a real daemon), which says nothing about
+/// readiness (ratect#263, a listed divergence: Batect fails it). So does a
+/// health wait still in flight. Covered with the gate still running when
+/// the run ends (dropped), and with it failing while the run is still
+/// draining output after the exit (forgiven once the run reports 0) —
+/// the order a real daemon produced for the issue's reproduction. The cost
+/// is a genuine failure landing in the same instant, which is lost too.
+#[tokio::test(start_paused = true)]
+async fn a_gate_still_in_flight_when_the_main_command_exits_zero_does_not_fail_the_task() {
+    for drain in [None, Some(std::time::Duration::from_secs(10))] {
+        for label in ["unhealthy", "setup command"] {
+            let (config, docker) = match label {
+                "unhealthy" => (
+                    config_with_a_gated_task_container(),
+                    FakeContainerRuntime::default()
+                        .with_unhealthy_container("app")
+                        .with_health_check_delay("app", std::time::Duration::from_secs(2)),
+                ),
+                _ => (
+                    config_with_failing_task_container_setup_command(),
+                    FakeContainerRuntime::default()
+                        .with_failing_setup_command("./migrate.sh")
+                        .with_exec_delay("./migrate.sh", std::time::Duration::from_secs(2)),
+                ),
+            };
+            let mut docker = docker.with_run_delay("app", std::time::Duration::from_secs(1));
+            if let Some(drain) = drain {
+                docker = docker.with_run_draining_after_exit("app", drain);
+            }
+            let sink = RecordingEventSink::default();
+            let engine = TaskEngine::new(
+                config,
+                docker.clone(),
+                Arc::new(sink.clone()),
+                crate::interrupt::Interrupt::new(),
+            );
+
+            let result = engine.run_task("start", &[]).await;
+
+            assert!(
+                result.is_ok(),
+                "{label}, drain {drain:?}: the task should succeed: {result:?}"
+            );
+            let posted = sink.events();
+            assert!(
+                !posted
+                    .iter()
+                    .any(|e| matches!(e, TaskEvent::TaskFailed { .. })),
+                "{label}, drain {drain:?}: no failure should be reported: {posted:?}"
+            );
+            let events = docker.events();
+            assert!(
+                events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+                "{label}, drain {drain:?}: the task container should be removed: {events:?}"
+            );
+        }
+    }
+}
+
+/// Dropped, not waited on: a setup command that would never finish doesn't
+/// hold up a task whose main command has exited 0 (ratect#263).
+#[tokio::test(start_paused = true)]
+async fn a_setup_command_still_running_does_not_hold_up_a_successful_task() {
+    let docker = FakeContainerRuntime::default()
+        .with_run_delay("app", std::time::Duration::from_secs(1))
+        .with_exec_delay("./migrate.sh", MAIN_COMMAND_THAT_OUTLASTS_ITS_GATE);
+    let engine = engine(config_with_failing_task_container_setup_command(), docker);
+
+    tokio::time::timeout(GATE_FAILURE_DEADLINE, engine.run_task("start", &[]))
+        .await
+        .expect("the task should end when its main command does, not when its gate does")
+        .unwrap();
 }
 
 /// Settings for a native-dialect project — the only thing that differs
