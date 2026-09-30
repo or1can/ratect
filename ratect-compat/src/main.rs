@@ -146,7 +146,7 @@ struct Args {
     #[arg(long = "docker-tls-verify", help_heading = "Docker connection")]
     docker_tls_verify: bool,
 
-    /// Path to a directory containing ca.pem/cert.pem/key.pem to
+    /// Path to a directory containing any of ca.pem/cert.pem/key.pem to
     /// authenticate to the Docker host and verify it, unless overridden
     /// individually by --docker-tls-ca-cert/-cert/-key. Defaults to the
     /// DOCKER_CERT_PATH environment variable, then ~/.docker.

@@ -36,23 +36,27 @@
 //! the open question, not "is this flaky".
 //!
 //! **A real, independent defect was found investigating it**: `bollard`'s
-//! `connect_with_ssl` (which [`connect`] calls for `--docker-tls`/`-verify`)
-//! used to treat *any* error from the OS trust-store loader as fatal,
-//! discarding every certificate that loaded successfully *and* the explicit
-//! `ssl_ca` this module hands it on the very next line. So one unreadable
-//! entry anywhere in the OS trust store — nothing to do with Docker,
-//! nothing the user did wrong — could make a TLS connection impossible even
-//! with a correct `--docker-tls-ca-cert`, on a machine where Docker's own
-//! CLI connects fine. User-reachable, not just a test artifact — see
-//! `CHANGELOG.md` for the fix, patched into the `bollard` fork this crate's
+//! `connect_with_ssl` used to treat *any* error from the OS trust-store
+//! loader as fatal, discarding every certificate that loaded successfully
+//! *and* the explicit CA it was handed. So one unreadable entry anywhere in
+//! the OS trust store — nothing to do with Docker, nothing the user did
+//! wrong — could make a TLS connection impossible even with a correct
+//! `--docker-tls-ca-cert`, on a machine where Docker's own CLI connects
+//! fine. User-reachable, not just a test artifact — see `CHANGELOG.md` for
+//! the fix, patched into the `bollard` fork this crate's
 //! `[patch.crates-io]` pins; offered upstream as
 //! [fussybeaver/bollard#796](https://github.com/fussybeaver/bollard/pull/796).
-//! This module's own
-//! connection failures (`connect`'s `with_context` calls) were never
-//! affected — the defect was entirely inside `connect_with_ssl`'s
-//! cert-loading, one layer below anything here. A TLS context with no
-//! stored CA loads the OS trust store here instead
-//! (`system_trust_roots`), tolerating a partial failure the same way.
+//!
+//! Nothing here calls `connect_with_ssl` any more. Every TLS connection —
+//! `--docker-tls`/`-verify` and a Docker context alike — is configured by
+//! `tls_client_config` and made by `connect_over_tls`, and the OS
+//! trust store is loaded in one place only, `system_trust_roots`, and only
+//! when no CA is configured; it tolerates a partial failure the same way
+//! the fork's fix does. `bollard` still reaches its own `connect_with_ssl`
+//! by itself, from `connect_with_host` on the plain path (an `https://`
+//! host, or `DOCKER_TLS_VERIFY` set to anything at all —
+//! [ratect#257](https://github.com/or1can/ratect/issues/257)), which is why
+//! the fork's fix is still pinned.
 
 use anyhow::{Context, Result};
 use bollard::Docker;
@@ -73,7 +77,7 @@ use std::path::{Path, PathBuf};
 /// One deliberate divergence from Batect, documented in
 /// [Differences from Batect](../../../docs/differences-from-batect.md): there's
 /// no way to skip TLS verification here — nor through a Docker context, whose
-/// `SkipTLSVerify` is not honoured either (see `ContextTls`). Batect's own
+/// `SkipTLSVerify` is not honoured either (see `TlsSettings`). Batect's own
 /// `--docker-tls` (without `-verify`) sets Go's
 /// `tls.Config.InsecureSkipVerify`, which disables *all* server certificate
 /// verification — chain of trust, expiry, and hostname matching, not just
@@ -87,9 +91,16 @@ use std::path::{Path, PathBuf};
 /// implementing its own `ServerCertVerifier` trait from scratch, a
 /// deliberate hurdle against careless misuse, not a config flag. See
 /// [Connecting to Docker](../../../docs/connecting-to-docker.md#tls-with-a-private-certificate-authority)
-/// for the supported (verified) alternative. Re-exported from `docker.rs`
-/// (`pub use`) so this module's existence is an implementation detail, not a
-/// path change.
+/// for the supported (verified) alternative.
+///
+/// A second one, in the other direction: none of `ca.pem`, `cert.pem` and
+/// `key.pem` has to exist (see `flag_tls_settings`). Batect requires all
+/// three, and the Docker CLI requires `ca.pem`; here a missing `ca.pem`
+/// means the system trust store and a missing client pair means no client
+/// certificate, as for a Docker context.
+///
+/// Re-exported from `docker.rs` (`pub use`) so this module's existence is an
+/// implementation detail, not a path change.
 #[derive(Debug, Default, Clone)]
 pub struct DockerConnectionOptions {
     pub host: Option<String>,
@@ -142,26 +153,49 @@ struct DockerContextDockerEndpoint {
 #[derive(Debug, PartialEq)]
 struct ContextEndpoint {
     host: String,
-    tls: Option<ContextTls>,
+    tls: Option<TlsSettings>,
 }
 
-/// A context's TLS settings, as the Docker CLI reads them
+/// What a TLS connection is configured with, whichever of a Docker context
+/// or the `--docker-tls*` flags asked for it, in the Docker CLI's own terms
 /// (`cli/context/docker/load.go`'s `Endpoint.tlsConfig`): `ca` is the sole
-/// trust root when stored, else the system trust store is used; `client` is
-/// presented when stored, else none is. `skip_verify_requested` is the
-/// context's `SkipTLSVerify`, which Ratect does not honour — it is kept only
-/// to explain a verification failure (see [`Connection::explain_failure`]).
+/// trust root when there is one, else the system trust store is used;
+/// `client` is presented when there is one, else none is.
+/// `skip_verify_requested` is a context's `SkipTLSVerify`, which Ratect does
+/// not honour — it is kept only to explain a verification failure (see
+/// [`Connection::explain_failure`]), and the flags have no way to set it.
 #[derive(Debug, PartialEq)]
-struct ContextTls {
-    ca: Option<PathBuf>,
+struct TlsSettings {
+    ca: Option<TlsFile>,
     client: Option<ClientCertificate>,
     skip_verify_requested: bool,
 }
 
+/// A file holding TLS material, and what the user wrote that named it —
+/// `Docker context 'x'`, a flag (`--docker-tls-ca-cert`), or for a file
+/// found in the certificate directory whichever of `--docker-cert-path`,
+/// `DOCKER_CERT_PATH` and `~/.docker` chose that directory. Every error
+/// about the file leads with `named_by`, so it points at something the
+/// user can change.
+#[derive(Debug, PartialEq)]
+struct TlsFile {
+    path: PathBuf,
+    named_by: String,
+}
+
+impl TlsFile {
+    fn new(path: PathBuf, named_by: &str) -> Self {
+        Self {
+            path,
+            named_by: named_by.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 struct ClientCertificate {
-    cert: PathBuf,
-    key: PathBuf,
+    cert: TlsFile,
+    key: TlsFile,
 }
 
 /// `<config_directory>/contexts/tls/<sha256(context_name)>/docker/` — where
@@ -211,17 +245,12 @@ fn docker_context_endpoint(config_directory: &Path, context_name: &str) -> Resul
     let endpoint = metadata.endpoints.docker;
 
     let tls_directory = docker_context_tls_directory(config_directory, context_name);
-    let stored = |name: &str| Some(tls_directory.join(name)).filter(|path| path.is_file());
-    let ca = stored("ca.pem");
-    let client = match (stored("cert.pem"), stored("key.pem")) {
-        (Some(cert), Some(key)) => Some(ClientCertificate { cert, key }),
-        (None, None) => None,
-        (Some(cert), None) => return Err(half_client_pair(context_name, &cert, "key.pem")),
-        (None, Some(key)) => return Err(half_client_pair(context_name, &key, "cert.pem")),
-    };
+    let named_by = format!("Docker context '{context_name}'");
+    let ca = file_in(&tls_directory, "ca.pem", &named_by);
+    let client = client_pair_in(&tls_directory, &named_by)?;
 
     let tls =
-        (ca.is_some() || client.is_some() || endpoint.skip_tls_verify).then_some(ContextTls {
+        (ca.is_some() || client.is_some() || endpoint.skip_tls_verify).then_some(TlsSettings {
             ca,
             client,
             skip_verify_requested: endpoint.skip_tls_verify,
@@ -269,20 +298,138 @@ pub(super) fn docker_config_directory(options: &DockerConnectionOptions) -> Resu
 }
 
 /// `--docker-cert-path`, else `DOCKER_CERT_PATH`, else `~/.docker` — the
-/// directory `ca.pem`/`cert.pem`/`key.pem` are read from unless
-/// `--docker-tls-ca-cert`/`-cert`/`-key` individually override one.
-/// Resolved independently of `docker_config_directory` (its own separate
-/// environment variable, even though both happen to share the same
-/// hardcoded default) — matching Batect's own two independently-settable
-/// options exactly.
-fn docker_cert_directory(options: &DockerConnectionOptions) -> Result<PathBuf> {
+/// directory `ca.pem`/`cert.pem`/`key.pem` are looked for in unless
+/// `--docker-tls-ca-cert`/`-cert`/`-key` individually override one — and
+/// which of those three chose it, the name errors about a file found there
+/// use (see `TlsFile`). Resolved independently of `docker_config_directory`
+/// (its own separate environment variable, even though both happen to share
+/// the same hardcoded default) — matching Batect's own two
+/// independently-settable options exactly.
+///
+/// An empty `DOCKER_CERT_PATH` counts as unset, as in the Docker CLI,
+/// rather than naming the working directory. Whether the directory exists
+/// is [`flag_tls_settings`]'s question, asked only if it's consulted.
+///
+/// Pure but for the home directory lookup — the environment value is
+/// injected, as for `resolve_host`.
+fn docker_cert_directory(
+    options: &DockerConnectionOptions,
+    docker_cert_path_env: Option<&str>,
+) -> Result<(PathBuf, String)> {
     if let Some(dir) = &options.cert_path {
-        return Ok(dir.clone());
+        return Ok((dir.clone(), "--docker-cert-path".to_string()));
     }
-    if let Ok(dir) = std::env::var("DOCKER_CERT_PATH") {
-        return Ok(PathBuf::from(dir));
+    if let Some(dir) = docker_cert_path_env.filter(|dir| !dir.is_empty()) {
+        return Ok((PathBuf::from(dir), "DOCKER_CERT_PATH".to_string()));
     }
-    Ok(crate::user::home_directory()?.join(".docker"))
+    Ok((
+        crate::user::home_directory()?.join(".docker"),
+        "~/.docker".to_string(),
+    ))
+}
+
+/// `directory`'s `name`, when it is there.
+fn file_in(directory: &Path, name: &str, named_by: &str) -> Option<TlsFile> {
+    Some(directory.join(name))
+        .filter(|path| path.is_file())
+        .map(|path| TlsFile::new(path, named_by))
+}
+
+/// `directory`'s `cert.pem` and `key.pem`: both, or neither. One without
+/// the other is an error — the Docker CLI silently presents no client
+/// certificate then (from a context's store and from the default paths
+/// alike: `cli/context/docker/load.go`'s `tlsConfig` wants both), and a
+/// daemon that wants one would refuse the connection with nothing pointing
+/// at the missing file.
+fn client_pair_in(directory: &Path, named_by: &str) -> Result<Option<ClientCertificate>> {
+    let cert = file_in(directory, "cert.pem", named_by);
+    let key = file_in(directory, "key.pem", named_by);
+    match (cert, key) {
+        (Some(cert), Some(key)) => Ok(Some(ClientCertificate { cert, key })),
+        (None, None) => Ok(None),
+        (Some(cert), None) => Err(half_client_pair(named_by, &cert.path, "key.pem")),
+        (None, Some(key)) => Err(half_client_pair(named_by, &key.path, "cert.pem")),
+    }
+}
+
+/// The TLS settings `--docker-tls`/`-verify` ask for, from the three file
+/// flags and the certificate directory (`cert_directory`, chosen by
+/// `cert_directory_named_by` — see [`docker_cert_directory`]). Decides
+/// which files are used without reading any of them; [`tls_client_config`]
+/// does that.
+///
+/// - A file a flag names must exist. It need not be a regular file: a pipe
+///   (`<(…)`, to keep a key off disk) is read like one, once.
+/// - The directory must exist if any file is looked for in it — that is,
+///   unless all three flags are given. Every file in it is optional, so a
+///   mistyped path would otherwise read as a directory holding none of
+///   them, and connect with the system trust store and no client
+///   certificate without a word.
+/// - Without `--docker-tls-ca-cert`, the directory's `ca.pem` is the CA
+///   when it is there; when it isn't there is none, and the system trust
+///   store is used.
+/// - With either of `--docker-tls-cert`/`-key`, a client certificate is
+///   presented, the other half coming from the directory's `cert.pem` or
+///   `key.pem`, which must then exist. With neither, the directory's pair
+///   is presented when both files are there, and none is when neither is.
+///
+/// Accepts everything Batect does (all three files required) and the Docker
+/// CLI does (`ca.pem` required; a missing default `cert.pem`/`key.pem`
+/// dropped), and more than either: no CA at all. What that costs is that a
+/// forgotten `ca.pem` shows up as a verification failure rather than a
+/// missing file, which [`Connection::explain_failure`] makes up for.
+fn flag_tls_settings(
+    options: &DockerConnectionOptions,
+    cert_directory: &Path,
+    cert_directory_named_by: &str,
+) -> Result<TlsSettings> {
+    let named = |flag: &str, path: &PathBuf| -> Result<TlsFile> {
+        if !path.exists() || path.is_dir() {
+            anyhow::bail!("{flag}: {} does not exist or is not a file", path.display());
+        }
+        Ok(TlsFile::new(path.clone(), flag))
+    };
+    let required = |name: &str| -> Result<TlsFile> {
+        file_in(cert_directory, name, cert_directory_named_by).with_context(|| {
+            format!(
+                "{cert_directory_named_by}: {} does not exist or is not a file — a client \
+                 certificate needs both a certificate and a key",
+                cert_directory.join(name).display()
+            )
+        })
+    };
+
+    let consults_directory =
+        options.tls_ca_cert.is_none() || options.tls_cert.is_none() || options.tls_key.is_none();
+    if consults_directory && !cert_directory.is_dir() {
+        anyhow::bail!(
+            "{cert_directory_named_by}: {} does not exist or is not a directory",
+            cert_directory.display()
+        );
+    }
+
+    let ca = match &options.tls_ca_cert {
+        Some(path) => Some(named("--docker-tls-ca-cert", path)?),
+        None => file_in(cert_directory, "ca.pem", cert_directory_named_by),
+    };
+    let client = match (&options.tls_cert, &options.tls_key) {
+        (None, None) => client_pair_in(cert_directory, cert_directory_named_by)?,
+        (cert, key) => Some(ClientCertificate {
+            cert: match cert {
+                Some(path) => named("--docker-tls-cert", path)?,
+                None => required("cert.pem")?,
+            },
+            key: match key {
+                Some(path) => named("--docker-tls-key", path)?,
+                None => required("key.pem")?,
+            },
+        }),
+    };
+    Ok(TlsSettings {
+        ca,
+        client,
+        skip_verify_requested: false,
+    })
 }
 
 /// Whether this invocation should connect over TLS at all: `--docker-tls`
@@ -302,14 +449,15 @@ fn tls_enabled(options: &DockerConnectionOptions, docker_tls_verify_env: Option<
 }
 
 /// Installs `rustls`'s `ring` cryptographic provider as the process-wide
-/// default, exactly once — `bollard::Docker::connect_with_ssl` panics if
-/// asked to build a TLS connection before one is installed (there's no
-/// provider bundled by default; `ratect-core`'s own `bollard` dependency
-/// enables just enough of `ssl_providerless` for that, matching bollard's
-/// own `ssl` feature). Idempotent: a later call after the first is a no-op
+/// default, exactly once — `rustls::ClientConfig::builder()`, which
+/// [`tls_client_config`] calls, uses the installed provider, and panics
+/// when there is none unless `rustls`'s own crate features name exactly
+/// one (`ratect-core`'s `bollard` dependency turns on `ring`, through its
+/// `ssl` feature; installing it here means nothing depends on no other
+/// crate ever turning on a second). Idempotent: a later call after the first is a no-op
 /// (`install_default` only errors if something else already installed a
 /// provider, which never happens here — nothing else in `ratect-core`
-/// touches `rustls` directly).
+/// installs one).
 fn ensure_crypto_provider_installed() {
     static INSTALLED: std::sync::Once = std::sync::Once::new();
     INSTALLED.call_once(|| {
@@ -407,83 +555,75 @@ fn conflicting_option_with_context(options: &DockerConnectionOptions) -> Option<
     }
 }
 
-/// The error for a context storing only one of `cert.pem`/`key.pem`.
-fn half_client_pair(context_name: &str, present: &Path, missing: &str) -> anyhow::Error {
+/// The error for only one of `cert.pem`/`key.pem` being there.
+fn half_client_pair(named_by: &str, present: &Path, missing: &str) -> anyhow::Error {
     anyhow::anyhow!(
-        "Docker context '{context_name}' stores {} but no {missing} beside it — a client \
-         certificate needs both",
+        "{named_by}: {} has no {missing} beside it — a client certificate needs both",
         present.display()
     )
 }
 
-/// Reads a file from a context's TLS directory, naming the context if it
-/// can't.
-fn read_context_file(context_name: &str, path: &Path) -> Result<Vec<u8>> {
-    fs::read(path).with_context(|| {
-        format!(
-            "Failed to read {} for Docker context '{context_name}'",
-            path.display()
-        )
-    })
+/// Reads `file`, naming what named it if it can't.
+fn read_tls_file(file: &TlsFile) -> Result<Vec<u8>> {
+    fs::read(&file.path)
+        .with_context(|| format!("{}: {} can't be read", file.named_by, file.path.display()))
 }
 
-/// Reads every certificate in the PEM file at `path`, for a context's
-/// `ca.pem`/`cert.pem` — an error naming the context and the file when it
-/// can't be read, isn't valid PEM, or holds no certificate at all.
-fn read_context_certificates(
-    context_name: &str,
-    path: &Path,
-) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
+/// Reads every certificate in the PEM file `file`, a CA or a client
+/// certificate — an error naming the file and what named it when it can't
+/// be read, isn't valid PEM, or holds no certificate at all.
+fn read_certificates(file: &TlsFile) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
     use rustls::pki_types::pem::PemObject;
-    let bytes = read_context_file(context_name, path)?;
+    let bytes = read_tls_file(file)?;
     let certificates = rustls::pki_types::CertificateDer::pem_slice_iter(&bytes)
         .collect::<Result<Vec<_>, _>>()
         .with_context(|| {
             format!(
-                "Docker context '{context_name}': {} is not a valid PEM certificate file",
-                path.display()
+                "{}: {} is not a valid PEM certificate file",
+                file.named_by,
+                file.path.display()
             )
         })?;
     if certificates.is_empty() {
         anyhow::bail!(
-            "Docker context '{context_name}': {} holds no certificate",
-            path.display()
+            "{}: {} holds no certificate",
+            file.named_by,
+            file.path.display()
         );
     }
     Ok(certificates)
 }
 
-/// Reads the private key in a context's `key.pem` — an error naming the
-/// context and the file when it can't be read, is encrypted (a context
-/// stores no passphrase to decrypt it with), or holds no usable key.
-fn read_context_private_key(
-    context_name: &str,
-    path: &Path,
-) -> Result<rustls::pki_types::PrivateKeyDer<'static>> {
+/// Reads the private key in `file` — an error naming the file and what
+/// named it when it can't be read, is encrypted (there is no passphrase to
+/// decrypt it with: a context stores none, and no flag takes one), or holds
+/// no usable key.
+fn read_private_key(file: &TlsFile) -> Result<rustls::pki_types::PrivateKeyDer<'static>> {
     use rustls::pki_types::pem::PemObject;
-    let bytes = read_context_file(context_name, path)?;
+    let bytes = read_tls_file(file)?;
     let text = String::from_utf8_lossy(&bytes);
     if text.contains("-----BEGIN ENCRYPTED PRIVATE KEY-----")
         || text.contains("Proc-Type: 4,ENCRYPTED")
     {
         anyhow::bail!(
-            "Docker context '{context_name}': {} is an encrypted private key, which Ratect \
-             can't use — store it unencrypted",
-            path.display()
+            "{}: {} is an encrypted private key, which Ratect can't use — store it unencrypted",
+            file.named_by,
+            file.path.display()
         );
     }
     rustls::pki_types::PrivateKeyDer::from_pem_slice(&bytes).with_context(|| {
         format!(
-            "Docker context '{context_name}': {} holds no valid PEM private key",
-            path.display()
+            "{}: {} holds no valid PEM private key",
+            file.named_by,
+            file.path.display()
         )
     })
 }
 
-/// The OS trust store, for a context that stores no `ca.pem`. An entry that
-/// fails to load is skipped rather than failing the connection — the same
-/// policy as the `bollard` fork's `connect_with_ssl` (see this module's own
-/// doc comment for why).
+/// The OS trust store, for a connection with no CA of its own. An entry
+/// that fails to load is skipped rather than failing the connection: one
+/// unreadable entry has nothing to do with Docker, and the Docker CLI
+/// connects regardless (see this module's own doc comment).
 fn system_trust_roots() -> rustls::RootCertStore {
     let loaded = rustls_native_certs::load_native_certs();
     if !loaded.errors.is_empty() {
@@ -494,23 +634,23 @@ fn system_trust_roots() -> rustls::RootCertStore {
     roots
 }
 
-/// The `rustls` client configuration for a context's TLS settings (see
-/// [`ContextTls`]). Every stored file is read and checked here, up front,
-/// so a bad one is named by this error rather than surfacing later as an
-/// opaque handshake failure — a client key most of all, which would
-/// otherwise just not be presented. The daemon's certificate is always
-/// verified: `skip_verify_requested` plays no part in this.
-fn context_tls_config(context_name: &str, tls: &ContextTls) -> Result<rustls::ClientConfig> {
+/// The `rustls` client configuration for `tls`. Every file is read and
+/// checked here, up front, so a bad one is named by this error rather than
+/// surfacing later as an opaque handshake failure — a client key most of
+/// all, which would otherwise just not be presented. The daemon's
+/// certificate is always verified: `skip_verify_requested` plays no part
+/// in this.
+fn tls_client_config(tls: &TlsSettings) -> Result<rustls::ClientConfig> {
     ensure_crypto_provider_installed();
     let roots = match &tls.ca {
         Some(ca) => {
             let mut roots = rustls::RootCertStore::empty();
-            for certificate in read_context_certificates(context_name, ca)? {
+            for certificate in read_certificates(ca)? {
                 roots.add(certificate).with_context(|| {
                     format!(
-                        "Docker context '{context_name}': {} holds a certificate that can't be \
-                         used as a trust root",
-                        ca.display()
+                        "{}: {} holds a certificate that can't be used as a trust root",
+                        ca.named_by,
+                        ca.path.display()
                     )
                 })?;
             }
@@ -522,41 +662,61 @@ fn context_tls_config(context_name: &str, tls: &ContextTls) -> Result<rustls::Cl
     let Some(client) = &tls.client else {
         return Ok(builder.with_no_client_auth());
     };
-    let certificates = read_context_certificates(context_name, &client.cert)?;
-    let key = read_context_private_key(context_name, &client.key)?;
+    let certificates = read_certificates(&client.cert)?;
+    let key = read_private_key(&client.key)?;
     builder
         .with_client_auth_cert(certificates, key)
         .with_context(|| {
             format!(
-                "Docker context '{context_name}': the private key in {} can't be used with the \
-             certificate in {}",
-                client.key.display(),
-                client.cert.display()
+                "{}: the private key in {} can't be used with the certificate in {}",
+                client.key.named_by,
+                client.key.path.display(),
+                client.cert.path.display()
             )
         })
 }
 
-/// Connects to `host` over TLS configured by `config`, through `bollard`'s
-/// custom-transport hook: `bollard`'s own `connect_with_ssl` needs a CA, a
-/// client certificate and a key, each as a file, so it can't express a
-/// context with no CA (the system trust store) or no client certificate.
-/// The transport mirrors that function's own — a `hyper-rustls` connector
-/// on `hyper-util`'s client, with no idle-connection pooling — and every
-/// request, upgrades (attach, exec) included, goes through it the same way.
-fn connect_with_tls_config(
-    context_name: &str,
-    host: &str,
-    config: rustls::ClientConfig,
-) -> Result<Docker> {
-    let Some(address) = host
+/// The address in `host` a TLS connection is made to: a `tcp://` or
+/// `https://` address, or a bare `host:port` — what `connect_with_ssl`
+/// took, so what `--docker-host` has always accepted with `--docker-tls`.
+/// Anything else with a scheme is refused; `connect_with_ssl` built a
+/// client for it that could never connect. A pure string check, so it's
+/// asked first — before any certificate is read or the system trust store
+/// loaded for a connection that could never be made.
+///
+/// `target` is what errors call the daemon: `Docker context 'x' (host
+/// 'h')` or `Docker host 'h'`.
+fn tls_address<'a>(target: &str, host: &'a str) -> Result<&'a str> {
+    match host
         .strip_prefix("tcp://")
         .or_else(|| host.strip_prefix("https://"))
-    else {
-        anyhow::bail!(
-            "Docker context '{context_name}' has TLS settings but its host '{host}' isn't a \
-             tcp:// or https:// address, the only kinds Ratect connects to over TLS"
-        );
-    };
+    {
+        Some(address) => Ok(address),
+        None if !host.contains("://") => Ok(host),
+        None => anyhow::bail!(
+            "Can't connect to {target} over TLS: the host isn't a tcp:// or https:// address, \
+             the only kinds Ratect connects to over TLS"
+        ),
+    }
+}
+
+/// Connects to `address` (see [`tls_address`]) over TLS as `tls` says
+/// (see [`tls_client_config`]), through `bollard`'s custom-transport hook
+/// — the one route every TLS connection takes, and the one place a
+/// failure to set it up is worded, whichever of the flags or a context
+/// asked for it.
+/// `bollard`'s own `connect_with_ssl` can't express what `TlsSettings`
+/// does: it needs a CA, a client certificate and a key, each as a file,
+/// adds the CA to the system trust store rather than using it alone, and
+/// reads the client pair only during the handshake, where a failure means
+/// no certificate is presented. The transport mirrors that function's own
+/// — a `hyper-rustls` connector on `hyper-util`'s client, with no
+/// idle-connection pooling — and every request, upgrades (attach, exec)
+/// included, goes through it the same way.
+///
+fn connect_over_tls(target: &str, address: &str, tls: &TlsSettings) -> Result<Docker> {
+    let config = tls_client_config(tls)
+        .with_context(|| format!("Failed to connect to {target} over TLS"))?;
 
     let mut http = hyper_util::client::legacy::connect::HttpConnector::new();
     http.enforce_http(false);
@@ -580,42 +740,61 @@ fn connect_with_tls_config(
         120,
         bollard::API_DEFAULT_VERSION,
     )
-    .with_context(|| {
-        format!("Failed to connect to Docker context '{context_name}' (host '{host}') over TLS")
-    })
+    .with_context(|| format!("Failed to connect to {target} over TLS"))
 }
 
-/// A connected client, plus what's needed to explain its first failure:
-/// the name of the context that asked to skip TLS verification, when the
-/// connection went through one that did.
+/// Why a verification failure on a connection may not be what the user
+/// expected, from how the connection was configured.
+#[derive(Debug)]
+enum VerificationNote {
+    /// The named context sets `SkipTLSVerify`, which Ratect doesn't honour.
+    ContextAskedToSkip(String),
+    /// `--docker-tls`/`-verify` with no CA: no `--docker-tls-ca-cert`, and
+    /// nothing at `looked_for`, the certificate directory's `ca.pem`.
+    SystemTrustStore { looked_for: PathBuf },
+}
+
+/// A connected client, plus what's needed to explain its first failure.
 #[derive(Debug)]
 pub(super) struct Connection {
     pub(super) docker: Docker,
-    skip_verify_requested_by: Option<String>,
+    verification_note: Option<VerificationNote>,
 }
 
 impl Connection {
-    fn without_skip_request(docker: Docker) -> Self {
+    fn without_note(docker: Docker) -> Self {
         Self {
             docker,
-            skip_verify_requested_by: None,
+            verification_note: None,
         }
     }
 
     /// `err`, from a request over this connection, with an explanation added
-    /// when it's a certificate-verification failure and the context asked
-    /// to skip verification — the one case where the user's own
-    /// configuration says this shouldn't have happened. Anything else is
+    /// when it's a certificate-verification failure and the connection has
+    /// a [`VerificationNote`] — the cases where the user's own
+    /// configuration says this shouldn't have happened, or doesn't say
+    /// which roots the daemon was verified against. Anything else is
     /// returned unchanged.
     pub(super) fn explain_failure(&self, err: anyhow::Error) -> anyhow::Error {
-        match &self.skip_verify_requested_by {
-            Some(context_name) if holds_certificate_error(err.as_ref()) => err.context(format!(
+        let Some(note) = &self.verification_note else {
+            return err;
+        };
+        if !holds_certificate_error(err.as_ref()) {
+            return err;
+        }
+        const SEE: &str = "See 'TLS with a private certificate authority' in Ratect's \
+                           Connecting to Docker documentation for how to make it verifiable";
+        match note {
+            VerificationNote::ContextAskedToSkip(context_name) => err.context(format!(
                 "Docker context '{context_name}' asks to skip TLS verification (its \
                  SkipTLSVerify setting), but Ratect always verifies the daemon's certificate. \
-                 See 'TLS with a private certificate authority' in Ratect's Connecting to \
-                 Docker documentation for how to make it verifiable"
+                 {SEE}"
             )),
-            _ => err,
+            VerificationNote::SystemTrustStore { looked_for } => err.context(format!(
+                "No --docker-tls-ca-cert was given and no ca.pem was found at {}, so the \
+                 daemon's certificate was verified against the system trust store. {SEE}",
+                looked_for.display()
+            )),
         }
     }
 }
@@ -666,10 +845,12 @@ fn holds_certificate_error(error: &(dyn std::error::Error + 'static)) -> bool {
 /// host is required (see `require_host_for_tls`).
 ///
 /// A context brings its own TLS settings instead — the ones
-/// `docker context create` stored for it (see [`docker_context_endpoint`]),
-/// connected through [`connect_with_tls_config`] rather than `bollard`'s
-/// `connect_with_ssl`. The returned [`Connection`] carries what
-/// [`Connection::explain_failure`] needs to explain a verification failure.
+/// `docker context create` stored for it (see [`docker_context_endpoint`]).
+/// Either way the settings are one [`TlsSettings`], turned into a
+/// connection by [`connect_over_tls`]; the flags' come from
+/// [`flag_tls_settings`]. The returned [`Connection`]
+/// carries what [`Connection::explain_failure`] needs to explain a
+/// verification failure.
 pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
     if options.context.is_some() {
         if let Some(conflicting) = conflicting_option_with_context(options) {
@@ -693,16 +874,19 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
             docker_context_endpoint(&config_directory, &context_name)?;
         let Some(tls) = tls else {
             return Docker::connect_with_host(&host)
-                .map(Connection::without_skip_request)
+                .map(Connection::without_note)
                 .with_context(|| {
                     format!("Failed to connect to Docker context '{context_name}' (host '{host}')")
                 });
         };
-        let config = context_tls_config(&context_name, &tls)?;
-        let docker = connect_with_tls_config(&context_name, &host, config)?;
+        let target = format!("Docker context '{context_name}' (host '{host}')");
+        let address = tls_address(&target, &host)?;
+        let docker = connect_over_tls(&target, address, &tls)?;
         return Ok(Connection {
             docker,
-            skip_verify_requested_by: tls.skip_verify_requested.then_some(context_name),
+            verification_note: tls
+                .skip_verify_requested
+                .then_some(VerificationNote::ContextAskedToSkip(context_name)),
         });
     }
 
@@ -713,28 +897,27 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
                 .with_context(|| format!("Failed to connect to Docker host '{host}'"))?,
             None => Docker::connect_with_local_defaults().context("Failed to connect to Docker")?,
         };
-        return Ok(Connection::without_skip_request(docker));
+        return Ok(Connection::without_note(docker));
     }
 
     let host = require_host_for_tls(host)?;
-    let cert_directory = docker_cert_directory(options)?;
-    let ca = options
-        .tls_ca_cert
-        .clone()
-        .unwrap_or_else(|| cert_directory.join("ca.pem"));
-    let cert = options
-        .tls_cert
-        .clone()
-        .unwrap_or_else(|| cert_directory.join("cert.pem"));
-    let key = options
-        .tls_key
-        .clone()
-        .unwrap_or_else(|| cert_directory.join("key.pem"));
-
-    ensure_crypto_provider_installed();
-    Docker::connect_with_ssl(&host, &key, &cert, &ca, 120, bollard::API_DEFAULT_VERSION)
-        .map(Connection::without_skip_request)
-        .with_context(|| format!("Failed to connect to Docker host '{host}' over TLS"))
+    let target = format!("Docker host '{host}'");
+    let address = tls_address(&target, &host)?;
+    let docker_cert_path_env = std::env::var("DOCKER_CERT_PATH").ok();
+    let (cert_directory, named_by) =
+        docker_cert_directory(options, docker_cert_path_env.as_deref())?;
+    let tls = flag_tls_settings(options, &cert_directory, &named_by)
+        .with_context(|| format!("Failed to connect to {target} over TLS"))?;
+    let docker = connect_over_tls(&target, address, &tls)?;
+    Ok(Connection {
+        docker,
+        verification_note: tls
+            .ca
+            .is_none()
+            .then(|| VerificationNote::SystemTrustStore {
+                looked_for: cert_directory.join("ca.pem"),
+            }),
+    })
 }
 
 #[cfg(test)]

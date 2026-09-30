@@ -69,7 +69,7 @@ accepts them; they're used only when it actually connects.
 | `--docker-config <PATH>` | — | `DOCKER_CONFIG`, then `~/.docker` | Directory containing the Docker CLI's own configuration — see [Connecting to Docker](connecting-to-docker.md#options). |
 | `--docker-tls` | — | — | Use TLS, identically to `--docker-tls-verify` — see [Connecting to Docker](connecting-to-docker.md#options). |
 | `--docker-tls-verify` | — | `DOCKER_TLS_VERIFY` | Use TLS, verifying the daemon's certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
-| `--docker-cert-path <PATH>` | — | `DOCKER_CERT_PATH`, then `~/.docker` | Directory containing `ca.pem`/`cert.pem`/`key.pem` — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-cert-path <PATH>` | — | `DOCKER_CERT_PATH`, then `~/.docker` | Directory containing any of `ca.pem`/`cert.pem`/`key.pem` — see [Connecting to Docker](connecting-to-docker.md#options). |
 | `--docker-tls-ca-cert <PATH>` | — | `ca.pem` in `--docker-cert-path` | The TLS CA certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
 | `--docker-tls-cert <PATH>` | — | `cert.pem` in `--docker-cert-path` | The TLS client certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
 | `--docker-tls-key <PATH>` | — | `key.pem` in `--docker-cert-path` | The TLS client key — see [Connecting to Docker](connecting-to-docker.md#options). |

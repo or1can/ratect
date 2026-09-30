@@ -24,10 +24,41 @@ Windows named pipe) — see [Which daemon is used](#which-daemon-is-used).
 | `--docker-config <PATH>` | `DOCKER_CONFIG`, then `~/.docker` | Directory containing the Docker CLI's own configuration files (context store, `config.json`). |
 | `--docker-tls` | — | Use TLS when connecting to the Docker host. Behaves identically to `--docker-tls-verify` — the daemon's certificate is always fully verified; there is no way to skip verification. |
 | `--docker-tls-verify` | `DOCKER_TLS_VERIFY` | Use TLS when connecting to the Docker host, verifying its certificate. Needs a host: `--docker-host` or `DOCKER_HOST`. |
-| `--docker-cert-path <PATH>` | `DOCKER_CERT_PATH`, then `~/.docker` | Directory containing `ca.pem`/`cert.pem`/`key.pem` to authenticate to the Docker host and verify it, unless overridden individually by the three options below. |
-| `--docker-tls-ca-cert <PATH>` | `ca.pem` in `--docker-cert-path` | The TLS CA certificate used to verify the Docker host's own certificate. |
-| `--docker-tls-cert <PATH>` | `cert.pem` in `--docker-cert-path` | The TLS certificate used to authenticate to the Docker host. |
-| `--docker-tls-key <PATH>` | `key.pem` in `--docker-cert-path` | The TLS key used to authenticate to the Docker host. |
+| `--docker-cert-path <PATH>` | `DOCKER_CERT_PATH`, then `~/.docker` | Directory containing any of `ca.pem`/`cert.pem`/`key.pem` to authenticate to the Docker host and verify it, unless overridden individually by the three options below. None of the three files has to be there — see [TLS through the options](#tls-through-the-options). |
+| `--docker-tls-ca-cert <PATH>` | `ca.pem` in `--docker-cert-path` | The TLS CA certificate used to verify the Docker host's own certificate — the only certificate authority it is checked against. The file must exist. Without this option and without a `ca.pem`, the system trust store is used. |
+| `--docker-tls-cert <PATH>` | `cert.pem` in `--docker-cert-path` | The TLS certificate used to authenticate to the Docker host. The file must exist, and so must the key. |
+| `--docker-tls-key <PATH>` | `key.pem` in `--docker-cert-path` | The TLS key used to authenticate to the Docker host. The file must exist, and so must the certificate. |
+
+## TLS through the options
+
+With `--docker-tls` or `--docker-tls-verify` (or `DOCKER_TLS_VERIFY`), the
+certificate directory is `--docker-cert-path`, then `DOCKER_CERT_PATH`, then
+`~/.docker` (an empty `DOCKER_CERT_PATH` counts as unset). The directory must
+exist unless all three files are named by their own options. What it holds
+decides how the connection is made:
+
+- `--docker-tls-ca-cert`, or else the directory's `ca.pem`, is the only
+  certificate authority the daemon's certificate is checked against. With
+  neither, the system trust store is used — for a daemon whose certificate a
+  public certificate authority signed.
+- `--docker-tls-cert` and `--docker-tls-key`, or else the directory's
+  `cert.pem` and `key.pem`, are presented as the client certificate. With
+  neither option and neither file, none is presented. Only one of the two
+  files in the directory is an error, and so is giving one option when the
+  directory doesn't hold the other file.
+- A file named by an option must exist.
+- An encrypted key, or one that doesn't match the certificate, is an error
+  naming the option or the directory, and the file.
+- Only a `tcp://` or `https://` host, or a bare `host:port`, can be connected
+  to over TLS.
+
+If the daemon's certificate fails verification and no certificate authority
+was given, the error says where a `ca.pem` was looked for. A daemon with a
+self-signed or privately signed certificate needs one — see
+[TLS with a private certificate authority](#tls-with-a-private-certificate-authority).
+
+A Docker context follows the same file rules with the files it stores — see
+below.
 
 ## Which daemon is used
 
@@ -77,7 +108,7 @@ for making the certificate verifiable instead.
 | `DOCKER_HOST` | Docker host to connect to — the default for `--docker-host`. Setting it means no context is used unless `--docker-context` is given. Empty counts as unset. |
 | `DOCKER_CONTEXT` | Docker CLI context to connect through — the default for `--docker-context`. Ignored when a host is set. Empty counts as unset. |
 | `DOCKER_CONFIG` | Directory containing the Docker CLI's own configuration files — the default for `--docker-config`. |
-| `DOCKER_CERT_PATH` | Directory containing `ca.pem`/`cert.pem`/`key.pem` for TLS — the default for `--docker-cert-path`. |
+| `DOCKER_CERT_PATH` | Directory containing any of `ca.pem`/`cert.pem`/`key.pem` for TLS — the default for `--docker-cert-path`. Empty counts as unset. |
 | `DOCKER_TLS_VERIFY` | `1` or `true` (any case) enables TLS, fully verified — the default for `--docker-tls-verify`. Any other value leaves it off. |
 
 ## TLS with a private certificate authority
@@ -141,7 +172,10 @@ Ratect at the result.
    `ratect-compat` takes the same three options, before the task name. Or set
    `--docker-cert-path` to a directory containing `ca.pem` (and
    `cert.pem`/`key.pem`, if the daemon requires client auth) instead of naming each
-   file individually — see [Options](#options). A Docker context created with the
+   file individually — see [Options](#options). Leave the CA out altogether and
+   the daemon is checked against the system trust store, which a private CA is
+   not in: verification fails, and the error says where a `ca.pem` was looked
+   for. A Docker context created with the
    same files (`docker context create my-daemon --docker
    "host=tcp://docker-daemon.example.com:2376,ca=./ca.pem"`) works too, through
    `--docker-context my-daemon` — see [Which daemon is used](#which-daemon-is-used).
