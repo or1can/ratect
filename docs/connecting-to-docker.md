@@ -19,7 +19,7 @@ Windows named pipe) — see [Which daemon is used](#which-daemon-is-used).
 
 | Flag | Default | Description |
 |---|---|---|
-| `--docker-host <HOST>` | `DOCKER_HOST` | Docker host to connect to, e.g. `unix:///var/run/docker.sock` or `tcp://1.2.3.4:5678`. Cannot be combined with `--docker-context`. |
+| `--docker-host <HOST>` | `DOCKER_HOST` | Docker host to connect to, e.g. `unix:///var/run/docker.sock` or `tcp://1.2.3.4:5678`. An `https://` host connects over TLS as if `--docker-tls-verify` were given. Cannot be combined with `--docker-context`. |
 | `--docker-context <NAME>` | `DOCKER_CONTEXT`, then the active context, unless a host is set | Docker CLI context to connect through — read from the Docker CLI's own context store (`~/.docker/contexts/`, or `--docker-config`'s directory). The active context is `~/.docker/config.json`'s `currentContext`. Cannot be combined with `--docker-host` or any of the TLS options below. Errors clearly if the named context doesn't exist in the store. |
 | `--docker-config <PATH>` | `DOCKER_CONFIG`, then `~/.docker` | Directory containing the Docker CLI's own configuration files (context store, `config.json`). |
 | `--docker-tls` | — | Use TLS when connecting to the Docker host. Behaves identically to `--docker-tls-verify` — the daemon's certificate is always fully verified; there is no way to skip verification. |
@@ -31,8 +31,8 @@ Windows named pipe) — see [Which daemon is used](#which-daemon-is-used).
 
 ## TLS through the options
 
-With `--docker-tls` or `--docker-tls-verify` (or `DOCKER_TLS_VERIFY`), the
-certificate directory is `--docker-cert-path`, then `DOCKER_CERT_PATH`, then
+With `--docker-tls` or `--docker-tls-verify` (or `DOCKER_TLS_VERIFY`), or an
+`https://` host, the certificate directory is `--docker-cert-path`, then `DOCKER_CERT_PATH`, then
 `~/.docker` (an empty `DOCKER_CERT_PATH` counts as unset). The directory must
 exist unless all three files are named by their own options. What it holds
 decides how the connection is made:
@@ -95,6 +95,10 @@ stored for it — used as the Docker CLI uses them:
 - An encrypted `key.pem`, or one that doesn't match `cert.pem`, is an error naming
   the context and the file.
 - Only a `tcp://` or `https://` host can be connected to over TLS.
+
+A context naming an `https://` host also connects over TLS, storing TLS material
+or not — the same as `--docker-host https://…`, and unlike the Docker CLI, which
+connects to such a host without TLS unless the context stores some.
 
 `SkipTLSVerify` is not honoured: the daemon's certificate is always fully verified,
 as with `--docker-tls`. If verification fails for a context that sets it, the error

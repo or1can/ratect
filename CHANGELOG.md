@@ -50,6 +50,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- `DOCKER_TLS_VERIFY` set to a value other than `1`/`true` (`0`, `false`, empty) no longer makes a `tcp://` connection use TLS. It did, through the Docker client library's own reading of the variable, and then failed for want of a `ca.pem` in `DOCKER_CERT_PATH` or `~/.docker`.
 - With `--docker-tls`/`--docker-tls-verify`, a client certificate or key that is missing, unreadable, encrypted, or doesn't match the other is an error naming the file, instead of the connection being made with no client certificate.
 - A second termination signal during cleanup now force-removes whatever is left, with no grace period, instead of abandoning cleanup and leaving the task's container and network behind; a Ctrl+C (`SIGINT`) after that abandons cleanup as any second signal used to. See [Differences from Batect](docs/differences-from-batect.md#runtime-behavior-gaps).
 - A Docker context's stored TLS settings (`ca.pem`, `cert.pem`/`key.pem`) are now used, so a context for a TLS-protected daemon connects. Its `SkipTLSVerify` is not honoured: the daemon's certificate is always verified.
@@ -63,6 +64,7 @@ history, from when it was the only binary.
 
 ### Changed
 
+- An `https://` Docker host (from `--docker-host`, `DOCKER_HOST`, or a Docker context) now connects over TLS with the same rules as `--docker-tls-verify`: the certificate directory's files, or a context's stored ones, and the system trust store without a `ca.pem`. It used to go through the Docker client library's own defaults, which required a `ca.pem` in `DOCKER_CERT_PATH` or `~/.docker` and ignored `--docker-cert-path` and the other TLS options. (Batect connects to an `https://` host without TLS unless told otherwise — see [Differences from Batect](docs/differences-from-batect.md).)
 - With `--docker-tls`/`--docker-tls-verify`, a certificate directory with no `ca.pem` is no longer an error: the daemon's certificate is checked against the system trust store, and a verification failure says where a `ca.pem` was looked for. Nor is one with no `cert.pem`/`key.pem`: no client certificate is presented. An empty `DOCKER_CERT_PATH` counts as unset. See [Connecting to Docker](docs/connecting-to-docker.md#tls-through-the-options).
 - [Getting Started](docs/getting-started.md) now teaches `ratect` and `ratect.toml` rather than `ratect-compat` and `batect.yml`, on a real project checked in as `examples/getting-started/`. [Installation](docs/installation.md)'s from-source instructions build and install both binaries.
 - The pages under `docs/` describe the binaries in the present tense: version numbers and "yet"/"used to" framing are gone, and the [`batect.yml` reference](docs/ratect-compat-config-reference.md#image-building) says what each output style shows of an image build in place of a stale note that no `--output` mode existed. The [`ratect` CLI reference](docs/ratect-cli.md)'s comparison table is now headed "Differences from `ratect-compat`" (its anchor drops the `-today`).

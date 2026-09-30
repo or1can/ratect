@@ -1870,3 +1870,70 @@ fn each_container_gets_only_its_own_network_mode_via_docker() {
         String::from_utf8_lossy(&output.stdout)
     );
 }
+
+/// A stand-in daemon on a plain TCP port: answers `/version` with just
+/// enough JSON for the API-version negotiation, and anything else with an
+/// empty list. Serves until the returned handle's sender is dropped.
+/// Returns the port.
+fn spawn_fake_plain_daemon() -> (u16, std::sync::mpsc::Sender<()>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    listener.set_nonblocking(true).unwrap();
+    let (stop, stopped) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || loop {
+        if let Err(std::sync::mpsc::TryRecvError::Disconnected) = stopped.try_recv() {
+            return;
+        }
+        let Ok((mut stream, _)) = listener.accept() else {
+            std::thread::sleep(Duration::from_millis(10));
+            continue;
+        };
+        stream.set_nonblocking(false).unwrap();
+        let mut request = [0u8; 2048];
+        let read = stream.read(&mut request).unwrap_or(0);
+        let body = if String::from_utf8_lossy(&request[..read]).contains("/version") {
+            r#"{"ApiVersion":"1.44","Version":"0.0.0-fake"}"#
+        } else {
+            "[]"
+        };
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{body}",
+            body.len()
+        );
+    });
+    (port, stop)
+}
+
+/// `DOCKER_TLS_VERIFY=0` reaches the Docker client library, which used to
+/// treat the variable being *set at all* as "use TLS" for a `tcp://` host
+/// and then fail for want of a `ca.pem` (ratect#257). An in-process test
+/// can't set the variable safely (every other test reads the environment
+/// concurrently), so this drives the binary with it. `--all-projects` so no
+/// config file is needed.
+#[test]
+fn a_tcp_host_stays_plain_when_docker_tls_verify_is_off() {
+    let (port, _stop) = spawn_fake_plain_daemon();
+
+    for off in ["0", "false", ""] {
+        let output = ratect_command()
+            .args(["resources", "list", "--all-projects"])
+            .arg("--docker-host")
+            .arg(format!("tcp://127.0.0.1:{port}"))
+            .env("DOCKER_TLS_VERIFY", off)
+            .env_remove("DOCKER_CERT_PATH")
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "DOCKER_TLS_VERIFY={off:?} should connect without TLS:\n{stderr}"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("Nothing left over."),
+            "{stderr}"
+        );
+    }
+}

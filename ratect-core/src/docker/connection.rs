@@ -52,11 +52,10 @@
 //! `tls_client_config` and made by `connect_over_tls`, and the OS
 //! trust store is loaded in one place only, `system_trust_roots`, and only
 //! when no CA is configured; it tolerates a partial failure the same way
-//! the fork's fix does. `bollard` still reaches its own `connect_with_ssl`
-//! by itself, from `connect_with_host` on the plain path (an `https://`
-//! host, or `DOCKER_TLS_VERIFY` set to anything at all —
-//! [ratect#257](https://github.com/or1can/ratect/issues/257)), which is why
-//! the fork's fix is still pinned.
+//! the fork's fix does. Nothing reaches `bollard`'s own TLS code any more,
+//! not even by way of `connect_with_host`: an `https://` host is a TLS
+//! connection here, and a plain `tcp://` one is made by `connect_plain`
+//! ([ratect#257](https://github.com/or1can/ratect/issues/257)).
 
 use anyhow::{Context, Result};
 use bollard::Docker;
@@ -743,6 +742,27 @@ fn connect_over_tls(target: &str, address: &str, tls: &TlsSettings) -> Result<Do
     .with_context(|| format!("Failed to connect to {target} over TLS"))
 }
 
+/// A plain, non-TLS connection to `host`. A `tcp://` or `http://` host is
+/// connected to with `connect_with_http` directly rather than through
+/// `connect_with_host`, which would start TLS for it on its own — with
+/// `bollard`'s default certificate paths — whenever `DOCKER_TLS_VERIFY` is
+/// set at all, `0` and `false` included, though [`tls_enabled`] has already
+/// read those as "off" ([ratect#257](https://github.com/or1can/ratect/issues/257)).
+/// Every other scheme (`unix://`, `npipe://`, `ssh://`) is `connect_with_host`'s
+/// to dispatch; `https://` never gets here (see [`connect`]).
+fn connect_plain(host: &str) -> Result<Docker, bollard::errors::Error> {
+    if host.starts_with("tcp://") || host.starts_with("http://") {
+        Docker::connect_with_http(host, 120, bollard::API_DEFAULT_VERSION)
+    } else {
+        Docker::connect_with_host(host)
+    }
+}
+
+/// Whether `host` asks for TLS by its scheme alone.
+fn is_https(host: &str) -> bool {
+    host.starts_with("https://")
+}
+
 /// Why a verification failure on a connection may not be what the user
 /// expected, from how the connection was configured.
 #[derive(Debug)]
@@ -842,7 +862,14 @@ fn holds_certificate_error(error: &(dyn std::error::Error + 'static)) -> bool {
 /// `--docker-context` at all (see `conflicting_option_with_context`), and
 /// ignores it when step 3 or 4 picks a context, as this does — and has no
 /// platform-default host to fall back to the way the plain path does, so a
-/// host is required (see `require_host_for_tls`).
+/// host is required (see `require_host_for_tls`). An `https://` host asks
+/// for TLS by itself, flag or no flag, and a context's `https://` host
+/// likewise — `bollard`'s reading of the scheme, kept; the Docker CLI's Go
+/// client connects to one without TLS unless TLS material is configured.
+/// `bollard`'s `connect_with_host` would connect to one over TLS with its
+/// own default certificate paths, so it is made here instead, with the same
+/// settings a `tcp://` host and the flags would use (for a context storing
+/// nothing: the system trust store, no client certificate).
 ///
 /// A context brings its own TLS settings instead — the ones
 /// `docker context create` stored for it (see [`docker_context_endpoint`]).
@@ -872,8 +899,15 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
     if let Some(context_name) = context_name {
         let ContextEndpoint { host, tls } =
             docker_context_endpoint(&config_directory, &context_name)?;
+        let tls = tls.or_else(|| {
+            is_https(&host).then_some(TlsSettings {
+                ca: None,
+                client: None,
+                skip_verify_requested: false,
+            })
+        });
         let Some(tls) = tls else {
-            return Docker::connect_with_host(&host)
+            return connect_plain(&host)
                 .map(Connection::without_note)
                 .with_context(|| {
                     format!("Failed to connect to Docker context '{context_name}' (host '{host}')")
@@ -891,9 +925,11 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
     }
 
     let docker_tls_verify_env = std::env::var("DOCKER_TLS_VERIFY").ok();
-    if !tls_enabled(options, docker_tls_verify_env.as_deref()) {
+    let tls = tls_enabled(options, docker_tls_verify_env.as_deref())
+        || host.as_deref().is_some_and(is_https);
+    if !tls {
         let docker = match host {
-            Some(host) => Docker::connect_with_host(&host)
+            Some(host) => connect_plain(&host)
                 .with_context(|| format!("Failed to connect to Docker host '{host}'"))?,
             None => Docker::connect_with_local_defaults().context("Failed to connect to Docker")?,
         };
