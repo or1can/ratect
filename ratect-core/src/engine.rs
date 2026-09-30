@@ -39,7 +39,10 @@
 //! else in the graph depends on the task container's own readiness. A gate failure
 //! while the main command is still running cancels it, as Batect's does (ratect#260):
 //! the run is dropped exactly as an interrupt drops it, and the ordinary cleanup
-//! stops and removes the container. Under the native dialect it has no gate at all — running it
+//! stops and removes the container. A gate that failed only because the
+//! container stopped (`docker::ContainerStopped`) after a main command that
+//! exited 0 fails nothing — a listed divergence from Batect (ratect#248).
+//! Under the native dialect it has no gate at all — running it
 //! *is* the task (decisions/0012) — which `task_container_readiness_gate`, derived
 //! once from the project's dialect, is the only switch for; its creation is still
 //! recorded and announced either way. `run_container` takes two
@@ -58,9 +61,9 @@
 //! produced a distinct bug in each of three consecutive review rounds. Don't
 //! reintroduce a removal here. See [task
 //! lifecycle](https://github.com/or1can/ratect/blob/main/docs/task-lifecycle.md#known-limitations) for
-//! the one race the Batect-compatible gate still shares with Batect (a
-//! near-instant main command with no `health_check` can still race past a
-//! `setup_commands` entry's own `docker exec`).
+//! the races the Batect-compatible gate still leaves open (a setup command
+//! already running when the main command exits is killed with the container,
+//! and fails the task).
 //! `resolve_volumes` (0.18.0) turns a container's `VolumeMount`s into the
 //! literal bind strings `docker.rs` expects — a `Local` mount's already fully
 //! resolved by `config.rs`, nothing left to do but reassemble the string; a
@@ -1019,7 +1022,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// A failure here while the main command is still running cancels it,
     /// as Batect's coroutine cancellation does: the caller abandons the run
     /// rather than waiting for a command that may itself be waiting on this
-    /// gate's work (ratect#260).
+    /// gate's work (ratect#260). A failure that says only that the container
+    /// stopped — the health wait saw it die, or a setup command's exec was
+    /// refused — carries `docker::ContainerStopped`, which the caller
+    /// forgives after a main command that exited 0 (ratect#248).
     async fn run_task_container_readiness(
         &self,
         container_id: &str,
@@ -1942,9 +1948,28 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // readiness failure that happened alongside it. This is the
             // precedence `run_container` used to apply internally, kept.
             run_result?;
-            readiness_result?;
-
-            Ok(())
+            // A gate that ended only because the container stopped never
+            // reached a verdict on its readiness — the main command's own
+            // exit ended it — so after that command exited 0 the task has
+            // succeeded (ratect#248, a listed divergence: Batect fails it).
+            // Decided by the failure's cause rather than by which future
+            // resolved first, since the `die` event and the exit report
+            // land together.
+            match readiness_result {
+                Err(error)
+                    if error
+                        .downcast_ref::<crate::docker::ContainerStopped>()
+                        .is_some() =>
+                {
+                    tracing::debug!(
+                        container = run.container.as_str(),
+                        error = format!("{error:#}"),
+                        "readiness gate ended by the task container stopping; ignored"
+                    );
+                    Ok(())
+                }
+                other => other,
+            }
         };
 
         // An interrupt abandons the run and falls through to the cleanup

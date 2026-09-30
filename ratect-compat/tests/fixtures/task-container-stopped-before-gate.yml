@@ -1,0 +1,28 @@
+# A task container whose near-instant main command exits 0 before its own
+# readiness gate can reach a verdict (ratect#248). Under Batect the gate then
+# fails because the container stopped — the health wait sees it die, or a
+# setup command's exec is refused as "not running" — and fails the task with
+# it. That failure says nothing about the container's readiness, so here the
+# task succeeds.
+project_name: ratect-task-container-stopped-before-gate-test
+containers:
+  healthy-later:
+    image: alpine:3.18.2
+    # Never reports before `true` exits: the first check runs an interval
+    # after the container starts.
+    health_check:
+      command: "true"
+      interval: 30s
+  set-up-later:
+    image: alpine:3.18.2
+    setup_commands:
+      - command: "true"
+tasks:
+  health-check:
+    run:
+      container: healthy-later
+      command: "true"
+  setup-command:
+    run:
+      container: set-up-later
+      command: "true"

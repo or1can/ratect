@@ -5,9 +5,9 @@
 # while its command was mid-sleep. (A dependency's setup commands run in a
 # separate container instead — see the `readiness` fixture for that half.)
 #
-# The `sleep 2` is what keeps this out of the one race documented in
-# docs/task-lifecycle.md: a near-instant main command can exit before the
-# setup command gets a chance to exec at all.
+# The `sleep 2` is what keeps the setup command from being skipped: a
+# near-instant main command can exit before it gets a chance to exec at all,
+# and the task then succeeds without it (see docs/task-lifecycle.md).
 project_name: ratect-task-setup-commands-test
 containers:
   app:

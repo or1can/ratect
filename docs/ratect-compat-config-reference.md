@@ -595,7 +595,9 @@ healthy, then every one of its `setup_commands` succeeded, in declared order.
 What each of those two gates waits for, how Docker reaches a health verdict,
 how several dependencies' waits combine into one task's start-up, and a real
 run of all of it are on [Dependency Readiness](dependency-readiness.md); the two
-fields are below. A task's own container runs the same gate here, but not
+fields are below. A task's own container runs the same gate here,
+concurrently with its main command — a gate that fails only because that
+command exited 0 and stopped the container doesn't fail the task — but not
 under `ratect.toml`, where it has none — see [The task's own
 container](dependency-readiness.md#the-tasks-own-container).
 

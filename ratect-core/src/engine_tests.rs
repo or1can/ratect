@@ -136,6 +136,14 @@ struct FakeContainerRuntime {
     // `Ok(true)` for a daemon that hasn't yet recorded an exit, `Err` for an
     // inspect that fails (see `with_running_probe`).
     running_probe: Arc<Mutex<Option<std::result::Result<bool, String>>>>,
+    // When set, `wait_for_container_healthy` and `exec_in_container` fail
+    // with `docker::ContainerStopped` on a container `exited_containers`
+    // holds by the time they resolve — Docker's own `die` event and its 409
+    // "is not running" — rather than reaching a verdict. Off by default: a
+    // run with no delays exits before its gate is first polled, and every
+    // test not about that ordering expects the gate's configured verdict
+    // (see `with_gate_observing_exits`).
+    gate_observes_exits: Arc<Mutex<bool>>,
     // Container id (keyed the same way as `health_check_delays`) ->
     // `(delay, exit_code)` `wait_for_container_exit` resolves with — see
     // `with_dependency_exit`. Absent means "never exits on its own" (the
@@ -191,6 +199,7 @@ impl Default for FakeContainerRuntime {
             run_drain_delays: Default::default(),
             exited_containers: Default::default(),
             running_probe: Default::default(),
+            gate_observes_exits: Default::default(),
             dependency_exits: Default::default(),
             container_outputs: Default::default(),
             signals_on_removal: Default::default(),
@@ -322,6 +331,23 @@ impl FakeContainerRuntime {
             .unwrap()
             .insert(name.to_string(), delay);
         self
+    }
+
+    /// See the `gate_observes_exits` field.
+    fn with_gate_observing_exits(self) -> Self {
+        *self.gate_observes_exits.lock().unwrap() = true;
+        self
+    }
+
+    /// Whether the gate should find `container_id` stopped — see the
+    /// `gate_observes_exits` field.
+    fn gate_finds_stopped(&self, container_id: &str) -> bool {
+        *self.gate_observes_exits.lock().unwrap()
+            && self
+                .exited_containers
+                .lock()
+                .unwrap()
+                .contains(container_id)
     }
 
     /// See the `running_probe` field.
@@ -759,6 +785,12 @@ impl ContainerRuntime for FakeContainerRuntime {
             tokio::time::sleep(delay).await;
         }
         self.push(format!("wait-healthy:{container_id}"));
+        if self.gate_finds_stopped(container_id) {
+            return Err(crate::docker::ContainerStopped(
+                "The container exited before becoming healthy.".to_string(),
+            )
+            .into());
+        }
         if self.unhealthy_container.lock().unwrap().as_deref() == Some(container_id) {
             anyhow::bail!(
                 "The configured health check did not indicate that the container was \
@@ -830,6 +862,12 @@ impl ContainerRuntime for FakeContainerRuntime {
             ),
         );
         self.push(format!("exec:{container_id}:{command}"));
+        if self.gate_finds_stopped(container_id) {
+            return Err(crate::docker::ContainerStopped(format!(
+                "Docker responded with status code 409: container {container_id} is not running"
+            ))
+            .into());
+        }
         let failing = self.failing_setup_command.lock().unwrap().as_deref() == Some(command);
         Ok(crate::docker::ExecResult {
             exit_code: if failing { 1 } else { 0 },
@@ -5191,6 +5229,133 @@ async fn a_gate_failure_the_probe_cannot_attribute_to_an_exit_cancels_the_run() 
     }
 }
 
+/// A gate failure that says only that the task container stopped — the
+/// health wait saw it die, or a setup command found it no longer running —
+/// says nothing about its readiness. After a main command that exited 0,
+/// that is the task succeeding, not failing (ratect#248). Covered with the
+/// run still draining when the gate fails, and without.
+#[tokio::test(start_paused = true)]
+async fn a_gate_failed_only_by_a_successful_main_commands_exit_does_not_fail_the_task() {
+    for drain in [None, Some(std::time::Duration::from_secs(10))] {
+        for (label, config, docker) in [
+            (
+                "health wait",
+                config_with_a_gated_task_container(),
+                FakeContainerRuntime::default()
+                    .with_health_check_delay("app", std::time::Duration::from_secs(2)),
+            ),
+            (
+                "setup command",
+                config_with_failing_task_container_setup_command(),
+                FakeContainerRuntime::default()
+                    .with_exec_delay("./migrate.sh", std::time::Duration::from_secs(2)),
+            ),
+        ] {
+            let mut docker = docker
+                .with_gate_observing_exits()
+                .with_run_delay("app", std::time::Duration::from_secs(1));
+            if let Some(drain) = drain {
+                docker = docker.with_run_draining_after_exit("app", drain);
+            }
+            let sink = RecordingEventSink::default();
+            let engine = TaskEngine::new(
+                config,
+                docker.clone(),
+                Arc::new(sink.clone()),
+                crate::interrupt::Interrupt::new(),
+            );
+
+            let result = engine.run_task("start", &[]).await;
+
+            assert!(
+                result.is_ok(),
+                "{label}, drain {drain:?}: the task should succeed: {result:?}"
+            );
+            let posted = sink.events();
+            assert!(
+                !posted
+                    .iter()
+                    .any(|e| matches!(e, TaskEvent::TaskFailed { .. })),
+                "{label}, drain {drain:?}: no failure should be reported: {posted:?}"
+            );
+            let events = docker.events();
+            assert!(
+                events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+                "{label}, drain {drain:?}: the task container should be removed: {events:?}"
+            );
+        }
+    }
+}
+
+/// The same stopped container after a main command that exited non-zero:
+/// the exit code is still the task's.
+#[tokio::test(start_paused = true)]
+async fn a_gate_failed_by_a_failing_main_commands_exit_keeps_its_exit_code() {
+    let docker = FakeContainerRuntime::default()
+        .with_gate_observing_exits()
+        .failing_run()
+        .with_run_delay("app", std::time::Duration::from_secs(1))
+        .with_health_check_delay("app", std::time::Duration::from_secs(2));
+    let engine = engine(config_with_a_gated_task_container(), docker);
+
+    let err = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert_eq!(
+        err.downcast_ref::<crate::docker::ContainerExitedNonZero>()
+            .map(|exited| exited.exit_code),
+        Some(1),
+        "the main command's own exit code should be the task's: {err:#}"
+    );
+}
+
+/// Only a stopped container is forgiven. A verdict the gate did reach — an
+/// unhealthy status, a setup command exiting non-zero — still fails the
+/// task, whether it lands while the main command is running (cancelling it)
+/// or after that command has exited 0.
+#[tokio::test(start_paused = true)]
+async fn a_gate_verdict_still_fails_the_task_whatever_the_main_command_did() {
+    for label in ["unhealthy", "setup command"] {
+        let config = || match label {
+            "unhealthy" => config_with_a_gated_task_container(),
+            _ => config_with_failing_task_container_setup_command(),
+        };
+        let docker = || match label {
+            "unhealthy" => FakeContainerRuntime::default().with_unhealthy_container("app"),
+            _ => FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh"),
+        };
+        // While running: the gate observes exits, but the container hasn't.
+        let running = docker()
+            .with_gate_observing_exits()
+            .with_run_delay("app", MAIN_COMMAND_THAT_OUTLASTS_ITS_GATE);
+        let err = tokio::time::timeout(
+            GATE_FAILURE_DEADLINE,
+            engine(config(), running).run_task("start", &[]),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("{label}: the gate's failure should cancel the run"))
+        .unwrap_err();
+        assert!(
+            err.downcast_ref::<crate::docker::ContainerStopped>()
+                .is_none(),
+            "{label}: the gate's own verdict should be the task's error: {err:#}"
+        );
+
+        // After a successful exit: the verdict arrives once the main
+        // command has already exited 0, and still fails the task.
+        let after_exit = docker()
+            .with_run_delay("app", std::time::Duration::from_secs(1))
+            .with_health_check_delay("app", std::time::Duration::from_secs(2))
+            .with_exec_delay("./migrate.sh", std::time::Duration::from_secs(2));
+        assert!(
+            engine(config(), after_exit)
+                .run_task("start", &[])
+                .await
+                .is_err(),
+            "{label}: a verdict reached after a successful exit should still fail the task"
+        );
+    }
+}
+
 /// Settings for a native-dialect project — the only thing that differs
 /// from the default (Batect-compatible) engine in the tests below.
 fn native_settings() -> TaskEngineSettings {
@@ -5334,6 +5499,24 @@ async fn a_dependencys_readiness_failure_fails_the_task_in_either_dialect() {
         assert!(
             failing_setup_engine.run_task("start", &[]).await.is_err(),
             "{dialect:?}: a dependency's failing setup command should fail the task"
+        );
+
+        // A dependency that dies before becoming healthy fails with the
+        // same health-wait error the task container's gate forgives after
+        // a successful exit (ratect#248); a dependency's never is.
+        let died = FakeContainerRuntime::default().with_gate_observing_exits();
+        died.exited_containers
+            .lock()
+            .unwrap()
+            .insert("sidecar-id-database".to_string());
+        let died_engine = engine(config_with_database_dependency(|_| {}), died)
+            .with_settings(settings())
+            .unwrap();
+        let err = died_engine.run_task("start", &[]).await.unwrap_err();
+        assert!(
+            format!("{err:#}").contains("The container exited before becoming healthy."),
+            "{dialect:?}: a dependency exiting before becoming healthy should fail the task: \
+             {err:#}"
         );
     }
 }
