@@ -107,6 +107,10 @@ fn task_container_setup_commands_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/task-container-setup-commands.yml")
 }
 
+fn task_container_gate_failure_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/task-container-gate-failure.yml")
+}
+
 fn no_image_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/no-image.yml")
 }
@@ -1505,6 +1509,90 @@ fn task_containers_own_setup_commands_run_via_docker() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(task_output(&stdout, "app"), "SETUP-RAN-DURING-TASK");
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// A task container's failing setup command cancels its still-running main
+/// command (ratect#260) — see `tests/fixtures/task-container-gate-failure.yml`,
+/// whose main command never exits on its own. The deadline allows for a cold
+/// pull and the container's stop timeout; without the cancellation the run
+/// would outlast any deadline.
+#[test]
+#[ignore]
+fn a_task_containers_failing_setup_command_cancels_its_main_command_via_docker() {
+    let project_filter = "label=eu.orican.ratect.project=ratect-task-container-gate-failure-test";
+    let ids = |kind: &str, all: bool| {
+        let mut arguments = vec![kind, "ls", "-q", "--filter", project_filter];
+        if all {
+            arguments.insert(2, "-a");
+        }
+        let output = Command::new("docker")
+            .args(&arguments)
+            .output()
+            .expect("failed to run docker ls");
+        assert!(output.status.success(), "docker {kind} ls failed");
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+
+    let mut child = ratect_command()
+        .arg("-f")
+        .arg(task_container_gate_failure_config_path())
+        .arg("check")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn ratect");
+    // Read as it arrives, so a cold pull's progress can't fill the pipe and
+    // stall the run into looking like a missing cancellation.
+    let mut child_stderr = child.stderr.take().unwrap();
+    let stderr = std::thread::spawn(move || {
+        let mut stderr = String::new();
+        child_stderr.read_to_string(&mut stderr).unwrap();
+        stderr
+    });
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("failed to wait on ratect") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    let Some(status) = status else {
+        let _ = child.kill();
+        let _ = child.wait();
+        for id in ids("container", true) {
+            let _ = Command::new("docker").args(["rm", "-fv", &id]).output();
+        }
+        for id in ids("network", false) {
+            let _ = Command::new("docker").args(["network", "rm", &id]).output();
+        }
+        panic!("the gate's failure should have cancelled the main command");
+    };
+    let stderr = stderr.join().unwrap();
+
+    assert_eq!(status.code(), Some(1), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("Setup command 'false'"),
+        "the setup command's failure should be the reported error:\n{stderr}"
+    );
+    assert_eq!(
+        ids("container", true),
+        Vec::<String>::new(),
+        "the cancelled task container should have been removed"
+    );
+    assert_eq!(
+        ids("network", false),
+        Vec::<String>::new(),
+        "the task network should have been removed"
+    );
 }
 
 /// Requires a running Docker daemon with network access to pull

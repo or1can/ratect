@@ -1,0 +1,15 @@
+# A task container whose own readiness gate fails while its main command is
+# still running (ratect#260). The main command waits for the marker a working
+# setup command would have written, so it never exits on its own: the task can only
+# end promptly if the gate's failure cancels it, as Batect's does.
+project_name: ratect-task-container-gate-failure-test
+containers:
+  app:
+    image: alpine:3.18.2
+    setup_commands:
+      - command: "false"
+tasks:
+  check:
+    run:
+      container: app
+      command: sh -c "until test -f /tmp/setup-ran; do sleep 1; done"

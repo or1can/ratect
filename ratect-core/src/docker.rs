@@ -1460,6 +1460,15 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     ///   by anything; its exit code is what readiness is decided on.
     async fn wait_for_container_exit(&self, container_id: &str) -> Result<i64>;
 
+    /// Whether `container_id` is still running, answered at once. The engine
+    /// asks when the task container's readiness gate fails, to tell a main
+    /// command still running (cancelled) from one that has already exited
+    /// and whose run is only still reporting it (awaited, so its exit code
+    /// survives). Docker's own answer, so it can briefly still be `true` for
+    /// a process that has already exited, until the daemon has recorded the
+    /// exit.
+    async fn container_is_running(&self, container_id: &str) -> Result<bool>;
+
     /// Everything `container_id` has written to stdout and stderr, for a
     /// container that has already exited.
     ///
@@ -2740,6 +2749,18 @@ impl ContainerRuntime for DockerClient {
 
     async fn wait_for_container_exit(&self, container_id: &str) -> Result<i64> {
         self.exit_code(container_id).await
+    }
+
+    async fn container_is_running(&self, container_id: &str) -> Result<bool> {
+        let inspection = self
+            .docker
+            .inspect_container(container_id, None::<InspectContainerOptions>)
+            .await
+            .with_context(|| format!("Failed to inspect container '{}'", container_id))?;
+        inspection
+            .state
+            .and_then(|state| state.running)
+            .with_context(|| format!("Docker reported no state for container '{}'", container_id))
     }
 
     async fn exec_in_container(
