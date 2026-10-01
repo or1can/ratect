@@ -5201,26 +5201,34 @@ async fn a_gate_failed_by_the_main_commands_own_exit_keeps_its_exit_code() {
 }
 
 /// When the probe can't confirm the main command exited — the daemon hasn't
-/// recorded the exit yet, or the inspect fails — the run is cancelled, and
-/// the gate's failure is the task's error: waiting on a command that might
-/// still be running is the hang ratect#260 is about. This is the race
-/// docs/task-lifecycle.md's known limitations describe.
+/// recorded the exit yet, or the inspect fails — and the run doesn't report
+/// within `TASK_CONTAINER_EXIT_GRACE` either, the run is cancelled, and the
+/// gate's failure is the task's error: waiting on a command that might
+/// still be running is the hang ratect#260 is about. Cancelled when the
+/// grace expires, not later.
 #[tokio::test(start_paused = true)]
 async fn a_gate_failure_the_probe_cannot_attribute_to_an_exit_cancels_the_run() {
     for probe in [Ok(true), Err("inspect failed")] {
+        let gate_fails_after = std::time::Duration::from_secs(2);
         let docker = FakeContainerRuntime::default()
             .with_running_probe(probe)
             .failing_run()
             .with_run_delay("app", std::time::Duration::from_secs(1))
             .with_run_draining_after_exit("app", MAIN_COMMAND_THAT_OUTLASTS_ITS_GATE)
-            .with_health_check_delay("app", std::time::Duration::from_secs(2))
+            .with_health_check_delay("app", gate_fails_after)
             .with_unhealthy_container("app");
         let engine = engine(config_with_a_gated_task_container(), docker.clone());
 
+        let start = tokio::time::Instant::now();
         let err = tokio::time::timeout(GATE_FAILURE_DEADLINE, engine.run_task("start", &[]))
             .await
             .unwrap_or_else(|_| panic!("{probe:?}: the run should have been cancelled"))
             .unwrap_err();
+        assert_eq!(
+            start.elapsed(),
+            gate_fails_after + super::TASK_CONTAINER_EXIT_GRACE,
+            "{probe:?}: the run should be cancelled exactly when the grace expires"
+        );
 
         assert!(
             err.downcast_ref::<crate::docker::ContainerExitedNonZero>()
@@ -5232,6 +5240,43 @@ async fn a_gate_failure_the_probe_cannot_attribute_to_an_exit_cancels_the_run() 
             events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
             "{probe:?}: the cancelled task container should be removed: {events:?}"
         );
+    }
+}
+
+/// The race ratect#263's fixture hit on CI: a setup command killed by the
+/// main command's exit reports its 137 before Docker has marked the
+/// container stopped, so the probe still says "running". The main command
+/// has exited, though, and its result arrives within
+/// `TASK_CONTAINER_EXIT_GRACE` — so it decides the task, exactly as it
+/// would had the probe already seen the exit: 0 succeeds, non-zero keeps
+/// its exit code.
+#[tokio::test(start_paused = true)]
+async fn a_gate_failure_reported_before_docker_records_the_exit_waits_for_the_run() {
+    for fails in [false, true] {
+        let mut docker = FakeContainerRuntime::default()
+            .with_running_probe(Ok(true))
+            .with_run_delay("app", std::time::Duration::from_secs(1))
+            .with_run_draining_after_exit("app", super::TASK_CONTAINER_EXIT_GRACE / 2)
+            .with_exec_delay("./migrate.sh", std::time::Duration::from_secs(1))
+            .with_failing_setup_command("./migrate.sh");
+        if fails {
+            docker = docker.failing_run();
+        }
+        let engine = engine(config_with_failing_task_container_setup_command(), docker);
+
+        let result = engine.run_task("start", &[]).await;
+
+        if fails {
+            let err = result.unwrap_err();
+            assert_eq!(
+                err.downcast_ref::<crate::docker::ContainerExitedNonZero>()
+                    .map(|exited| exited.exit_code),
+                Some(1),
+                "the main command's own exit code should be the task's: {err:#}"
+            );
+        } else {
+            assert!(result.is_ok(), "the task should succeed: {result:?}");
+        }
     }
 }
 

@@ -62,9 +62,8 @@
 //! produced a distinct bug in each of three consecutive review rounds. Don't
 //! reintroduce a removal here. See [task
 //! lifecycle](https://github.com/or1can/ratect/blob/main/docs/task-lifecycle.md#known-limitations) for
-//! the races the Batect-compatible gate still leaves open (a setup command
-//! already running when the main command exits is killed with the container,
-//! and fails the task).
+//! how the Batect-compatible gate races a fast main command, and where its
+//! outcome differs from Batect's.
 //! `resolve_volumes` (0.18.0) turns a container's `VolumeMount`s into the
 //! literal bind strings `docker.rs` expects — a `Local` mount's already fully
 //! resolved by `config.rs`, nothing left to do but reassemble the string; a
@@ -93,6 +92,16 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::OnceCell;
 use uuid::Uuid;
+
+/// How long a task container's failed readiness gate waits for the main
+/// command's own result when Docker still reports the container running.
+/// A setup command killed by the main command's exit can report before
+/// Docker has recorded that exit (ratect#263's fixture, on CI), so one
+/// "running" answer doesn't prove the command is still going. Seconds, not
+/// milliseconds, because that window is a daemon round-trip under load; short
+/// because a main command that really is still running is cancelled only
+/// once it expires.
+const TASK_CONTAINER_EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The host environment lookup `TaskEngine` reads proxy variables from —
 /// boxed so the real `std::env::var`-backed closure and a fixed test
@@ -1490,6 +1499,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// same principle Batect applies (only ever its single "task container"),
     /// even though Ratect's prerequisites are structurally different (full
     /// recursive task runs, not steps within one task).
+    // `async_recursion` adds a bare `#[must_use]` to a function returning a
+    // boxed future, which is already `#[must_use]` — Clippy 1.99's
+    // `double_must_use` flags that macro output, not anything written here.
+    #[allow(clippy::double_must_use)]
     #[async_recursion]
     async fn run_task_scoped(
         &self,
@@ -1914,18 +1927,16 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // draining output and waiting on Docker's exit report. That
             // command has finished, not stalled, so Docker is asked which it
             // is before anything is cancelled, and an exited one is awaited
-            // for its exit code. A failed inspect cancels: guessing "still
-            // running" can at worst misreport the task's result, while guessing
-            // "exited" could wait forever. The answer is exact when the
-            // health wait saw the container die (Docker marks it stopped
-            // before it emits `die`), but a setup command can fail on a
-            // process that has exited before Docker marks the container
-            // stopped; that one is cancelled, and its exit code lost — the
-            // race docs/task-lifecycle.md's known limitations describe. That
-            // includes a setup command killed with a container whose main
-            // command exited 0 (ratect#263): on a real daemon its 137 has so
-            // far always arrived after the container was marked stopped,
-            // but nothing guarantees that order.
+            // for its exit code. The answer is exact when the health wait
+            // saw the container die (Docker marks it stopped before it emits
+            // `die`), but a setup command can fail on a process that has
+            // exited before Docker marks the container stopped — a setup
+            // command killed with a container whose main command exited 0
+            // (ratect#263) reported its 137 first on CI. So "running", or a
+            // failed inspect, waits up to `TASK_CONTAINER_EXIT_GRACE` for
+            // the run's own result before cancelling: an exit that is
+            // already happening arrives well within it, and a bounded wait
+            // can't become the hang a command still running would be.
             let (run_result, readiness_result) = tokio::select! {
                 biased;
                 run_result = &mut run_future => match run_result {
@@ -1954,10 +1965,16 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                             // once the id is recorded.
                             None => false,
                         };
-                        if !main_command_exited {
-                            return Err(error);
+                        if main_command_exited {
+                            (run_future.await, Err(error))
+                        } else {
+                            match tokio::time::timeout(TASK_CONTAINER_EXIT_GRACE, &mut run_future)
+                                .await
+                            {
+                                Ok(run_result) => (run_result, Err(error)),
+                                Err(_) => return Err(error),
+                            }
                         }
-                        (run_future.await, Err(error))
                     }
                 },
             };
@@ -1967,16 +1984,17 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // precedence `run_container` used to apply internally, kept.
             run_result?;
             // Reached with a gate failure only once the main command has
-            // exited 0: a failure while it was running cancelled it above.
-            // By then the gate has no verdict left to give — the
-            // container's exit is what ended it, whether the health wait
-            // saw it die or a setup command was killed with it (137) or
-            // refused an exec — so the task has succeeded (ratect#248,
-            // ratect#263, a listed divergence: Batect fails it). Decided by
-            // the run's own result rather than by the failure's cause,
-            // since a killed setup command's exit code says nothing about
-            // why it was killed. The cost: a setup command genuinely
-            // failing in the same instant is forgiven too.
+            // exited 0, at most `TASK_CONTAINER_EXIT_GRACE` after the
+            // failure: one still running past that was cancelled above.
+            // Usually the container's exit is what ended the gate — the
+            // health wait saw it die, or a setup command was killed with it
+            // (137) or refused an exec — so it has no verdict left to give,
+            // and the task has succeeded (ratect#248, ratect#263, a listed
+            // divergence: Batect fails it). Decided by the run's own result
+            // rather than by the failure's cause, since a killed setup
+            // command's exit code says nothing about why it was killed. The
+            // cost: a setup command genuinely failing within the grace
+            // before a main command exits 0 is forgiven too.
             if let Err(error) = readiness_result {
                 tracing::debug!(
                     container = run.container.as_str(),
@@ -2425,6 +2443,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// `resolving`/`running` params): `graph` is already proven acyclic by
     /// `build_dependency_graph`, run once, synchronously, before this is
     /// ever called.
+    // `double_must_use`: see `run_task_scoped`.
+    #[allow(clippy::double_must_use)]
     #[async_recursion]
     #[allow(clippy::too_many_arguments)]
     async fn ensure_container_ready(
