@@ -3490,6 +3490,34 @@ async fn setup_command_falls_back_to_the_containers_own_working_directory() {
 }
 
 #[tokio::test]
+async fn setup_command_falls_back_to_a_customised_working_directory() {
+    let mut config = config_with_database_dependency(|database| {
+        database.working_directory = Some("/from-container".to_string());
+        database.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./apply-migrations.sh".to_string(),
+            working_directory: None,
+            run_in: None,
+        }]);
+    });
+    config.tasks.get_mut("start").unwrap().customise = Some(HashMap::from([(
+        "database".to_string(),
+        TaskContainerCustomisation {
+            environment: None,
+            ports: None,
+            working_directory: Some("/from-customise".to_string()),
+        },
+    )]));
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let (working_directory, _, _) = docker.exec_for("./apply-migrations.sh").unwrap();
+    assert_eq!(working_directory.as_deref(), Some("/from-customise"));
+}
+
+#[tokio::test]
 async fn setup_commands_own_working_directory_overrides_the_containers() {
     let config = config_with_database_dependency(|database| {
         database.working_directory = Some("/from-container".to_string());
@@ -4936,6 +4964,60 @@ async fn task_containers_own_setup_commands_run() {
             .any(|e| e == "exec:sidecar-id-app:./migrate.sh"),
         "the task's own container's setup command should have run: {events:?}"
     );
+}
+
+/// A task whose `run.working_directory` overrides its container's, with a
+/// setup command of the given `working_directory` on that container.
+fn config_with_task_working_directory_and_setup_command(
+    setup_command_working_directory: Option<&str>,
+) -> Config {
+    let mut containers = HashMap::new();
+    let mut app = container("alpine:3.18", None);
+    app.working_directory = Some("/from-container".to_string());
+    app.setup_commands = Some(vec![crate::config::SetupCommand {
+        command: "./migrate.sh".to_string(),
+        working_directory: setup_command_working_directory.map(str::to_string),
+        run_in: None,
+    }]);
+    containers.insert("app".to_string(), app);
+    let mut start = task("app", "echo hi");
+    start.run.as_mut().unwrap().working_directory = Some("/from-task".to_string());
+    let mut tasks = HashMap::new();
+    tasks.insert("start".to_string(), start);
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+/// Batect's code, not its docs (which say the override is ignored): the
+/// task-specialised container carries `run.working_directory`, and that is
+/// what a setup command with none of its own falls back to (ratect#271).
+#[tokio::test]
+async fn task_containers_setup_command_falls_back_to_the_tasks_run_working_directory() {
+    let config = config_with_task_working_directory_and_setup_command(None);
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let (working_directory, _, _) = docker.exec_for("./migrate.sh").unwrap();
+    assert_eq!(working_directory.as_deref(), Some("/from-task"));
+}
+
+#[tokio::test]
+async fn task_containers_setup_commands_own_working_directory_overrides_the_tasks() {
+    let config = config_with_task_working_directory_and_setup_command(Some("/from-setup-command"));
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let (working_directory, _, _) = docker.exec_for("./migrate.sh").unwrap();
+    assert_eq!(working_directory.as_deref(), Some("/from-setup-command"));
 }
 
 #[tokio::test(start_paused = true)]
