@@ -305,6 +305,8 @@ pub struct Container {
     /// (which has already exited by the time anything could connect to it) and
     /// `setup_commands` (which would run before the check had passed, since
     /// the companion is a sibling of this container rather than a gate on it).
+    /// The check alone decides readiness: an image's own `HEALTHCHECK`, which
+    /// Docker still runs, isn't waited on (ratect#269).
     /// `ratect`-native only, like `run_to_completion` — a YAML-declared
     /// container may not use it, whichever project includes it (ratect#214;
     /// see `ConfigFormat::batect_shaped_containers`).
@@ -5278,12 +5280,13 @@ fn validate_external_health_check_path(container: &str, path: &str) -> Result<()
 /// `run_to_completion` companion container plus the dependency edges that
 /// make anything waiting on the checked container wait on the check too.
 ///
-/// This is the entire feature. Nothing downstream — not `engine.rs`, not
-/// `docker.rs` — knows an external health check exists: by the time the
-/// config leaves here it is an ordinary dependency graph with one more node
-/// in it, and that node's readiness is `run_to_completion`'s (ratect#97),
-/// already built. Deliberately so, rather than a second place where
-/// "ready" is decided.
+/// This is almost the entire feature. By the time the config leaves here it
+/// is an ordinary dependency graph with one more node in it, and that
+/// node's readiness is `run_to_completion`'s (ratect#97), already built —
+/// deliberately so, rather than a second place where "ready" is decided.
+/// `docker.rs` knows nothing of it; `engine.rs` knows only to skip the
+/// checked container's own health wait (ratect#269), which the check
+/// replaces, and to narrate the companion as that container.
 ///
 /// The companion depends on the checked container and is depended on by
 /// whatever depended on the checked container — every *other* container's
@@ -5322,8 +5325,9 @@ fn expand_external_health_checks(config: &mut Config) -> Result<()> {
         // The companion is a *sibling* of the checked container, not a gate
         // on it, so there is no ordering that could put a setup command
         // after the check: `setup_commands` run once the checked container
-        // is healthy, and a container with no `health_check` is healthy the
-        // instant it starts. A setup command here would therefore run
+        // is ready, and a container with an external check is ready the
+        // instant it starts — not even its image's own `HEALTHCHECK` is
+        // waited on (ratect#269). A setup command here would therefore run
         // against exactly the not-yet-ready service the check exists to wait
         // for — quietly, and only sometimes. Rejected rather than
         // documented, since "sometimes" is the worst kind of contract.

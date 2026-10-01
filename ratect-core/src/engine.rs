@@ -2663,18 +2663,22 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     // check at all), then every one of its setup commands
                     // must succeed, before anything that depends on it
                     // starts.
-                    self.docker
-                        .wait_for_container_healthy(&container_id)
-                        .await
-                        .with_context(|| format!("Container '{}' did not become healthy", name))?;
-                    // Not for a container whose readiness is an
-                    // `external_health_check`: this gate is empty for it
-                    // (no Docker `HEALTHCHECK` to wait on), so the event
-                    // would claim a verdict nothing reached, and would
-                    // arrive before the check it appears to report had even
-                    // started. Its companion posts it instead, when the
-                    // check actually passes.
+                    //
+                    // Except for a container whose readiness is an
+                    // `external_health_check` (ratect#269): that check alone
+                    // decides it, so its image's own `HEALTHCHECK` — which
+                    // Docker still runs — isn't waited on, and there is no
+                    // verdict here to report. Its companion posts
+                    // `ContainerBecameHealthy` instead, when the check
+                    // actually passes. One branch for both, so the wait and
+                    // the event can't disagree about which containers skip it.
                     if dependency_config.external_health_check.is_none() {
+                        self.docker
+                            .wait_for_container_healthy(&container_id)
+                            .await
+                            .with_context(|| {
+                                format!("Container '{}' did not become healthy", name)
+                            })?;
                         self.event_sink.post(TaskEvent::ContainerBecameHealthy {
                             container: name.to_string(),
                         });

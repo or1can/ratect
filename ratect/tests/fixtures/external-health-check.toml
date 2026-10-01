@@ -9,7 +9,8 @@
 # so `docker exec`ing a check into it is impossible and an in-container
 # `health_check` could never be written for it. Anything that becomes ready
 # here did so from outside, over the project's own network, with nothing at
-# all having run inside the checked container.
+# all having run inside the checked container for it — the one image that
+# adds a `HEALTHCHECK` of its own is there to prove that isn't waited on.
 project_name = "ratect-external-health-check-test"
 
 [containers.api]
@@ -40,9 +41,24 @@ port = 9999
 interval = "1s"
 retries = 2
 
+# An image whose own `HEALTHCHECK` always fails (see its Dockerfile). The
+# external check alone decides readiness (ratect#269), so this is ready once
+# the check passes, and Docker's verdict is never waited on.
+[containers.api-with-failing-image-healthcheck]
+build_directory = "external-health-check-image"
+[containers.api-with-failing-image-healthcheck.external_health_check]
+type = "tcp"
+port = 80
+interval = "1s"
+retries = 20
+
 [containers.app]
 image = "alpine:3.18.2"
 dependencies = ["api", "socket"]
+
+[containers.app-with-failing-image-healthcheck]
+image = "alpine:3.18.2"
+dependencies = ["api-with-failing-image-healthcheck"]
 
 [containers.app-with-unreachable-dependency]
 image = "alpine:3.18.2"
@@ -55,3 +71,7 @@ run = { container = "app", command = "echo app-started" }
 [tasks.start-with-unreachable-dependency]
 description = "Must fail before its container ever runs"
 run = { container = "app-with-unreachable-dependency", command = "echo should-not-run" }
+
+[tasks.start-despite-failing-image-healthcheck]
+description = "Runs once the external check passes, whatever the image's own HEALTHCHECK says"
+run = { container = "app-with-failing-image-healthcheck", command = "echo app-started" }

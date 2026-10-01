@@ -456,7 +456,9 @@ the daemon owns its schedule, its `starting`/`healthy`/`unhealthy` state and
 its re-running for the container's whole lifetime. This is closer to a
 Kubernetes *readiness* check: an external observer asking "can this be used
 yet?", once, with no opinion about the container's health afterwards. (Ratect
-has no equivalent of a *liveness* check in either form.)
+has no equivalent of a *liveness* check in either form.) So the external check
+alone decides when the container is ready: if its image declares a
+`HEALTHCHECK` of its own, Docker still runs it, but Ratect doesn't wait on it.
 
 ```toml
 [containers.api]
@@ -505,9 +507,11 @@ both tools the check uses reach it.)
   nothing has to appear in `ports`. Two isolated instances of one project
   (concurrent CI jobs on a single host) therefore never contend over a host
   port to check each other.
-- **Reported as an ordinary health check, because that is what it is.** The
-  output says `api has become healthy.` when the check passes — the same line
-  a `health_check` produces, at the same point in the run. A check that never
+- **Reported as the container becoming healthy.** The output says `api has
+  become healthy.` when the check passes — the same line a `health_check`
+  produces, at the same point in the run, since both mean the container is
+  ready to use; the check itself is still a readiness check, not Docker's
+  health check. A check that never
   passes fails it the same way too, naming the container you wrote:
   `Container 'api' did not become healthy: last status 000 from
   http://api:8080/healthz after 30 attempt(s), wanted 200`.
