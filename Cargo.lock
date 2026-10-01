@@ -321,18 +321,20 @@ dependencies = [
 [[package]]
 name = "bollard"
 version = "0.22.0"
-source = "git+https://github.com/or1can/bollard.git?branch=fix%2Fnative-certs-partial-load#843a8eb3cf5a0f38bc02953ad6e4c7a0c284efc7"
+source = "git+https://github.com/or1can/bollard.git?branch=fix%2Fnative-certs-partial-load#1d8cb2ec630f3bdea80c5ad5cb24d8bd0fe0089b"
 dependencies = [
  "async-stream",
  "base64 0.23.1",
  "bitflags 2.13.1",
- "bollard-buildkit-proto 0.9.0",
+ "bollard-buildkit-proto 0.9.1",
  "bollard-stubs",
  "bytes",
+ "cap-fs-ext",
  "cap-std",
  "chrono",
  "futures-core",
  "futures-util",
+ "glob",
  "hex",
  "home",
  "http",
@@ -346,6 +348,7 @@ dependencies = [
  "num",
  "pin-project-lite",
  "rand 0.10.2",
+ "regex",
  "rustls",
  "rustls-native-certs",
  "rustls-pki-types",
@@ -360,6 +363,7 @@ dependencies = [
  "tonic",
  "tower-service",
  "url",
+ "xattr",
 ]
 
 [[package]]
@@ -377,12 +381,11 @@ dependencies = [
 
 [[package]]
 name = "bollard-buildkit-proto"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dde1c1fa6e91b511b1a00293b6add7bba4e97a81c3b50499728a2de30d440a4b"
+checksum = "520619af2416f16aa42df3053233632891db4fd70c193db7e86cd2f9ee4ab814"
 dependencies = [
  "prost",
- "prost-types",
  "tonic",
  "tonic-prost",
 ]
@@ -428,10 +431,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
-name = "cap-primitives"
-version = "4.0.2"
+name = "cap-fs-ext"
+version = "4.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdadbd7c002d3a484b35243669abdae85a0ebaded5a61117169dc3400f9a7ff0"
+checksum = "56ff379b70af8e08307a8f65e7040c7301cb4a572538ade16b4984f0da77847f"
+dependencies = [
+ "cap-primitives",
+ "cap-std",
+ "io-lifetimes 3.0.1",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "cap-primitives"
+version = "4.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b5f74729fd2f44701d1a8eb47e906cdb3ccd9ec0f02baad85a744b791940b18"
 dependencies = [
  "ambient-authority",
  "fs-set-times",
@@ -447,9 +462,9 @@ dependencies = [
 
 [[package]]
 name = "cap-std"
-version = "4.0.2"
+version = "4.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7281235d6e96d3544ca18bba9049be92f4190f8d923e3caef1b5f66cfa752608"
+checksum = "c1ec78e242cfa2cfe276807ac2ecc00315a6c97786977414bcd1c3963b6c91b8"
 dependencies = [
  "cap-primitives",
  "io-extras",
@@ -1175,6 +1190,12 @@ dependencies = [
  "r-efi 6.0.0",
  "rand_core 0.10.1",
 ]
+
+[[package]]
+name = "glob"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "group"
