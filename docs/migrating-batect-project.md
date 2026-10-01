@@ -50,7 +50,12 @@ the one example kept as a `batect.yml`:
 
 The output is a starting point, not a finished file: [`config
 convert`](ratect-cli.md#config) doesn't carry comments over, though it does
-check the result round-trips losslessly before writing it. Review it
+check the result round-trips losslessly before writing it. The same
+configuration runs differently in one respect under `ratect`: a task's own
+container has no readiness gate (see [Dependency
+Readiness](dependency-readiness.md#the-tasks-own-container)). `config convert`
+warns about each task container whose `health_check` or `setup_commands` this affects; a
+health check from the image itself can't be seen without the image. Review it
 field-by-field against [Configuration Reference](ratect-config-reference.md)
 before deleting the original — this is the fastest route to fully native, but
 still one diff worth reading closely, not a step to run and forget.
@@ -91,12 +96,21 @@ include = [
 `ratect tasks list -f ratect.toml` and `ratect run test -f ratect.toml` now
 work through the native binary and a native entry point, with zero lines of
 the actual configuration translated — mostly the same behavior as before, with
-one edge case worth knowing: a Git-included bundle that itself declares a
-nested `type: git` include is refused under the native format unless
-`allow_nested_git_includes` is set, where `ratect-compat` allows it
-unconditionally (see [Where the semantics
-differ](ratect-config-reference.md#where-the-semantics-differ)). It only bites
-if `legacy.yml` itself has a nested Git include of that shape.
+two differences worth knowing:
+
+- **A task's own container has no readiness gate.** The native binary doesn't
+  wait on the health check of a container a task runs as its own
+  `run.container` — whether from `health_check` or its image's own
+  `HEALTHCHECK` — and doesn't run its `setup_commands`, wherever that
+  container is declared: the project's format decides, not the file's (see
+  [Dependency Readiness](dependency-readiness.md#the-tasks-own-container)).
+  The same container used as a dependency is still gated.
+- **Nested Git includes need a grant.** A Git-included bundle that itself
+  declares a nested `type: git` include is refused under the native format
+  unless `allow_nested_git_includes` is set, where `ratect-compat` allows it
+  unconditionally (see [Where the semantics
+  differ](ratect-config-reference.md#where-the-semantics-differ)). It only
+  bites if `legacy.yml` itself has a nested Git include of that shape.
 
 #### Migrate one file at a time
 

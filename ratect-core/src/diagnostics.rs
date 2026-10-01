@@ -31,6 +31,7 @@
 //! own on what "no connection" means or how that got decided.
 
 use crate::config::Config;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// One thing `doctor` (or `config validate`) looked at.
@@ -240,6 +241,70 @@ pub async fn leftover_finding<D: crate::resources::ResourceInventory + Send + Sy
             leftovers.len()
         ))
     })
+}
+
+/// What `ratect config convert` warns about: the one way a converted
+/// project behaves differently from its source (ratect#267). `ratect` runs a
+/// task's own container with no readiness gate (decisions/0012), so a
+/// `health_check` on a container some task runs as its own `run.container`
+/// isn't waited on for that task, and its `setup_commands` don't run. One
+/// message per container, naming the tasks and only the fields it has.
+///
+/// Not one of [`config_findings`]: in a native project those fields are
+/// valid and inert there by design — the same container may be another
+/// task's dependency, where they apply — so `doctor` and `config validate`
+/// would be flagging configurations that are exactly what their author
+/// meant. It is only news to someone converting from `ratect-compat`, which
+/// does gate a task's own container. An image's own `HEALTHCHECK` isn't
+/// waited on either, but can't be seen without the image, so it isn't
+/// covered here.
+pub fn ungated_task_container_warnings(config: &Config) -> Vec<String> {
+    let mut tasks_by_container: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (task_name, task) in &config.tasks {
+        if let Some(run) = &task.run {
+            tasks_by_container
+                .entry(run.container.as_str())
+                .or_default()
+                .push(task_name.as_str());
+        }
+    }
+    tasks_by_container
+        .into_iter()
+        .filter_map(|(container_name, mut task_names)| {
+            let container = config.containers.get(container_name)?;
+            let health_check = container
+                .health_check
+                .is_some()
+                .then_some("the container's 'health_check' isn't waited on");
+            let setup_commands = container
+                .setup_commands
+                .as_ref()
+                .is_some_and(|commands| !commands.is_empty())
+                .then_some(match health_check {
+                    Some(_) => "its 'setup_commands' don't run",
+                    None => "the container's 'setup_commands' don't run",
+                });
+            let effects: Vec<&str> = [health_check, setup_commands].into_iter().flatten().collect();
+            if effects.is_empty() {
+                return None;
+            }
+            task_names.sort_unstable();
+            let quoted: Vec<String> = task_names.iter().map(|name| format!("'{name}'")).collect();
+            let tasks_run = match quoted.as_slice() {
+                [one] => format!("Task {one} runs container '{container_name}' as its own"),
+                [rest @ .., last] => format!(
+                    "Tasks {} and {last} run container '{container_name}' as their own",
+                    rest.join(", ")
+                ),
+                [] => unreachable!("every entry was created by pushing a task name"),
+            };
+            Some(format!(
+                "{tasks_run}, so under ratect {} — a task's own container has no readiness \
+                 gate (see https://github.com/or1can/ratect/blob/main/docs/dependency-readiness.md#the-tasks-own-container).",
+                effects.join(" and ")
+            ))
+        })
+        .collect()
 }
 
 #[cfg(test)]

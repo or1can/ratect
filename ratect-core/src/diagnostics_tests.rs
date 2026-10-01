@@ -411,3 +411,56 @@ async fn no_leftovers_is_a_fine_finding() {
         Finding::Fine("no leftovers from previous runs".to_string())
     );
 }
+
+const OWN_CONTAINER_LINK: &str =
+    "https://github.com/or1can/ratect/blob/main/docs/dependency-readiness.md#the-tasks-own-container";
+
+/// One task, one field: the warning names the task, the container and only
+/// the field it has — "isn't waited on", since Docker still runs a health
+/// check; it is Ratect that stops watching it (ratect#267).
+#[tokio::test]
+async fn an_ungated_task_containers_health_check_is_warned_about() {
+    let config = config_with(
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    health_check:\n      command: \"true\"\ntasks:\n  t:\n    run:\n      container: app\n",
+    )
+    .await;
+
+    assert_eq!(
+        ungated_task_container_warnings(&config),
+        vec![format!(
+            "Task 't' runs container 'app' as its own, so under ratect the container's \
+             'health_check' isn't waited on — a task's own container has no readiness gate \
+             (see {OWN_CONTAINER_LINK})."
+        )]
+    );
+}
+
+/// Both fields, several tasks: tasks sorted and listed once per container.
+#[tokio::test]
+async fn an_ungated_task_container_shared_by_several_tasks_is_warned_about_once() {
+    let config = config_with(
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    health_check:\n      command: \"true\"\n    setup_commands:\n      - command: ./migrate.sh\ntasks:\n  v:\n    run:\n      container: app\n  t:\n    run:\n      container: app\n  u:\n    run:\n      container: app\n",
+    )
+    .await;
+
+    assert_eq!(
+        ungated_task_container_warnings(&config),
+        vec![format!(
+            "Tasks 't', 'u' and 'v' run container 'app' as their own, so under ratect the \
+             container's 'health_check' isn't waited on and its 'setup_commands' don't run — \
+             a task's own container has no readiness gate (see {OWN_CONTAINER_LINK})."
+        )]
+    );
+}
+
+/// Nothing to warn about: the fields on a dependency (still gated), an
+/// empty `setup_commands`, and a task with no `run` of its own.
+#[tokio::test]
+async fn gated_or_empty_readiness_fields_are_not_warned_about() {
+    let config = config_with(
+        "project_name: demo\ncontainers:\n  db:\n    image: postgres:16\n    health_check:\n      command: pg_isready\n    setup_commands:\n      - command: ./seed.sh\n  app:\n    image: alpine:3.18\n    dependencies: [db]\n    setup_commands: []\ntasks:\n  t:\n    run:\n      container: app\n  all:\n    prerequisites: [t]\n",
+    )
+    .await;
+
+    assert!(ungated_task_container_warnings(&config).is_empty());
+}

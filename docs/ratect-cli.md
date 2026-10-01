@@ -306,12 +306,19 @@ ratect -f batect.yml config convert --stdout  # prints instead, to review or pip
 
 It's **one-directional** (`ratect-compat` stays YAML; the reverse would be lossy) and
 writes `ratect.toml` only if one doesn't already exist — pass `--force` to overwrite,
-or `--stdout` to print. The conversion **preserves behaviour, not formatting**: YAML
-anchors/aliases/merge keys are expanded inline, `include`d files (Git bundles too) are
-flattened into the one result, and comments are dropped — so the output carries a
+or `--stdout` to print. The conversion **preserves the configuration, not formatting**:
+YAML anchors/aliases/merge keys are expanded inline, `include`d files (Git bundles too)
+are flattened into the one result, and comments are dropped — so the output carries a
 header and is a *starting point to review*, not a blind drop-in. Before writing, the
 conversion is checked to round-trip losslessly back to the same configuration, so
-whatever it produces is guaranteed to behave identically to the original. (It emits
+whatever it produces is guaranteed to be the configuration you started with. `ratect`
+runs that configuration differently in one respect: a task's own container has no
+readiness gate, so its health check — from `health_check` or from its image's own
+`HEALTHCHECK` — isn't waited on, and its `setup_commands` don't run (see [Dependency
+Readiness](dependency-readiness.md#the-tasks-own-container)). `config convert` warns
+on stderr about each task container whose `health_check` or `setup_commands` this
+affects; an image's `HEALTHCHECK` can't be seen without the image, so check those
+yourself. (It emits
 the compact `"8080:80"` / `.:/code` string forms for `ports`/`volumes` rather than
 the object form; both are valid, and reformatting is a review step.)
 
