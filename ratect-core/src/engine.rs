@@ -62,9 +62,8 @@
 //! produced a distinct bug in each of three consecutive review rounds. Don't
 //! reintroduce a removal here. See [task
 //! lifecycle](https://github.com/or1can/ratect/blob/main/docs/task-lifecycle.md#known-limitations) for
-//! the races the Batect-compatible gate still leaves open (a setup command
-//! already running when the main command exits is killed with the container,
-//! and fails the task).
+//! how the Batect-compatible gate races a fast main command, and where its
+//! outcome differs from Batect's.
 //! `resolve_volumes` (0.18.0) turns a container's `VolumeMount`s into the
 //! literal bind strings `docker.rs` expects — a `Local` mount's already fully
 //! resolved by `config.rs`, nothing left to do but reassemble the string; a
