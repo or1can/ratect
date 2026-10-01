@@ -145,9 +145,11 @@ struct SetupCommandContext<'a> {
     /// runs.
     container_id: &'a str,
     /// The declaring container's effective working directory, the fallback
-    /// for a command that sets none of its own. Derived differently by each
-    /// caller (see [`TaskEngine::run_setup_commands`]), so it arrives
-    /// resolved rather than being recomputed there.
+    /// for a command that sets none of its own: its derived spec's, so a
+    /// task's `run.working_directory` or a dependency's
+    /// `customise.working_directory` applies, as in Batect's code (ratect#271).
+    /// Arrives resolved rather than being recomputed in
+    /// [`TaskEngine::run_setup_commands`].
     working_directory: Option<&'a str>,
     /// The declaring container's environment and user, passed to `exec` for
     /// a command running in that same container. Both are deliberately
@@ -841,10 +843,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// written — and kept right — twice.
     ///
     /// Everything that *does* differ between the two callers arrives in
-    /// [`SetupCommandContext`]: the task container and a dependency derive
-    /// their default working directory from different places (deliberately —
-    /// a task's own `run.working_directory` is not a setup command's
-    /// fallback), so neither is recomputed here.
+    /// [`SetupCommandContext`] — the working directory and environment from
+    /// each caller's own derived spec, which carries the task's `run`
+    /// overrides for the task container and its `customise` for a
+    /// dependency — so none of it is recomputed here.
     async fn run_setup_commands(
         &self,
         setup_commands: &[crate::config::SetupCommand],
@@ -1039,9 +1041,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         &self,
         container_id: &str,
         name: &str,
-        container_config: &crate::config::Container,
-        environment: Option<&HashMap<String, String>>,
-        user_mapping: Option<&crate::docker::UserMapping>,
+        setup_commands: &[crate::config::SetupCommand],
+        spec: &crate::container_spec::ContainerSpec,
         dependency_ids: &HashMap<String, String>,
     ) -> Result<()> {
         self.docker
@@ -1053,16 +1054,13 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         });
 
         self.run_setup_commands(
-            container_config
-                .setup_commands
-                .as_deref()
-                .unwrap_or_default(),
+            setup_commands,
             &SetupCommandContext {
                 name,
                 container_id,
-                working_directory: container_config.working_directory.as_deref(),
-                environment,
-                user_mapping,
+                working_directory: spec.shared.options.working_directory.as_deref(),
+                environment: spec.shared.environment.as_ref(),
+                user_mapping: spec.shared.user_mapping.as_ref(),
                 dependency_ids,
             },
         )
@@ -1898,9 +1896,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 self.run_task_container_readiness(
                     &container_id,
                     &run.container,
-                    container_config,
-                    spec.shared.environment.as_ref(),
-                    spec.shared.user_mapping.as_ref(),
+                    container_config
+                        .setup_commands
+                        .as_deref()
+                        .unwrap_or_default(),
+                    &spec,
                     &dependency_ids,
                 )
                 .await

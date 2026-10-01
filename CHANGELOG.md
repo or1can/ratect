@@ -51,6 +51,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- A task container's setup command with no `working_directory` of its own now runs in the task's `run.working_directory` when it sets one, as Batect does, instead of the container's own `working_directory` (ratect-compat only).
 - A task container whose own health check or setup command fails while its main command is still running now stops that command and fails the task, as Batect does, instead of waiting for the command to exit (ratect-compat only).
 - `DOCKER_TLS_VERIFY` set to a value other than `1`/`true` (`0`, `false`, empty) no longer makes a `tcp://` connection use TLS. It did, through the Docker client library's own reading of the variable, and then failed for want of a `ca.pem` in `DOCKER_CERT_PATH` or `~/.docker`.
 - With `--docker-tls`/`--docker-tls-verify`, a client certificate or key that is missing, unreadable, encrypted, or doesn't match the other is an error naming the file, instead of the connection being made with no client certificate.
