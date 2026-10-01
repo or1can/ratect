@@ -1490,6 +1490,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// same principle Batect applies (only ever its single "task container"),
     /// even though Ratect's prerequisites are structurally different (full
     /// recursive task runs, not steps within one task).
+    // `async_recursion` adds a bare `#[must_use]` to a function returning a
+    // boxed future, which is already `#[must_use]` — Clippy 1.99's
+    // `double_must_use` flags that macro output, not anything written here.
+    #[allow(clippy::double_must_use)]
     #[async_recursion]
     async fn run_task_scoped(
         &self,
@@ -2425,6 +2429,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// `resolving`/`running` params): `graph` is already proven acyclic by
     /// `build_dependency_graph`, run once, synchronously, before this is
     /// ever called.
+    // `double_must_use`: see `run_task_scoped`.
+    #[allow(clippy::double_must_use)]
     #[async_recursion]
     #[allow(clippy::too_many_arguments)]
     async fn ensure_container_ready(
