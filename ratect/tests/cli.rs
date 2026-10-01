@@ -1160,6 +1160,36 @@ fn external_health_checks_gate_a_dependent_via_docker() {
     );
 }
 
+/// The external check alone decides readiness (ratect#269):
+/// `api-with-failing-image-healthcheck`'s image declares a `HEALTHCHECK`
+/// that can never pass, and the task still runs once the external check
+/// does, rather than failing on Docker's "unhealthy". Requires the same
+/// images as the test above, and builds one on top of `traefik/whoami`. Run
+/// explicitly with `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn an_external_health_check_ignores_the_images_own_healthcheck_via_docker() {
+    let _guard = serial_docker();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(external_health_check_fixture_path())
+        .args(["run", "start-despite-failing-image-healthcheck"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("app-started"),
+        "the task should run once the external check passed:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
 /// The failure half of the fixture above: `unreachable`'s TCP check targets
 /// a port nothing listens on, so it exhausts its retries and fails the run
 /// before the dependent container ever starts. The error names the companion

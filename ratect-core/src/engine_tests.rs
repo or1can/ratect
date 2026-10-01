@@ -4032,6 +4032,43 @@ async fn a_failing_external_health_check_fails_in_the_checked_containers_name() 
     );
 }
 
+/// The external check alone decides readiness (ratect#269): the checked
+/// container's image may carry a `HEALTHCHECK` of its own, which Docker
+/// still runs, but Ratect doesn't wait on it — whether it would fail or
+/// never report at all. The companion passing is what lets `app` start.
+#[tokio::test(start_paused = true)]
+async fn an_external_health_check_does_not_also_wait_on_the_images_own_healthcheck() {
+    for label in ["unhealthy", "never reports"] {
+        let docker = FakeContainerRuntime::default().with_dependency_exit(
+            COMPANION,
+            std::time::Duration::ZERO,
+            0,
+        );
+        let docker = match label {
+            "unhealthy" => docker.with_unhealthy_container("database"),
+            _ => docker.with_health_check_delay("database", std::time::Duration::from_secs(3600)),
+        };
+        let engine = engine(config_with_an_external_health_check(), docker.clone());
+
+        tokio::time::timeout(GATE_FAILURE_DEADLINE, engine.run_task("start", &[]))
+            .await
+            .unwrap_or_else(|_| panic!("{label}: the task waited on the image's HEALTHCHECK"))
+            .unwrap_or_else(|error| panic!("{label}: the task should succeed: {error:#}"));
+
+        let events = docker.events();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.starts_with("wait-healthy:sidecar-id-database")),
+            "{label}: Ratect must not wait on the checked container's own health: {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| e.starts_with("run:app:")),
+            "{label}: the dependent should have run: {events:?}"
+        );
+    }
+}
+
 /// A non-zero exit fails the task run the same way a health-check or
 /// `setup_commands` failure does today, with normal cleanup still running
 /// afterward.
