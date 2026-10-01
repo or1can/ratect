@@ -290,7 +290,11 @@ pub struct Container {
     /// YAML-declared container may not use it, whichever project includes it
     /// (ratect#214; see `ConfigFormat::batect_shaped_containers`) — and,
     /// unlike `extends`, meaningless on a task's own `run` block, which has no
-    /// `dependencies` of its own to place this on in the first place.
+    /// `dependencies` of its own to place this on in the first place. Inert,
+    /// not rejected, on a container a task names as its `run.container` —
+    /// the rule decisions/0012 gives `health_check`: a task's own container
+    /// always runs to completion anyway, and the same container may be
+    /// another task's dependency, where the flag applies.
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub run_to_completion: Option<bool>,
     /// Checks this container's readiness from *outside* it, for an image with
@@ -307,10 +311,9 @@ pub struct Container {
     ///
     /// Inert on a task's own `run.container`, exactly as `health_check` is:
     /// nothing waits on a task's own container becoming ready, since
-    /// running it *is* the task. Unlike `run_to_completion`, that is not
-    /// rejected — the field changes nothing about how the container runs,
-    /// so the same container being one task's main container and another
-    /// task's checked dependency is an ordinary thing to write.
+    /// running it *is* the task. Not rejected, so the same container being
+    /// one task's main container and another task's checked dependency is
+    /// an ordinary thing to write.
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub external_health_check: Option<ExternalHealthCheck>,
     /// This container's readiness is reported as the named container's,
@@ -4217,9 +4220,6 @@ async fn load_project_impl(
     // After `extends`, so an inherited cache mount is judged on the scope
     // the container effectively has.
     reject_conflicting_cache_scopes(&config)?;
-    // Same reasoning, same placement: a container's effective
-    // `run_to_completion` isn't known until `extends` has resolved it.
-    reject_run_to_completion_on_main_container(&config)?;
     // Same reasoning, same placement: what a container *effectively* has is
     // not known until inheritance has supplied it.
     reject_run_to_completion_conflicts(&config)?;
@@ -4652,7 +4652,7 @@ fn reject_setup_command_run_in_compat(containers: &[BatectShaped<'_>]) -> Result
 /// reject configurations that work today.
 ///
 /// Runs *after* [`resolve_extends`], for the same reason
-/// [`reject_run_to_completion_on_main_container`] does: a container's
+/// [`reject_run_to_completion_conflicts`] does: a container's
 /// effective `dependencies` (and its target's effective
 /// `run_to_completion`) aren't known until inheritance has resolved them.
 fn validate_setup_command_targets(config: &Config) -> Result<()> {
@@ -5177,42 +5177,6 @@ fn reject_run_to_completion_conflicts(config: &Config) -> Result<()> {
                  of its own"
             );
         }
-    }
-    Ok(())
-}
-
-/// Rejects a task whose own `run.container` has `run_to_completion` set —
-/// whether declared directly or inherited via `extends`, which is exactly
-/// why this runs *after* [`resolve_extends`], same placement/reasoning as
-/// [`reject_conflicting_cache_scopes`]: a container's effective
-/// `run_to_completion` isn't known until inheritance has resolved it. A
-/// task's own container already always runs to completion by definition —
-/// that's what running a task's command means — so the flag would silently
-/// have no effect there rather than erroring, which is worse than rejecting
-/// it outright. The same container can still legitimately be
-/// `run_to_completion` when used as a *dependency* by another task; this
-/// only rejects a task naming it as its own `run.container` while the flag
-/// is set.
-fn reject_run_to_completion_on_main_container(config: &Config) -> Result<()> {
-    let mut offenders: Vec<(&str, &str)> = config
-        .tasks
-        .iter()
-        .filter_map(|(task_name, task)| {
-            let run = task.run.as_ref()?;
-            let container = config.containers.get(&run.container)?;
-            container
-                .run_to_completion
-                .unwrap_or(false)
-                .then_some((task_name.as_str(), run.container.as_str()))
-        })
-        .collect();
-    offenders.sort_unstable();
-    if let Some((task_name, container_name)) = offenders.first() {
-        anyhow::bail!(
-            "Task '{task_name}' has 'run_to_completion' set on its main container \
-             '{container_name}' — that flag only applies to a dependency; a task's own \
-             container already always runs to completion"
-        );
     }
     Ok(())
 }

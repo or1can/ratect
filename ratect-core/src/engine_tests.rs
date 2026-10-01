@@ -4219,6 +4219,87 @@ async fn run_to_completion_dependency_declared_directly_on_the_task() {
     assert!(start_index < run_index, "events: {events:?}");
 }
 
+/// `run_to_completion` is inert on a task's own container (ratect#268):
+/// task `a` runs `c` as an ordinary task container, while task `b`, which
+/// depends on that same `c`, still waits on its exit as a dependency.
+#[tokio::test]
+async fn run_to_completion_is_inert_on_a_tasks_own_container() {
+    let config = || {
+        let mut containers = HashMap::new();
+        containers.insert("c".to_string(), {
+            let mut c = container("alpine:3.18", None);
+            c.run_to_completion = Some(true);
+            c
+        });
+        containers.insert("app".to_string(), container("alpine:3.18", None));
+        let mut tasks = HashMap::new();
+        tasks.insert("a".to_string(), task("c", "echo hi"));
+        let mut b = task("app", "echo hi");
+        b.dependencies = Some(vec!["c".to_string()]);
+        tasks.insert("b".to_string(), b);
+        Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        }
+    };
+
+    let docker = FakeContainerRuntime::default();
+    engine(config(), docker.clone())
+        .run_task("a", &[])
+        .await
+        .unwrap();
+    let events = docker.events();
+    assert!(
+        events.iter().any(|e| e.starts_with("run:c:")),
+        "task 'a' must run 'c' as its own container: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|e| e.starts_with("sidecar-start:c:")),
+        "task 'a' must not start 'c' as a dependency too: {events:?}"
+    );
+
+    let docker =
+        FakeContainerRuntime::default().with_dependency_exit("c", std::time::Duration::ZERO, 0);
+    engine(config(), docker.clone())
+        .run_task("b", &[])
+        .await
+        .unwrap();
+    let events = docker.events();
+    let start_index = events
+        .iter()
+        .position(|e| e.starts_with("sidecar-start:c:"))
+        .expect("task 'b' must start 'c' as a dependency");
+    let run_index = events
+        .iter()
+        .position(|e| e.starts_with("run:app:"))
+        .expect("task 'b''s own container should have run");
+    assert!(
+        start_index < run_index,
+        "'c' must run to completion before task 'b' starts: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.starts_with("wait-healthy:sidecar-id-c")),
+        "'c' is a run-to-completion dependency of 'b', not a health-checked one: {events:?}"
+    );
+
+    // Its exit is what `b` waits on: a non-zero one fails `b` before
+    // `b`'s own container runs.
+    let docker =
+        FakeContainerRuntime::default().with_dependency_exit("c", std::time::Duration::ZERO, 1);
+    let result = engine(config(), docker.clone()).run_task("b", &[]).await;
+    assert!(result.is_err(), "a failing 'c' must fail task 'b'");
+    let events = docker.events();
+    assert!(
+        !events.iter().any(|e| e.starts_with("run:app:")),
+        "task 'b''s own container must not run after 'c' failed: {events:?}"
+    );
+}
+
 /// An already-recorded interrupt wins because `run_task_internal`'s
 /// `select!` polls the run first (`biased`) and the run can't finish
 /// synchronously — the run delay is what holds it at an await point long
