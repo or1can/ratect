@@ -3490,6 +3490,34 @@ async fn setup_command_falls_back_to_the_containers_own_working_directory() {
 }
 
 #[tokio::test]
+async fn setup_command_falls_back_to_a_customised_working_directory() {
+    let mut config = config_with_database_dependency(|database| {
+        database.working_directory = Some("/from-container".to_string());
+        database.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./apply-migrations.sh".to_string(),
+            working_directory: None,
+            run_in: None,
+        }]);
+    });
+    config.tasks.get_mut("start").unwrap().customise = Some(HashMap::from([(
+        "database".to_string(),
+        TaskContainerCustomisation {
+            environment: None,
+            ports: None,
+            working_directory: Some("/from-customise".to_string()),
+        },
+    )]));
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let (working_directory, _, _) = docker.exec_for("./apply-migrations.sh").unwrap();
+    assert_eq!(working_directory.as_deref(), Some("/from-customise"));
+}
+
+#[tokio::test]
 async fn setup_commands_own_working_directory_overrides_the_containers() {
     let config = config_with_database_dependency(|database| {
         database.working_directory = Some("/from-container".to_string());
