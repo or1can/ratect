@@ -189,8 +189,11 @@ enum ConfigCommand {
     ///
     /// The output is a reviewable starting point, not a blind drop-in:
     /// comments are lost, and any `include`d files are flattened into the one
-    /// result (Git bundles included). It preserves behaviour, not formatting —
-    /// the conversion is checked to round-trip losslessly before it's written.
+    /// result (Git bundles included). It preserves the configuration, not
+    /// formatting — the conversion is checked to round-trip losslessly before
+    /// it's written. Under ratect a task's own container has no readiness
+    /// gate, so a warning on stderr names each task container whose
+    /// `health_check` or `setup_commands` that affects.
     Convert(ConfigConvertArgs),
 }
 
@@ -1329,8 +1332,9 @@ async fn validate_config(
 /// `$ENV`) and relative paths survive verbatim rather than being baked in.
 /// `include`d files are flattened into the one result. Comments are lost, so
 /// the output is a starting point to review, not a blind drop-in — but the
-/// conversion is checked to round-trip losslessly first, so the behaviour it
-/// encodes is guaranteed identical.
+/// conversion is checked to round-trip losslessly first, so the configuration
+/// it encodes is guaranteed identical. How `ratect` *runs* that configuration
+/// isn't — see [`ratect_core::diagnostics::ungated_task_container_warnings`].
 async fn convert_config(
     args: ConfigConvertArgs,
     global: &GlobalArgs,
@@ -1358,13 +1362,24 @@ async fn convert_config(
         source.display()
     );
 
+    // After the output exists, not before: a write refused by no-clobber
+    // has nothing to warn about yet. On stderr, so `--stdout`'s document is
+    // exactly the converted file.
+    let warn_about_ungated_task_containers = || {
+        for warning in ratect_core::diagnostics::ungated_task_container_warnings(&loaded.config) {
+            tracing::warn!("{warning}");
+        }
+    };
+
     if args.stdout {
         print!("{document}");
+        warn_about_ungated_task_containers();
         return Ok(());
     }
 
     let output = ratect_core::config::base_path_for(source).join(DEFAULT_CONFIG_FILE);
     write_generated_config(&output, &document, args.force)?;
+    warn_about_ungated_task_containers();
 
     if style != OutputStyle::Quiet {
         println!("Converted {} to {}.", source.display(), output.display());

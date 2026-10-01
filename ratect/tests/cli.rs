@@ -422,6 +422,84 @@ fn config_convert_to_stdout_writes_no_file() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Runs `config convert` on `batect_yml` both ways — writing the file and
+/// `--stdout` — with `RUST_LOG` cleared so the caller's environment can't
+/// hide a warning. Returns each run's stderr, and asserts the two documents
+/// are the same, so a warning can never leak into the converted output.
+fn convert_both_ways(batect_yml: &str) -> (String, String) {
+    let dir = unique_project_dir();
+    std::fs::write(dir.join("batect.yml"), batect_yml).unwrap();
+    let convert = |extra: &[&str]| {
+        let output = ratect_command()
+            .env_remove("RUST_LOG")
+            .arg("-f")
+            .arg(dir.join("batect.yml"))
+            .args(["config", "convert"])
+            .args(extra)
+            .output()
+            .expect("failed to run ratect");
+        assert!(
+            output.status.success(),
+            "convert {extra:?} failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    };
+
+    let written = convert(&[]);
+    let printed = convert(&["--stdout"]);
+    assert_eq!(
+        String::from_utf8_lossy(&printed.stdout),
+        std::fs::read_to_string(dir.join("ratect.toml")).unwrap(),
+        "--stdout and the written file should be the same document"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+    (
+        String::from_utf8_lossy(&written.stderr).into_owned(),
+        String::from_utf8_lossy(&printed.stderr).into_owned(),
+    )
+}
+
+/// Converted config is identical, but `ratect` runs a task's own container
+/// with no readiness gate (decisions/0012), so a task container's
+/// `setup_commands` would silently stop running (ratect#267). Warned about on
+/// stderr either way the output goes, naming the container and the field.
+#[test]
+fn config_convert_warns_about_a_task_containers_readiness_fields() {
+    let (written, printed) = convert_both_ways(
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    setup_commands:\n      - command: ./migrate.sh\ntasks:\n  t:\n    run:\n      container: app\n",
+    );
+
+    for (label, stderr) in [("written", &written), ("--stdout", &printed)] {
+        assert!(
+            stderr.contains("'app'")
+                && stderr.contains("'setup_commands'")
+                && stderr.contains("dependency-readiness.md#the-tasks-own-container"),
+            "{label}: expected a warning naming 'app' and 'setup_commands':\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("'health_check'"),
+            "{label}: only the fields the container has should be named:\n{stderr}"
+        );
+    }
+}
+
+/// The same fields on a *dependency* still run under `ratect`, so there is
+/// nothing to warn about.
+#[test]
+fn config_convert_does_not_warn_about_a_dependencys_readiness_fields() {
+    let (written, printed) = convert_both_ways(
+        "project_name: demo\ncontainers:\n  db:\n    image: postgres:16\n    health_check:\n      command: pg_isready\n    setup_commands:\n      - command: ./seed.sh\n  app:\n    image: alpine:3.18\n    dependencies: [db]\ntasks:\n  t:\n    run:\n      container: app\n",
+    );
+
+    for (label, stderr) in [("written", &written), ("--stdout", &printed)] {
+        assert!(
+            !stderr.contains("'db'") && !stderr.contains("dependency-readiness"),
+            "{label}: a dependency's readiness fields should not be warned about:\n{stderr}"
+        );
+    }
+}
+
 /// The other half of why `batect.yml`'s image-source validation is
 /// deliberately not applied to the native format: `extends` is
 /// `child.or(parent)` with no way to *unset* an inherited field, so setting
