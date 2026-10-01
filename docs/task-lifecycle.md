@@ -169,7 +169,8 @@ colliding.
   *concurrently* with the main command rather than blocking it, because
   nothing else in the graph depends on the task container's own readiness. A
   setup command or health-check failure while the main command is still
-  running cancels it at once, as Batect does, and fails the task; the
+  running cancels it and fails the task, as Batect does (after up to two
+  seconds — see below); the
   container is then stopped and removed like any failed run's. That
   includes a `health_check` written for the container's usual,
   non-overridden role, which a one-off command doesn't make go away.
@@ -181,14 +182,13 @@ colliding.
   typically). None of those say anything about the container's readiness,
   so the task succeeds, where Batect fails it. The cost is that a setup
   command genuinely failing at the same moment the main command exits 0 is
-  forgiven too. One race is left, with either exit code: a setup command
-  that fails because the main command has just exited can be reported
-  before Docker has marked the container stopped. Ratect then takes the main
-  command to be still running and cancels it, so the task fails with the
-  setup command's error instead of the main command's result. That includes
-  a setup command killed by a main command that exited 0 — the case above.
-  The race hasn't been observed on a real daemon, but Docker doesn't
-  guarantee the order that avoids it. `ratect` has none of this: under the native dialect a
+  forgiven too. A setup command that fails because the main command has
+  just exited can be reported before Docker has marked the container
+  stopped, so a gate failure while Docker still reports the container
+  running, or can't say, waits up to two seconds for the main command's own
+  result before cancelling it. A main command that exits within that window
+  decides the task as above, so one exiting 0 up to two seconds after a
+  setup command genuinely failed is forgiven too. `ratect` has none of this: under the native dialect a
   task's own container has no readiness gate at all (see [Dependency
   Readiness](dependency-readiness.md#the-tasks-own-container)).
 - **Prerequisite tasks stay sequential, matching Batect exactly** — `prerequisites`
