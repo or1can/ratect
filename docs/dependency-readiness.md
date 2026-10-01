@@ -288,8 +288,9 @@ Which rules apply depends on the project's dialect: whether `ratect` or
   for its health check, whether from `health_check` or the image's own
   `HEALTHCHECK`, and doesn't run its `setup_commands`. The task's result is the
   main command's alone. Docker still runs the health check; Ratect doesn't
-  watch it. The fields stay valid on that container, since the same container
-  can be another task's dependency.
+  watch it. Nor does `run_to_completion` change anything: the container runs
+  as the task, exactly as it would without it. The fields stay valid on that
+  container, since the same container can be another task's dependency.
 - **`ratect-compat` (Batect-compatible): the same gate as a dependency**, run
   concurrently with its main command rather than gating anything on it —
   matching Batect, which runs every container through identical per-container

@@ -6489,97 +6489,38 @@ run_to_completion = true
     );
 }
 
-/// The container `run.container` names is a plain `Container`, so nothing
-/// stops `run_to_completion` from being set on *that* container by name —
-/// only the previous test's `TaskRun` shape is structurally protected. A
-/// task's own container already always runs to completion by definition,
-/// so the flag would silently do nothing there; this is rejected instead of
-/// left to load successfully with no effect.
+/// `run_to_completion` on a container some task runs as its own
+/// `run.container` is accepted, and inert there — the rule decisions/0012
+/// gives `health_check`, `setup_commands` and `external_health_check`: the
+/// same container can be one task's main container and another task's
+/// dependency, and it is only the latter role the flag applies to. What the
+/// engine does with each role is `engine_tests`'
+/// `run_to_completion_is_inert_on_a_tasks_own_container`.
 #[tokio::test]
-async fn run_to_completion_is_rejected_on_a_tasks_main_container() {
-    let err = load_native_toml(
-        r#"
-project_name = "demo"
-
-[containers.app]
-image = "alpine:3.18"
-run_to_completion = true
-
-[tasks.t]
-run = { container = "app" }
-"#,
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        format!("{err:#}").contains("run_to_completion")
-            && format!("{err:#}").contains("'app'")
-            && format!("{err:#}").contains("'t'"),
-        "expected the error to name the task and its main container, got: {err:#}"
-    );
-}
-
-/// The same container can still legitimately be `run_to_completion` when
-/// used as a *dependency* elsewhere — only being named as a task's own
-/// `run.container` while the flag is set is rejected.
-#[tokio::test]
-async fn run_to_completion_is_still_allowed_when_the_same_container_is_used_as_a_dependency() {
+async fn run_to_completion_is_accepted_on_a_container_that_is_also_a_tasks_own() {
     let project = load_native_toml(
         r#"
 project_name = "demo"
 
-[containers.migrate]
+[containers.c]
 image = "alpine:3.18"
 run_to_completion = true
 
 [containers.app]
 image = "alpine:3.18"
-dependencies = ["migrate"]
 
-[tasks.t]
+[tasks.a]
+run = { container = "c" }
+
+[tasks.b]
 run = { container = "app" }
+dependencies = ["c"]
 "#,
     )
     .await
     .unwrap();
 
-    assert_eq!(
-        project.config.containers["migrate"].run_to_completion,
-        Some(true)
-    );
-}
-
-/// The main-container check runs *after* `extends` resolves — a container
-/// that only ends up `run_to_completion` by inheriting it from a base is
-/// rejected as a task's own container exactly like one that sets the field
-/// directly. Catches the gap a check placed before `extends` (inside
-/// `resolve_expressions_with_boundaries`) would miss entirely, since the
-/// child's own `run_to_completion` is still unset at that point.
-#[tokio::test]
-async fn run_to_completion_inherited_via_extends_is_still_rejected_on_a_main_container() {
-    let err = load_native_toml(
-        r#"
-project_name = "demo"
-
-[containers.base]
-image = "alpine:3.18"
-run_to_completion = true
-
-[containers.migrate]
-extends = "base"
-
-[tasks.t]
-run = { container = "migrate" }
-"#,
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        format!("{err:#}").contains("run_to_completion")
-            && format!("{err:#}").contains("'migrate'")
-            && format!("{err:#}").contains("'t'"),
-        "expected the error to name the task and its (inheriting) main container, got: {err:#}"
-    );
+    assert_eq!(project.config.containers["c"].run_to_completion, Some(true));
 }
 
 /// `external_health_check` (ratect#98): the HTTP form parses into

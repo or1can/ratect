@@ -424,15 +424,13 @@ dependencies = ["migrate"]
 - **Concurrent when independent.** Two `run_to_completion` dependencies for one
   container that don't depend on each other run at the same time, gated purely
   by the graph, not a separate strictly-sequential list.
-- **The task's own container is unaffected.** It already always runs to
-  completion by definition — that's what running a task's command means. The
-  field is meaningless there twice over: structurally, a task's own `run`
-  block has no field to set it on in the first place; and on the container
-  itself, setting it on whichever container a task names via `run.container`
-  is rejected when the file loads (directly, or inherited via `extends`),
-  rather than silently doing nothing. The same container can still be
-  `run_to_completion` when used as a *dependency* by another task — only
-  being a task's own main container while the flag is set is rejected.
+- **Inert on a task's own container**, exactly as `health_check` and
+  `setup_commands` are. A task's own container already always runs to
+  completion by definition — that's what running a task's command means — so
+  a container a task names via `run.container` runs as an ordinary task
+  container whether or not it sets the flag. The same container still runs to
+  completion as a gate when another task uses it as a *dependency*. (A task's
+  own `run` block has no field to set it on at all.)
 
 **Not a substitute for `prerequisites`.** A `prerequisites` entry runs
 as a fully separate task execution — own network, own containers, own
@@ -542,9 +540,9 @@ both tools the check uses reach it.)
 - **Inert on a task's own container**, exactly as `health_check` and
   `setup_commands` are — nothing waits on a task's own container becoming
   ready, because running it *is* the task (see [Dependency
-  Readiness](dependency-readiness.md#the-tasks-own-container)). Unlike `run_to_completion`, this isn't rejected: the field changes
-  nothing about how the container runs, so the same container can be one
-  task's main container and another task's checked dependency.
+  Readiness](dependency-readiness.md#the-tasks-own-container)), so the same
+  container can be one task's main container and another task's checked
+  dependency.
 
 Because the two are separate concepts, `interval`, `retries` and `timeout` do
 not quite mean the same thing in both, despite the shared names — which is why
