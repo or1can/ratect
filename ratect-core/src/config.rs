@@ -4229,6 +4229,10 @@ async fn load_project_impl(
     if format.allows_extends() {
         resolve_extends(&mut config.containers)?;
     }
+    // After `extends`, so an inherited `dependencies` list is checked too;
+    // before every rule below that follows a reference, so each of those can
+    // take its target's existence as given.
+    reject_references_to_undeclared_containers(&config)?;
     // After `extends`, so an inherited cache mount is judged on the scope
     // the container effectively has.
     reject_conflicting_cache_scopes(&config)?;
@@ -4657,11 +4661,11 @@ fn reject_setup_command_run_in_compat(containers: &[BatectShaped<'_>]) -> Result
 ///
 /// A `run_to_completion` dependency (ratect#97) is refused for the opposite
 /// reason: it has *already exited* by the time it counts as ready, so there
-/// is no live process for `docker exec` to target. Only checked when the
-/// named target actually exists as a container — a `dependencies` entry
-/// naming nothing is already caught by `build_dependency_graph` when a task
-/// that uses it runs, and tightening that into a load-time error here would
-/// reject configurations that work today.
+/// is no live process for `docker exec` to target. The target has to be a
+/// dependency, and [`reject_references_to_undeclared_containers`] has
+/// already refused one naming nothing — so it exists, unless it is a name
+/// reserved for a generated `external_health_check` companion, which
+/// `expand_external_health_checks` refuses later and this lookup tolerates.
 ///
 /// Runs *after* [`resolve_extends`], for the same reason
 /// [`reject_run_to_completion_conflicts`] does: a container's
@@ -5055,6 +5059,64 @@ fn reject_conflicting_cache_scopes(config: &Config) -> Result<()> {
                     seen.insert(cache.name.as_str(), cache.scope());
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// Rejects a container's or a task's `dependencies` entry, or a task's
+/// `run.container`, that names no declared container — in Batect's own words
+/// (`ContainerDependencyGraph.kt`), naming both the missing name and what
+/// referred to it.
+///
+/// **Earlier than Batect**, which only finds these while building the graph
+/// for a task it is about to run, and so never for a container no task
+/// reaches. Checking here means a file that loads has no such reference, so
+/// `ratect config validate` reports it and no run can reach it — and the
+/// engine, which cannot say what referred to a name, never has to.
+///
+/// **After `resolve_extends`**, so an inherited `dependencies` list is
+/// checked, and reported against the inheriting container. **Before** the
+/// rules that follow a reference — `run_in`, `network_mode = "container:…"`
+/// and `customise` keys must each name a dependency or a member of the
+/// task's graph, so once this passes every one of them names a container
+/// that exists.
+///
+/// A name reserved for a generated `external_health_check` companion counts
+/// as declared here, though the companion does not exist yet: a reference to
+/// one is refused by `expand_external_health_checks` instead, with a message
+/// that says the name is reserved rather than that nothing has it.
+fn reject_references_to_undeclared_containers(config: &Config) -> Result<()> {
+    let companions: std::collections::HashSet<String> = config
+        .containers
+        .iter()
+        .filter(|(_, container)| container.external_health_check.is_some())
+        .map(|(name, _)| external_health_check_container_name(name))
+        .collect();
+    let check = |reference: &String, referrer: String| -> Result<()> {
+        if config.containers.contains_key(reference) || companions.contains(reference) {
+            return Ok(());
+        }
+        anyhow::bail!("The container '{reference}' referenced by {referrer} does not exist.")
+    };
+    let mut names: Vec<&String> = config.containers.keys().collect();
+    names.sort_unstable();
+    for name in names {
+        for dependency in config.containers[name].dependencies.iter().flatten() {
+            check(dependency, format!("container '{name}'"))?;
+        }
+    }
+    let mut task_names: Vec<&String> = config.tasks.keys().collect();
+    task_names.sort_unstable();
+    for task_name in task_names {
+        let task = &config.tasks[task_name];
+        let references = task
+            .run
+            .iter()
+            .map(|run| &run.container)
+            .chain(task.dependencies.iter().flatten());
+        for reference in references {
+            check(reference, format!("task '{task_name}'"))?;
         }
     }
     Ok(())

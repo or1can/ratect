@@ -220,6 +220,18 @@ fn unshare(result: &SharedResult<String>) -> Result<String> {
     result.clone().map_err(|e| anyhow::anyhow!("{:?}", e))
 }
 
+/// The error for a container name with no container behind it. The config
+/// loader's `reject_references_to_undeclared_containers` refuses every such
+/// reference before any task runs, naming what referred to it, so a miss
+/// here is a bug in Ratect, not in the user's configuration — and the
+/// message says so rather than repeating the loader's attribution.
+fn undeclared_container_bug(name: &str) -> String {
+    format!(
+        "Container '{name}' not found — the configuration loader should have refused this \
+         reference, so this is a bug in Ratect"
+    )
+}
+
 /// Builds the deduplicated container dependency graph for one task
 /// execution: `root` (the task's own container) plus any task-level
 /// `dependencies` (unioned into `root`'s own adjacency list — the same union
@@ -260,7 +272,7 @@ fn build_dependency_graph(
 
         let container = containers
             .get(name)
-            .with_context(|| format!("Container '{}' not found", name))?;
+            .with_context(|| undeclared_container_bug(name))?;
         let mut dependencies = container.dependencies.clone().unwrap_or_default();
         if let Some(extra) = extra_root_dependencies {
             dependencies.extend(extra.iter().cloned());
@@ -1584,7 +1596,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             .config
             .containers
             .get(&run.container)
-            .with_context(|| format!("Container '{}' not found", run.container))?;
+            .with_context(|| undeclared_container_bug(&run.container))?;
 
         // The user-facing "Running <task>..." line is the event sink's job
         // now (see `crate::ui`) — this stays at `debug` so `RUST_LOG=info`
@@ -2461,7 +2473,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         .config
                         .containers
                         .get(name)
-                        .with_context(|| format!("Container '{}' not found", name))?;
+                        .with_context(|| undeclared_container_bug(name))?;
 
                     // A `customise` entry for this container specifically —
                     // applied on top of its own base config, same precedence
