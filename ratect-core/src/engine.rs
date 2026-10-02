@@ -1912,15 +1912,14 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // since that command may be waiting on what the gate would have
             // done (ratect#260). Dropping `run_future` is the same cancel an
             // interrupt makes, and the cleanup below stops and removes the
-            // container `readiness_future` has already recorded. A run that
-            // exits 0 first drops the gate instead (ratect#263), but only
-            // after polling it once more: `readiness_future` is where the
+            // container `readiness_future` has already recorded. The run's
+            // end ends the gate, whatever the exit code: a run that finishes
+            // first drops the gate instead (ratect#263), but only after
+            // polling it once more, since `readiness_future` is where the
             // container's id is recorded, so it must not be dropped unpolled
-            // (which is also why this isn't `tokio::try_join!`). A run that
-            // exits non-zero first still waits for the gate, as
-            // `tokio::join!` would. `biased` towards the run so a main
-            // command that has exited keeps its own exit code over a gate
-            // failing in the same poll.
+            // (which is also why this isn't `tokio::try_join!`). `biased`
+            // towards the run so a main command that has exited keeps its
+            // own exit code over a gate failing in the same poll.
             //
             // A gate can also fail *because* the main command exited — the
             // health wait sees the container die — while the run is still
@@ -1939,19 +1938,16 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // can't become the hang a command still running would be.
             let (run_result, readiness_result) = tokio::select! {
                 biased;
-                run_result = &mut run_future => match run_result {
-                    // A main command that exited 0 has ended the gate's
+                run_result = &mut run_future => {
+                    // A main command that has exited has ended the gate's
                     // question: whatever the gate is still doing — a setup
                     // command the container's exit killed, a health wait —
                     // is dropped rather than awaited (ratect#263). Polled
                     // once first, so a container id sent but not yet
                     // recorded is recorded for the cleanup below.
-                    Ok(()) => {
-                        let _ = futures::FutureExt::now_or_never(readiness_future.as_mut());
-                        (Ok(()), Ok(()))
-                    }
-                    Err(_) => (run_result, readiness_future.await),
-                },
+                    let _ = futures::FutureExt::now_or_never(readiness_future.as_mut());
+                    (run_result, Ok(()))
+                }
                 readiness_result = &mut readiness_future => match readiness_result {
                     Ok(()) => (run_future.await, Ok(())),
                     Err(error) => {

@@ -5672,6 +5672,39 @@ async fn a_setup_command_still_running_does_not_hold_up_a_successful_task() {
         .unwrap();
 }
 
+/// The same with any exit code: a main command exiting non-zero ends the
+/// gate too, rather than the run waiting on a setup command that may never
+/// finish before reporting the exit code that already decides the task. The
+/// container is still cleaned up.
+#[tokio::test(start_paused = true)]
+async fn a_setup_command_still_running_does_not_hold_up_a_failed_task() {
+    let docker = FakeContainerRuntime::default()
+        .failing_run()
+        .with_run_delay("app", std::time::Duration::from_secs(1))
+        .with_exec_delay("./migrate.sh", MAIN_COMMAND_THAT_OUTLASTS_ITS_GATE);
+    let engine = engine(
+        config_with_failing_task_container_setup_command(),
+        docker.clone(),
+    );
+
+    let err = tokio::time::timeout(GATE_FAILURE_DEADLINE, engine.run_task("start", &[]))
+        .await
+        .expect("the task should end when its main command does, not when its gate does")
+        .unwrap_err();
+
+    assert_eq!(
+        err.downcast_ref::<crate::docker::ContainerExitedNonZero>()
+            .map(|exited| exited.exit_code),
+        Some(1),
+        "the main command's own exit code should be the task's: {err:#}"
+    );
+    let events = docker.events();
+    assert!(
+        events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+        "the task container should be removed: {events:?}"
+    );
+}
+
 /// Settings for a native-dialect project — the only thing that differs
 /// from the default (Batect-compatible) engine in the tests below.
 fn native_settings() -> TaskEngineSettings {
