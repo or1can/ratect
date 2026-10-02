@@ -881,7 +881,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         format!(
                             "Setup command '{}' on container '{name}' names 'run_in' \
                                  container '{target}', which was not started as one of its \
-                                 dependencies",
+                                 dependencies — the configuration loader should have refused \
+                                 this, so this is a bug in Ratect",
                             setup_command.command
                         )
                     })?;
