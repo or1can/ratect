@@ -5714,7 +5714,7 @@ fn native_settings() -> TaskEngineSettings {
     }
 }
 
-/// A task whose own container declares both halves of a readiness gate: a
+/// A task whose own container declares both steps of a readiness gate: a
 /// `health_check` and one `setup_commands` entry (`./migrate.sh`).
 fn config_with_a_gated_task_container() -> Config {
     let mut config = config_with_failing_task_container_setup_command();

@@ -85,7 +85,12 @@ sequenceDiagram
     Engine->>Docker: pull_image() (task's own image, per image_pull_policy, unless already decided)
     Engine->>Docker: run_container(name, network)
     Docker-->>Main: created, started, joined to network
-    Main-->>Engine: runs to completion, logs streamed live to stdout
+    par the main command
+        Main-->>Engine: runs to completion, logs streamed live to stdout
+    and ratect-compat only: the task container's own readiness gate, gating nothing
+        Engine->>Docker: wait_for_container_healthy(), then exec_in_container() per setup command
+        Note over Engine: a failure cancels a still-running main command;<br/>the main command's exit ends the gate (see Known limitations)
+    end
 
     Note over Engine: cleanup — runs even if the task's container failed,<br/>unless --no-cleanup* says otherwise
     Engine->>Docker: stop_and_remove_container() for the task's own container

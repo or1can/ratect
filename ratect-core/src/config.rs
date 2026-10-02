@@ -1648,8 +1648,10 @@ pub fn external_health_check_container_name(container: &str) -> String {
 /// gets a generated companion container ([`external_health_check_container_name`])
 /// that loops the check and exits 0 or non-zero, and every dependent of the
 /// checked container gains that companion as a dependency too. The engine
-/// sees nothing new — see `expand_external_health_checks`, which is the
-/// whole of it.
+/// learns only two things from it: to skip the checked container's own
+/// health wait (ratect#269), and to narrate the companion's verdict as the
+/// checked container's (`reports_readiness_for`). See
+/// `expand_external_health_checks` for the rest.
 ///
 /// The check runs over the project's own Docker network, reaching the
 /// checked container by its container-config name (its network alias), so
@@ -2823,6 +2825,10 @@ impl ConfigFormat {
     /// pulled the file in. To use a native field, convert that container to
     /// TOML; incremental migration exists so a project needn't be
     /// refactored in one go, not so a YAML file can grow native features.
+    /// Load-time rules only: what a container does at *run time* — a task's
+    /// own container's readiness gate — follows the project's dialect, not
+    /// the file (decisions/0012), so a `.yml` task container under `ratect`
+    /// has none.
     /// See [decisions/0003](../../decisions/0003-ratect-native-config-format.md),
     /// whose "`extends` flows one way — never the reverse" is this same
     /// rule stated of one field.

@@ -490,7 +490,7 @@
           ]
         },
         "setup_commands": {
-          "description": "Commands run inside the container (via `docker exec`) after it becomes healthy but before its dependents start — see `SetupCommand`. Plain strings, no expression support — matching Batect, which doesn't type these as expressions either.",
+          "description": "Commands run after the container becomes healthy but before its dependents start, in declared order — each inside this container, or with `run_in` inside one of its dependencies. Plain strings, no expression support.",
           "items": {
             "$ref": "#/definitions/SetupCommand"
           },
@@ -824,7 +824,7 @@
           "type": "string"
         },
         "run_in": {
-          "description": "Runs this command inside another container instead of the one that declares it — for a setup step whose tooling lives in a different image, such as seeding a database from a client container. Must name one of the declaring container's own dependencies, or the declaring container itself (which is what omitting it means).",
+          "description": "Runs this command inside another container instead of the one that declares it — for a setup step whose tooling lives in a different image, such as seeding a database from a client container. Must name one of the declaring container's own dependencies, or the declaring container itself (which is what omitting it means). Rejected when the named container is a `run_to_completion` one: it has already exited by the time it counts as ready, so there is nothing left to run a command in.",
           "type": [
             "string",
             "null"

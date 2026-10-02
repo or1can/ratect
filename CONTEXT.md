@@ -48,17 +48,21 @@ backwards.
 ## Formats
 
 **Dialect** — which binary's rules govern a project: Batect-compatible
-(`ratect-compat`) or native (`ratect`). A property of a project.
+(`ratect-compat`) or native (`ratect`). A property of a project. The word is
+this file's and the code's; user docs name the binary instead.
 
 **File syntax** — whether a file is parsed as TOML or YAML. A property of a
 file, independent of its project's dialect.
 
 ## Readiness
 
-**Readiness gate** — what a container must pass before anything that depends
-on it starts: its health check, then its setup commands (or, for a
-run-to-completion container, exiting 0). A task's own container has none
-under the native dialect.
+**Readiness gate** — the check a container passes before it counts as ready:
+one gate, two steps — a health-check step (Docker's own health check, or an
+external health check run from outside the container), then its setup
+commands. A run-to-completion container's gate is exiting 0 instead. For a
+dependency, nothing that depends on it starts before it passes. A task's own
+container's gate gates nothing: under the Batect-compatible dialect it runs
+alongside the main command; under the native dialect it has none.
 
 ## Identity
 

@@ -69,4 +69,4 @@ never delete one (same append-only spirit as the roadmap's versioned lists).
 | [0009](0009-adopt-claims-plugin.md) | Adopting the `claims` plugin for documentation checks | Accepted — adopted immediately |
 | [0010](0010-release-binary-distribution.md) | Automated release pipeline: prebuilt binaries, SBOM, provenance | Accepted — implemented (ratect-compat 0.28.0 · ratect 0.7.0) |
 | [0011](0011-container-identity.md) | Container identity: state the intent, add to the image (`ratect` native) | Accepted — planned (ratect 0.12.0) |
-| [0012](0012-native-task-container-has-no-readiness-gate.md) | A task's own container has no readiness gate (`ratect` native) | Accepted — implemented (ratect 0.10.0) |
+| [0012](0012-native-task-container-has-no-readiness-gate.md) | A task's own container's readiness gate | Accepted — implemented (ratect 0.10.0, ratect-compat 0.31.0) |
