@@ -171,7 +171,7 @@ containers:
 | `additional_hosts` | map of string → string | no | Extra `/etc/hosts` entries in this container, `hostname: ip`, Docker's own `--add-host` mechanism. No expression support. |
 | `ports` | list of strings/objects | no | Publishes container ports to the host (see [Port mappings](#port-mappings) below). No expression support. Suppressed entirely by `--disable-ports`, regardless of this field. See [CLI reference](ratect-compat-cli.md). |
 | `health_check` | object | no | Overrides the health check configuration baked into the container's image (see [Dependency readiness](#dependency-readiness) below). No expression support. |
-| `setup_commands` | list of objects (`command`, `working_directory`) | no | Commands run inside the started container after it becomes healthy but before its dependents start (see [Dependency readiness](#dependency-readiness) below). No expression support. |
+| `setup_commands` | list of objects (`command`, `working_directory`) | no | Commands run inside the started container after it becomes healthy; a dependency's must succeed before its dependents start (see [Dependency readiness](#dependency-readiness) below). No expression support. |
 | `working_directory` | string | no | Overrides the image's own `WORKDIR`. No [expression](#expressions) support. A task's own container's `working_directory` can be further overridden by the task-level `run.working_directory` — see [TaskRun](#taskrun). A `setup_commands` entry with no `working_directory` of its own falls back to the container's effective working directory — this, or the task's `run.working_directory` or `customise` override where one applies — then to the image's own default. Batect's own documentation says a task container's setup commands ignore `run.working_directory`; Batect's code applies it, and Ratect follows the code. |
 | `command` | string | no | Overrides the image's own default `CMD`. Tokenized into literal argv (quote/backslash-aware whitespace splitting, no shell involved — matching Batect's own tokenizer exactly). No [expression](#expressions) support. Applies as-is to a dependency/sidecar container; a task's own container's `command` can be further overridden by the task-level `run.command` — see [TaskRun](#taskrun). |
 | `entrypoint` | string | no | Overrides the image's own `ENTRYPOINT`. Tokenized into literal argv the same way `command` is (quote/backslash-aware whitespace splitting, no shell involved — matching Batect's own tokenizer exactly). No [expression](#expressions) support. A task's own container's `entrypoint` can be further overridden by the task-level `run.entrypoint` — see [TaskRun](#taskrun). |
@@ -596,11 +596,13 @@ What each of those two steps waits for, how Docker reaches a health verdict,
 how several dependencies' waits combine into one task's start-up, and a real
 run of all of it are on [Dependency Readiness](dependency-readiness.md); the two
 fields are below. A task's own container runs the same gate here,
-concurrently with its main command: a failure fails the task while that
-command is still running, and once it has exited 0 the gate is forgiven —
-with one race, described in [known
-limitations](task-lifecycle.md#known-limitations). Under `ratect`, a YAML
-root file included, it has none — see [The task's own
+concurrently with its main command: a failure while that command is still
+running fails the task unless the command exits 0 within the next two
+seconds, and cancels it if it hasn't exited by then; once it has exited 0, a
+failure is forgiven — the cost and the
+race that leaves are described in [known
+limitations](task-lifecycle.md#known-limitations). Under `ratect` it has none,
+even for a task container declared in a YAML file — see [The task's own
 container](dependency-readiness.md#the-tasks-own-container).
 
 `health_check` *overrides* the image's health check configuration — each field

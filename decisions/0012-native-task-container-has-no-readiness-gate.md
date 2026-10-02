@@ -26,8 +26,10 @@ Batect runs every container through the same per-container steps, the
 task's own container included: its health wait and `setup_commands` run
 concurrently with its main command, and a failure in either fails the task
 even when the main command succeeded. Ratect ported that, in both binaries.
-Nothing depends on the task container's readiness, so the gate there
-protects nothing and only adds ways to fail.
+Nothing depends on the task container's readiness, so under the native
+dialect — with no Batect behaviour to preserve — the gate there protects
+nothing and only adds ways to fail. The Batect-compatible forces below are
+why the same can't be said of `ratect-compat`.
 
 **The native forces.** The common case is a one-off command — `psql`, a
 migration script — run in an image built as a long-running service: its

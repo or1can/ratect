@@ -273,8 +273,8 @@ pub struct Container {
     /// report healthy before its dependents start.
     pub health_check: Option<HealthCheckConfig>,
     /// Commands run inside the container (via `docker exec`) after it
-    /// becomes healthy but before its dependents start — see
-    /// [`SetupCommand`]. Plain strings, no [expression](#expressions)
+    /// becomes healthy; a dependency's must succeed before its dependents
+    /// start — see [`SetupCommand`]. Plain strings, no [expression](#expressions)
     /// support — matching Batect, which doesn't type these as expressions
     /// either.
     pub setup_commands: Option<Vec<SetupCommand>>,
@@ -1905,9 +1905,13 @@ pub struct SetupCommand {
     /// The command to run, tokenized into arguments rather than run through
     /// a shell — wrap it in `sh -c '...'` to use shell operators.
     pub command: String,
-    /// Falls back to the container's own `working_directory`
-    /// ([`Container::working_directory`]) when omitted, and then to the
-    /// image's own default when neither is set — matching Batect.
+    /// Falls back to the container's effective `working_directory` when
+    /// omitted — its own ([`Container::working_directory`]), as overridden
+    /// by the task's `run.working_directory` for the task's own container
+    /// or by a `customise` entry for a dependency — and then to the image's
+    /// own default when none is set. Matching what Batect does (ratect#271;
+    /// Batect's own docs say the task-level override is ignored, but its
+    /// code applies it).
     ///
     /// The first paragraph is what the *compat* schema describes, where it
     /// is the whole truth. Under [`Self::run_in`] the fallback is the

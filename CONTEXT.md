@@ -56,10 +56,11 @@ file, independent of its project's dialect.
 
 ## Readiness
 
-**Readiness gate** — the check a container passes before it counts as ready:
-one gate, two steps — a health-check step (Docker's own health check, or an
-external health check run from outside the container), then its setup
-commands. A run-to-completion container's gate is exiting 0 instead. For a
+**Readiness gate** — the check a container passes before it counts as ready.
+One gate per container, whatever it consists of: ordinarily two steps — a
+health-check step (Docker's own health check), then its setup commands. An
+externally checked container's gate is its external health check alone, and
+a run-to-completion container's is exiting 0. For a
 dependency, nothing that depends on it starts before it passes. A task's own
 container's gate gates nothing: under the Batect-compatible dialect it runs
 alongside the main command; under the native dialect it has none.
