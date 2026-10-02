@@ -175,16 +175,19 @@ pub enum TaskEvent {
     DependencyStarted {
         container: String,
     },
-    /// The dependency reported healthy (immediately, for a container with
-    /// no health check at all — the event still posts, matching Batect).
+    /// A container reported healthy — a dependency, or under the
+    /// Batect-compatible dialect the task's own container (decisions/0012).
+    /// Immediate for a container with no health check at all (the event
+    /// still posts, matching Batect); for an externally checked container,
+    /// posted by its companion when the check passes (ratect#98).
     ContainerBecameHealthy {
         container: String,
     },
     /// A `run_to_completion` dependency exited with status 0 and is now
-    /// ready — this dialect's counterpart to
-    /// [`TaskEvent::ContainerBecameHealthy`] for a container that has no
-    /// health check at all, since it runs to completion instead of staying
-    /// detached. `ratect`-native only, like the field itself.
+    /// ready — what such a container posts in place of
+    /// [`TaskEvent::ContainerBecameHealthy`], since it has no health check
+    /// and runs to completion instead of staying detached. `ratect`-native
+    /// only, like the field itself.
     DependencyCompleted {
         container: String,
     },
@@ -205,8 +208,9 @@ pub enum TaskEvent {
         total: usize,
         run_in: Option<String>,
     },
-    /// Every one of the dependency's `setup_commands` succeeded — only
-    /// posted when it had some.
+    /// Every one of a container's `setup_commands` succeeded — a
+    /// dependency's, or under the Batect-compatible dialect the task's own
+    /// container's. Only posted when it had some.
     SetupCommandsCompleted {
         container: String,
     },

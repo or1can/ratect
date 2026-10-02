@@ -102,7 +102,8 @@ two differences worth knowing:
   wait on the health check of a container a task runs as its own
   `run.container` — whether from `health_check` or its image's own
   `HEALTHCHECK` — and doesn't run its `setup_commands`, wherever that
-  container is declared: the project's format decides, not the file's (see
+  container is declared: the binary running the project decides, not the
+  file's format (see
   [Dependency Readiness](dependency-readiness.md#the-tasks-own-container)).
   The same container used as a dependency is still gated.
 - **Nested Git includes need a grant.** A Git-included bundle that itself

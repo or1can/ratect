@@ -104,7 +104,9 @@ it, isolating it just the same as a task with dependencies.
 
 `--no-cleanup-after-failure` skips the cleanup step above for a genuine infrastructure
 failure (a build/pull/health-check/setup-command failure, or anything else before the
-task's own container gets to run); `--no-cleanup-after-success` skips it when the
+task's own container gets to run — or, under `ratect-compat`, its own health check or
+setup commands failing while its main command is still running, which cancels it);
+`--no-cleanup-after-success` skips it when the
 task's own container ran to completion instead, regardless of its exit code (a
 non-zero exit is still "success" for this purpose — it's the task's own container
 actually running that matters, not what it returned); `--no-cleanup` is both at once.
@@ -193,8 +195,11 @@ colliding.
   running, or can't say, waits up to two seconds for the main command's own
   result before cancelling it. A main command that exits within that window
   decides the task as above, so one exiting 0 up to two seconds after a
-  setup command genuinely failed is forgiven too. `ratect` has none of this: under the native dialect a
-  task's own container has no readiness gate at all (see [Dependency
+  setup command genuinely failed is forgiven too. The race that leaves: a
+  main command that has in fact exited 0, but whose exit Docker reports more
+  than two seconds after the setup command's failure, is cancelled, and the
+  task fails with the setup command's error. Under `ratect` none of this
+  applies: a task's own container has no readiness gate at all (see [Dependency
   Readiness](dependency-readiness.md#the-tasks-own-container)).
 - **Prerequisite tasks stay sequential, matching Batect exactly** — `prerequisites`
   entries run one after another, each to completion, never concurrently with each

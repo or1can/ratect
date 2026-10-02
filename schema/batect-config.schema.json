@@ -334,7 +334,7 @@
           "description": "Runs the container as the host's own user rather than the image's default, so files it writes to a mounted volume aren't root-owned."
         },
         "setup_commands": {
-          "description": "Commands run inside the container (via `docker exec`) after it becomes healthy but before its dependents start — see `SetupCommand`. Plain strings, no expression support — matching Batect, which doesn't type these as expressions either.",
+          "description": "Commands run inside the container (via `docker exec`) after it becomes healthy; a dependency's must succeed before its dependents start — see `SetupCommand`. Plain strings, no expression support — matching Batect, which doesn't type these as expressions either.",
           "items": {
             "$ref": "#/definitions/SetupCommand"
           },
@@ -630,7 +630,7 @@
           "type": "string"
         },
         "working_directory": {
-          "description": "Falls back to the container's own `working_directory` (`Container::working_directory`) when omitted, and then to the image's own default when neither is set — matching Batect.",
+          "description": "Falls back to the container's effective `working_directory` when omitted — its own (`Container::working_directory`), as overridden by the task's `run.working_directory` for the task's own container or by a `customise` entry for a dependency — and then to the image's own default when none is set. Matching what Batect does (ratect#271; Batect's own docs say the task-level override is ignored, but its code applies it).",
           "type": [
             "string",
             "null"

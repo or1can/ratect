@@ -270,10 +270,11 @@ fn make_native(json: &mut serde_json::Value) {
             "working_directory".to_string(),
             serde_json::json!({
                 "type": ["string", "null"],
-                "description": "Falls back to the `working_directory` of whichever container \
-                                the command runs in — the one declaring it, or the one named \
-                                by `run_in` — and then to that image's own default when \
-                                neither is set.",
+                "description": "Falls back to the effective `working_directory` of whichever \
+                                container the command runs in — the one declaring it (as \
+                                overridden by the task's `run.working_directory` or a \
+                                `customise` entry), or the one named by `run_in` — and then \
+                                to that image's own default when none is set.",
             }),
         );
         properties.insert(

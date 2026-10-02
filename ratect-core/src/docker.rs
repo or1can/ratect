@@ -1462,11 +1462,13 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
 
     /// Whether `container_id` is still running, answered at once. The engine
     /// asks when the task container's readiness gate fails, to tell a main
-    /// command still running (cancelled) from one that has already exited
-    /// and whose run is only still reporting it (awaited, so its exit code
-    /// survives). Docker's own answer, so it can briefly still be `true` for
-    /// a process that has already exited, until the daemon has recorded the
-    /// exit.
+    /// command still running from one that has already exited and whose run
+    /// is only still reporting it (awaited, so its exit code survives).
+    /// Docker's own answer, so it can briefly still be `true` for a process
+    /// that has already exited, until the daemon has recorded the exit —
+    /// which is why a `true` (or an `Err`) makes the engine wait a little
+    /// for the run's own result before cancelling it, rather than cancel at
+    /// once (`engine::TASK_CONTAINER_EXIT_GRACE`, decisions/0012).
     async fn container_is_running(&self, container_id: &str) -> Result<bool>;
 
     /// Everything `container_id` has written to stdout and stderr, for a

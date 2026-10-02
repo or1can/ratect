@@ -82,15 +82,17 @@ struct Args {
     tag_image: Vec<(String, String)>,
 
     /// If an infrastructure error occurs before the task's own container can
-    /// start, leave all containers created for that task running so the
-    /// issue can be investigated. Equivalent to providing both
-    /// --no-cleanup-after-failure and --no-cleanup-after-success.
+    /// start, or its own health check or setup commands fail while its main
+    /// command is still running, leave all containers created for that task
+    /// running so the issue can be investigated. Equivalent to providing
+    /// both --no-cleanup-after-failure and --no-cleanup-after-success.
     #[arg(long = "no-cleanup", help_heading = "Cleanup after a run")]
     no_cleanup: bool,
 
     /// If an infrastructure error occurs before the task's own container can
-    /// start, leave all containers created for that task running so the
-    /// issue can be investigated.
+    /// start, or its own health check or setup commands fail while its main
+    /// command is still running, leave all containers created for that task
+    /// running so the issue can be investigated.
     #[arg(
         long = "no-cleanup-after-failure",
         help_heading = "Cleanup after a run"

@@ -286,8 +286,8 @@ nothing unexpected to report.
 
 ## The task's own container
 
-Which rules apply depends on the project's dialect: whether `ratect` or
-`ratect-compat` loaded it, not which file declares the container.
+Which rules apply depends on which binary loaded the project, `ratect` or
+`ratect-compat`, not on which file declares the container.
 
 - **`ratect` (native): no readiness gate.** Running the task's own container
   *is* the task, and nothing depends on it becoming ready. Ratect doesn't wait
@@ -301,7 +301,9 @@ Which rules apply depends on the project's dialect: whether `ratect` or
   concurrently with its main command rather than gating anything on it —
   matching Batect, which runs every container through identical per-container
   steps, task container included. A failure there while the main command is
-  still running stops it and fails the task. Once that command has exited,
+  still running stops it and fails the task — after waiting up to two
+  seconds for the command's own exit, which decides the task instead if it
+  arrives. Once that command has exited,
   with any code, whatever the gate was still doing — a health wait, a setup
   command the container's exit killed — is dropped, and after an exit 0 a
   failure it already reported isn't one. That, and the race it leaves
