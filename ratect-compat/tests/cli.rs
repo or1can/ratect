@@ -212,6 +212,10 @@ fn project_directory_declared_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-directory-declared.yml")
 }
 
+fn undeclared_container_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/undeclared-container.yml")
+}
+
 fn interactive_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/interactive.yml")
 }
@@ -425,6 +429,26 @@ fn declaring_batect_project_directory_in_config_variables_reports_error() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("batect.project_directory") && stderr.contains("built-in"),
+        "stderr:\n{}",
+        stderr
+    );
+}
+
+/// Refused when the file loads, not only when a task reaching it runs as in
+/// Batect — so even `--list-tasks` fails.
+#[test]
+fn a_reference_to_an_undeclared_container_fails_the_load() {
+    let output = ratect_command()
+        .args(["--list-tasks", "-f"])
+        .arg(undeclared_container_config_path())
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr
+            .contains("The container 'ghost' referenced by container 'build-env' does not exist."),
         "stderr:\n{}",
         stderr
     );

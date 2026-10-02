@@ -1,0 +1,14 @@
+# A container's dependency names a container that isn't declared. Batect only
+# notices when a task that reaches it runs; ratect-compat refuses the file when
+# it loads, so even --list-tasks fails.
+project_name: ratect-undeclared-container-test
+containers:
+  build-env:
+    image: alpine:3.18.2
+    dependencies:
+      - ghost
+tasks:
+  test:
+    run:
+      container: build-env
+      command: echo hi

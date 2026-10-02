@@ -6320,20 +6320,22 @@ async fn a_network_mode_chain_that_loops_is_rejected_when_the_file_loads() {
 
 /// A `container:` target that isn't a container in this project — directly
 /// or further along a chain — is refused when the file loads, before any
-/// advice about moving a field onto it. Listing it in `dependencies` too
-/// must not let it through.
+/// advice about moving a field onto it, and before the complaint that it
+/// isn't a dependency. Listing it in `dependencies` as well is refused
+/// earlier still, as a reference to an undeclared container
+/// (`a_reference_to_an_undeclared_container_is_rejected_when_the_file_loads`).
 #[tokio::test]
 async fn a_network_mode_container_target_that_does_not_exist_is_rejected() {
     for (label, containers, expected) in [
         (
             "direct",
-            "[containers.app]\nimage = \"alpine:3.18\"\ndependencies = [\"ghost\"]\n\
+            "[containers.app]\nimage = \"alpine:3.18\"\n\
              network_mode = \"container:ghost\"\nports = [{ local = 8080, container = 80 }]\n",
             "'ghost'",
         ),
         (
             "through a chain",
-            "[containers.b]\nimage = \"alpine:3.18\"\ndependencies = [\"ghost\"]\n\
+            "[containers.b]\nimage = \"alpine:3.18\"\n\
              network_mode = \"container:ghost\"\n\n\
              [containers.app]\nimage = \"alpine:3.18\"\ndependencies = [\"b\"]\n\
              network_mode = \"container:b\"\ndns = [\"1.1.1.1\"]\n",
@@ -10676,4 +10678,131 @@ async fn a_grant_lost_through_a_bundles_own_local_include_is_reported() {
     std::fs::remove_dir_all(&bundle).ok();
     std::fs::remove_dir_all(&project).ok();
     std::fs::remove_dir_all(&cache_root).ok();
+}
+
+/// A name used to refer to a container must name a declared one, in both
+/// formats, and the error names both sides in Batect's own wording
+/// (`ContainerDependencyGraph.kt`). Before ratect#280 every one of these
+/// loaded cleanly and failed only once a task ran, as "Container 'ghost' not
+/// found" — naming the reference but not where it was written.
+#[tokio::test]
+async fn a_reference_to_an_undeclared_container_is_rejected_when_the_file_loads() {
+    let cases = [
+        (
+            "[containers.app]\nimage = \"alpine:3.18\"\ndependencies = [\"ghost\"]\n\
+             [tasks.t]\nrun = { container = \"app\" }\n",
+            "containers:\n  app:\n    image: alpine:3.18\n    dependencies: [ghost]\n\
+             tasks:\n  t:\n    run:\n      container: app\n",
+            "The container 'ghost' referenced by container 'app' does not exist.",
+        ),
+        (
+            "[containers.app]\nimage = \"alpine:3.18\"\n\
+             [tasks.t]\nrun = { container = \"app\" }\ndependencies = [\"ghost\"]\n",
+            "containers:\n  app:\n    image: alpine:3.18\n\
+             tasks:\n  t:\n    run:\n      container: app\n    dependencies: [ghost]\n",
+            "The container 'ghost' referenced by task 't' does not exist.",
+        ),
+        (
+            "[containers.app]\nimage = \"alpine:3.18\"\n\
+             [tasks.t]\nrun = { container = \"ghost\" }\n",
+            "containers:\n  app:\n    image: alpine:3.18\n\
+             tasks:\n  t:\n    run:\n      container: ghost\n",
+            "The container 'ghost' referenced by task 't' does not exist.",
+        ),
+    ];
+    for (toml, yaml, expected) in cases {
+        let err = load_native_toml(&format!("project_name = \"demo\"\n{toml}"))
+            .await
+            .unwrap_err();
+        assert_eq!(format!("{err:#}"), expected, "native, for:\n{toml}");
+
+        let dir = unique_temp_dir();
+        let path = dir.join("batect.yml");
+        std::fs::write(&path, format!("project_name: demo\n{yaml}")).unwrap();
+        let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(format!("{err:#}"), expected, "compat, for:\n{yaml}");
+    }
+}
+
+/// Judged on what a container *effectively* depends on: a `dependencies`
+/// list reached only through `extends` is checked too, and reported against
+/// the inheriting container — which sorts ahead of its base here, so the
+/// error can only name it if inheritance has been resolved first.
+#[tokio::test]
+async fn an_inherited_reference_to_an_undeclared_container_is_rejected() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+[containers.app]
+extends = "base"
+[containers.base]
+image = "alpine:3.18"
+dependencies = ["ghost"]
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        format!("{err:#}"),
+        "The container 'ghost' referenced by container 'app' does not exist."
+    );
+}
+
+/// Several bad references report the same one every time — containers in
+/// name order before tasks, and within each, in the order written.
+#[tokio::test]
+async fn undeclared_container_references_are_reported_deterministically() {
+    for _ in 0..8 {
+        let err = load_native_toml(
+            r#"
+project_name = "demo"
+[containers.b]
+image = "alpine:3.18"
+dependencies = ["ghost-b2", "ghost-b1"]
+[containers.a]
+image = "alpine:3.18"
+dependencies = ["a2", "ghost-a"]
+[containers.a2]
+image = "alpine:3.18"
+[tasks.s]
+run = { container = "ghost-s" }
+[tasks.r]
+run = { container = "ghost-r" }
+"#,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            format!("{err:#}"),
+            "The container 'ghost-a' referenced by container 'a' does not exist."
+        );
+    }
+}
+
+/// `run_in` must name one of the declaring container's dependencies, so with
+/// every dependency checked to exist first, a `run_in` naming nothing is
+/// reported as the missing dependency it is — rather than slipping past the
+/// run-to-completion rule, which only ever fired for a target that exists.
+#[tokio::test]
+async fn a_run_in_naming_an_undeclared_dependency_is_rejected_when_the_file_loads() {
+    let err = load_native_toml(
+        r#"
+project_name = "demo"
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["ghost"]
+setup_commands = [{ command = "true", run_in = "ghost" }]
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        format!("{err:#}"),
+        "The container 'ghost' referenced by container 'app' does not exist."
+    );
 }

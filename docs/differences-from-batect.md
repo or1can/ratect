@@ -51,6 +51,7 @@ reference](ratect-compat-config-reference.md#container) for the full list. The e
 |---|---|
 | `image` | An [expression](#expressions)-looking value (`$VAR`) is rejected when the file loads rather than resolved or used as a literal — Batect resolves nothing here either, but silently treats it as a literal image name that then fails at pull time instead. `ratect.toml` does resolve them; see [config reference](ratect-compat-config-reference.md#container). |
 | `volumes` | A `cache` mount's `name` must use Docker's own volume-name character set; Batect doesn't validate it at all, so an unvalidated name could bind-mount an arbitrary host directory under `--cache-type=directory`. Breaking change for `--cache-type=directory` only — `--cache-type=volume` already enforced this via Docker itself. See [Cache volumes](ratect-compat-config-reference.md#cache-volumes). |
+| `dependencies` | A name that isn't a declared container is rejected when the file loads — and so is one in a task's `dependencies` or `run.container`. Batect reports the same error in the same words, but only once a task that reaches the reference runs, so a stale reference in a container or task nothing runs never stops Batect and stops every `ratect-compat` command. See [config reference](ratect-compat-config-reference.md#container). |
 | `capabilities_to_add` / `capabilities_to_drop` | Also accepts `BPF`/`CHECKPOINT_RESTORE`/`PERFMON` — Docker capabilities added after Batect's last release, so its own `Capability` enum predates them. A superset: every config Batect itself accepts here still parses identically. |
 | `health_check` / `setup_commands` | A task's own container's readiness gate doesn't fail the task once its main command has exited 0, whatever the failure — typically the container stopped before reporting a health status, before a setup command could `exec` into it, or while one was running and was killed with it; Batect's does. A failure of that gate while the main command is still running fails the task as Batect's does, but cancels the main command up to two seconds later, and is forgiven if the main command exits 0 within that time. That, and the race it leaves open, are in [task lifecycle](task-lifecycle.md#known-limitations). Under `ratect` a task's own container has no readiness gate at all — see [Dependency Readiness](dependency-readiness.md#the-tasks-own-container). |
 | `log_driver` / `log_options` | An absent value leaves the daemon's own default alone; Batect's config model bakes in a literal `"json-file"` default explicitly. Immaterial in practice — that's Docker's own out-of-the-box default too. |
@@ -58,13 +59,17 @@ reference](ratect-compat-config-reference.md#container) for the full list. The e
 
 ### Task fields
 
-Every task field is supported field-for-field, with no divergence from Batect —
-see [config reference](ratect-compat-config-reference.md#task) for the full list.
+Every task field is supported field-for-field — see [config
+reference](ratect-compat-config-reference.md#task) for the full list. The one
+exception, `dependencies` naming an undeclared container, is under
+`dependencies` in [Container fields](#container-fields) above.
 
 ### `run` fields
 
-Every `run` field is supported field-for-field, with no divergence from Batect —
-see [TaskRun](ratect-compat-config-reference.md#taskrun) for the full list.
+Every `run` field is supported field-for-field — see
+[TaskRun](ratect-compat-config-reference.md#taskrun) for the full list. The one
+exception, `container` naming an undeclared container, is under `dependencies`
+in [Container fields](#container-fields) above.
 
 ## CLI flags
 

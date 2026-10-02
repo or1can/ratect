@@ -309,6 +309,41 @@ run = { container = "app" }
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// A reference to an undeclared container is a problem `config validate`
+/// reports, naming both sides — not something only a run would find.
+#[test]
+fn config_validate_reports_a_reference_to_an_undeclared_container() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        r#"
+project_name = "demo"
+
+[containers.app]
+image = "alpine:3.18"
+
+[tasks.t]
+run = { container = "app" }
+dependencies = ["ghost"]
+"#,
+    )
+    .unwrap();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(dir.join("ratect.toml"))
+        .args(["config", "validate"])
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&dir).ok();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!output.status.success(), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains("problem")
+            && stdout.contains("The container 'ghost' referenced by task 't' does not exist."),
+        "stdout:\n{stdout}"
+    );
+}
+
 /// `config convert` turns a `batect.yml` (anchors and all) into a
 /// `ratect.toml` that actually loads and runs — proven by listing tasks from
 /// the *converted* file. Also covers the no-clobber guard and `--force`.
