@@ -1226,6 +1226,28 @@ to live at, so links written before the split still resolve.
   surface is unchanged. See the closed
   [milestone](https://github.com/or1can/ratect/milestone/4) for everything
   that shipped, including the test-only fixes this list leaves out.
+- **0.31.0** — Three themes, shared with [`ratect` 0.10.0](#ratect) below
+  through `ratect-core`, with five breaking changes for this binary, all
+  listed under Breaking in [`CHANGELOG.md`](CHANGELOG.md). **Connecting to
+  Docker** follows the Docker CLI's rules more closely: `DOCKER_HOST` overrides a
+  context, a context's stored TLS settings are used, `--docker-tls*` and
+  contexts take one TLS route, and a CA certificate, when one is given, is
+  the only authority trusted. **The task's own container's readiness gate** is closer to
+  Batect: a failure while the main command runs now cancels it rather than
+  waiting for it to exit. It also departs from Batect in two deliberate,
+  listed ways: once the main command exits 0 the gate no longer counts, and
+  it waits two seconds for that exit before cancelling
+  ([decisions/0012](decisions/0012-native-task-container-has-no-readiness-gate.md)).
+  A task container's setup command with no `working_directory` of its own
+  now runs in the task's `run.working_directory`, as Batect's does. **Leaks
+  and loose ends**: a second termination signal during cleanup force-removes
+  what's left instead of abandoning it, and a signal received during cleanup
+  now shows in the exit code; a dependency cut short mid-start is cleaned
+  up; piped stdin reaching its end closes the container's own; a reference
+  to an undeclared container is rejected when the file loads. The
+  documentation is now a published, searchable site. See the closed
+  [milestone](https://github.com/or1can/ratect/milestone/7) for everything
+  that shipped.
 - **1.0.0** — the [Batect Parity](ROADMAP.md#batect-parity) section above substantially checked
   off (all of the above, including 0.7.0–0.19.0, not just the items shipped through
   0.6.0), and verified against real Batect projects — the conformance corpus above
@@ -1533,6 +1555,22 @@ to live at, so links written before the split still resolve.
   here too, since it's the same `dist-workspace.toml`. This binary's own
   subcommand surface is unchanged. See the closed
   [milestone](https://github.com/or1can/ratect/milestone/4) for everything
+  that shipped.
+- **0.10.0** — The native format's readiness and container-field release,
+  on top of the shared `ratect-core` work in
+  [`ratect-compat` 0.31.0](#ratect-compat) above. Seven breaking changes
+  for this binary — those five, and two of its own — all listed under
+  Breaking in [`CHANGELOG.md`](CHANGELOG.md). Its own two: a task's own
+  container has no readiness gate
+  ([decisions/0012](decisions/0012-native-task-container-has-no-readiness-gate.md)),
+  and a container declared in a YAML file now follows Batect's rules
+  wherever it's included. A dependency can `run_to_completion`, be checked
+  from outside with `external_health_check`, or run a setup command `run_in`
+  another container. New container fields: `stop_signal`/`stop_grace_period`,
+  `ulimits`, `dns`/`dns_search`/`dns_options` and `network_mode`. `config
+  convert` warns about task containers whose gate stops running.
+  See the closed
+  [milestone](https://github.com/or1can/ratect/milestone/7) for everything
   that shipped.
 
 Its **1.0.0** means something different from `ratect-compat`'s: interface stability

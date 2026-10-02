@@ -21,6 +21,8 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+## [ratect-compat 0.31.0 · ratect 0.10.0] - 2026-10-02
+
 ### Breaking
 
 - With `--docker-tls`/`--docker-tls-verify`, the CA certificate (`--docker-tls-ca-cert`, or `ca.pem` in the certificate directory) is the only certificate authority the daemon's certificate is checked against, as in the Docker CLI and Batect; the system trust store is no longer trusted as well. A daemon certificate a public certificate authority signed, used alongside an unrelated `ca.pem`, now fails verification.
