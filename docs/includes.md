@@ -76,8 +76,8 @@ first](#a-grant-goes-on-the-entry-that-reaches-the-file-first) rests on.
 
 ## Which fields a file may use
 
-A file's own **format** decides which fields and which rules apply to the
-containers it declares — not the project that includes it. A `.yml` is
+A file's own **format** decides which fields a container may use and which
+rules its file loads under — not the project that includes it. A `.yml` is
 Batect's format, so a container written in one may use no `ratect`-native
 field (`extends`, `ulimits`, `stop_signal`, `dns`/`dns_search`/`dns_options`,
 `network_mode`, `run_to_completion`,
@@ -86,6 +86,13 @@ gets Batect's own semantics: no expressions resolved in `image`, and exactly
 one of `image`/`build_directory`. That holds even when a `ratect.toml`
 project is what pulled the file in, and it holds for a YAML *root* file too
 — `ratect -f batect.yml` reads a Batect file, and reads it as one.
+
+What a container does at *run time* follows the binary instead, not the file:
+under `ratect`, a task's own container has no readiness gate, whichever file
+declares it — a `.yml` task container in a native project, or in `ratect -f
+batect.yml`, gets no health wait and runs no `setup_commands`, exactly as a
+TOML one. Under `ratect-compat` it has Batect's. See [The task's own
+container](dependency-readiness.md#the-tasks-own-container).
 
 To use a native field on a container, move that container into a `.toml`
 file. Incremental migration exists so a project needn't be converted in one

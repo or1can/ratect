@@ -397,7 +397,7 @@ exactly as it would if that command ran inside `db` itself.
 
 A dependency normally starts detached, waits for a health check (immediate if
 none is configured), then runs its `setup_commands` — see [Dependency
-Readiness](dependency-readiness.md#the-two-gates). `run_to_completion` replaces that whole
+Readiness](dependency-readiness.md#the-readiness-gate). `run_to_completion` replaces that whole
 gate with a simpler one: the dependency runs, and is ready once it exits with
 status 0 — a non-zero exit fails the task run the same way an unhealthy
 dependency or a failing setup command does. Kubernetes-style
@@ -443,7 +443,7 @@ running while it finishes.
 
 ## `external_health_check`: checking a container from outside it
 
-A [`health_check`](dependency-readiness.md#the-two-gates) runs *inside* the
+A [`health_check`](dependency-readiness.md#the-readiness-gate) runs *inside* the
 container it checks, so it needs a shell and a tool (`curl`, `wget`,
 `pg_isready`) to be present in that image. A distroless or `scratch` image has
 neither, and the usual workaround is to add tooling that exists for no reason
@@ -514,7 +514,9 @@ both tools the check uses reach it.)
   health check. A check that never
   passes fails it the same way too, naming the container you wrote:
   `Container 'api' did not become healthy: last status 000 from
-  http://api:8080/healthz after 30 attempt(s), wanted 200`.
+  http://api:8080/healthz after 30 attempt(s), wanted 200. The external check
+  ran in container 'ratect-health-check-api' — --no-cleanup-after-failure
+  keeps it for inspection`.
 - **Ratect runs the check from a companion container, which you don't see.**
   Declaring one generates a container named `ratect-health-check-<container>`
   running `curlimages/curl` (pinned by digest, not by tag — you did not write
@@ -779,7 +781,7 @@ container, and the third about how a task runs its own container.
 | --- | --- | --- |
 | A Git-included bundle declaring a **`type: git` include of its own** | Always allowed, matching Batect | Refused unless the bundle's own include entry sets [`allow_nested_git_includes`](#nested-git-includes) |
 | A **nested** Git include failing to clone | Reports `git`'s own error | Reports that it failed, with the transport detail behind `RUST_LOG=debug` — see [Nested Git includes](#nested-git-includes) |
-| A **task's own container**'s `health_check`/`setup_commands` | Run alongside the main command, matching Batect; a failure fails the task while the main command is still running, and not once it has exited 0 | Inert: no health wait, no setup commands, and the task's result is the main command's alone — see [Dependency Readiness](dependency-readiness.md#the-tasks-own-container) |
+| A **task's own container**'s `health_check`/`setup_commands` | Run alongside the main command, matching Batect; a failure fails the task while the main command is still running, and is forgiven once it has exited 0 — with one race, see [known limitations](task-lifecycle.md#known-limitations) | Inert: no health wait, no setup commands, and the task's result is the main command's alone — see [Dependency Readiness](dependency-readiness.md#the-tasks-own-container) |
 | An **expression in `image`** | Rejected when the file loads — Batect resolves nothing there | Resolved like any other expression — see [Expressions in `image`](#expressions-in-image) |
 | A container with **both** `image` and `build_directory` | Rejected when the file loads, matching Batect | Allowed — `image` wins, and this is the only way to override a `build_directory` inherited from an `extends` parent, since inheritance is per-field with no way to unset one |
 | A container with **neither** `image` nor `build_directory` | Rejected when the file loads | Allowed — a container used only as an `extends` base needs neither; the requirement is enforced when a task actually runs a container, so no `abstract` marker is needed |

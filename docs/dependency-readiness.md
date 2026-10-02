@@ -5,10 +5,11 @@ accepts connections some time after its process launches. This page is the one
 place for what "ready" means, how Ratect waits for it, and how several
 dependencies' waits combine into one task's start-up. The fields themselves
 (`dependencies`, `health_check`, `setup_commands`) are in the [`batect.yml`
-reference](ratect-compat-config-reference.md#dependency-readiness); they mean
-exactly the same thing in a `ratect.toml` (see [Field
+reference](ratect-compat-config-reference.md#dependency-readiness); a
+`ratect.toml` dependency reads them the same way (see [Field
 reference](ratect-config-reference.md#field-reference)), which is what the
-running example is written in.
+running example is written in. A task's *own* container is the one place the
+two binaries differ — see [The task's own container](#the-tasks-own-container).
 
 That example, throughout, is
 [`examples/full-stack`](https://github.com/or1can/ratect/tree/main/examples/full-stack)'s
@@ -37,10 +38,11 @@ The recording on the [homepage](index.md) is the same command in `fancy` mode.
 its health check can pass, not because anything is padded. The rest of this page
 is what the lines between `Starting db...` and `Starting app...` mean.
 
-## The two gates
+## The readiness gate
 
-Matching Batect, a dependency must pass two gates, in order, before anything
-that depends on it (another dependency, or the task's own container) starts:
+Matching Batect, a dependency must pass one readiness gate, in two steps in
+order, before anything that depends on it (another dependency, or the task's
+own container) starts:
 
 1. **It must report healthy.** If the container has a Docker health check — from
    its image's own `HEALTHCHECK`, from the `health_check` field, or both — Ratect
@@ -49,20 +51,20 @@ that depends on it (another dependency, or the task's own container) starts:
    output) or if the container exits first. A container with no health check at
    all is immediately considered healthy — for it, started *is* ready. In the
    transcript, this
-   gate is the gap between `Started db.` and `db has become healthy.`
+   step is the gap between `Started db.` and `db has become healthy.`
 
-   This gate is Docker's own health check, so it needs a shell and a check tool
+   This step is Docker's own health check, so it needs a shell and a check tool
    *inside* the image. If yours has neither — a distroless or `scratch` build —
    a `ratect.toml` container can be checked from outside instead, with
    [`external_health_check`](ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it),
-   which then replaces this gate, image `HEALTHCHECK` included.
+   which then replaces this step, image `HEALTHCHECK` included.
 2. **Its `setup_commands` must succeed.** Each runs inside the running container
    (via Docker's `exec` mechanism), one at a time in declared order, with the
    container's own `environment` and (under [User
    mapping](ratect-compat-config-reference.md#user-mapping)) the same user/group
    the container runs as. A command exiting non-zero fails the task, with its
    output in the error. In the transcript, `Running setup command psql -U
-   postgres -c "ANALYZE visits;" (1 of 1) in db...` is this gate, and `Starting
+   postgres -c "ANALYZE visits;" (1 of 1) in db...` is this step, and `Starting
    app...` doesn't appear until `db has completed all setup commands.`
 
 A `ratect.toml` setup command can run *somewhere else*:
@@ -70,12 +72,13 @@ A `ratect.toml` setup command can run *somewhere else*:
 (`ratect`-native only) names one of the declaring container's own dependencies
 to exec into instead, for the case where the tooling a setup step needs lives in
 a different image — seeding a database from a client container, say. When it
-runs is unchanged: it is still gate 2 of the container that declares it, so
+runs is unchanged: it is still the second step of the gate of the container
+that declares it, so
 nothing depending on that container starts until it has succeeded. The
 restriction to that container's own dependencies is what makes it safe, and is
 explained in that field's own section.
 
-Whichever gate fails, the task fails, and already-started containers are still
+Whichever step fails, the task fails, and already-started containers are still
 cleaned up as usual.
 
 A `ratect.toml` dependency can opt into a different readiness gate entirely:
@@ -94,7 +97,7 @@ A `ratect.toml` container can also be checked *from outside itself*:
 [`external_health_check`](ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it)
 (`ratect`-native only) makes an HTTP request or a bare TCP connection to the
 container over the project's own network, for an image with no shell and no
-check tooling to run gate 1 with — a distroless or `scratch` build. The two
+check tooling to run the first step with — a distroless or `scratch` build. The two
 are different concepts rather than two spellings of one: `health_check` *is*
 Docker's own `HEALTHCHECK`, owned by the daemon and re-run for the container's
 whole lifetime, while this is closer to a Kubernetes *readiness* check — asked
@@ -102,7 +105,7 @@ once, from outside, with no opinion about the container's health afterwards.
 (Ratect has no equivalent of a *liveness* check in either form.) It alone
 decides readiness: an image's own `HEALTHCHECK` still runs, but Ratect
 doesn't wait on it. It is
-config-level sugar over `run_to_completion` rather than a third kind of gate:
+config-level sugar over `run_to_completion` rather than a gate of its own:
 declaring one generates a companion container that loops the check and exits
 0 or non-zero, and everything that depended on the checked container depends
 on that companion too. None of that surfaces — the companion narrates nothing
@@ -113,7 +116,7 @@ described below is unchanged.
 ## How Docker reaches its verdict
 
 This is Docker's own behavior, not Ratect's, but it's what actually determines
-how long the first gate waits and when it fails, so it's worth spelling out:
+how long the first step waits and when it fails, so it's worth spelling out:
 
 - A freshly started container with a health check isn't unhealthy — it's in a
   third state, **`starting`**, until Docker reaches a first verdict. Docker runs
@@ -298,9 +301,10 @@ Which rules apply depends on the project's dialect: whether `ratect` or
   concurrently with its main command rather than gating anything on it —
   matching Batect, which runs every container through identical per-container
   steps, task container included. A failure there while the main command is
-  still running stops it and fails the task. Once that command has exited 0,
-  whatever the gate was still doing — a health wait, a setup command the
-  container's exit killed — isn't a failure. That, and the race it leaves
+  still running stops it and fails the task. Once that command has exited,
+  with any code, whatever the gate was still doing — a health wait, a setup
+  command the container's exit killed — is dropped, and after an exit 0 a
+  failure it already reported isn't one. That, and the race it leaves
   open, are in [known
   limitations](task-lifecycle.md#known-limitations); where Ratect differs from
   Batect on it is in [Differences from

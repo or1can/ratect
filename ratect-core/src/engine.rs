@@ -14,7 +14,9 @@
 
 //! The core execution logic — task lifecycle,
 //! prerequisites, dependency-cycle detection, sidecar/dependency container resolution
-//! (see [`docs/task-lifecycle.md`](https://github.com/or1can/ratect/blob/main/docs/task-lifecycle.md)), and once-per-session
+//! (see [`docs/task-lifecycle.md`](https://github.com/or1can/ratect/blob/main/docs/task-lifecycle.md),
+//! and [`docs/dependency-readiness.md`](https://github.com/or1can/ratect/blob/main/docs/dependency-readiness.md)
+//! for when a dependency counts as ready), and once-per-session
 //! dedup of image pulls/builds/task runs. `TaskEngine` is generic over
 //! `ContainerRuntime`. Worth knowing: opt-in settings (`existing_network`,
 //! `publish_ports`, etc.) are builder methods rather than `TaskEngine::new`
@@ -32,21 +34,18 @@
 //! threads through `start_dependency`'s own recursion unconditionally, so it
 //! reaches its target regardless of depth in the dependency graph. Under the
 //! Batect-compatible dialect the task's own container goes through the same
-//! readiness gate a dependency always has too (`run_task_container_readiness`) —
-//! health-check wait, then `setup_commands`, in order — but run *concurrently* with
-//! `ContainerRuntime::run_container`'s own attach-and-wait-for-exit (the engine's
-//! first concurrent-exec path), rather than gating anything on it, since nothing
-//! else in the graph depends on the task container's own readiness. A gate failure
-//! while the main command is still running cancels it, as Batect's does (ratect#260):
-//! the run is dropped exactly as an interrupt drops it, and the ordinary cleanup
-//! stops and removes the container. Once the main command has exited 0 the
-//! gate fails nothing — whatever it was still doing is dropped, or forgiven
-//! if it has already failed — a listed divergence from Batect (ratect#248,
-//! ratect#263).
-//! Under the native dialect it has no gate at all — running it
-//! *is* the task (decisions/0012) — which `task_container_readiness_gate`, derived
-//! once from the project's dialect, is the only switch for; its creation is still
-//! recorded and announced either way. `run_container` takes two
+//! readiness gate a dependency has (`run_task_container_readiness`), run
+//! *concurrently* with `ContainerRuntime::run_container`'s own
+//! attach-and-wait-for-exit (the engine's first concurrent-exec path) rather
+//! than gating anything on it. A gate failure while the main command is still
+//! running cancels it — the run is dropped exactly as an interrupt drops it, and
+//! the ordinary cleanup stops and removes the container — and the run's end ends
+//! the gate: whatever it was still doing is dropped, and after an exit 0 a
+//! failure it has already reported is forgiven. Under the native dialect it has
+//! no gate at all, which `task_container_readiness_gate`, derived once from the
+//! project's dialect, is the only switch for; its creation is still recorded and
+//! announced either way. Why each of those, and where the outcome differs from
+//! Batect's, is decisions/0012. `run_container` takes two
 //! `oneshot::Sender`s for this:
 //! `created` (the container's id, sent the moment `create_container` returns —
 //! *before* it's started, matching Batect's own `containersCreated` set, which is
@@ -60,10 +59,7 @@
 //! purely to order that removal after the gate; the cleanup flags then had to be
 //! interpreted identically in two modules, and keeping them in step by hand
 //! produced a distinct bug in each of three consecutive review rounds. Don't
-//! reintroduce a removal here. See [task
-//! lifecycle](https://github.com/or1can/ratect/blob/main/docs/task-lifecycle.md#known-limitations) for
-//! how the Batect-compatible gate races a fast main command, and where its
-//! outcome differs from Batect's.
+//! reintroduce a removal here.
 //! `resolve_volumes` (0.18.0) turns a container's `VolumeMount`s into the
 //! literal bind strings `docker.rs` expects — a `Local` mount's already fully
 //! resolved by `config.rs`, nothing left to do but reassemble the string; a
@@ -832,8 +828,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         }
     }
 
-    /// Runs one container's `setup_commands` in declared order — the second
-    /// of the two readiness gates (see docs/dependency-readiness.md), shared
+    /// Runs one container's `setup_commands` in declared order — the
+    /// readiness gate's second step (see docs/dependency-readiness.md), shared
     /// by [`Self::run_task_container_readiness`] and the dependency gate
     /// inside [`Self::ensure_container_ready`]. Those two functions stay
     /// separate on purpose (a dependency's gate also handles
@@ -1010,33 +1006,22 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     }
 
     /// The task's own container's readiness gate, run only under the
-    /// Batect-compatible dialect (see `task_container_readiness_gate`;
-    /// the native dialect has none — decisions/0012): waits for it to report
-    /// healthy, then runs its `setup_commands` in order — the same two
-    /// gates `ensure_container_ready` applies to a dependency, ported here
-    /// almost unchanged (this doesn't share that code directly since a
-    /// dependency's version also handles `customise`/cache-key/dedup
-    /// concerns that don't apply to the one, always-present task
-    /// container). Unlike a dependency, nothing in the graph depends on
-    /// *this* container's own readiness, so the caller runs this
-    /// concurrently with `run_container`'s own attach-and-wait-for-exit
-    /// rather than gating anything on it — matching
-    /// Batect, which generates the identical health-check-wait/
-    /// `setup_commands` steps for every container, task container
-    /// included, and runs them concurrently with that container's own
-    /// command (see docs/task-lifecycle.md's "Known limitations").
+    /// Batect-compatible dialect (see `task_container_readiness_gate`; the
+    /// native dialect has none): waits for it to report healthy, then runs
+    /// its `setup_commands` in order — the same gate `ensure_container_ready`
+    /// applies to a dependency, ported here almost unchanged (not shared
+    /// directly, since a dependency's version also handles
+    /// `customise`/cache-key/dedup concerns that don't apply to the one,
+    /// always-present task container). The caller runs this concurrently
+    /// with `run_container`'s own attach-and-wait-for-exit, cancels the
+    /// main command if this fails while it is still running, and drops or
+    /// forgives this once the main command has exited — see decisions/0012
+    /// for why.
     ///
     /// `container_id` must already be running: the caller waits for
     /// `run_container`'s own `started` signal before calling here, since
-    /// both gates need a running container (a health status only appears
+    /// both steps need a running container (a health status only appears
     /// once one exists, and `docker exec` refuses anything else).
-    ///
-    /// A failure here while the main command is still running cancels it,
-    /// as Batect's coroutine cancellation does: the caller abandons the run
-    /// rather than waiting for a command that may itself be waiting on this
-    /// gate's work (ratect#260). Once the main command has exited 0, the
-    /// caller drops or forgives whatever this reports (ratect#248,
-    /// ratect#263).
     async fn run_task_container_readiness(
         &self,
         container_id: &str,
@@ -1765,7 +1750,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // concurrently; a dependent container's own
             // `ensure_container_ready` call still waits on its dependencies
             // first (see that function) — matching Batect's own within-task
-            // container concurrency (see docs/task-lifecycle.md).
+            // container concurrency (see docs/dependency-readiness.md).
             // Kept for the same reason as the fan-out inside
             // `ensure_container_ready`: the task container's own `run_in`
             // setup commands (ratect#111) and `container:` network mode
@@ -1818,15 +1803,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             let term_var = self.term_environment_variable(interactive);
             let user_mapping = self.resolve_user_mapping(container_config).await?;
             // Under the Batect-compatible dialect, the task's own container
-            // goes through the same readiness gate as any dependency
-            // (health-check wait, then `setup_commands`, in order) —
-            // matching Batect, which runs every container through identical
-            // per-container steps; under the native dialect it has none
-            // (`task_container_readiness_gate`). Unlike
-            // a dependency, nothing else in the graph depends on the task
-            // container's own readiness, so this runs *concurrently* with
-            // its main command instead of gating anything — see
-            // `run_task_container_readiness`'s own doc comment.
+            // goes through the same readiness gate as any dependency, run
+            // *concurrently* with its main command instead of gating
+            // anything; under the native dialect it has none
+            // (`task_container_readiness_gate`). See
+            // `run_task_container_readiness` and decisions/0012.
             let command = run
                 .command
                 .as_deref()
@@ -1908,50 +1889,40 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             let mut run_future = std::pin::pin!(run_future);
             let mut readiness_future = std::pin::pin!(readiness_future);
             // Only a readiness *failure* short-circuits: it abandons the
-            // main command still running, as Batect's cancellation does,
-            // since that command may be waiting on what the gate would have
-            // done (ratect#260). Dropping `run_future` is the same cancel an
-            // interrupt makes, and the cleanup below stops and removes the
-            // container `readiness_future` has already recorded. A run that
-            // exits 0 first drops the gate instead (ratect#263), but only
-            // after polling it once more: `readiness_future` is where the
-            // container's id is recorded, so it must not be dropped unpolled
-            // (which is also why this isn't `tokio::try_join!`). A run that
-            // exits non-zero first still waits for the gate, as
-            // `tokio::join!` would. `biased` towards the run so a main
-            // command that has exited keeps its own exit code over a gate
-            // failing in the same poll.
+            // main command still running, since that command may be waiting
+            // on what the gate would have done. Dropping `run_future` is the
+            // same cancel an interrupt makes, and the cleanup below stops
+            // and removes the container `readiness_future` has already
+            // recorded. The run's end ends the gate, whatever the exit code:
+            // a run that finishes first drops the gate instead, but only
+            // after polling it once more, since `readiness_future` is where
+            // the container's id is recorded, so it must not be dropped
+            // unpolled (which is also why this isn't `tokio::try_join!`).
+            // `biased` towards the run so a main command that has exited
+            // keeps its own exit code over a gate failing in the same poll.
             //
             // A gate can also fail *because* the main command exited — the
-            // health wait sees the container die — while the run is still
-            // draining output and waiting on Docker's exit report. That
-            // command has finished, not stalled, so Docker is asked which it
-            // is before anything is cancelled, and an exited one is awaited
-            // for its exit code. The answer is exact when the health wait
-            // saw the container die (Docker marks it stopped before it emits
-            // `die`), but a setup command can fail on a process that has
-            // exited before Docker marks the container stopped — a setup
-            // command killed with a container whose main command exited 0
-            // (ratect#263) reported its 137 first on CI. So "running", or a
+            // health wait sees the container die, a setup command is killed
+            // with it — while the run is still draining output and waiting
+            // on Docker's exit report. So Docker is asked whether the
+            // container is still running before anything is cancelled: an
+            // exited one is awaited for its exit code, and "running", or a
             // failed inspect, waits up to `TASK_CONTAINER_EXIT_GRACE` for
-            // the run's own result before cancelling: an exit that is
-            // already happening arrives well within it, and a bounded wait
-            // can't become the hang a command still running would be.
+            // the run's own result first, since a setup command killed by
+            // the exit can report before Docker has marked the container
+            // stopped. The reasoning, and the race this leaves, are in
+            // decisions/0012.
             let (run_result, readiness_result) = tokio::select! {
                 biased;
-                run_result = &mut run_future => match run_result {
-                    // A main command that exited 0 has ended the gate's
-                    // question: whatever the gate is still doing — a setup
-                    // command the container's exit killed, a health wait —
-                    // is dropped rather than awaited (ratect#263). Polled
-                    // once first, so a container id sent but not yet
-                    // recorded is recorded for the cleanup below.
-                    Ok(()) => {
-                        let _ = futures::FutureExt::now_or_never(readiness_future.as_mut());
-                        (Ok(()), Ok(()))
-                    }
-                    Err(_) => (run_result, readiness_future.await),
-                },
+                run_result = &mut run_future => {
+                    // A main command that has exited has ended the gate's
+                    // question: whatever the gate is still doing is dropped
+                    // rather than awaited. Polled once first, so a container
+                    // id sent but not yet recorded is recorded for the
+                    // cleanup below.
+                    let _ = futures::FutureExt::now_or_never(readiness_future.as_mut());
+                    (run_result, Ok(()))
+                }
                 readiness_result = &mut readiness_future => match readiness_result {
                     Ok(()) => (run_future.await, Ok(())),
                     Err(error) => {
@@ -1980,21 +1951,14 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             };
             // Ordered, not merged: a nonzero exit code is the task's own
             // verdict and the more useful thing to report, so it wins over a
-            // readiness failure that happened alongside it. This is the
-            // precedence `run_container` used to apply internally, kept.
+            // readiness failure that happened alongside it.
             run_result?;
             // Reached with a gate failure only once the main command has
-            // exited 0, at most `TASK_CONTAINER_EXIT_GRACE` after the
-            // failure: one still running past that was cancelled above.
-            // Usually the container's exit is what ended the gate — the
-            // health wait saw it die, or a setup command was killed with it
-            // (137) or refused an exec — so it has no verdict left to give,
-            // and the task has succeeded (ratect#248, ratect#263, a listed
-            // divergence: Batect fails it). Decided by the run's own result
-            // rather than by the failure's cause, since a killed setup
-            // command's exit code says nothing about why it was killed. The
-            // cost: a setup command genuinely failing within the grace
-            // before a main command exits 0 is forgiven too.
+            // exited 0: Docker had already reported the container stopped
+            // when the gate failed, or the exit arrived within
+            // `TASK_CONTAINER_EXIT_GRACE` — one still running past that was
+            // cancelled above. Forgiven, judged by the run's outcome rather
+            // than the failure's cause — see decisions/0012.
             if let Err(error) = readiness_result {
                 tracing::debug!(
                     container = run.container.as_str(),
@@ -2430,7 +2394,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     }
 
     /// Ensures `name`'s container is started and *ready* (healthy, then every
-    /// one of its `setup_commands` succeeded) on `network`, memoized per this
+    /// one of its `setup_commands` succeeded — or, with `run_to_completion`,
+    /// exited 0) on `network`, memoized per this
     /// one task execution via `cells` — concurrent callers reaching the same
     /// node (a diamond in the dependency graph) share one `ReadyCell`, so the
     /// second awaits the first's in-flight work instead of starting it
@@ -2439,7 +2404,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// this and the memoization together are what let independent branches
     /// of one task's dependency graph run at the same time while a container
     /// with dependencies of its own still waits for them first (see
-    /// docs/task-lifecycle.md). No cycle guard here any more (pre-0.15.0's
+    /// docs/dependency-readiness.md). No cycle guard here any more (pre-0.15.0's
     /// `resolving`/`running` params): `graph` is already proven acyclic by
     /// `build_dependency_graph`, run once, synchronously, before this is
     /// ever called.
@@ -2657,7 +2622,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         return Ok(container_id);
                     }
 
-                    // Batect's readiness gate (see docs/task-lifecycle.md):
+                    // Batect's readiness gate (see docs/dependency-readiness.md):
                     // started isn't ready. The dependency must report
                     // healthy (immediate for a container with no health
                     // check at all), then every one of its setup commands

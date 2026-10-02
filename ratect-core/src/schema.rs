@@ -285,7 +285,10 @@ fn make_native(json: &mut serde_json::Value) {
                                 in a different image, such as seeding a database from a \
                                 client container. Must name one of the declaring container's \
                                 own dependencies, or the declaring container itself (which is \
-                                what omitting it means).",
+                                what omitting it means). Rejected when the named container \
+                                is a `run_to_completion` one: it has already exited by the \
+                                time it counts as ready, so there is nothing left to run a \
+                                command in.",
             }),
         );
     }
@@ -324,6 +327,25 @@ fn make_native(json: &mut serde_json::Value) {
                                 both — or neither — legal on one container.",
             }),
         );
+        // Corrects the shared description for the same reason the
+        // `SetupCommand` object's own is corrected above: it says each
+        // command runs inside the container that declares it, which `run_in`
+        // makes untrue here. Only the description is replaced, so the
+        // property's type and items stay the generated ones.
+        if let Some(setup_commands) = properties
+            .get_mut("setup_commands")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            setup_commands.insert(
+                "description".to_string(),
+                serde_json::json!(
+                    "Commands run after the container becomes healthy but before its \
+                     dependents start, in declared order — each inside this container, or \
+                     with `run_in` inside one of its dependencies. Plain strings, no \
+                     expression support."
+                ),
+            );
+        }
         // Add the native-only `run_to_completion` field — skipped from the
         // compat schema (`Container::run_to_completion`'s `schemars(skip)`,
         // since `ratect-compat` rejects it), same reasoning as `extends`

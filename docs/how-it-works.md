@@ -173,8 +173,8 @@ unit-tested with a fake implementation instead of a real Docker daemon.
   `run_container`, it hands the container's id back the moment Docker creates it,
   so cleanup removes a dependency whose start failed or was cut short by another
   dependency failing.
-- **`wait_for_container_healthy` / `exec_in_container`**: the two halves of the
-  [dependency readiness gate](dependency-readiness.md#the-two-gates). The first
+- **`wait_for_container_healthy` / `exec_in_container`**: the two steps of the
+  [dependency readiness gate](dependency-readiness.md#the-readiness-gate). The first
   blocks on Docker's own event stream, replayed from the beginning so a verdict
   that arrived before the stream opened still counts, and turns an *unhealthy*
   verdict into an error carrying the last health check's exit code and output. The

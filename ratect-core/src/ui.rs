@@ -188,8 +188,10 @@ pub enum TaskEvent {
     DependencyCompleted {
         container: String,
     },
-    /// One of a dependency's `setup_commands` is about to run. `index` is
-    /// 1-based, for rendering as "(n of total)".
+    /// One of a container's `setup_commands` is about to run — a
+    /// dependency's, or under the Batect-compatible dialect the task's own
+    /// container's (decisions/0012). `index` is 1-based, for rendering as
+    /// "(n of total)".
     ///
     /// `container` is always the container whose readiness gate this is —
     /// the one that *declared* the command. `run_in` (ratect#111) is the

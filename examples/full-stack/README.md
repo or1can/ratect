@@ -43,8 +43,10 @@ never serves anything.
 It used to have a second reason that no longer applies, which is worth
 knowing if you are reading older Ratect material: `app`'s check was once an
 in-container `health_check`, and a task's own container used to wait on
-that, so `npm ci` in `app` would have waited forever for a server it never
-starts. Under `ratect` nothing waits on a task's own container becoming
+that, so `npm ci` in `app` would have raced it: the command exits long
+before anything serves port 8080, and the check then failed the task for a
+container that had exited before becoming healthy. Under `ratect` nothing
+waits on a task's own container becoming
 ready, whichever check it declares, because running the container *is* the
 task — see [Dependency
 Readiness](../../docs/dependency-readiness.md#the-tasks-own-container).
