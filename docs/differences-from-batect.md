@@ -86,6 +86,11 @@ A config Batect rejects is rejected here too, but the report is Ratect's own:
   list when there is a cause, where Batect prints one message. A parse error's
   own reason is in that list, under `Failed to parse config file "<path>"`. The
   same holds for every fatal error, not only a config one.
+- **With several problems, the one reported isn't necessarily Batect's first.**
+  Every config check runs before `--override-image` is checked, a
+  `--config-vars-file` is read before the config file, a duplicate
+  `build_ssh` id is checked after a container's image source, and a volume's
+  fields are checked in a different order.
 
 ## CLI flags
 
