@@ -203,6 +203,10 @@ tables above:
   `Could not pull image X.` and the daemon's message, and a failed build's
   output under `Build output:` rather than `Output from Docker was:`. See
   [Load errors](#load-errors) for the cause chain.
+- **No pull lines for an image that's already local.** Under
+  `image_pull_policy: IfNotPresent`, an image that's already present prints no
+  `Pulling X...`/`Pulled X.` lines; Batect prints both even though nothing is
+  pulled. See [Task Lifecycle](task-lifecycle.md).
 
 ## Next steps
 
