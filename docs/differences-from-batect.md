@@ -32,7 +32,7 @@ reference](ratect-compat-config-reference.md) for the full list. The exceptions:
 | Field | Notes |
 |---|---|
 | `config_variables` | `description:` is recognized but inert — Ratect has no help/usage output to show one in. |
-| `include` | Ratect enforces that a Git include's `path` (and anything it transitively includes) stays within that repository's own clone; Batect has no equivalent containment check. In `ratect.toml` specifically, a Git-included bundle also can't declare further Git includes of its own unless `allow_nested_git_includes` is set — `ratect-compat` stays unrestricted, matching Batect. See [What a bundle may do](includes.md#what-a-bundle-may-do). |
+| `include` | Ratect enforces that a Git include's `path` (and anything it transitively includes) stays within that repository's own clone; Batect has no equivalent containment check. In `ratect.toml` specifically, a Git-included bundle also can't declare further Git includes of its own unless `allow_nested_git_includes` is set — `ratect-compat` stays unrestricted, matching Batect. See [What a bundle may do](includes.md#what-a-bundle-may-do). A Git include's clone is cached under `~/.ratect/incl`, keyed by a SHA-256 of the remote and ref with each length-prefixed, with a TOML sidecar — not Batect's `~/.batect/incl`, keyed by a hash of `git <remote> @<ref>`, which two different remote/ref pairs can share. Neither tool reuses or sweeps the other's clones. See [Git includes](ratect-compat-config-reference.md#git-includes). |
 | `forbid_telemetry` | Recognized, no effect — Ratect doesn't collect telemetry, so there's nothing to forbid. |
 
 ### Expressions
