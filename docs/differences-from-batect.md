@@ -121,7 +121,7 @@ list. The exceptions:
 Batect behavior not implemented in task execution, beyond what's covered by the field
 tables above:
 
-- **Cleanup on a termination signal (Ctrl+C, `SIGTERM`, `SIGHUP`)**: three deliberate
+- **Cleanup on a termination signal (Ctrl+C, `SIGTERM`, `SIGHUP`)**: four deliberate
   differences from Batect, which traps `SIGINT` only:
 
   - **Ratect also traps `SIGTERM` and `SIGHUP`**, down the same cleanup path — a task
@@ -144,6 +144,12 @@ tables above:
     list`/`clean`](ratect-cli.md#managing-resources) finds it (`ratect`-only;
     `ratect-compat` has no equivalent verb, so from it the sweep is `docker` itself,
     filtering the same labels).
+  - **The notice names the signal and the next step**: a warning such as
+    `Interrupted; cleaning up. Press Ctrl+C again to force-remove what's left,
+    and Ctrl+C after that to stop cleaning up.`, then `Error: Interrupted` once
+    cleanup ends. Batect prints `Task cancelled: Interrupt received during
+    execution.` and that it is waiting for outstanding operations. The warning
+    goes through `RUST_LOG` like any other.
 
   `SIGKILL` remains untrappable by either tool, same underlying OS limitation — the
   same labels are what a post-hoc `ratect resources clean` needs to find what it left.
