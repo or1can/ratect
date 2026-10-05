@@ -71,6 +71,16 @@ Every `run` field is supported field-for-field — see
 exception, `container` naming an undeclared container, is under `dependencies`
 in [Container fields](#container-fields) above.
 
+### Load errors
+
+A config Batect rejects is rejected here too, but the report is Ratect's own:
+
+- **The wording** is Ratect's, not Batect's — `Configuration file "batect.yml"
+  not found.` rather than `The file '<absolute path>' does not exist.`, and
+  likewise for malformed volumes, ports, devices and includes, expressions,
+  durations, duplicate `build_ssh` ids, an undeclared `--config-var` and a name
+  defined in more than one file.
+
 ## CLI flags
 
 Every other flag from Batect's own [CLI
