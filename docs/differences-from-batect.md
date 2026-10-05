@@ -82,6 +82,10 @@ A config Batect rejects is rejected here too, but the report is Ratect's own:
   defined in more than one file.
 - **A check made once the file has parsed names what it's about** — the
   container or task — rather than giving Batect's YAML path, line and column.
+- **The full cause chain is printed**: `Error: <message>`, then a `Caused by:`
+  list when there is a cause, where Batect prints one message. A parse error's
+  own reason is in that list, under `Failed to parse config file "<path>"`. The
+  same holds for every fatal error, not only a config one.
 
 ## CLI flags
 
