@@ -80,6 +80,8 @@ A config Batect rejects is rejected here too, but the report is Ratect's own:
   likewise for malformed volumes, ports, devices and includes, expressions,
   durations, duplicate `build_ssh` ids, an undeclared `--config-var` and a name
   defined in more than one file.
+- **A check made once the file has parsed names what it's about** — the
+  container or task — rather than giving Batect's YAML path, line and column.
 
 ## CLI flags
 
