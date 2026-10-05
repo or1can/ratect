@@ -1221,7 +1221,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     if should_pull {
                         // Milestones post only when a pull actually happens —
                         // a skip (image already local under `IfNotPresent`)
-                        // stays silent, matching Batect.
+                        // stays silent. Batect posts both even then; see
+                        // docs/differences-from-batect.md.
                         self.event_sink.post(TaskEvent::ImagePullStarting {
                             image: image.to_string(),
                         });
