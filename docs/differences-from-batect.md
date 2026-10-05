@@ -195,6 +195,14 @@ tables above:
   break) the same way it already does on `\n`, so a real progress bar
   prints one interleaved line per redraw tick instead of staying silent —
   spammier, but never silent-then-dumped.
+- **Failure messages are Ratect's own.** A task fails at the same step as under
+  Batect — an image that won't pull or build, a task network that can't be
+  created, a dependency that doesn't become healthy, a failing setup command, a
+  dependency cycle — but Batect's headline and wording aren't reproduced:
+  `Failed to pull image X` and its `Caused by:` list, for example, rather than
+  `Could not pull image X.` and the daemon's message, and a failed build's
+  output under `Build output:` rather than `Output from Docker was:`. See
+  [Load errors](#load-errors) for the cause chain.
 
 ## Next steps
 
