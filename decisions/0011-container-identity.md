@@ -1,7 +1,7 @@
 # 0011 — Container identity: state the intent, add to the image
 
-**Status:** Accepted — planned (ratect 0.12.0). Scope is tracked in the
-[ratect 0.12.0 milestone](https://github.com/or1can/ratect/milestone/12),
+**Status:** Accepted — planned (ratect 0.13.0). Scope is tracked in the
+[ratect 0.13.0 milestone](https://github.com/or1can/ratect/milestone/12),
 as the spec [#233](https://github.com/or1can/ratect/issues/233) and its
 sub-issues; the design round was
 [#227](https://github.com/or1can/ratect/issues/227). This decision covers
