@@ -32,7 +32,7 @@ reference](ratect-compat-config-reference.md) for the full list. The exceptions:
 | Field | Notes |
 |---|---|
 | `config_variables` | `description:` is recognized but inert — Ratect has no help/usage output to show one in. |
-| `include` | Ratect enforces that a Git include's `path` (and anything it transitively includes) stays within that repository's own clone; Batect has no equivalent containment check. In `ratect.toml` specifically, a Git-included bundle also can't declare further Git includes of its own unless `allow_nested_git_includes` is set — `ratect-compat` stays unrestricted, matching Batect. See [What a bundle may do](includes.md#what-a-bundle-may-do). |
+| `include` | Ratect enforces that a Git include's `path` (and anything it transitively includes) stays within that repository's own clone; Batect has no equivalent containment check. In `ratect.toml` specifically, a Git-included bundle also can't declare further Git includes of its own unless `allow_nested_git_includes` is set — `ratect-compat` stays unrestricted, matching Batect. See [What a bundle may do](includes.md#what-a-bundle-may-do). A Git include's clone is cached under `~/.ratect/incl`, keyed by a SHA-256 of the remote and ref with each length-prefixed, with a TOML sidecar — not Batect's `~/.batect/incl`, keyed by a hash of `git <remote> @<ref>`, which two different remote/ref pairs can share. Neither tool reuses or sweeps the other's clones. See [Git includes](ratect-compat-config-reference.md#git-includes). |
 | `forbid_telemetry` | Recognized, no effect — Ratect doesn't collect telemetry, so there's nothing to forbid. |
 
 ### Expressions
@@ -50,7 +50,7 @@ reference](ratect-compat-config-reference.md#container) for the full list. The e
 | Field | Notes |
 |---|---|
 | `image` | An [expression](#expressions)-looking value (`$VAR`) is rejected when the file loads rather than resolved or used as a literal — Batect resolves nothing here either, but silently treats it as a literal image name that then fails at pull time instead. `ratect.toml` does resolve them; see [config reference](ratect-compat-config-reference.md#container). |
-| `volumes` | A `cache` mount's `name` must use Docker's own volume-name character set; Batect doesn't validate it at all, so an unvalidated name could bind-mount an arbitrary host directory under `--cache-type=directory`. Breaking change for `--cache-type=directory` only — `--cache-type=volume` already enforced this via Docker itself. See [Cache volumes](ratect-compat-config-reference.md#cache-volumes). |
+| `volumes` | A `cache` mount's `name` must use Docker's own volume-name character set; Batect doesn't validate it at all, so an unvalidated name could bind-mount an arbitrary host directory under `--cache-type=directory`. Breaking change for `--cache-type=directory` only — `--cache-type=volume` already enforced this via Docker itself. See [Cache volumes](ratect-compat-config-reference.md#cache-volumes). A newly generated `.batect/caches/key` holds a UUID rather than Batect's six-character id, under a comment that doesn't name Batect; each tool reads the other's key file, so the volume names stay the same. |
 | `dependencies` | A name that isn't a declared container is rejected when the file loads — and so is one in a task's `dependencies` or `run.container`. Batect reports the same error in the same words, but only once a task that reaches the reference runs, so a stale reference in a container or task nothing runs never stops Batect and stops every `ratect-compat` command. See [config reference](ratect-compat-config-reference.md#container). |
 | `capabilities_to_add` / `capabilities_to_drop` | Also accepts `BPF`/`CHECKPOINT_RESTORE`/`PERFMON` — Docker capabilities added after Batect's last release, so its own `Capability` enum predates them. A superset: every config Batect itself accepts here still parses identically. |
 | `health_check` / `setup_commands` | A task's own container's readiness gate doesn't fail the task once its main command has exited 0, whatever the failure — typically the container stopped before reporting a health status, before a setup command could `exec` into it, or while one was running and was killed with it; Batect's does. A failure of that gate while the main command is still running fails the task as Batect's does, but cancels the main command up to two seconds later, and is forgiven if the main command exits 0 within that time. That, and the race it leaves open, are in [task lifecycle](task-lifecycle.md#known-limitations). Under `ratect` a task's own container has no readiness gate at all — see [Dependency Readiness](dependency-readiness.md#the-tasks-own-container). |
@@ -71,6 +71,27 @@ Every `run` field is supported field-for-field — see
 exception, `container` naming an undeclared container, is under `dependencies`
 in [Container fields](#container-fields) above.
 
+### Load errors
+
+A config Batect rejects is rejected here too, but the report is Ratect's own:
+
+- **The wording** is Ratect's, not Batect's — `Configuration file "batect.yml"
+  not found.` rather than `The file '<absolute path>' does not exist.`, and
+  likewise for malformed volumes, ports, devices and includes, expressions,
+  durations, duplicate `build_ssh` ids, an undeclared `--config-var` and a name
+  defined in more than one file.
+- **A check made once the file has parsed names what it's about** — the
+  container or task — rather than giving Batect's YAML path, line and column.
+- **The full cause chain is printed**: `Error: <message>`, then a `Caused by:`
+  list when there is a cause, where Batect prints one message. A parse error's
+  own reason is in that list, under `Failed to parse config file "<path>"`. The
+  same holds for every fatal error, not only a config one.
+- **With several problems, the one reported isn't necessarily Batect's first.**
+  Every config check runs before `--override-image` is checked, a
+  `--config-vars-file` is read before the config file, a duplicate
+  `build_ssh` id is checked after a container's image source, and a volume's
+  fields are checked in a different order.
+
 ## CLI flags
 
 Every other flag from Batect's own [CLI
@@ -81,8 +102,10 @@ list. The exceptions:
 | Flag | Notes |
 |---|---|
 | `--version` | Also gets a `-V` short form Batect doesn't have (a `clap` default). |
-| `--output` / `-o` | An explicit `-o fancy` on a non-interactive console fails up front with a clear error; Batect accepts it and crashes with an unhandled exception on the first repaint. `all`'s status lines also drop Batect's inner `Batect \| ` prefix — the outer prefix already says whose line it is. See [Output Styles](output-styles.md). |
-| `--no-color` | A superset, not a gap: Batect rejects `-o fancy --no-color` at parse time (its console couples color and cursor movement under one flag); Ratect's keeps them independent, so that combination renders colorless fancy instead. |
+| `--help` / `-h` | The layout and text are `clap`'s rather than Batect's, including `<CONFIG_FILE>`-style value placeholders and `[default: …]` for a fixed default. A description never shows an environment variable's current value — Batect's say, for example, whether `DOCKER_HOST` is currently set, and to what. See [Options](ratect-compat-cli.md#options). |
+| `TASK_NAME` (positional) | A misspelled task name's `Did you mean` suggestions include every task tied on edit distance; Batect keeps only one name per distance. See [Exit codes and error reporting](ratect-compat-cli.md#exit-codes-and-error-reporting). |
+| `--output` / `-o` | An explicit `-o fancy` on a non-interactive console fails up front with a clear error; Batect accepts it and crashes with an unhandled exception on the first repaint. `all`'s status lines also drop Batect's inner `Batect \| ` prefix — the outer prefix already says whose line it is. `fancy` clips a line to the terminal's width in display columns, so a wide character counts as two; Batect counts UTF-16 units, so a line holding wide characters is clipped earlier here. See [Output Styles](output-styles.md). |
+| `--no-color` | A superset, not a gap: Batect rejects `-o fancy --no-color` at parse time (its console couples color and cursor movement under one flag); Ratect's keeps them independent, so that combination renders colorless fancy instead. Ratect also honours two environment variables Batect ignores: `NO_COLOR` has `--no-color`'s full effect, including making `simple` the auto-selected style, and `CLICOLOR_FORCE` colours output to a non-terminal. See [Colour](output-styles.md#colour). |
 | `--no-cleanup`, `--no-cleanup-after-failure`, `--no-cleanup-after-success` | Batect's own `DontCleanup` still stops a started container, just skips removing it; Ratect leaves it genuinely running (not just present-but-stopped) for investigation. |
 | `--docker-cert-path`, `--docker-tls`, `--docker-tls-verify`, `--docker-tls-ca-cert`, `--docker-tls-cert`, `--docker-tls-key` | Batect's bare `--docker-tls` (without `-verify`) disables *all* server certificate verification, not just hostname matching. Ratect doesn't support that mode at all — `--docker-tls` and `--docker-tls-verify` behave identically here, the daemon's certificate always fully verified. See [TLS with a private certificate authority](connecting-to-docker.md#tls-with-a-private-certificate-authority) for the supported alternative (your own CA). A superset in one respect: Batect requires all of `ca.pem`, `cert.pem` and `key.pem`, and Ratect none of them — without a CA the system trust store is used, and without a `cert.pem`/`key.pem` pair no client certificate is presented. A CA that is given is the only one trusted. See [TLS through the options](connecting-to-docker.md#tls-through-the-options). |
 | `--docker-context` | A context's `SkipTLSVerify` is not honoured: the daemon's certificate is always fully verified, as with `--docker-tls`. Batect honours it, skipping verification. See [Which daemon is used](connecting-to-docker.md#which-daemon-is-used). |
@@ -90,7 +113,7 @@ list. The exceptions:
 | `--docker-host`, `--docker-context` | An empty `DOCKER_HOST` or `DOCKER_CONTEXT` counts as unset, as in the Docker CLI. Batect takes an empty value as set: an empty `DOCKER_HOST` still rules out every context and becomes the host, and an empty `DOCKER_CONTEXT` names a context called `""`. See [Which daemon is used](connecting-to-docker.md#which-daemon-is-used). |
 | `--cache-type` | Unlike Batect, not forced to `directory` for Windows containers — Ratect has no Windows support to special-case. |
 | `--max-parallelism` | Batect's flag caps *every* setup/cleanup step via a step-scheduling model Ratect doesn't have. Ratect's caps a narrower set — image pulls/builds, a dependency's create+start, and setup commands — the resource-intensive operations; health-check waits and cleanup teardown are deliberately excluded, and the task's own container's run is never gated, matching Batect's own exemption for it. |
-| `--log-file` | Batect's own default (no `--log-file`) is a silent `NullLogSink`, nothing anywhere; Ratect always logs to stderr regardless, so `--log-file` here tees into a file *in addition to* stderr, not instead of it. |
+| `--log-file` | Batect's own default (no `--log-file`) is a silent `NullLogSink`, nothing anywhere; Ratect always logs to stderr regardless, so `--log-file` here tees into a file *in addition to* stderr, not instead of it. The records are Ratect's own rather than Batect's: the Git include cache sweep, for example, logs only what goes wrong, in its own words, and none of Batect's `No repositories ready for clean up.`, `Deleting repository as it has not been used in over 30 days.` or `Repository deletion completed.` records. |
 | `--no-update-notification`, `--upgrade`, `--no-wrapper-cache-cleanup` | Recognized, no effect — permanently inapplicable, since Ratect is a single native binary with no self-updating wrapper script to disable notifications for, clean caches for, or upgrade. Recognized rather than rejected so an existing Batect invocation carrying one doesn't hard-fail outright. See [CLI reference](ratect-compat-cli.md#recognized-no-effect). |
 
 ## Runtime behavior gaps
@@ -98,7 +121,7 @@ list. The exceptions:
 Batect behavior not implemented in task execution, beyond what's covered by the field
 tables above:
 
-- **Cleanup on a termination signal (Ctrl+C, `SIGTERM`, `SIGHUP`)**: three deliberate
+- **Cleanup on a termination signal (Ctrl+C, `SIGTERM`, `SIGHUP`)**: four deliberate
   differences from Batect, which traps `SIGINT` only:
 
   - **Ratect also traps `SIGTERM` and `SIGHUP`**, down the same cleanup path — a task
@@ -121,6 +144,12 @@ tables above:
     list`/`clean`](ratect-cli.md#managing-resources) finds it (`ratect`-only;
     `ratect-compat` has no equivalent verb, so from it the sweep is `docker` itself,
     filtering the same labels).
+  - **The notice names the signal and the next step**: a warning such as
+    `Interrupted; cleaning up. Press Ctrl+C again to force-remove what's left,
+    and Ctrl+C after that to stop cleaning up.`, then `Error: Interrupted` once
+    cleanup ends. Batect prints `Task cancelled: Interrupt received during
+    execution.` and that it is waiting for outstanding operations. The warning
+    goes through `RUST_LOG` like any other.
 
   `SIGKILL` remains untrappable by either tool, same underlying OS limitation — the
   same labels are what a post-hoc `ratect resources clean` needs to find what it left.
@@ -166,6 +195,18 @@ tables above:
   break) the same way it already does on `\n`, so a real progress bar
   prints one interleaved line per redraw tick instead of staying silent —
   spammier, but never silent-then-dumped.
+- **Failure messages are Ratect's own.** A task fails at the same step as under
+  Batect — an image that won't pull or build, a task network that can't be
+  created, a dependency that doesn't become healthy, a failing setup command, a
+  dependency cycle — but Batect's headline and wording aren't reproduced:
+  `Failed to pull image X` and its `Caused by:` list, for example, rather than
+  `Could not pull image X.` and the daemon's message, and a failed build's
+  output under `Build output:` rather than `Output from Docker was:`. See
+  [Load errors](#load-errors) for the cause chain.
+- **No pull lines for an image that's already local.** Under
+  `image_pull_policy: IfNotPresent`, an image that's already present prints no
+  `Pulling X...`/`Pulled X.` lines; Batect prints both even though nothing is
+  pulled. See [Task Lifecycle](task-lifecycle.md).
 
 ## Next steps
 
