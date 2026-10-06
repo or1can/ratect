@@ -2505,7 +2505,8 @@ pub struct TaskRun {
     /// Overrides the container's own `command` for this task's run
     /// specifically — see [`Container::command`]. If neither this nor the
     /// container's own `command` is set, the image's own default `CMD`
-    /// runs instead.
+    /// runs instead — unless `-- ADDITIONAL_ARGS` are given, which replace
+    /// it.
     pub command: Option<String>,
     /// Environment variables for this task's run specifically, merged over
     /// the container's own `environment` — see `Container::environment`.

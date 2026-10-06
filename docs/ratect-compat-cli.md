@@ -167,9 +167,11 @@ command string and re-parsed), so they're safe even if they contain characters t
 would be shell metacharacters elsewhere, like `;`, `&&`, or backticks — Ratect never
 passes `command`/`ADDITIONAL_ARGS` through a shell at all.
 
-If the task's container has no `command` at all, `ADDITIONAL_ARGS` (when given) are
-passed directly as the container's entrypoint arguments instead, matching plain
-`docker run <image> <args>`.
+If neither the task's `run` nor its container has a `command`, `ADDITIONAL_ARGS`
+(when given) **replace** the image's default `CMD`, as plain `docker run <image>
+<args>` does; the image's `ENTRYPOINT` is kept. So for an image built with
+`ENTRYPOINT ["server"]` and `CMD ["--port", "80"]`, `ratect-compat <task> --
+--debug` runs `server --debug`, not `server --port 80 --debug`.
 
 ## Exit codes and error reporting
 

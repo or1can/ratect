@@ -227,7 +227,8 @@ pub enum TaskEvent {
     },
     /// The task's own container is about to run. `command` is the resolved
     /// command (`run.command` falling back to the container's own), `None`
-    /// when the image's default `CMD` runs instead.
+    /// when no command is configured (the image's default `CMD`, or
+    /// additional args replacing it, runs instead).
     RunningTaskContainer {
         container: String,
         command: Option<String>,

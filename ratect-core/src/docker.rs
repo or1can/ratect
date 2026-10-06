@@ -272,9 +272,9 @@ fn tokenize_command_line(input: &str) -> Result<Vec<String>> {
 /// positional-parameter trick). See `docs/differences-from-batect.md` for
 /// what this means for `$VAR`/glob/shell-operator characters in `command`.
 ///
-/// When `command` is unset, non-empty `additional_args` are passed directly
-/// as argv, letting the image's own entrypoint receive them (matching plain
-/// `docker run <image> <args>`).
+/// When `command` is unset, non-empty `additional_args` replace the image's
+/// default `CMD`, as `docker run <image> <args>` does (the image's own
+/// entrypoint receives them); Batect refuses them with an error instead.
 fn build_cmd(command: Option<&str>, additional_args: &[String]) -> Result<Option<Vec<String>>> {
     match command {
         Some(c) => {

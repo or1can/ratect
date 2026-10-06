@@ -255,8 +255,8 @@ pub struct SharedContainerSpec {
     /// dependency's `customise` has no equivalent override (matching
     /// Batect's own `TaskContainerCustomisation`), so a dependency's is
     /// always its container's own value, verbatim. `None` runs the image's
-    /// own default `CMD` instead (plus `additional_args`, when the task's
-    /// own container has any).
+    /// own default `CMD` instead — unless the task's own container has
+    /// `additional_args`, which then replace that `CMD` (`build_cmd`).
     pub command: Option<String>,
     /// Already-resolved bind-mount strings (`resolve_volumes`) — `tmpfs`
     /// mounts are carried separately, on `options.tmpfs`.
@@ -318,10 +318,11 @@ pub struct ContainerSpec {
     pub interactive: bool,
     /// Appended as literal argv entries after `shared.command`'s own
     /// tokenized argv — matching Batect's own `ADDITIONAL_ARGS` mechanism
-    /// exactly, never re-parsed as shell syntax regardless of what
-    /// characters they contain. If `shared.command` is `None`, a non-empty
-    /// `additional_args` is passed directly as the container's argv,
-    /// letting the image's own entrypoint receive them. Always empty for a
+    /// exactly in that case, never re-parsed as shell syntax regardless of
+    /// what characters they contain. If `shared.command` is `None`, a
+    /// non-empty `additional_args` replaces the image's default `CMD` (its
+    /// `ENTRYPOINT` is kept, so receives them), where Batect refuses them
+    /// with an error. Always empty for a
     /// dependency — only the top-level requested task's own container can
     /// receive `-- ADDITIONAL_ARGS`.
     pub additional_args: Vec<String>,

@@ -37,7 +37,7 @@ group headings there, so the order alone carries them.
 
 | Command | What it does |
 | --- | --- |
-| `ratect run <task> [-- ARGS...]` | Runs a task. Anything after `--` is appended to the task command's own arguments. |
+| `ratect run <task> [-- ARGS...]` | Runs a task. Anything after `--` is appended to the task command's own arguments, or replaces the image's default `CMD` when the task has no command. |
 | `ratect tasks list` | Lists the tasks this project defines. |
 
 ### Managing resources

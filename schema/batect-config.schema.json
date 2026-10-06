@@ -764,7 +764,7 @@
       "additionalProperties": false,
       "properties": {
         "command": {
-          "description": "Overrides the container's own `command` for this task's run specifically — see `Container::command`. If neither this nor the container's own `command` is set, the image's own default `CMD` runs instead.",
+          "description": "Overrides the container's own `command` for this task's run specifically — see `Container::command`. If neither this nor the container's own `command` is set, the image's own default `CMD` runs instead — unless `-- ADDITIONAL_ARGS` are given, which replace it.",
           "type": [
             "string",
             "null"
