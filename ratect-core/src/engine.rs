@@ -1998,8 +1998,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // indistinguishable to the user, and completing is the more useful
         // reading of a tie.
         //
-        // The residual race is Batect's too: a container created but not yet
-        // recorded is dropped before cleanup can see it, and survives. For a
+        // The residual race is Ratect's own: a container created but not yet
+        // recorded is dropped before cleanup can see it, and survives.
+        // Batect's `CreateContainerStepRunner` always posts the created
+        // event, so its cleanup sees every container. For a
         // dependency that is only a create request already with the daemon
         // when the run is dropped — its id is recorded the moment the create
         // call returns (`created_dependencies`). The task's own container
