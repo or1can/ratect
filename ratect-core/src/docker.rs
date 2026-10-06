@@ -1725,7 +1725,9 @@ fn docker_buildkit_env_value(
 /// BuildKit) is used, which is BuildKit on any modern daemon. A missing
 /// header (a daemon old enough to predate it) falls back to the classic
 /// builder. A `DOCKER_BUILDKIT` value that parses as neither is a hard error
-/// naming the value, matching Batect, rather than a silent guess.
+/// naming the value rather than a silent guess — raised when a build first
+/// needs the builder, not on every command as in Batect and the docker CLI
+/// (see `docs/differences-from-batect.md`'s `--enable-buildkit` row).
 ///
 /// Pure (both inputs injected) so the whole decision table is
 /// unit-testable; [`DockerClient`] feeds it the real environment variable
