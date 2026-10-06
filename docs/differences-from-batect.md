@@ -249,6 +249,11 @@ tables above:
   unhealthy verdict and Ratect looking up that check's exit code and output,
   the error gives the verdict alone. Batect reports the failed lookup instead,
   or crashes.
+- **A startup failure drops the rest of startup at once.** When one of a
+  task's containers can't be started — its image won't pull or build, or it
+  doesn't become ready — whatever else was starting alongside it is dropped
+  there and then, and cleanup begins. Batect cancels that work and waits for it
+  to wind down first.
 - **No pull lines for an image that's already local.** Under
   `image_pull_policy: IfNotPresent`, an image that's already present prints no
   `Pulling X...`/`Pulled X.` lines; Batect prints both even though nothing is
