@@ -16,19 +16,25 @@
 //! `StartupProgressDisplay`/`CleanupProgressDisplay`: a live status block
 //! with one line per container in the task's dependency graph, repainted in
 //! place via cursor movement (no spinner — the "animation" is purely
-//! rewriting changed lines, exactly like Batect), then *frozen* (after a
+//! rewriting lines in place, as in Batect), then *frozen* (after a
 //! separating blank line) the moment the task's own container starts, so
 //! the container's raw output streams below it untouched. Cleanup gets a
 //! single live countdown line after the task exits, cleared before the
 //! final summary line.
 //!
-//! Differences from Batect's implementation, both deliberate:
+//! Differences from Batect's implementation, all deliberate:
 //! - Batect repaints only lines that changed (a diff against the previous
 //!   frame); Ratect rewrites the whole block each time — between two
 //!   flushes of one atomic write, so there's no visible flicker, and every
 //!   repaint re-clips against the *current* terminal width for free.
 //! - Colorless fancy works (`--no-color` suppresses bold/color but not
 //!   cursor movement) — see [`Console`]'s independent-axes design.
+//! - After the terminal's width changes, a fresh block is painted below the
+//!   old one instead of moving the cursor back up over it: the terminal has
+//!   re-wrapped the old lines by then, so Batect's cursor-up count lands in
+//!   the wrong place (ratect#73).
+//! - A reported width of 0 counts as unknown, so lines print unclipped;
+//!   Batect clips every line to nothing.
 
 use super::{Color, ColorMode, Console, EventSink, TaskContainerInfo, TaskEvent};
 use std::collections::BTreeSet;
