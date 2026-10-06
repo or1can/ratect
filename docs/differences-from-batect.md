@@ -244,6 +244,11 @@ tables above:
   and `all` reports a failed setup command or network check, two failures
   Batect's `all` doesn't print at all. A setup command's output is trimmed, so
   output that is only whitespace counts as none.
+- **An unhealthy dependency's error can lack the last health check's
+  details.** If the container, or the daemon, goes away between Docker's
+  unhealthy verdict and Ratect looking up that check's exit code and output,
+  the error gives the verdict alone. Batect reports the failed lookup instead,
+  or crashes.
 - **No pull lines for an image that's already local.** Under
   `image_pull_policy: IfNotPresent`, an image that's already present prints no
   `Pulling X...`/`Pulled X.` lines; Batect prints both even though nothing is
