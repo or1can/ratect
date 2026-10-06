@@ -22,10 +22,23 @@
 //! means no container gets a TTY or stdin and every container gets
 //! `TERM=dumb`, matching Batect.
 //!
-//! One simplification against Batect: its own status lines carry a second
-//! inner `Batect | ` prefix (`build | Batect | Running build...`); Ratect
-//! drops that inner prefix — the outer one already says whose line it is,
-//! and Ratect's milestone wording is unambiguous about being Ratect's own.
+//! Differences from Batect's implementation, all deliberate:
+//! - Batect's own status lines carry a second inner `Batect | ` prefix
+//!   (`build | Batect | Running build...`); Ratect drops that inner prefix —
+//!   the outer one already says whose line it is, and Ratect's milestone
+//!   wording is unambiguous about being Ratect's own.
+//! - A container's output is split into lines on a lone `\r` as well as on
+//!   `\n`, so a progress redraw prints rather than piling up — see
+//!   [`LineBuffer`].
+//! - A container's last line is printed even without a trailing newline;
+//!   Batect loses it.
+//! - A failure is an unprefixed `Error: …` line on stderr, as in every
+//!   style, where Batect prints `<task> ! `/`<container> ! ` lines on
+//!   stdout; and a failed setup command or network check is reported, where
+//!   Batect's `all` prints nothing for either.
+//!
+//! The prefix colours also differ — see `CONTAINER_COLORS` — but that
+//! choice isn't settled yet.
 
 use super::{Color, ColorMode, Console, ContainerIoStreaming, EventSink, OnceFlag, TaskEvent};
 use std::collections::HashMap;
@@ -34,7 +47,9 @@ use unicode_width::UnicodeWidthStr;
 
 /// The prefix colors assigned to containers, round-robin in (sorted) name
 /// order — deliberately excluding white (task-level lines) and red
-/// (errors), matching Batect.
+/// (errors). Those two exclusions match Batect; the rest doesn't: Batect
+/// also cycles black, and assigns by the containers' order in its set
+/// rather than by name.
 const CONTAINER_COLORS: [Color; 5] = [
     Color::Blue,
     Color::Cyan,
