@@ -357,9 +357,11 @@ impl EventSink for InterleavedEventLogger {
 /// ends. Deliberately **not** a port of Batect's own
 /// `InterleavedContainerOutputSink`, which splits on `\n` alone: a
 /// carriage-return progress redraw (pip/curl/apt-style) would otherwise
-/// produce no output until the stream ends, then dump one giant
-/// concatenated line — see `docs/differences-from-batect.md`'s own entry
-/// for this. `docker.rs` drives one of these per streamed container.
+/// produce no output until the next `\n`, then dump one giant concatenated
+/// line. Nor does Batect's sink emit an unterminated tail: only its `close`
+/// does, and nothing in production closes it, so that last line is lost —
+/// see `docs/differences-from-batect.md`'s own entries for both. `docker.rs`
+/// drives one of these per streamed container.
 pub struct LineBuffer {
     pending: Vec<u8>,
     /// Set on seeing a `\r` whose successor isn't known yet — resolved by
