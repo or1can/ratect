@@ -33,12 +33,19 @@
 //! orphaned. Batect has no *shared* cache — [`CacheStore`]'s scope handling
 //! is `ratect`-only.
 //!
-//! One deliberate divergence: a freshly generated [`project_cache_key`] is a
-//! full `uuid::Uuid::new_v4()`, not Batect's 6-character `a-z0-9` id, whose
-//! alphabet is meaningfully more collision-prone across many projects on one
-//! machine. An existing Batect-written key file is still read and reused
-//! byte-for-byte, tolerant of its `#`-comment header — nothing depends on
-//! matching the *generation* format, only on the file's path and layout.
+//! Deliberate divergences:
+//!
+//! - A freshly generated [`project_cache_key`] is a full
+//!   `uuid::Uuid::new_v4()`, not Batect's 6-character `a-z0-9` id, whose
+//!   alphabet is meaningfully more collision-prone across many projects on
+//!   one machine. An existing Batect-written key file is still read and
+//!   reused byte-for-byte, tolerant of its `#`-comment header — nothing
+//!   depends on matching the *generation* format, only on the file's path
+//!   and layout.
+//! - Cleaning directory caches when the project has no `.batect/caches`
+//!   directory removes nothing, where Batect fails.
+//! - A cache directory entry that is a symbolic link is skipped when
+//!   cleaning, where Batect follows it and deletes whatever it points to.
 //!
 //! The removal *decision* — which volumes or directories match this project,
 //! restricted to `--clean-cache`'s allowlist — lives in plain synchronous
@@ -420,7 +427,9 @@ fn matching_cache_directories(cache_dir: &Path, only: &HashSet<String>) -> Resul
 /// Removes this project's own cache directories (or, with `only` non-empty,
 /// just the named ones) — `--clean`/`--clean-cache` under
 /// `CacheType::Directory`. Mirrors Batect's own
-/// `CleanupCachesCommand.runForDirectories`. Returns the names actually
+/// `CleanupCachesCommand.runForDirectories`, except that a missing cache
+/// directory removes nothing rather than failing, and an entry that is a
+/// symbolic link is skipped rather than followed. Returns the names actually
 /// removed.
 fn clean_directory_caches(project_directory: &Path, only: &HashSet<String>) -> Result<Vec<String>> {
     let cache_dir = cache_directory(project_directory);
