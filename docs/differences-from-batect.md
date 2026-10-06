@@ -258,6 +258,12 @@ tables above:
   `image_pull_policy: IfNotPresent`, an image that's already present prints no
   `Pulling X...`/`Pulled X.` lines; Batect prints both even though nothing is
   pulled. See [Task Lifecycle](task-lifecycle.md).
+- **`fancy` mode draws a fresh block after the terminal's width changes.**
+  The terminal has re-wrapped the old lines by then, so moving the cursor back
+  up over as many lines as were drawn, as Batect does, lands it in the wrong
+  place on common terminals and corrupts the display. Ratect leaves the old
+  block where it is and draws the new one below it, at the cost of that
+  leftover block.
 
 ## Next steps
 
