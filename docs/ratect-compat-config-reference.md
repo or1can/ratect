@@ -529,10 +529,12 @@ A few things happen automatically to make this actually work, not just set `--us
   host-mounted, so it doesn't persist across runs, matching Ratect's existing
   ephemeral-container model.
 - **Every [`cache` mount](#cache-volumes) on the container gets the same ownership
-  treatment.** A Docker volume is created root-owned, so without this the container
-  would mount its cache and then fail on the first write — the mount having
-  succeeded, which makes it a confusing place to find out. Applies to a cache
-  anywhere, including one nested inside `home_directory`.
+  treatment, except a read-only one.** A Docker volume is created root-owned, so
+  without this the container would mount its cache and then fail on the first write
+  — the mount having succeeded, which makes it a confusing place to find out. Applies
+  to a cache anywhere, including one nested inside `home_directory`. A cache mounted
+  with `ro` among its `options` keeps its owner: nothing can write to it, and the
+  read-only mount would refuse the change.
 
 Applies per-container, independently — a task's own container and each of its
 dependencies can each set `run_as_current_user` on their own; it isn't inherited or
