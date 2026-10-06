@@ -39,8 +39,14 @@ reference](ratect-compat-config-reference.md) for the full list. The exceptions:
 
 Matches Batect exactly, field-for-field — see
 [Expressions](ratect-compat-config-reference.md#expressions) for the full syntax and which
-fields support it. The one exception, `image`, is in [Container
-fields](#container-fields) below.
+fields support it. The exceptions:
+
+- `image` — see [Container fields](#container-fields) below.
+- `batect.project_directory` has its `.` and `..` components resolved:
+  `-f ../proj/batect.yml` gives `/parent/proj`, where Batect gives
+  `/parent/cwd/../proj`. Both name the same directory, and a volume path built
+  from either is normalised the same way, so the difference only shows where
+  the value is used as a string — in `environment` or `build_args`.
 
 ### Container fields
 
