@@ -518,18 +518,6 @@ impl<G: GitClient> GitIncludeCache<G> {
         Ok(())
     }
 
-    /// Removes any cached repo whose `last_used` is more than
-    /// `STALE_AFTER` old — matching Batect's own
-    /// `GitRepositoryCacheCleanupTask`/`GitRepositoryCache.delete`, except
-    /// for a bad sidecar (below).
-    /// Meant to be started unconditionally, once per invocation, as a
-    /// detached background task (see `main.rs`) — never awaited, so a
-    /// failure here is only ever logged. Each stale entry is removed
-    /// independently: one entry's removal failing (its `.toml` sidecar
-    /// unreadable/unparsable, or a filesystem error) is logged and skipped
-    /// rather than aborting the whole sweep. Batect's per-entry try/catch
-    /// covers only the deletion: a sidecar it can't read or parse throws
-    /// from `GitRepositoryCache.listAll`, before any entry is deleted.
     /// Every entry currently in the cache — what `ratect includes list`
     /// reports.
     ///
@@ -706,6 +694,18 @@ impl<G: GitClient> GitIncludeCache<G> {
         removed
     }
 
+    /// Removes any cached repo whose `last_used` is more than
+    /// `STALE_AFTER` old — matching Batect's own
+    /// `GitRepositoryCacheCleanupTask`/`GitRepositoryCache.delete`, except
+    /// for a bad sidecar (below).
+    /// Meant to be started unconditionally, once per invocation, as a
+    /// detached background task (see `main.rs`) — never awaited, so a
+    /// failure here is only ever logged. Each stale entry is removed
+    /// independently: one entry's removal failing (its `.toml` sidecar
+    /// unreadable/unparsable, or a filesystem error) is logged and skipped
+    /// rather than aborting the whole sweep. Batect's per-entry try/catch
+    /// covers only the deletion: a sidecar it can't read or parse throws
+    /// from `GitRepositoryCache.listAll`, before any entry is deleted.
     pub async fn cleanup_stale(&self) -> Result<()> {
         let root = self.root.resolve()?;
         let now = (self.clock)();
