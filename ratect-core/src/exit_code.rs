@@ -46,7 +46,9 @@
 ///   [`crate::interrupt::TerminationSignal::exit_code`].
 /// - **Anything else** — `1`.
 ///
-/// A divergence from Batect, which returns `-1` (255) for every failure alike
+/// A divergence from Batect, which passes the task's own exit code through
+/// too (except under `--no-cleanup-after-success`, where it always returns
+/// `-1`, 255) but returns `-1` (255) for a signal or any other failure alike,
 /// and so says nothing about which it was; Ratect already diverges by using 1
 /// rather than 255 for an ordinary failure.
 pub fn for_error(error: &anyhow::Error) -> u8 {
