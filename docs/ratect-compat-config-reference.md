@@ -911,7 +911,8 @@ file it includes. It's generated from Ratect's own configuration types, so it ca
 drift from what Ratect accepts; the checks it can't express are the cross-field ones
 (a task needing `run` or `prerequisites`, port ranges on both sides of a mapping
 covering the same number of ports, `customise` naming a container that's actually in
-the task's graph). Those are still reported by Ratect itself, when you run a task.
+the task's graph). Those are still reported by Ratect itself, when it loads the file —
+for any command that loads it, `--list-tasks` included.
 
 Not submitted to [SchemaStore's catalog](https://www.schemastore.org/api/json/catalog.json)
 itself, so an editor only picks the schema up via the `$schema` line above.
