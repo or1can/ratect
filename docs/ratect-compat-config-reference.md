@@ -529,10 +529,12 @@ A few things happen automatically to make this actually work, not just set `--us
   host-mounted, so it doesn't persist across runs, matching Ratect's existing
   ephemeral-container model.
 - **Every [`cache` mount](#cache-volumes) on the container gets the same ownership
-  treatment.** A Docker volume is created root-owned, so without this the container
-  would mount its cache and then fail on the first write — the mount having
-  succeeded, which makes it a confusing place to find out. Applies to a cache
-  anywhere, including one nested inside `home_directory`.
+  treatment, except a read-only one.** A Docker volume is created root-owned, so
+  without this the container would mount its cache and then fail on the first write
+  — the mount having succeeded, which makes it a confusing place to find out. Applies
+  to a cache anywhere, including one nested inside `home_directory`. A cache mounted
+  with `ro` among its `options` keeps its owner: nothing can write to it, and the
+  read-only mount would refuse the change.
 
 Applies per-container, independently — a task's own container and each of its
 dependencies can each set `run_as_current_user` on their own; it isn't inherited or
@@ -776,7 +778,7 @@ the three different `$`-syntaxes that resemble each other, see the [FAQ](faq.md#
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `container` | string | yes | Name of a container defined under `containers`. A name that isn't one is rejected when the file loads. |
-| `command` | string | no | Overrides the container's own `command` for this task's run specifically (see [Container](#container)). Tokenized the same way. If neither this nor the container's own `command` is set, the image's own default `CMD` runs instead. Any `-- ADDITIONAL_ARGS` from the CLI are appended as further literal argv entries — see [CLI reference](ratect-compat-cli.md#using-additional_args-in-a-task-command). |
+| `command` | string | no | Overrides the container's own `command` for this task's run specifically (see [Container](#container)). Tokenized the same way. If neither this nor the container's own `command` is set, the image's own default `CMD` runs instead. Any `-- ADDITIONAL_ARGS` from the CLI are appended to the command as further literal argv entries — or, when there's no command, replace the image's default `CMD` — see [CLI reference](ratect-compat-cli.md#using-additional_args-in-a-task-command). |
 | `environment` | map of string → string | no | Environment variables to set for this task's run specifically. Merged with the container's own `environment` — see [Environment precedence](#environment-precedence) below for the order. Values support the same [expressions](#expressions) as `environment` does. |
 | `ports` | list of strings/objects | no | Additional port mappings for this task's run specifically — see [Port mappings](#port-mappings). *Added* to the container's own `ports`, not an override — there's no concept of one replacing an entry from the other. |
 | `working_directory` | string | no | Overrides the container's own `working_directory` for this task's run specifically (see [Container](#container)), including where its `setup_commands` run. No [expression](#expressions) support. |
@@ -909,7 +911,8 @@ file it includes. It's generated from Ratect's own configuration types, so it ca
 drift from what Ratect accepts; the checks it can't express are the cross-field ones
 (a task needing `run` or `prerequisites`, port ranges on both sides of a mapping
 covering the same number of ports, `customise` naming a container that's actually in
-the task's graph). Those are still reported by Ratect itself, when you run a task.
+the task's graph). Those are still reported by Ratect itself, when it loads the file —
+for any command that loads it, `--list-tasks` included.
 
 Not submitted to [SchemaStore's catalog](https://www.schemastore.org/api/json/catalog.json)
 itself, so an editor only picks the schema up via the `$schema` line above.

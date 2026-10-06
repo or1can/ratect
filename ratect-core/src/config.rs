@@ -2344,8 +2344,8 @@ pub struct Task {
     /// dependency, at any depth) — keyed by container name. Can't target
     /// `run.container` itself (set the equivalent property on `run`
     /// instead) or a container outside this task's graph; both are rejected
-    /// when the file loads, matching Batect's own
-    /// `Task`/`ContainerDependencyGraph` checks.
+    /// when the file loads. Batect rejects the first at load too, but the
+    /// second only when that task runs.
     ///
     /// Only the paragraph above becomes the generated schemas' description,
     /// which is why the two rejections' own homes are named here rather than
@@ -2505,7 +2505,8 @@ pub struct TaskRun {
     /// Overrides the container's own `command` for this task's run
     /// specifically — see [`Container::command`]. If neither this nor the
     /// container's own `command` is set, the image's own default `CMD`
-    /// runs instead.
+    /// runs instead — unless `-- ADDITIONAL_ARGS` are given, which replace
+    /// it.
     pub command: Option<String>,
     /// Environment variables for this task's run specifically, merged over
     /// the container's own `environment` — see `Container::environment`.

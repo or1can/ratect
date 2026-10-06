@@ -53,7 +53,7 @@ listed under.
 |---|---|---|---|
 | `--no-cleanup` | — | — | Equivalent to providing both `--no-cleanup-after-failure` and `--no-cleanup-after-success`. |
 | `--no-cleanup-after-failure` | — | — | If an infrastructure error occurs (a build/pull/health-check/setup-command failure, or anything else before the task's own container gets to run — or the task container's own health check or setup commands failing while its main command is still running, which cancels it), leave every container and network created for that task in place instead of removing them, so the issue can be investigated. A task's own container exiting non-zero is *not* "failure" for this purpose — see `--no-cleanup-after-success`. One divergence from Batect: containers are left genuinely *running*, not just present-but-stopped — see [Differences from Batect](differences-from-batect.md#cli-flags). |
-| `--no-cleanup-after-success` | — | — | If the task's own container runs to completion — regardless of its exit code — leave every container and network created for that task in place instead of removing them. Same divergence as `--no-cleanup-after-failure`: left genuinely running, not stopped-but-present. |
+| `--no-cleanup-after-success` | — | — | If the task's own container runs to completion — regardless of its exit code — leave every container and network created for that task in place instead of removing them. Same divergence as `--no-cleanup-after-failure`: left genuinely running, not stopped-but-present. The exit code is still the task container's own, where Batect's is always `255` here — see [Differences from Batect](differences-from-batect.md#cli-flags). |
 
 ### Docker connection
 
@@ -167,9 +167,11 @@ command string and re-parsed), so they're safe even if they contain characters t
 would be shell metacharacters elsewhere, like `;`, `&&`, or backticks — Ratect never
 passes `command`/`ADDITIONAL_ARGS` through a shell at all.
 
-If the task's container has no `command` at all, `ADDITIONAL_ARGS` (when given) are
-passed directly as the container's entrypoint arguments instead, matching plain
-`docker run <image> <args>`.
+If neither the task's `run` nor its container has a `command`, `ADDITIONAL_ARGS`
+(when given) **replace** the image's default `CMD`, as plain `docker run <image>
+<args>` does; the image's `ENTRYPOINT` is kept. So for an image built with
+`ENTRYPOINT ["server"]` and `CMD ["--port", "80"]`, `ratect-compat <task> --
+--debug` runs `server --debug`, not `server --port 80 --debug`.
 
 ## Exit codes and error reporting
 

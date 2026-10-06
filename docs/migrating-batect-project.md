@@ -14,13 +14,15 @@ tool you actually want.
 
 ## Step 1: point `ratect-compat` at what you already have
 
-The first step needs no config changes at all: run `ratect-compat` against the
+The first step usually needs no config changes: run `ratect-compat` against the
 `batect.yml` you already have, in place of the (now unmaintained) `batect`
-binary itself. Same file, same flags, mostly the same behavior — see
-[Differences from Batect](differences-from-batect.md) for the short list of
-real exceptions. This alone gets a maintained tool without touching a single
-line of YAML, and is a complete, permanent choice on its own if that's all you
-want.
+binary itself. Same file, same flags, mostly the same behavior. Some checks
+Batect makes only when a task runs are made here when the file loads, so a
+latent mistake in a task you never ran can surface — see [Load
+errors](differences-from-batect.md#load-errors), and [Differences from
+Batect](differences-from-batect.md) for the other exceptions. This alone gets a
+maintained tool, and is a complete, permanent choice on its own if that's all
+you want.
 
 ## From here, two paths
 

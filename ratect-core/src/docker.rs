@@ -272,9 +272,9 @@ fn tokenize_command_line(input: &str) -> Result<Vec<String>> {
 /// positional-parameter trick). See `docs/differences-from-batect.md` for
 /// what this means for `$VAR`/glob/shell-operator characters in `command`.
 ///
-/// When `command` is unset, non-empty `additional_args` are passed directly
-/// as argv, letting the image's own entrypoint receive them (matching plain
-/// `docker run <image> <args>`).
+/// When `command` is unset, non-empty `additional_args` replace the image's
+/// default `CMD`, as `docker run <image> <args>` does (the image's own
+/// entrypoint receives them); Batect refuses them with an error instead.
 fn build_cmd(command: Option<&str>, additional_args: &[String]) -> Result<Option<Vec<String>>> {
     match command {
         Some(c) => {
@@ -1186,14 +1186,17 @@ fn collect_build_context_entries(
 pub struct UserMapping {
     pub user: crate::user::CurrentUser,
     pub home_directory: String,
-    /// Absolute container paths of this container's `cache` mounts, which
-    /// need the same ownership treatment the home directory gets.
+    /// Absolute container paths of this container's writable `cache`
+    /// mounts, which need the same ownership treatment the home directory
+    /// gets.
     ///
     /// A fresh Docker volume is created root-owned, so a container running
     /// as the host user cannot write to one — the mount succeeds and the
     /// first write fails, which is a confusing place to discover it. Batect
     /// uploads a directory entry per cache mount for exactly this reason
-    /// (`uploadCacheDirectories`); this is the same list.
+    /// (`uploadCacheDirectories`), but for every one: this list leaves out
+    /// a read-only mount, whose upload would fail (see
+    /// `TaskEngine::resolve_user_mapping`).
     pub cache_directories: Vec<String>,
 }
 
@@ -1435,8 +1438,9 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// - Otherwise, waits on Docker's own event stream (`health_status`/
     ///   `die`, replayed from the beginning of time so a verdict that
     ///   arrived before this call still counts): reported-healthy returns
-    ///   `Ok`; reported-unhealthy fails with the last health-check run's
-    ///   exit code and output; exiting before a verdict fails too.
+    ///   `Ok`; reported-unhealthy fails, including the last health-check
+    ///   run's exit code and output when the container and daemon are still
+    ///   there to report them; exiting before a verdict fails too.
     ///
     /// No Ratect-side timeout, matching Batect — Docker's own
     /// `retries`/`interval` bound how long a verdict can take.
@@ -1721,7 +1725,9 @@ fn docker_buildkit_env_value(
 /// BuildKit) is used, which is BuildKit on any modern daemon. A missing
 /// header (a daemon old enough to predate it) falls back to the classic
 /// builder. A `DOCKER_BUILDKIT` value that parses as neither is a hard error
-/// naming the value, matching Batect, rather than a silent guess.
+/// naming the value rather than a silent guess — raised when a build first
+/// needs the builder, not on every command as in Batect and the docker CLI
+/// (see `docs/differences-from-batect.md`'s `--enable-buildkit` row).
 ///
 /// Pure (both inputs injected) so the whole decision table is
 /// unit-testable; [`DockerClient`] feeds it the real environment variable
@@ -2004,9 +2010,9 @@ impl DockerClient {
                 format!("Failed to upload user mapping files to container '{container_id}'")
             })?;
 
-        // The home directory, then every cache mount — each an existing
-        // mount point whose ownership has to be changed to the mapped user,
-        // and all done the same way for that reason.
+        // The home directory, then every writable cache mount — each an
+        // existing mount point whose ownership has to be changed to the
+        // mapped user, and all done the same way for that reason.
         for directory in
             std::iter::once(&mapping.home_directory).chain(mapping.cache_directories.iter())
         {

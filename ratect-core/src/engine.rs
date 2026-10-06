@@ -491,10 +491,12 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// container's *built* image, in addition to the default
     /// `<project_name>-<container_name>` tag `resolve_image` already
     /// applies. Never validated against `config.containers` up front (no
-    /// eager check here, unlike `image_overrides`) — matching Batect, which
-    /// only ever surfaces a problem when the named container is actually
-    /// reached (see `resolve_image`) or, for one that's never reached at
-    /// all, once the whole invocation finishes (see `run_task`).
+    /// eager check here, unlike `image_overrides`): a tag on a container
+    /// that uses a pulled image fails when that container's image is
+    /// resolved (see `resolve_image`), and one on a container that's never
+    /// reached at all once the whole invocation finishes (see `run_task`).
+    /// Batect makes the second check at the same point, but the first only
+    /// once the task using the container has finished.
     image_tags: HashMap<String, std::collections::HashSet<String>>,
     /// Every container name `resolve_image` has been asked to resolve so
     /// far this invocation (task and prerequisites alike) — regardless of
@@ -1247,8 +1249,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// moment a tagged container name turns out to resolve via a pull
     /// instead, whether that's its own configured `image` or an
     /// `--override-image` replacement. Matches Batect's
-    /// `ImageTaggingValidator`/`ContainerUsesPulledImageException` message
-    /// exactly.
+    /// `ContainerUsesPulledImageException` message exactly, but not its
+    /// timing: Batect's `ImageTaggingValidator` raises it once the task
+    /// using the container has finished, where this fails before that
+    /// container runs.
     fn reject_tagged_pulled_image(&self, container_name: &str) -> Result<()> {
         if self.image_tags.contains_key(container_name) {
             anyhow::bail!(
@@ -1420,7 +1424,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 // hit the read-only bind and abort the run before the task
                 // starts, where it previously worked. Nothing needs to write
                 // to it either, which is the whole point of `ro`. Batect
-                // shares the gap; skipping is the safe side of it.
+                // doesn't skip it, so its run fails there instead.
                 crate::config::VolumeMount::Cache(cache) if !is_read_only(&cache.options) => {
                     Some(cache.container.clone())
                 }
@@ -1994,8 +1998,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // indistinguishable to the user, and completing is the more useful
         // reading of a tie.
         //
-        // The residual race is Batect's too: a container created but not yet
-        // recorded is dropped before cleanup can see it, and survives. For a
+        // The residual race is Ratect's own: a container created but not yet
+        // recorded is dropped before cleanup can see it, and survives.
+        // Batect's `CreateContainerStepRunner` always posts the created
+        // event, so its cleanup sees every container. For a
         // dependency that is only a create request already with the daemon
         // when the run is dropped — its id is recorded the moment the create
         // call returns (`created_dependencies`). The task's own container

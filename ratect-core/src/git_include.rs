@@ -29,16 +29,19 @@
 //! actually happened. `GitIncludeCache::cleanup_stale` (0.19.0) sweeps that
 //! same cache: any entry whose `last_used` is more than 30 days old gets
 //! both its working copy and its `.toml` sidecar removed, matching
-//! Batect's own `GitRepositoryCacheCleanupTask` exactly except that it's a
-//! `tokio::spawn`ed async task, not a literal OS thread (Batect's own JVM
+//! Batect's own `GitRepositoryCacheCleanupTask` except in how it handles a
+//! bad sidecar (below) and in being a `tokio::spawn`ed async task, not a
+//! literal OS thread (Batect's own JVM
 //! daemon thread is the equivalent to port the *behavior* of — unconditional,
 //! fire-and-forget, never awaited — not literally a `std::thread::spawn`).
 //! Started unconditionally from `main.rs`'s "run a task" branch (not
 //! `--list-tasks`), before the Docker connectivity check, mirroring where
 //! Batect's own `BackgroundTaskManager` fires it. One stale entry failing
 //! to delete (unreadable/unparsable sidecar, filesystem error) is logged
-//! and skipped rather than aborting the whole sweep — same per-entry
-//! try/catch Batect's own cleanup task has. `cached_working_copy` (0.3.0) is
+//! and skipped rather than aborting the whole sweep. Batect's own cleanup
+//! task catches a failed deletion per entry too, but reads every sidecar
+//! outside that catch, so one it can't read or parse aborts its whole sweep,
+//! every run, until it's removed. `cached_working_copy` (0.3.0) is
 //! the read-only counterpart to `ensure_cached`: it computes the same
 //! `~/.ratect/incl` path and returns it only if the clone already exists —
 //! never cloning, locking, or touching the network — for offline callers
@@ -515,16 +518,6 @@ impl<G: GitClient> GitIncludeCache<G> {
         Ok(())
     }
 
-    /// Removes any cached repo whose `last_used` is more than
-    /// `STALE_AFTER` old — matching Batect's own
-    /// `GitRepositoryCacheCleanupTask`/`GitRepositoryCache.delete` exactly.
-    /// Meant to be started unconditionally, once per invocation, as a
-    /// detached background task (see `main.rs`) — never awaited, so a
-    /// failure here is only ever logged. Each stale entry is removed
-    /// independently: one entry's removal failing (its `.toml` sidecar
-    /// unreadable/unparsable, or a filesystem error) is logged and skipped
-    /// rather than aborting the whole sweep, same as Batect's own per-entry
-    /// try/catch.
     /// Every entry currently in the cache — what `ratect includes list`
     /// reports.
     ///
@@ -701,6 +694,18 @@ impl<G: GitClient> GitIncludeCache<G> {
         removed
     }
 
+    /// Removes any cached repo whose `last_used` is more than
+    /// `STALE_AFTER` old — matching Batect's own
+    /// `GitRepositoryCacheCleanupTask`/`GitRepositoryCache.delete`, except
+    /// for a bad sidecar (below).
+    /// Meant to be started unconditionally, once per invocation, as a
+    /// detached background task (see `main.rs`) — never awaited, so a
+    /// failure here is only ever logged. Each stale entry is removed
+    /// independently: one entry's removal failing (its `.toml` sidecar
+    /// unreadable/unparsable, or a filesystem error) is logged and skipped
+    /// rather than aborting the whole sweep. Batect's per-entry try/catch
+    /// covers only the deletion: a sidecar it can't read or parse throws
+    /// from `GitRepositoryCache.listAll`, before any entry is deleted.
     pub async fn cleanup_stale(&self) -> Result<()> {
         let root = self.root.resolve()?;
         let now = (self.clock)();
