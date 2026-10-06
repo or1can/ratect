@@ -463,10 +463,12 @@ pub fn select_output_style(
 
 /// Whether the console can support a live-repainting display — the shared
 /// half of [`select_output_style`]'s auto-selection rule, also used to
-/// validate an *explicit* `--output fancy` up front (with a clear error)
-/// instead of Batect's behavior of accepting it and crashing on the first
-/// repaint. Deliberately excludes `--no-color`: that only influences the
-/// *default*, since colorless fancy works fine (see [`Console`]).
+/// validate an *explicit* `--output fancy` up front (with a clear error).
+/// Batect never checks an explicit `fancy`: it crashes on the first repaint
+/// when stdout isn't a terminal, and with `TERM=dumb` writes cursor
+/// movements the terminal can't perform. Deliberately excludes
+/// `--no-color`: that only influences the *default*, since colorless fancy
+/// works fine (see [`Console`]).
 ///
 /// **Staying with this heuristic rather than a terminfo lookup, deliberately**
 /// (Batect's own roadmap wanted the latter, and this ported the approach it
@@ -512,8 +514,9 @@ pub fn console_dimensions_available() -> bool {
 /// gathering them again on top of that.
 ///
 /// Errors only for an explicit `fancy` on a console that can't support live
-/// repainting — Batect instead accepts it and crashes on the first repaint
-/// (a documented divergence, see docs/differences-from-batect.md).
+/// repainting — Batect instead accepts it, crashing on the first repaint
+/// when stdout isn't a terminal and garbling a `TERM=dumb` one (a
+/// documented divergence, see docs/differences-from-batect.md).
 /// Auto-selected fancy already implies an interactive console, so this can
 /// only actually fire for an explicit `-o fancy`.
 pub fn create_event_sink(
