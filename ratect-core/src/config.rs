@@ -2344,8 +2344,8 @@ pub struct Task {
     /// dependency, at any depth) — keyed by container name. Can't target
     /// `run.container` itself (set the equivalent property on `run`
     /// instead) or a container outside this task's graph; both are rejected
-    /// when the file loads, matching Batect's own
-    /// `Task`/`ContainerDependencyGraph` checks.
+    /// when the file loads. Batect rejects the first at load too, but the
+    /// second only when that task runs.
     ///
     /// Only the paragraph above becomes the generated schemas' description,
     /// which is why the two rejections' own homes are named here rather than

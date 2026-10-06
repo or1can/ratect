@@ -60,21 +60,41 @@ reference](ratect-compat-config-reference.md#container) for the full list. The e
 ### Task fields
 
 Every task field is supported field-for-field — see [config
-reference](ratect-compat-config-reference.md#task) for the full list. The one
-exception, `dependencies` naming an undeclared container, is under
-`dependencies` in [Container fields](#container-fields) above.
+reference](ratect-compat-config-reference.md#task) for the full list. The
+exceptions are about when a mistake is caught: `dependencies` naming an
+undeclared container is under `dependencies` in [Container
+fields](#container-fields) above, and a `customise` naming a container the task
+doesn't start is under [Load errors](#load-errors).
 
 ### `run` fields
 
 Every `run` field is supported field-for-field — see
-[TaskRun](ratect-compat-config-reference.md#taskrun) for the full list. The one
-exception, `container` naming an undeclared container, is under `dependencies`
-in [Container fields](#container-fields) above.
+[TaskRun](ratect-compat-config-reference.md#taskrun) for the full list. The
+exceptions are about when a mistake is caught: `container` naming an undeclared
+container is under `dependencies` in [Container fields](#container-fields)
+above, and a `container` also listed in the task's `dependencies` is under [Load
+errors](#load-errors).
 
 ### Load errors
 
-A config Batect rejects is rejected here too, but the report is Ratect's own:
+Ratect checks a config when the file loads, and the report is its own:
 
+- **Some checks Batect makes only once a task reaches them are made when the
+  file loads here**, for any command that loads it — `--list-tasks` included —
+  and the first hard error stops it, so a config Batect lists, or runs a
+  different task from, can fail to load here. Besides the undeclared names under
+  `dependencies` in [Container fields](#container-fields), they include a
+  `run_as_current_user` `home_directory` that isn't an absolute path, and a
+  relative `cache` mount destination under `run_as_current_user` — Batect
+  checks both as it configures the container, though its message for the cache
+  path is never seen, since Docker has already refused the relative mount when
+  the container was created; and a task's `customise` naming a container its
+  task doesn't start, or its `run.container` also listed in its
+  `dependencies`, checked for every task rather than only the ones run.
+  `--tag-image` on a container that uses a pulled image isn't checked at load,
+  but fails as soon as that container's image is resolved — after its
+  dependencies have started and its prerequisite tasks have run, but before it
+  runs — where Batect fails once the task using it has finished.
 - **The wording** is Ratect's, not Batect's — `Configuration file "batect.yml"
   not found.` rather than `The file '<absolute path>' does not exist.`, and
   likewise for malformed volumes, ports, devices and includes, expressions,
