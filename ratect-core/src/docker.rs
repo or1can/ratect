@@ -1186,14 +1186,17 @@ fn collect_build_context_entries(
 pub struct UserMapping {
     pub user: crate::user::CurrentUser,
     pub home_directory: String,
-    /// Absolute container paths of this container's `cache` mounts, which
-    /// need the same ownership treatment the home directory gets.
+    /// Absolute container paths of this container's writable `cache`
+    /// mounts, which need the same ownership treatment the home directory
+    /// gets.
     ///
     /// A fresh Docker volume is created root-owned, so a container running
     /// as the host user cannot write to one — the mount succeeds and the
     /// first write fails, which is a confusing place to discover it. Batect
     /// uploads a directory entry per cache mount for exactly this reason
-    /// (`uploadCacheDirectories`); this is the same list.
+    /// (`uploadCacheDirectories`), but for every one: this list leaves out
+    /// a read-only mount, whose upload would fail (see
+    /// `TaskEngine::resolve_user_mapping`).
     pub cache_directories: Vec<String>,
 }
 
@@ -2004,9 +2007,9 @@ impl DockerClient {
                 format!("Failed to upload user mapping files to container '{container_id}'")
             })?;
 
-        // The home directory, then every cache mount — each an existing
-        // mount point whose ownership has to be changed to the mapped user,
-        // and all done the same way for that reason.
+        // The home directory, then every writable cache mount — each an
+        // existing mount point whose ownership has to be changed to the
+        // mapped user, and all done the same way for that reason.
         for directory in
             std::iter::once(&mapping.home_directory).chain(mapping.cache_directories.iter())
         {
