@@ -497,7 +497,10 @@ pub fn supports_interactivity(terminal: &TerminalFacts) -> bool {
 /// Whether the terminal's dimensions are actually queryable — the
 /// "am I really attached to a console" signal [`select_output_style`]
 /// wants beyond plain `isatty` (Batect's `ConsoleDimensions.current !=
-/// null` check).
+/// null` check). Every lookup error counts as "not queryable", so the style
+/// falls back to `simple`. Batect tells "no console" (`null`) apart from a
+/// failed native lookup, which it rethrows when choosing a style
+/// automatically, failing the run.
 pub fn console_dimensions_available() -> bool {
     crossterm::terminal::size().is_ok()
 }
