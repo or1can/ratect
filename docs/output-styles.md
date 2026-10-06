@@ -37,8 +37,10 @@ window.addEventListener('DOMContentLoaded', function () {
 </script>
 
 What the recording can't tell you: there is no spinner — the animation is
-purely rewriting changed lines, exactly like Batect — and lines are clipped to
-the terminal's current width. Because it repaints, it requires an interactive
+purely rewriting the block's lines in place, as Batect's is — and lines are
+clipped to the terminal's current width. After that width changes, the block is
+drawn afresh below the old one rather than over it, since the terminal has
+re-wrapped the old lines. Because it repaints, it requires an interactive
 console: an explicit `-o fancy` without one fails up front with a clear error
 (Batect instead accepts it and crashes on the first repaint). Works with
 [`--no-color`](#colour) — the repaint stays; bold/color go — a combination
