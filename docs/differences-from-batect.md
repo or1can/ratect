@@ -264,6 +264,9 @@ tables above:
   place on common terminals and corrupts the display. Ratect leaves the old
   block where it is and draws the new one below it, at the cost of that
   leftover block.
+- **`fancy` mode treats a reported terminal width of 0 as unknown.** Some
+  pseudo-terminals report it (`script`'s, some CI runners'), and lines are
+  then printed unclipped; Batect clips every line to nothing.
 
 ## Next steps
 
