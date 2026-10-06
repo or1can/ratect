@@ -1424,7 +1424,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 // hit the read-only bind and abort the run before the task
                 // starts, where it previously worked. Nothing needs to write
                 // to it either, which is the whole point of `ro`. Batect
-                // shares the gap; skipping is the safe side of it.
+                // doesn't skip it, so its run fails there instead.
                 crate::config::VolumeMount::Cache(cache) if !is_read_only(&cache.options) => {
                     Some(cache.container.clone())
                 }
