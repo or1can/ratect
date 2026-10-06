@@ -48,7 +48,8 @@ own container) starts:
    its image's own `HEALTHCHECK`, from the `health_check` field, or both — Ratect
    waits for Docker's verdict: proceeds on *healthy*; fails the task on
    *unhealthy* (the error includes the last health-check run's exit code and
-   output) or if the container exits first. A container with no health check at
+   output, unless the container or the daemon has gone by the time Ratect looks
+   them up) or if the container exits first. A container with no health check at
    all is immediately considered healthy — for it, started *is* ready. In the
    transcript, this
    step is the gap between `Started db.` and `db has become healthy.`

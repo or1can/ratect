@@ -1438,8 +1438,9 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// - Otherwise, waits on Docker's own event stream (`health_status`/
     ///   `die`, replayed from the beginning of time so a verdict that
     ///   arrived before this call still counts): reported-healthy returns
-    ///   `Ok`; reported-unhealthy fails with the last health-check run's
-    ///   exit code and output; exiting before a verdict fails too.
+    ///   `Ok`; reported-unhealthy fails, including the last health-check
+    ///   run's exit code and output when the container and daemon are still
+    ///   there to report them; exiting before a verdict fails too.
     ///
     /// No Ratect-side timeout, matching Batect — Docker's own
     /// `retries`/`interval` bound how long a verdict can take.

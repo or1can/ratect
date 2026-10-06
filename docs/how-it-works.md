@@ -177,7 +177,8 @@ unit-tested with a fake implementation instead of a real Docker daemon.
   [dependency readiness gate](dependency-readiness.md#the-readiness-gate). The first
   blocks on Docker's own event stream, replayed from the beginning so a verdict
   that arrived before the stream opened still counts, and turns an *unhealthy*
-  verdict into an error carrying the last health check's exit code and output. The
+  verdict into an error carrying the last health check's exit code and output, when
+  the container and daemon are still there to report them. The
   second runs one `setup_commands` entry in the running container and returns its
   exit code and output for the engine to judge.
 
