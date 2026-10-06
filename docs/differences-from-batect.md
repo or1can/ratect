@@ -238,7 +238,12 @@ tables above:
   `Failed to pull image X` and its `Caused by:` list, for example, rather than
   `Could not pull image X.` and the daemon's message, and a failed build's
   output under `Build output:` rather than `Output from Docker was:`. See
-  [Load errors](#load-errors) for the cause chain.
+  [Load errors](#load-errors) for the cause chain. The message is an
+  unprefixed `Error: …` line on stderr in every output style, `all` included,
+  where Batect's `all` prints `<task> ! ` or `<container> ! ` lines on stdout;
+  and `all` reports a failed setup command or network check, two failures
+  Batect's `all` doesn't print at all. A setup command's output is trimmed, so
+  output that is only whitespace counts as none.
 - **No pull lines for an image that's already local.** Under
   `image_pull_policy: IfNotPresent`, an image that's already present prints no
   `Pulling X...`/`Pulled X.` lines; Batect prints both even though nothing is
