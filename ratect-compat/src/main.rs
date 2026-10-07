@@ -565,8 +565,12 @@ async fn run(mut args: Args) -> Result<()> {
 /// `--clean`/`--clean-cache`: removes this project's own cache
 /// volumes/directories and exits, without running anything. Never needs
 /// `--config-file` to actually exist — matching Batect, whose own
-/// `CleanupCachesCommand` only needs the project directory and
-/// `--cache-type`/Docker connection flags, not the task config itself.
+/// `CleanupCachesCommand` doesn't read the task config either. Under
+/// `--cache-type=directory` it never connects to Docker at all, so it works
+/// with the daemon unreachable; Batect checks connectivity first under either
+/// cache type, only so it can detect Windows containers (which force its
+/// cache type to `directory`), which Ratect doesn't support. A divergence recorded
+/// in `docs/differences-from-batect.md`.
 ///
 /// `--clean-cache <NAME>` (repeatable) restricts this to the named caches;
 /// plain `--clean` with no `--clean-cache` cleans every one of this
