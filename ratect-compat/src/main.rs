@@ -278,10 +278,11 @@ impl Args {
 
 /// The CLI-side `--output` value set — clap's `ValueEnum` derive gives the
 /// lowercase names (`fancy`/`simple`/`quiet`/`all`) and the standard
-/// invalid-value error listing them, matching Batect's own enum-converted
-/// option. Mirrors [`ratect_core::ui::OutputStyle`] rather than deriving on
-/// it directly, keeping `clap` a `ratect`-only dependency (see AGENTS.md's
-/// CLI-vs-core dependency split).
+/// invalid-value error listing them, as Batect's own enum-converted option
+/// lists them — though in `clap`'s format and words, not Batect's. Mirrors
+/// [`ratect_core::ui::OutputStyle`] rather than deriving on it directly,
+/// keeping `clap` a `ratect`-only dependency (see AGENTS.md's CLI-vs-core
+/// dependency split).
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 enum OutputStyleArg {
     Fancy,

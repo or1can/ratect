@@ -166,6 +166,14 @@ list. The exceptions:
 | `--generate-completion-script`, `--generate-completion-task-info` | Not accepted — an unrecognized-argument error. Batect's are hidden flags for its own shell completion, which reaches them only through Batect's wrapper script. `ratect-compat` has no shell completion; the native binary prints its own script with [`ratect completions <shell>`](ratect-cli.md#shell-completion). |
 | `--no-update-notification`, `--upgrade`, `--no-wrapper-cache-cleanup` | Recognized, no effect — permanently inapplicable, since Ratect is a single native binary with no self-updating wrapper script to disable notifications for, clean caches for, or upgrade. Recognized rather than rejected so an existing Batect invocation carrying one doesn't hard-fail outright. See [CLI reference](ratect-compat-cli.md#recognized-no-effect). |
 
+Beyond any one flag:
+
+- **A mistake on the command line is reported in `clap`'s format**: an
+  `error: …` line in its own words, sometimes followed by a tip or a usage
+  line, then `For more information, try '--help'.` Batect prints a single message of its
+  own instead, such as `Invalid option '--bogus'. Run './batect --help' for a
+  list of valid options.`
+
 ## Runtime behavior gaps
 
 Batect behavior not implemented in task execution, beyond what's covered by the field
