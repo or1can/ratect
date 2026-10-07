@@ -2069,7 +2069,12 @@ pub struct RunAsCurrentUser {
 
 /// A single port or a range of consecutive ports (`from..=to`; `from == to`
 /// for a single port). Ported from Batect's own `PortRange`: `from` must be
-/// positive, and `from <= to`.
+/// positive, and `from <= to`. Batect matches the raw text against
+/// `(\d+)(-(\d+))?`; this accepts more, each as the port it denotes — a
+/// leading `+` (`parse`'s `u16` parsing takes one), and an unquoted YAML hex
+/// or octal integer (`0x50`), which the YAML layer resolves before
+/// `visit_u64`/`visit_i64` see it. A divergence recorded in
+/// `docs/differences-from-batect.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PortRange {
     pub from: u16,
@@ -2078,7 +2083,8 @@ pub struct PortRange {
 
 impl PortRange {
     /// Parses `"port"` or `"from-to"`. Ported from Batect's
-    /// `PortRange.parse`.
+    /// `PortRange.parse`, with its messages, but not its accept-set: a
+    /// leading `+` on either half parses here (see the type's own doc).
     pub fn parse(value: &str) -> Result<Self> {
         let invalid = || {
             anyhow::anyhow!(
