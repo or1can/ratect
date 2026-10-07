@@ -288,6 +288,11 @@ tables above:
   `image_pull_policy: IfNotPresent`, an image that's already present prints no
   `Pulling X...`/`Pulled X.` lines; Batect prints both even though nothing is
   pulled. See [Task Lifecycle](task-lifecycle.md).
+- **Under `image_pull_policy: Always`, an image is pulled once per run**, not
+  again for each task in a prerequisite chain that uses it, as Batect does. A
+  `build_directory` image is likewise built once per run, where Batect builds
+  it again for each task — and, under `Always`, pulls its base image again each
+  time. See [Task Lifecycle](task-lifecycle.md).
 - **`fancy` mode draws a fresh block after the terminal's width changes.**
   The terminal has re-wrapped the old lines by then, so moving the cursor back
   up over as many lines as were drawn, as Batect does, lands it in the wrong
