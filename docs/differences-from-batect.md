@@ -270,6 +270,12 @@ tables above:
   doesn't become ready — whatever else was starting alongside it is dropped
   there and then, and cleanup begins. Batect cancels that work and waits for it
   to wind down first.
+- **The task network is ready before any image work starts.** Ratect creates
+  it — or, under `--use-network`, checks that it exists — and only then pulls
+  or builds an image, where Batect does both at once. So a network problem,
+  such as a missing `--use-network` network or an exhausted address pool,
+  fails the task straight away, rather than once the pulls and builds already
+  in flight have finished.
 - **Cleanup carries on past a container it fails to stop or remove.** A
   container whose stop fails isn't removed, as under Batect, but cleanup still
   stops and removes the task's other containers, including the ones it depends
