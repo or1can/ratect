@@ -270,7 +270,10 @@ tables above:
   doesn't become ready — whatever else was starting alongside it is dropped
   there and then, and cleanup begins. Batect cancels that work and waits for it
   to wind down first.
-- **Cleanup carries on past a container it fails to remove.** Ratect still
+- **Cleanup carries on past a container it fails to stop or remove.** A
+  container whose stop fails isn't removed, as under Batect, but cleanup still
+  stops and removes the task's other containers, including the ones it depends
+  on; Batect's cleanup stalls there and leaves them running. Ratect also still
   goes on to remove the task network, where Batect keeps it and lists it among
   the manual cleanup commands it prints. While that container is still attached
   to the network, Docker refuses, and Ratect logs a second warning naming the
