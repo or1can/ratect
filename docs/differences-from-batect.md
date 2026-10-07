@@ -270,6 +270,11 @@ tables above:
   doesn't become ready — whatever else was starting alongside it is dropped
   there and then, and cleanup begins. Batect cancels that work and waits for it
   to wind down first.
+- **Cleanup carries on past a container it fails to remove.** Ratect still
+  goes on to remove the task network, where Batect keeps it and lists it among
+  the manual cleanup commands it prints. While that container is still attached
+  to the network, Docker refuses, and Ratect logs a second warning naming the
+  network.
 - **No pull lines for an image that's already local.** Under
   `image_pull_policy: IfNotPresent`, an image that's already present prints no
   `Pulling X...`/`Pulled X.` lines; Batect prints both even though nothing is
