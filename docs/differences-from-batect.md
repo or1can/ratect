@@ -173,6 +173,9 @@ Beyond any one flag:
   line, then `For more information, try '--help'.` Batect prints a single message of its
   own instead, such as `Invalid option '--bogus'. Run './batect --help' for a
   list of valid options.`
+- **Short options combine, and take an attached value**: `-Tf batect.yml`,
+  `-fbatect.yml` and `-oquiet` are accepted. Batect looks an option up by its
+  exact text up to any `=`, and rejects each of those as an invalid option.
 
 ## Runtime behavior gaps
 
