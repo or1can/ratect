@@ -2448,8 +2448,11 @@ pub fn format_task_list_quiet(tasks: &HashMap<String, Task>) -> String {
 /// project actually declares one; a project with no `group` usage at all
 /// (the common case, and Ratect's pre-0.14.0 behavior) stays a single flat
 /// list with no extra headings. Matches Batect's own `ListTasksCommand`
-/// human-readable format: groups sorted alphabetically with the ungrouped
-/// bucket last, tasks sorted alphabetically within a group.
+/// human-readable format in its grouping and order — groups sorted
+/// alphabetically with the ungrouped bucket last, tasks sorted
+/// alphabetically within a group — but not its header: Batect opens a flat
+/// list with `Available tasks:` and a grouped one with its first group
+/// heading, a divergence recorded in `docs/differences-from-batect.md`.
 pub fn format_task_list(project_name: &str, tasks: &HashMap<String, Task>) -> String {
     let mut lines = vec![format!("Tasks in {}:", project_name)];
 
