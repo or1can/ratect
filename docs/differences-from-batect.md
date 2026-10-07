@@ -284,6 +284,14 @@ tables above:
   doesn't become ready — whatever else was starting alongside it is dropped
   there and then, and cleanup begins. Batect cancels that work and waits for it
   to wind down first.
+- **The daemon is first asked for its version, not pinged.** Ratect's first
+  request is `/version`; Batect sends `/_ping` and then asks for the version,
+  before running anything. The image builder — BuildKit or the classic one — is
+  chosen only once a run first builds an image, from a `/_ping` made then
+  (see `--enable-buildkit` under [CLI flags](#cli-flags)). And a daemon that
+  can't be reached, or is too old, is reported in Ratect's own words, not
+  Batect's `Docker is not installed, not running or not compatible with
+  Batect: …`.
 - **The task network is ready before any image work starts.** Ratect creates
   it — or, under `--use-network`, checks that it exists — and only then pulls
   or builds an image, where Batect does both at once. So a network problem,
