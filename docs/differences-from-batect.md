@@ -83,6 +83,19 @@ container is under `dependencies` in [Container fields](#container-fields)
 above, and a `container` also listed in the task's `dependencies` is under [Load
 errors](#load-errors).
 
+### Null values
+
+A field given a YAML null (`volumes:` with nothing after it, `~` or `null`)
+mostly loads as if it were left out — a container's `volumes`, `ports`,
+`environment`, `health_check` or `run_as_current_user`, a task's
+`prerequisites`, `dependencies` or `customise`, and the top-level
+`forbid_telemetry` or `config_variables`, for example. Batect rejects a null on
+each of those. Where Batect accepts one — `run`'s `command`, `entrypoint` and
+`working_directory`, a config variable's `default` and `description`,
+`health_check`'s `retries` — the two tools agree. Some nulls are rejected here
+too, such as an `environment` variable's value and `shm_size`, in Ratect's own
+words.
+
 ### Load errors
 
 Ratect checks a config when the file loads, and the report is its own:
