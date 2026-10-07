@@ -95,7 +95,8 @@ accepts them; they're used only when it actually connects.
 but do nothing — hidden from `--help`, since they're not real Ratect features, just
 recognized so an existing Batect invocation carrying one doesn't hard-fail outright
 (an unrecognized flag is a `clap` parse error that kills the *entire* invocation before
-anything runs at all, including `--list-tasks`). All three
+anything runs at all, including `--list-tasks` — unless it comes after `--version` or
+`--help`, which act as soon as they're reached). All three
 only make sense for Batect's own self-updating wrapper script, which Ratect — a single
 native binary — doesn't have and isn't planning to grow. `--upgrade` specifically
 prints a one-line notice to stderr and exits `0` rather than running silently, since a
