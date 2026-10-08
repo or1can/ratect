@@ -54,6 +54,13 @@ this file's and the code's; user docs name the binary instead.
 **File syntax** — whether a file is parsed as TOML or YAML. A property of a
 file, independent of its project's dialect.
 
+## Batect parity
+
+**Divergence** — a deliberate difference between `ratect-compat` and Batect,
+recorded in `docs/differences-from-batect.md`.
+
+**Parity gap** — an unintended difference between `ratect-compat` and Batect.
+
 ## Readiness
 
 **Readiness gate** — the check a container passes before it counts as ready.
