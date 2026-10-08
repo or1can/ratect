@@ -41,6 +41,13 @@ by these rules, in order:
    value, an expression expanded where Batect keeps it literal, an empty
    option value that fails later with an unrelated error, a command line with
    no task name that exits 0.
+
+   The one exception is a mistake in the file itself — a reference to an
+   undeclared container, a `customise` for a container the task never starts.
+   `ratect-compat` may catch it earlier than Batect, failing any command that
+   loads the file rather than only the task that reaches it
+   ([0014](0014-config-checked-at-load-evaluated-per-task.md)): the file is
+   wrong for everyone who runs it, and failing at load tells them sooner.
 2. **Keep harmless leniency, as a divergence.** Where `ratect-compat` accepts
    something Batect rejects and the accepted input still does what the user
    evidently meant — a port written `+80`, a dependency listed twice, a field
@@ -56,8 +63,8 @@ by these rules, in order:
    terminal, stalling cleanup after one failed stop.
 4. **Wording and format are `ratect-compat`'s own** — messages, help text,
    `--version`, the task-list header, the argument-error format — provided the
-   accept/reject outcome and the point of failure match. Own words must not be
-   worse words: an error names what the user wrote
+   accept/reject outcome and the point of failure match (subject to rule 1's
+   exception for mistakes in the file). Own words must not be worse words: an error names what the user wrote
    ([AGENTS.md](../AGENTS.md) guideline 15) and, where it can, the likely cause.
    A message that buries the reason under library internals is a gap even when
    wording is a divergence.
