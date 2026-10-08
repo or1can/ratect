@@ -1,6 +1,8 @@
 # 0001 — Two binaries (`ratect` and `ratect-compat`) on a shared core
 
-**Status:** Accepted — shipped (the split landed in 0.20.0).
+**Status:** Accepted — shipped (the split landed in 0.20.0). What
+`ratect-compat`'s "strict, literal" match means in practice is narrowed by
+[0013](0013-when-ratect-compat-copies-batect.md).
 
 ## Context
 
