@@ -278,10 +278,11 @@ impl Args {
 
 /// The CLI-side `--output` value set — clap's `ValueEnum` derive gives the
 /// lowercase names (`fancy`/`simple`/`quiet`/`all`) and the standard
-/// invalid-value error listing them, matching Batect's own enum-converted
-/// option. Mirrors [`ratect_core::ui::OutputStyle`] rather than deriving on
-/// it directly, keeping `clap` a `ratect`-only dependency (see AGENTS.md's
-/// CLI-vs-core dependency split).
+/// invalid-value error listing them, as Batect's own enum-converted option
+/// lists them — though in `clap`'s format and words, not Batect's. Mirrors
+/// [`ratect_core::ui::OutputStyle`] rather than deriving on it directly,
+/// keeping `clap` a `ratect`-only dependency (see AGENTS.md's CLI-vs-core
+/// dependency split).
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 enum OutputStyleArg {
     Fancy,
@@ -565,8 +566,12 @@ async fn run(mut args: Args) -> Result<()> {
 /// `--clean`/`--clean-cache`: removes this project's own cache
 /// volumes/directories and exits, without running anything. Never needs
 /// `--config-file` to actually exist — matching Batect, whose own
-/// `CleanupCachesCommand` only needs the project directory and
-/// `--cache-type`/Docker connection flags, not the task config itself.
+/// `CleanupCachesCommand` doesn't read the task config either. Under
+/// `--cache-type=directory` it never connects to Docker at all, so it works
+/// with the daemon unreachable; Batect checks connectivity first under either
+/// cache type, only so it can detect Windows containers (which force its
+/// cache type to `directory`), which Ratect doesn't support. A divergence recorded
+/// in `docs/differences-from-batect.md`.
 ///
 /// `--clean-cache <NAME>` (repeatable) restricts this to the named caches;
 /// plain `--clean` with no `--clean-cache` cleans every one of this

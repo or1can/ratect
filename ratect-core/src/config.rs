@@ -2069,7 +2069,12 @@ pub struct RunAsCurrentUser {
 
 /// A single port or a range of consecutive ports (`from..=to`; `from == to`
 /// for a single port). Ported from Batect's own `PortRange`: `from` must be
-/// positive, and `from <= to`.
+/// positive, and `from <= to`. Batect matches the raw text against
+/// `(\d+)(-(\d+))?`; this accepts more, each as the port it denotes — a
+/// leading `+` (`parse`'s `u16` parsing takes one), and an unquoted YAML hex
+/// or octal integer (`0x50`), which the YAML layer resolves before
+/// `visit_u64`/`visit_i64` see it. A divergence recorded in
+/// `docs/differences-from-batect.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PortRange {
     pub from: u16,
@@ -2078,7 +2083,8 @@ pub struct PortRange {
 
 impl PortRange {
     /// Parses `"port"` or `"from-to"`. Ported from Batect's
-    /// `PortRange.parse`.
+    /// `PortRange.parse`, with its messages, but not its accept-set: a
+    /// leading `+` on either half parses here (see the type's own doc).
     pub fn parse(value: &str) -> Result<Self> {
         let invalid = || {
             anyhow::anyhow!(
@@ -2442,8 +2448,11 @@ pub fn format_task_list_quiet(tasks: &HashMap<String, Task>) -> String {
 /// project actually declares one; a project with no `group` usage at all
 /// (the common case, and Ratect's pre-0.14.0 behavior) stays a single flat
 /// list with no extra headings. Matches Batect's own `ListTasksCommand`
-/// human-readable format: groups sorted alphabetically with the ungrouped
-/// bucket last, tasks sorted alphabetically within a group.
+/// human-readable format in its grouping and order — groups sorted
+/// alphabetically with the ungrouped bucket last, tasks sorted
+/// alphabetically within a group — but not its header: Batect opens a flat
+/// list with `Available tasks:` and a grouped one with its first group
+/// heading, a divergence recorded in `docs/differences-from-batect.md`.
 pub fn format_task_list(project_name: &str, tasks: &HashMap<String, Task>) -> String {
     let mut lines = vec![format!("Tasks in {}:", project_name)];
 

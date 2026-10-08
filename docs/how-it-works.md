@@ -130,11 +130,13 @@ rather than plain sets, so two containers resolving the same image share one
 in-flight operation instead of racing. Dependency readiness, by contrast, is scoped
 to a single **task execution** and discarded when it finishes.
 
-Concurrency follows Batect exactly: **prerequisites run sequentially**, one to
+Concurrency follows Batect's in outline: **prerequisites run sequentially**, one to
 completion after another, even when independent — while **one task's dependency
 startup is concurrent**, with independent branches of its graph pulling, building,
 starting and health-waiting at the same time, gated only on each container's own
-`dependencies` being ready. Running independent prerequisites concurrently too is
+`dependencies` being ready. The task's network is created before any of that
+starts, where Batect creates it alongside — see [Differences from
+Batect](differences-from-batect.md#runtime-behavior-gaps). Running independent prerequisites concurrently too is
 a possible Rust-specific enhancement beyond Batect — tracked as
 [ratect#102](https://github.com/or1can/ratect/issues/102) — and
 [Dependency Readiness](dependency-readiness.md#resolution-order) has the detail.
