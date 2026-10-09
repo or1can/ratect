@@ -48,6 +48,39 @@ own real `build-env` container and `build` task — same image, same command, sa
 task `description`/`group` — with an `environment` entry added here purely to
 show the syntax; the real file doesn't set one.
 
+## `ratect_version`: the version a project was written for
+
+A top-level `ratect_version` records the Ratect version the project was
+written for:
+
+```toml
+ratect_version = "0.11.0"
+project_name = "my-app"
+```
+
+`ratect` checks it before reading anything else in the file, and refuses to
+run the project in two cases:
+
+- **The project is newer than the binary.** A project written for 0.13 most
+  likely uses something 0.11 doesn't know, so 0.11 says it needs 0.13 or later
+  rather than failing on whichever field it meets first.
+- **A later release changed what a configuration means.** Ratect keeps a list
+  of every change to what a `ratect.toml` means or accepts — the
+  `CHANGELOG.md` entries marked **ratect.toml:** under *Breaking*. If any came
+  after the project's `ratect_version`, `ratect` lists them and stops; once
+  you've reviewed them, set `ratect_version` to the version you're running.
+  An upgrade that crosses none of them is silent.
+
+Only the major and minor numbers are compared, and only the root file may set
+it — an included file, or any YAML file, that does is rejected. A project
+without one counts as written for 0.3.0, the first release with `ratect.toml`,
+so it's refused the first time a release changes what a configuration means;
+`ratect config validate` and `ratect doctor` warn about the missing field
+until then, and `ratect config convert` writes it for you. A project whose
+root file is a `batect.yml` can't set it at all — it keeps Batect's own shape
+— so converting it is the way to declare one. `ratect-compat` rejects the
+field like any other it doesn't know.
+
 ## `extends`: inheritance instead of YAML anchors
 
 `batect.yml` factors out a shared base container with YAML anchors/aliases/merge
@@ -859,6 +892,7 @@ so it also works as a CI gate.
 | Local overrides | `batect.local.yml` | `ratect.local.toml` |
 | Git bundle default | `batect-bundle.yml` | `ratect-bundle.toml`, then `batect-bundle.yml` |
 | Includes | YAML | TOML or YAML, by extension |
+| Written-for version | — | [`ratect_version`](#ratect_version-the-version-a-project-was-written-for) |
 
 Most field *meanings* are unchanged; the spelling and the format-level rules
 above are the bulk of the difference. The exceptions are the native-only

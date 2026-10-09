@@ -13,6 +13,7 @@
 # Keep this in sync with `batect.yml`: the two describe the same project in the
 # two formats, and `ratect-core`'s `the_two_root_dev_configs_agree` test fails
 # if they drift.
+ratect_version = "0.11.0"
 project_name = "ratect"
 
 [containers.rust-build-env]

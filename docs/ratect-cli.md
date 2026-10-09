@@ -291,7 +291,8 @@ and exec instances die with their container, so there's nothing left to find.
 `ratect config validate` is `doctor`'s configuration half on its own — it loads the
 config, resolves it, and runs the same config-only checks (missing
 `build_directory`/Dockerfile, floating image tags, dependencies with no
-`health_check`), exiting non-zero on a problem. It never touches Docker, so it's the
+`health_check`, a missing [`ratect_version`](ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for)),
+exiting non-zero on a problem. It never touches Docker, so it's the
 gate to run in CI when all you want to know is "is the config valid?", without a
 daemon. It takes the same `--config-var`/`--config-vars-file` options as `run`, since
 resolving the config can need them.
@@ -318,7 +319,8 @@ readiness gate, so its health check — from `health_check` or from its image's 
 Readiness](dependency-readiness.md#the-tasks-own-container)). `config convert` warns
 on stderr about each task container whose `health_check` or `setup_commands` this
 affects; an image's `HEALTHCHECK` can't be seen without the image, so check those
-yourself. (It emits
+yourself. The result declares the converting binary's own version as its
+[`ratect_version`](ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for). (It emits
 the compact `"8080:80"` / `.:/code` string forms for `ports`/`volumes` rather than
 the object form; both are valid, and reformatting is a review step.)
 
@@ -339,7 +341,10 @@ load, a missing `build_directory` or Dockerfile. A **warning** works but is like
 bite: a floating image tag (`latest`, or no tag at all) means the same configuration
 runs a different image next week, and a dependency with no `health_check` counts as
 ready the moment it starts unless its image defines one, which is where "connection
-refused" on the first run comes from.
+refused" on the first run comes from. A project with no
+[`ratect_version`](ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for)
+is a warning too: it changes nothing until a release changes what a configuration
+means, and then the project is refused until you've reviewed what changed.
 
 If you're **migrating from Batect**, `doctor` also flags a leftover `batect`/`batect.cmd`
 wrapper script. Those aren't harmless: `./batect` still downloads and runs the

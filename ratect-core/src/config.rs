@@ -2746,6 +2746,13 @@ pub(crate) struct ConfigFile {
     /// still loads.
     #[serde(default)]
     forbid_telemetry: Option<bool>,
+    /// The Ratect version a native project was written for. Read — and
+    /// checked — by [`crate::written_for`] before this struct is ever
+    /// parsed; here only so the full parse accepts it, and so a file that
+    /// may not declare it can be refused ([`reject_misplaced_ratect_version`]).
+    /// Skipped from the compat schema, added to the native one.
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    ratect_version: Option<String>,
 }
 
 /// Which binary's rules govern a project — see `CONTEXT.md`'s **Dialect**.
@@ -2970,6 +2977,39 @@ fn native_field_rejection(entry: &BatectShaped<'_>, message: String) -> anyhow::
         ),
         None => anyhow::anyhow!("{message}"),
     }
+}
+
+/// Refuses `ratect_version` anywhere but a native project's root TOML file
+/// (decisions/0015): a YAML file keeps Batect's own shape whichever project
+/// includes it, and the version is the project's, not one file's.
+fn reject_misplaced_ratect_version(
+    path: &Path,
+    file: &ConfigFile,
+    format: ConfigFormat,
+    is_root: bool,
+) -> Result<()> {
+    if file.ratect_version.is_none() {
+        return Ok(());
+    }
+    let yaml = match format {
+        ConfigFormat::Compat => true,
+        ConfigFormat::Native => matches!(config_file_format(path), Ok(FileFormat::Yaml)),
+    };
+    if yaml {
+        anyhow::bail!(
+            "'{}' declares 'ratect_version', which only a native ratect.toml can do: a \
+             Batect-format (YAML) file keeps Batect's own fields.",
+            path.display()
+        );
+    }
+    if !is_root {
+        anyhow::bail!(
+            "Included file '{}' declares 'ratect_version', but only the root configuration \
+             file can do so.",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 /// The parser a file's extension selects under `ConfigFormat::Native`.
@@ -3261,6 +3301,7 @@ impl Config {
     ) -> Result<LoadedConfig> {
         let root_path = absolute_path(path)?;
         let root_file = format.parse(path)?;
+        reject_misplaced_ratect_version(path, &root_file, format, true)?;
         let root_dir = root_path.parent().unwrap_or(Path::new("")).to_path_buf();
 
         let mut seen: HashSet<PathBuf> = HashSet::new();
@@ -3380,6 +3421,7 @@ impl Config {
             effective_grants.record(resolved.clone(), effective);
 
             let file = format.parse(&resolved)?;
+            reject_misplaced_ratect_version(&resolved, &file, format, false)?;
             if file.project_name.is_some() {
                 anyhow::bail!(
                     "Included file '{}' declares 'project_name', but only the root \
@@ -4011,7 +4053,12 @@ pub struct LoadedProject {
 /// because both formats target the same `Config`: everything that survives to
 /// that model is preserved, and the things that don't (comments, key order)
 /// are exactly what a converted file is expected to lose.
-pub fn to_native_toml(config: &Config) -> Result<String> {
+///
+/// Declares `written_for` — the converting binary's own version — as the
+/// result's `ratect_version` ([`crate::written_for`]): it was converted under
+/// that version's rules, so that is what it was written for. Added after the
+/// round-trip check, since `ratect_version` isn't part of [`Config`].
+pub fn to_native_toml(config: &Config, written_for: crate::written_for::Version) -> Result<String> {
     let value = toml::Value::try_from(config).context("serializing the configuration")?;
     let text = toml::to_string_pretty(&value).context("rendering TOML")?;
 
@@ -4022,7 +4069,11 @@ pub fn to_native_toml(config: &Config) -> Result<String> {
         reparsed_value == value,
         "the conversion did not round-trip losslessly — this is a bug; please report it"
     );
-    Ok(text)
+    let declared = toml::Value::String(written_for.to_string());
+    Ok(format!(
+        "{} = {declared}\n{text}",
+        crate::written_for::FIELD
+    ))
 }
 
 /// The task names `config_file` defines, following its `include`s — for shell

@@ -566,3 +566,90 @@ fn docker_options_belong_to_run_not_to_tasks_list() {
     ])
     .is_err());
 }
+
+/// The prefix that marks a `CHANGELOG.md` `### Breaking` entry as a change to
+/// what a `ratect.toml` means or accepts — one that needs a row in
+/// `ratect_core::written_for::BREAKING_CHANGES` (AGENTS.md guideline 7).
+const CONFIG_CHANGE_MARKER: &str = "- **ratect.toml:**";
+
+/// The `ratect` version of every marked `### Breaking` entry in `changelog`,
+/// one per entry. `## [Unreleased]` entries count as `unreleased`; a release
+/// heading names its `ratect` version (`## [ratect-compat X · ratect Y]`).
+fn marked_breaking_change_versions(changelog: &str, unreleased: &str) -> Vec<String> {
+    let mut versions = Vec::new();
+    let mut release: Option<String> = None;
+    let mut in_breaking = false;
+    for line in changelog.lines() {
+        if let Some(heading) = line.strip_prefix("## [") {
+            release = if heading.starts_with("Unreleased]") {
+                Some(unreleased.to_string())
+            } else {
+                heading
+                    .split(']')
+                    .next()
+                    .and_then(|names| {
+                        names
+                            .split(" · ")
+                            .find_map(|name| name.strip_prefix("ratect "))
+                    })
+                    .map(str::to_string)
+            };
+            in_breaking = false;
+        } else if line.starts_with("### ") {
+            in_breaking = line == "### Breaking";
+        } else if in_breaking && line.starts_with(CONFIG_CHANGE_MARKER) {
+            versions.push(
+                release
+                    .clone()
+                    .unwrap_or_else(|| panic!("a marked entry outside a ratect release: {line}")),
+            );
+        }
+    }
+    versions
+}
+
+/// Every marked entry has its own row in the table, and every row its own
+/// marked entry — so a change to what a `ratect.toml` means can't ship without
+/// the written-for check knowing about it (decisions/0015).
+#[test]
+fn every_marked_breaking_change_has_a_written_for_row() {
+    let changelog = include_str!("../../CHANGELOG.md");
+    let mut marked = marked_breaking_change_versions(changelog, &running_version().to_string());
+    let mut rows: Vec<String> = ratect_core::written_for::BREAKING_CHANGES
+        .iter()
+        .map(|row| row.version.to_string())
+        .collect();
+    marked.sort();
+    rows.sort();
+    assert_eq!(
+        marked, rows,
+        "CHANGELOG.md's '{CONFIG_CHANGE_MARKER}' entries (left) and \
+         ratect_core::written_for::BREAKING_CHANGES' rows (right) must match one for one"
+    );
+}
+
+#[test]
+fn marked_breaking_changes_are_found_under_their_release() {
+    let changelog = "\
+## [Unreleased]
+
+### Breaking
+
+- **ratect.toml:** a backslash now escapes.
+- Something about the CLI.
+
+### Added
+
+- **ratect.toml:** not breaking, so not counted.
+
+## [ratect-compat 0.33.0 · ratect 0.12.0] - 2026-11-01
+
+### Breaking
+
+- **ratect.toml:** environment no longer inherited.
+";
+    assert_eq!(
+        marked_breaking_change_versions(changelog, "0.13.0"),
+        vec!["0.13.0".to_string(), "0.12.0".to_string()]
+    );
+}

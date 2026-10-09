@@ -464,3 +464,31 @@ async fn gated_or_empty_readiness_fields_are_not_warned_about() {
 
     assert!(ungated_task_container_warnings(&config).is_empty());
 }
+
+/// decisions/0015: a project that doesn't say what it was written for
+/// counts as 0.3.0, so the first breaking change refuses it — this is the
+/// nudge before that happens.
+#[test]
+fn an_unmarked_project_is_told_to_declare_its_written_for_version() {
+    let finding = written_for_finding(&WrittenFor::Unmarked).unwrap();
+    assert!(
+        matches!(&finding, Finding::Warning(message) if message.contains("'ratect_version'")),
+        "{finding:?}"
+    );
+}
+
+/// A YAML root can't declare one, so the advice is to convert it.
+#[test]
+fn a_yaml_root_is_told_to_convert_before_declaring_its_written_for_version() {
+    let finding = written_for_finding(&WrittenFor::YamlRoot).unwrap();
+    assert!(
+        matches!(&finding, Finding::Warning(message) if message.contains("ratect config convert")),
+        "{finding:?}"
+    );
+}
+
+#[test]
+fn a_declared_written_for_version_needs_no_finding() {
+    let declared = WrittenFor::Declared("0.11.0".parse().unwrap());
+    assert_eq!(written_for_finding(&declared), None);
+}

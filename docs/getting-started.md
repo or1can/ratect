@@ -31,7 +31,9 @@ The smallest file that runs something:
 
 This defines one container (`build-env`, based on the `alpine:3.24` image, with the
 current directory mounted at `/code`) and one task (`hello`, which runs `ls /code`
-inside that container).
+inside that container). `ratect_version` records which Ratect the file was written
+for, so a later Ratect can tell you when one of its changes affects it — see
+[`ratect_version`](ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for).
 
 See the [configuration reference](ratect-config-reference.md) for the full schema.
 

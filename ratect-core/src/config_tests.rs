@@ -4579,9 +4579,11 @@ tasks:
       command: echo hi
 "#,
     );
-    let text = to_native_toml(&config).unwrap();
-    let reparsed: Config = toml::from_str(&text).unwrap();
-    assert_eq!(reparsed.project_name, "demo");
+    let text = to_native_toml(&config, "0.11.0".parse().unwrap()).unwrap();
+    let reparsed: ConfigFile = toml::from_str(&text).unwrap();
+    // `config convert` declares the converting binary's version (decisions/0015).
+    assert_eq!(reparsed.ratect_version.as_deref(), Some("0.11.0"));
+    assert_eq!(reparsed.project_name.as_deref(), Some("demo"));
     assert!(reparsed.containers.contains_key("app"));
     assert!(reparsed.tasks.contains_key("build"));
     assert_eq!(
@@ -7936,6 +7938,61 @@ project_name: not-allowed
     let result = Config::load_from_file(&dir.join("batect.yml")).await;
     assert!(format!("{:?}", result.unwrap_err()).contains("project_name"));
 
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `ratect_version` — decisions/0015. The root `ratect.toml` may set it; the
+/// check against it runs before loading, in `crate::written_for`, so loading
+/// only has to accept it there and refuse it everywhere else.
+#[tokio::test]
+async fn a_root_ratect_toml_may_declare_its_written_for_version() {
+    load_native_toml(
+        "ratect_version = \"0.11.0\"\nproject_name = \"demo\"\n\n\
+         [containers.app]\nimage = \"alpine:3.18\"\n",
+    )
+    .await
+    .unwrap();
+}
+
+/// Root-only, like `project_name`: it is the project's version, not a file's.
+#[tokio::test]
+async fn ratect_version_in_an_included_file_is_an_error() {
+    let (fragment, result) = load_native_including(
+        "extra.toml",
+        "ratect_version = \"0.11.0\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n",
+    )
+    .await;
+    let error = format!("{:#}", result.unwrap_err());
+    assert!(error.contains("'ratect_version'"), "{error}");
+    assert!(error.contains(&fragment.display().to_string()), "{error}");
+}
+
+/// A YAML file keeps Batect's shape — whichever project includes it, and
+/// whichever binary loads it — so it can't declare a version.
+#[tokio::test]
+async fn ratect_version_in_a_yaml_file_is_an_error() {
+    let (fragment, result) = load_native_including(
+        "extra.yml",
+        "ratect_version: 0.11.0\ncontainers:\n  app:\n    image: alpine:3.18\n",
+    )
+    .await;
+    let error = format!("{:#}", result.unwrap_err());
+    assert!(error.contains("'ratect_version'"), "{error}");
+    assert!(error.contains(&fragment.display().to_string()), "{error}");
+
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "ratect_version: 0.11.0\nproject_name: demo\n",
+    )
+    .unwrap();
+    let error = format!(
+        "{:#}",
+        load_project(&dir.join("batect.yml"), &HashMap::new())
+            .await
+            .unwrap_err()
+    );
+    assert!(error.contains("'ratect_version'"), "{error}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

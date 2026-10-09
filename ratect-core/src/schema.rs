@@ -167,6 +167,26 @@ pub fn native_config_file_schema() -> serde_json::Value {
 /// `deny_unknown_fields` strictness — is identical, because both formats parse
 /// into the same [`Config`](crate::config::Config).
 fn make_native(json: &mut serde_json::Value) {
+    // Add the native-only top-level `ratect_version` — skipped from the
+    // compat schema (`ConfigFile::ratect_version`'s `schemars(skip)`, since
+    // a `batect.yml` may not declare it), same reasoning as `extends` below.
+    if let Some(properties) = json
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        properties.insert(
+            crate::written_for::FIELD.to_string(),
+            serde_json::json!({
+                "type": "string",
+                "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-.+)?$",
+                "description": "The Ratect version this project was written for, e.g. \
+                                \"0.11.0\". Ratect refuses to run the project if it is older \
+                                than this, or if a later release has changed what a \
+                                configuration means. Root file only.",
+            }),
+        );
+    }
+
     let Some(definitions) = json
         .get_mut("definitions")
         .and_then(serde_json::Value::as_object_mut)
