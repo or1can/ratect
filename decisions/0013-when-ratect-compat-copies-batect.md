@@ -72,9 +72,13 @@ by these rules, in order:
    the differences page, and a doc page or code comment that says "matching
    Batect" or "exactly like Batect" about a divergence is a defect.
 
-The native `ratect` binary is outside this record: it is free to diverge
-([0001](0001-two-binaries.md)), and a decision here only binds it where the
-code is shared and the decision says so.
+The native `ratect` binary is otherwise free to diverge
+([0001](0001-two-binaries.md)), but a parity fix in code both binaries share
+applies to both by default: the native binary follows unless the decision says
+it shouldn't, in which case the fix is gated on the dialect. Where following
+changes what a native config means or accepts — a backslash in an expression
+starting to escape, say — that's a breaking change for `ratect`, and its
+`CHANGELOG.md` entry says so.
 
 ## Alternatives considered
 

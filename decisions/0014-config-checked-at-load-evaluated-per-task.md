@@ -84,6 +84,7 @@ kinds of thing:
   ([#432](https://github.com/or1can/ratect/issues/432)).
 - `docs/ratect-compat-config-reference.md` documents resolve-once-at-load today;
   it changes with #314.
-- The native `ratect` binary shares the loader. Whether it follows the per-task
-  evaluation is part of #314's design; the native format's own rules are
-  [0003](0003-ratect-native-config-format.md)'s.
+- The native `ratect` binary shares the loader, so it follows the per-task
+  evaluation by default ([0013](0013-when-ratect-compat-copies-batect.md));
+  #314's design can gate it on the dialect if there's a reason. The native
+  format's own rules are [0003](0003-ratect-native-config-format.md)'s.
