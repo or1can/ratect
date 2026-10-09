@@ -30,6 +30,17 @@ exact version a project ran. Ratect ships no wrapper, deliberately
   ([0013](0013-when-ratect-compat-copies-batect.md)): its changes move it
   towards Batect, so a `batect.yml` has no earlier Ratect meaning to protect,
   and it gains no Ratect-only field.
+- **The table follows the file, not the project.** A container declared in
+  a YAML file follows Batect's rules wherever it's included — even inside a
+  native project ([Where the semantics
+  differ](../docs/ratect-config-reference.md#where-the-semantics-differ)) — so
+  that file's meaning is Batect's, as in the bullet above. A parity fix that
+  changes only how a Batect-format file is read is Ratect implementing
+  Batect's meaning more faithfully, not a change to what a `ratect.toml`
+  means, and adds no row
+  ([#462](https://github.com/or1can/ratect/issues/462)'s literal
+  `home_directory` is the first). A fix in code TOML files share too — an
+  expression starting to honour a backslash escape — does add one.
 - **A top-level `ratect_version` field in the root `ratect.toml`** holds the
   version the project was written for — a full version (`"0.11.0"`), compared
   by major and minor, since a pre-1.0 breaking change lands on a minor version.
