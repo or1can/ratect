@@ -21,6 +21,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Security
+
+- Upgraded `noyalib` to 0.0.56, fixing [RUSTSEC-2026-0333](https://rustsec.org/advisories/RUSTSEC-2026-0333) (resource budgets not enforced on the typed deserialization path). Ratect parses YAML through that path, including files from a Git-included bundle, so a hostile bundle could get past noyalib's resource limits while loading (a denial of service).
+
 ## [ratect-compat 0.31.0 · ratect 0.10.0] - 2026-10-02
 
 ### Breaking
