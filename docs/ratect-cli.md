@@ -316,13 +316,16 @@ are flattened into the one result, and comments are dropped — so the output ca
 header and is a *starting point to review*, not a blind drop-in. Before writing, the
 conversion is checked to round-trip losslessly back to the same configuration, so
 whatever it produces is guaranteed to be the configuration you started with. `ratect`
-runs that configuration differently in one respect: a task's own container has no
+runs that configuration differently in two respects. A task's own container has no
 readiness gate, so its health check — from `health_check` or from its image's own
 `HEALTHCHECK` — isn't waited on, and its `setup_commands` don't run (see [Dependency
 Readiness](dependency-readiness.md#the-tasks-own-container)). `config convert` warns
 on stderr about each task container whose `health_check` or `setup_commands` this
 affects; an image's `HEALTHCHECK` can't be seen without the image, so check those
-yourself. The result declares the converting binary's own version as its
+yourself. And `run_as_current_user.home_directory` is used as written in a `batect.yml`
+but [evaluated](ratect-config-reference.md#where-the-semantics-differ) in a
+`ratect.toml`, so `config convert` also warns about each one containing a `$` or `<`
+expression, whose converted value would change. The result declares the converting binary's own version as its
 [`ratect_version`](ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for). (It emits
 the compact `"8080:80"` / `.:/code` string forms for `ports`/`volumes` rather than
 the object form; both are valid, and reformatting is a review step.)

@@ -492,3 +492,25 @@ fn a_declared_written_for_version_needs_no_finding() {
     let declared = WrittenFor::Declared("0.11.0".parse().unwrap());
     assert_eq!(written_for_finding(&declared), None);
 }
+
+/// #462: a Batect-format `home_directory` is literal, but `ratect.toml`
+/// evaluates the same text — and has no way to escape it — so `config
+/// convert` can't carry a `$`/`<` across unchanged. One warning per such
+/// container, naming the value.
+#[tokio::test]
+async fn a_home_directory_that_would_become_an_expression_is_warned_about() {
+    let config = config_with(
+        "project_name: demo\ncontainers:\n  b:\n    image: alpine:3.18\n    run_as_current_user:\n      enabled: true\n      home_directory: /home/$USER\n  a:\n    image: alpine:3.18\n    run_as_current_user:\n      enabled: true\n      home_directory: /home/<who\n  plain:\n    image: alpine:3.18\n    run_as_current_user:\n      enabled: true\n      home_directory: /home/me\n",
+    )
+    .await;
+    let warnings = home_directory_expression_warnings(&config);
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+    assert!(
+        warnings[0].contains("'a'") && warnings[0].contains("'/home/<who'"),
+        "{warnings:?}"
+    );
+    assert!(
+        warnings[1].contains("'b'") && warnings[1].contains("'/home/$USER'"),
+        "{warnings:?}"
+    );
+}

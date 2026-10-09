@@ -501,12 +501,12 @@ group instead.
 > also deleting `home_directory` fails config loading. Remove `home_directory`
 > entirely to disable user mapping, not just `enabled`.
 
-`home_directory` takes [expressions](#expressions) (e.g.
-`home_directory: /home/${USER:-container-user}`). It is interpolated but, unlike
-`build_directory` or a volume's host path, **not** resolved against the config
+`home_directory` is used exactly as written, as in Batect: it isn't an
+[expression](#expressions), so a `$` or `<` in it is just part of the path. Unlike
+`build_directory` or a volume's host path, it is **not** resolved against the config
 file's directory — it names a path *inside* the container, so a relative value
 would be meaningless there and is rejected as not absolute. A `:` or control
-character in the resolved value is also rejected: it is written into the
+character in it is also rejected: it is written into the
 generated `/etc/passwd` and `/etc/shadow` entries, where either would corrupt
 the line. So is `/` itself, or a path ending in `..`: the directory is
 created by name inside its parent, and neither has a name to create.
@@ -832,10 +832,7 @@ config_variables:
 volume's `host_path` (see [Volume path resolution](#volume-path-resolution)),
 `build_directory`, `build_args`, a `build_secrets` entry's `path` (not its
 `environment` — that's a literal host environment variable *name*, not itself
-interpolated), a `build_ssh` entry's `paths`, and
-[`run_as_current_user`](#user-mapping)'s `home_directory` (interpolated
-but *not* resolved against the config file, since it names a path inside the
-container) support two kinds of expression, resolved once — after CLI-supplied
+interpolated), and a `build_ssh` entry's `paths` support two kinds of expression, resolved once — after CLI-supplied
 config variable overrides (`--config-var`/`--config-vars-file`) are known, so before
 any task runs but not at config-parse time itself. Everywhere else in the config, a
 string is used exactly as written, with no substitution — expression support is
@@ -847,7 +844,9 @@ themselves get built, not automatically.
 > `image`](ratect-config-reference.md#expressions-in-image). It is rejected in a
 > `batect.yml` rather than ignored, because Batect resolves nothing there and a
 > file using one would stop working under `batect` itself. In this format,
-> `--override-image` is the way to choose an image per run.
+> `--override-image` is the way to choose an image per run. It also resolves them
+> in [`run_as_current_user`](#user-mapping)'s `home_directory`, which a
+> `batect.yml` uses as written.
 
 Literal
 text around an expression is left untouched (`"prefix-$VAR-suffix"` interpolates just

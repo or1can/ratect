@@ -10901,3 +10901,88 @@ fn a_root_file_without_a_project_name_is_an_error_naming_it() {
     assert!(error.contains(&missing.display().to_string()), "{error}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// #462: Batect reads `run_as_current_user.home_directory` as a plain string,
+/// so in a Batect-format file `$VAR` and `<var` stay literal — and an unset
+/// variable in it fails nothing, even in a container the task never uses.
+#[tokio::test]
+async fn a_batect_format_home_directory_is_not_an_expression() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    \
+         run_as_current_user:\n      enabled: true\n      \
+         home_directory: /home/$RATECT_462_UNSET\n",
+    )
+    .unwrap();
+    let project = load_project(&dir.join("batect.yml"), &HashMap::new())
+        .await
+        .unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(
+        project.config.containers["app"]
+            .run_as_current_user
+            .as_ref()
+            .unwrap()
+            .home_directory
+            .as_deref(),
+        Some("/home/$RATECT_462_UNSET")
+    );
+}
+
+/// The file decides, not the project: a YAML file a native project includes
+/// is Batect-shaped, so its `home_directory` is literal too, while one in the
+/// project's own TOML is still an expression.
+#[tokio::test]
+async fn home_directory_is_literal_in_a_yaml_include_and_evaluated_in_toml() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("extra.yml"),
+        "containers:\n  from-yaml:\n    image: alpine:3.18\n    \
+         run_as_current_user:\n      enabled: true\n      home_directory: /home/<user\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "project_name = \"demo\"\ninclude = [{ path = \"extra.yml\" }]\n\n\
+         [config_variables.user]\ndefault = \"dev\"\n\n\
+         [containers.from-toml]\nimage = \"alpine:3.18\"\n\
+         run_as_current_user = { enabled = true, home_directory = \"/home/<user\" }\n",
+    )
+    .unwrap();
+    let project = load_project_native(&dir.join("ratect.toml"), &HashMap::new())
+        .await
+        .unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let home = |name: &str| {
+        project.config.containers[name]
+            .run_as_current_user
+            .as_ref()
+            .unwrap()
+            .home_directory
+            .clone()
+    };
+    assert_eq!(home("from-yaml").as_deref(), Some("/home/<user"));
+    assert_eq!(home("from-toml").as_deref(), Some("/home/dev"));
+}
+
+/// Literal still gets the shape checks: a relative `home_directory` in a
+/// Batect-format file is rejected when the file loads, as before.
+#[tokio::test]
+async fn a_literal_batect_format_home_directory_is_still_checked() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    \
+         run_as_current_user:\n      enabled: true\n      home_directory: $HOME/me\n",
+    )
+    .unwrap();
+    let error = format!(
+        "{:#}",
+        load_project(&dir.join("batect.yml"), &HashMap::new())
+            .await
+            .unwrap_err()
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(error.contains("'$HOME/me'"), "{error}");
+}

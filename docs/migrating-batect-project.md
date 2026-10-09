@@ -53,10 +53,13 @@ the one example kept as a `batect.yml`:
 The output is a starting point, not a finished file: [`config
 convert`](ratect-cli.md#config) doesn't carry comments over, though it does
 check the result round-trips losslessly before writing it. The same
-configuration runs differently in one respect under `ratect`: a task's own
+configuration runs differently in two respects under `ratect`: a task's own
 container has no readiness gate (see [Dependency
-Readiness](dependency-readiness.md#the-tasks-own-container)). `config convert`
-warns about each task container whose `health_check` or `setup_commands` this affects; a
+Readiness](dependency-readiness.md#the-tasks-own-container)), and an expression in
+`run_as_current_user.home_directory` is evaluated rather than used as written (see
+[Where the semantics differ](ratect-config-reference.md#where-the-semantics-differ)).
+`config convert` warns about each task container whose `health_check` or
+`setup_commands` the first affects, and each `home_directory` the second does; a
 health check from the image itself can't be seen without the image. Review it
 field-by-field against [Configuration Reference](ratect-config-reference.md)
 before deleting the original — this is the fastest route to fully native, but

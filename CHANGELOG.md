@@ -21,6 +21,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Breaking
+
+- `run_as_current_user.home_directory` in a `batect.yml` — or in any YAML file a native project includes — is no longer an expression: it's used exactly as written, as in Batect, so `$VAR` and `<var` in it stay literal and an unset variable there no longer fails the load. In a `ratect.toml` it's still evaluated.
+
 ### Added
 
 - **`ratect_version`** (ratect only): a root `ratect.toml` may declare the Ratect version it was written for. `ratect` refuses a project written for a newer version, and one whose meaning a later release has changed, listing those changes; `ratect config validate` and `ratect doctor` warn when it's missing, and `ratect config convert` writes it. See the [`ratect.toml` reference](docs/ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for).
