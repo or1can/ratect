@@ -25,6 +25,10 @@ history, from when it was the only binary.
 
 - Upgraded `noyalib` to 0.0.56, fixing [RUSTSEC-2026-0333](https://rustsec.org/advisories/RUSTSEC-2026-0333) (resource budgets not enforced on the typed deserialization path). Ratect parses YAML through that path, including files from a Git-included bundle, so a hostile bundle could get past noyalib's resource limits while loading (a denial of service).
 
+### Changed
+
+- Upgraded `noyalib` to 0.0.57, which parses some edge-case YAML closer to the YAML 1.2 spec: `0X1F` and `0x-1` load as strings, a plain scalar whose line ends in a space continues on the next line, and folded scalars and escaped line breaks follow the spec exactly. A config relying on the old reading may load differently; see noyalib's [0.0.57 release notes](https://github.com/sebastienrousseau/noyalib/releases/tag/v0.0.57).
+
 ## [ratect-compat 0.31.0 · ratect 0.10.0] - 2026-10-02
 
 ### Breaking
