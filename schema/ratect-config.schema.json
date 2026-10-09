@@ -1145,6 +1145,11 @@
         "null"
       ]
     },
+    "ratect_version": {
+      "description": "The Ratect version this project was written for, e.g. \"0.11.0\". Ratect refuses to run the project if it is older than this, or if a later release has changed what a configuration means. Root file only.",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-.+)?$",
+      "type": "string"
+    },
     "tasks": {
       "additionalProperties": {
         "$ref": "#/definitions/Task"

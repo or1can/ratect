@@ -344,6 +344,107 @@ dependencies = ["ghost"]
     );
 }
 
+/// This binary's version as a project declares it: no pre-release suffix.
+fn written_for_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+        .split_once('-')
+        .map_or(env!("CARGO_PKG_VERSION"), |(release, _)| release)
+}
+
+/// decisions/0015: a project written for a newer Ratect is refused for that
+/// reason — before the parser gets to the field this binary doesn't know,
+/// which would otherwise be all the user is told.
+#[test]
+fn a_project_written_for_a_newer_ratect_is_refused_before_it_is_parsed() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "ratect_version = \"99.0.0\"\nproject_name = \"demo\"\nfuture_field = true\n",
+    )
+    .unwrap();
+    for args in [&["tasks", "list"][..], &["config", "validate"][..]] {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(dir.join("ratect.toml"))
+            .args(args)
+            .output()
+            .expect("failed to run ratect");
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!output.status.success(), "{args:?}:\n{all}");
+        assert!(
+            all.contains("needs ratect 99.0 or later"),
+            "{args:?}:\n{all}"
+        );
+        assert!(!all.contains("future_field"), "{args:?}:\n{all}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `config validate` suggests declaring `ratect_version` when a project
+/// doesn't, as a warning — it changes nothing until a release changes what a
+/// configuration means.
+#[test]
+fn config_validate_suggests_declaring_ratect_version_only_when_it_is_missing() {
+    let dir = unique_project_dir();
+    let validate = |body: &str| {
+        std::fs::write(dir.join("ratect.toml"), body).unwrap();
+        let output = ratect_command()
+            .arg("-f")
+            .arg(dir.join("ratect.toml"))
+            .args(["config", "validate"])
+            .output()
+            .expect("failed to run ratect");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    let unmarked = validate("project_name = \"demo\"\n");
+    assert!(
+        unmarked
+            .lines()
+            .any(|line| line.contains("warning") && line.contains("'ratect_version'")),
+        "{unmarked}"
+    );
+
+    let marked = validate(&format!(
+        "ratect_version = \"{}\"\nproject_name = \"demo\"\n",
+        written_for_version()
+    ));
+    assert!(!marked.contains("ratect_version"), "{marked}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `config convert` declares the converting binary's version — the rules the
+/// result was converted under.
+#[test]
+fn config_convert_declares_the_version_it_was_converted_with() {
+    let dir = unique_project_dir();
+    std::fs::write(dir.join("batect.yml"), "project_name: demo\n").unwrap();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(dir.join("batect.yml"))
+        .args(["config", "convert", "--stdout"])
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&dir).ok();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line == format!("ratect_version = \"{}\"", written_for_version())),
+        "{stdout}"
+    );
+}
+
 /// `config convert` turns a `batect.yml` (anchors and all) into a
 /// `ratect.toml` that actually loads and runs — proven by listing tasks from
 /// the *converted* file. Also covers the no-clobber guard and `--force`.
@@ -1725,6 +1826,10 @@ fn doctor_reports_each_kind_of_config_finding_from_the_doctor_fixture() {
     assert!(
         has_line("warning ", &["dependency 'cache' has no health_check"]),
         "the unguarded dependency should be flagged:\n{stdout}"
+    );
+    assert!(
+        has_line("warning ", &["'ratect_version' isn't set"]),
+        "the missing written-for version should be flagged:\n{stdout}"
     );
     assert!(
         has_line(

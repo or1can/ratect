@@ -21,6 +21,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Added
+
+- **`ratect_version`** (ratect only): a root `ratect.toml` may declare the Ratect version it was written for. `ratect` refuses a project written for a newer version, and one whose meaning a later release has changed, listing those changes; `ratect config validate` and `ratect doctor` warn when it's missing, and `ratect config convert` writes it. See the [`ratect.toml` reference](docs/ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for).
+
 ### Security
 
 - Upgraded `noyalib` to 0.0.56, fixing [RUSTSEC-2026-0333](https://rustsec.org/advisories/RUSTSEC-2026-0333) (resource budgets not enforced on the typed deserialization path). Ratect parses YAML through that path, including files from a Git-included bundle, so a hostile bundle could get past noyalib's resource limits while loading (a denial of service).

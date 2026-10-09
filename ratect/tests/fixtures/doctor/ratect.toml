@@ -10,6 +10,7 @@
 # - `cache`, a dependency with no health_check: the unguarded-dependency warning.
 # - `app`, whose build_directory doesn't exist: the problem that fails the command.
 # - `batect`, beside this file: the wrapper-script warning.
+# - no `ratect_version`: the missing written-for-version warning.
 # - `build`, on the pinned `build-env`: the one task here that actually runs.
 #   A `--no-cleanup-after-success` run of it is what gives the docs capture
 #   its leftover-resources warning.

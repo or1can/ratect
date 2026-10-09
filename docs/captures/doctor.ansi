@@ -5,7 +5,8 @@ Checking ratect.toml...
   warning container 'database' uses a floating image tag — pin it, or the same configuration will run a different image later
   warning dependency 'cache' has no health_check — unless its image defines one, it counts as ready the moment it starts
   problem container 'app' has build_directory '/private/tmp/ratect/ratect/tests/fixtures/doctor/missing-dir', which doesn't exist
+  warning 'ratect_version' isn't set — set it to the Ratect version this project was written for, so a later Ratect can say when one of its changes affects this project
   warning 2 resource(s) left over from previous runs — see `ratect resources list`
 
-7 check(s): 1 problem(s), 4 warning(s).
+8 check(s): 1 problem(s), 5 warning(s).
 Error: 1 problem(s) found.

@@ -54,3 +54,4 @@ pub mod schema;
 pub mod ssh_agent;
 pub mod ui;
 pub mod user;
+pub mod written_for;

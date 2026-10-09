@@ -1,3 +1,4 @@
+ratect_version = "0.11.0"
 project_name = "example-node"
 
 [containers.build-env]

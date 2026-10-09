@@ -31,6 +31,7 @@
 //! own on what "no connection" means or how that got decided.
 
 use crate::config::Config;
+use crate::written_for::WrittenFor;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -164,6 +165,25 @@ pub fn wrapper_script_findings(project_directory: &Path) -> Vec<Finding> {
             })
         })
         .collect()
+}
+
+/// A native project that doesn't say which Ratect it was written for — see
+/// [`crate::written_for`]. Only a warning: it changes nothing until a release
+/// changes what a configuration means, at which point the project counts as
+/// written for 0.3.0 and refuses until someone has looked.
+pub fn written_for_finding(written_for: &WrittenFor) -> Option<Finding> {
+    let field = crate::written_for::FIELD;
+    match written_for {
+        WrittenFor::Declared(_) => None,
+        WrittenFor::Unmarked => Some(Finding::Warning(format!(
+            "'{field}' isn't set — set it to the Ratect version this project was written \
+             for, so a later Ratect can say when one of its changes affects this project"
+        ))),
+        WrittenFor::YamlRoot => Some(Finding::Warning(format!(
+            "the root file is Batect-format YAML, so it can't set '{field}' — convert it \
+             with `ratect config convert` to declare which Ratect it was written for"
+        ))),
+    }
 }
 
 /// Whether `content` is one of Batect's own wrapper scripts, by the notice
