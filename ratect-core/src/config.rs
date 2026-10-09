@@ -4076,6 +4076,36 @@ pub fn to_native_toml(config: &Config, written_for: crate::written_for::Version)
     ))
 }
 
+/// The `project_name` `config_file` declares, read from that one file and
+/// nothing else — for `ratect resources`, which scopes itself by the name
+/// alone (ratect#563). `project_name` is root-only, so the root file is
+/// enough; and since a leftover belongs to whatever created it, not to what
+/// the configuration says now, nothing else in the file — its written-for
+/// version, a field this binary doesn't know, an expression this machine
+/// can't evaluate, an include — may stop it being read. TOML or YAML by
+/// extension, as the native loader chooses.
+pub fn project_name_of(config_file: &Path) -> Result<String> {
+    /// Just the one field, with no `deny_unknown_fields`.
+    #[derive(Deserialize)]
+    struct ProjectName {
+        project_name: Option<String>,
+    }
+    let text = std::fs::read_to_string(config_file)
+        .with_context(|| format!("Failed to open config file {:?}", config_file))?;
+    let parsed: ProjectName = match config_file_format(config_file)? {
+        FileFormat::Toml => toml::from_str(&text)
+            .with_context(|| format!("Failed to parse config file {:?}", config_file))?,
+        FileFormat::Yaml => noyalib::from_str(&text)
+            .with_context(|| format!("Failed to parse config file {:?}", config_file))?,
+    };
+    parsed.project_name.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Configuration file {:?} is missing the required 'project_name' field",
+            config_file
+        )
+    })
+}
+
 /// The task names `config_file` defines, following its `include`s — for shell
 /// completion, which must be instant and side-effect-free, so this is
 /// deliberately *not* a real load. It parses each file (TOML or YAML by

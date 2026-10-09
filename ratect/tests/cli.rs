@@ -1627,6 +1627,60 @@ fn all_projects_never_reaches_containers_ratect_did_not_create() {
     );
 }
 
+/// Project-scoped `resources` needs only `project_name` (ratect#563): a
+/// project refused by the written-for check, or holding a value this machine
+/// can't evaluate, is still one whose leftovers you can list. Proven without
+/// a daemon — pointed at an unreachable one, the command gets past the
+/// configuration and fails on Docker instead.
+#[test]
+fn project_scoped_resources_reads_nothing_but_the_project_name() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "ratect_version = \"99.0.0\"\nproject_name = \"demo\"\n\n\
+         [containers.deploy]\nimage = \"alpine:3.18\"\n\
+         environment = { PROFILE = \"$UNSET_RATECT_563_VARIABLE\" }\n",
+    )
+    .unwrap();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(dir.join("ratect.toml"))
+        .args(["resources", "list", "--docker-host", "tcp://127.0.0.1:1"])
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&dir).ok();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "no daemon is listening:\n{stderr}"
+    );
+    assert!(!stderr.contains("ratect_version"), "{stderr}");
+    assert!(!stderr.contains("UNSET_RATECT_563_VARIABLE"), "{stderr}");
+}
+
+/// Without a `project_name` to scope by, the error says where it looked and
+/// what to use instead.
+#[test]
+fn project_scoped_resources_without_a_project_name_points_at_all_projects() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "[containers.app]\nimage = \"alpine:3.18\"\n",
+    )
+    .unwrap();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(dir.join("ratect.toml"))
+        .args(["resources", "list"])
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&dir).ok();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("'project_name'"), "{stderr}");
+    assert!(stderr.contains("--all-projects"), "{stderr}");
+}
+
 /// Requires a running Docker daemon with network access to pull
 /// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
 ///

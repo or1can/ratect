@@ -93,11 +93,7 @@ struct GlobalArgs {
 
 /// Values for the configuration's own `config_variables` — for the
 /// subcommands that read configuration at all.
-///
-/// `Default` is "none supplied", which is what `resources` uses: it reads
-/// the configuration only for the project's name, and a project name that
-/// depended on a config variable would be a strange thing to have.
-#[derive(ClapArgs, Debug, Default)]
+#[derive(ClapArgs, Debug)]
 struct ConfigVarArgs {
     /// Set a config variable's value, as NAME=VALUE (repeatable). Takes
     /// precedence over --config-vars-file and the variable's own default.
@@ -264,9 +260,10 @@ enum ResourcesCommand {
 
 /// Which leftovers to act on.
 ///
-/// Like `caches`, never reads the configuration file — a leftover belongs
-/// to whatever created it, not to whatever the config says now, and the
-/// times you most want this are when a run went wrong.
+/// Reads nothing from the configuration but the root file's `project_name`,
+/// and nothing at all with `--all-projects` — a leftover belongs to whatever
+/// created it, not to whatever the config says now, and the times you most
+/// want this are when a run went wrong.
 #[derive(ClapArgs, Debug)]
 struct ResourcesArgs {
     /// Include every project's leftovers, not just this one's. The
@@ -1076,10 +1073,11 @@ async fn manage_resources(
     };
     let quiet = style == OutputStyle::Quiet;
 
-    // Scoped to this project unless asked otherwise — the project name
-    // comes from the configuration, which is the one thing `resources`
-    // needs it for, so `--all-projects` also covers the case where the
-    // config can't be read at all.
+    // Scoped to this project unless asked otherwise — by its name alone,
+    // read from the root file without loading the rest (ratect#563), so
+    // neither the written-for check nor an expression this machine can't
+    // evaluate stands in the way. `--all-projects` covers the case where
+    // even that can't be read.
     //
     // `--all-projects` still filters on *having* the project label, never
     // on nothing: an unfiltered listing is every container on the machine,
@@ -1089,10 +1087,10 @@ async fn manage_resources(
         None
     } else {
         Some(
-            load(global, &ConfigVarArgs::default())
-                .await?
-                .config
-                .project_name,
+            ratect_core::config::project_name_of(&global.config_file).context(
+                "Can't tell which project's leftovers to act on; pass --all-projects for \
+                 every project's",
+            )?,
         )
     };
     let docker = DockerClient::new(&args.docker.into()).await?;

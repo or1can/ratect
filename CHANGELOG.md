@@ -31,6 +31,7 @@ history, from when it was the only binary.
 
 ### Changed
 
+- `ratect resources list`/`clean` (ratect only) read only the root file's `project_name` to scope themselves, so a project refused by its `ratect_version`, or holding a value that can't be evaluated on this machine, no longer stops them.
 - Upgraded `noyalib` to 0.0.57, which parses some edge-case YAML closer to the YAML 1.2 spec: `0X1F` and `0x-1` load as strings, a plain scalar whose line ends in a space continues on the next line, and folded scalars and escaped line breaks follow the spec exactly. A config relying on the old reading may load differently; see noyalib's [0.0.57 release notes](https://github.com/sebastienrousseau/noyalib/releases/tag/v0.0.57).
 
 ## [ratect-compat 0.31.0 · ratect 0.10.0] - 2026-10-02
