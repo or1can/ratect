@@ -13,5 +13,5 @@
 # that check rather than silently breaking the dogfood build; when that
 # happens, bump this line. There's no separate MSRV promise — this just
 # tracks a recent stable.
-FROM rust:1.98-bookworm
+FROM rust:1.99-bookworm
 RUN rustup component add rustfmt clippy
