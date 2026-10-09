@@ -272,8 +272,11 @@ pipe into `docker rm`. Removal takes containers before networks, since a network
 still holding an endpoint can't be removed; a resource that fails to remove is
 reported and the rest still go.
 
-Like `caches`, `resources` reads the configuration only for the project's name —
-never for what to remove, which comes from the labels alone.
+`resources` reads one thing from the configuration — the root file's
+`project_name`, to scope itself to this project — and nothing else in it, so neither
+the [`ratect_version`](ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for)
+check nor a value this machine can't evaluate gets in the way. What to remove comes
+from the labels alone.
 
 Nothing without Ratect's own labels is ever listed or removed, `--all-projects`
 included: containers started by other tools, and Docker's built-in `bridge`/`host`/

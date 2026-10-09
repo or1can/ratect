@@ -10863,3 +10863,41 @@ run = { container = "app" }
         "The container 'ghost' referenced by container 'app' does not exist."
     );
 }
+
+/// `ratect resources` scopes itself by `project_name` alone (ratect#563), so
+/// reading it must not depend on anything else in the configuration: not the
+/// written-for check, not a field this binary doesn't know, not an
+/// expression it can't evaluate here, not an include.
+#[test]
+fn project_name_is_read_from_the_root_file_alone() {
+    let dir = unique_temp_dir();
+    let toml = dir.join("ratect.toml");
+    std::fs::write(
+        &toml,
+        "ratect_version = \"99.0.0\"\nproject_name = \"demo\"\nfuture_field = 1\n\
+         include = [{ path = \"missing.toml\" }]\n\n\
+         [containers.deploy]\nimage = \"$UNSET_RATECT_563_VARIABLE\"\n",
+    )
+    .unwrap();
+    assert_eq!(project_name_of(&toml).unwrap(), "demo");
+
+    let yaml = dir.join("batect.yml");
+    std::fs::write(&yaml, ".anchor: &a 1\nproject_name: from-yaml\n").unwrap();
+    assert_eq!(project_name_of(&yaml).unwrap(), "from-yaml");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_root_file_without_a_project_name_is_an_error_naming_it() {
+    let dir = unique_temp_dir();
+    let path = dir.join("ratect.toml");
+    std::fs::write(&path, "[containers.app]\nimage = \"alpine:3.18\"\n").unwrap();
+    let error = format!("{:#}", project_name_of(&path).unwrap_err());
+    assert!(error.contains("'project_name'"), "{error}");
+    assert!(error.contains(&path.display().to_string()), "{error}");
+
+    let missing = dir.join("absent.toml");
+    let error = format!("{:#}", project_name_of(&missing).unwrap_err());
+    assert!(error.contains(&missing.display().to_string()), "{error}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
