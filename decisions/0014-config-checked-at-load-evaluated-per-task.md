@@ -39,7 +39,7 @@ kinds of thing:
 - **Checks on the file's own content run at load, for every command that loads
   the file**, and fail fast: undeclared references, a `customise` outside the
   task's graph, a task container also listed in its own `dependencies`, a
-  `run_as_current_user` `home_directory` that isn't absolute, a relative cache
+  literal `run_as_current_user` `home_directory` that isn't absolute, a relative cache
   destination under `run_as_current_user`. This is a divergence, recorded under
   "Load errors" in
   [`docs/differences-from-batect.md`](../docs/differences-from-batect.md). The
@@ -53,6 +53,34 @@ kinds of thing:
   ([#355](https://github.com/or1can/ratect/issues/355)).
 - In `batect.yml`, `run_as_current_user.home_directory` is not an expression at
   all, as in Batect ([#462](https://github.com/or1can/ratect/issues/462)).
+- **Evaluation happens per task**: when each task in the execution order is
+  reached — after its prerequisites have run, before any of its own containers
+  is built, created or started — every container in that task's graph, and the
+  task's own `run.environment`, is evaluated. So a prerequisite that fails
+  stops the run with its own failure, as in Batect, before a later task's bad
+  value is ever looked at. Within one task this is earlier than Batect, which
+  evaluates each container as it creates or builds it, possibly after starting
+  the task's dependencies; that is a divergence, recorded on the differences
+  page.
+- **A check on a field that may hold an expression judges a literal at load
+  and an expression when it's evaluated.** That covers `home_directory`'s shape
+  (absolute, no `:` or control character, a final path component) in
+  `ratect.toml`, and a Git-included container's host paths staying inside its
+  boundary. A literal mistake is a mistake in the file; a value from the
+  machine waits for evaluation, which still precedes Docker touching that
+  container, so no escaping path ever reaches the daemon.
+- **An inherited path keeps its supplier's anchoring.** `extends` (native only)
+  takes each field whole from one container in the chain, so loading records
+  which container supplied each path-bearing field — `volumes`,
+  `build_directory`, `build_secrets`, `build_ssh` — and evaluation resolves it
+  against that container's file and boundary, as it did when evaluation
+  preceded `extends`.
+- **`ratect config validate` and `ratect doctor` evaluate the whole project**
+  against the machine they run on, reporting each value that can't be
+  evaluated, or that fails a check above, as a warning naming the field and the
+  expression. A missing CI-only variable is expected on a laptop, so it never
+  fails validation; this is where a value only one task would trip over is
+  found without running that task.
 
 ## Alternatives considered
 
@@ -65,6 +93,21 @@ kinds of thing:
   `--list-tasks`. That is a gap under
   [0013](0013-when-ratect-compat-copies-batect.md)'s first rule — a config Batect
   runs fails under `ratect-compat`.
+- **Evaluating once per run, before the first prerequisite.** Rejected: both
+  this and per-task evaluation run less than Batect before failing, but this
+  one also changes which failure is reported. Where a prerequisite would fail
+  on its own, Batect reports that failure and its exit code; evaluating
+  everything first reports a later task's bad value instead, and the broken
+  prerequisite goes unnoticed.
+- **Evaluating per container, as Batect does.** Rejected: exact within a task,
+  but it spreads evaluation across the engine's build and create steps for a
+  difference no outcome depends on — Batect already creates a task's
+  containers concurrently, so which of two failures inside one task comes
+  first is a race there anyway.
+- **Keeping the un-extended containers and re-applying `extends` per task**, so
+  each ancestor's paths are evaluated against its own file. Rejected for
+  recording each field's supplier: the same anchoring, without redoing
+  inheritance on every run.
 
 ## Consequences
 
@@ -75,13 +118,21 @@ kinds of thing:
   [#373](https://github.com/or1can/ratect/issues/373),
   [#379](https://github.com/or1can/ratect/issues/379) and
   [#462](https://github.com/or1can/ratect/issues/462).
-- Which of several load errors is reported must be deterministic, and match
-  the order Batect reports that case in: the order the file declares things in,
-  for a file's own mistakes
+- Where a config has several errors, a run reports the first, and which is
+  first follows Batect only where it changes what executes. Errors at
+  different points of failure — at load against during a task, or one task
+  against a later one — surface in Batect's order, since that decides what has
+  run and which exit code you get. Errors at the same point of failure — two
+  bad containers in one file, two load-time rule violations — are reported in
+  a deterministic order of Ratect's own, the order the file declares them in:
+  the file is rejected either way, so which one is named first is presentation,
+  [0013](0013-when-ratect-compat-copies-batect.md)'s fourth rule
   ([#405](https://github.com/or1can/ratect/issues/405),
-  [#433](https://github.com/or1can/ratect/issues/433)), and tasks, then
-  containers, then config variables for a name defined in more than one file
-  ([#432](https://github.com/or1can/ratect/issues/432)).
+  [#433](https://github.com/or1can/ratect/issues/433),
+  [#432](https://github.com/or1can/ratect/issues/432)).
+- `ratect config validate` still stops at the first load-time error; only its
+  evaluation pass reports everything it finds. Collecting every load-time
+  error is a separate change.
 - `docs/ratect-compat-config-reference.md` documents resolve-once-at-load today;
   it changes with #314.
 - The native `ratect` binary shares the loader, so it follows the per-task

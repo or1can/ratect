@@ -54,6 +54,9 @@ this file's and the code's; user docs name the binary instead.
 **File syntax** — whether a file is parsed as TOML or YAML. A property of a
 file, independent of its project's dialect.
 
+**Written-for version** — the Ratect version a native project's configuration
+was written for. A property of a project, not of a file.
+
 ## Batect parity
 
 **Divergence** — a deliberate difference between `ratect-compat` and Batect,
