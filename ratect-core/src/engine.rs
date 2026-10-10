@@ -468,7 +468,7 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// The host environment lookup `proxy::proxy_environment_variables`
     /// reads from — real `std::env::var` in the real constructor, a fixed
     /// closure in tests (see `with_host_env`), same reason
-    /// `config.rs::resolve_expressions_with` parameterizes over this.
+    /// `LoadedProject::evaluate` parameterizes over this.
     host_env: HostEnv,
     /// The `/proc/net/tcp`/`tcp6` source `unreachable_proxy_ports` reads —
     /// see `ProcNetTcp` and `with_proc_net_tcp`.
@@ -784,7 +784,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// Resolves a container's `volumes` into the literal Docker bind
     /// strings `docker.rs`'s `run_container`/`start_background_container`
     /// expect. `Local` mounts are already fully resolved (host path made
-    /// absolute, interpolated) by `Config::resolve_expressions` — nothing
+    /// absolute, interpolated) by `LoadedProject::evaluate` — nothing
     /// left to do here but reassemble the `"local:container[:options]"`
     /// string. `Cache` mounts are resolved here instead, since that needs
     /// `--cache-type` (see `with_settings`) and the project's own cache
@@ -1411,7 +1411,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         let home_directory = run_as_current_user
             .home_directory
             .clone()
-            .expect("validated non-None by Config::resolve_expressions when enabled is true");
+            .expect("validated non-None when the config loads, when enabled is true");
 
         // A cache mount's container path — the volume behind it is created
         // root-owned, so without this the mapped user cannot write to it.
@@ -2486,7 +2486,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     // A `customise` entry for this container specifically —
                     // applied on top of its own base config, same precedence
                     // as a task's `run` overriding its own main container
-                    // (see `Config::resolve_expressions_with_boundaries`
+                    // (see `config::check_values`
                     // for the validation ensuring this can never target the
                     // main task container, and
                     // `config::reject_customisations_outside_the_task_graph`

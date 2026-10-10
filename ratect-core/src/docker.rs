@@ -1316,7 +1316,7 @@ fn ensure_host_volume_directories_exist(volumes: Option<&Vec<String>>) -> Result
         // A non-absolute source is a Docker named volume, not a host path —
         // a `cache` mount under `CacheType::Volume` resolves to exactly
         // this (e.g. `"batect-cache-<key>-<name>"`). Every *local* mount's
-        // host path is already made absolute by `Config::resolve_expressions`
+        // host path is already made absolute by `LoadedProject::evaluate`
         // before it ever reaches here, so this only ever skips a named
         // volume, never a genuine (if unusual) relative local path.
         // Without this guard, `create_dir_all` would `mkdir -p` a directory
@@ -2018,8 +2018,8 @@ impl DockerClient {
         {
             let tar = build_owned_directory_tar(directory, mapping.user.uid, mapping.user.gid)
                 // Not attributed to a container here: a non-absolute
-                // mount path is a *config* error, rejected by
-                // `Config::resolve_expressions_with` naming the container
+                // mount path is a *config* error, rejected when the
+                // config loads or is evaluated, naming the container
                 // the user wrote. Reaching this is a bug in Ratect, so the
                 // Docker id is the useful identifier rather than a
                 // misleading one.

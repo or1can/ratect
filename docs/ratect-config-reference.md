@@ -303,15 +303,16 @@ host environment with a fallback. The same rules apply as everywhere else — an
 unset host variable with no `:-default` is a hard error naming it, rather than a
 silent empty string that would produce a puzzling image reference.
 
-Resolution happens before `extends` is applied, so a container inheriting an
-`image` inherits the *resolved* value, consistent with `build_directory` and
-volume host paths.
+A container inheriting an `image` through `extends` gets the expression its
+parent wrote, evaluated the same way, so it resolves to the same value.
 
-**Resolution is eager and covers the whole file**, not just the containers your
-task uses — again like every other expression-bearing field. So an unset
-variable with no `:-default` fails *every* task in the file, including tasks
-that never touch the container declaring it. Give a default where a variable is
-genuinely optional. The error names the container, so you are not left hunting
+**Nothing is evaluated when the file loads**, so `ratect tasks list` works
+whatever this machine supplies. Running a task evaluates every container in the
+file before it starts, not just the ones your task uses — again like every
+other expression-bearing field. So an unset variable with no `:-default` fails
+*every* task in the file, including tasks that never touch the container
+declaring it. Give a default where a variable is genuinely optional. The error
+names the container, the field and the expression, so you are not left hunting
 for which one.
 
 **Rejected in a `batect.yml`**, rather than resolved or ignored. Batect has no

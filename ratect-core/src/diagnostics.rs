@@ -108,8 +108,8 @@ pub fn config_findings(config: &Config) -> Vec<Finding> {
         )));
     }
 
-    // Already resolved to an absolute path by `load_project`, so this is
-    // the path Ratect will actually hand to Docker.
+    // Already resolved to an absolute path by `LoadedProject::evaluate`, so
+    // this is the path Ratect will actually hand to Docker.
     let mut missing: Vec<String> = Vec::new();
     for (name, container) in &config.containers {
         let Some(directory) = &container.build_directory else {

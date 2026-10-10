@@ -43,7 +43,11 @@ model):
   after `include` merge. An inherited relative path is already absolute by the
   time a child inherits it, so it stays anchored to the *parent's* own file; this
   is the only ordering under which inheritance across `include` boundaries doesn't
-  silently re-anchor paths to the child's directory.
+  silently re-anchor paths to the child's directory. *(Amended by
+  [0014](0014-config-checked-at-load-evaluated-per-task.md): loading no longer
+  evaluates, so `extends` now runs on unevaluated containers and records which
+  container supplied each path-bearing field; evaluation resolves an inherited
+  path against that supplier's file, keeping the same anchoring.)*
 - **Shallow, per field** — mechanically `child.or(parent)` over the (already
   `Option`) fields, exactly Cargo's `inherits`: a set field replaces, an unset one
   inherits, no recursion into nested maps.

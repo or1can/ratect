@@ -739,7 +739,7 @@ fn tmpfs_mounts(
 /// Each `build_ssh` entry's already-resolved `paths` are classified into a
 /// source here — see [`crate::docker::classify_ssh_agent_paths`], which is
 /// what makes this fallible. Ids are unique by the time this runs, checked
-/// by [`crate::config::Config::resolve_expressions_with`].
+/// when the configuration loads (`crate::config::load_project`).
 ///
 /// Failures here name an agent id rather than a container, deliberately:
 /// `TaskEngine::resolve_image` attributes every way one container's build

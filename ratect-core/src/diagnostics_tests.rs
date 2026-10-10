@@ -49,7 +49,7 @@ async fn config_from(file_name: &str, text: &str) -> Config {
     let path = directory.join(file_name);
     std::fs::write(&path, text).unwrap();
 
-    let project = crate::config::load_project_native(&path, &HashMap::new())
+    let project = crate::config::load_project_native(&path)
         .await
         .expect("fixture config should load");
     std::fs::remove_dir_all(&directory).unwrap();

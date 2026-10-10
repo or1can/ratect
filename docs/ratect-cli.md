@@ -103,7 +103,8 @@ and `ratect run build -f custom.yml` are the same invocation.
 Narrower options attach to the commands that actually use them, rather than being
 global: a flag that's accepted and then ignored reads as a promise. So the
 config-variable options below belong to `run` and `tasks list` (the commands that read
-configuration), and the Docker connection options to `run`, `caches`, `resources` and `doctor` (the
+configuration — though `tasks list` evaluates nothing, so it reads the values without
+using them), and the Docker connection options to `run`, `caches`, `resources` and `doctor` (the
 ones that reach a daemon).
 
 | Option | Applies to | Description |

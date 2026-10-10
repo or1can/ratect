@@ -291,11 +291,12 @@ enum TasksCommand {
 
 #[derive(ClapArgs, Debug)]
 struct TasksListArgs {
-    // Listing tasks means loading and *resolving* the configuration, which
-    // fails outright if a declared config variable has no value — so the
-    // options that supply one belong here, even though nothing in the listing
-    // itself interpolates. (A task's `description` is a plain string, not an
-    // expression, matching Batect's own typing.)
+    // Listing tasks loads the configuration but evaluates nothing (see
+    // `LoadedProject::evaluate`), so these values are read — a malformed
+    // vars file still fails — and then unused. Kept rather than removed
+    // because dropping them would break a script that passes them. (A task's
+    // `description` is a plain string, not an expression, matching Batect's
+    // own typing.)
     #[command(flatten)]
     config_vars: ConfigVarArgs,
 }
@@ -668,13 +669,16 @@ async fn run(cli: Cli) -> Result<()> {
     // Arms follow the `Command` enum's own order (see there).
     match command {
         Command::Run(args) => {
-            let project = load(&global, &args.config_vars).await?;
-            run_task(project, args, color_mode, requested_style, terminal).await
+            let (project, config_var_overrides) = load(&global, &args.config_vars).await?;
+            // Every container and task, until the engine evaluates only what
+            // each task uses (#557).
+            let config = project.evaluate_all(&config_var_overrides)?;
+            run_task(project, config, args, color_mode, requested_style, terminal).await
         }
         Command::Tasks {
             command: TasksCommand::List(args),
         } => {
-            let project = load(&global, &args.config_vars).await?;
+            let (project, _) = load(&global, &args.config_vars).await?;
             let listing = match style {
                 OutputStyle::Quiet => format_task_list_quiet(&project.config.tasks),
                 _ => format_task_list(&project.config.project_name, &project.config.tasks),
@@ -769,12 +773,14 @@ fn completion_config_file() -> PathBuf {
     }
 }
 
-/// Loads the configuration — merging `--config-vars-file` with any
-/// `--config-var`s, which override it.
+/// Loads the configuration, and the config-variable overrides its
+/// evaluation would use — `--config-vars-file` merged with any
+/// `--config-var`s, which override it. Loading evaluates nothing (see
+/// `LoadedProject::evaluate`), so a verb that needs values passes these on.
 async fn load(
     global: &GlobalArgs,
     config_vars: &ConfigVarArgs,
-) -> Result<ratect_core::config::LoadedProject> {
+) -> Result<(ratect_core::config::LoadedProject, HashMap<String, String>)> {
     // Before the load, so a project written for a newer Ratect is refused for
     // that rather than for whichever new field the parser trips on first.
     ratect_core::written_for::check(&global.config_file, running_version())?;
@@ -794,7 +800,20 @@ async fn load(
         None => HashMap::new(),
     };
     config_var_overrides.extend(config_vars.config_var.iter().cloned());
-    load_project_native(&global.config_file, &config_var_overrides).await
+    let project = load_project_native(&global.config_file).await?;
+    Ok((project, config_var_overrides))
+}
+
+/// [`load`], then every container and task evaluated — what `doctor` and
+/// `config validate` check, until they report each value that can't be
+/// evaluated as a warning instead (#558).
+async fn load_and_evaluate(
+    global: &GlobalArgs,
+    config_vars: &ConfigVarArgs,
+) -> Result<(ratect_core::config::LoadedProject, Config)> {
+    let (project, overrides) = load(global, config_vars).await?;
+    let config = project.evaluate_all(&overrides)?;
+    Ok((project, config))
 }
 
 /// `doctor`/`config validate`'s nudge to declare `ratect_version` — read
@@ -829,6 +848,7 @@ const BATECT_CONFIG_FILE: &str = "batect.yml";
 
 async fn run_task(
     project: ratect_core::config::LoadedProject,
+    config: Config,
     args: RunArgs,
     color_mode: ColorMode,
     requested_style: Option<OutputStyle>,
@@ -855,8 +875,7 @@ async fn run_task(
         .with_event_sink(Arc::clone(&event_sink))
         .with_enable_buildkit(args.enable_buildkit);
 
-    let engine =
-        TaskEngine::new(project.config, docker, event_sink, interrupt).with_settings(settings)?;
+    let engine = TaskEngine::new(config, docker, event_sink, interrupt).with_settings(settings)?;
     engine.run_task(&args.task, &args.args).await
 }
 
@@ -1244,15 +1263,15 @@ async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> 
         &global.config_file,
     )));
 
-    match load(global, &args.config_vars).await {
-        Ok(project) => {
+    match load_and_evaluate(global, &args.config_vars).await {
+        Ok((project, config)) => {
             findings.push(Finding::Fine(format!(
                 "{} loads ({} container(s), {} task(s))",
                 global.config_file.display(),
                 project.config.declared_containers().count(),
                 project.config.tasks.len()
             )));
-            findings.extend(config_findings(&project.config));
+            findings.extend(config_findings(&config));
             findings.extend(written_for_finding_for(&global.config_file));
 
             // Now's the current time; leftover age isn't part of this
@@ -1325,15 +1344,15 @@ async fn validate_config(
     style: OutputStyle,
 ) -> Result<()> {
     let mut findings = Vec::new();
-    match load(global, &args.config_vars).await {
-        Ok(project) => {
+    match load_and_evaluate(global, &args.config_vars).await {
+        Ok((project, config)) => {
             findings.push(Finding::Fine(format!(
                 "{} loads ({} container(s), {} task(s))",
                 global.config_file.display(),
                 project.config.declared_containers().count(),
                 project.config.tasks.len()
             )));
-            findings.extend(config_findings(&project.config));
+            findings.extend(config_findings(&config));
             findings.extend(written_for_finding_for(&global.config_file));
         }
         Err(error) => findings.push(Finding::Problem(format!(

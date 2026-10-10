@@ -21,6 +21,94 @@ fn parse(yaml: &str) -> Config {
     noyalib::from_reader(Cursor::new(yaml.as_bytes())).expect("valid yaml")
 }
 
+/// A loader-free path through the two real halves, for a config with no
+/// `extends`: [`check_values`], what loading judges, then every container
+/// and task through [`LoadedProject::evaluate`], written back in place.
+fn check_and_evaluate_in_place(
+    config: &mut Config,
+    base_path: &Path,
+    provenance: Provenance,
+    config_var_overrides: &HashMap<String, String>,
+    host_env: impl Fn(&str) -> Option<String>,
+) -> Result<()> {
+    let project_directory = project_directory_path(base_path)?;
+    check_values(config, &provenance, &project_directory)?;
+    let project = LoadedProject {
+        config: Config {
+            project_name: config.project_name.clone(),
+            containers: config.containers.clone(),
+            tasks: config.tasks.clone(),
+            config_variables: config.config_variables.clone(),
+            forbid_telemetry: config.forbid_telemetry,
+        },
+        project_directory,
+        // Unread by `evaluate`; Batect-shapedness comes from `provenance`.
+        dialect: Dialect::BatectCompatible,
+        provenance,
+    };
+    let Evaluated { containers, tasks } = project.evaluate(
+        project.config.containers.keys().map(String::as_str),
+        project.config.tasks.keys().map(String::as_str),
+        config_var_overrides,
+        host_env,
+    )?;
+    config.containers = containers;
+    config.tasks = tasks;
+    Ok(())
+}
+
+impl Config {
+    /// [`check_and_evaluate_in_place`] on a hand-built `Config`, each
+    /// container's paths anchored on `container_base_paths` (or `base_path`
+    /// where absent).
+    fn check_and_evaluate_with(
+        &mut self,
+        base_path: &Path,
+        container_base_paths: &HashMap<String, PathBuf>,
+        config_var_overrides: &HashMap<String, String>,
+        host_env: impl Fn(&str) -> Option<String>,
+    ) -> Result<()> {
+        let provenance = Provenance {
+            base_paths: container_base_paths.clone(),
+            ..Provenance::default()
+        };
+        check_and_evaluate_in_place(self, base_path, provenance, config_var_overrides, host_env)
+    }
+
+    /// [`check_values`] alone — what loading judges, so a test using this
+    /// pins that a rule fires (or doesn't) at load, not only by evaluation.
+    fn check_with(
+        &self,
+        base_path: &Path,
+        container_base_paths: &HashMap<String, PathBuf>,
+    ) -> Result<()> {
+        let provenance = Provenance {
+            base_paths: container_base_paths.clone(),
+            ..Provenance::default()
+        };
+        check_values(self, &provenance, &project_directory_path(base_path)?)
+    }
+}
+
+impl LoadedConfig {
+    /// [`check_and_evaluate_in_place`] on a loaded but unextended config,
+    /// with its real provenance and the real host environment.
+    fn check_and_evaluate(
+        &mut self,
+        base_path: &Path,
+        config_var_overrides: &HashMap<String, String>,
+    ) -> Result<()> {
+        let provenance = self.provenance();
+        check_and_evaluate_in_place(
+            &mut self.config,
+            base_path,
+            provenance,
+            config_var_overrides,
+            |name| std::env::var(name).ok(),
+        )
+    }
+}
+
 /// Moved here from `ratect-compat`'s own `main.rs` when `base_path_for`
 /// became shared (`ratect` needs the identical rule) — the behavior is
 /// the same, only its home changed.
@@ -298,8 +386,8 @@ fn format_task_list_quiet_is_sorted_tab_separated_and_ignores_groups() {
 }
 
 #[test]
-fn resolve_expressions_errors_when_a_task_has_neither_run_nor_prerequisites() {
-    let mut config = parse(
+fn load_errors_when_a_task_has_neither_run_nor_prerequisites() {
+    let config = parse(
         r#"
 project_name: demo
 containers:
@@ -310,20 +398,15 @@ tasks:
 "#,
     );
 
-    let result = config.resolve_expressions_with(
-        Path::new("/base"),
-        &HashMap::new(),
-        &HashMap::new(),
-        no_host_env,
-    );
+    let result = config.check_with(Path::new("/base"), &HashMap::new());
 
     assert!(format!("{:#}", result.unwrap_err())
         .contains("Task 'test' must have at least one of 'run' or 'prerequisites'"));
 }
 
 #[test]
-fn resolve_expressions_errors_when_a_task_has_empty_prerequisites_and_no_run() {
-    let mut config = parse(
+fn load_errors_when_a_task_has_empty_prerequisites_and_no_run() {
+    let config = parse(
         r#"
 project_name: demo
 containers:
@@ -335,12 +418,7 @@ tasks:
 "#,
     );
 
-    let result = config.resolve_expressions_with(
-        Path::new("/base"),
-        &HashMap::new(),
-        &HashMap::new(),
-        no_host_env,
-    );
+    let result = config.check_with(Path::new("/base"), &HashMap::new());
 
     assert!(format!("{:#}", result.unwrap_err())
         .contains("Task 'test' must have at least one of 'run' or 'prerequisites'"));
@@ -373,8 +451,8 @@ tasks:
 }
 
 #[test]
-fn resolve_expressions_errors_when_a_task_has_dependencies_but_no_run() {
-    let mut config = parse(
+fn load_errors_when_a_task_has_dependencies_but_no_run() {
+    let config = parse(
         r#"
 project_name: demo
 containers:
@@ -396,20 +474,15 @@ tasks:
 "#,
     );
 
-    let result = config.resolve_expressions_with(
-        Path::new("/base"),
-        &HashMap::new(),
-        &HashMap::new(),
-        no_host_env,
-    );
+    let result = config.check_with(Path::new("/base"), &HashMap::new());
 
     assert!(format!("{:#}", result.unwrap_err())
         .contains("'run' is required if 'dependencies' is provided"));
 }
 
 #[test]
-fn resolve_expressions_errors_when_a_task_dependency_names_its_own_main_container() {
-    let mut config = parse(
+fn load_errors_when_a_task_dependency_names_its_own_main_container() {
+    let config = parse(
         r#"
 project_name: demo
 containers:
@@ -424,12 +497,7 @@ tasks:
 "#,
     );
 
-    let result = config.resolve_expressions_with(
-        Path::new("/base"),
-        &HashMap::new(),
-        &HashMap::new(),
-        no_host_env,
-    );
+    let result = config.check_with(Path::new("/base"), &HashMap::new());
 
     let message = result.unwrap_err().to_string();
     assert!(message.contains("Task 'test'"), "message: {message}");
@@ -476,8 +544,8 @@ tasks:
 }
 
 #[test]
-fn resolve_expressions_errors_when_customise_targets_the_main_task_container() {
-    let mut config = parse(
+fn load_errors_when_customise_targets_the_main_task_container() {
+    let config = parse(
         r#"
 project_name: demo
 containers:
@@ -493,12 +561,7 @@ tasks:
 "#,
     );
 
-    let result = config.resolve_expressions_with(
-        Path::new("/base"),
-        &HashMap::new(),
-        &HashMap::new(),
-        no_host_env,
-    );
+    let result = config.check_with(Path::new("/base"), &HashMap::new());
 
     assert!(format!("{:#}", result.unwrap_err())
         .contains("Cannot apply customisations to main task container 'build-env'"));
@@ -536,8 +599,8 @@ tasks:
 }
 
 #[test]
-fn resolve_expressions_allows_customise_for_a_task_level_dependency() {
-    let mut config = parse(
+fn load_allows_customise_for_a_task_level_dependency() {
+    let config = parse(
         r#"
 project_name: demo
 containers:
@@ -557,12 +620,7 @@ tasks:
 "#,
     );
 
-    let result = config.resolve_expressions_with(
-        Path::new("/base"),
-        &HashMap::new(),
-        &HashMap::new(),
-        no_host_env,
-    );
+    let result = config.check_with(Path::new("/base"), &HashMap::new());
 
     assert!(result.is_ok(), "{:?}", result.unwrap_err());
 }
@@ -1991,7 +2049,7 @@ fn volume_mount_tmpfs_serializes_to_object_form() {
 }
 
 #[test]
-fn resolve_expressions_makes_relative_local_volume_host_path_absolute() {
+fn evaluate_makes_relative_local_volume_host_path_absolute() {
     let mut container = container_with_environment(HashMap::new());
     container.volumes = Some(vec![VolumeMount::Local(LocalVolumeMount {
         local: "code".to_string(),
@@ -2007,7 +2065,7 @@ fn resolve_expressions_makes_relative_local_volume_host_path_absolute() {
     };
 
     config
-        .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+        .check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
             None
         })
         .unwrap();
@@ -2020,7 +2078,7 @@ fn resolve_expressions_makes_relative_local_volume_host_path_absolute() {
 }
 
 #[test]
-fn resolve_expressions_leaves_absolute_local_volume_host_path_unchanged() {
+fn evaluate_leaves_absolute_local_volume_host_path_unchanged() {
     let mut container = container_with_environment(HashMap::new());
     container.volumes = Some(vec![VolumeMount::Local(LocalVolumeMount {
         local: "/already/absolute".to_string(),
@@ -2036,7 +2094,7 @@ fn resolve_expressions_leaves_absolute_local_volume_host_path_unchanged() {
     };
 
     config
-        .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+        .check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
             None
         })
         .unwrap();
@@ -2049,7 +2107,7 @@ fn resolve_expressions_leaves_absolute_local_volume_host_path_unchanged() {
 }
 
 #[test]
-fn resolve_expressions_interpolates_relative_local_volume_host_path_expression() {
+fn evaluate_interpolates_relative_local_volume_host_path_expression() {
     let mut container = container_with_environment(HashMap::new());
     container.volumes = Some(vec![VolumeMount::Local(LocalVolumeMount {
         local: "<subdir".to_string(),
@@ -2071,7 +2129,7 @@ fn resolve_expressions_interpolates_relative_local_volume_host_path_expression()
     };
 
     config
-        .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+        .check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
             None
         })
         .unwrap();
@@ -2084,8 +2142,7 @@ fn resolve_expressions_interpolates_relative_local_volume_host_path_expression()
 }
 
 #[test]
-fn resolve_expressions_interpolates_absolute_local_volume_host_path_expression_without_prefixing_base_path(
-) {
+fn evaluate_interpolates_absolute_local_volume_host_path_expression_without_prefixing_base_path() {
     // `<project_root` resolving to an absolute path must be used as-is,
     // not treated as a literal relative fragment of `base_path` the way
     // it would be if resolution happened before interpolation.
@@ -2110,7 +2167,7 @@ fn resolve_expressions_interpolates_absolute_local_volume_host_path_expression_w
     };
 
     config
-        .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+        .check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
             None
         })
         .unwrap();
@@ -2123,7 +2180,7 @@ fn resolve_expressions_interpolates_absolute_local_volume_host_path_expression_w
 }
 
 #[test]
-fn resolve_expressions_does_not_touch_cache_volume_mounts() {
+fn evaluate_does_not_touch_cache_volume_mounts() {
     let mut container = container_with_environment(HashMap::new());
     container.volumes = Some(vec![VolumeMount::Cache(CacheVolumeMount {
         name: "gradle-cache".to_string(),
@@ -2140,7 +2197,7 @@ fn resolve_expressions_does_not_touch_cache_volume_mounts() {
     };
 
     config
-        .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+        .check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
             None
         })
         .unwrap();
@@ -2156,9 +2213,27 @@ fn resolve_expressions_does_not_touch_cache_volume_mounts() {
     );
 }
 
+/// Evaluates then anchors one host path, as `evaluate_container` does for
+/// each.
+fn evaluate_path(
+    path: &str,
+    base_path: &Path,
+    host_env: &impl Fn(&str) -> Option<String>,
+    config_vars: &HashMap<String, Option<String>>,
+    boundary: Option<(&Boundary, &Path)>,
+) -> Result<String> {
+    let evaluated = evaluate_value("'volumes'", path, host_env, config_vars)?;
+    let anchor = Anchor {
+        base_path,
+        boundary,
+        batect_shaped: false,
+    };
+    Ok(anchor_path(&evaluated, &anchor)?.display().to_string())
+}
+
 #[test]
-fn resolve_path_makes_relative_path_absolute() {
-    let resolved = resolve_path(
+fn evaluate_path_makes_relative_path_absolute() {
+    let resolved = evaluate_path(
         "docker",
         Path::new("/base"),
         &no_host_env,
@@ -2174,13 +2249,13 @@ fn resolve_path_makes_relative_path_absolute() {
 /// Batect's own `PathResolver.resolveHomeDir`, and what a config like
 /// `local: ~/.cache/trivy` obviously intends.
 #[test]
-fn resolve_path_expands_a_leading_tilde_to_the_home_directory() {
+fn evaluate_path_expands_a_leading_tilde_to_the_home_directory() {
     let home = crate::user::home_directory().unwrap();
     for (path, expected) in [
         ("~/.cache/trivy", home.join(".cache/trivy")),
         ("~", home.clone()),
     ] {
-        let resolved = resolve_path(
+        let resolved = evaluate_path(
             path,
             Path::new("/base"),
             &no_host_env,
@@ -2197,12 +2272,12 @@ fn resolve_path_expands_a_leading_tilde_to_the_home_directory() {
 /// Batect doesn't support either) and a `~` anywhere but the front stay
 /// literal.
 #[test]
-fn resolve_path_leaves_a_tilde_that_is_not_a_leading_component_alone() {
+fn evaluate_path_leaves_a_tilde_that_is_not_a_leading_component_alone() {
     for (path, expected) in [
         ("~notauser/x", "/base/~notauser/x"),
         ("sub/~/x", "/base/sub/~/x"),
     ] {
-        let resolved = resolve_path(
+        let resolved = evaluate_path(
             path,
             Path::new("/base"),
             &no_host_env,
@@ -2215,8 +2290,8 @@ fn resolve_path_leaves_a_tilde_that_is_not_a_leading_component_alone() {
 }
 
 #[test]
-fn resolve_path_cleans_dot_components_from_the_joined_path() {
-    let resolved = resolve_path(
+fn evaluate_path_cleans_dot_components_from_the_joined_path() {
+    let resolved = evaluate_path(
         "./docker",
         Path::new("/base"),
         &no_host_env,
@@ -2231,8 +2306,8 @@ fn resolve_path_cleans_dot_components_from_the_joined_path() {
 }
 
 #[test]
-fn resolve_path_leaves_absolute_path_unchanged() {
-    let resolved = resolve_path(
+fn evaluate_path_leaves_absolute_path_unchanged() {
+    let resolved = evaluate_path(
         "/already/absolute",
         Path::new("/base"),
         &no_host_env,
@@ -2244,9 +2319,9 @@ fn resolve_path_leaves_absolute_path_unchanged() {
 }
 
 #[test]
-fn resolve_path_interpolates_expression_before_resolving() {
+fn evaluate_path_interpolates_expression_before_resolving() {
     let config_vars = HashMap::from([("project_root".to_string(), Some("/abs/root".to_string()))]);
-    let resolved = resolve_path(
+    let resolved = evaluate_path(
         "<project_root",
         Path::new("/base"),
         &no_host_env,
@@ -2281,9 +2356,9 @@ fn ungranted_git_boundary_at(repo_dir: PathBuf) -> Boundary {
 }
 
 #[test]
-fn resolve_path_rejects_a_git_included_containers_absolute_path_outside_both_allowed_roots() {
+fn evaluate_path_rejects_a_git_included_containers_absolute_path_outside_both_allowed_roots() {
     let boundary = ungranted_git_boundary();
-    let result = resolve_path(
+    let result = evaluate_path(
         "/etc",
         Path::new("/repo/sub"),
         &no_host_env,
@@ -2300,9 +2375,9 @@ fn resolve_path_rejects_a_git_included_containers_absolute_path_outside_both_all
 /// be. (Before expansion existed this was inert — it resolved to a
 /// harmless `<repo>/~/.ssh` — so it's newly load-bearing.)
 #[test]
-fn resolve_path_rejects_a_git_included_containers_home_directory_path() {
+fn evaluate_path_rejects_a_git_included_containers_home_directory_path() {
     let boundary = ungranted_git_boundary();
-    let result = resolve_path(
+    let result = evaluate_path(
         "~/.ssh",
         Path::new("/repo/sub"),
         &no_host_env,
@@ -2313,9 +2388,9 @@ fn resolve_path_rejects_a_git_included_containers_home_directory_path() {
 }
 
 #[test]
-fn resolve_path_rejects_a_git_included_containers_dot_dot_traversal_outside_both_allowed_roots() {
+fn evaluate_path_rejects_a_git_included_containers_dot_dot_traversal_outside_both_allowed_roots() {
     let boundary = ungranted_git_boundary();
-    let result = resolve_path(
+    let result = evaluate_path(
         "../../etc",
         Path::new("/repo/sub"),
         &no_host_env,
@@ -2334,13 +2409,13 @@ fn resolve_path_rejects_a_git_included_containers_dot_dot_traversal_outside_both
 /// normalized this passed containment and was handed to Docker as a
 /// bind-mount source.
 #[test]
-fn resolve_path_rejects_a_git_included_containers_absolute_path_with_a_traversal() {
+fn evaluate_path_rejects_a_git_included_containers_absolute_path_with_a_traversal() {
     let boundary = ungranted_git_boundary();
     for path in [
         "/repo/../../etc/shadow",
         "<{batect.project_directory}/../../../etc/shadow",
     ] {
-        let result = resolve_path(
+        let result = evaluate_path(
             path,
             Path::new("/repo/sub"),
             &no_host_env,
@@ -2363,14 +2438,14 @@ fn resolve_path_rejects_a_git_included_containers_absolute_path_with_a_traversal
 /// target is not, and Docker dereferences it at bind-mount time.
 #[cfg(unix)]
 #[test]
-fn resolve_path_rejects_a_symlink_inside_the_clone_that_points_outside_both_roots() {
+fn evaluate_path_rejects_a_symlink_inside_the_clone_that_points_outside_both_roots() {
     let repo_dir = unique_temp_dir();
     let outside = unique_temp_dir();
     std::os::unix::fs::symlink(&outside, repo_dir.join("escape")).unwrap();
     let project_dir = unique_temp_dir();
     let boundary = ungranted_git_boundary_at(repo_dir.clone());
 
-    let result = resolve_path(
+    let result = evaluate_path(
         "escape",
         &repo_dir,
         &no_host_env,
@@ -2387,13 +2462,13 @@ fn resolve_path_rejects_a_symlink_inside_the_clone_that_points_outside_both_root
 /// The check above must not reject the ordinary case it sits in front of.
 #[cfg(unix)]
 #[test]
-fn resolve_path_allows_a_real_path_inside_the_clone() {
+fn evaluate_path_allows_a_real_path_inside_the_clone() {
     let repo_dir = unique_temp_dir();
     std::fs::create_dir(repo_dir.join("data")).unwrap();
     let project_dir = unique_temp_dir();
     let boundary = ungranted_git_boundary_at(repo_dir.clone());
 
-    let resolved = resolve_path(
+    let resolved = evaluate_path(
         "data",
         &repo_dir,
         &no_host_env,
@@ -2413,12 +2488,12 @@ fn resolve_path_allows_a_real_path_inside_the_clone() {
 /// missing path into a rejection.
 #[cfg(unix)]
 #[test]
-fn resolve_path_allows_a_path_inside_the_clone_that_does_not_exist_yet() {
+fn evaluate_path_allows_a_path_inside_the_clone_that_does_not_exist_yet() {
     let repo_dir = unique_temp_dir();
     let project_dir = unique_temp_dir();
     let boundary = ungranted_git_boundary_at(repo_dir.clone());
 
-    let resolved = resolve_path(
+    let resolved = evaluate_path(
         "not-created-yet/output",
         &repo_dir,
         &no_host_env,
@@ -2438,7 +2513,7 @@ fn resolve_path_allows_a_path_inside_the_clone_that_does_not_exist_yet() {
 /// to canonicalize both sides or every path under such a root is rejected.
 #[cfg(unix)]
 #[test]
-fn resolve_path_allows_a_project_directory_that_is_itself_reached_through_a_symlink() {
+fn evaluate_path_allows_a_project_directory_that_is_itself_reached_through_a_symlink() {
     let real_project = unique_temp_dir();
     let link_parent = unique_temp_dir();
     let linked_project = link_parent.join("project");
@@ -2446,7 +2521,7 @@ fn resolve_path_allows_a_project_directory_that_is_itself_reached_through_a_syml
     std::fs::create_dir(real_project.join("output")).unwrap();
     let boundary = ungranted_git_boundary_at(unique_temp_dir());
 
-    let resolved = resolve_path(
+    let resolved = evaluate_path(
         "output",
         &linked_project,
         &no_host_env,
@@ -2473,13 +2548,13 @@ fn resolve_path_allows_a_project_directory_that_is_itself_reached_through_a_syml
 /// runs as one, as the dogfooded `batect.yml` tasks do.
 #[cfg(unix)]
 #[test]
-fn resolve_path_refuses_a_path_whose_real_location_cannot_be_determined() {
+fn evaluate_path_refuses_a_path_whose_real_location_cannot_be_determined() {
     let repo_dir = unique_temp_dir();
     std::os::unix::fs::symlink("loop", repo_dir.join("loop")).unwrap();
     let project_dir = unique_temp_dir();
     let boundary = ungranted_git_boundary_at(repo_dir.clone());
 
-    let result = resolve_path(
+    let result = evaluate_path(
         "loop",
         &repo_dir,
         &no_host_env,
@@ -2497,9 +2572,9 @@ fn resolve_path_refuses_a_path_whose_real_location_cannot_be_determined() {
 /// reach: a `..` that stays inside an allowed root is still allowed, and the
 /// resolved path comes back normalized rather than as written.
 #[test]
-fn resolve_path_allows_a_traversal_that_stays_inside_an_allowed_root() {
+fn evaluate_path_allows_a_traversal_that_stays_inside_an_allowed_root() {
     let boundary = ungranted_git_boundary();
-    let resolved = resolve_path(
+    let resolved = evaluate_path(
         "/repo/sub/../docker",
         Path::new("/repo/sub"),
         &no_host_env,
@@ -2511,9 +2586,9 @@ fn resolve_path_allows_a_traversal_that_stays_inside_an_allowed_root() {
 }
 
 #[test]
-fn resolve_path_allows_a_git_included_containers_path_within_the_clone_directory() {
+fn evaluate_path_allows_a_git_included_containers_path_within_the_clone_directory() {
     let boundary = ungranted_git_boundary();
-    let resolved = resolve_path(
+    let resolved = evaluate_path(
         "sub/docker",
         Path::new("/repo"),
         &no_host_env,
@@ -2525,14 +2600,14 @@ fn resolve_path_allows_a_git_included_containers_path_within_the_clone_directory
 }
 
 #[test]
-fn resolve_path_allows_a_git_included_containers_path_under_the_project_directory() {
+fn evaluate_path_allows_a_git_included_containers_path_under_the_project_directory() {
     // A shared bundle referencing the caller's own project directory
     // (e.g. `<{batect.project_directory}/output`) is a legitimate use
     // case, not an escape — the project directory is the caller's own,
     // fully-trusted tree, distinct from the untrusted repository the
     // container definition itself came from.
     let boundary = ungranted_git_boundary();
-    let resolved = resolve_path(
+    let resolved = evaluate_path(
         "/project/output",
         Path::new("/repo"),
         &no_host_env,
@@ -2589,7 +2664,7 @@ fn container_with_build(build_directory: &str, build_args: HashMap<String, Strin
 }
 
 #[test]
-fn resolve_expressions_resolves_build_directory_relative_path() {
+fn evaluate_resolves_build_directory_relative_path() {
     let mut config = Config {
         project_name: "demo".to_string(),
         containers: HashMap::from([(
@@ -2602,7 +2677,7 @@ fn resolve_expressions_resolves_build_directory_relative_path() {
     };
 
     config
-        .resolve_expressions_with(
+        .check_and_evaluate_with(
             Path::new("/base"),
             &HashMap::new(),
             &HashMap::new(),
@@ -2617,7 +2692,7 @@ fn resolve_expressions_resolves_build_directory_relative_path() {
 }
 
 #[test]
-fn resolve_expressions_interpolates_build_args() {
+fn evaluate_interpolates_build_args() {
     let mut build_args = HashMap::new();
     build_args.insert("MESSAGE".to_string(), "$HOST_VAR".to_string());
     let mut config = Config {
@@ -2632,7 +2707,7 @@ fn resolve_expressions_interpolates_build_args() {
     };
 
     config
-        .resolve_expressions_with(
+        .check_and_evaluate_with(
             Path::new("/base"),
             &HashMap::new(),
             &HashMap::new(),
@@ -2647,7 +2722,7 @@ fn resolve_expressions_interpolates_build_args() {
 }
 
 #[test]
-fn resolve_expressions_resolves_build_secret_path_relative_to_base() {
+fn evaluate_resolves_build_secret_path_relative_to_base() {
     let mut container = container_with_build("./docker", HashMap::new());
     container.build_secrets = Some(HashMap::from([(
         "cert".to_string(),
@@ -2662,7 +2737,7 @@ fn resolve_expressions_resolves_build_secret_path_relative_to_base() {
     };
 
     config
-        .resolve_expressions_with(
+        .check_and_evaluate_with(
             Path::new("/base"),
             &HashMap::new(),
             &HashMap::new(),
@@ -2680,7 +2755,7 @@ fn resolve_expressions_resolves_build_secret_path_relative_to_base() {
 }
 
 #[test]
-fn resolve_expressions_leaves_build_secret_environment_name_unresolved() {
+fn evaluate_leaves_build_secret_environment_name_unresolved() {
     let mut container = container_with_build("./docker", HashMap::new());
     container.build_secrets = Some(HashMap::from([(
         "token".to_string(),
@@ -2695,7 +2770,7 @@ fn resolve_expressions_leaves_build_secret_environment_name_unresolved() {
     };
 
     config
-        .resolve_expressions_with(
+        .check_and_evaluate_with(
             Path::new("/base"),
             &HashMap::new(),
             &HashMap::new(),
@@ -2852,14 +2927,14 @@ fn a_relative_cache_path_under_run_as_current_user_is_rejected_naming_the_contai
 /// while it still runs under `batect` — a `--list-tasks` that fails is a
 /// worse divergence than a mount Docker rejects later.
 #[test]
-fn resolve_expressions_accepts_a_non_slash_local_mount_path() {
+fn load_accepts_a_non_slash_local_mount_path() {
     let mut container = container_with_build("./docker", HashMap::new());
     container.volumes = Some(vec![VolumeMount::Local(LocalVolumeMount {
         local: ".".to_string(),
         container: "C:\\code".to_string(),
         options: None,
     })]);
-    let mut config = Config {
+    let config = Config {
         project_name: "demo".to_string(),
         containers: HashMap::from([("build-env".to_string(), container)]),
         tasks: HashMap::new(),
@@ -2868,12 +2943,7 @@ fn resolve_expressions_accepts_a_non_slash_local_mount_path() {
     };
 
     config
-        .resolve_expressions_with(
-            Path::new("/base"),
-            &HashMap::new(),
-            &HashMap::new(),
-            no_host_env,
-        )
+        .check_with(Path::new("/base"), &HashMap::new())
         .expect("a Windows-style container path should still load");
 }
 
@@ -2894,7 +2964,7 @@ async fn a_shared_cache_is_rejected_in_a_batect_yml() {
     )
     .unwrap();
 
-    let err = load_project(&dir.join("batect.yml"), &HashMap::new())
+    let err = load_project(&dir.join("batect.yml"))
         .await
         .expect_err("scope is native-only");
     std::fs::remove_dir_all(&dir).ok();
@@ -2911,7 +2981,7 @@ async fn a_shared_cache_is_rejected_in_a_batect_yml() {
 /// it. Two *containers* naming one cache is the ordinary way to share it
 /// between them, so the check is per project rather than per container.
 #[test]
-fn resolve_expressions_rejects_one_cache_name_with_two_scopes() {
+fn load_rejects_one_cache_name_with_two_scopes() {
     let cache = |scope| {
         VolumeMount::Cache(CacheVolumeMount {
             name: "registry".to_string(),
@@ -3004,7 +3074,7 @@ fn the_reported_scope_conflict_does_not_depend_on_hashmap_order() {
 /// `local` mounts and include paths, and deliberately skips `cache` mounts,
 /// on the reasoning that a cache name was never a path.
 #[test]
-fn resolve_expressions_rejects_a_cache_name_that_is_a_path() {
+fn load_rejects_a_cache_name_that_is_a_path() {
     for name in [
         "/etc",
         "../../.ssh",
@@ -3021,7 +3091,7 @@ fn resolve_expressions_rejects_a_cache_name_that_is_a_path() {
             options: None,
             scope: Default::default(),
         })]);
-        let mut config = Config {
+        let config = Config {
             project_name: "demo".to_string(),
             containers: HashMap::from([("build-env".to_string(), container)]),
             tasks: HashMap::new(),
@@ -3030,12 +3100,7 @@ fn resolve_expressions_rejects_a_cache_name_that_is_a_path() {
         };
 
         let err = config
-            .resolve_expressions_with(
-                Path::new("/base"),
-                &HashMap::new(),
-                &HashMap::new(),
-                no_host_env,
-            )
+            .check_with(Path::new("/base"), &HashMap::new())
             .unwrap_err();
         assert!(
             format!("{err:#}").contains("not a valid cache name"),
@@ -3048,7 +3113,7 @@ fn resolve_expressions_rejects_a_cache_name_that_is_a_path() {
 /// volume-name character set, which `--cache-type volume` already enforces,
 /// so this only brings the directory form in line.
 #[test]
-fn resolve_expressions_accepts_ordinary_cache_names() {
+fn load_accepts_ordinary_cache_names() {
     for name in [
         "gradle-cache",
         "cargo_registry",
@@ -3064,7 +3129,7 @@ fn resolve_expressions_accepts_ordinary_cache_names() {
             options: None,
             scope: Default::default(),
         })]);
-        let mut config = Config {
+        let config = Config {
             project_name: "demo".to_string(),
             containers: HashMap::from([("build-env".to_string(), container)]),
             tasks: HashMap::new(),
@@ -3073,12 +3138,7 @@ fn resolve_expressions_accepts_ordinary_cache_names() {
         };
 
         config
-            .resolve_expressions_with(
-                Path::new("/base"),
-                &HashMap::new(),
-                &HashMap::new(),
-                no_host_env,
-            )
+            .check_with(Path::new("/base"), &HashMap::new())
             .unwrap_or_else(|e| panic!("{name:?} should be accepted: {e:#}"));
     }
 }
@@ -3147,7 +3207,7 @@ async fn even_a_project_scope_is_rejected_in_a_batect_yml() {
     )
     .unwrap();
 
-    let err = load_project(&dir.join("batect.yml"), &HashMap::new())
+    let err = load_project(&dir.join("batect.yml"))
         .await
         .expect_err("the field itself is native-only");
     std::fs::remove_dir_all(&dir).ok();
@@ -3165,8 +3225,8 @@ fn container_with_build_ssh(agents: Vec<SshAgent>) -> Container {
 }
 
 #[test]
-fn resolve_expressions_accepts_a_single_default_ssh_agent() {
-    let mut config = Config {
+fn load_accepts_a_single_default_ssh_agent() {
+    let config = Config {
         project_name: "demo".to_string(),
         containers: HashMap::from([(
             "build-env".to_string(),
@@ -3181,12 +3241,7 @@ fn resolve_expressions_accepts_a_single_default_ssh_agent() {
     };
 
     config
-        .resolve_expressions_with(
-            Path::new("/base"),
-            &HashMap::new(),
-            &HashMap::new(),
-            no_host_env,
-        )
+        .check_with(Path::new("/base"), &HashMap::new())
         .unwrap();
 }
 
@@ -3220,8 +3275,8 @@ tasks: {}
 /// Several agents under distinct ids is Batect's own behaviour, and
 /// what a Dockerfile selecting `--mount=type=ssh,id=deploy` needs.
 #[test]
-fn resolve_expressions_accepts_several_distinctly_named_build_ssh_agents() {
-    let mut config = Config {
+fn load_accepts_several_distinctly_named_build_ssh_agents() {
+    let config = Config {
         project_name: "demo".to_string(),
         containers: HashMap::from([(
             "build-env".to_string(),
@@ -3242,12 +3297,7 @@ fn resolve_expressions_accepts_several_distinctly_named_build_ssh_agents() {
     };
 
     config
-        .resolve_expressions_with(
-            Path::new("/base"),
-            &HashMap::new(),
-            &HashMap::new(),
-            no_host_env,
-        )
+        .check_with(Path::new("/base"), &HashMap::new())
         .unwrap();
 }
 
@@ -3256,7 +3306,7 @@ fn resolve_expressions_accepts_several_distinctly_named_build_ssh_agents() {
 /// — so `id_ed25519` means one next to the config file, not one in
 /// whatever directory `ratect` happened to be run from.
 #[test]
-fn resolve_expressions_resolves_build_ssh_paths_against_the_config_directory() {
+fn evaluate_resolves_build_ssh_paths_against_the_config_directory() {
     let mut config = Config {
         project_name: "demo".to_string(),
         containers: HashMap::from([(
@@ -3275,7 +3325,7 @@ fn resolve_expressions_resolves_build_ssh_paths_against_the_config_directory() {
     };
 
     config
-        .resolve_expressions_with(
+        .check_and_evaluate_with(
             Path::new("/base"),
             &HashMap::new(),
             &HashMap::new(),
@@ -3296,8 +3346,8 @@ fn resolve_expressions_resolves_build_ssh_paths_against_the_config_directory() {
 /// A Dockerfile picks an agent by id, so two entries claiming one id
 /// have no defined meaning — matching Batect, which rejects them too.
 #[test]
-fn resolve_expressions_rejects_duplicate_build_ssh_agent_ids() {
-    let mut config = Config {
+fn load_rejects_duplicate_build_ssh_agent_ids() {
+    let config = Config {
         project_name: "demo".to_string(),
         containers: HashMap::from([(
             "build-env".to_string(),
@@ -3318,12 +3368,7 @@ fn resolve_expressions_rejects_duplicate_build_ssh_agent_ids() {
     };
 
     let err = config
-        .resolve_expressions_with(
-            Path::new("/base"),
-            &HashMap::new(),
-            &HashMap::new(),
-            no_host_env,
-        )
+        .check_with(Path::new("/base"), &HashMap::new())
         .unwrap_err();
 
     assert!(
@@ -3465,7 +3510,7 @@ tasks: {}
 }
 
 #[test]
-fn resolve_expressions_leaves_additional_hostnames_and_hosts_untouched() {
+fn evaluate_leaves_additional_hostnames_and_hosts_untouched() {
     let mut config = config_with_container(Container {
         additional_hostnames: Some(vec!["db-alias".to_string()]),
         additional_hosts: Some(HashMap::from([(
@@ -3476,7 +3521,7 @@ fn resolve_expressions_leaves_additional_hostnames_and_hosts_untouched() {
     });
 
     config
-        .resolve_expressions_with(
+        .check_and_evaluate_with(
             Path::new("/base"),
             &HashMap::new(),
             &HashMap::new(),
@@ -3819,14 +3864,14 @@ fn parse_duration_rejects_invalid_input() {
 }
 
 #[test]
-fn resolve_expressions_leaves_ports_untouched() {
+fn evaluate_leaves_ports_untouched() {
     let mut config = config_with_container(Container {
         ports: Some(vec![port_mapping((8080, 8080), (80, 80), "tcp")]),
         ..container_with_build("docker", HashMap::new())
     });
 
     config
-        .resolve_expressions_with(
+        .check_and_evaluate_with(
             Path::new("/base"),
             &HashMap::new(),
             &HashMap::new(),
@@ -4001,32 +4046,22 @@ fn port_mapping_serializes_to_its_string_form_and_round_trips() {
 }
 
 #[test]
-fn resolve_expressions_errors_when_run_as_current_user_enabled_without_home_directory() {
-    let mut config = config_with_container(container_with_run_as_current_user(true, None));
+fn load_errors_when_run_as_current_user_enabled_without_home_directory() {
+    let config = config_with_container(container_with_run_as_current_user(true, None));
 
-    let result = config.resolve_expressions_with(
-        Path::new("/base"),
-        &HashMap::new(),
-        &HashMap::new(),
-        no_host_env,
-    );
+    let result = config.check_with(Path::new("/base"), &HashMap::new());
 
     assert!(format!("{:#}", result.unwrap_err()).contains("no 'home_directory' was provided"));
 }
 
 #[test]
-fn resolve_expressions_errors_when_home_directory_given_without_run_as_current_user_enabled() {
-    let mut config = config_with_container(container_with_run_as_current_user(
+fn load_errors_when_home_directory_given_without_run_as_current_user_enabled() {
+    let config = config_with_container(container_with_run_as_current_user(
         false,
         Some("/home/container-user"),
     ));
 
-    let result = config.resolve_expressions_with(
-        Path::new("/base"),
-        &HashMap::new(),
-        &HashMap::new(),
-        no_host_env,
-    );
+    let result = config.check_with(Path::new("/base"), &HashMap::new());
 
     assert!(
         format!("{:#}", result.unwrap_err()).contains("'run_as_current_user.enabled' is not true")
@@ -4034,18 +4069,13 @@ fn resolve_expressions_errors_when_home_directory_given_without_run_as_current_u
 }
 
 #[test]
-fn resolve_expressions_errors_when_run_as_current_user_home_directory_is_not_absolute() {
-    let mut config = config_with_container(container_with_run_as_current_user(
+fn load_errors_when_run_as_current_user_home_directory_is_not_absolute() {
+    let config = config_with_container(container_with_run_as_current_user(
         true,
         Some("home/container-user"),
     ));
 
-    let result = config.resolve_expressions_with(
-        Path::new("/base"),
-        &HashMap::new(),
-        &HashMap::new(),
-        no_host_env,
-    );
+    let result = config.check_with(Path::new("/base"), &HashMap::new());
 
     assert!(format!("{:#}", result.unwrap_err()).contains("is not an absolute path"));
 }
@@ -4055,17 +4085,11 @@ fn resolve_expressions_errors_when_run_as_current_user_home_directory_is_not_abs
 /// container existed. Checked on the path as written: `/srv/x/..` cleans
 /// to `/srv`, which has a leaf, but the raw path is what Docker is given.
 #[test]
-fn resolve_expressions_errors_when_run_as_current_user_home_directory_has_no_leaf() {
+fn load_errors_when_run_as_current_user_home_directory_has_no_leaf() {
     for home in ["/", "/srv/..", "/srv/x/.."] {
-        let mut config =
-            config_with_container(container_with_run_as_current_user(true, Some(home)));
+        let config = config_with_container(container_with_run_as_current_user(true, Some(home)));
 
-        let result = config.resolve_expressions_with(
-            Path::new("/base"),
-            &HashMap::new(),
-            &HashMap::new(),
-            no_host_env,
-        );
+        let result = config.check_with(Path::new("/base"), &HashMap::new());
 
         let message = format!("{:#}", result.unwrap_err());
         assert!(
@@ -4076,52 +4100,42 @@ fn resolve_expressions_errors_when_run_as_current_user_home_directory_has_no_lea
 }
 
 #[test]
-fn resolve_expressions_errors_when_run_as_current_user_home_directory_contains_a_colon() {
+fn load_errors_when_run_as_current_user_home_directory_contains_a_colon() {
     // SEC-002: a ':' would shift the fields of the colon-delimited
     // /etc/passwd/etc/shadow line `home_directory` is interpolated into.
-    let mut config = config_with_container(container_with_run_as_current_user(
+    let config = config_with_container(container_with_run_as_current_user(
         true,
         Some("/home/x:0:0:root:/root:/bin/sh"),
     ));
 
-    let result = config.resolve_expressions_with(
-        Path::new("/base"),
-        &HashMap::new(),
-        &HashMap::new(),
-        no_host_env,
-    );
+    let result = config.check_with(Path::new("/base"), &HashMap::new());
 
     assert!(format!("{:#}", result.unwrap_err()).contains("contains a ':' or a control character"));
 }
 
 #[test]
-fn resolve_expressions_errors_when_run_as_current_user_home_directory_contains_a_newline() {
+fn load_errors_when_run_as_current_user_home_directory_contains_a_newline() {
     // SEC-002: a newline would inject an entirely new, attacker-chosen
     // /etc/passwd/etc/shadow entry rather than just extending this one.
-    let mut config = config_with_container(container_with_run_as_current_user(
+    let config = config_with_container(container_with_run_as_current_user(
         true,
         Some("/home/x\nbackdoor:x:0:0::/root:/bin/sh"),
     ));
 
-    let result = config.resolve_expressions_with(
-        Path::new("/base"),
-        &HashMap::new(),
-        &HashMap::new(),
-        no_host_env,
-    );
+    let result = config.check_with(Path::new("/base"), &HashMap::new());
 
     assert!(format!("{:#}", result.unwrap_err()).contains("contains a ':' or a control character"));
 }
 
 #[test]
-fn resolve_expressions_interpolates_run_as_current_user_home_directory() {
+fn evaluate_interpolates_run_as_current_user_home_directory() {
     let mut config = config_with_container(container_with_run_as_current_user(
         true,
         Some("/home/$HOST_VAR"),
     ));
 
     config
-        .resolve_expressions_with(
+        .check_and_evaluate_with(
             Path::new("/base"),
             &HashMap::new(),
             &HashMap::new(),
@@ -4141,16 +4155,11 @@ fn resolve_expressions_interpolates_run_as_current_user_home_directory() {
 }
 
 #[test]
-fn resolve_expressions_leaves_disabled_run_as_current_user_unaffected() {
-    let mut config = config_with_container(container_with_run_as_current_user(false, None));
+fn load_leaves_disabled_run_as_current_user_unaffected() {
+    let config = config_with_container(container_with_run_as_current_user(false, None));
 
     config
-        .resolve_expressions_with(
-            Path::new("/base"),
-            &HashMap::new(),
-            &HashMap::new(),
-            no_host_env,
-        )
+        .check_with(Path::new("/base"), &HashMap::new())
         .unwrap();
 
     let run_as_current_user = config.containers["build-env"]
@@ -4189,7 +4198,7 @@ fn unique_temp_dir() -> std::path::PathBuf {
 }
 
 #[tokio::test]
-async fn load_from_file_then_resolve_expressions_resolves_paths() {
+async fn load_from_file_then_evaluate_resolves_paths() {
     let dir = unique_temp_dir();
     let config_path = dir.join("batect.yml");
     std::fs::write(
@@ -4207,7 +4216,7 @@ tasks: {}
     .unwrap();
 
     let mut loaded = Config::load_from_file(&config_path).await.unwrap();
-    loaded.resolve_expressions(&dir, &HashMap::new()).unwrap();
+    loaded.check_and_evaluate(&dir, &HashMap::new()).unwrap();
 
     let volume = expect_local(
         &loaded.config.containers["build-env"]
@@ -4264,11 +4273,11 @@ run = { container = "build-env", command = "cargo test" }
     let mut yaml = Config::load_from_file(&dir.join("batect.yml"))
         .await
         .unwrap();
-    yaml.resolve_expressions(&dir, &HashMap::new()).unwrap();
+    yaml.check_and_evaluate(&dir, &HashMap::new()).unwrap();
     let mut toml = Config::load_from_file_native(&dir.join("ratect.toml"))
         .await
         .unwrap();
-    toml.resolve_expressions(&dir, &HashMap::new()).unwrap();
+    toml.check_and_evaluate(&dir, &HashMap::new()).unwrap();
 
     assert_eq!(yaml.config.project_name, toml.config.project_name);
     assert_eq!(
@@ -4309,12 +4318,12 @@ async fn the_two_root_dev_configs_agree() {
 
     let mut from_yaml = Config::load_from_file(&batect).await.unwrap();
     from_yaml
-        .resolve_expressions(base_path_for(&batect), &HashMap::new())
+        .check_and_evaluate(base_path_for(&batect), &HashMap::new())
         .unwrap();
 
     let mut from_toml = Config::load_from_file_native(&ratect).await.unwrap();
     from_toml
-        .resolve_expressions(base_path_for(&ratect), &HashMap::new())
+        .check_and_evaluate(base_path_for(&ratect), &HashMap::new())
         .unwrap();
 
     assert_eq!(
@@ -4613,7 +4622,7 @@ async fn load_native_toml(body: &str) -> Result<LoadedProject> {
     let dir = unique_temp_dir();
     let path = dir.join("ratect.toml");
     std::fs::write(&path, body).unwrap();
-    let result = load_project_native(&path, &HashMap::new()).await;
+    let result = load_project_native(&path).await;
     std::fs::remove_dir_all(&dir).ok();
     result
 }
@@ -4692,13 +4701,13 @@ run = { container = "a" }
     assert_eq!(a.command.as_deref(), Some("a-cmd")); // a's own
 }
 
-/// Resolve-then-extend: an inherited relative path was resolved against
-/// the *parent's* file before inheritance, so the child gets the parent's
-/// absolute path, not one re-anchored to the child's own location. Here
-/// both containers share the root file, so the point is simply that the
-/// inherited `build_directory` is absolute and correct.
+/// An inherited relative path is resolved against the file of the
+/// container that supplied it, so the child gets the parent's absolute
+/// path, not one re-anchored to the child's own location. Here both
+/// containers share the root file, so the point is simply that the
+/// inherited `build_directory` is evaluated to an absolute, correct path.
 #[tokio::test]
-async fn extends_inherits_an_already_resolved_path() {
+async fn extends_inherits_a_path_resolved_against_its_supplier() {
     let dir = unique_temp_dir();
     std::fs::create_dir_all(dir.join("ctx")).unwrap();
     let path = dir.join("ratect.toml");
@@ -4718,22 +4727,25 @@ run = { container = "app" }
 "#,
     )
     .unwrap();
-    let project = load_project_native(&path, &HashMap::new()).await.unwrap();
+    let project = load_project_native(&path).await.unwrap();
+    let evaluated = project
+        .evaluate(["app"], [], &HashMap::new(), no_host_env)
+        .unwrap();
     assert_eq!(
-        project.config.containers["app"].build_directory,
+        evaluated.containers["app"].build_directory,
         Some(dir.join("ctx").display().to_string())
     );
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// The reason `extends` resolves *after* path resolution: a `base` in an
+/// The reason `extends` records each field's supplier: a `base` in an
 /// included file in a *different directory* has its relative
 /// `build_directory` anchored to *its own* file's directory, and a child
-/// in the root that inherits it must keep that anchoring — not re-resolve
-/// it against the child's own directory. This is the cross-boundary case
-/// the ordering exists to protect (`extends_inherits_an_already_resolved_path`
-/// only covers the same-directory case); a regression to extend-then-resolve
-/// would silently re-anchor the path here.
+/// in the root that inherits it must keep that anchoring — not resolve it
+/// against the child's own directory. This is the cross-boundary case the
+/// supplier exists to protect (`extends_inherits_a_path_resolved_against_its_supplier`
+/// only covers the same-directory case); evaluating against the child's
+/// own file would silently re-anchor the path here.
 #[tokio::test]
 async fn extends_across_an_include_boundary_keeps_the_parents_path_anchoring() {
     let dir = unique_temp_dir();
@@ -4758,13 +4770,11 @@ run = { container = "app" }
     )
     .unwrap();
 
-    let project = load_project_native(&dir.join("ratect.toml"), &HashMap::new())
-        .await
+    let project = load_project_native(&dir.join("ratect.toml")).await.unwrap();
+    let evaluated = project
+        .evaluate(["app"], [], &HashMap::new(), no_host_env)
         .unwrap();
-    let build_directory = project.config.containers["app"]
-        .build_directory
-        .clone()
-        .unwrap();
+    let build_directory = evaluated.containers["app"].build_directory.clone().unwrap();
     // Anchored to the parent's own directory (`sub/`), not the child's root.
     assert_eq!(
         build_directory,
@@ -4812,7 +4822,7 @@ async fn load_native_including(
         ),
     )
     .unwrap();
-    let result = load_project_native(&dir.join("ratect.toml"), &HashMap::new()).await;
+    let result = load_project_native(&dir.join("ratect.toml")).await;
     std::fs::remove_dir_all(&dir).ok();
     (fragment_path, result)
 }
@@ -4918,7 +4928,7 @@ async fn a_yaml_root_file_is_batect_shaped_even_under_the_native_binary() {
          stop_signal: SIGINT\ntasks:\n  t:\n    run:\n      container: app\n",
     )
     .unwrap();
-    let error = load_project_native(&path, &HashMap::new())
+    let error = load_project_native(&path)
         .await
         .expect_err("a YAML root file keeps Batect's rules");
     let error = format!("{error:#}");
@@ -5019,8 +5029,11 @@ ulimits = [{ name = "nofile", soft = 10 }]
         project.config.containers["app"].stop_signal.as_deref(),
         Some("SIGINT")
     );
+    let evaluated = project
+        .evaluate(["app"], [], &HashMap::new(), no_host_env)
+        .unwrap();
     assert_eq!(
-        project.config.containers["app"].image.as_deref(),
+        evaluated.containers["app"].image.as_deref(),
         Some("alpine:3.18"),
         "a TOML-declared container still resolves expressions in image"
     );
@@ -5049,9 +5062,7 @@ async fn a_batect_compatible_project_is_batect_compatible() {
         "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n",
     )
     .unwrap();
-    let project = load_project(&dir.join("batect.yml"), &HashMap::new())
-        .await
-        .unwrap();
+    let project = load_project(&dir.join("batect.yml")).await.unwrap();
     std::fs::remove_dir_all(&dir).ok();
     assert_eq!(project.dialect, Dialect::BatectCompatible);
 }
@@ -5090,9 +5101,7 @@ run = { container = "app" }
     )
     .unwrap();
 
-    let project = load_project_native(&dir.join("ratect.toml"), &HashMap::new())
-        .await
-        .unwrap();
+    let project = load_project_native(&dir.join("ratect.toml")).await.unwrap();
     let app = &project.config.containers["app"];
     assert_eq!(app.image.as_deref(), Some("alpine:3.18"));
     assert_eq!(app.working_directory.as_deref(), Some("/base"));
@@ -5198,7 +5207,7 @@ async fn extends_is_rejected_in_compat_mode() {
             "project_name: demo\ncontainers:\n  app:\n    extends: base\n    image: alpine\ntasks: {}\n",
         )
         .unwrap();
-    let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+    let err = load_project(&path).await.unwrap_err();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         format!("{err:#}").contains("uses 'extends'"),
@@ -5451,7 +5460,7 @@ async fn setup_command_run_in_is_rejected_in_compat_mode() {
          command: ./seed.sh\n        run_in: seed-client\ntasks: {}\n",
     )
     .unwrap();
-    let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+    let err = load_project(&path).await.unwrap_err();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         format!("{err:#}").contains("has a setup command using 'run_in'"),
@@ -5471,7 +5480,7 @@ async fn run_to_completion_is_rejected_in_compat_mode() {
         "project_name: demo\ncontainers:\n  migrate:\n    image: alpine\n    run_to_completion: true\ntasks: {}\n",
     )
     .unwrap();
-    let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+    let err = load_project(&path).await.unwrap_err();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         format!("{err:#}").contains("uses 'run_to_completion'"),
@@ -5576,7 +5585,7 @@ async fn stop_signal_is_rejected_in_compat_mode() {
         "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    stop_signal: SIGINT\ntasks: {}\n",
     )
     .unwrap();
-    let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+    let err = load_project(&path).await.unwrap_err();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         format!("{err:#}").contains("uses 'stop_signal'"),
@@ -5595,7 +5604,7 @@ async fn stop_grace_period_is_rejected_in_compat_mode() {
         "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    stop_grace_period: 30s\ntasks: {}\n",
     )
     .unwrap();
-    let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+    let err = load_project(&path).await.unwrap_err();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         format!("{err:#}").contains("uses 'stop_grace_period'"),
@@ -5646,7 +5655,7 @@ async fn ulimits_are_rejected_in_compat_mode() {
         "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    ulimits:\n      - name: nofile\n        soft: 1024\ntasks: {}\n",
     )
     .unwrap();
-    let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+    let err = load_project(&path).await.unwrap_err();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         format!("{err:#}").contains("uses 'ulimits'"),
@@ -5824,7 +5833,7 @@ async fn a_dns_entry_that_is_not_an_ip_address_is_rejected_as_native_only_in_com
         "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    dns:\n      - resolver.example.com\ntasks: {}\n",
     )
     .unwrap();
-    let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+    let err = load_project(&path).await.unwrap_err();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         format!("{err:#}").contains("uses 'dns'"),
@@ -5851,7 +5860,7 @@ async fn dns_fields_are_rejected_in_compat_mode() {
             ),
         )
         .unwrap();
-        let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+        let err = load_project(&path).await.unwrap_err();
         std::fs::remove_dir_all(&dir).ok();
         assert!(
             format!("{err:#}").contains(&format!("uses '{field}'")),
@@ -6431,7 +6440,7 @@ async fn network_mode_is_rejected_in_compat_mode() {
         "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    network_mode: host\ntasks: {}\n",
     )
     .unwrap();
-    let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+    let err = load_project(&path).await.unwrap_err();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         format!("{err:#}").contains("uses 'network_mode'"),
@@ -6868,7 +6877,7 @@ async fn external_health_check_is_rejected_in_compat_mode() {
         "project_name: demo\ncontainers:\n  api:\n    image: alpine\n    external_health_check:\n      type: tcp\n      port: 8080\ntasks: {}\n",
     )
     .unwrap();
-    let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+    let err = load_project(&path).await.unwrap_err();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         format!("{err:#}").contains("uses 'external_health_check'"),
@@ -7338,11 +7347,11 @@ run = {{ container = "app", command = "true" }}
 
 /// The conflict rules are about a container's *effective* configuration, so
 /// they have to run after `extends` has supplied it. This is the gap that
-/// existed while the check sat in `resolve_expressions_with_boundaries`: the
-/// child's own `setup_commands`/`health_check` were still unset at that
-/// point, so the config loaded and `engine.rs` then returned at the
-/// run-to-completion branch, dropping the inherited setup commands in
-/// silence.
+/// existed while the check sat in the pass before `extends` (now
+/// `check_values`): the child's own `setup_commands`/`health_check` were
+/// still unset at that point, so the config loaded and `engine.rs` then
+/// returned at the run-to-completion branch, dropping the inherited setup
+/// commands in silence.
 #[tokio::test]
 async fn run_to_completion_conflicts_are_judged_after_extends_resolves() {
     for inherited in [
@@ -7653,13 +7662,13 @@ run = { container = "db" }
     assert!(format!("{err:#}").contains("'path'"), "got: {err:#}");
 }
 
-/// `load_project` is the whole load-resolve sequence both binaries use,
+/// `load_project` then `evaluate` is the whole sequence both binaries use,
 /// so this proves the steps happen *and* happen in the right order: the
-/// volume path below is only correct if includes were merged before
-/// expressions were resolved, and the override only wins if it's
-/// applied at resolution rather than being ignored.
+/// volume path below is only correct if it was anchored on the included
+/// file the container came from, and the override only wins if it's
+/// applied at evaluation rather than being ignored.
 #[tokio::test]
-async fn load_project_resolves_includes_expressions_and_the_project_directory() {
+async fn load_project_then_evaluate_resolves_includes_expressions_and_the_project_directory() {
     let dir = unique_temp_dir();
     std::fs::write(
         dir.join("containers.yml"),
@@ -7694,10 +7703,13 @@ tasks:
     .unwrap();
 
     let overrides = HashMap::from([("greeting".to_string(), "from-the-override".to_string())]);
-    let project = load_project(&config_path, &overrides).await.unwrap();
+    let project = load_project(&config_path).await.unwrap();
+    let evaluated = project
+        .evaluate(["build-env"], [], &overrides, no_host_env)
+        .unwrap();
 
     assert_eq!(project.project_directory, dir.clean());
-    let container = &project.config.containers["build-env"];
+    let container = &evaluated.containers["build-env"];
     assert_eq!(
         container.environment.as_ref().unwrap()["GREETING"],
         "from-the-override"
@@ -7710,9 +7722,240 @@ tasks:
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// The config the next few tests share: `app` is all literal, `deploy`
+/// reads a value from the machine in every field that may hold one.
+const ONE_CONTAINER_NEEDS_THE_MACHINE: &str = r#"
+project_name: demo
+config_variables:
+  region: {}
+containers:
+  app:
+    image: alpine:3.18
+    volumes:
+      - code:/code
+  deploy:
+    build_directory: $DEPLOY_DIR
+    build_args:
+      PROFILE: $AWS_PROFILE
+    build_secrets:
+      token:
+        path: $TOKEN_FILE
+    build_ssh:
+      - id: default
+        paths:
+          - $SSH_KEY
+    volumes:
+      - $CREDENTIALS:/root/.aws
+    environment:
+      REGION: <region
+  orphan:
+    image: alpine:3.18
+    environment:
+      UNDECLARED: <nowhere
+tasks:
+  test:
+    run:
+      container: app
+      environment:
+        CI_ONLY: $CI_TOKEN
+"#;
+
+/// ADR 0014: load is a check of the file, and a value only some machines
+/// have is not a mistake in the file — so a container reading one loads,
+/// and the task list needs nothing evaluated.
+#[tokio::test]
+async fn load_project_evaluates_no_expression() {
+    let dir = unique_temp_dir();
+    let config_path = dir.join("batect.yml");
+    std::fs::write(&config_path, ONE_CONTAINER_NEEDS_THE_MACHINE).unwrap();
+
+    let project = load_project(&config_path).await.unwrap();
+
+    let deploy = &project.config.containers["deploy"];
+    assert_eq!(deploy.environment.as_ref().unwrap()["REGION"], "<region");
+    assert_eq!(deploy.build_directory.as_deref(), Some("$DEPLOY_DIR"));
+    assert_eq!(
+        project.config.tasks["test"]
+            .run
+            .as_ref()
+            .unwrap()
+            .environment
+            .as_ref()
+            .unwrap()["CI_ONLY"],
+        "$CI_TOKEN"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The evaluation entry point evaluates what it is asked for and nothing
+/// else: `deploy`'s values are never looked at when only `app` and `test`
+/// are.
+#[tokio::test]
+async fn evaluate_leaves_containers_it_was_not_asked_for_alone() {
+    let dir = unique_temp_dir();
+    let config_path = dir.join("batect.yml");
+    std::fs::write(&config_path, ONE_CONTAINER_NEEDS_THE_MACHINE).unwrap();
+    let project = load_project(&config_path).await.unwrap();
+
+    let evaluated = project
+        .evaluate(["app"], [], &HashMap::new(), no_host_env)
+        .unwrap();
+
+    assert_eq!(
+        evaluated.containers.keys().collect::<Vec<_>>(),
+        vec!["app"],
+        "only what was asked for comes back"
+    );
+    assert_eq!(
+        expect_local(&evaluated.containers["app"].volumes.as_ref().unwrap()[0]).local,
+        dir.join("code").display().to_string()
+    );
+    assert!(evaluated.tasks.is_empty());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// #297's wording, for every field that may hold an expression: the error
+/// names the container, the field and the expression, not only the
+/// variable.
+#[tokio::test]
+async fn an_unevaluable_value_names_its_container_field_and_expression() {
+    let dir = unique_temp_dir();
+    let config_path = dir.join("batect.yml");
+    std::fs::write(&config_path, ONE_CONTAINER_NEEDS_THE_MACHINE).unwrap();
+    let project = load_project(&config_path).await.unwrap();
+    let region = HashMap::from([("region".to_string(), "eu-west-2".to_string())]);
+
+    // Each case supplies every variable but the one under test, so the
+    // field it names is the only one that can fail.
+    let cases = [
+        ("DEPLOY_DIR", "'build_directory'", "$DEPLOY_DIR"),
+        ("AWS_PROFILE", "'build_args.PROFILE'", "$AWS_PROFILE"),
+        ("TOKEN_FILE", "'build_secrets.token'", "$TOKEN_FILE"),
+        ("SSH_KEY", "'build_ssh' entry 'default'", "$SSH_KEY"),
+        ("CREDENTIALS", "'volumes'", "$CREDENTIALS"),
+    ];
+    for (unset, field, expression) in cases {
+        let host_env = |name: &str| (name != unset).then(|| format!("/set/{name}"));
+        let err = project
+            .evaluate(["deploy"], [], &region, host_env)
+            .expect_err("an unset variable cannot be evaluated");
+        let message = format!("{err:#}");
+        assert!(message.contains("Container 'deploy'"), "{unset}: {message}");
+        assert!(message.contains(field), "{unset}: {message}");
+        assert!(message.contains(expression), "{unset}: {message}");
+        assert!(message.contains(unset), "{unset}: {message}");
+    }
+
+    // An undeclared config variable, which only `<nowhere` references.
+    let every_host_var = |name: &str| Some(format!("/set/{name}"));
+    let message = format!(
+        "{:#}",
+        project
+            .evaluate(["orphan"], [], &region, every_host_var)
+            .unwrap_err()
+    );
+    assert!(message.contains("Container 'orphan'"), "{message}");
+    assert!(message.contains("'environment.UNDECLARED'"), "{message}");
+    assert!(message.contains("<nowhere"), "{message}");
+    assert!(message.contains("is not declared"), "{message}");
+
+    // A task's own `run.environment`, named by the task.
+    let message = format!(
+        "{:#}",
+        project
+            .evaluate([], ["test"], &HashMap::new(), no_host_env)
+            .unwrap_err()
+    );
+    assert!(message.contains("Task 'test'"), "{message}");
+    assert!(message.contains("'run.environment.CI_ONLY'"), "{message}");
+    assert!(message.contains("$CI_TOKEN"), "{message}");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A `--config-var` naming an undeclared variable is a mistake in how the
+/// project was run, and evaluation is where overrides are read.
+#[tokio::test]
+async fn evaluate_rejects_an_override_for_an_undeclared_config_variable() {
+    let dir = unique_temp_dir();
+    let config_path = dir.join("batect.yml");
+    std::fs::write(&config_path, ONE_CONTAINER_NEEDS_THE_MACHINE).unwrap();
+    let project = load_project(&config_path).await.unwrap();
+
+    let overrides = HashMap::from([("nope".to_string(), "x".to_string())]);
+    let err = project
+        .evaluate(["app"], [], &overrides, no_host_env)
+        .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("'nope'"),
+        "the error should name the override: {err:#}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A `home_directory` written as a literal is judged where the file is: a
+/// relative one never loads. Written as an expression it can only be
+/// judged once evaluated, so it loads and fails then.
+#[tokio::test]
+async fn a_home_directory_is_judged_at_load_only_when_it_is_a_literal() {
+    let dir = unique_temp_dir();
+    let path = dir.join("ratect.toml");
+    let config = |home_directory: &str| {
+        format!(
+            r#"
+project_name = "demo"
+
+[containers.app]
+image = "alpine:3.18"
+run_as_current_user = {{ enabled = true, home_directory = "{home_directory}" }}
+
+[tasks.test.run]
+container = "app"
+"#
+        )
+    };
+
+    std::fs::write(&path, config("relative/home")).unwrap();
+    let err = load_project_native(&path).await.unwrap_err();
+    assert!(
+        format!("{err:#}").contains("is not an absolute path"),
+        "a literal relative home is a mistake in the file: {err:#}"
+    );
+
+    std::fs::write(&path, config("$HOME_DIR")).unwrap();
+    let project = load_project_native(&path)
+        .await
+        .expect("an expression can't be judged before it is evaluated");
+    let relative = |_: &str| Some("relative/home".to_string());
+    let err = project
+        .evaluate(["app"], [], &HashMap::new(), relative)
+        .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(message.contains("Container 'app'"), "{message}");
+    assert!(message.contains("is not an absolute path"), "{message}");
+    let absolute = |_: &str| Some("/home/me".to_string());
+    let evaluated = project
+        .evaluate(["app"], [], &HashMap::new(), absolute)
+        .unwrap();
+    assert_eq!(
+        evaluated.containers["app"]
+            .run_as_current_user
+            .as_ref()
+            .unwrap()
+            .home_directory
+            .as_deref(),
+        Some("/home/me")
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[tokio::test]
 async fn load_project_fails_fast_when_the_config_file_is_missing() {
-    let error = load_project(Path::new("/nonexistent/batect.yml"), &HashMap::new())
+    let error = load_project(Path::new("/nonexistent/batect.yml"))
         .await
         .expect_err("a missing config file should be an error, not an empty config");
     assert!(
@@ -7988,9 +8231,7 @@ async fn ratect_version_in_a_yaml_file_is_an_error() {
     .unwrap();
     let error = format!(
         "{:#}",
-        load_project(&dir.join("batect.yml"), &HashMap::new())
-            .await
-            .unwrap_err()
+        load_project(&dir.join("batect.yml")).await.unwrap_err()
     );
     assert!(error.contains("'ratect_version'"), "{error}");
     std::fs::remove_dir_all(&dir).unwrap();
@@ -8063,7 +8304,7 @@ containers:
     let mut loaded = Config::load_from_file(&dir.join("batect.yml"))
         .await
         .unwrap();
-    loaded.resolve_expressions(&dir, &HashMap::new()).unwrap();
+    loaded.check_and_evaluate(&dir, &HashMap::new()).unwrap();
 
     let volume = expect_local(
         &loaded.config.containers["build-env"]
@@ -8108,7 +8349,7 @@ containers:
     let mut loaded = Config::load_from_file(&dir.join("batect.yml"))
         .await
         .unwrap();
-    loaded.resolve_expressions(&dir, &HashMap::new()).unwrap();
+    loaded.check_and_evaluate(&dir, &HashMap::new()).unwrap();
 
     let value = &loaded.config.containers["build-env"]
         .environment
@@ -8375,7 +8616,7 @@ async fn a_vouched_for_git_include_may_use_host_paths() {
         .await
         .unwrap();
     loaded
-        .resolve_expressions(&project, &HashMap::new())
+        .check_and_evaluate(&project, &HashMap::new())
         .expect("a vouched-for bundle's host path should be allowed");
 
     let volume = expect_local(&loaded.config.containers["trivy"].volumes.as_ref().unwrap()[0]);
@@ -8425,7 +8666,7 @@ async fn a_bundle_cannot_grant_host_paths_to_its_own_nested_include() {
         .await
         .unwrap();
     let error = loaded
-        .resolve_expressions(&project, &HashMap::new())
+        .check_and_evaluate(&project, &HashMap::new())
         .expect_err("a bundle must not be able to grant host paths to what it includes");
     assert!(
         format!("{error:?}").contains("escapes both the Git repository"),
@@ -8472,7 +8713,7 @@ async fn vouching_for_a_bundle_does_not_extend_to_its_nested_includes() {
         .await
         .unwrap();
     let error = loaded
-        .resolve_expressions(&project, &HashMap::new())
+        .check_and_evaluate(&project, &HashMap::new())
         .expect_err("trust must not extend to a nested include");
     assert!(
         format!("{error:?}").contains("escapes both the Git repository"),
@@ -9095,7 +9336,7 @@ tasks: {}
     let mut loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
         .await
         .unwrap();
-    loaded.resolve_expressions(&dir, &HashMap::new()).unwrap();
+    loaded.check_and_evaluate(&dir, &HashMap::new()).unwrap();
 
     let volume = expect_local(
         &loaded.config.containers["bundled"]
@@ -9155,11 +9396,145 @@ tasks: {}
     let mut loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
         .await
         .unwrap();
-    let result = loaded.resolve_expressions(&dir, &HashMap::new());
+    let result = loaded.check_and_evaluate(&dir, &HashMap::new());
     assert!(
         format!("{:?}", result.unwrap_err()).contains("escapes both the Git repository"),
         "a container declared inside a Git include must not be able to mount an arbitrary \
              host path"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).unwrap();
+}
+
+/// ADR 0014's split, for a bundle's host paths: a literal one escaping the
+/// boundary is a mistake in the file and fails the load-time check on its
+/// own, while one written as an expression passes that check and is
+/// refused when evaluated — before anything could mount it.
+#[tokio::test]
+async fn a_git_included_containers_escaping_path_is_refused_at_load_when_literal_and_at_evaluation_otherwise(
+) {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+"#,
+    )
+    .unwrap();
+    let mut files = HashMap::new();
+    files.insert(
+        "batect-bundle.yml".to_string(),
+        r#"
+containers:
+  literal:
+    image: alpine:3.18
+    volumes:
+      - /:/hostroot
+  expression:
+    image: alpine:3.18
+    volumes:
+      - $HOST_ROOT:/hostroot
+tasks: {}
+"#
+        .to_string(),
+    );
+    let git = FakeGitClient::new().with_files("https://example.com/bundle.git", "v1.0.0", files);
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+    let mut loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+        .await
+        .unwrap();
+    let project_directory = project_directory_path(&dir).unwrap();
+
+    let err = check_values(&loaded.config, &loaded.provenance(), &project_directory)
+        .expect_err("a literal escaping path is a mistake in the file");
+    let message = format!("{err:#}");
+    assert!(message.contains("Container 'literal'"), "{message}");
+    assert!(
+        message.contains("escapes both the Git repository"),
+        "{message}"
+    );
+
+    loaded.config.containers.remove("literal");
+    check_values(&loaded.config, &loaded.provenance(), &project_directory)
+        .expect("an expression can't be judged before it is evaluated");
+    let project = LoadedProject {
+        provenance: loaded.provenance(),
+        config: loaded.config,
+        project_directory,
+        dialect: Dialect::BatectCompatible,
+    };
+    let root = |_: &str| Some("/".to_string());
+    let err = project
+        .evaluate(["expression"], [], &HashMap::new(), root)
+        .expect_err("evaluated, it escapes just the same");
+    let message = format!("{err:#}");
+    assert!(message.contains("Container 'expression'"), "{message}");
+    assert!(
+        message.contains("escapes both the Git repository"),
+        "{message}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).unwrap();
+}
+
+/// An inherited host path keeps its supplier's boundary as well as its
+/// file: a root container extending a bundle's container may not mount
+/// what the bundle couldn't, though the root itself has no boundary.
+#[tokio::test]
+async fn an_inherited_path_is_held_to_its_suppliers_boundary() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        r#"
+project_name = "demo"
+include = [{ type = "git", repo = "https://example.com/bundle.git", ref = "v1.0.0" }]
+
+[containers.child]
+extends = "base"
+"#,
+    )
+    .unwrap();
+    let mut files = HashMap::new();
+    files.insert(
+        "ratect-bundle.toml".to_string(),
+        "[containers.base]\nimage = \"alpine:3.18\"\nvolumes = [\"$HOST_ROOT:/hostroot\"]\n"
+            .to_string(),
+    );
+    let git = FakeGitClient::new().with_files("https://example.com/bundle.git", "v1.0.0", files);
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+    let loaded = Config::load_from_file_native_with_git_cache(&dir.join("ratect.toml"), &git_cache)
+        .await
+        .unwrap();
+    // `load_project_impl`'s own sequence, minus the real Git cache.
+    let project_directory = project_directory_path(&dir).unwrap();
+    let mut provenance = loaded.provenance();
+    check_values(&loaded.config, &provenance, &project_directory).unwrap();
+    let mut config = loaded.config;
+    provenance.suppliers = resolve_extends(&mut config.containers).unwrap();
+    let project = LoadedProject {
+        config,
+        project_directory,
+        dialect: Dialect::Native,
+        provenance,
+    };
+
+    let root = |_: &str| Some("/".to_string());
+    let err = project
+        .evaluate(["child"], [], &HashMap::new(), root)
+        .expect_err("the parent's boundary travels with the path it supplied");
+    let message = format!("{err:#}");
+    assert!(message.contains("Container 'child'"), "{message}");
+    assert!(
+        message.contains("escapes both the Git repository"),
+        "{message}"
     );
 
     std::fs::remove_dir_all(&dir).unwrap();
@@ -9199,7 +9574,7 @@ tasks: {}
     let mut loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
         .await
         .unwrap();
-    let result = loaded.resolve_expressions(&dir, &HashMap::new());
+    let result = loaded.check_and_evaluate(&dir, &HashMap::new());
     assert!(format!("{:?}", result.unwrap_err()).contains("escapes both the Git repository"));
 
     std::fs::remove_dir_all(&dir).unwrap();
@@ -9242,7 +9617,7 @@ tasks: {}
     let mut loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
         .await
         .unwrap();
-    let result = loaded.resolve_expressions(&dir, &HashMap::new());
+    let result = loaded.check_and_evaluate(&dir, &HashMap::new());
     assert!(format!("{:?}", result.unwrap_err()).contains("escapes both the Git repository"));
 
     std::fs::remove_dir_all(&dir).unwrap();
@@ -9289,7 +9664,7 @@ tasks: {}
     let mut loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
         .await
         .unwrap();
-    loaded.resolve_expressions(&dir, &HashMap::new()).unwrap();
+    loaded.check_and_evaluate(&dir, &HashMap::new()).unwrap();
 
     let volume = expect_local(
         &loaded.config.containers["bundled"]
@@ -9933,7 +10308,7 @@ fn container_with_environment(environment: HashMap<String, String>) -> Container
 }
 
 #[test]
-fn resolve_expressions_expands_host_var() {
+fn evaluate_expands_host_var() {
     let mut environment = HashMap::new();
     environment.insert("FOO".to_string(), "$HOST_VAR".to_string());
     let mut config = Config {
@@ -9948,7 +10323,7 @@ fn resolve_expressions_expands_host_var() {
     };
 
     config
-        .resolve_expressions_with(
+        .check_and_evaluate_with(
             Path::new("/base"),
             &HashMap::new(),
             &HashMap::new(),
@@ -9963,7 +10338,7 @@ fn resolve_expressions_expands_host_var() {
 }
 
 #[test]
-fn resolve_expressions_uses_default_when_host_var_unset() {
+fn evaluate_uses_default_when_host_var_unset() {
     let mut environment = HashMap::new();
     environment.insert("FOO".to_string(), "${HOST_VAR:-fallback}".to_string());
     let mut config = Config {
@@ -9978,7 +10353,7 @@ fn resolve_expressions_uses_default_when_host_var_unset() {
     };
 
     config
-        .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+        .check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
             None
         })
         .unwrap();
@@ -9990,7 +10365,7 @@ fn resolve_expressions_uses_default_when_host_var_unset() {
 }
 
 #[test]
-fn resolve_expressions_errors_when_host_var_unset_without_default() {
+fn evaluate_errors_when_host_var_unset_without_default() {
     let mut environment = HashMap::new();
     environment.insert("FOO".to_string(), "$HOST_VAR".to_string());
     let mut config = Config {
@@ -10004,7 +10379,7 @@ fn resolve_expressions_errors_when_host_var_unset_without_default() {
         forbid_telemetry: None,
     };
 
-    let result = config.resolve_expressions_with(
+    let result = config.check_and_evaluate_with(
         Path::new("/base"),
         &HashMap::new(),
         &HashMap::new(),
@@ -10014,7 +10389,7 @@ fn resolve_expressions_errors_when_host_var_unset_without_default() {
 }
 
 #[test]
-fn resolve_expressions_prefers_cli_override_over_default() {
+fn evaluate_prefers_cli_override_over_default() {
     let mut environment = HashMap::new();
     environment.insert("FOO".to_string(), "<env_name".to_string());
     let mut config_variables = HashMap::new();
@@ -10038,7 +10413,7 @@ fn resolve_expressions_prefers_cli_override_over_default() {
 
     let overrides = HashMap::from([("env_name".to_string(), "prod".to_string())]);
     config
-        .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &overrides, |_| None)
+        .check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &overrides, |_| None)
         .unwrap();
 
     assert_eq!(
@@ -10048,7 +10423,7 @@ fn resolve_expressions_prefers_cli_override_over_default() {
 }
 
 #[test]
-fn resolve_expressions_falls_back_to_config_variable_default() {
+fn evaluate_falls_back_to_config_variable_default() {
     let mut environment = HashMap::new();
     environment.insert("FOO".to_string(), "<env_name".to_string());
     let mut config_variables = HashMap::new();
@@ -10071,7 +10446,7 @@ fn resolve_expressions_falls_back_to_config_variable_default() {
     };
 
     config
-        .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+        .check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
             None
         })
         .unwrap();
@@ -10083,7 +10458,7 @@ fn resolve_expressions_falls_back_to_config_variable_default() {
 }
 
 #[test]
-fn resolve_expressions_errors_on_undeclared_config_variable_reference() {
+fn evaluate_errors_on_undeclared_config_variable_reference() {
     let mut environment = HashMap::new();
     environment.insert("FOO".to_string(), "<missing".to_string());
     let mut config = Config {
@@ -10097,7 +10472,7 @@ fn resolve_expressions_errors_on_undeclared_config_variable_reference() {
         forbid_telemetry: None,
     };
 
-    let result = config.resolve_expressions_with(
+    let result = config.check_and_evaluate_with(
         Path::new("/base"),
         &HashMap::new(),
         &HashMap::new(),
@@ -10107,7 +10482,7 @@ fn resolve_expressions_errors_on_undeclared_config_variable_reference() {
 }
 
 #[test]
-fn resolve_expressions_errors_on_declared_config_variable_with_no_value() {
+fn evaluate_errors_on_declared_config_variable_with_no_value() {
     let mut environment = HashMap::new();
     environment.insert("FOO".to_string(), "<env_name".to_string());
     let mut config_variables = HashMap::new();
@@ -10129,7 +10504,7 @@ fn resolve_expressions_errors_on_declared_config_variable_with_no_value() {
         forbid_telemetry: None,
     };
 
-    let result = config.resolve_expressions_with(
+    let result = config.check_and_evaluate_with(
         Path::new("/base"),
         &HashMap::new(),
         &HashMap::new(),
@@ -10139,7 +10514,7 @@ fn resolve_expressions_errors_on_declared_config_variable_with_no_value() {
 }
 
 #[test]
-fn resolve_expressions_errors_on_unknown_cli_override() {
+fn evaluate_errors_on_unknown_cli_override() {
     let mut config = Config {
         project_name: "demo".to_string(),
         containers: HashMap::new(),
@@ -10150,12 +10525,12 @@ fn resolve_expressions_errors_on_unknown_cli_override() {
 
     let overrides = HashMap::from([("unknown".to_string(), "value".to_string())]);
     let result =
-        config.resolve_expressions_with(Path::new("/base"), &HashMap::new(), &overrides, |_| None);
+        config.check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &overrides, |_| None);
     assert!(result.is_err());
 }
 
 #[test]
-fn resolve_expressions_leaves_literal_values_unchanged() {
+fn evaluate_leaves_literal_values_unchanged() {
     let mut environment = HashMap::new();
     environment.insert("FOO".to_string(), "literal-value".to_string());
     let mut config = Config {
@@ -10170,7 +10545,7 @@ fn resolve_expressions_leaves_literal_values_unchanged() {
     };
 
     config
-        .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+        .check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
             None
         })
         .unwrap();
@@ -10182,7 +10557,7 @@ fn resolve_expressions_leaves_literal_values_unchanged() {
 }
 
 #[test]
-fn resolve_expressions_resolves_built_in_project_directory_var_in_environment() {
+fn evaluate_resolves_built_in_project_directory_var_in_environment() {
     let mut environment = HashMap::new();
     environment.insert("FOO".to_string(), "<batect.project_directory".to_string());
     let mut config = Config {
@@ -10197,7 +10572,7 @@ fn resolve_expressions_resolves_built_in_project_directory_var_in_environment() 
     };
 
     config
-        .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+        .check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
             None
         })
         .unwrap();
@@ -10209,7 +10584,7 @@ fn resolve_expressions_resolves_built_in_project_directory_var_in_environment() 
 }
 
 #[test]
-fn resolve_expressions_resolves_built_in_project_directory_var_in_volumes() {
+fn evaluate_resolves_built_in_project_directory_var_in_volumes() {
     let mut container = container_with_environment(HashMap::new());
     container.volumes = Some(vec![VolumeMount::Local(LocalVolumeMount {
         local: "<{batect.project_directory}/scripts".to_string(),
@@ -10225,7 +10600,7 @@ fn resolve_expressions_resolves_built_in_project_directory_var_in_volumes() {
     };
 
     config
-        .resolve_expressions_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+        .check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
             None
         })
         .unwrap();
@@ -10236,7 +10611,7 @@ fn resolve_expressions_resolves_built_in_project_directory_var_in_volumes() {
 }
 
 #[test]
-fn resolve_expressions_cleans_project_directory_var_when_base_path_is_empty() {
+fn evaluate_cleans_project_directory_var_when_base_path_is_empty() {
     // An empty `base_path` is what `main.rs` passes for a bare `-f
     // batect.yml` (no directory prefix) — `Path::parent()` on that
     // returns `Some("")`, not `None`. Without cleaning, joining an empty
@@ -10255,7 +10630,7 @@ fn resolve_expressions_cleans_project_directory_var_when_base_path_is_empty() {
     };
 
     config
-        .resolve_expressions_with(Path::new(""), &HashMap::new(), &HashMap::new(), |_| None)
+        .check_and_evaluate_with(Path::new(""), &HashMap::new(), &HashMap::new(), |_| None)
         .unwrap();
 
     let resolved = &config.containers["build-env"].environment.as_ref().unwrap()["FOO"];
@@ -10266,7 +10641,7 @@ fn resolve_expressions_cleans_project_directory_var_when_base_path_is_empty() {
 }
 
 #[test]
-fn resolve_expressions_errors_if_project_directory_is_declared_in_config_variables() {
+fn load_errors_if_project_directory_is_declared_in_config_variables() {
     let mut config_variables = HashMap::new();
     config_variables.insert(
         "batect.project_directory".to_string(),
@@ -10275,7 +10650,7 @@ fn resolve_expressions_errors_if_project_directory_is_declared_in_config_variabl
             description: None,
         },
     );
-    let mut config = Config {
+    let config = Config {
         project_name: "demo".to_string(),
         containers: HashMap::new(),
         tasks: HashMap::new(),
@@ -10283,17 +10658,12 @@ fn resolve_expressions_errors_if_project_directory_is_declared_in_config_variabl
         forbid_telemetry: None,
     };
 
-    let result = config.resolve_expressions_with(
-        Path::new("/base"),
-        &HashMap::new(),
-        &HashMap::new(),
-        |_| None,
-    );
+    let result = config.check_with(Path::new("/base"), &HashMap::new());
     assert!(result.is_err());
 }
 
 #[test]
-fn resolve_expressions_errors_if_project_directory_is_given_as_a_cli_override() {
+fn evaluate_errors_if_project_directory_is_given_as_a_cli_override() {
     let mut config = Config {
         project_name: "demo".to_string(),
         containers: HashMap::new(),
@@ -10307,7 +10677,7 @@ fn resolve_expressions_errors_if_project_directory_is_given_as_a_cli_override() 
         "/hijacked".to_string(),
     )]);
     let result =
-        config.resolve_expressions_with(Path::new("/base"), &HashMap::new(), &overrides, |_| None);
+        config.check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &overrides, |_| None);
     assert!(result.is_err());
 }
 
@@ -10333,22 +10703,21 @@ run = { container = "app" }
     )
     .unwrap();
 
-    let defaulted = load_project_native(&dir.join("ratect.toml"), &HashMap::new())
-        .await
+    let project = load_project_native(&dir.join("ratect.toml")).await.unwrap();
+    let defaulted = project
+        .evaluate(["app"], [], &HashMap::new(), no_host_env)
         .unwrap();
     assert_eq!(
-        defaulted.config.containers["app"].image.as_deref(),
+        defaulted.containers["app"].image.as_deref(),
         Some("my-repo/my-image:latest")
     );
 
-    let overridden = load_project_native(
-        &dir.join("ratect.toml"),
-        &HashMap::from([("tag".to_string(), "1.2.3".to_string())]),
-    )
-    .await
-    .unwrap();
+    let overrides = HashMap::from([("tag".to_string(), "1.2.3".to_string())]);
+    let overridden = project
+        .evaluate(["app"], [], &overrides, no_host_env)
+        .unwrap();
     assert_eq!(
-        overridden.config.containers["app"].image.as_deref(),
+        overridden.containers["app"].image.as_deref(),
         Some("my-repo/my-image:1.2.3")
     );
 
@@ -10368,7 +10737,7 @@ async fn an_image_expression_is_rejected_in_a_batect_yml() {
     )
     .unwrap();
 
-    let err = load_project(&dir.join("batect.yml"), &HashMap::new())
+    let err = load_project(&dir.join("batect.yml"))
         .await
         .expect_err("an expression here would not survive a move back to batect");
     let err = format!("{err:#}");
@@ -10394,7 +10763,7 @@ async fn an_ordinary_image_still_loads_in_a_batect_yml() {
         )
         .unwrap();
 
-        let project = load_project(&dir.join("batect.yml"), &HashMap::new())
+        let project = load_project(&dir.join("batect.yml"))
             .await
             .unwrap_or_else(|e| panic!("{image} should still load: {e:#}"));
         assert_eq!(
@@ -10421,7 +10790,7 @@ async fn the_reported_image_expression_does_not_depend_on_hashmap_order() {
 
     let mut messages = std::collections::HashSet::new();
     for _ in 0..32 {
-        let err = load_project(&dir.join("batect.yml"), &HashMap::new())
+        let err = load_project(&dir.join("batect.yml"))
             .await
             .expect_err("both containers use an expression");
         messages.insert(format!("{err:#}"));
@@ -10453,7 +10822,7 @@ async fn an_image_expression_is_rejected_even_on_an_unreferenced_container() {
     )
     .unwrap();
 
-    let err = load_project(&dir.join("batect.yml"), &HashMap::new())
+    let err = load_project(&dir.join("batect.yml"))
         .await
         .expect_err("the check is whole-file, not per-used-container");
     let err = format!("{err:#}");
@@ -10617,7 +10986,7 @@ async fn two_paths_into_one_repository_each_keep_their_own_grant() {
     assert!(loaded.config.containers.contains_key("ungranted"));
 
     let error = loaded
-        .resolve_expressions(&project, &HashMap::new())
+        .check_and_evaluate(&project, &HashMap::new())
         .expect_err("the grant on one entry must not reach the file another pulled in");
     let error = format!("{error:#}");
     assert!(
@@ -10776,7 +11145,7 @@ async fn a_reference_to_an_undeclared_container_is_rejected_when_the_file_loads(
         let dir = unique_temp_dir();
         let path = dir.join("batect.yml");
         std::fs::write(&path, format!("project_name: demo\n{yaml}")).unwrap();
-        let err = load_project(&path, &HashMap::new()).await.unwrap_err();
+        let err = load_project(&path).await.unwrap_err();
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(format!("{err:#}"), expected, "compat, for:\n{yaml}");
     }
@@ -10915,12 +11284,13 @@ async fn a_batect_format_home_directory_is_not_an_expression() {
          home_directory: /home/$RATECT_462_UNSET\n",
     )
     .unwrap();
-    let project = load_project(&dir.join("batect.yml"), &HashMap::new())
-        .await
-        .unwrap();
+    let project = load_project(&dir.join("batect.yml")).await.unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
+    let evaluated = project
+        .evaluate(["app"], [], &HashMap::new(), no_host_env)
+        .unwrap();
     assert_eq!(
-        project.config.containers["app"]
+        evaluated.containers["app"]
             .run_as_current_user
             .as_ref()
             .unwrap()
@@ -10950,12 +11320,13 @@ async fn home_directory_is_literal_in_a_yaml_include_and_evaluated_in_toml() {
          run_as_current_user = { enabled = true, home_directory = \"/home/<user\" }\n",
     )
     .unwrap();
-    let project = load_project_native(&dir.join("ratect.toml"), &HashMap::new())
-        .await
-        .unwrap();
+    let project = load_project_native(&dir.join("ratect.toml")).await.unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
+    let evaluated = project
+        .evaluate(["from-yaml", "from-toml"], [], &HashMap::new(), no_host_env)
+        .unwrap();
     let home = |name: &str| {
-        project.config.containers[name]
+        evaluated.containers[name]
             .run_as_current_user
             .as_ref()
             .unwrap()
@@ -10964,6 +11335,40 @@ async fn home_directory_is_literal_in_a_yaml_include_and_evaluated_in_toml() {
     };
     assert_eq!(home("from-yaml").as_deref(), Some("/home/<user"));
     assert_eq!(home("from-toml").as_deref(), Some("/home/dev"));
+}
+
+/// Literal travels with the value, not the container: a native container
+/// inheriting a YAML-declared parent's `run_as_current_user` keeps it as
+/// written, since the parent's file is where it was written.
+#[tokio::test]
+async fn an_inherited_batect_format_home_directory_stays_literal() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("extra.yml"),
+        "containers:\n  base:\n    image: alpine:3.18\n    \
+         run_as_current_user:\n      enabled: true\n      home_directory: /home/<user\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "project_name = \"demo\"\ninclude = [{ path = \"extra.yml\" }]\n\n\
+         [containers.child]\nextends = \"base\"\n",
+    )
+    .unwrap();
+    let project = load_project_native(&dir.join("ratect.toml")).await.unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let evaluated = project
+        .evaluate(["child"], [], &HashMap::new(), no_host_env)
+        .expect("an undeclared '<user' is literal text here, never evaluated");
+    assert_eq!(
+        evaluated.containers["child"]
+            .run_as_current_user
+            .as_ref()
+            .unwrap()
+            .home_directory
+            .as_deref(),
+        Some("/home/<user")
+    );
 }
 
 /// Literal still gets the shape checks: a relative `home_directory` in a
@@ -10979,9 +11384,7 @@ async fn a_literal_batect_format_home_directory_is_still_checked() {
     .unwrap();
     let error = format!(
         "{:#}",
-        load_project(&dir.join("batect.yml"), &HashMap::new())
-            .await
-            .unwrap_err()
+        load_project(&dir.join("batect.yml")).await.unwrap_err()
     );
     std::fs::remove_dir_all(&dir).unwrap();
     assert!(error.contains("'$HOME/me'"), "{error}");
