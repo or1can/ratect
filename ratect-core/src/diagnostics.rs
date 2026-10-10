@@ -263,8 +263,45 @@ pub async fn leftover_finding<D: crate::resources::ResourceInventory + Send + Sy
     })
 }
 
-/// What `ratect config convert` warns about: the one way a converted
-/// project behaves differently from its source (ratect#267). `ratect` runs a
+/// `config convert`'s warning for each container whose
+/// `run_as_current_user.home_directory` holds what `ratect.toml` would read as
+/// an expression (#462). A Batect-format file uses the value as written; the
+/// converted file evaluates the same text, and has no escape that would keep
+/// it literal — so a conversion can't carry it across unchanged, and the
+/// reader has to decide what they meant. Sorted by container name.
+///
+/// Not one of [`config_findings`] for the same reason as
+/// [`ungated_task_container_warnings`]: it's only news to someone moving a
+/// file from one format to the other.
+pub fn home_directory_expression_warnings(config: &Config) -> Vec<String> {
+    let mut containers: Vec<(&String, &str)> = config
+        .containers
+        .iter()
+        .filter_map(|(name, container)| {
+            let home = container
+                .run_as_current_user
+                .as_ref()?
+                .home_directory
+                .as_deref()?;
+            crate::expressions::contains_expression(home).then_some((name, home))
+        })
+        .collect();
+    containers.sort_unstable();
+    containers
+        .into_iter()
+        .map(|(name, home)| {
+            format!(
+                "Container '{name}' has run_as_current_user.home_directory '{home}', which \
+                 batect.yml uses as written but ratect evaluates as an expression — check \
+                 what it resolves to under ratect."
+            )
+        })
+        .collect()
+}
+
+/// What `ratect config convert` warns about: one of the two ways a converted
+/// project behaves differently from its source (ratect#267; the other is
+/// [`home_directory_expression_warnings`]). `ratect` runs a
 /// task's own container with no readiness gate (decisions/0012), so a
 /// `health_check` on a container some task runs as its own `run.container`
 /// isn't waited on for that task, and its `setup_commands` don't run. One

@@ -620,6 +620,22 @@ fn config_convert_warns_about_a_task_containers_readiness_fields() {
     }
 }
 
+/// #462: `ratect.toml` evaluates a `home_directory` that `batect.yml` uses as
+/// written, so a converted `$`/`<` changes meaning — warned about either way
+/// the conversion is written.
+#[test]
+fn config_convert_warns_about_a_home_directory_that_becomes_an_expression() {
+    let (written, printed) = convert_both_ways(
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    run_as_current_user:\n      enabled: true\n      home_directory: /home/$USER\n",
+    );
+    for (label, stderr) in [("written", &written), ("--stdout", &printed)] {
+        assert!(
+            stderr.contains("'app'") && stderr.contains("'/home/$USER'"),
+            "{label}: expected a warning naming 'app' and its home_directory:\n{stderr}"
+        );
+    }
+}
+
 /// The same fields on a *dependency* still run under `ratect`, so there is
 /// nothing to warn about.
 #[test]

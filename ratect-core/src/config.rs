@@ -67,8 +67,9 @@
 //! `--config-vars-file` with individually-supplied variables stays the caller's
 //! job — only the caller knows what its own flags are called.
 //! `run_as_current_user.home_directory` is
-//! interpolated but *not* resolved against a base path — it's a container-side path,
-//! validated to start with `/` instead. `PortRange`/`PortMapping`,
+//! interpolated — except in a Batect-format file, where Batect reads it as a plain
+//! string (#462) — but never resolved against a base path: it's a container-side
+//! path, validated to start with `/` instead. `PortRange`/`PortMapping`,
 //! `DeviceMapping` (`devices`), and `VolumeMount` (`volumes` — `Local`/`Cache`
 //! variants, 0.18.0, plus `Tmpfs`, 0.21.0) all have hand-written `Deserialize`
 //! impls so an entry can be either Batect's string form (`"local:container[/protocol]"` /
@@ -3165,6 +3166,10 @@ pub struct LoadedConfig {
     /// which a project with several includes otherwise leaves you hunting
     /// for.
     container_origins: HashMap<String, PathBuf>,
+    /// Which loader read it — with `container_origins`, what decides which
+    /// containers are Batect-shaped ([`ConfigFormat::batect_shaped_containers`]),
+    /// and so which follow Batect's rules during resolution too.
+    format: ConfigFormat,
 }
 
 impl LoadedConfig {
@@ -3183,10 +3188,21 @@ impl LoadedConfig {
         base_path: &Path,
         config_var_overrides: &HashMap<String, String>,
     ) -> Result<()> {
+        let batect_shaped: HashSet<String> = self
+            .format
+            .batect_shaped_containers(
+                &self.config,
+                &self.container_origins,
+                &self.container_boundaries,
+            )
+            .iter()
+            .map(|entry| entry.name.to_string())
+            .collect();
         self.config.resolve_expressions_with_boundaries(
             base_path,
             &self.container_base_paths,
             &self.container_boundaries,
+            &batect_shaped,
             config_var_overrides,
             |name| std::env::var(name).ok(),
         )
@@ -3509,6 +3525,7 @@ impl Config {
             container_base_paths,
             container_boundaries,
             container_origins,
+            format,
         })
     }
 
@@ -3583,6 +3600,7 @@ impl Config {
             base_path,
             container_base_paths,
             &HashMap::new(),
+            &HashSet::new(),
             config_var_overrides,
             host_env,
         )
@@ -3600,6 +3618,11 @@ impl Config {
     /// — see `Boundary::check_path_allowed` for why the project
     /// directory is a second allowed root rather than requiring pure
     /// containment within the clone.
+    /// `batect_shaped` (likewise empty outside it) names the containers
+    /// declared in a Batect-format file — see
+    /// [`ConfigFormat::batect_shaped_containers`] — whose
+    /// `run_as_current_user.home_directory` is used as written rather than
+    /// interpolated, as Batect does (#462).
     ///
     /// **Validation added here may only judge one field's own internal
     /// shape** — that a `home_directory` is absolute, that `build_ssh` ids
@@ -3630,6 +3653,7 @@ impl Config {
         base_path: &Path,
         container_base_paths: &HashMap<String, PathBuf>,
         container_boundaries: &HashMap<String, Boundary>,
+        batect_shaped: &HashSet<String>,
         config_var_overrides: &HashMap<String, String>,
         host_env: impl Fn(&str) -> Option<String>,
     ) -> Result<()> {
@@ -3802,9 +3826,16 @@ impl Config {
                                 )
                             })?;
                         // Not `resolve_path` — this is a path *inside the
-                        // container*, never resolved against `base_path`.
-                        *home_directory =
-                            crate::expressions::interpolate(home_directory, &host_env, &config_vars)?;
+                        // container*, never resolved against `base_path`. And
+                        // not an expression at all in a Batect-format file:
+                        // Batect reads it as a plain string (#462).
+                        if !batect_shaped.contains(container_name.as_str()) {
+                            *home_directory = crate::expressions::interpolate(
+                                home_directory,
+                                &host_env,
+                                &config_vars,
+                            )?;
+                        }
                         if !home_directory.starts_with('/') {
                             anyhow::bail!(
                                 "has an invalid 'run_as_current_user.home_directory': \
