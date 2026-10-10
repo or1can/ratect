@@ -296,13 +296,15 @@ and exec instances die with their container, so there's nothing left to find.
 ## `config`
 
 `ratect config validate` is `doctor`'s configuration half on its own — it loads the
-config, resolves it, and runs the same config-only checks (missing
+config, evaluates every container and task against this machine, and runs the same
+config-only checks (values this machine can't evaluate, missing
 `build_directory`/Dockerfile, floating image tags, dependencies with no
 `health_check`, a missing [`ratect_version`](ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for)),
 exiting non-zero on a problem. It never touches Docker, so it's the
 gate to run in CI when all you want to know is "is the config valid?", without a
-daemon. It takes the same `--config-var`/`--config-vars-file` options as `run`, since
-resolving the config can need them.
+daemon. It takes the same `--config-var`/`--config-vars-file` options as `run`, and
+reads `ratect.local.toml` the same way, since evaluating the config can need them.
+A config that doesn't load stops at its first error.
 
 `ratect config convert` migrates a Batect-format `batect.yml` to a native
 `ratect.toml` — point `-f` at the `batect.yml`:
@@ -355,6 +357,19 @@ refused" on the first run comes from. A project with no
 [`ratect_version`](ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for)
 is a warning too: it changes nothing until a release changes what a configuration
 means, and then the project is refused until you've reviewed what changed.
+
+So is each value this machine can't evaluate — an unset `$VAR`, a `<var` with no
+value — naming its container or task, its field and the expression, as `deploy`'s
+`$DEPLOY_TOKEN` above. Every one is reported, not only the first. It's a warning
+rather than a problem because a variable only CI sets is expected to be missing on
+a laptop, and it fails only a run that [reaches it](ratect-config-reference.md#config-variables-and-expressions):
+`ratect run build` there never evaluates `deploy`. The same goes for a value that
+evaluates but can't be used — an expression-valued
+`run_as_current_user.home_directory` that isn't an absolute path, or a
+Git-included container's host path that evaluates to somewhere outside its
+boundary. A container with such a value is left out of the checks that read its
+values, so its image tag and `build_directory` aren't judged until it evaluates.
+When everything evaluates, `doctor` says so on its own `ok` line.
 
 If you're **migrating from Batect**, `doctor` also flags a leftover `batect`/`batect.cmd`
 wrapper script. Those aren't harmless: `./batect` still downloads and runs the

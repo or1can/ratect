@@ -3,12 +3,11 @@
 **Status:** Accepted. Checking at load is implemented and recorded as a
 divergence, and since [#556](https://github.com/or1can/ratect/issues/556) loading
 evaluates no expression. Since [#557](https://github.com/or1can/ratect/issues/557)
-a run evaluates each task when it reaches it. `ratect config validate` and
-`ratect doctor` still evaluate the whole project before doing anything else, and
-fail on the first value they can't evaluate, until
-[#558](https://github.com/or1can/ratect/issues/558) (part of
-[#314](https://github.com/or1can/ratect/issues/314), designed with
-[#149](https://github.com/or1can/ratect/issues/149)).
+a run evaluates each task when it reaches it, and since
+[#558](https://github.com/or1can/ratect/issues/558) `ratect config validate` and
+`ratect doctor` evaluate the whole project and warn about each value they can't
+evaluate — which completes [#314](https://github.com/or1can/ratect/issues/314)
+(designed with [#149](https://github.com/or1can/ratect/issues/149)).
 
 ## Context
 

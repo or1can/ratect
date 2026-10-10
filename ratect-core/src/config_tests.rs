@@ -7953,6 +7953,115 @@ container = "app"
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// decisions/0014: `config validate` and `doctor` evaluate the whole project
+/// and report every value this machine can't evaluate — each one, not only
+/// the first, naming its container or task, field and expression — and keep
+/// every container that did evaluate for the checks that need its values.
+#[tokio::test]
+async fn evaluating_the_whole_project_reports_every_failure_and_keeps_the_rest() {
+    let dir = unique_temp_dir();
+    let config_path = dir.join("batect.yml");
+    std::fs::write(&config_path, ONE_CONTAINER_NEEDS_THE_MACHINE).unwrap();
+    let project = load_project(&config_path).await.unwrap();
+    let region = HashMap::from([("region".to_string(), "eu-west-2".to_string())]);
+    // Everything but `$AWS_PROFILE` and `$CREDENTIALS`, two fields of one
+    // container, and `$CI_TOKEN`, a task's.
+    let host_env = |name: &str| {
+        (!["AWS_PROFILE", "CREDENTIALS", "CI_TOKEN"].contains(&name))
+            .then(|| format!("/set/{name}"))
+    };
+
+    let WholeProjectEvaluation {
+        evaluated,
+        failures,
+    } = project
+        .evaluate_whole_project(&region, host_env)
+        .expect("only an override for an undeclared variable fails outright");
+    let messages: Vec<String> = failures.iter().map(|error| format!("{error:#}")).collect();
+
+    let expected = [
+        ("Container 'deploy'", "'volumes'", "$CREDENTIALS"),
+        ("Container 'deploy'", "'build_args.PROFILE'", "$AWS_PROFILE"),
+        ("Container 'orphan'", "'environment.UNDECLARED'", "<nowhere"),
+        ("Task 'test'", "'run.environment.CI_ONLY'", "$CI_TOKEN"),
+    ];
+    assert_eq!(messages.len(), expected.len(), "{messages:#?}");
+    for (message, (owner, field, expression)) in messages.iter().zip(expected) {
+        assert!(message.contains(owner), "{message}");
+        assert!(message.contains(field), "{message}");
+        assert!(message.contains(expression), "{message}");
+    }
+
+    // `app` evaluated; the two containers with a failure aren't offered as
+    // evaluated, half-done.
+    let mut containers: Vec<&str> = evaluated.containers.keys().map(String::as_str).collect();
+    containers.sort_unstable();
+    assert_eq!(containers, ["app"]);
+    assert!(evaluated.tasks.is_empty(), "{:?}", evaluated.tasks);
+
+    // With every variable set, nothing fails.
+    let every_host_var = |name: &str| Some(format!("/set/{name}"));
+    let mut without_orphan = project;
+    without_orphan.config.containers.remove("orphan");
+    let whole = without_orphan
+        .evaluate_whole_project(&region, every_host_var)
+        .unwrap();
+    assert!(whole.failures.is_empty(), "{:?}", whole.failures);
+    assert_eq!(whole.evaluated.containers.len(), 2);
+    assert_eq!(whole.evaluated.tasks.len(), 1);
+
+    // An override for an undeclared variable is how the project was run,
+    // not a value, so it still fails outright.
+    let overrides = HashMap::from([("nope".to_string(), "x".to_string())]);
+    assert!(without_orphan
+        .evaluate_whole_project(&overrides, every_host_var)
+        .is_err());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A check deferred from load to evaluation names the field and the
+/// expression too, not only the value it evaluated to — the value alone
+/// doesn't say where to look.
+#[tokio::test]
+async fn a_deferred_check_names_the_field_and_the_expression() {
+    let dir = unique_temp_dir();
+    let path = dir.join("ratect.toml");
+    std::fs::write(
+        &path,
+        r#"
+project_name = "demo"
+
+[containers.app]
+image = "alpine:3.18"
+run_as_current_user = { enabled = true, home_directory = "$HOME_DIR" }
+"#,
+    )
+    .unwrap();
+    let project = load_project_native(&path).await.unwrap();
+
+    let relative = |_: &str| Some("relative/home".to_string());
+    let whole = project
+        .evaluate_whole_project(&HashMap::new(), relative)
+        .unwrap();
+    let messages: Vec<String> = whole
+        .failures
+        .iter()
+        .map(|error| format!("{error:#}"))
+        .collect();
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    let message = &messages[0];
+    assert!(message.contains("Container 'app'"), "{message}");
+    assert!(
+        message.contains("'run_as_current_user.home_directory'"),
+        "{message}"
+    );
+    assert!(message.contains("$HOME_DIR"), "{message}");
+    assert!(message.contains("is not an absolute path"), "{message}");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[tokio::test]
 async fn load_project_fails_fast_when_the_config_file_is_missing() {
     let error = load_project(Path::new("/nonexistent/batect.yml"))
@@ -9478,6 +9587,25 @@ tasks: {}
     assert!(
         message.contains("escapes both the Git repository"),
         "{message}"
+    );
+    // `config validate` reports it as one failure among the rest, naming the
+    // field and the expression the escaping path came from.
+    let whole = project
+        .evaluate_whole_project(&HashMap::new(), root)
+        .unwrap();
+    let messages: Vec<String> = whole.failures.iter().map(|e| format!("{e:#}")).collect();
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert!(
+        messages[0].contains("Container 'expression'"),
+        "{messages:?}"
+    );
+    assert!(
+        messages[0].contains("'volumes' ('$HOST_ROOT')"),
+        "{messages:?}"
+    );
+    assert!(
+        messages[0].contains("escapes both the Git repository"),
+        "{messages:?}"
     );
 
     std::fs::remove_dir_all(&dir).unwrap();

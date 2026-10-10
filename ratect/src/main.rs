@@ -850,15 +850,19 @@ async fn load_with_overrides(
 }
 
 /// Loads as [`load_with_overrides`] does, then evaluates every container and
-/// task — what `doctor` and `config validate` read, until they report each
-/// value that can't be evaluated as a warning instead (#558).
+/// task as far as each can be — what `doctor` and `config validate` read,
+/// reporting each value this machine can't evaluate as a warning
+/// (decisions/0014).
 async fn load_and_evaluate(
     global: &GlobalArgs,
     config_vars: &ConfigVarArgs,
-) -> Result<(ratect_core::config::LoadedProject, Config)> {
+) -> Result<(
+    ratect_core::config::LoadedProject,
+    ratect_core::config::WholeProjectEvaluation,
+)> {
     let (project, overrides) = load_with_overrides(global, config_vars).await?;
-    let config = project.evaluate_all(&overrides)?;
-    Ok((project, config))
+    let evaluation = project.evaluate_whole_project(&overrides, |name| std::env::var(name).ok())?;
+    Ok((project, evaluation))
 }
 
 /// `doctor`/`config validate`'s nudge to declare `ratect_version` — read
@@ -1319,14 +1323,14 @@ async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> 
     )));
 
     match load_and_evaluate(global, &args.config_vars).await {
-        Ok((project, config)) => {
+        Ok((project, evaluation)) => {
             findings.push(Finding::Fine(format!(
                 "{} loads ({} container(s), {} task(s))",
                 global.config_file.display(),
                 project.config.declared_containers().count(),
                 project.config.tasks.len()
             )));
-            findings.extend(config_findings(&config));
+            findings.extend(config_findings(&project.config, &evaluation));
             findings.extend(written_for_finding_for(&global.config_file));
 
             // Now's the current time; leftover age isn't part of this
@@ -1400,14 +1404,14 @@ async fn validate_config(
 ) -> Result<()> {
     let mut findings = Vec::new();
     match load_and_evaluate(global, &args.config_vars).await {
-        Ok((project, config)) => {
+        Ok((project, evaluation)) => {
             findings.push(Finding::Fine(format!(
                 "{} loads ({} container(s), {} task(s))",
                 global.config_file.display(),
                 project.config.declared_containers().count(),
                 project.config.tasks.len()
             )));
-            findings.extend(config_findings(&config));
+            findings.extend(config_findings(&project.config, &evaluation));
             findings.extend(written_for_finding_for(&global.config_file));
         }
         Err(error) => findings.push(Finding::Problem(format!(

@@ -121,8 +121,8 @@ fn unique_project_dir() -> PathBuf {
 /// config-variable values — no `--config-vars-file` needed, this binary's
 /// native equivalent of `ratect-compat`'s `batect.local.yml` default. Proven
 /// with a required config variable (no default) that only the local file
-/// supplies: `config validate` evaluates the config, so it fails without the
-/// file and succeeds once it's there.
+/// supplies: `config validate` evaluates the config, so it warns that the
+/// value can't be evaluated without the file, and not once it's there.
 #[test]
 fn ratect_local_toml_is_auto_discovered_for_config_variables() {
     let dir = unique_project_dir();
@@ -149,9 +149,15 @@ run = { container = "app" }
         .args(["config", "validate"])
         .output()
         .expect("failed to run ratect");
+    let unevaluated = |output: &std::process::Output| {
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line.contains("warning") && line.contains("<greeting"))
+    };
     assert!(
-        !without.status.success(),
-        "a required config variable with no local file should fail to resolve"
+        unevaluated(&without),
+        "a required config variable with no local file can't be evaluated:\n{}",
+        String::from_utf8_lossy(&without.stdout)
     );
 
     std::fs::write(dir.join("ratect.local.toml"), "greeting = \"hello\"\n").unwrap();
@@ -162,9 +168,9 @@ run = { container = "app" }
         .output()
         .expect("failed to run ratect");
     assert!(
-        with.status.success(),
+        with.status.success() && !unevaluated(&with),
         "ratect.local.toml should be discovered automatically:\n{}",
-        String::from_utf8_lossy(&with.stderr)
+        String::from_utf8_lossy(&with.stdout)
     );
 
     std::fs::remove_dir_all(&dir).ok();
@@ -439,6 +445,87 @@ dependencies = ["ghost"]
             && stdout.contains("The container 'ghost' referenced by task 't' does not exist."),
         "stdout:\n{stdout}"
     );
+}
+
+/// decisions/0014: a value this machine can't evaluate, in a container no
+/// task here needs to run, is a warning `config validate` reports — each one,
+/// naming the container, the field and the expression — not a failure.
+#[test]
+fn config_validate_warns_about_each_value_this_machine_cannot_evaluate() {
+    const FIRST: &str = "RATECT_TEST_UNSET_DEPLOY_PROFILE";
+    const SECOND: &str = "RATECT_TEST_UNSET_PUBLISH_TOKEN";
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        format!(
+            r#"
+project_name = "demo"
+
+[containers.build-env]
+image = "alpine:3.18"
+
+[containers.deploy]
+image = "alpine:3.18"
+environment = {{ PROFILE = "${FIRST}" }}
+
+[containers.publish]
+image = "alpine:3.18"
+environment = {{ TOKEN = "${SECOND}" }}
+
+[tasks.build]
+run = {{ container = "build-env" }}
+"#
+        ),
+    )
+    .unwrap();
+    let validate = |set: &[&str]| {
+        let mut command = ratect_command();
+        command
+            .arg("-f")
+            .arg(dir.join("ratect.toml"))
+            .args(["config", "validate"])
+            .env_remove(FIRST)
+            .env_remove(SECOND);
+        for name in set {
+            command.env(name, "set");
+        }
+        let output = command.output().expect("failed to run ratect");
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            output.status.success(),
+            "a warning isn't a failure:\n{stdout}"
+        );
+        stdout
+    };
+    let warns_about = |stdout: &str, container: &str, field: &str, variable: &str| {
+        stdout.lines().any(|line| {
+            line.trim_start().starts_with("warning ")
+                && line.contains(&format!("Container '{container}'"))
+                && line.contains(&format!("'{field}'"))
+                && line.contains(&format!("${variable}"))
+        })
+    };
+
+    let neither = validate(&[]);
+    assert!(
+        warns_about(&neither, "deploy", "environment.PROFILE", FIRST),
+        "{neither}"
+    );
+    assert!(
+        warns_about(&neither, "publish", "environment.TOKEN", SECOND),
+        "{neither}"
+    );
+
+    let one = validate(&[FIRST]);
+    assert!(
+        !warns_about(&one, "deploy", "environment.PROFILE", FIRST),
+        "setting the variable removes its warning:\n{one}"
+    );
+    assert!(
+        warns_about(&one, "publish", "environment.TOKEN", SECOND),
+        "{one}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// This binary's version as a project declares it: no pre-release suffix.
@@ -1967,6 +2054,7 @@ fn doctor_reports_each_kind_of_config_finding_from_the_doctor_fixture() {
         .arg("-f")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/doctor/ratect.toml"))
         .arg("doctor")
+        .env_remove("DEPLOY_TOKEN")
         .output()
         .expect("failed to run ratect");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1993,6 +2081,17 @@ fn doctor_reports_each_kind_of_config_finding_from_the_doctor_fixture() {
     assert!(
         has_line("warning ", &["dependency 'cache' has no health_check"]),
         "the unguarded dependency should be flagged:\n{stdout}"
+    );
+    assert!(
+        has_line(
+            "warning ",
+            &[
+                "Container 'deploy'",
+                "'environment.TOKEN'",
+                "('$DEPLOY_TOKEN')"
+            ]
+        ),
+        "the value this machine can't evaluate should be flagged:\n{stdout}"
     );
     assert!(
         has_line("warning ", &["'ratect_version' isn't set"]),

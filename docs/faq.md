@@ -123,7 +123,7 @@ This is easy to conflate with a second, entirely different `$`-syntax: Ratect's 
 [config-time expressions](ratect-compat-config-reference.md#expressions) (`$VAR`,
 `${VAR:-default}`, `<name`), which *do* exist — but only in specific fields
 (`environment` values, a volume's `host_path`, `build_directory`, and a few others),
-resolved once before any task runs, never inside `command` itself. So there are
+evaluated when the run reaches the task that uses them, never inside `command` itself. So there are
 three different things that can look like "the same" `$VAR`: Ratect's own
 config-time expression syntax (only in the fields listed above), `command`'s literal
 tokenizer (no substitution of any kind), and real shell expansion once you're
