@@ -13,27 +13,39 @@
 // limitations under the License.
 
 use super::*;
+use crate::config::LoadedProject;
 use crate::docker::LabelledResource;
 use crate::resources::ResourceInventory;
 use std::collections::HashMap;
 
-/// Builds a `Config` the way a real invocation does — through
-/// `load_project_native` on an actual file — rather than by parsing YAML
-/// here, which would duplicate knowledge that belongs to `config.rs`. It
-/// also means `build_directory` paths are resolved exactly as they will be
-/// at run time, which one of these checks depends on.
+/// A project's `Config` as written, for the checks that read only that.
 async fn config_with(yaml: &str) -> Config {
-    config_from("batect.yml", yaml).await
+    project_from("batect.yml", yaml).await.config
 }
 
-/// The same, for a test whose config needs a `ratect`-native field: those
-/// may only be written in a native (TOML) file, whichever project loads it
-/// (ratect#214), so a YAML fixture using one no longer loads at all.
-async fn native_config_with(toml: &str) -> Config {
-    config_from("ratect.toml", toml).await
+/// [`config_findings`] for a project, evaluated against `host_env` the way
+/// `config validate` evaluates it against the real one.
+fn findings_for(
+    project: &LoadedProject,
+    host_env: impl Fn(&str) -> Option<String>,
+) -> Vec<Finding> {
+    let evaluation = project
+        .evaluate_whole_project(&HashMap::new(), host_env)
+        .expect("no override is given");
+    config_findings(&project.config, &evaluation)
 }
 
-async fn config_from(file_name: &str, text: &str) -> Config {
+fn no_host_env(_: &str) -> Option<String> {
+    None
+}
+
+/// Loads a project the way a real invocation does — through
+/// `load_project_native` on an actual file named `file_name` — rather than
+/// by parsing it here, which would duplicate knowledge that belongs to
+/// `config.rs`. A config needing a `ratect`-native field has to be a
+/// `ratect.toml`: those may only be written in a native (TOML) file,
+/// whichever project loads it (ratect#214).
+async fn project_from(file_name: &str, text: &str) -> LoadedProject {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let directory = std::env::temp_dir().join(format!(
@@ -53,7 +65,7 @@ async fn config_from(file_name: &str, text: &str) -> Config {
         .await
         .expect("fixture config should load");
     std::fs::remove_dir_all(&directory).unwrap();
-    project.config
+    project
 }
 
 /// Docker treats a missing tag as `latest`, so both are the same
@@ -77,7 +89,8 @@ fn a_floating_image_tag_is_latest_or_no_tag_at_all() {
 
 #[tokio::test]
 async fn doctor_warns_about_floating_tags_and_unguarded_dependencies() {
-    let config = config_with(
+    let project = project_from(
+        "batect.yml",
         r#"
 project_name: demo
 containers:
@@ -99,7 +112,7 @@ tasks:
     )
     .await;
 
-    let findings = config_findings(&config);
+    let findings = findings_for(&project, no_host_env);
     let messages: Vec<String> = findings
         .iter()
         .map(|finding| finding.render().trim().to_string())
@@ -144,7 +157,8 @@ tasks:
 /// load.
 #[tokio::test]
 async fn doctor_does_not_ask_for_a_health_check_a_dependency_cannot_have() {
-    let config = native_config_with(
+    let project = project_from(
+        "ratect.toml",
         r#"
 project_name = "demo"
 
@@ -166,7 +180,7 @@ run = { container = "app", command = "echo hi" }
     )
     .await;
 
-    let messages: Vec<String> = config_findings(&config)
+    let messages: Vec<String> = findings_for(&project, no_host_env)
         .iter()
         .map(|finding| finding.render().trim().to_string())
         .collect();
@@ -261,7 +275,8 @@ fn a_project_with_no_wrapper_scripts_is_not_warned() {
 /// is what makes it usable as a CI step.
 #[tokio::test]
 async fn a_missing_build_directory_is_a_problem() {
-    let config = config_with(
+    let project = project_from(
+        "batect.yml",
         r#"
 project_name: demo
 containers:
@@ -276,7 +291,7 @@ tasks:
     )
     .await;
 
-    let findings = config_findings(&config);
+    let findings = findings_for(&project, no_host_env);
     assert!(
             findings.iter().any(|finding| matches!(
                 finding,
@@ -284,6 +299,76 @@ tasks:
             )),
             "{findings:?}"
         );
+}
+
+/// decisions/0014: a value this machine can't evaluate is a warning naming
+/// the container, field and expression — never a problem — and the checks
+/// that read evaluated values skip the container it's in rather than judge
+/// it as written.
+#[tokio::test]
+async fn an_unevaluable_value_is_a_warning_and_its_container_is_not_judged() {
+    let project = project_from(
+        "ratect.toml",
+        r#"
+project_name = "demo"
+
+[containers.deploy]
+image = "alpine"
+build_directory = "/nonexistent/build/context"
+environment = { PROFILE = "$AWS_PROFILE" }
+
+[containers.app]
+image = "alpine:3.18.2"
+"#,
+    )
+    .await;
+
+    let findings = findings_for(&project, no_host_env);
+    let warnings: Vec<&String> = findings
+        .iter()
+        .filter_map(|finding| match finding {
+            Finding::Warning(message) => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(warnings.len(), 1, "{findings:?}");
+    assert!(
+        warnings[0].contains("Container 'deploy'")
+            && warnings[0].contains("'environment.PROFILE'")
+            && warnings[0].contains("$AWS_PROFILE"),
+        "{findings:?}"
+    );
+    assert!(
+        findings.iter().all(|f| !matches!(f, Finding::Problem(_))),
+        "an unevaluated container's build_directory isn't judged: {findings:?}"
+    );
+    assert!(
+        !findings
+            .iter()
+            .any(|f| matches!(f, Finding::Fine(m) if m.contains("every value evaluates"))),
+        "{findings:?}"
+    );
+
+    // Set, it evaluates — and is judged like any other container.
+    let findings = findings_for(&project, |_| Some("ci".to_string()));
+    assert!(
+        findings
+            .iter()
+            .any(|f| matches!(f, Finding::Fine(m) if m.contains("every value evaluates"))),
+        "{findings:?}"
+    );
+    assert!(
+        findings.iter().any(
+            |f| matches!(f, Finding::Warning(m) if m.contains("'deploy'") && m.contains("floating"))
+        ),
+        "{findings:?}"
+    );
+    assert!(
+        findings.iter().any(
+            |f| matches!(f, Finding::Problem(m) if m.contains("'deploy'") && m.contains("doesn't exist"))
+        ),
+        "{findings:?}"
+    );
 }
 
 /// A container named only by a *task*'s `dependencies` gates that task

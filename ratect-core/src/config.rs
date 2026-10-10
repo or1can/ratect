@@ -60,8 +60,10 @@
 //! of step with each other. **Loading evaluates no expression**
 //! ([decisions/0014](https://github.com/or1can/ratect/blob/main/decisions/0014-config-checked-at-load-evaluated-per-task.md)):
 //! it judges what the file says, and a field that may hold an expression only
-//! when it holds a literal. `LoadedProject::evaluate` is the one place a `$VAR`
-//! or `<var` is evaluated, for the containers and tasks a caller names, with the
+//! when it holds a literal. `LoadedProject::evaluate` is where a `$VAR` or
+//! `<var` is evaluated — stopping at the first failure, or with
+//! `evaluate_whole_project` collecting every one, for `config validate` and
+//! `doctor` — for the containers and tasks a caller names, with the
 //! caller's `--config-var`/`--config-vars-file` overrides — per-container,
 //! against each container's own origin directory rather than a single shared
 //! one, so an included file's relative paths resolve against *its own* directory
@@ -3841,6 +3843,11 @@ fn evaluate_value(
 /// the `extends` chain whose value it is ([`Provenance::suppliers`]), so an
 /// inherited relative path resolves against its parent's own file and stays
 /// inside its parent's boundary.
+///
+/// Returns every value that failed, in field order, each naming its field
+/// and expression — not only the first, for `ratect config validate` and
+/// `ratect doctor`, which report them all. A value that fails is left as
+/// written.
 fn evaluate_container(
     name: &str,
     container: &mut Container,
@@ -3848,57 +3855,71 @@ fn evaluate_container(
     project_directory: &Path,
     host_env: &impl Fn(&str) -> Option<String>,
     config_vars: &HashMap<String, Option<String>>,
-) -> Result<()> {
+) -> Vec<anyhow::Error> {
+    let mut failures = Vec::new();
     let suppliers = provenance.suppliers_of(name);
     let anchor = |supplier: &str| provenance.anchor(supplier, project_directory);
     let resolve = |field: &str, path: &str, anchor: &Anchor<'_>| -> Result<String> {
         let evaluated = evaluate_value(field, path, host_env, config_vars)?;
-        Ok(anchor_path(&evaluated, anchor)?.display().to_string())
+        let resolved =
+            anchor_path(&evaluated, anchor).with_context(|| deferred_check_context(field, path))?;
+        Ok(resolved.display().to_string())
     };
 
     if let Some(image) = &mut container.image {
-        *image = evaluate_value("'image'", image, host_env, config_vars)?;
+        store_or_record(
+            image,
+            evaluate_value("'image'", image, host_env, config_vars),
+            &mut failures,
+        );
     }
     for (key, value) in container.environment.iter_mut().flatten() {
-        *value = evaluate_value(
+        let evaluated = evaluate_value(
             &format!("'environment.{key}'"),
             value,
             host_env,
             config_vars,
-        )?;
+        );
+        store_or_record(value, evaluated, &mut failures);
     }
     let volumes_anchor = anchor(&suppliers.volumes);
     for volume in container.volumes.iter_mut().flatten() {
         // `Cache` and `Tmpfs` mounts hold no expression — see `check_values`.
         if let VolumeMount::Local(local) = volume {
-            local.local = resolve("'volumes'", &local.local, &volumes_anchor)?;
+            let resolved = resolve("'volumes'", &local.local, &volumes_anchor);
+            store_or_record(&mut local.local, resolved, &mut failures);
         }
     }
     if let Some(build_directory) = &mut container.build_directory {
-        *build_directory = resolve(
+        let resolved = resolve(
             "'build_directory'",
             build_directory,
             &anchor(&suppliers.build_directory),
-        )?;
+        );
+        store_or_record(build_directory, resolved, &mut failures);
     }
     for (key, value) in container.build_args.iter_mut().flatten() {
-        *value = evaluate_value(&format!("'build_args.{key}'"), value, host_env, config_vars)?;
+        let evaluated =
+            evaluate_value(&format!("'build_args.{key}'"), value, host_env, config_vars);
+        store_or_record(value, evaluated, &mut failures);
     }
     let build_secrets_anchor = anchor(&suppliers.build_secrets);
     for (key, secret) in container.build_secrets.iter_mut().flatten() {
         if let BuildSecret::Path(path) = secret {
-            *path = resolve(
+            let resolved = resolve(
                 &format!("'build_secrets.{key}'"),
                 path,
                 &build_secrets_anchor,
-            )?;
+            );
+            store_or_record(path, resolved, &mut failures);
         }
     }
     let build_ssh_anchor = anchor(&suppliers.build_ssh);
     for agent in container.build_ssh.iter_mut().flatten() {
         let field = format!("'build_ssh' entry '{}'", agent.id);
         for path in &mut agent.paths {
-            *path = resolve(&field, path, &build_ssh_anchor)?;
+            let resolved = resolve(&field, path, &build_ssh_anchor);
+            store_or_record(path, resolved, &mut failures);
         }
     }
     if let Some(run_as_current_user) = &mut container.run_as_current_user {
@@ -3906,37 +3927,41 @@ fn evaluate_container(
         // literal, judged there too (#462).
         if let Some(home_directory) = &mut run_as_current_user.home_directory {
             if !anchor(&suppliers.run_as_current_user).batect_shaped {
-                *home_directory = evaluate_value(
-                    "'run_as_current_user.home_directory'",
-                    home_directory,
-                    host_env,
-                    config_vars,
-                )?;
-                check_home_directory(home_directory)?;
+                let field = "'run_as_current_user.home_directory'";
+                let checked = evaluate_value(field, home_directory, host_env, config_vars)
+                    .and_then(|value| {
+                        check_home_directory(&value)
+                            .with_context(|| deferred_check_context(field, home_directory))?;
+                        Ok(value)
+                    });
+                store_or_record(home_directory, checked, &mut failures);
             }
         }
     }
-    Ok(())
+    failures
 }
 
 /// Evaluates a task's own expression-bearing values: its `run.environment`
-/// and each `customise.<container>.environment` (#373).
+/// and each `customise.<container>.environment` (#373). Returns every value
+/// that failed, as [`evaluate_container`] does.
 fn evaluate_task(
     task: &mut Task,
     host_env: &impl Fn(&str) -> Option<String>,
     config_vars: &HashMap<String, Option<String>>,
-) -> Result<()> {
+) -> Vec<anyhow::Error> {
+    let mut failures = Vec::new();
     let environment = task
         .run
         .iter_mut()
         .flat_map(|run| run.environment.iter_mut().flatten());
     for (key, value) in environment {
-        *value = evaluate_value(
+        let evaluated = evaluate_value(
             &format!("'run.environment.{key}'"),
             value,
             host_env,
             config_vars,
-        )?;
+        );
+        store_or_record(value, evaluated, &mut failures);
     }
     // In name order, so which of two bad values is reported doesn't depend
     // on a `HashMap`'s iteration order.
@@ -3944,15 +3969,36 @@ fn evaluate_task(
     customisations.sort_unstable_by_key(|(container, _)| *container);
     for (container, customisation) in customisations {
         for (key, value) in customisation.environment.iter_mut().flatten() {
-            *value = evaluate_value(
+            let evaluated = evaluate_value(
                 &format!("'customise.{container}.environment.{key}'"),
                 value,
                 host_env,
                 config_vars,
-            )?;
+            );
+            store_or_record(value, evaluated, &mut failures);
         }
     }
-    Ok(())
+    failures
+}
+
+/// Stores one evaluated value, or records why it couldn't be, leaving the
+/// value as written.
+fn store_or_record(
+    target: &mut String,
+    evaluated: Result<String>,
+    failures: &mut Vec<anyhow::Error>,
+) {
+    match evaluated {
+        Ok(value) => *target = value,
+        Err(error) => failures.push(error),
+    }
+}
+
+/// The context for a check deferred from load ([`check_values`]) failing on
+/// an evaluated value: the check's own message names the value, which
+/// doesn't say which field or expression it came from.
+fn deferred_check_context(field: &str, expression: &str) -> String {
+    format!("{field} ('{expression}') evaluates to a value that can't be used")
 }
 
 /// Where each container came from, as far as evaluating it needs to know —
@@ -4188,9 +4234,23 @@ pub struct Evaluated {
     pub tasks: HashMap<String, Task>,
 }
 
+/// The whole project as [`LoadedProject::evaluate_whole_project`] returns it:
+/// what evaluated, and why the rest didn't.
+#[derive(Debug)]
+pub struct WholeProjectEvaluation {
+    /// Every container and task all of whose values evaluated. One with any
+    /// failure is left out rather than offered half-evaluated.
+    pub evaluated: Evaluated,
+    /// Every value that couldn't be evaluated, or failed a check deferred
+    /// from load — containers in name order, then tasks, each in field
+    /// order — each naming its container or task, field and expression.
+    pub failures: Vec<anyhow::Error>,
+}
+
 impl LoadedProject {
-    /// Evaluates the named containers and tasks against this machine — the
-    /// one place an expression is evaluated, and the second half of
+    /// Evaluates the named containers and tasks against this machine — with
+    /// [`evaluate_whole_project`](Self::evaluate_whole_project), the one way
+    /// an expression is evaluated, and the second half of
     /// [decisions/0014](../../decisions/0014-config-checked-at-load-evaluated-per-task.md)'s
     /// split. `$VAR`s are looked up through `host_env`; `<var`s take their
     /// value from `config_var_overrides` (a `--config-vars-file` merged with
@@ -4210,8 +4270,44 @@ impl LoadedProject {
         config_var_overrides: &HashMap<String, String>,
         host_env: impl Fn(&str) -> Option<String>,
     ) -> Result<Evaluated> {
+        let whole = self.evaluate_each(containers, tasks, config_var_overrides, host_env)?;
+        match whole.failures.into_iter().next() {
+            Some(first) => Err(first),
+            None => Ok(whole.evaluated),
+        }
+    }
+
+    /// Every container and task [evaluated](Self::evaluate) as far as each
+    /// one can be, collecting every failure rather than stopping at the
+    /// first — for `ratect config validate` and `ratect doctor`, which report
+    /// each value this machine can't evaluate as a warning (decisions/0014).
+    /// Fails outright only on a config-variable override the project doesn't
+    /// declare, which is a mistake in how it was run rather than a value.
+    pub fn evaluate_whole_project(
+        &self,
+        config_var_overrides: &HashMap<String, String>,
+        host_env: impl Fn(&str) -> Option<String>,
+    ) -> Result<WholeProjectEvaluation> {
+        self.evaluate_each(
+            self.config.containers.keys().map(String::as_str),
+            self.config.tasks.keys().map(String::as_str),
+            config_var_overrides,
+            host_env,
+        )
+    }
+
+    /// The loop [`evaluate`](Self::evaluate) and
+    /// [`evaluate_whole_project`](Self::evaluate_whole_project) share.
+    fn evaluate_each<'n>(
+        &self,
+        containers: impl IntoIterator<Item = &'n str>,
+        tasks: impl IntoIterator<Item = &'n str>,
+        config_var_overrides: &HashMap<String, String>,
+        host_env: impl Fn(&str) -> Option<String>,
+    ) -> Result<WholeProjectEvaluation> {
         let config_vars =
             config_variable_values(&self.config, config_var_overrides, &self.project_directory)?;
+        let mut failures = Vec::new();
 
         let mut container_names: Vec<&str> = containers.into_iter().collect();
         container_names.sort_unstable();
@@ -4224,16 +4320,22 @@ impl LoadedProject {
                 .get(name)
                 .ok_or_else(|| anyhow::anyhow!("No container named '{name}' is declared"))?
                 .clone();
-            evaluate_container(
+            let container_failures = evaluate_container(
                 name,
                 &mut container,
                 &self.provenance,
                 &self.project_directory,
                 &host_env,
                 &config_vars,
-            )
-            .with_context(|| format!("Container '{name}'"))?;
-            evaluated_containers.insert(name.to_string(), container);
+            );
+            if container_failures.is_empty() {
+                evaluated_containers.insert(name.to_string(), container);
+            }
+            failures.extend(
+                container_failures
+                    .into_iter()
+                    .map(|error| error.context(format!("Container '{name}'"))),
+            );
         }
 
         let mut task_names: Vec<&str> = tasks.into_iter().collect();
@@ -4247,14 +4349,23 @@ impl LoadedProject {
                 .get(name)
                 .ok_or_else(|| anyhow::anyhow!("No task named '{name}' is declared"))?
                 .clone();
-            evaluate_task(&mut task, &host_env, &config_vars)
-                .with_context(|| format!("Task '{name}'"))?;
-            evaluated_tasks.insert(name.to_string(), task);
+            let task_failures = evaluate_task(&mut task, &host_env, &config_vars);
+            if task_failures.is_empty() {
+                evaluated_tasks.insert(name.to_string(), task);
+            }
+            failures.extend(
+                task_failures
+                    .into_iter()
+                    .map(|error| error.context(format!("Task '{name}'"))),
+            );
         }
 
-        Ok(Evaluated {
-            containers: evaluated_containers,
-            tasks: evaluated_tasks,
+        Ok(WholeProjectEvaluation {
+            evaluated: Evaluated {
+                containers: evaluated_containers,
+                tasks: evaluated_tasks,
+            },
+            failures,
         })
     }
 
@@ -4269,26 +4380,6 @@ impl LoadedProject {
             dialect: Dialect::default(),
             provenance: Provenance::default(),
         }
-    }
-
-    /// The whole project [evaluated](Self::evaluate) against the real host
-    /// environment, as a [`Config`] — for `ratect config validate` and
-    /// `ratect doctor`, until they report each value that can't be evaluated
-    /// instead ([#558](https://github.com/or1can/ratect/issues/558)).
-    pub fn evaluate_all(&self, config_var_overrides: &HashMap<String, String>) -> Result<Config> {
-        let Evaluated { containers, tasks } = self.evaluate(
-            self.config.containers.keys().map(String::as_str),
-            self.config.tasks.keys().map(String::as_str),
-            config_var_overrides,
-            |name| std::env::var(name).ok(),
-        )?;
-        Ok(Config {
-            project_name: self.config.project_name.clone(),
-            containers,
-            tasks,
-            config_variables: self.config.config_variables.clone(),
-            forbid_telemetry: self.config.forbid_telemetry,
-        })
     }
 }
 

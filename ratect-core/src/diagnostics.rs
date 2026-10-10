@@ -30,7 +30,7 @@
 //! already failed can skip it without this module needing any opinion of its
 //! own on what "no connection" means or how that got decided.
 
-use crate::config::Config;
+use crate::config::{Config, WholeProjectEvaluation};
 use crate::written_for::WrittenFor;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -57,15 +57,35 @@ impl Finding {
     }
 }
 
-/// The checks that need only the configuration — pure, so they're testable
-/// without a daemon or a project on disk.
-pub fn config_findings(config: &Config) -> Vec<Finding> {
+/// The checks that need only the configuration — no daemon. `config` is the
+/// project as written; `evaluation` is the same project
+/// [evaluated](crate::config::LoadedProject::evaluate_whole_project) against
+/// this machine.
+///
+/// Each value that couldn't be evaluated is a warning, not a problem: a
+/// variable only CI sets is expected to be missing on a laptop, and fails
+/// only a run that reaches it (decisions/0014). The checks that read
+/// evaluated values — the image tag, the build directory — run on the
+/// containers that evaluated; the rest read only names and literals, so they
+/// run on `config`.
+pub fn config_findings(config: &Config, evaluation: &WholeProjectEvaluation) -> Vec<Finding> {
     let mut findings = Vec::new();
+    let containers = &evaluation.evaluated.containers;
+
+    if evaluation.failures.is_empty() {
+        findings.push(Finding::Fine(
+            "every value evaluates on this machine".to_string(),
+        ));
+    }
+    findings.extend(evaluation.failures.iter().map(|failure| {
+        Finding::Warning(format!(
+            "{failure:#} — a run that reaches it fails on this machine"
+        ))
+    }));
 
     // A floating tag defeats the entire point of pinning a task's
     // environment: the same config gives a different image next week.
-    let mut floating: Vec<&str> = config
-        .containers
+    let mut floating: Vec<&str> = containers
         .iter()
         .filter(|(_, container)| container.image.as_deref().is_some_and(floating_image_tag))
         .map(|(name, _)| name.as_str())
@@ -108,10 +128,10 @@ pub fn config_findings(config: &Config) -> Vec<Finding> {
         )));
     }
 
-    // Already resolved to an absolute path by `LoadedProject::evaluate`, so
-    // this is the path Ratect will actually hand to Docker.
+    // Already resolved to an absolute path by evaluation, so this is the
+    // path Ratect will actually hand to Docker.
     let mut missing: Vec<String> = Vec::new();
-    for (name, container) in &config.containers {
+    for (name, container) in containers {
         let Some(directory) = &container.build_directory else {
             continue;
         };
