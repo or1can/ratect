@@ -61,8 +61,10 @@ struct Cli {
 ///
 /// Everything narrower is attached to the subcommands that actually use it
 /// — [`DockerArgs`] to the ones that reach a daemon, [`ConfigVarArgs`] to
-/// the ones that read configuration. A flag accepted but ignored is worse
-/// than one that isn't offered: it reads as a promise.
+/// the ones that evaluate configuration. A flag accepted but ignored is
+/// worse than one that isn't offered: it reads as a promise — which is why
+/// one that has stopped meaning anything is deprecated, hidden and warned
+/// about until it's removed (see [`TasksListArgs`]).
 #[derive(ClapArgs, Debug)]
 struct GlobalArgs {
     /// Path to the configuration file. Defaults to `ratect.toml`, this
@@ -92,7 +94,7 @@ struct GlobalArgs {
 }
 
 /// Values for the configuration's own `config_variables` — for the
-/// subcommands that read configuration at all.
+/// subcommands that evaluate configuration.
 #[derive(ClapArgs, Debug)]
 struct ConfigVarArgs {
     /// Set a config variable's value, as NAME=VALUE (repeatable). Takes
@@ -291,14 +293,29 @@ enum TasksCommand {
 
 #[derive(ClapArgs, Debug)]
 struct TasksListArgs {
-    // Listing tasks loads the configuration but evaluates nothing (see
-    // `LoadedProject::evaluate`), so these values are read — a malformed
-    // vars file still fails — and then unused. Kept rather than removed
-    // because dropping them would break a script that passes them. (A task's
-    // `description` is a plain string, not an expression, matching Batect's
-    // own typing.)
-    #[command(flatten)]
-    config_vars: ConfigVarArgs,
+    /// Deprecated: no effect, since listing tasks evaluates no value.
+    #[arg(long = "config-var", value_parser = parse_key_value, hide = true)]
+    config_var: Vec<(String, String)>,
+
+    /// Deprecated: no effect, since listing tasks evaluates no value.
+    #[arg(long = "config-vars-file", hide = true)]
+    config_vars_file: Option<PathBuf>,
+}
+
+impl TasksListArgs {
+    /// Listing tasks evaluates nothing (see `LoadedProject::evaluate`), so
+    /// these options went from meaning something to meaning nothing.
+    /// Accepted with a warning rather than refused, so a script passing them
+    /// keeps working until they're removed. (A task's `description` is a
+    /// plain string, not an expression, matching Batect's own typing.)
+    fn warn_about_deprecated_options(&self) {
+        if !self.config_var.is_empty() || self.config_vars_file.is_some() {
+            tracing::warn!(
+                "--config-var and --config-vars-file are deprecated for 'tasks list' and have \
+                 no effect: listing tasks evaluates no value"
+            );
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -669,16 +686,16 @@ async fn run(cli: Cli) -> Result<()> {
     // Arms follow the `Command` enum's own order (see there).
     match command {
         Command::Run(args) => {
-            let (project, config_var_overrides) = load(&global, &args.config_vars).await?;
             // Every container and task, until the engine evaluates only what
             // each task uses (#557).
-            let config = project.evaluate_all(&config_var_overrides)?;
+            let (project, config) = load_and_evaluate(&global, &args.config_vars).await?;
             run_task(project, config, args, color_mode, requested_style, terminal).await
         }
         Command::Tasks {
             command: TasksCommand::List(args),
         } => {
-            let (project, _) = load(&global, &args.config_vars).await?;
+            args.warn_about_deprecated_options();
+            let project = load(&global).await?;
             let listing = match style {
                 OutputStyle::Quiet => format_task_list_quiet(&project.config.tasks),
                 _ => format_task_list(&project.config.project_name, &project.config.tasks),
@@ -773,18 +790,25 @@ fn completion_config_file() -> PathBuf {
     }
 }
 
-/// Loads the configuration, and the config-variable overrides its
-/// evaluation would use — `--config-vars-file` merged with any
-/// `--config-var`s, which override it. Loading evaluates nothing (see
-/// `LoadedProject::evaluate`), so a verb that needs values passes these on.
-async fn load(
+/// Loads the configuration. Evaluates nothing (see
+/// `LoadedProject::evaluate`), so it needs no config-variable values.
+async fn load(global: &GlobalArgs) -> Result<ratect_core::config::LoadedProject> {
+    check_written_for(global)?;
+    load_project_native(&global.config_file).await
+}
+
+/// Before the load, so a project written for a newer Ratect is refused for
+/// that rather than for whichever new field the parser trips on first.
+fn check_written_for(global: &GlobalArgs) -> Result<()> {
+    ratect_core::written_for::check(&global.config_file, running_version())
+}
+
+/// The config-variable values evaluation uses — `--config-vars-file` merged
+/// with any `--config-var`s, which override it.
+fn config_var_overrides(
     global: &GlobalArgs,
     config_vars: &ConfigVarArgs,
-) -> Result<(ratect_core::config::LoadedProject, HashMap<String, String>)> {
-    // Before the load, so a project written for a newer Ratect is refused for
-    // that rather than for whichever new field the parser trips on first.
-    ratect_core::written_for::check(&global.config_file, running_version())?;
-
+) -> Result<HashMap<String, String>> {
     // The config-vars file is either the one `--config-vars-file` names, or —
     // when it doesn't — an auto-discovered `ratect.local.toml` beside the
     // config file, loaded only if it exists (an absent one just means no file
@@ -795,23 +819,27 @@ async fn load(
             ratect_core::config::base_path_for(&global.config_file).join(LOCAL_CONFIG_VARS_FILE);
         default.exists().then_some(default)
     });
-    let mut config_var_overrides: HashMap<String, String> = match &vars_file {
+    let mut overrides: HashMap<String, String> = match &vars_file {
         Some(path) => Config::load_config_vars_file_native(path)?,
         None => HashMap::new(),
     };
-    config_var_overrides.extend(config_vars.config_var.iter().cloned());
-    let project = load_project_native(&global.config_file).await?;
-    Ok((project, config_var_overrides))
+    overrides.extend(config_vars.config_var.iter().cloned());
+    Ok(overrides)
 }
 
-/// [`load`], then every container and task evaluated — what `doctor` and
-/// `config validate` check, until they report each value that can't be
-/// evaluated as a warning instead (#558).
+/// Loads as [`load`] does, then evaluates every container and task — what
+/// `run`, `doctor` and `config validate` read, until a run evaluates only
+/// what each task uses (#557) and the other two report each value that
+/// can't be evaluated as a warning instead (#558).
 async fn load_and_evaluate(
     global: &GlobalArgs,
     config_vars: &ConfigVarArgs,
 ) -> Result<(ratect_core::config::LoadedProject, Config)> {
-    let (project, overrides) = load(global, config_vars).await?;
+    // The written-for check first (see there), then the config-vars file,
+    // so a malformed one is reported before anything the config holds.
+    check_written_for(global)?;
+    let overrides = config_var_overrides(global, config_vars)?;
+    let project = load_project_native(&global.config_file).await?;
     let config = project.evaluate_all(&overrides)?;
     Ok((project, config))
 }

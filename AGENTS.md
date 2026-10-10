@@ -28,7 +28,8 @@ Ratect is a **Cargo workspace** with four crates (the
   + `TaskEngineSettings` + `ui::create_event_sink`. Conventions to keep when adding
   a verb — Docker-connection options live in the flattened `DockerArgs` struct and
   attach to the subcommands that actually connect (never globally, so no verb accepts
-  a flag it ignores); `OutputStyleArg`/`CacheTypeArg` are *this binary's own*
+  a flag it ignores — a deprecated one, hidden and warned about until its removal,
+  being the one exception); `OutputStyleArg`/`CacheTypeArg` are *this binary's own*
   mirrors of the `ratect-core` enums, intentionally duplicated from `ratect-compat`'s
   rather than shared (each binary's accepted value names are part of its own
   interface, and `clap` stays out of `ratect-core`); and the `Command` enum's

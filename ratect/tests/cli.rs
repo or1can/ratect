@@ -214,6 +214,59 @@ run = { container = "app" }
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// `tasks list` evaluates nothing, so its config-variable options are
+/// deprecated: still accepted, with a warning saying they do nothing — and
+/// the file one names, or an auto-discovered `ratect.local.toml`, is not
+/// even read, so a malformed one can't stop the listing.
+#[test]
+fn tasks_list_warns_that_its_config_variable_options_are_deprecated() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "project_name = \"demo\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n\n\
+         [tasks.build]\nrun = { container = \"app\" }\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("ratect.local.toml"), "not toml at all = = =\n").unwrap();
+
+    let list = |args: &[&str]| {
+        ratect_command()
+            .arg("-f")
+            .arg(dir.join("ratect.toml"))
+            .args(["tasks", "list", "-o", "quiet"])
+            .args(args)
+            .output()
+            .expect("failed to run ratect")
+    };
+
+    let plain = list(&[]);
+    assert!(
+        plain.status.success(),
+        "a malformed ratect.local.toml must not stop the listing:\n{}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&plain.stderr).contains("deprecated"),
+        "no option given, nothing to warn about"
+    );
+
+    for args in [
+        &["--config-var", "x=1"][..],
+        &["--config-vars-file", "/nonexistent/vars.toml"][..],
+    ] {
+        let output = list(args);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{args:?}:\n{stderr}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "build\n");
+        assert!(
+            stderr.contains("deprecated") && stderr.contains("no effect"),
+            "{args:?}:\n{stderr}"
+        );
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// `completions <shell>` prints a dynamic registration script and reaches
 /// nothing to do it — no config, no daemon. (The script *installs* the callback
 /// that reads the config later, at `<TAB>` time.)

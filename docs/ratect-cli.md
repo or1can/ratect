@@ -102,15 +102,18 @@ and `ratect run build -f custom.yml` are the same invocation.
 
 Narrower options attach to the commands that actually use them, rather than being
 global: a flag that's accepted and then ignored reads as a promise. So the
-config-variable options below belong to `run` and `tasks list` (the commands that read
-configuration — though `tasks list` evaluates nothing, so it reads the values without
-using them), and the Docker connection options to `run`, `caches`, `resources` and `doctor` (the
+config-variable options below belong to `run`, `config validate` and `doctor` (the
+commands that evaluate configuration), and the Docker connection options to `run`, `caches`, `resources` and `doctor` (the
 ones that reach a daemon).
 
 | Option | Applies to | Description |
 | --- | --- | --- |
-| `--config-var <NAME=VALUE>` | `run`, `tasks list` | Sets a [config variable](ratect-compat-config-reference.md#configvariable). Repeatable; wins over `--config-vars-file` and the variable's own default. |
-| `--config-vars-file <PATH>` | `run`, `tasks list` | A file of config variable values (a flat `NAME = VALUE` map), parsed as TOML or YAML by extension. Defaults to an auto-discovered [`ratect.local.toml`](ratect-config-reference.md#local-overrides) beside the config file, when present. |
+| `--config-var <NAME=VALUE>` | `run`, `config validate`, `doctor` | Sets a [config variable](ratect-compat-config-reference.md#configvariable). Repeatable; wins over `--config-vars-file` and the variable's own default. |
+| `--config-vars-file <PATH>` | `run`, `config validate`, `doctor` | A file of config variable values (a flat `NAME = VALUE` map), parsed as TOML or YAML by extension. Defaults to an auto-discovered [`ratect.local.toml`](ratect-config-reference.md#local-overrides) beside the config file, when present. |
+
+`tasks list` still accepts both, deprecated: they have no effect there, since listing
+tasks evaluates no value, and passing either prints a warning saying so. They'll be
+removed in a later release.
 
 ## Docker connection options
 
