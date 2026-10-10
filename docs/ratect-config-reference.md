@@ -307,13 +307,11 @@ A container inheriting an `image` through `extends` gets the expression its
 parent wrote, evaluated the same way, so it resolves to the same value.
 
 **Nothing is evaluated when the file loads**, so `ratect tasks list` works
-whatever this machine supplies. Running a task evaluates every container in the
-file before it starts, not just the ones your task uses — again like every
-other expression-bearing field. So an unset variable with no `:-default` fails
-*every* task in the file, including tasks that never touch the container
-declaring it. Give a default where a variable is genuinely optional. The error
-names the container, the field and the expression, so you are not left hunting
-for which one.
+whatever this machine supplies. Running a task evaluates only the containers
+that task uses, when the run reaches it — again like every other
+expression-bearing field. So an unset variable with no `:-default` fails only
+the tasks whose containers read it. The error names the container, the field
+and the expression, so you are not left hunting for which one.
 
 **Rejected in a `batect.yml`**, rather than resolved or ignored. Batect has no
 expression support in `image`, so a file using one would load here and fail

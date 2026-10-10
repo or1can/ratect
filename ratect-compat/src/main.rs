@@ -249,7 +249,12 @@ impl Args {
     /// perfectly and reverses the flag), and a flag declared but never read
     /// here. Keep the literal exhaustive for that reason. `ratect` has the
     /// same function for the same reasons.
-    fn engine_settings(&self, project_directory: PathBuf, dialect: Dialect) -> TaskEngineSettings {
+    fn engine_settings(
+        &self,
+        project_directory: PathBuf,
+        dialect: Dialect,
+        config_var_overrides: HashMap<String, String>,
+    ) -> TaskEngineSettings {
         let mut image_tags: HashMap<String, HashSet<String>> = HashMap::new();
         for (container, tag) in &self.tag_image {
             image_tags
@@ -272,6 +277,7 @@ impl Args {
             // identified later — see `ratect_core::labels`.
             ratect_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             dialect,
+            config_var_overrides,
         }
     }
 }
@@ -499,11 +505,6 @@ async fn run(mut args: Args) -> Result<()> {
 
     match args.task_name.as_deref() {
         Some(task_name) => {
-            // Every container and task, until the engine evaluates only what
-            // each task uses (#557) — first, so a value this machine can't
-            // supply fails before anything else is set up, as it did when
-            // loading evaluated it.
-            let config = project.evaluate_all(&config_var_overrides)?;
             // Unconditional, fire-and-forget — matching Batect's own
             // `GitRepositoryCacheCleanupTask`, an unconditional daemon
             // thread started on every "run a task" invocation regardless of
@@ -527,7 +528,11 @@ async fn run(mut args: Args) -> Result<()> {
             // it can return.
             let event_sink = create_event_sink(requested_style, color_mode, &terminal)?;
             // Built before the connection options consume `args` below.
-            let settings = args.engine_settings(project.project_directory, project.dialect);
+            let settings = args.engine_settings(
+                project.project_directory.clone(),
+                project.dialect,
+                config_var_overrides,
+            );
             // Constructed here rather than inside `ratect-core` — a library
             // shouldn't take over a process's signal handling on its own
             // initiative — and armed immediately, since (unlike
@@ -553,7 +558,7 @@ async fn run(mut args: Args) -> Result<()> {
                 .with_event_sink(Arc::clone(&event_sink))
                 .with_enable_buildkit(args.enable_buildkit);
             let engine =
-                TaskEngine::new(config, docker, event_sink, interrupt).with_settings(settings)?;
+                TaskEngine::new(project, docker, event_sink, interrupt).with_settings(settings)?;
             engine.run_task(task_name, &args.additional_args).await?;
         }
         None => {

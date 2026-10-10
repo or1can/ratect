@@ -3919,8 +3919,8 @@ fn evaluate_container(
     Ok(())
 }
 
-/// Evaluates a task's own expression-bearing values: today, its
-/// `run.environment`.
+/// Evaluates a task's own expression-bearing values: its `run.environment`
+/// and each `customise.<container>.environment` (#373).
 fn evaluate_task(
     task: &mut Task,
     host_env: &impl Fn(&str) -> Option<String>,
@@ -3937,6 +3937,20 @@ fn evaluate_task(
             host_env,
             config_vars,
         )?;
+    }
+    // In name order, so which of two bad values is reported doesn't depend
+    // on a `HashMap`'s iteration order.
+    let mut customisations: Vec<_> = task.customise.iter_mut().flatten().collect();
+    customisations.sort_unstable_by_key(|(container, _)| *container);
+    for (container, customisation) in customisations {
+        for (key, value) in customisation.environment.iter_mut().flatten() {
+            *value = evaluate_value(
+                &format!("'customise.{container}.environment.{key}'"),
+                value,
+                host_env,
+                config_vars,
+            )?;
+        }
     }
     Ok(())
 }
@@ -4244,11 +4258,23 @@ impl LoadedProject {
         })
     }
 
+    /// A project built in memory rather than read from a file — every
+    /// container declared in the project directory itself, with no
+    /// boundary or `extends` chain.
+    #[cfg(test)]
+    pub(crate) fn in_memory(config: Config, project_directory: PathBuf) -> Self {
+        Self {
+            config,
+            project_directory,
+            dialect: Dialect::default(),
+            provenance: Provenance::default(),
+        }
+    }
+
     /// The whole project [evaluated](Self::evaluate) against the real host
-    /// environment, as a [`Config`] — for a consumer that still reads every
-    /// container's values, until it evaluates only what it uses
-    /// ([#557](https://github.com/or1can/ratect/issues/557),
-    /// [#558](https://github.com/or1can/ratect/issues/558)).
+    /// environment, as a [`Config`] — for `ratect config validate` and
+    /// `ratect doctor`, until they report each value that can't be evaluated
+    /// instead ([#558](https://github.com/or1can/ratect/issues/558)).
     pub fn evaluate_all(&self, config_var_overrides: &HashMap<String, String>) -> Result<Config> {
         let Evaluated { containers, tasks } = self.evaluate(
             self.config.containers.keys().map(String::as_str),

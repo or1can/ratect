@@ -14,7 +14,9 @@
 
 use super::*;
 use crate::cache::VolumeStore;
-use crate::config::{BuildSecret, Container, Dialect, NetworkMode, PortMapping, Task, TaskRun};
+use crate::config::{
+    BuildSecret, Config, Container, Dialect, NetworkMode, PortMapping, Task, TaskRun,
+};
 use crate::resources::ResourceInventory;
 use crate::ui::NullEventSink;
 use std::collections::HashMap;
@@ -1284,9 +1286,15 @@ fn network_label(network: &crate::container_spec::ContainerNetwork) -> String {
 /// `TaskEngine::new` directly instead, same as it would have called
 /// `with_event_sink`/`with_interrupt` before those became constructor
 /// arguments.
+/// `config` as a project declared entirely in `/project`, as an engine
+/// takes it — every value unevaluated, as loading leaves it.
+fn project(config: Config) -> crate::config::LoadedProject {
+    crate::config::LoadedProject::in_memory(config, PathBuf::from("/project"))
+}
+
 fn engine<D: ContainerRuntime + Send + Sync>(config: Config, docker: D) -> TaskEngine<D> {
     TaskEngine::new(
-        config,
+        project(config),
         docker,
         Arc::new(NullEventSink),
         crate::interrupt::Interrupt::new(),
@@ -2360,7 +2368,7 @@ async fn build_directory_container_builds_then_runs_the_built_image() {
         .find(|e| e.starts_with("build:"))
         .expect("image should have been built");
     assert!(
-        build_event.ends_with(":./docker"),
+        build_event.ends_with(":/project/docker"),
         "build should use the container's build_directory: {build_event}"
     );
 
@@ -2871,7 +2879,7 @@ async fn dependency_container_with_build_directory_is_built_and_started() {
     let events = docker.events();
     let build_event = events
         .iter()
-        .find(|e| e.starts_with("build:") && e.ends_with(":./db"))
+        .find(|e| e.starts_with("build:") && e.ends_with(":/project/db"))
         .expect("dependency container should have been built");
     let tag = build_event
         .strip_prefix("build:")
@@ -3177,7 +3185,7 @@ async fn a_missing_network_still_posts_task_failed() {
     let sink = RecordingEventSink::default();
     let docker = FakeContainerRuntime::default().without_existing_network();
     let engine = TaskEngine::new(
-        config,
+        project(config),
         docker,
         Arc::new(sink.clone()),
         crate::interrupt::Interrupt::new(),
@@ -3338,7 +3346,7 @@ async fn dependency_exiting_after_ready_warns_while_the_task_container_still_run
         .with_dependency_exit("database", std::time::Duration::from_secs(1), 137);
     let sink = RecordingEventSink::default();
     let engine = TaskEngine::new(
-        config,
+        project(config),
         docker,
         Arc::new(sink.clone()),
         crate::interrupt::Interrupt::new(),
@@ -3911,7 +3919,7 @@ async fn run_to_completion_dependency_posts_dependency_completed() {
     );
     let sink = RecordingEventSink::default();
     let engine = TaskEngine::new(
-        config,
+        project(config),
         docker,
         Arc::new(sink.clone()),
         crate::interrupt::Interrupt::new(),
@@ -3989,7 +3997,7 @@ async fn an_external_health_checks_companion_reports_the_checked_containers_read
     );
     let sink = RecordingEventSink::default();
     let engine = TaskEngine::new(
-        config_with_an_external_health_check(),
+        project(config_with_an_external_health_check()),
         docker,
         Arc::new(sink.clone()),
         crate::interrupt::Interrupt::new(),
@@ -4038,7 +4046,7 @@ async fn a_failing_external_health_check_fails_in_the_checked_containers_name() 
             "no TCP connection to database:5432 after 30 attempt(s)",
         );
     let engine = TaskEngine::new(
-        config_with_an_external_health_check(),
+        project(config_with_an_external_health_check()),
         docker,
         Arc::new(RecordingEventSink::default()),
         crate::interrupt::Interrupt::new(),
@@ -4385,7 +4393,7 @@ fn interrupted_engine(
         interrupt.record();
     }
     let engine = TaskEngine::new(
-        config,
+        project(config),
         docker.clone(),
         Arc::new(NullEventSink),
         Arc::clone(&interrupt),
@@ -4516,7 +4524,7 @@ async fn a_signal_during_cleanup_escalates_it_even_when_the_run_was_not_interrup
         &[crate::interrupt::TerminationSignal::Terminate],
     );
     let engine = TaskEngine::new(
-        config,
+        project(config),
         docker.clone(),
         Arc::new(NullEventSink),
         Arc::clone(&interrupt),
@@ -4578,7 +4586,7 @@ async fn a_second_signal_during_cleanup_force_removes_what_is_left() {
             &[crate::interrupt::TerminationSignal::Terminate],
         );
     let engine = TaskEngine::new(
-        config,
+        project(config),
         docker.clone(),
         Arc::new(NullEventSink),
         Arc::clone(&interrupt),
@@ -4633,7 +4641,7 @@ async fn a_second_interrupt_during_cleanup_force_removes_what_is_left() {
             &[crate::interrupt::TerminationSignal::Interrupt],
         );
     let engine = TaskEngine::new(
-        config,
+        project(config),
         docker.clone(),
         Arc::new(NullEventSink),
         Arc::clone(&interrupt),
@@ -4671,7 +4679,7 @@ async fn a_third_interrupt_during_cleanup_abandons_it() {
             ],
         );
     let engine = TaskEngine::new(
-        config,
+        project(config),
         docker.clone(),
         Arc::new(NullEventSink),
         Arc::clone(&interrupt),
@@ -4716,7 +4724,7 @@ async fn a_supervisors_follow_up_signal_after_escalation_does_not_abandon() {
         ],
     );
     let engine = TaskEngine::new(
-        config,
+        project(config),
         docker.clone(),
         Arc::new(NullEventSink),
         Arc::clone(&interrupt),
@@ -4756,7 +4764,7 @@ async fn an_interrupt_after_escalation_of_an_uninterrupted_runs_cleanup_abandons
         ],
     );
     let engine = TaskEngine::new(
-        config,
+        project(config),
         docker.clone(),
         Arc::new(NullEventSink),
         Arc::clone(&interrupt),
@@ -5510,7 +5518,7 @@ async fn a_gate_failed_only_by_a_successful_main_commands_exit_does_not_fail_the
             }
             let sink = RecordingEventSink::default();
             let engine = TaskEngine::new(
-                config,
+                project(config),
                 docker.clone(),
                 Arc::new(sink.clone()),
                 crate::interrupt::Interrupt::new(),
@@ -5629,7 +5637,7 @@ async fn a_gate_still_in_flight_when_the_main_command_exits_zero_does_not_fail_t
             }
             let sink = RecordingEventSink::default();
             let engine = TaskEngine::new(
-                config,
+                project(config),
                 docker.clone(),
                 Arc::new(sink.clone()),
                 crate::interrupt::Interrupt::new(),
@@ -5738,7 +5746,7 @@ async fn native_task_containers_own_readiness_gate_does_not_run() {
     let docker = FakeContainerRuntime::default();
     let sink = RecordingEventSink::default();
     let engine = TaskEngine::new(
-        config_with_a_gated_task_container(),
+        project(config_with_a_gated_task_container()),
         docker.clone(),
         Arc::new(sink.clone()),
         crate::interrupt::Interrupt::new(),
@@ -7686,7 +7694,13 @@ fn with_settings_applies_every_setting() {
         project_name: "demo".to_string(),
         containers,
         tasks,
-        config_variables: None,
+        config_variables: Some(HashMap::from([(
+            "flavour".to_string(),
+            crate::config::ConfigVariable {
+                description: None,
+                default: None,
+            },
+        )])),
         forbid_telemetry: None,
     };
 
@@ -7709,6 +7723,7 @@ fn with_settings_applies_every_setting() {
         )),
         ratect_version: Some("1.2.3".to_string()),
         dialect: Dialect::Native,
+        config_var_overrides: HashMap::from([("flavour".to_string(), "spicy".to_string())]),
     };
     let engine = engine(config, FakeContainerRuntime::default())
         .with_settings(settings)
@@ -7737,6 +7752,7 @@ fn with_settings_applies_every_setting() {
     assert_eq!(cache.cache_type, crate::cache::CacheType::Directory);
     assert_eq!(cache.project_directory, PathBuf::from("/projects/demo"));
     assert!(!engine.task_container_readiness_gate);
+    assert_eq!(engine.config_var_overrides["flavour"], "spicy");
 }
 
 /// The default is "no flags given at all", so an engine built from it
@@ -7767,6 +7783,7 @@ fn default_settings_leave_an_engine_in_its_no_flags_state() {
     assert!(engine.cache_options.is_none());
     assert!(engine.ratect_version.is_none());
     assert!(engine.task_container_readiness_gate);
+    assert!(engine.config_var_overrides.is_empty());
 }
 
 /// The one setting that can fail — `with_settings` returns a `Result`
@@ -8473,6 +8490,165 @@ async fn customise_overrides_a_dependencys_working_directory_environment_and_por
     assert_eq!(docker.working_directory_for("app"), None);
 }
 
+/// A config whose only unevaluable value sits in `deploy`, a container no
+/// task here uses — what decisions/0014's per-task evaluation is for.
+fn config_with_an_unevaluable_container(unevaluable: &str) -> Config {
+    let mut containers = HashMap::new();
+    containers.insert("app".to_string(), container("alpine:3.18", None));
+    let mut deploy = container("alpine:3.18", None);
+    deploy.environment = Some(HashMap::from([(
+        "PROFILE".to_string(),
+        "$RATECT_TEST_UNSET".to_string(),
+    )]));
+    containers.insert(unevaluable.to_string(), deploy);
+    let mut tasks = HashMap::new();
+    tasks.insert("build".to_string(), task("app", "echo build"));
+    let mut test = task("app", "echo test");
+    test.prerequisites = Some(vec!["build".to_string()]);
+    tasks.insert("test".to_string(), test);
+    tasks.insert("deploy".to_string(), task(unevaluable, "echo deploy"));
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+#[tokio::test]
+async fn a_container_outside_the_task_graph_is_never_evaluated() {
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(
+        config_with_an_unevaluable_container("deploy"),
+        docker.clone(),
+    )
+    .with_host_env(|_| None);
+
+    engine
+        .run_task("test", &[])
+        .await
+        .expect("'deploy' is in neither task's graph, so its value is never needed");
+}
+
+#[tokio::test]
+async fn an_unevaluable_value_fails_its_task_before_any_docker_work_for_it() {
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(
+        config_with_an_unevaluable_container("deploy"),
+        docker.clone(),
+    )
+    .with_host_env(|_| None);
+
+    let error = engine
+        .run_task("deploy", &[])
+        .await
+        .expect_err("'deploy' reads a variable this machine doesn't have");
+
+    let message = format!("{error:#}");
+    for named in ["'deploy'", "'environment.PROFILE'", "'$RATECT_TEST_UNSET'"] {
+        assert!(message.contains(named), "should name {named}: {message}");
+    }
+    assert_eq!(docker.events(), Vec::<String>::new());
+}
+
+/// Batect evaluates a task only once it is reached, so a prerequisite that
+/// fails on its own is what the run reports — not a later task's bad value.
+#[tokio::test]
+async fn a_failing_prerequisite_is_reported_before_a_later_tasks_unevaluable_value() {
+    let mut config = config_with_an_unevaluable_container("deploy");
+    config.tasks.get_mut("deploy").unwrap().prerequisites = Some(vec!["build".to_string()]);
+    let docker = FakeContainerRuntime::default().failing_run();
+    let engine = engine(config, docker.clone()).with_host_env(|_| None);
+
+    let error = engine
+        .run_task("deploy", &[])
+        .await
+        .expect_err("the prerequisite fails");
+
+    assert!(
+        error.is::<crate::docker::ContainerExitedNonZero>(),
+        "the prerequisite's own failure, not deploy's value: {error:#}"
+    );
+    assert_eq!(crate::exit_code::for_error(&error), 1);
+}
+
+#[tokio::test]
+async fn a_tasks_values_are_evaluated_against_the_host_and_its_config_variables() {
+    let mut containers = HashMap::new();
+    let mut database = container("postgres:16", None);
+    database.environment = Some(HashMap::from([(
+        "FROM_CONTAINER".to_string(),
+        "$RATECT_TEST_HOST".to_string(),
+    )]));
+    containers.insert("database".to_string(), database);
+    containers.insert(
+        "app".to_string(),
+        container("alpine:3.18", Some(vec!["database".to_string()])),
+    );
+    let mut run_task = task("app", "echo hi");
+    run_task.run.as_mut().unwrap().environment = Some(HashMap::from([(
+        "FROM_RUN".to_string(),
+        "<flavour".to_string(),
+    )]));
+    run_task.customise = Some(HashMap::from([(
+        "database".to_string(),
+        TaskContainerCustomisation {
+            environment: Some(HashMap::from([(
+                "FROM_CUSTOMISE".to_string(),
+                "${RATECT_TEST_UNSET:-fallback}".to_string(),
+            )])),
+            ports: None,
+            working_directory: None,
+        },
+    )]));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks: HashMap::from([("run".to_string(), run_task)]),
+        config_variables: Some(HashMap::from([(
+            "flavour".to_string(),
+            crate::config::ConfigVariable {
+                description: None,
+                default: Some("plain".to_string()),
+            },
+        )])),
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            config_var_overrides: HashMap::from([("flavour".to_string(), "spicy".to_string())]),
+            ..TaskEngineSettings::default()
+        })
+        .unwrap()
+        .with_host_env(|name| (name == "RATECT_TEST_HOST").then(|| "from-host".to_string()));
+
+    engine.run_task("run", &[]).await.unwrap();
+
+    let database_env = docker.environment_for("database").unwrap();
+    assert_eq!(database_env["FROM_CONTAINER"], "from-host");
+    assert_eq!(database_env["FROM_CUSTOMISE"], "fallback");
+    assert_eq!(docker.environment_for("app").unwrap()["FROM_RUN"], "spicy");
+}
+
+#[test]
+fn with_settings_rejects_an_override_for_an_undeclared_config_variable() {
+    let error = engine(
+        config_with_an_unevaluable_container("deploy"),
+        FakeContainerRuntime::default(),
+    )
+    .with_settings(TaskEngineSettings {
+        config_var_overrides: HashMap::from([("nope".to_string(), "x".to_string())]),
+        ..TaskEngineSettings::default()
+    })
+    .err()
+    .expect("'nope' isn't declared");
+
+    assert!(format!("{error:#}").contains("'nope'"), "{error:#}");
+}
+
 #[tokio::test]
 async fn term_env_var_reaches_a_tasks_own_container_when_interactive() {
     let mut containers = HashMap::new();
@@ -9125,7 +9301,7 @@ async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
     let sink = RecordingEventSink::default();
     let docker = FakeContainerRuntime::default();
     let engine = TaskEngine::new(
-        config,
+        project(config),
         docker,
         Arc::new(sink.clone()),
         crate::interrupt::Interrupt::new(),
@@ -9270,7 +9446,7 @@ async fn posts_pull_events_only_when_a_pull_actually_happens() {
     let sink = RecordingEventSink::default();
     let docker = FakeContainerRuntime::default();
     let engine = TaskEngine::new(
-        config(),
+        project(config()),
         docker,
         Arc::new(sink.clone()),
         crate::interrupt::Interrupt::new(),
@@ -9289,7 +9465,7 @@ async fn posts_pull_events_only_when_a_pull_actually_happens() {
     let sink = RecordingEventSink::default();
     let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
     let engine = TaskEngine::new(
-        config(),
+        project(config()),
         docker,
         Arc::new(sink.clone()),
         crate::interrupt::Interrupt::new(),
@@ -9329,7 +9505,7 @@ async fn image_resolved_posts_even_when_no_pull_or_build_happens() {
     let sink = RecordingEventSink::default();
     let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
     let engine = TaskEngine::new(
-        config,
+        project(config),
         docker,
         Arc::new(sink.clone()),
         crate::interrupt::Interrupt::new(),
@@ -9393,7 +9569,7 @@ async fn setup_command_output_only_posts_when_the_sink_wants_progress_detail() {
     let docker = FakeContainerRuntime::default().with_failing_setup_command("./seed-data.sh");
     let sink = RecordingEventSink::default();
     let engine = TaskEngine::new(
-        config,
+        project(config),
         docker,
         Arc::new(sink.clone()),
         crate::interrupt::Interrupt::new(),
@@ -9419,7 +9595,7 @@ async fn setup_command_output_only_posts_when_the_sink_wants_progress_detail() {
     let docker = FakeContainerRuntime::default().with_failing_setup_command("./seed-data.sh");
     let sink = InterleavedRecordingSink::default();
     let engine = TaskEngine::new(
-        config,
+        project(config),
         docker,
         Arc::new(sink.clone()),
         crate::interrupt::Interrupt::new(),
@@ -9459,7 +9635,7 @@ async fn interleaved_policy_disables_interactive_and_sets_dumb_term_everywhere()
     let sink = InterleavedRecordingSink::default();
     let docker = FakeContainerRuntime::default();
     let engine = TaskEngine::new(
-        config,
+        project(config),
         docker.clone(),
         Arc::new(sink.clone()),
         crate::interrupt::Interrupt::new(),

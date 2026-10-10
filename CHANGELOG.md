@@ -35,7 +35,8 @@ history, from when it was the only binary.
 
 ### Changed
 
-- `ratect-compat --list-tasks` and `ratect tasks list` evaluate no `$VAR` or `<var` expression: they succeed when a value can't be evaluated on this machine, and a `--config-var` naming an undeclared variable is no longer an error there. Running a task, `ratect config validate` and `ratect doctor` still evaluate every container and task first.
+- `ratect-compat --list-tasks` and `ratect tasks list` evaluate no `$VAR` or `<var` expression: they succeed when a value can't be evaluated on this machine, and a `--config-var` naming an undeclared variable is no longer an error there. `ratect config validate` and `ratect doctor` still evaluate every container and task first.
+- Running a task evaluates each task's values when the run reaches it — after its prerequisites, before any of its own containers starts — and only for the containers that task uses: a value this machine can't supply no longer fails a task that doesn't use it, and a prerequisite that fails on its own is reported rather than a later task's value.
 - A value that can't be evaluated is reported with its container or task, field and expression.
 - `ratect resources list`/`clean` (ratect only) read only the root file's `project_name` to scope themselves, so a project refused by its `ratect_version`, or holding a value that can't be evaluated on this machine, no longer stops them.
 - Upgraded `noyalib` to 0.0.57, which parses some edge-case YAML closer to the YAML 1.2 spec: `0X1F` and `0x-1` load as strings, a plain scalar whose line ends in a space continues on the next line, and folded scalars and escaped line breaks follow the spec exactly. A config relying on the old reading may load differently; see noyalib's [0.0.57 release notes](https://github.com/sebastienrousseau/noyalib/releases/tag/v0.0.57).
@@ -43,6 +44,10 @@ history, from when it was the only binary.
 ### Deprecated
 
 - `ratect tasks list`'s `--config-var` and `--config-vars-file` (ratect only): they have no effect, since listing tasks evaluates no value, and passing either now prints a warning. Neither the file one names nor an auto-discovered `ratect.local.toml` is read, so a missing or malformed one no longer stops the listing. They will be removed in a later release.
+
+### Fixed
+
+- `customise.<container>.environment` values are evaluated as expressions, as `environment` values are, rather than reaching the container as written.
 
 ## [ratect-compat 0.31.0 · ratect 0.10.0] - 2026-10-02
 
