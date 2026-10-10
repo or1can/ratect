@@ -686,10 +686,17 @@ async fn run(cli: Cli) -> Result<()> {
     // Arms follow the `Command` enum's own order (see there).
     match command {
         Command::Run(args) => {
-            // Every container and task, until the engine evaluates only what
-            // each task uses (#557).
-            let (project, config) = load_and_evaluate(&global, &args.config_vars).await?;
-            run_task(project, config, args, color_mode, requested_style, terminal).await
+            let (project, config_var_overrides) =
+                load_with_overrides(&global, &args.config_vars).await?;
+            run_task(
+                project,
+                config_var_overrides,
+                args,
+                color_mode,
+                requested_style,
+                terminal,
+            )
+            .await
         }
         Command::Tasks {
             command: TasksCommand::List(args),
@@ -827,19 +834,29 @@ fn config_var_overrides(
     Ok(overrides)
 }
 
-/// Loads as [`load`] does, then evaluates every container and task — what
-/// `run`, `doctor` and `config validate` read, until a run evaluates only
-/// what each task uses (#557) and the other two report each value that
-/// can't be evaluated as a warning instead (#558).
-async fn load_and_evaluate(
+/// Loads as [`load`] does, along with the config-variable overrides its
+/// values are evaluated with — what `run` reads, whose engine evaluates
+/// each task's values when it reaches the task.
+async fn load_with_overrides(
     global: &GlobalArgs,
     config_vars: &ConfigVarArgs,
-) -> Result<(ratect_core::config::LoadedProject, Config)> {
+) -> Result<(ratect_core::config::LoadedProject, HashMap<String, String>)> {
     // The written-for check first (see there), then the config-vars file,
     // so a malformed one is reported before anything the config holds.
     check_written_for(global)?;
     let overrides = config_var_overrides(global, config_vars)?;
     let project = load_project_native(&global.config_file).await?;
+    Ok((project, overrides))
+}
+
+/// Loads as [`load_with_overrides`] does, then evaluates every container and
+/// task — what `doctor` and `config validate` read, until they report each
+/// value that can't be evaluated as a warning instead (#558).
+async fn load_and_evaluate(
+    global: &GlobalArgs,
+    config_vars: &ConfigVarArgs,
+) -> Result<(ratect_core::config::LoadedProject, Config)> {
+    let (project, overrides) = load_with_overrides(global, config_vars).await?;
     let config = project.evaluate_all(&overrides)?;
     Ok((project, config))
 }
@@ -876,7 +893,7 @@ const BATECT_CONFIG_FILE: &str = "batect.yml";
 
 async fn run_task(
     project: ratect_core::config::LoadedProject,
-    config: Config,
+    config_var_overrides: HashMap<String, String>,
     args: RunArgs,
     color_mode: ColorMode,
     requested_style: Option<OutputStyle>,
@@ -888,7 +905,11 @@ async fn run_task(
     let event_sink = create_event_sink(requested_style, color_mode, &terminal)?;
 
     // Built before the connection options are consumed below.
-    let settings = args.engine_settings(project.project_directory, project.dialect);
+    let settings = args.engine_settings(
+        project.project_directory.clone(),
+        project.dialect,
+        config_var_overrides,
+    );
     // Constructed here rather than inside `ratect-core` — a library
     // shouldn't take over a process's signal handling on its own initiative
     // — and armed immediately, since (unlike `engine_settings`, kept
@@ -903,7 +924,7 @@ async fn run_task(
         .with_event_sink(Arc::clone(&event_sink))
         .with_enable_buildkit(args.enable_buildkit);
 
-    let engine = TaskEngine::new(config, docker, event_sink, interrupt).with_settings(settings)?;
+    let engine = TaskEngine::new(project, docker, event_sink, interrupt).with_settings(settings)?;
     engine.run_task(&args.task, &args.args).await
 }
 
@@ -920,7 +941,12 @@ impl RunArgs {
     /// literal exhaustive for that reason: adding `..Default::default()`
     /// would trade the compiler's check for a silent default.
     /// `ratect-compat` has the same function for the same reasons.
-    fn engine_settings(&self, project_directory: PathBuf, dialect: Dialect) -> TaskEngineSettings {
+    fn engine_settings(
+        &self,
+        project_directory: PathBuf,
+        dialect: Dialect,
+        config_var_overrides: HashMap<String, String>,
+    ) -> TaskEngineSettings {
         let mut image_tags: HashMap<String, HashSet<String>> = HashMap::new();
         for (container, tag) in &self.tag_image {
             image_tags
@@ -943,6 +969,7 @@ impl RunArgs {
             // identified later — see `ratect_core::labels`.
             ratect_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             dialect,
+            config_var_overrides,
         }
     }
 }

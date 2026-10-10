@@ -62,10 +62,10 @@
 //! reintroduce a removal here.
 //! `resolve_volumes` (0.18.0) turns a container's `VolumeMount`s into the
 //! literal bind strings `docker.rs` expects — a `Local` mount's already fully
-//! resolved by `config.rs`, nothing left to do but reassemble the string; a
-//! `Cache` mount goes through `cache::resolve_cache_mount`, memoizing the
-//! project's own cache key in a `tokio::sync::OnceCell` field (computed at
-//! most once per invocation, and only if a `cache` mount is actually
+//! resolved by `LoadedProject::evaluate` when its task is reached, nothing
+//! left to do but reassemble the string; a `Cache` mount goes through
+//! `cache::resolve_cache_mount`, memoizing the project's own cache key in a
+//! `tokio::sync::OnceCell` field (computed at most once per invocation, and only if a `cache` mount is actually
 //! resolved — never eagerly). `--cache-type` + the project directory reach
 //! `TaskEngineSettings::cache` via `main.rs`'s own `with_settings` call,
 //! always made in practice despite being optional here. `Tmpfs` mounts are
@@ -77,7 +77,9 @@
 //! `ContainerOptions.tmpfs` field instead, mapped onto Docker's own
 //! `HostConfig.Tmpfs` map by `docker.rs`'s `build_tmpfs_mounts`.
 
-use crate::config::{container_names_in_task, Config, Container, Task, TaskContainerCustomisation};
+use crate::config::{
+    container_names_in_task, Container, Evaluated, LoadedProject, Task, TaskContainerCustomisation,
+};
 use crate::container_spec::derive_build_spec;
 use crate::docker::ContainerRuntime;
 use crate::ui::{EventSink, TaskEvent};
@@ -425,7 +427,15 @@ fn format_task_suggestions(tasks: &HashMap<String, Task>, name: &str) -> String 
 }
 
 pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
-    config: Config,
+    /// The project as loaded — its values unevaluated. Each task's
+    /// containers and values are [evaluated](LoadedProject::evaluate) when
+    /// the task is reached (see `run_task_internal`), and everything that
+    /// task's run does reads that evaluated view; this is read only for what
+    /// comes before it — finding the task, its prerequisites, and which
+    /// containers to evaluate.
+    project: LoadedProject,
+    /// `--config-var`/`--config-vars-file`, for evaluating each task.
+    config_var_overrides: HashMap<String, String>,
     /// `Arc`, not owned by value: `ensure_container_ready` needs to hand a
     /// clone into a detached `tokio::spawn`ed dependency-exit watcher (see
     /// `TaskEvent::DependencyExitedUnexpectedly`) that outlives its own
@@ -448,7 +458,9 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// concurrently by two branches of one task's dependency graph (0.15.0).
     /// Keyed by container name (not build directory) since a given name
     /// always has the same `build_directory`/`build_args` within one
-    /// `Config`. Stores the image ID (not the human-readable tag) — see
+    /// invocation: each task re-evaluates its containers, but against the
+    /// same host environment and config-variable overrides, so to the same
+    /// values. Stores the image ID (not the human-readable tag) — see
     /// `resolve_image` for why.
     built_images: Mutex<HashMap<String, ReadyCell>>,
     in_progress_tasks: Mutex<HashSet<String>>,
@@ -465,10 +477,11 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// `dontPropagateProxyEnvironmentVariables`. `true` (the default)
     /// propagates them.
     propagate_proxy_environment_variables: bool,
-    /// The host environment lookup `proxy::proxy_environment_variables`
-    /// reads from — real `std::env::var` in the real constructor, a fixed
-    /// closure in tests (see `with_host_env`), same reason
-    /// `LoadedProject::evaluate` parameterizes over this.
+    /// The host environment lookup each task's values are evaluated
+    /// against, and `proxy::proxy_environment_variables` reads from — real
+    /// `std::env::var` in the real constructor, a fixed closure in tests
+    /// (see `with_host_env`), same reason `LoadedProject::evaluate`
+    /// parameterizes over this.
     host_env: HostEnv,
     /// The `/proc/net/tcp`/`tcp6` source `unreachable_proxy_ports` reads —
     /// see `ProcNetTcp` and `with_proc_net_tcp`.
@@ -641,6 +654,10 @@ pub struct TaskEngineSettings {
     pub ratect_version: Option<String>,
     /// The project's dialect — [`crate::config::LoadedProject::dialect`].
     pub dialect: crate::config::Dialect,
+    /// `--config-var`s merged over a `--config-vars-file`'s values, which
+    /// each task's values are evaluated with. Checked against the project's
+    /// declared variables by [`TaskEngine::with_settings`].
+    pub config_var_overrides: HashMap<String, String>,
 }
 
 impl Default for TaskEngineSettings {
@@ -658,6 +675,7 @@ impl Default for TaskEngineSettings {
             cache: None,
             ratect_version: None,
             dialect: crate::config::Dialect::default(),
+            config_var_overrides: HashMap::new(),
         }
     }
 }
@@ -681,13 +699,14 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     ///
     /// [`with_settings`]: Self::with_settings
     pub fn new(
-        config: Config,
+        project: LoadedProject,
         docker: D,
         event_sink: Arc<dyn EventSink>,
         interrupt: Arc<crate::interrupt::Interrupt>,
     ) -> Self {
         Self {
-            config,
+            project,
+            config_var_overrides: HashMap::new(),
             docker: Arc::new(docker),
             executed_tasks: Mutex::new(HashSet::new()),
             pulled_images: Mutex::new(HashMap::new()),
@@ -746,19 +765,26 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             cache,
             ratect_version,
             dialect,
+            config_var_overrides,
         } = settings;
         // Validated up front — matching Batect's own eager validation and
         // error wording exactly — rather than only failing the first time
         // (if ever) an overridden container is actually reached. See
         // `resolve_image`.
         for name in image_overrides.keys() {
-            if !self.config.containers.contains_key(name) {
+            if !self.project.config.containers.contains_key(name) {
                 anyhow::bail!(
                     "Cannot override image for container '{name}' because there is no \
                      container named '{name}' defined."
                 );
             }
         }
+        // Up front too, so an override for a variable the project doesn't
+        // declare is refused before any task runs rather than when the first
+        // one is evaluated. Evaluating nothing reads no host value.
+        self.project
+            .evaluate([], [], &config_var_overrides, |_| None)?;
+        self.config_var_overrides = config_var_overrides;
         self.existing_network = existing_network;
         self.publish_ports = publish_ports;
         self.propagate_proxy_environment_variables = propagate_proxy_environment_variables;
@@ -1329,7 +1355,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             let result = cell
                 .get_or_init(|| async {
                     let build: Result<String> = async {
-                        let tag = format!("{}-{}", self.config.project_name, container_name);
+                        let tag =
+                            format!("{}-{}", self.project.config.project_name, container_name);
                         // No `extra_no_proxy_entries` at build time — matches
                         // Batect, which never adds container names to
                         // `no_proxy` for a build (nothing's running yet to be
@@ -1546,17 +1573,53 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         result
     }
 
+    /// `task` and every container in its graph,
+    /// [evaluated](LoadedProject::evaluate) with this run's config-variable
+    /// overrides against the host environment — what the rest of the task's
+    /// run reads its values from. A task with no `run` has no graph, and only
+    /// its own values are evaluated.
+    fn evaluate_task(
+        &self,
+        task_name: &str,
+        task: &Task,
+    ) -> Result<(Task, HashMap<String, Container>)> {
+        let names = task
+            .run
+            .as_ref()
+            .map(|run| {
+                container_names_in_task(
+                    &self.project.config.containers,
+                    &run.container,
+                    task.dependencies.as_deref(),
+                )
+            })
+            .unwrap_or_default();
+        let Evaluated {
+            containers,
+            mut tasks,
+        } = self.project.evaluate(
+            names.iter().map(String::as_str),
+            [task_name],
+            &self.config_var_overrides,
+            |name| (self.host_env)(name),
+        )?;
+        let task = tasks
+            .remove(task_name)
+            .expect("evaluate returns every task it is asked for");
+        Ok((task, containers))
+    }
+
     async fn run_task_internal(
         &self,
         task_name: &str,
         additional_args: &[String],
         top_level: bool,
     ) -> Result<()> {
-        let task = self.config.tasks.get(task_name).with_context(|| {
+        let task = self.project.config.tasks.get(task_name).with_context(|| {
             format!(
                 "Task '{}' not found.{}",
                 task_name,
-                format_task_suggestions(&self.config.tasks, task_name)
+                format_task_suggestions(&self.project.config.tasks, task_name)
             )
         })?;
 
@@ -1577,12 +1640,18 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         if !(top_level && self.skip_prerequisites) {
             if let Some(prerequisites) = &task.prerequisites {
                 let prerequisites =
-                    expand_prerequisite_wildcards(&self.config.tasks, prerequisites)?;
+                    expand_prerequisite_wildcards(&self.project.config.tasks, prerequisites)?;
                 for prerequisite in &prerequisites {
                     self.run_task_scoped(prerequisite, &[], false).await?;
                 }
             }
         }
+
+        // This task's own values, evaluated only now that its prerequisites
+        // have run, and before anything of its own touches Docker
+        // (decisions/0014): a prerequisite that fails reports its own
+        // failure, never this task's bad value.
+        let (task, containers) = self.evaluate_task(task_name, task)?;
 
         // A task with only `prerequisites` and no `run` of its own — those
         // have already executed above; there's no container of the task's
@@ -1598,9 +1667,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         };
 
         // Run the task itself
-        let container_config = self
-            .config
-            .containers
+        let container_config = containers
             .get(&run.container)
             .with_context(|| undeclared_container_bug(&run.container))?;
 
@@ -1654,11 +1721,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // dependency) gets the same `no_proxy` exemption list, matching
         // Batect's `allContainersInNetwork` being fixed for the whole graph
         // rather than recomputed per container.
-        let no_proxy_entries = container_names_in_task(
-            &self.config.containers,
-            &run.container,
-            task.dependencies.as_deref(),
-        );
+        let no_proxy_entries =
+            container_names_in_task(&containers, &run.container, task.dependencies.as_deref());
         // Identifies every resource this one task execution creates (see
         // `crate::labels`). The id is generated here rather than alongside
         // the network below, so it exists even under `--use-network`, where
@@ -1666,7 +1730,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // on which run they belong to.
         let run_id = Uuid::new_v4().to_string();
         let run_labels = crate::labels::RunLabels::new(
-            &self.config.project_name,
+            &self.project.config.project_name,
             task_name,
             &run_id,
             self.ratect_version.as_deref(),
@@ -1717,11 +1781,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // proves the whole graph acyclic before any concurrent execution
             // starts, so `ensure_container_ready` doesn't need its own
             // runtime cycle guard.
-            let graph = build_dependency_graph(
-                &self.config.containers,
-                &run.container,
-                task.dependencies.as_deref(),
-            )?;
+            let graph =
+                build_dependency_graph(&containers, &run.container, task.dependencies.as_deref())?;
             // The resolved graph, for per-container progress displays (see
             // `TaskEvent::TaskGraphResolved`). A node missing from config
             // can't happen for a graph that just built successfully, but
@@ -1735,8 +1796,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // companion beside the container it checks, which is therefore
             // still in that list and is what the display drains on.
             let narrated = |name: &String| {
-                self.config
-                    .containers
+                containers
                     .get(name)
                     .is_none_or(|container| container.reports_readiness_for.is_none())
             };
@@ -1744,13 +1804,13 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 .iter()
                 .filter(|(name, _)| narrated(name))
                 .map(|(name, dependencies)| {
-                    let container_config = self.config.containers.get(name);
+                    let container_config = containers.get(name);
                     crate::ui::TaskContainerInfo {
                         name: name.clone(),
                         image: container_config.and_then(|c| c.image.clone()),
                         build_tag: container_config
                             .and_then(|c| c.build_directory.as_ref())
-                            .map(|_| format!("{}-{}", self.config.project_name, name)),
+                            .map(|_| format!("{}-{}", self.project.config.project_name, name)),
                         dependencies: dependencies
                             .iter()
                             .filter(|dependency| narrated(dependency))
@@ -1781,6 +1841,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     self.ensure_container_ready(
                         dependency_name,
                         &graph,
+                        &containers,
                         &network_name,
                         &ready_cells,
                         &created_dependencies,
@@ -2229,9 +2290,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 });
             }
             for (name, container_id) in &created_sidecars {
-                let narrate = self
-                    .config
-                    .containers
+                let narrate = containers
                     .get(name)
                     .is_none_or(|container| container.reports_readiness_for.is_none());
                 removals.push_back(Removal {
@@ -2251,7 +2310,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     removals.push_front(removal);
                     break;
                 }
-                let container_config = self.config.containers.get(removal.name);
+                let container_config = containers.get(removal.name);
                 let stop_signal = container_config.and_then(|c| c.stop_signal.as_deref());
                 let stop_grace_period = container_config.and_then(|c| c.stop_grace_period);
                 let graceful = self.docker.stop_and_remove_container(
@@ -2436,6 +2495,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         &self,
         name: &str,
         graph: &HashMap<String, Vec<String>>,
+        containers: &HashMap<String, Container>,
         network: &str,
         cells: &Mutex<HashMap<String, ReadyCell>>,
         created_dependencies: &CreatedDependencies,
@@ -2462,6 +2522,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                             self.ensure_container_ready(
                                 dependency_name,
                                 graph,
+                                containers,
                                 network,
                                 cells,
                                 created_dependencies,
@@ -2477,9 +2538,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         .map(|(id, dependency_name)| (dependency_name.clone(), id))
                         .collect();
 
-                    let dependency_config = self
-                        .config
-                        .containers
+                    let dependency_config = containers
                         .get(name)
                         .with_context(|| undeclared_container_bug(name))?;
 

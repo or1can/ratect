@@ -457,6 +457,37 @@ fn list_tasks_succeeds_when_an_unused_container_cannot_be_evaluated() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "build\n");
 }
 
+/// The run's counterpart: a task is evaluated only when it is reached, and
+/// only the containers its own graph uses, so `deploy`'s values are never
+/// looked at (decisions/0014).
+#[test]
+#[ignore]
+fn a_task_runs_when_an_unused_container_cannot_be_evaluated_via_docker() {
+    let output = ratect_command()
+        .args(["-o", "simple", "-f"])
+        .arg(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/unevaluable-unused-container.yml"),
+        )
+        .arg("build")
+        .env_remove("RATECT_TEST_NEVER_SET")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line == "built"),
+        "stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
 /// Refused when the file loads, not only when a task reaching it runs as in
 /// Batect — so even `--list-tasks` fails.
 #[test]

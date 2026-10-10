@@ -37,10 +37,14 @@ reference](ratect-compat-config-reference.md) for the full list. The exceptions:
 
 ### Expressions
 
-Matches Batect exactly, field-for-field — see
-[Expressions](ratect-compat-config-reference.md#expressions) for the full syntax and which
-fields support it. The exceptions:
+The syntax and which fields support it match Batect, field-for-field — see
+[Expressions](ratect-compat-config-reference.md#expressions). The exceptions:
 
+- **When a task's values are evaluated.** Both evaluate only what a task uses,
+  once the run reaches it, after its prerequisites. Ratect evaluates every
+  container in the task's graph before starting any of them, where Batect
+  evaluates each as it creates or builds it — so here a value that can't be
+  evaluated fails the task before its dependencies start, rather than after.
 - `image` — see [Container fields](#container-fields) below.
 - `batect.project_directory` has its `.` and `..` components resolved:
   `-f ../proj/batect.yml` gives `/parent/proj`, where Batect gives

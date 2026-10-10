@@ -828,15 +828,18 @@ config_variables:
 
 ## Expressions
 
-`environment` values (on both [Container](#container) and [TaskRun](#taskrun)), a
+`environment` values (on [Container](#container), [TaskRun](#taskrun) and a task's
+[`customise`](#taskcontainercustomisation) entries), a
 volume's `host_path` (see [Volume path resolution](#volume-path-resolution)),
 `build_directory`, `build_args`, a `build_secrets` entry's `path` (not its
 `environment` — that's a literal host environment variable *name*, not itself
 interpolated), and a `build_ssh` entry's `paths` support two kinds of expression,
 evaluated when you run a task — not when the file loads, so `--list-tasks` works
 whatever this machine supplies, and uses no `--config-var`/`--config-vars-file` value.
-Running a task evaluates every container and task in the file before anything
-starts, with those overrides applied. Everywhere else in the config, a
+Each task is evaluated when the run reaches it — after its prerequisites, before
+any of its own containers is built or started — with those overrides applied, and
+only the containers that task uses: a value this machine can't supply fails only
+a task that needs it. Everywhere else in the config, a
 string is used exactly as written, with no substitution — expression support is
 scoped to fields that can meaningfully take one; it'll extend to more fields as they
 themselves get built, not automatically.

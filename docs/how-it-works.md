@@ -82,8 +82,8 @@ evaluation reads what the machine running it supplies — see
      can commit one inside its own clone. A literal path gets the same check at
      load.
 
-   Running a task evaluates every container and task in the project before the
-   engine starts.
+   The engine evaluates each task as it reaches it — see step 3 of the task
+   engine below.
 
    See the [configuration reference](ratect-compat-config-reference.md#expressions) for the full
    expression syntax, precedence, and error rules.
@@ -106,7 +106,11 @@ where that lives and stays current.
    actually named on the command line, and that flag is the whole of
    interactive-TTY eligibility: a prerequisite chain isn't the thing being run
    interactively, so only the originally-requested task's own container is ever
-   eligible, however deeply nested its prerequisites are. A task with no `run` of
+   eligible, however deeply nested its prerequisites are. The task is then
+   **evaluated**, before any Docker work of its own: every container in its graph,
+   its `run.environment` and its `customise` environments go through
+   `LoadedProject::evaluate`, and the rest of the task reads only those values. A
+   container no task in the run uses is never evaluated. A task with no `run` of
    its own stops here and succeeds — it exists purely to chain prerequisites (see
    [config reference](ratect-compat-config-reference.md#task)), matching Batect's own
    `TaskRunner`.

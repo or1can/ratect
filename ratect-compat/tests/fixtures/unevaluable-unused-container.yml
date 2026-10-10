@@ -1,7 +1,8 @@
 # A container no task uses reads values this machine can't supply — an unset
 # host variable with no default, and a config variable the file never
-# declares. Loading evaluates no expression (decisions/0014), so
-# `--list-tasks` still lists the tasks.
+# declares. Loading evaluates no expression, and a run evaluates only what
+# the task it reaches uses (decisions/0014), so `--list-tasks` still lists the
+# tasks and `build` still runs.
 project_name: unevaluable-unused-container
 containers:
   build-env:
