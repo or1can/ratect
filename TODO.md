@@ -68,9 +68,9 @@ Confirmed against GitHub's own `/markdown` API, not assumed.
 - **15.** **The generated JSON schemas' `description`s name private Rust items**
   (`ratect-core/src/config.rs` doc comments, rendered by
   `ratect-core/src/schema.rs`) — a description is what an editor shows a
-  user writing a `batect.yml`/`ratect.toml`, and 29 mentions across 22 of
-  them cite things like `TaskEngine::resolve_image`,
-  `Config::resolve_expressions_with` or `BuildSecret::Path`, which name
+  user writing a `batect.yml`/`ratect.toml`, and about two dozen of them
+  cite things like `TaskEngine::resolve_image`,
+  `TaskEngine::run_task_internal` or `BuildSecret::Path`, which name
   nothing the reader can look up. The mechanism is already in place to fix
   it — only a doc comment's *first paragraph* becomes the description
   (`schema.rs`'s summarizer, pinned by
@@ -78,7 +78,7 @@ Confirmed against GitHub's own `/markdown` API, not assumed.
   needs its user-facing sentence kept first and the implementation detail
   moved to a second paragraph, exactly as `Task::customise` now does.
   Deliberately not done piecemeal while passing through: fixing two of
-  twenty-two leaves the tree less consistent than finding it, and the
+  two dozen leaves the tree less consistent than finding it, and the
   remedy is per-field prose rather than one mechanical edit. Count it by
   walking the committed schemas' `description` values for a backticked
   `Foo::bar`, not by grepping the source, since only the first paragraph

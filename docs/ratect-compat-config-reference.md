@@ -386,8 +386,8 @@ For a `local` mount, `local` (the host path) is resolved:
   **relative to the directory containing the config file** (not the current working
   directory). If it's already absolute (whether literally written that way, expanded
   from `~`, or because that's what an expression resolved to), it's left unchanged.
-- This all happens once, after CLI-supplied config variable overrides
-  (`--config-var`/`--config-vars-file`) are known — not at config-parse time.
+- This all happens when a task is run, with CLI-supplied config variable overrides
+  (`--config-var`/`--config-vars-file`) applied — not when the file loads.
 - `build_directory` is resolved the same way (it has no `:container_path` part to split
   off, obviously, but otherwise follows identical rules).
 
@@ -832,9 +832,11 @@ config_variables:
 volume's `host_path` (see [Volume path resolution](#volume-path-resolution)),
 `build_directory`, `build_args`, a `build_secrets` entry's `path` (not its
 `environment` — that's a literal host environment variable *name*, not itself
-interpolated), and a `build_ssh` entry's `paths` support two kinds of expression, resolved once — after CLI-supplied
-config variable overrides (`--config-var`/`--config-vars-file`) are known, so before
-any task runs but not at config-parse time itself. Everywhere else in the config, a
+interpolated), and a `build_ssh` entry's `paths` support two kinds of expression,
+evaluated when you run a task — not when the file loads, so `--list-tasks` works
+whatever this machine supplies, and uses no `--config-var`/`--config-vars-file` value.
+Running a task evaluates every container and task in the file before anything
+starts, with those overrides applied. Everywhere else in the config, a
 string is used exactly as written, with no substitution — expression support is
 scoped to fields that can meaningfully take one; it'll extend to more fields as they
 themselves get built, not automatically.
@@ -862,7 +864,8 @@ is treated as a literal character rather than an error.
 | `<{name}` | A [`config_variables`](#configvariable) entry | `<{environment_name}` |
 
 A host variable referenced without a `:-default` fallback, and unset when `ratect`
-runs, is a hard error naming the variable — there's no silent empty-string fallback. A
+runs, is a hard error naming the container or task, the field, the expression and
+the variable — there's no silent empty-string fallback. A
 config variable referenced via `<name`/`<{name}` must be declared under
 `config_variables`; an undeclared name is a hard error, and so is a declared one with
 no value from any source (see [ConfigVariable](#configvariable)'s precedence order).

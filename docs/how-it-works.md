@@ -11,21 +11,23 @@ Each binary has its own `main.rs`, and both parse arguments with
 interface ([CLI reference](ratect-compat-cli.md)), and `ratect/src/main.rs` for the
 subcommand interface ([`ratect` CLI reference](ratect-cli.md)). Everything below
 this step is shared — both call into `ratect-core`, which is where the rest of
-this document lives. Parsing has to happen before config resolution (step 2)
-can finish, since `--config-var`/`--config-vars-file` feed into it.
+this document lives. Parsing has to happen before config evaluation (step 2)
+can run, since `--config-var`/`--config-vars-file` feed into it.
 
-## 2. Config loading and resolution (`ratect-core/src/config.rs`)
+## 2. Config loading and evaluation (`ratect-core/src/config.rs`)
 
-This is two separate steps, not one, because the second depends on CLI flags that
-aren't known at the first:
+This is two separate steps, not one: loading checks what the file says, and
+evaluation reads what the machine running it supplies — see
+[decisions/0014](../decisions/0014-config-checked-at-load-evaluated-per-task.md).
 
-1. **`Config::load_from_file`** (or `load_from_file_native`, for `ratect.toml`):
-   the root file is parsed into `Config`/`Container`/`Task`/`TaskRun`/`ConfigVariable`
-   structs — YAML via [`noyalib`](https://docs.rs/noyalib), TOML via
-   [`toml`](https://docs.rs/toml), one struct set for both formats — and its
-   top-level `include` list (if any) is resolved, with every loaded file's
-   `containers`/`tasks`/`config_variables` merged into one `Config` (see
-   [how included files combine](includes.md#how-included-files-combine)). Expressions are not interpolated at this stage.
+1. **`load_project`** (or `load_project_native`, for `ratect.toml`) starts with
+   `Config::load_from_file` (or `load_from_file_native`): the root file is parsed
+   into `Config`/`Container`/`Task`/`TaskRun`/`ConfigVariable` structs — YAML via
+   [`noyalib`](https://docs.rs/noyalib), TOML via [`toml`](https://docs.rs/toml),
+   one struct set for both formats — and its top-level `include` list (if any) is
+   resolved, with every loaded file's `containers`/`tasks`/`config_variables`
+   merged into one `Config` (see
+   [how included files combine](includes.md#how-included-files-combine)).
 
    Includes are walked breadth-first, so every entry in the root file is reached
    before any included file's own, and each file is loaded exactly once however
@@ -36,42 +38,52 @@ aren't known at the first:
    rules, and [`CONTEXT.md`](../CONTEXT.md) for what *bundle*, *grant* and
    *boundary* each denote.
 
-   The result is a `LoadedConfig`: the merged `Config`, plus two maps step 2
-   needs — `container_base_paths`, recording which directory each container came
-   from, and `container_boundaries`, recording the clone each container
-   reached through a Git include must resolve its host paths within.
-2. **`LoadedConfig::resolve_expressions`**: called once, after
-   `--config-var`/`--config-vars-file` have been parsed and merged into an overrides
-   map — from `load_project`/`load_project_native` in `config.rs`, which run both
-   steps in order so neither binary has to know the order. In one pass:
-   - Resolves [expressions](ratect-compat-config-reference.md#expressions) (`$VAR`, `${VAR:-default}`,
+   It then checks the result — references, field combinations, and the shape of
+   every value it can judge without the machine — applies `extends` (native
+   only), and returns a `LoadedProject`. **No expression is evaluated**: a field
+   that may hold one is judged here only when it holds a literal, so a container
+   reading a variable this machine doesn't have stops nothing that doesn't use
+   it. The `LoadedProject` keeps what evaluation needs: the directory each
+   container was declared in, the clone a Git-included container must keep its
+   host paths within, and which container in an `extends` chain supplied each
+   path-bearing field. Listing tasks needs nothing more.
+2. **`LoadedProject::evaluate`**: given the containers and tasks a caller needs,
+   and the `--config-var`/`--config-vars-file` overrides it parsed:
+   - Evaluates [expressions](ratect-compat-config-reference.md#expressions) (`$VAR`, `${VAR:-default}`,
      `<name`, `<{name}`, plus the built-in `batect.project_directory`) in every field
      that takes one: `environment` values (container and task `run`), `local` volume
      mount host paths, `build_directory`, `build_args`, a `build_secrets` entry's
-     `path`, a `build_ssh` entry's `paths`, `run_as_current_user.home_directory`, and
-     — `ratect.toml` only — `image`. A `cache` mount's `name`/`container` are plain
-     strings, matching Batect: nothing to interpolate (see
-     [Cache volumes](ratect-compat-config-reference.md#cache-volumes)).
-   - **Volume path resolution**: *after* interpolating a `local` mount's host path, if
-     the result is relative, it's resolved to an absolute path relative to *that
-     container's own origin file's* directory (via `container_base_paths` — the root
-     config's directory when there's no `include` involved), not the current working
-     directory — done in this order (interpolate, then resolve) because an expression
-     can itself resolve to an absolute path, which mustn't be treated as a relative
-     fragment. `batect.project_directory` itself always resolves to the root config's
-     directory regardless of which file a container came from. A `cache` mount's
-     Docker volume name/host directory is resolved later instead (`ratect-core/src/cache.rs`,
-     via `engine.rs`'s `resolve_volumes`), once `--cache-type` and the project's own
+     `path`, a `build_ssh` entry's `paths`, `run_as_current_user.home_directory`
+     (not in a Batect-format file), and — `ratect.toml` only — `image`. A `cache`
+     mount's `name`/`container` are plain strings, matching Batect: nothing to
+     evaluate (see [Cache volumes](ratect-compat-config-reference.md#cache-volumes)).
+     A value that can't be evaluated is an error naming the container or task,
+     the field and the expression.
+   - **Host path resolution**: *after* evaluating a host path, if the result is
+     relative, it's resolved to an absolute path relative to the directory of the
+     file that declared the value — the container's own, or for an inherited
+     field the ancestor's that supplied it; the root config's directory when
+     there's no `include` involved — not the current working directory. Done in
+     this order because an expression can itself resolve to an absolute path,
+     which mustn't be treated as a relative fragment. `batect.project_directory`
+     itself always resolves to the root config's directory regardless of which
+     file a container came from. A `cache` mount's Docker volume name/host
+     directory is resolved later instead (`ratect-core/src/cache.rs`, via
+     `engine.rs`'s `resolve_volumes`), once `--cache-type` and the project's own
      cache key are known — neither available at this stage.
 
-     The resolved path is then checked against `container_boundaries`: a
-     container that came from a Git-included file may only reach inside its own
-     clone or your project directory, unless that include was granted
-     [`allow_host_paths`](includes.md#vouching-for-a-bundle). Checked twice: once
-     lexically, with both the check and the path normalized first, since
-     `Path::starts_with` does not interpret `..`; then against the real
-     locations, with symlinks resolved as far as the path exists, since a
-     bundle can commit one inside its own clone.
+     The resolved path is then checked against the container's Git boundary, if
+     it has one: a container that came from a Git-included file may only reach
+     inside its own clone or your project directory, unless that include was
+     granted [`allow_host_paths`](includes.md#vouching-for-a-bundle). Checked
+     twice: once lexically, with both the check and the path normalized first,
+     since `Path::starts_with` does not interpret `..`; then against the real
+     locations, with symlinks resolved as far as the path exists, since a bundle
+     can commit one inside its own clone. A literal path gets the same check at
+     load.
+
+   Running a task evaluates every container and task in the project before the
+   engine starts.
 
    See the [configuration reference](ratect-compat-config-reference.md#expressions) for the full
    expression syntax, precedence, and error rules.

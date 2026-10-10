@@ -1,0 +1,19 @@
+# A container no task uses reads values this machine can't supply — an unset
+# host variable with no default, and a config variable the file never
+# declares. Loading evaluates no expression (decisions/0014), so
+# `--list-tasks` still lists the tasks.
+project_name: unevaluable-unused-container
+containers:
+  build-env:
+    image: alpine:3.18.2
+  deploy:
+    image: alpine:3.18.2
+    volumes:
+      - $RATECT_TEST_NEVER_SET:/root/.aws
+    environment:
+      REGION: <never_declared
+tasks:
+  build:
+    run:
+      container: build-env
+      command: echo built

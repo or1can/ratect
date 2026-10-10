@@ -434,6 +434,29 @@ fn declaring_batect_project_directory_in_config_variables_reports_error() {
     );
 }
 
+/// A value only some machines have is not a mistake in the file, so a
+/// container no task uses that reads one doesn't stop `--list-tasks`, as it
+/// doesn't stop Batect (decisions/0014).
+#[test]
+fn list_tasks_succeeds_when_an_unused_container_cannot_be_evaluated() {
+    let output = ratect_command()
+        .args(["--list-tasks", "-o", "quiet", "-f"])
+        .arg(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/unevaluable-unused-container.yml"),
+        )
+        .env_remove("RATECT_TEST_NEVER_SET")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "build\n");
+}
+
 /// Refused when the file loads, not only when a task reaching it runs as in
 /// Batect — so even `--list-tasks` fails.
 #[test]
@@ -454,13 +477,16 @@ fn a_reference_to_an_undeclared_container_fails_the_load() {
     );
 }
 
+/// Refused where overrides are read — when the task's values are
+/// evaluated, before anything reaches Docker.
 #[test]
 fn overriding_batect_project_directory_via_cli_reports_error() {
     let output = ratect_command()
-        .args(["--list-tasks", "-f"])
+        .arg("-f")
         .arg(sample_config_path())
         .arg("--config-var")
         .arg("batect.project_directory=/hijacked")
+        .arg("test-task")
         .output()
         .expect("failed to run ratect");
 

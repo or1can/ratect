@@ -1,10 +1,12 @@
 # 0014 — Config is checked at load, and evaluated per task
 
 **Status:** Accepted. Checking at load is implemented and recorded as a
-divergence. Evaluating per task is planned for ratect-compat 0.32.0 · ratect
-0.11.0 ([#314](https://github.com/or1can/ratect/issues/314), designed with
-[#149](https://github.com/or1can/ratect/issues/149)); until it lands, expressions
-are still evaluated at load.
+divergence, and since [#556](https://github.com/or1can/ratect/issues/556) loading
+evaluates no expression. Evaluating per task is planned for ratect-compat 0.32.0 ·
+ratect 0.11.0 ([#314](https://github.com/or1can/ratect/issues/314), designed with
+[#149](https://github.com/or1can/ratect/issues/149)); until it lands, running a
+task, `ratect config validate` and `ratect doctor` evaluate the whole project
+before doing anything else.
 
 ## Context
 
@@ -133,8 +135,8 @@ kinds of thing:
 - `ratect config validate` still stops at the first load-time error; only its
   evaluation pass reports everything it finds. Collecting every load-time
   error is a separate change.
-- `docs/ratect-compat-config-reference.md` documents resolve-once-at-load today;
-  it changes with #314.
+- `docs/ratect-compat-config-reference.md` documented resolve-once-at-load; it
+  changed with #314's first step, [#556](https://github.com/or1can/ratect/issues/556).
 - The native `ratect` binary shares the loader, so it follows the per-task
   evaluation by default ([0013](0013-when-ratect-compat-copies-batect.md));
   #314's design can gate it on the dialect if there's a reason. The native

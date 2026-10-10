@@ -214,7 +214,7 @@ impl Boundary {
     /// interpreting any of them, so `<repo_dir>/../../elsewhere` starts with
     /// `<repo_dir>` and passes — the check is inert on exactly the input it
     /// exists to reject. Two call sites got this wrong (completion's walk, and
-    /// [`crate::config::resolve_path`]'s absolute branch), which is one more
+    /// `crate::config::anchor_path`'s absolute branch), which is one more
     /// than a convention survives; cleaning here makes the mistake
     /// unrepresentable.
     pub(crate) fn check_contains(&self, resolved: &Path) -> Result<()> {
@@ -258,8 +258,8 @@ impl Boundary {
     }
 
     /// Containment check for a Git-included container's path-bearing fields
-    /// (`volumes` host paths, `build_directory`) — see the security note on
-    /// [`crate::config::Config::resolve_expressions_with_boundaries`]. Unlike
+    /// (`volumes` host paths, `build_directory`), applied by
+    /// `crate::config::anchor_path`. Unlike
     /// `check_contains`/`check_contains_canonical` above (used only for
     /// further `include` resolution, which must stay entirely within the
     /// repository), a shared bundle may reasonably want to reference the

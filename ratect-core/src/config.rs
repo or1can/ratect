@@ -27,14 +27,15 @@
 //! itself stays string-tolerant, which is what lets one set of hand-written
 //! `Deserialize` impls serve both formats). **`extends`** (native only; a
 //! container declared in a YAML file using it is *rejected*, not ignored — see
-//! `ConfigFormat::batect_shaped_containers`) is a final pass *after*
-//! expression/path resolution — mechanically `child.or(parent)` over the
+//! `ConfigFormat::batect_shaped_containers`) is a load-time pass over
+//! unevaluated containers — mechanically `child.or(parent)` over the
 //! already-`Option` fields, so a set field replaces and an unset one inherits,
 //! single-parent, transitive, cycle-checked. `inherit_container_fields`
 //! destructures the parent exhaustively on purpose: a new `Container` field that
-//! forgets to inherit is a compile error, not a silent gap. Ordering is
-//! load-bearing — resolve *then* extend, so an inherited relative path stays
-//! anchored to the *parent's* own file rather than re-anchoring to the child's.
+//! forgets to inherit is a compile error, not a silent gap. It records which
+//! container supplied each path-bearing field (`Suppliers`), and that is
+//! load-bearing — evaluation resolves an inherited relative path against the
+//! *supplier's* own file, rather than re-anchoring it to the child's.
 //! See [decisions/0003](https://github.com/or1can/ratect/blob/main/decisions/0003-ratect-native-config-format.md).
 //! Two Batect behaviours worth knowing, both found by running real-world bundles
 //! and both applying to *either* format's YAML: a top-level key starting with `.`
@@ -51,23 +52,24 @@
 //! [Includes](https://github.com/or1can/ratect/blob/main/docs/includes.md)), merging every loaded
 //! file's `containers`/`tasks`/`config_variables` into one `Config`, returned inside a
 //! `LoadedConfig` alongside a `container_base_paths` map (each container name → its
-//! own origin file's directory). A separate `LoadedConfig::resolve_expressions` call
-//! (needs CLI-supplied `--config-var`/`--config-vars-file` overrides, so it can't
-//! happen inside `load_from_file`) interpolates and resolves paths — per-container,
-//! against `container_base_paths` rather than a single shared directory, so an
-//! included file's relative paths resolve against *its own* directory while
-//! `batect.project_directory` still always resolves to the root's (`Config`'s own
-//! `resolve_expressions` stays available too, unchanged, for a `Config` built without
-//! going through `load_from_file`). `load_project` (0.2.0-dev) wraps that whole
-//! sequence — existence check, `load_from_file`, `base_path_for`,
-//! `project_directory_path`, `resolve_expressions` — into the one call a binary
-//! actually wants, returning a `LoadedProject`; it exists so `ratect` and
-//! `ratect-compat` can't get the ordering (includes before expressions) or the
-//! missing-file error wording out of step with each other. Merging
+//! own origin file's directory). `load_project` wraps the load — existence
+//! check, `load_from_file`, the format's field rejections, `check_values`,
+//! `extends`, and the rules that need inheritance applied — into the one call a
+//! binary actually wants, returning a `LoadedProject`; it exists so `ratect` and
+//! `ratect-compat` can't get the ordering or the missing-file error wording out
+//! of step with each other. **Loading evaluates no expression**
+//! ([decisions/0014](https://github.com/or1can/ratect/blob/main/decisions/0014-config-checked-at-load-evaluated-per-task.md)):
+//! it judges what the file says, and a field that may hold an expression only
+//! when it holds a literal. `LoadedProject::evaluate` is the one place a `$VAR`
+//! or `<var` is evaluated, for the containers and tasks a caller names, with the
+//! caller's `--config-var`/`--config-vars-file` overrides — per-container,
+//! against each container's own origin directory rather than a single shared
+//! one, so an included file's relative paths resolve against *its own* directory
+//! while `batect.project_directory` still always resolves to the root's. Merging
 //! `--config-vars-file` with individually-supplied variables stays the caller's
 //! job — only the caller knows what its own flags are called.
 //! `run_as_current_user.home_directory` is
-//! interpolated — except in a Batect-format file, where Batect reads it as a plain
+//! evaluated — except in a Batect-format file, where Batect reads it as a plain
 //! string (#462) — but never resolved against a base path: it's a container-side
 //! path, validated to start with `/` instead. `PortRange`/`PortMapping`,
 //! `DeviceMapping` (`devices`), and `VolumeMount` (`volumes` — `Local`/`Cache`
@@ -75,8 +77,8 @@
 //! impls so an entry can be either Batect's string form (`"local:container[/protocol]"` /
 //! `"local:container[:options]"` — `VolumeMount`'s string form is always
 //! `Local`; there's no compact string form for `Cache`/`Tmpfs`) or the expanded
-//! object form. A `VolumeMount::Local`'s host path is resolved here (against
-//! `container_base_paths`, same as `build_directory`); a `Cache`'s `name`/
+//! object form. A `VolumeMount::Local`'s host path is resolved when evaluated
+//! (against its declaring file's directory, same as `build_directory`); a `Cache`'s `name`/
 //! `container` are plain strings, not `Expression`s, matching Batect — nothing
 //! to resolve here at all, since `--cache-type` and the project's own cache
 //! key (needed to actually resolve one) aren't known until `engine.rs`/
@@ -121,7 +123,7 @@ use crate::include_trust::{self, Boundary, Bundle, BundleId, EffectiveGrants, Gr
 /// Batect's one built-in config variable, resolvable via `<batect.project_directory`/
 /// `<{batect.project_directory}` without being declared in `config_variables` — always
 /// the absolute path of the directory containing the config file. See
-/// [`Config::resolve_expressions_with`].
+/// [`config_variable_values`].
 const PROJECT_DIRECTORY_VAR: &str = "batect.project_directory";
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -154,8 +156,8 @@ pub struct Container {
     /// Shallow and per-field: a field set here replaces the inherited one
     /// outright (nested maps are not merged into), and a field left unset is
     /// taken from the named container. Single-parent, and may chain (`a`
-    /// extends `b` extends `c`). Resolved after path/expression resolution, so
-    /// an inherited relative path stays anchored to the *parent's* own file.
+    /// extends `b` extends `c`). An inherited relative path stays anchored to
+    /// the *parent's* own file.
     /// `ratect`-native only — a YAML-declared container may not use it,
     /// whichever project includes it (ratect#214; see
     /// `ConfigFormat::batect_shaped_containers`) — and skipped from the
@@ -229,15 +231,15 @@ pub struct Container {
     /// Dockerfile's `RUN --mount=type=ssh` instructions. Each entry is one
     /// agent, named by an `id` a `RUN` instruction can select
     /// (`--mount=type=ssh,id=<id>`), and ids must be unique across the list
-    /// (checked in [`Config::resolve_expressions_with`]). An entry with no
+    /// (checked when the file loads). An entry with no
     /// `paths` forwards the host's own running ssh-agent via
     /// `SSH_AUTH_SOCK`; an entry with `paths` serves those private key
     /// files instead, which is what works in CI where no agent is running.
     /// See [`SshAgent`], and [Image building](https://github.com/or1can/ratect/blob/main/docs/ratect-compat-config-reference.md#image-building).
     pub build_ssh: Option<Vec<SshAgent>>,
     /// Host bind mounts (`local`) and/or named cache volumes (`cache`) — see
-    /// [`VolumeMount`]. A `local` mount's host path is resolved in
-    /// [`Config::resolve_expressions_with`]; a `cache` mount's Docker volume
+    /// [`VolumeMount`]. A `local` mount's host path is resolved when
+    /// [evaluated](LoadedProject::evaluate); a `cache` mount's Docker volume
     /// name/host directory is resolved later, once `--cache-type` and the
     /// project's own cache key are known — see [`crate::cache`].
     pub volumes: Option<Vec<VolumeMount>>,
@@ -850,7 +852,7 @@ impl<'de> Deserialize<'de> for Ulimit {
 
 /// One `volumes` entry. Either a `local` bind mount (a host path, resolved
 /// against the container's own base path — see
-/// [`Config::resolve_expressions_with`]), a `cache` mount (a named volume
+/// [`LoadedProject::evaluate`]), a `cache` mount (a named volume
 /// that persists between separate `ratect` invocations, or a host directory
 /// under `--cache-type=directory` — see [`crate::cache::resolve_cache_mount`]),
 /// or a `tmpfs` mount (an in-memory filesystem, lost when the container
@@ -864,7 +866,7 @@ pub enum VolumeMount {
 
 /// A host path bind-mounted into the container. `local` supports
 /// [expressions](#expressions) and is resolved against the declaring
-/// container's own base path — see [`Config::resolve_expressions_with`].
+/// container's own base path — see [`LoadedProject::evaluate`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalVolumeMount {
     pub local: String,
@@ -1441,7 +1443,7 @@ pub enum BuildSecret {
     Environment(String),
     /// A path to a file on the host containing the secret's value.
     /// Supports [expressions](#expressions) and is resolved the same way
-    /// as `build_directory` — see [`Config::resolve_expressions_with`].
+    /// as `build_directory` — see [`LoadedProject::evaluate`].
     Path(String),
 }
 
@@ -1514,8 +1516,8 @@ impl Serialize for BuildSecret {
 
 /// One agent in a container's `build_ssh` list — see
 /// [`Container::build_ssh`]. Ids must be unique across the list, which is
-/// checked in [`Config::resolve_expressions_with`] rather than here, so the
-/// error can name the offending container.
+/// checked when the file loads rather than here, so the error can name the
+/// offending container.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2051,8 +2053,8 @@ mod duration_string {
 }
 
 /// Runs this container as the host's own user/group instead of whatever the
-/// image defaults to (see [`Config::resolve_expressions_with`]'s validation
-/// and `TaskEngine::resolve_user_mapping`). `home_directory` is required
+/// image defaults to (see the load-time validation of `home_directory` and
+/// `TaskEngine::resolve_user_mapping`). `home_directory` is required
 /// when `enabled` is `true` (and rejected otherwise) — Ratect never guesses
 /// one, matching Batect.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -2317,12 +2319,12 @@ impl Serialize for PortMapping {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Task {
     /// Absent for a task that only exists to chain `prerequisites` together
-    /// — validated in [`Config::resolve_expressions_with_boundaries`] to
-    /// require at least one of `run`/`prerequisites`, matching Batect. A
+    /// — validated when the file loads to require at least one of
+    /// `run`/`prerequisites`, matching Batect. A
     /// `run`-less task's prerequisites still execute; there's just no
     /// container of the task's own to run afterwards — see
     /// `TaskEngine::run_task_internal`.
@@ -2334,9 +2336,8 @@ pub struct Task {
     /// [`Container::dependencies`], which every task using that container
     /// picks up. Unioned with the task's own container's `dependencies` when
     /// resolving what to start alongside it — see
-    /// `TaskEngine::run_task_internal`. Requires `run` (validated in
-    /// [`Config::resolve_expressions_with_boundaries`], matching Batect) and
-    /// can't name `run.container` itself.
+    /// `TaskEngine::run_task_internal`. Requires `run` (validated when the
+    /// file loads, matching Batect) and can't name `run.container` itself.
     pub dependencies: Option<Vec<String>>,
     /// Free-text shown next to the task's name in `--list-tasks` output —
     /// see [`format_task_list`].
@@ -2356,8 +2357,7 @@ pub struct Task {
     ///
     /// Only the paragraph above becomes the generated schemas' description,
     /// which is why the two rejections' own homes are named here rather than
-    /// there: the main-container one in
-    /// [`Config::resolve_expressions_with_boundaries`], the
+    /// there: the main-container one in `check_values`, the
     /// outside-the-graph one in
     /// `reject_customisations_outside_the_task_graph`, which runs after
     /// `extends` because membership depends on `dependencies` a container
@@ -2367,7 +2367,7 @@ pub struct Task {
 
 /// One entry in a task's `customise` map — see [`Task::customise`].
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskContainerCustomisation {
     /// Merged with the container's own `environment` (see
@@ -2507,7 +2507,7 @@ fn format_task_line(name: &str, description: Option<&str>) -> String {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskRun {
     /// The container to run the task in, by name.
@@ -2537,7 +2537,7 @@ pub struct TaskRun {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigVariable {
     /// The value to use when `--config-var` doesn't supply one. Without a
@@ -3086,7 +3086,7 @@ fn parse_toml_config_file(path: &Path) -> Result<ConfigFile> {
 
 /// Resolves `path` to an absolute, lexically-cleaned path, anchored at the
 /// current directory if `path` is itself relative — same normalization
-/// [`resolve_path`] applies to a resolved value, reused here for include
+/// [`anchor_path`] applies to a resolved value, reused here for include
 /// paths (to de-duplicate an already-loaded file regardless of how many
 /// differently-spelled relative paths reach it, and for clear error
 /// messages) and to compute the directory a loaded file's own relative
@@ -3137,12 +3137,12 @@ fn resolve_include_target(
     );
 }
 
-/// The result of [`Config::load_from_file`]: the merged, but not yet
-/// expression-resolved, [`Config`], plus enough information for
-/// [`resolve_expressions`](Self::resolve_expressions) to resolve each
-/// container's relative paths (`volumes` host paths, `build_directory`)
-/// against *its own* origin file's directory rather than always the root
-/// config's directory — see [Where relative paths
+/// The result of [`Config::load_from_file`]: the merged, unevaluated
+/// [`Config`], plus enough information for [`load_project`] to check it and
+/// for [`LoadedProject::evaluate`] later to resolve each container's
+/// relative paths (`volumes` host paths, `build_directory`) against *its
+/// own* origin file's directory rather than always the root config's
+/// directory — see [Where relative paths
 /// resolve](../../docs/includes.md#where-relative-paths-resolve).
 #[derive(Debug)]
 pub struct LoadedConfig {
@@ -3173,22 +3173,11 @@ pub struct LoadedConfig {
 }
 
 impl LoadedConfig {
-    /// Like [`Config::resolve_expressions`], but resolves each container's
-    /// relative paths against its own origin file's directory (recorded by
-    /// [`Config::load_from_file`]) rather than uniformly against
-    /// `base_path`, and additionally confines a Git-included container's
-    /// resolved `volumes`/`build_directory` paths to that repository's own
-    /// clone directory or the project directory (see
-    /// `Boundary::check_path_allowed`). Identical behavior to
-    /// `Config::resolve_expressions` when no `include` was used (every
-    /// container's origin is then the root file's own directory anyway, and
-    /// `container_boundaries` is empty).
-    pub fn resolve_expressions(
-        &mut self,
-        base_path: &Path,
-        config_var_overrides: &HashMap<String, String>,
-    ) -> Result<()> {
-        let batect_shaped: HashSet<String> = self
+    /// Where each container was declared, as [`check_values`] and later
+    /// [`LoadedProject::evaluate`] need it — before `extends`, so every
+    /// container is its own supplier here.
+    fn provenance(&self) -> Provenance {
+        let batect_shaped = self
             .format
             .batect_shaped_containers(
                 &self.config,
@@ -3198,14 +3187,12 @@ impl LoadedConfig {
             .iter()
             .map(|entry| entry.name.to_string())
             .collect();
-        self.config.resolve_expressions_with_boundaries(
-            base_path,
-            &self.container_base_paths,
-            &self.container_boundaries,
-            &batect_shaped,
-            config_var_overrides,
-            |name| std::env::var(name).ok(),
-        )
+        Provenance {
+            base_paths: self.container_base_paths.clone(),
+            boundaries: self.container_boundaries.clone(),
+            batect_shaped,
+            suppliers: HashMap::new(),
+        }
     }
 }
 
@@ -3254,11 +3241,10 @@ impl Config {
     }
 
     /// Parses the config file and resolves `include`s — but no path
-    /// resolution or expression interpolation yet. Those need
-    /// `config_var_overrides` from the CLI (`--config-var`/
-    /// `--config-vars-file`), which aren't known yet at this point, so
-    /// callers must follow up with
-    /// [`LoadedConfig::resolve_expressions`].
+    /// resolution or expression interpolation: that is
+    /// [`LoadedProject::evaluate`]'s, once the caller knows which containers
+    /// it needs and with which `--config-var`/`--config-vars-file` overrides.
+    /// [`load_project`] is what follows this up with the load-time checks.
     ///
     /// A local file `include` entry is resolved relative to the directory of
     /// the file that declares it (not necessarily the root file's
@@ -3554,392 +3540,494 @@ impl Config {
             }
         }
     }
+}
 
-    /// Resolves every expression-bearing value in the config — `environment`
-    /// entries (on containers and task `run`s), volume host paths, and a
-    /// container's `image` (native-only in effect: an expression there is
-    /// refused in a `batect.yml` before this runs, so interpolating it is a
-    /// no-op for that format) — through Batect's expression syntax:
-    /// `$VAR`/`${VAR}`/`${VAR:-default}`
-    /// against the real host environment, and `<name`/`<{name}` against
-    /// `config_variables`, merged with `config_var_overrides` (highest
-    /// precedence — from `--config-var`/`--config-vars-file`).
-    ///
-    /// Also turns relative volume host paths into absolute ones (relative to
-    /// `base_path`, the config file's directory) — done here, *after*
-    /// interpolation, rather than automatically in `load_from_file`. An
-    /// expression can itself resolve to an absolute path (e.g. a
-    /// `<project_root` config variable), and that must not be prefixed with
-    /// `base_path` as if it were still a literal relative fragment — so
-    /// path resolution has to run after interpolation, which in turn has to
-    /// wait for CLI-supplied config variable overrides to be known.
-    pub fn resolve_expressions(
-        &mut self,
-        base_path: &Path,
-        config_var_overrides: &HashMap<String, String>,
-    ) -> Result<()> {
-        self.resolve_expressions_with(base_path, &HashMap::new(), config_var_overrides, |name| {
-            std::env::var(name).ok()
-        })
+/// Rejects a value of the file's own that is wrong whatever machine reads it
+/// — the load-time half of [decisions/0014](../../decisions/0014-config-checked-at-load-evaluated-per-task.md),
+/// run for every command that loads the project. Evaluates nothing: a field
+/// that may hold an expression is judged here only when it is a literal,
+/// and left for [`LoadedProject::evaluate`] otherwise. That covers a
+/// `run_as_current_user.home_directory`'s shape (always literal in a
+/// Batect-format file, #462) and a Git-included container's host paths
+/// staying inside its [`Boundary`].
+///
+/// Runs **before** [`resolve_extends`], on each container as declared, and
+/// may therefore only judge one field's own internal shape — that a
+/// `home_directory` is absolute, that `build_ssh` ids are unique. That is
+/// safe for exactly those rules: `inherit_container_fields` replaces a field
+/// whole rather than merging into it, so an inherited value is identical to
+/// one this pass already judged on the parent, against the parent's own
+/// file and boundary.
+///
+/// A rule spanning **two** fields is not safe here and belongs after
+/// `resolve_extends` — with [`reject_conflicting_cache_scopes`],
+/// [`reject_run_to_completion_conflicts`] and the rest — because `extends`
+/// can supply one side of it and not the other, so this pass sees a
+/// combination the container does not actually end up with. Nor may a rule
+/// here read a *container's* fields while judging a task —
+/// `container_names_in_task` walks `dependencies`, which is inherited like
+/// anything else.
+///
+/// None of that is hypothetical. Three rules lived here and were wrong to:
+/// `run_to_completion`'s conflict with `health_check`/`setup_commands` and
+/// the `cache`-mount path rule both accepted every inherited case, and the
+/// `customise` membership rule *rejected* valid ones. Each moved out only
+/// after the one before it had been found, which is the reason this
+/// paragraph exists rather than another comment asserting the pass is fine.
+///
+/// Containers and tasks are each judged in name order, so a project with
+/// several offenders always reports the same one.
+fn check_values(config: &Config, provenance: &Provenance, project_directory: &Path) -> Result<()> {
+    if config
+        .config_variables
+        .as_ref()
+        .is_some_and(|vars| vars.contains_key(PROJECT_DIRECTORY_VAR))
+    {
+        anyhow::bail!(
+            "'{PROJECT_DIRECTORY_VAR}' is a built-in config variable and can't be declared \
+             in 'config_variables'"
+        );
     }
 
-    /// The actual implementation behind [`resolve_expressions`](Self::resolve_expressions),
-    /// for callers that never need
-    /// [`resolve_expressions_with_boundaries`](Self::resolve_expressions_with_boundaries)'s
-    /// Git-containment checks (i.e. every caller except
-    /// [`LoadedConfig::resolve_expressions`]) — a thin wrapper so their call
-    /// sites don't have to pass an always-empty boundaries map.
-    fn resolve_expressions_with(
-        &mut self,
-        base_path: &Path,
-        container_base_paths: &HashMap<String, PathBuf>,
-        config_var_overrides: &HashMap<String, String>,
-        host_env: impl Fn(&str) -> Option<String>,
-    ) -> Result<()> {
-        self.resolve_expressions_with_boundaries(
-            base_path,
-            container_base_paths,
-            &HashMap::new(),
-            &HashSet::new(),
-            config_var_overrides,
-            host_env,
-        )
+    let mut container_names: Vec<&String> = config.containers.keys().collect();
+    container_names.sort_unstable();
+    for container_name in container_names {
+        let container = &config.containers[container_name];
+        let anchor = provenance.anchor(container_name, project_directory);
+        // One attribution point for the whole block, as in
+        // `evaluate_container`: nothing below knows which container asked.
+        (|| -> Result<()> {
+            for volume in container.volumes.iter().flatten() {
+                match volume {
+                    // A cache `name` becomes a host directory under
+                    // `--cache-type directory`, so it is checked before
+                    // anything can join it onto one. It is a plain string,
+                    // not an expression, matching Batect's own `CacheMount`
+                    // typing; its Docker volume name or host directory is
+                    // resolved once `--cache-type` and the project's cache
+                    // key are known — see `crate::cache::resolve_cache_mount`.
+                    VolumeMount::Cache(cache) => validate_cache_name(&cache.name)?,
+                    VolumeMount::Local(local) => check_literal_path(&local.local, &anchor)?,
+                    // `container`/`options` are plain strings too, matching
+                    // Batect's own `TmpfsMount` typing.
+                    VolumeMount::Tmpfs(_) => {}
+                }
+            }
+            if let Some(build_directory) = &container.build_directory {
+                check_literal_path(build_directory, &anchor)?;
+            }
+            for secret in container.build_secrets.iter().flat_map(HashMap::values) {
+                // `Environment` is a literal host env var *name*, not itself
+                // an expression — matches Batect's own `String` (not
+                // `Expression`) typing for that variant.
+                if let BuildSecret::Path(path) = secret {
+                    check_literal_path(path, &anchor)?;
+                }
+            }
+            let mut ids_seen = HashSet::new();
+            for agent in container.build_ssh.iter().flatten() {
+                if !ids_seen.insert(agent.id.as_str()) {
+                    // A Dockerfile selects an agent by id, so two entries
+                    // claiming one id have no defined meaning — rejected here
+                    // rather than silently letting one win, matching Batect's
+                    // own `checkForDuplicateSSHAgents`.
+                    anyhow::bail!(
+                        "has more than one 'build_ssh' entry with the id \
+                         '{}', but each SSH agent must have a unique id",
+                        agent.id
+                    );
+                }
+                for path in &agent.paths {
+                    check_literal_path(path, &anchor)?;
+                }
+            }
+            if let Some(run_as_current_user) = &container.run_as_current_user {
+                if run_as_current_user.enabled {
+                    let home_directory =
+                        run_as_current_user.home_directory.as_ref().ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "has 'run_as_current_user.enabled' set to true, \
+                                 but no 'home_directory' was provided",
+                            )
+                        })?;
+                    // Not an expression at all in a Batect-format file:
+                    // Batect reads it as a plain string (#462).
+                    if anchor.batect_shaped
+                        || !crate::expressions::contains_expression(home_directory)
+                    {
+                        check_home_directory(home_directory)?;
+                    }
+                } else if run_as_current_user.home_directory.is_some() {
+                    anyhow::bail!(
+                        "has 'run_as_current_user.home_directory' set, but \
+                         'run_as_current_user.enabled' is not true",
+                    );
+                }
+            }
+            Ok(())
+        })()
+        .with_context(|| format!("Container '{container_name}'"))?;
     }
 
-    /// The actual implementation behind [`resolve_expressions`](Self::resolve_expressions)
-    /// and [`LoadedConfig::resolve_expressions`], parameterized over the host
-    /// environment lookup so tests don't have to touch the real process
-    /// environment. `container_base_paths` (empty when called from
-    /// `Config::resolve_expressions` directly) overrides `base_path` on a
-    /// per-container basis — see [`LoadedConfig`]. `container_boundaries`
-    /// (likewise empty outside `LoadedConfig::resolve_expressions`) confines
-    /// a Git-included container's resolved `volumes`/`build_directory` paths
-    /// to that repository's own clone directory *or* the project directory
-    /// — see `Boundary::check_path_allowed` for why the project
-    /// directory is a second allowed root rather than requiring pure
-    /// containment within the clone.
-    /// `batect_shaped` (likewise empty outside it) names the containers
-    /// declared in a Batect-format file — see
-    /// [`ConfigFormat::batect_shaped_containers`] — whose
-    /// `run_as_current_user.home_directory` is used as written rather than
-    /// interpolated, as Batect does (#462).
-    ///
-    /// **Validation added here may only judge one field's own internal
-    /// shape** — that a `home_directory` is absolute, that `build_ssh` ids
-    /// are unique, that a config variable is declared. It runs *before*
-    /// [`resolve_extends`], and that is safe for exactly those rules:
-    /// `inherit_container_fields` replaces a field whole rather than merging
-    /// into it, so an inherited value is identical to one this pass already
-    /// judged on the parent.
-    ///
-    /// A rule spanning **two** fields is not safe here and belongs after
-    /// `resolve_extends` — with [`reject_conflicting_cache_scopes`],
-    /// [`reject_run_to_completion_conflicts`] and the rest — because
-    /// `extends` can supply one side of it and not the other, so this pass
-    /// sees a combination the container does not actually end up with. Nor
-    /// may a rule here read a *container's* fields while judging a task —
-    /// `container_names_in_task` walks `dependencies`, which is inherited
-    /// like anything else.
-    ///
-    /// None of that is hypothetical. Three rules lived here and were wrong
-    /// to: `run_to_completion`'s conflict with `health_check`/`setup_commands`
-    /// and the `cache`-mount path rule both accepted every inherited case,
-    /// and the `customise` membership rule *rejected* valid ones. Each moved
-    /// out only after the one before it had been found, which is the reason
-    /// this paragraph exists rather than another comment asserting the pass
-    /// is fine.
-    fn resolve_expressions_with_boundaries(
-        &mut self,
-        base_path: &Path,
-        container_base_paths: &HashMap<String, PathBuf>,
-        container_boundaries: &HashMap<String, Boundary>,
-        batect_shaped: &HashSet<String>,
-        config_var_overrides: &HashMap<String, String>,
-        host_env: impl Fn(&str) -> Option<String>,
-    ) -> Result<()> {
-        if self
-            .config_variables
-            .as_ref()
-            .is_some_and(|vars| vars.contains_key(PROJECT_DIRECTORY_VAR))
-        {
+    let mut task_names: Vec<&String> = config.tasks.keys().collect();
+    task_names.sort_unstable();
+    for task_name in task_names {
+        let task = &config.tasks[task_name];
+        if task.run.is_none() && task.prerequisites.as_ref().is_none_or(|p| p.is_empty()) {
             anyhow::bail!(
-                "'{PROJECT_DIRECTORY_VAR}' is a built-in config variable and can't be declared \
-                 in 'config_variables'"
+                "Task '{}' must have at least one of 'run' or 'prerequisites'",
+                task_name
             );
         }
-
-        for key in config_var_overrides.keys() {
-            let declared = self
-                .config_variables
-                .as_ref()
-                .is_some_and(|vars| vars.contains_key(key));
-            if !declared {
+        match (&task.run, &task.dependencies) {
+            (None, Some(dependencies)) if !dependencies.is_empty() => {
                 anyhow::bail!(
-                    "Config variable '{}' was given a value via --config-var/--config-vars-file, \
-                     but isn't declared in 'config_variables'",
-                    key
-                );
-            }
-        }
-
-        let mut config_vars: HashMap<String, Option<String>> = HashMap::new();
-        if let Some(declared) = &self.config_variables {
-            for (name, var) in declared {
-                let value = config_var_overrides
-                    .get(name)
-                    .cloned()
-                    .or_else(|| var.default.clone());
-                config_vars.insert(name.clone(), value);
-            }
-        }
-
-        // Batect's one built-in config variable: the absolute path of the
-        // directory containing the config file. Not user-declarable (see
-        // the check above) or overridable via --config-var — the guard
-        // above already stops that, since only *declared* names can be
-        // overridden.
-        let project_directory_path = project_directory_path(base_path)?;
-        let project_directory = project_directory_path.display().to_string();
-        config_vars.insert(PROJECT_DIRECTORY_VAR.to_string(), Some(project_directory));
-
-        for (container_name, container) in self.containers.iter_mut() {
-            // One attribution point for the whole block. Everything below
-            // speaks its own vocabulary — `expressions` knows a variable
-            // name, `resolve_path` a path — and none of them know which
-            // container asked. Naming it per call site means the next
-            // field added is unattributed by default, which is how `image`
-            // shipped reporting an unset variable with no container while
-            // the compat rejection beside it named one.
-            (|| -> Result<()> {
-                let container_base_path = container_base_paths
-                    .get(container_name)
-                    .map(PathBuf::as_path)
-                    .unwrap_or(base_path);
-                let container_boundary = container_boundaries
-                    .get(container_name)
-                    .map(|boundary| (boundary, project_directory_path.as_path()));
-                // Unconditional, though only `ratect.toml` can reach it with an
-                // expression in it: a `batect.yml` carrying one is refused at load
-                // (see `reject_image_expressions_in_compat`), and anything that
-                // survives that has nothing here to substitute. Keeping the
-                // *decision* at the rejection — where the format is already known —
-                // is what saves threading `ConfigFormat` through path resolution.
-                if let Some(image) = &mut container.image {
-                    *image = crate::expressions::interpolate(image, &host_env, &config_vars)?;
-                }
-                if let Some(environment) = &mut container.environment {
-                    for value in environment.values_mut() {
-                        *value = crate::expressions::interpolate(value, &host_env, &config_vars)?;
-                    }
-                }
-                if let Some(volumes) = &mut container.volumes {
-                    for volume in volumes {
-                        // A cache `name` becomes a host directory under
-                        // `--cache-type directory`, so it is checked before
-                        // anything can join it onto one.
-                        if let VolumeMount::Cache(cache) = volume {
-                            validate_cache_name(&cache.name)?;
-                        }
-                        // `Cache` mounts have nothing else to resolve here —
-                        // `name`/`container` are plain strings, not expressions,
-                        // matching Batect's own `CacheMount` typing. Their
-                        // Docker volume name/host directory is resolved later,
-                        // once `--cache-type` and the project's cache key are
-                        // known — see `crate::cache::resolve_cache_mount`. `Tmpfs`
-                        // mounts likewise have nothing to resolve — `container`/
-                        // `options` are plain strings too, matching Batect's own
-                        // `TmpfsMount` typing.
-                        if let VolumeMount::Local(local) = volume {
-                            local.local = resolve_path(
-                                &local.local,
-                                container_base_path,
-                                &host_env,
-                                &config_vars,
-                                container_boundary,
-                            )?;
-                        }
-                    }
-                }
-                if let Some(build_directory) = &mut container.build_directory {
-                    *build_directory = resolve_path(
-                        build_directory,
-                        container_base_path,
-                        &host_env,
-                        &config_vars,
-                        container_boundary,
-                    )?;
-                }
-                if let Some(build_args) = &mut container.build_args {
-                    for value in build_args.values_mut() {
-                        *value = crate::expressions::interpolate(value, &host_env, &config_vars)?;
-                    }
-                }
-                if let Some(build_secrets) = &mut container.build_secrets {
-                    for secret in build_secrets.values_mut() {
-                        // `Environment` is a literal host env var *name*, not
-                        // itself an expression — matches Batect's own `String`
-                        // (not `Expression`) typing for that variant.
-                        if let BuildSecret::Path(path) = secret {
-                            *path = resolve_path(
-                                path,
-                                container_base_path,
-                                &host_env,
-                                &config_vars,
-                                container_boundary,
-                            )?;
-                        }
-                    }
-                }
-                if let Some(build_ssh) = &mut container.build_ssh {
-                    let mut ids_seen = HashSet::new();
-                    for agent in build_ssh.iter_mut() {
-                        let id = agent.id.clone();
-                        if !ids_seen.insert(id.clone()) {
-                            // A Dockerfile selects an agent by id, so two
-                            // entries claiming one id have no defined meaning —
-                            // rejected here rather than silently letting one win,
-                            // matching Batect's own `checkForDuplicateSSHAgents`.
-                            anyhow::bail!(
-                                "has more than one 'build_ssh' entry with the id \
-                                 '{}', but each SSH agent must have a unique id",
-                                id
-                            );
-                        }
-                        for path in &mut agent.paths {
-                            *path = resolve_path(
-                                path,
-                                container_base_path,
-                                &host_env,
-                                &config_vars,
-                                container_boundary,
-                            )?;
-                        }
-                    }
-                }
-                if let Some(run_as_current_user) = &mut container.run_as_current_user {
-                    if run_as_current_user.enabled {
-                        let home_directory =
-                            run_as_current_user.home_directory.as_mut().ok_or_else(|| {
-                                anyhow::anyhow!(
-                                    "has 'run_as_current_user.enabled' set to true, \
-                                     but no 'home_directory' was provided",
-                                )
-                            })?;
-                        // Not `resolve_path` — this is a path *inside the
-                        // container*, never resolved against `base_path`. And
-                        // not an expression at all in a Batect-format file:
-                        // Batect reads it as a plain string (#462).
-                        if !batect_shaped.contains(container_name.as_str()) {
-                            *home_directory = crate::expressions::interpolate(
-                                home_directory,
-                                &host_env,
-                                &config_vars,
-                            )?;
-                        }
-                        if !home_directory.starts_with('/') {
-                            anyhow::bail!(
-                                "has an invalid 'run_as_current_user.home_directory': \
-                                 '{}' is not an absolute path",
-                                home_directory
-                            );
-                        }
-                        // The rule itself now lives in
-                        // `reject_relative_cache_mounts_under_user_mapping`,
-                        // after `resolve_extends` — it spans two fields
-                        // (`volumes` and `run_as_current_user`), so this
-                        // pass is the wrong place for it. See this method's
-                        // own doc comment.
-                        // `home_directory` is interpolated raw into a
-                        // colon-delimited `/etc/passwd`/`/etc/shadow` line
-                        // (`user::generate_passwd_file`) — a `:` shifts that
-                        // line's fields, and a newline/other control character
-                        // injects an entirely new (attacker-chosen) entry.
-                        if home_directory.contains(':') || home_directory.chars().any(char::is_control)
-                        {
-                            anyhow::bail!(
-                                "has an invalid 'run_as_current_user.home_directory': \
-                                 '{}' contains a ':' or a control character, which would corrupt the \
-                                 generated /etc/passwd and /etc/shadow entries",
-                                home_directory
-                            );
-                        }
-                        // The home is *created*, by uploading its leaf into
-                        // its parent (`docker.rs`'s `build_owned_directory_tar`),
-                        // so it needs a leaf as `Path::file_name` sees it on
-                        // the path as written — the same call that function
-                        // makes, so the two agree. `/` and anything ending
-                        // in `..` have none, and used to fail there, after
-                        // the container existed. Not cleaned first:
-                        // `/srv/x/..` cleans to `/srv`, but the raw path is
-                        // what reaches Docker.
-                        if Path::new(home_directory.as_str()).file_name().is_none() {
-                            anyhow::bail!(
-                                "has an invalid 'run_as_current_user.home_directory': \
-                                 '{home_directory}' has no directory name to create"
-                            );
-                        }
-                    } else if run_as_current_user.home_directory.is_some() {
-                        anyhow::bail!(
-                            "has 'run_as_current_user.home_directory' set, but \
-                             'run_as_current_user.enabled' is not true",
-                        );
-                    }
-                }
-                Ok(())
-            })()
-            .with_context(|| format!("Container '{container_name}'"))?;
-        }
-
-        for (task_name, task) in self.tasks.iter_mut() {
-            if task.run.is_none() && task.prerequisites.as_ref().is_none_or(|p| p.is_empty()) {
-                anyhow::bail!(
-                    "Task '{}' must have at least one of 'run' or 'prerequisites'",
+                    "Task '{}' has 'dependencies' but no 'run' — 'run' is required if \
+                     'dependencies' is provided",
                     task_name
                 );
             }
-            match (&task.run, &task.dependencies) {
-                (None, Some(dependencies)) if !dependencies.is_empty() => {
-                    anyhow::bail!(
-                        "Task '{}' has 'dependencies' but no 'run' — 'run' is required if \
-                         'dependencies' is provided",
-                        task_name
-                    );
-                }
-                (Some(run), Some(dependencies)) if dependencies.contains(&run.container) => {
-                    anyhow::bail!(
-                        "Task '{}' cannot have container '{}' as both the main task \
-                         container (via 'run') and a task-level dependency",
-                        task_name,
-                        run.container
-                    );
-                }
-                _ => {}
+            (Some(run), Some(dependencies)) if dependencies.contains(&run.container) => {
+                anyhow::bail!(
+                    "Task '{}' cannot have container '{}' as both the main task \
+                     container (via 'run') and a task-level dependency",
+                    task_name,
+                    run.container
+                );
             }
-            if let (Some(run), Some(customise)) = (&task.run, &task.customise) {
-                if let Some(customisation_name) = customise.keys().find(|n| *n == &run.container) {
-                    anyhow::bail!(
-                        "Cannot apply customisations to main task container '{}' in task \
-                         '{}'. Set the corresponding properties on 'run' instead",
-                        customisation_name,
-                        task_name
-                    );
-                }
-                // Whether a customised container is *in* the task's graph
-                // depends on container `dependencies`, which `extends` can
-                // supply — so that half lives in
-                // `reject_customisations_outside_the_task_graph`, after
-                // inheritance. See this method's own doc comment.
+            _ => {}
+        }
+        if let (Some(run), Some(customise)) = (&task.run, &task.customise) {
+            if let Some(customisation_name) = customise.keys().find(|n| *n == &run.container) {
+                anyhow::bail!(
+                    "Cannot apply customisations to main task container '{}' in task \
+                     '{}'. Set the corresponding properties on 'run' instead",
+                    customisation_name,
+                    task_name
+                );
             }
-            if let Some(run) = &mut task.run {
-                if let Some(environment) = &mut run.environment {
-                    for value in environment.values_mut() {
-                        *value = crate::expressions::interpolate(value, &host_env, &config_vars)?;
-                    }
-                }
+            // Whether a customised container is *in* the task's graph
+            // depends on container `dependencies`, which `extends` can
+            // supply — so that half lives in
+            // `reject_customisations_outside_the_task_graph`, after
+            // inheritance. See this function's own doc comment.
+        }
+    }
+
+    Ok(())
+}
+
+/// Judges a host path at load when it is a literal and its container came
+/// from a Git include: whether it stays inside that bundle's [`Boundary`]
+/// needs nothing from the machine but the home directory a leading `~`
+/// expands to. A path holding an expression is judged when evaluated.
+fn check_literal_path(path: &str, anchor: &Anchor<'_>) -> Result<()> {
+    if anchor.boundary.is_some() && !crate::expressions::contains_expression(path) {
+        anchor_path(path, anchor)?;
+    }
+    Ok(())
+}
+
+/// The shape a `run_as_current_user.home_directory` must have — judged at
+/// load on a literal ([`check_values`]) and on an evaluated expression
+/// ([`evaluate_container`]). Not `anchor_path`: this is a path *inside the
+/// container*, never resolved against a base path.
+fn check_home_directory(home_directory: &str) -> Result<()> {
+    if !home_directory.starts_with('/') {
+        anyhow::bail!(
+            "has an invalid 'run_as_current_user.home_directory': \
+             '{}' is not an absolute path",
+            home_directory
+        );
+    }
+    // `home_directory` is interpolated raw into a colon-delimited
+    // `/etc/passwd`/`/etc/shadow` line (`user::generate_passwd_file`) — a `:`
+    // shifts that line's fields, and a newline/other control character
+    // injects an entirely new (attacker-chosen) entry.
+    if home_directory.contains(':') || home_directory.chars().any(char::is_control) {
+        anyhow::bail!(
+            "has an invalid 'run_as_current_user.home_directory': \
+             '{}' contains a ':' or a control character, which would corrupt the \
+             generated /etc/passwd and /etc/shadow entries",
+            home_directory
+        );
+    }
+    // The home is *created*, by uploading its leaf into its parent
+    // (`docker.rs`'s `build_owned_directory_tar`), so it needs a leaf as
+    // `Path::file_name` sees it on the path as written — the same call that
+    // function makes, so the two agree. `/` and anything ending in `..` have
+    // none, and used to fail there, after the container existed. Not
+    // cleaned first: `/srv/x/..` cleans to `/srv`, but the raw path is what
+    // reaches Docker.
+    if Path::new(home_directory).file_name().is_none() {
+        anyhow::bail!(
+            "has an invalid 'run_as_current_user.home_directory': \
+             '{home_directory}' has no directory name to create"
+        );
+    }
+    Ok(())
+}
+
+/// Every declared config variable's value — an override from
+/// `--config-var`/`--config-vars-file` (or `ratect.local.toml`), else its
+/// `default`, else `None` — plus the built-in `batect.project_directory`.
+/// An override for a variable the file doesn't declare is refused here,
+/// where overrides are first read.
+fn config_variable_values(
+    config: &Config,
+    config_var_overrides: &HashMap<String, String>,
+    project_directory: &Path,
+) -> Result<HashMap<String, Option<String>>> {
+    let mut override_names: Vec<&String> = config_var_overrides.keys().collect();
+    override_names.sort_unstable();
+    for key in override_names {
+        let declared = config
+            .config_variables
+            .as_ref()
+            .is_some_and(|vars| vars.contains_key(key));
+        if !declared {
+            anyhow::bail!(
+                "Config variable '{}' was given a value via --config-var/--config-vars-file, \
+                 but isn't declared in 'config_variables'",
+                key
+            );
+        }
+    }
+
+    let mut config_vars: HashMap<String, Option<String>> = HashMap::new();
+    for (name, var) in config.config_variables.iter().flatten() {
+        let value = config_var_overrides
+            .get(name)
+            .cloned()
+            .or_else(|| var.default.clone());
+        config_vars.insert(name.clone(), value);
+    }
+    // Batect's one built-in config variable: the absolute path of the
+    // directory containing the config file. Not user-declarable
+    // (`check_values` refuses it) or overridable via --config-var — the
+    // guard above already stops that, since only *declared* names can be
+    // overridden.
+    config_vars.insert(
+        PROJECT_DIRECTORY_VAR.to_string(),
+        Some(project_directory.display().to_string()),
+    );
+    Ok(config_vars)
+}
+
+/// Interpolates one expression-bearing value, naming the field and the
+/// expression when it can't be — the variable alone, which is all
+/// `expressions` knows, doesn't say where to look (#297). `field` is how
+/// the message names it, quoting included: `'environment.TOKEN'`, or
+/// `'build_ssh' entry 'default'` for a list entry named by its id.
+fn evaluate_value(
+    field: &str,
+    value: &str,
+    host_env: &impl Fn(&str) -> Option<String>,
+    config_vars: &HashMap<String, Option<String>>,
+) -> Result<String> {
+    crate::expressions::interpolate(value, host_env, config_vars)
+        .with_context(|| format!("cannot evaluate {field} ('{value}')"))
+}
+
+/// Evaluates every expression-bearing value of one container — `image`
+/// (native-only in effect: an expression there is refused in a `batect.yml`
+/// at load), `environment`, local `volumes` host paths, `build_directory`,
+/// `build_args`, `build_secrets` paths, `build_ssh` paths and (outside a
+/// Batect-format file, #462) `run_as_current_user.home_directory` — then
+/// resolves each host path against the file that declared it and judges
+/// what [`check_values`] could only judge on a literal.
+///
+/// Each path-bearing field is anchored on its **supplier**: the container in
+/// the `extends` chain whose value it is ([`Provenance::suppliers`]), so an
+/// inherited relative path resolves against its parent's own file and stays
+/// inside its parent's boundary.
+fn evaluate_container(
+    name: &str,
+    container: &mut Container,
+    provenance: &Provenance,
+    project_directory: &Path,
+    host_env: &impl Fn(&str) -> Option<String>,
+    config_vars: &HashMap<String, Option<String>>,
+) -> Result<()> {
+    let suppliers = provenance.suppliers_of(name);
+    let anchor = |supplier: &str| provenance.anchor(supplier, project_directory);
+    let resolve = |field: &str, path: &str, anchor: &Anchor<'_>| -> Result<String> {
+        let evaluated = evaluate_value(field, path, host_env, config_vars)?;
+        Ok(anchor_path(&evaluated, anchor)?.display().to_string())
+    };
+
+    if let Some(image) = &mut container.image {
+        *image = evaluate_value("'image'", image, host_env, config_vars)?;
+    }
+    for (key, value) in container.environment.iter_mut().flatten() {
+        *value = evaluate_value(
+            &format!("'environment.{key}'"),
+            value,
+            host_env,
+            config_vars,
+        )?;
+    }
+    let volumes_anchor = anchor(&suppliers.volumes);
+    for volume in container.volumes.iter_mut().flatten() {
+        // `Cache` and `Tmpfs` mounts hold no expression — see `check_values`.
+        if let VolumeMount::Local(local) = volume {
+            local.local = resolve("'volumes'", &local.local, &volumes_anchor)?;
+        }
+    }
+    if let Some(build_directory) = &mut container.build_directory {
+        *build_directory = resolve(
+            "'build_directory'",
+            build_directory,
+            &anchor(&suppliers.build_directory),
+        )?;
+    }
+    for (key, value) in container.build_args.iter_mut().flatten() {
+        *value = evaluate_value(&format!("'build_args.{key}'"), value, host_env, config_vars)?;
+    }
+    let build_secrets_anchor = anchor(&suppliers.build_secrets);
+    for (key, secret) in container.build_secrets.iter_mut().flatten() {
+        if let BuildSecret::Path(path) = secret {
+            *path = resolve(
+                &format!("'build_secrets.{key}'"),
+                path,
+                &build_secrets_anchor,
+            )?;
+        }
+    }
+    let build_ssh_anchor = anchor(&suppliers.build_ssh);
+    for agent in container.build_ssh.iter_mut().flatten() {
+        let field = format!("'build_ssh' entry '{}'", agent.id);
+        for path in &mut agent.paths {
+            *path = resolve(&field, path, &build_ssh_anchor)?;
+        }
+    }
+    if let Some(run_as_current_user) = &mut container.run_as_current_user {
+        // Presence was judged at load; a Batect-format file's value is a
+        // literal, judged there too (#462).
+        if let Some(home_directory) = &mut run_as_current_user.home_directory {
+            if !anchor(&suppliers.run_as_current_user).batect_shaped {
+                *home_directory = evaluate_value(
+                    "'run_as_current_user.home_directory'",
+                    home_directory,
+                    host_env,
+                    config_vars,
+                )?;
+                check_home_directory(home_directory)?;
             }
         }
+    }
+    Ok(())
+}
 
-        Ok(())
+/// Evaluates a task's own expression-bearing values: today, its
+/// `run.environment`.
+fn evaluate_task(
+    task: &mut Task,
+    host_env: &impl Fn(&str) -> Option<String>,
+    config_vars: &HashMap<String, Option<String>>,
+) -> Result<()> {
+    let environment = task
+        .run
+        .iter_mut()
+        .flat_map(|run| run.environment.iter_mut().flatten());
+    for (key, value) in environment {
+        *value = evaluate_value(
+            &format!("'run.environment.{key}'"),
+            value,
+            host_env,
+            config_vars,
+        )?;
+    }
+    Ok(())
+}
+
+/// Where each container came from, as far as evaluating it needs to know —
+/// kept by [`LoadedProject`] for [`LoadedProject::evaluate`].
+#[derive(Debug, Default)]
+struct Provenance {
+    /// The directory of the file each container was declared in — what its
+    /// relative host paths resolve against. A container absent here (one
+    /// Ratect generated, or a `Config` built without the loader) resolves
+    /// against the project directory.
+    base_paths: HashMap<String, PathBuf>,
+    /// The Git boundary a container's host paths must stay within, for every
+    /// container whose origin file was reached (directly or via a nested
+    /// local include) through a `type: git` include — see
+    /// `Boundary::check_path_allowed`. A container absent from this map was
+    /// declared entirely within the caller's own local project tree and has
+    /// no such restriction, matching the trust model local includes already
+    /// had.
+    boundaries: HashMap<String, Boundary>,
+    /// The containers declared in a Batect-format file — see
+    /// [`ConfigFormat::batect_shaped_containers`] — whose
+    /// `run_as_current_user.home_directory` is used as written rather than
+    /// evaluated, as Batect does (#462).
+    batect_shaped: HashSet<String>,
+    /// Which container in an `extends` chain supplied each path-bearing
+    /// field, recorded by [`resolve_extends`]. A container absent here
+    /// supplied all of its own.
+    suppliers: HashMap<String, Suppliers>,
+}
+
+/// For one container, which container's declaration each field that is
+/// anchored on its declaring file came from — itself, or an `extends`
+/// ancestor. `extends` takes a field whole from one container in the chain,
+/// so one name per field is enough. `run_as_current_user` is here for
+/// [`Provenance::batect_shaped`], not for a path: a YAML-declared parent's
+/// `home_directory` stays literal in a native child that inherits it.
+#[derive(Debug, Clone)]
+struct Suppliers {
+    volumes: String,
+    build_directory: String,
+    build_secrets: String,
+    build_ssh: String,
+    run_as_current_user: String,
+}
+
+impl Suppliers {
+    /// A container that supplied every field itself.
+    fn own(name: &str) -> Self {
+        Suppliers {
+            volumes: name.to_string(),
+            build_directory: name.to_string(),
+            build_secrets: name.to_string(),
+            build_ssh: name.to_string(),
+            run_as_current_user: name.to_string(),
+        }
+    }
+}
+
+/// What a supplier's path-bearing value is resolved against — see
+/// [`Provenance::anchor`].
+struct Anchor<'a> {
+    base_path: &'a Path,
+    /// The supplier's Git boundary, with the project directory that is its
+    /// second allowed root — see `Boundary::check_path_allowed`.
+    boundary: Option<(&'a Boundary, &'a Path)>,
+    batect_shaped: bool,
+}
+
+impl Provenance {
+    fn anchor<'a>(&'a self, supplier: &str, project_directory: &'a Path) -> Anchor<'a> {
+        Anchor {
+            base_path: self
+                .base_paths
+                .get(supplier)
+                .map(PathBuf::as_path)
+                .unwrap_or(project_directory),
+            boundary: self
+                .boundaries
+                .get(supplier)
+                .map(|boundary| (boundary, project_directory)),
+            batect_shaped: self.batect_shaped.contains(supplier),
+        }
+    }
+
+    fn suppliers_of(&self, container: &str) -> Suppliers {
+        self.suppliers
+            .get(container)
+            .cloned()
+            .unwrap_or_else(|| Suppliers::own(container))
     }
 }
 
@@ -3970,35 +4058,29 @@ fn expand_home_directory(path: &str) -> Result<Option<PathBuf>> {
     Ok(Some(home.join(components.as_path())))
 }
 
-/// Interpolates expressions within `path`, expands a leading `~` (see
-/// [`expand_home_directory`]), then resolves the result to an
-/// absolute path (relative to `base_path`) if it's relative — done in this
-/// order because an expression can itself resolve to an absolute path (e.g.
-/// a `<project_root` config variable), which mustn't be prefixed with
-/// `base_path` as if it were still a literal relative fragment. Shared by
-/// volume host paths (the host-path segment) and `build_directory`.
+/// Expands a leading `~` in an already-evaluated host path (see
+/// [`expand_home_directory`]), resolves the result to an absolute path
+/// (relative to the anchor's base path) if it's relative, and checks it
+/// against the anchor's Git boundary, if any. Evaluation comes first because
+/// an expression can itself resolve to an absolute path (e.g. a
+/// `<project_root` config variable), which mustn't be prefixed with the base
+/// path as if it were still a literal relative fragment. Shared by every
+/// host path: `volumes`, `build_directory`, `build_secrets`, `build_ssh`.
 ///
-/// `base_path` itself may be relative (e.g. derived from a `-f ./batect.yml`
-/// config path), so this always joins onto the current directory too, then
-/// lexically `.clean()`s the result — otherwise a `.` component anywhere
-/// along the way (from either `base_path` or `path`) would survive verbatim
-/// into the returned string, e.g. `/project/./docker` instead of
-/// `/project/docker`. Purely cosmetic (the path still resolves correctly on
-/// disk either way), but worth avoiding since it's user-visible in errors.
-fn resolve_path(
-    path: &str,
-    base_path: &Path,
-    host_env: &impl Fn(&str) -> Option<String>,
-    config_vars: &HashMap<String, Option<String>>,
-    container_boundary: Option<(&Boundary, &Path)>,
-) -> Result<String> {
-    let interpolated = crate::expressions::interpolate(path, host_env, config_vars)?;
-    let resolved = if let Some(home_relative) = expand_home_directory(&interpolated)? {
+/// The base path itself may be relative (e.g. derived from a `-f
+/// ./batect.yml` config path), so this always joins onto the current
+/// directory too, then lexically `.clean()`s the result — otherwise a `.`
+/// component anywhere along the way would survive verbatim into the returned
+/// path, e.g. `/project/./docker` instead of `/project/docker`. Purely
+/// cosmetic (the path still resolves correctly on disk either way), but
+/// worth avoiding since it's user-visible in errors.
+fn anchor_path(path: &str, anchor: &Anchor<'_>) -> Result<PathBuf> {
+    let resolved = if let Some(home_relative) = expand_home_directory(path)? {
         // Already absolute (it's rooted at the home directory), so it never
-        // joins onto `base_path` — same as any other absolute path below.
+        // joins onto the base path — same as any other absolute path below.
         home_relative.clean()
-    } else if Path::new(&interpolated).is_relative() {
-        let absolute_path = base_path.join(&interpolated);
+    } else if Path::new(path).is_relative() {
+        let absolute_path = anchor.base_path.join(path);
         std::env::current_dir()?.join(absolute_path).clean()
     } else {
         // Cleaned like the two branches above, not left as written: an
@@ -4016,14 +4098,14 @@ fn resolve_path(
         // whose parent is a symlink therefore resolves the same way under
         // both tools, which is the point. Flagged twice in review as a
         // behaviour change; recorded here so it isn't a third time.
-        PathBuf::from(&interpolated).clean()
+        PathBuf::from(path).clean()
     };
 
-    if let Some((boundary, project_dir)) = container_boundary {
+    if let Some((boundary, project_dir)) = anchor.boundary {
         boundary.check_path_allowed(&resolved, project_dir)?;
     }
 
-    Ok(resolved.display().to_string())
+    Ok(resolved)
 }
 
 /// The project's own root directory — the absolute, lexically-cleaned
@@ -4031,7 +4113,7 @@ fn resolve_path(
 /// the value the built-in `batect.project_directory` config variable
 /// resolves to, and the directory Ratect's `.batect/caches/` (cache
 /// volumes — see [`crate::cache`]) is scoped under, so it's exposed here
-/// rather than kept private to [`Config::resolve_expressions_with`].
+/// rather than kept private to `config_variable_values`.
 ///
 /// `base_path` itself may be relative (e.g. derived from a `-f
 /// ./batect.yml` config path), so this always joins onto the current
@@ -4049,7 +4131,7 @@ pub fn project_directory_path(base_path: &Path) -> Result<PathBuf> {
 /// prefix (the common `-f batect.yml` case) rather than `None`, so that
 /// isn't a "no parent" case in the `unwrap_or` sense and resolves to `""`,
 /// not `"."`. Both are handled identically downstream
-/// ([`Config::resolve_expressions`] joins onto the current directory and
+/// (`anchor_path` joins onto the current directory and
 /// lexically cleans the result), but it's worth being explicit, since it's
 /// easy to assume `parent()` returning `None` is the only case needing a
 /// fallback.
@@ -4057,8 +4139,17 @@ pub fn base_path_for(config_file: &Path) -> &Path {
     config_file.parent().unwrap_or(Path::new("."))
 }
 
-/// A configuration file loaded, merged and fully resolved — what a binary
-/// actually needs before it can build a [`TaskEngine`](crate::engine::TaskEngine).
+/// A configuration file loaded, merged and checked — what a binary needs
+/// before it can list tasks or, once [evaluated](Self::evaluate), build a
+/// [`TaskEngine`](crate::engine::TaskEngine).
+///
+/// `config` holds the values **as written**: loading evaluates no `$VAR` or
+/// `<var` expression and resolves no host path, so a value only some
+/// machines have can't stop a command that doesn't use it
+/// ([decisions/0014](../../decisions/0014-config-checked-at-load-evaluated-per-task.md)).
+/// Anything that only needs names — a task listing, shell completion — reads
+/// `config` directly; anything that needs values asks
+/// [`evaluate`](Self::evaluate) for the containers and tasks it uses.
 #[derive(Debug)]
 pub struct LoadedProject {
     pub config: Config,
@@ -4069,6 +4160,110 @@ pub struct LoadedProject {
     /// Which loader read the project — for
     /// [`crate::engine::TaskEngineSettings::dialect`].
     pub dialect: Dialect,
+    /// Where each container came from, which evaluating it needs and its
+    /// fields don't carry.
+    provenance: Provenance,
+}
+
+/// Containers and tasks as [`LoadedProject::evaluate`] returns them: every
+/// expression evaluated, every host path absolute, every deferred check
+/// passed.
+#[derive(Debug)]
+pub struct Evaluated {
+    pub containers: HashMap<String, Container>,
+    pub tasks: HashMap<String, Task>,
+}
+
+impl LoadedProject {
+    /// Evaluates the named containers and tasks against this machine — the
+    /// one place an expression is evaluated, and the second half of
+    /// [decisions/0014](../../decisions/0014-config-checked-at-load-evaluated-per-task.md)'s
+    /// split. `$VAR`s are looked up through `host_env`; `<var`s take their
+    /// value from `config_var_overrides` (a `--config-vars-file` merged with
+    /// any `--config-var`s, which win), else the variable's `default`. Host
+    /// paths resolve against the file that declared them — for an inherited
+    /// field, the ancestor that supplied it — and a Git-included container's
+    /// must stay inside its bundle's boundary. An expression-valued
+    /// `home_directory` gets the shape check a literal one had at load.
+    ///
+    /// Containers are evaluated in name order, then tasks, and the first
+    /// failure is returned, naming the container or task, the field and the
+    /// expression. A name the project doesn't declare is an error.
+    pub fn evaluate<'n>(
+        &self,
+        containers: impl IntoIterator<Item = &'n str>,
+        tasks: impl IntoIterator<Item = &'n str>,
+        config_var_overrides: &HashMap<String, String>,
+        host_env: impl Fn(&str) -> Option<String>,
+    ) -> Result<Evaluated> {
+        let config_vars =
+            config_variable_values(&self.config, config_var_overrides, &self.project_directory)?;
+
+        let mut container_names: Vec<&str> = containers.into_iter().collect();
+        container_names.sort_unstable();
+        container_names.dedup();
+        let mut evaluated_containers = HashMap::new();
+        for name in container_names {
+            let mut container = self
+                .config
+                .containers
+                .get(name)
+                .ok_or_else(|| anyhow::anyhow!("No container named '{name}' is declared"))?
+                .clone();
+            evaluate_container(
+                name,
+                &mut container,
+                &self.provenance,
+                &self.project_directory,
+                &host_env,
+                &config_vars,
+            )
+            .with_context(|| format!("Container '{name}'"))?;
+            evaluated_containers.insert(name.to_string(), container);
+        }
+
+        let mut task_names: Vec<&str> = tasks.into_iter().collect();
+        task_names.sort_unstable();
+        task_names.dedup();
+        let mut evaluated_tasks = HashMap::new();
+        for name in task_names {
+            let mut task = self
+                .config
+                .tasks
+                .get(name)
+                .ok_or_else(|| anyhow::anyhow!("No task named '{name}' is declared"))?
+                .clone();
+            evaluate_task(&mut task, &host_env, &config_vars)
+                .with_context(|| format!("Task '{name}'"))?;
+            evaluated_tasks.insert(name.to_string(), task);
+        }
+
+        Ok(Evaluated {
+            containers: evaluated_containers,
+            tasks: evaluated_tasks,
+        })
+    }
+
+    /// The whole project [evaluated](Self::evaluate) against the real host
+    /// environment, as a [`Config`] — for a consumer that still reads every
+    /// container's values, until it evaluates only what it uses
+    /// ([#557](https://github.com/or1can/ratect/issues/557),
+    /// [#558](https://github.com/or1can/ratect/issues/558)).
+    pub fn evaluate_all(&self, config_var_overrides: &HashMap<String, String>) -> Result<Config> {
+        let Evaluated { containers, tasks } = self.evaluate(
+            self.config.containers.keys().map(String::as_str),
+            self.config.tasks.keys().map(String::as_str),
+            config_var_overrides,
+            |name| std::env::var(name).ok(),
+        )?;
+        Ok(Config {
+            project_name: self.config.project_name.clone(),
+            containers,
+            tasks,
+            config_variables: self.config.config_variables.clone(),
+            forbid_telemetry: self.config.forbid_telemetry,
+        })
+    }
 }
 
 /// Serializes a merged, *unresolved* [`Config`] to native `ratect.toml` text —
@@ -4288,50 +4483,35 @@ fn collect_completion_task_names(
     }
 }
 
-/// Loads `config_file`, resolves its `include`s, and resolves every
-/// expression in the result — the whole config-to-usable-`Config` sequence
-/// both binaries need, in one call, so neither has to know the order the
-/// steps go in (includes before expressions; the config-vars file before
-/// `--config-var`, which overrides it).
-///
-/// `config_var_overrides` is the merged result of a `--config-vars-file`
-/// (load it with [`Config::load_config_vars_file`]) and any individually
-/// supplied variables, the latter winning — merging them is the caller's
-/// job, since only the caller knows what its own flags are called.
+/// Loads `config_file`, resolves its `include`s, and checks the result —
+/// the whole config-to-[`LoadedProject`] sequence both binaries need, in one
+/// call, so neither has to know the order the steps go in. Evaluates no
+/// expression: see [`LoadedProject::evaluate`] for that, and
+/// `check_values` for what is judged here instead.
 ///
 /// A missing file is an error here rather than an empty config: every
 /// caller so far wants to fail fast, and doing it in one place means the
 /// message is identical whichever binary is running.
-pub async fn load_project(
-    config_file: &Path,
-    config_var_overrides: &HashMap<String, String>,
-) -> Result<LoadedProject> {
-    load_project_impl(config_file, config_var_overrides, ConfigFormat::Compat).await
+pub async fn load_project(config_file: &Path) -> Result<LoadedProject> {
+    load_project_impl(config_file, ConfigFormat::Compat).await
 }
 
 /// Native-mode counterpart of [`load_project`] — `ratect`'s entry point. A
 /// TOML root file, TOML/YAML includes by extension (see
 /// `ConfigFormat::Native`).
-pub async fn load_project_native(
-    config_file: &Path,
-    config_var_overrides: &HashMap<String, String>,
-) -> Result<LoadedProject> {
-    load_project_impl(config_file, config_var_overrides, ConfigFormat::Native).await
+pub async fn load_project_native(config_file: &Path) -> Result<LoadedProject> {
+    load_project_impl(config_file, ConfigFormat::Native).await
 }
 
-async fn load_project_impl(
-    config_file: &Path,
-    config_var_overrides: &HashMap<String, String>,
-    format: ConfigFormat,
-) -> Result<LoadedProject> {
+async fn load_project_impl(config_file: &Path, format: ConfigFormat) -> Result<LoadedProject> {
     if !config_file.exists() {
         anyhow::bail!("Configuration file {:?} not found.", config_file);
     }
-    let mut loaded = match format {
+    let loaded = match format {
         ConfigFormat::Compat => Config::load_from_file(config_file).await?,
         ConfigFormat::Native => Config::load_from_file_native(config_file).await?,
     };
-    // Before `resolve_expressions` below — see
+    // Before `check_values` below — see
     // `ConfigFormat::reject_incompatible_fields`'s own doc comment for why.
     format.reject_incompatible_fields(
         &loaded.config,
@@ -4341,15 +4521,17 @@ async fn load_project_impl(
     // After the native-only rejection, so a Batect-format file's `dns` is
     // refused as a field it may not use at all rather than for its syntax.
     validate_dns_servers(&loaded.config)?;
-    let base_path = base_path_for(config_file);
-    let project_directory = project_directory_path(base_path)?;
-    loaded.resolve_expressions(base_path, config_var_overrides)?;
+    let project_directory = project_directory_path(base_path_for(config_file))?;
+    let mut provenance = loaded.provenance();
+    // Before `extends`, on each container as declared — see its own doc
+    // comment for which rules that allows.
+    check_values(&loaded.config, &provenance, &project_directory)?;
     let mut config = loaded.config;
-    // Resolved *after* expression/path resolution, so an inherited relative
-    // path is already absolute and stays anchored to its parent's own file —
-    // see [`Container::extends`] and decisions/0003.
+    // Records which ancestor supplied each path-bearing field, so evaluation
+    // anchors an inherited relative path on its parent's own file — see
+    // [`Container::extends`] and decisions/0003.
     if format.allows_extends() {
-        resolve_extends(&mut config.containers)?;
+        provenance.suppliers = resolve_extends(&mut config.containers)?;
     }
     // After `extends`, so an inherited `dependencies` list is checked too;
     // before every rule below that follows a reference, so each of those can
@@ -4390,6 +4572,7 @@ async fn load_project_impl(
         config,
         project_directory,
         dialect: format.dialect(),
+        provenance,
     })
 }
 
@@ -5248,8 +5431,8 @@ fn reject_references_to_undeclared_containers(config: &Config) -> Result<()> {
 ///
 /// **After `resolve_extends`**: membership is computed by
 /// `container_names_in_task`, which walks container `dependencies` — and a
-/// container can inherit that list. While this lived in
-/// [`Config::resolve_expressions_with_boundaries`] a base declaring
+/// container can inherit that list. While this lived in the pass before
+/// `extends` — what is now [`check_values`] — a base declaring
 /// `dependencies` and a child adding `extends` made every customisation of
 /// one of those dependencies fail to load, even though the task does start
 /// it. Unlike the two sibling rules that moved for the same reason, this one
@@ -5299,8 +5482,8 @@ fn reject_customisations_outside_the_task_graph(config: &Config) -> Result<()> {
 /// **After `resolve_extends`**, because it spans two fields and `extends`
 /// can supply either alone — a base carrying the `volumes` and a child
 /// adding `run_as_current_user`, or the reverse. Both loaded cleanly while
-/// this lived in [`Config::resolve_expressions_with_boundaries`]; see that
-/// method's doc comment for the general rule.
+/// this lived in the pass before `extends`, now [`check_values`]; see that
+/// function's doc comment for the general rule.
 fn reject_relative_cache_mounts_under_user_mapping(config: &Config) -> Result<()> {
     let mut names: Vec<&String> = config.containers.keys().collect();
     names.sort_unstable();
@@ -5339,8 +5522,8 @@ fn reject_relative_cache_mounts_under_user_mapping(config: &Config) -> Result<()
 /// `run_to_completion` passed while this ran earlier, since the child's own
 /// `setup_commands` was still unset at that point — and the commands were
 /// then dropped in silence at run time. See
-/// [`Config::resolve_expressions_with_boundaries`]'s own doc comment for
-/// the rule this is one of three instances of.
+/// [`check_values`]'s own doc comment for the rule this is one of three
+/// instances of.
 ///
 /// An explicitly empty `setup_commands` is not a declaration of any: it is
 /// how an `extends` child clears a list it would otherwise inherit (see
@@ -5381,26 +5564,39 @@ fn reject_run_to_completion_conflicts(config: &Config) -> Result<()> {
 /// replacing YAML anchors. Shallow, per field (`child.or(parent)`, exactly
 /// Cargo's profile `inherits`): a field the child sets wins, an unset one is
 /// taken from the (already-resolved) parent, with no recursion into nested
-/// maps. Single-parent, transitive, and cycle-checked. Runs on already
-/// path/expression-resolved containers, so an inherited relative path points
-/// where it did on the parent. See decisions/0003.
-fn resolve_extends(containers: &mut HashMap<String, Container>) -> Result<()> {
+/// maps. Single-parent, transitive, and cycle-checked. Runs on unevaluated
+/// containers, so returns which container supplied each field whose value
+/// is anchored on its declaring file ([`Suppliers`]), for evaluation to
+/// resolve an inherited relative path where it pointed on the parent. See
+/// decisions/0003.
+fn resolve_extends(
+    containers: &mut HashMap<String, Container>,
+) -> Result<HashMap<String, Suppliers>> {
     let mut resolved: HashMap<String, Container> = HashMap::new();
+    let mut suppliers: HashMap<String, Suppliers> = HashMap::new();
     let names: Vec<String> = containers.keys().cloned().collect();
     for name in names {
-        resolve_container_extends(&name, containers, &mut resolved, &mut Vec::new())?;
+        resolve_container_extends(
+            &name,
+            containers,
+            &mut resolved,
+            &mut suppliers,
+            &mut Vec::new(),
+        )?;
     }
     *containers = resolved;
-    Ok(())
+    Ok(suppliers)
 }
 
 /// Resolves one container's inheritance chain into `resolved`, memoized so a
-/// shared ancestor is merged once. `ancestors` is the current resolution
-/// path, for detecting cycles (including a container extending itself).
+/// shared ancestor is merged once, and records its [`Suppliers`]. `ancestors`
+/// is the current resolution path, for detecting cycles (including a
+/// container extending itself).
 fn resolve_container_extends(
     name: &str,
     source: &HashMap<String, Container>,
     resolved: &mut HashMap<String, Container>,
+    suppliers: &mut HashMap<String, Suppliers>,
     ancestors: &mut Vec<String>,
 ) -> Result<()> {
     if resolved.contains_key(name) {
@@ -5419,14 +5615,32 @@ fn resolve_container_extends(
         .get(name)
         .expect("resolve_container_extends called with a known container name")
         .clone();
+    let mut supplied = Suppliers::own(name);
 
     if let Some(parent) = merged.extends.clone() {
         if !source.contains_key(&parent) {
             anyhow::bail!("The container '{name}' extends '{parent}', which is not defined.");
         }
         ancestors.push(name.to_string());
-        resolve_container_extends(&parent, source, resolved, ancestors)?;
+        resolve_container_extends(&parent, source, resolved, suppliers, ancestors)?;
         ancestors.pop();
+        // Before inheriting, while an unset field still means "the parent's".
+        let inherited = &suppliers[&parent];
+        if merged.volumes.is_none() {
+            supplied.volumes = inherited.volumes.clone();
+        }
+        if merged.build_directory.is_none() {
+            supplied.build_directory = inherited.build_directory.clone();
+        }
+        if merged.build_secrets.is_none() {
+            supplied.build_secrets = inherited.build_secrets.clone();
+        }
+        if merged.build_ssh.is_none() {
+            supplied.build_ssh = inherited.build_ssh.clone();
+        }
+        if merged.run_as_current_user.is_none() {
+            supplied.run_as_current_user = inherited.run_as_current_user.clone();
+        }
         let parent = resolved
             .get(&parent)
             .expect("parent resolved by the recursive call above")
@@ -5437,6 +5651,7 @@ fn resolve_container_extends(
     // Consumed: the resolved container carries no `extends` of its own.
     merged.extends = None;
     resolved.insert(name.to_string(), merged);
+    suppliers.insert(name.to_string(), supplied);
     Ok(())
 }
 

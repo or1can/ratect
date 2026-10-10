@@ -152,7 +152,7 @@
           ]
         },
         "build_ssh": {
-          "description": "Makes SSH keys available to a `build_directory` build, for a Dockerfile's `RUN --mount=type=ssh` instructions. Each entry is one agent, named by an `id` a `RUN` instruction can select (`--mount=type=ssh,id=<id>`), and ids must be unique across the list (checked in `Config::resolve_expressions_with`). An entry with no `paths` forwards the host's own running ssh-agent via `SSH_AUTH_SOCK`; an entry with `paths` serves those private key files instead, which is what works in CI where no agent is running. See `SshAgent`, and [Image building](https://github.com/or1can/ratect/blob/main/docs/ratect-compat-config-reference.md#image-building).",
+          "description": "Makes SSH keys available to a `build_directory` build, for a Dockerfile's `RUN --mount=type=ssh` instructions. Each entry is one agent, named by an `id` a `RUN` instruction can select (`--mount=type=ssh,id=<id>`), and ids must be unique across the list (checked when the file loads). An entry with no `paths` forwards the host's own running ssh-agent via `SSH_AUTH_SOCK`; an entry with `paths` serves those private key files instead, which is what works in CI where no agent is running. See `SshAgent`, and [Image building](https://github.com/or1can/ratect/blob/main/docs/ratect-compat-config-reference.md#image-building).",
           "items": {
             "$ref": "#/definitions/SshAgent"
           },
@@ -365,7 +365,7 @@
           ]
         },
         "volumes": {
-          "description": "Host bind mounts (`local`) and/or named cache volumes (`cache`) — see `VolumeMount`. A `local` mount's host path is resolved in `Config::resolve_expressions_with`; a `cache` mount's Docker volume name/host directory is resolved later, once `--cache-type` and the project's own cache key are known — see `crate::cache`.",
+          "description": "Host bind mounts (`local`) and/or named cache volumes (`cache`) — see `VolumeMount`. A `local` mount's host path is resolved when evaluated; a `cache` mount's Docker volume name/host directory is resolved later, once `--cache-type` and the project's own cache key are known — see `crate::cache`.",
           "items": {
             "$ref": "#/definitions/VolumeMount"
           },
@@ -602,7 +602,7 @@
     },
     "RunAsCurrentUser": {
       "additionalProperties": false,
-      "description": "Runs this container as the host's own user/group instead of whatever the image defaults to (see `Config::resolve_expressions_with`'s validation and `TaskEngine::resolve_user_mapping`). `home_directory` is required when `enabled` is `true` (and rejected otherwise) — Ratect never guesses one, matching Batect.",
+      "description": "Runs this container as the host's own user/group instead of whatever the image defaults to (see the load-time validation of `home_directory` and `TaskEngine::resolve_user_mapping`). `home_directory` is required when `enabled` is `true` (and rejected otherwise) — Ratect never guesses one, matching Batect.",
       "properties": {
         "enabled": {
           "description": "Whether to run as the host's own user. Required — there's no default.",
@@ -644,7 +644,7 @@
     },
     "SshAgent": {
       "additionalProperties": false,
-      "description": "One agent in a container's `build_ssh` list — see `Container::build_ssh`. Ids must be unique across the list, which is checked in `Config::resolve_expressions_with` rather than here, so the error can name the offending container.",
+      "description": "One agent in a container's `build_ssh` list — see `Container::build_ssh`. Ids must be unique across the list, which is checked when the file loads rather than here, so the error can name the offending container.",
       "properties": {
         "id": {
           "description": "The agent id a Dockerfile's `RUN --mount=type=ssh,id=<id>` refers to. Required, matching Batect — use `default` for the id a bare `RUN --mount=type=ssh` uses, which is BuildKit's own implicit one.",
@@ -678,7 +678,7 @@
           ]
         },
         "dependencies": {
-          "description": "Sidecar containers scoped to this task specifically — distinct from `Container::dependencies`, which every task using that container picks up. Unioned with the task's own container's `dependencies` when resolving what to start alongside it — see `TaskEngine::run_task_internal`. Requires `run` (validated in `Config::resolve_expressions_with_boundaries`, matching Batect) and can't name `run.container` itself.",
+          "description": "Sidecar containers scoped to this task specifically — distinct from `Container::dependencies`, which every task using that container picks up. Unioned with the task's own container's `dependencies` when resolving what to start alongside it — see `TaskEngine::run_task_internal`. Requires `run` (validated when the file loads, matching Batect) and can't name `run.container` itself.",
           "items": {
             "type": "string"
           },
@@ -720,7 +720,7 @@
               "type": "null"
             }
           ],
-          "description": "Absent for a task that only exists to chain `prerequisites` together — validated in `Config::resolve_expressions_with_boundaries` to require at least one of `run`/`prerequisites`, matching Batect. A `run`-less task's prerequisites still execute; there's just no container of the task's own to run afterwards — see `TaskEngine::run_task_internal`."
+          "description": "Absent for a task that only exists to chain `prerequisites` together — validated when the file loads to require at least one of `run`/`prerequisites`, matching Batect. A `run`-less task's prerequisites still execute; there's just no container of the task's own to run afterwards — see `TaskEngine::run_task_internal`."
         }
       },
       "type": "object"

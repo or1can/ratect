@@ -121,8 +121,8 @@ fn unique_project_dir() -> PathBuf {
 /// config-variable values — no `--config-vars-file` needed, this binary's
 /// native equivalent of `ratect-compat`'s `batect.local.yml` default. Proven
 /// with a required config variable (no default) that only the local file
-/// supplies: `tasks list` resolves the config, so it fails without the file
-/// and succeeds once it's there.
+/// supplies: `config validate` evaluates the config, so it fails without the
+/// file and succeeds once it's there.
 #[test]
 fn ratect_local_toml_is_auto_discovered_for_config_variables() {
     let dir = unique_project_dir();
@@ -146,7 +146,7 @@ run = { container = "app" }
     let without = ratect_command()
         .arg("-f")
         .arg(dir.join("ratect.toml"))
-        .args(["tasks", "list"])
+        .args(["config", "validate"])
         .output()
         .expect("failed to run ratect");
     assert!(
@@ -158,7 +158,7 @@ run = { container = "app" }
     let with = ratect_command()
         .arg("-f")
         .arg(dir.join("ratect.toml"))
-        .args(["tasks", "list"])
+        .args(["config", "validate"])
         .output()
         .expect("failed to run ratect");
     assert!(
@@ -166,6 +166,103 @@ run = { container = "app" }
         "ratect.local.toml should be discovered automatically:\n{}",
         String::from_utf8_lossy(&with.stderr)
     );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A value only some machines have is not a mistake in the file, so a
+/// container no task uses that reads one doesn't stop `tasks list`
+/// (decisions/0014) — nor does a config variable with no value yet.
+#[test]
+fn tasks_list_succeeds_when_an_unused_container_cannot_be_evaluated() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        r#"
+project_name = "demo"
+
+[config_variables.region]
+
+[containers.app]
+image = "alpine:3.18"
+
+[containers.deploy]
+image = "alpine:3.18"
+volumes = ["$RATECT_TEST_NEVER_SET:/root/.aws"]
+environment = { REGION = "<region", OTHER = "<never_declared" }
+
+[tasks.build]
+run = { container = "app" }
+"#,
+    )
+    .unwrap();
+
+    let output = ratect_command()
+        .arg("-f")
+        .arg(dir.join("ratect.toml"))
+        .args(["tasks", "list", "-o", "quiet"])
+        .env_remove("RATECT_TEST_NEVER_SET")
+        .output()
+        .expect("failed to run ratect");
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "build\n");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `tasks list` evaluates nothing, so its config-variable options are
+/// deprecated: still accepted, with a warning saying they do nothing — and
+/// the file one names, or an auto-discovered `ratect.local.toml`, is not
+/// even read, so a malformed one can't stop the listing.
+#[test]
+fn tasks_list_warns_that_its_config_variable_options_are_deprecated() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "project_name = \"demo\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n\n\
+         [tasks.build]\nrun = { container = \"app\" }\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("ratect.local.toml"), "not toml at all = = =\n").unwrap();
+
+    let list = |args: &[&str]| {
+        ratect_command()
+            .arg("-f")
+            .arg(dir.join("ratect.toml"))
+            .args(["tasks", "list", "-o", "quiet"])
+            .args(args)
+            .output()
+            .expect("failed to run ratect")
+    };
+
+    let plain = list(&[]);
+    assert!(
+        plain.status.success(),
+        "a malformed ratect.local.toml must not stop the listing:\n{}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&plain.stderr).contains("deprecated"),
+        "no option given, nothing to warn about"
+    );
+
+    for args in [
+        &["--config-var", "x=1"][..],
+        &["--config-vars-file", "/nonexistent/vars.toml"][..],
+    ] {
+        let output = list(args);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{args:?}:\n{stderr}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "build\n");
+        assert!(
+            stderr.contains("deprecated") && stderr.contains("no effect"),
+            "{args:?}:\n{stderr}"
+        );
+    }
 
     std::fs::remove_dir_all(&dir).ok();
 }

@@ -15,7 +15,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use ratect_core::config::{
-    format_task_list, format_task_list_quiet, load_project, Config, Dialect, LoadedProject,
+    format_task_list, format_task_list_quiet, load_project, Config, Dialect,
 };
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
@@ -478,11 +478,7 @@ async fn run(mut args: Args) -> Result<()> {
         None => HashMap::new(),
     };
     config_var_overrides.extend(args.config_var.iter().cloned());
-    let LoadedProject {
-        config,
-        project_directory,
-        dialect,
-    } = load_project(&args.config_file, &config_var_overrides).await?;
+    let project = load_project(&args.config_file).await?;
 
     // Gathered once, here, and reused for both the `--list-tasks` quiet-
     // format decision below and (inside `create_event_sink`) the real
@@ -494,8 +490,8 @@ async fn run(mut args: Args) -> Result<()> {
 
     if args.list_tasks {
         let listing = match output_style {
-            OutputStyle::Quiet => format_task_list_quiet(&config.tasks),
-            _ => format_task_list(&config.project_name, &config.tasks),
+            OutputStyle::Quiet => format_task_list_quiet(&project.config.tasks),
+            _ => format_task_list(&project.config.project_name, &project.config.tasks),
         };
         println!("{listing}");
         return Ok(());
@@ -503,6 +499,11 @@ async fn run(mut args: Args) -> Result<()> {
 
     match args.task_name.as_deref() {
         Some(task_name) => {
+            // Every container and task, until the engine evaluates only what
+            // each task uses (#557) — first, so a value this machine can't
+            // supply fails before anything else is set up, as it did when
+            // loading evaluated it.
+            let config = project.evaluate_all(&config_var_overrides)?;
             // Unconditional, fire-and-forget — matching Batect's own
             // `GitRepositoryCacheCleanupTask`, an unconditional daemon
             // thread started on every "run a task" invocation regardless of
@@ -526,7 +527,7 @@ async fn run(mut args: Args) -> Result<()> {
             // it can return.
             let event_sink = create_event_sink(requested_style, color_mode, &terminal)?;
             // Built before the connection options consume `args` below.
-            let settings = args.engine_settings(project_directory, dialect);
+            let settings = args.engine_settings(project.project_directory, project.dialect);
             // Constructed here rather than inside `ratect-core` — a library
             // shouldn't take over a process's signal handling on its own
             // initiative — and armed immediately, since (unlike
