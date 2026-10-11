@@ -3140,11 +3140,17 @@ fn absolute_path(path: &Path) -> Result<PathBuf> {
 /// them. Each candidate's *lexical* containment within a Git boundary is
 /// checked before it's touched; the caller re-checks the chosen one
 /// canonically.
+///
+/// A candidate holding a NUL is refused before any of that, as Batect does —
+/// otherwise it reads as a file that doesn't exist (#365).
 fn resolve_include_target(
     base_dir: &Path,
     candidates: &[String],
     boundary: Option<&Boundary>,
 ) -> Result<PathBuf> {
+    if let Some(invalid) = candidates.iter().find(|c| c.contains('\0')) {
+        anyhow::bail!("Include path '{}' is not a valid path.", printable(invalid));
+    }
     if let [only] = candidates {
         let resolved = absolute_path(&base_dir.join(only))?;
         if let Some(boundary) = boundary {
@@ -3784,7 +3790,7 @@ fn check_home_directory(home_directory: &str) -> Result<()> {
         anyhow::bail!(
             "has an invalid 'run_as_current_user.home_directory': \
              '{}' is not an absolute path",
-            home_directory
+            printable(home_directory)
         );
     }
     // `home_directory` is interpolated raw into a colon-delimited
@@ -3796,7 +3802,7 @@ fn check_home_directory(home_directory: &str) -> Result<()> {
             "has an invalid 'run_as_current_user.home_directory': \
              '{}' contains a ':' or a control character, which would corrupt the \
              generated /etc/passwd and /etc/shadow entries",
-            home_directory
+            printable(home_directory)
         );
     }
     // The home is *created*, by uploading its leaf into its parent
@@ -3809,7 +3815,8 @@ fn check_home_directory(home_directory: &str) -> Result<()> {
     if Path::new(home_directory).file_name().is_none() {
         anyhow::bail!(
             "has an invalid 'run_as_current_user.home_directory': \
-             '{home_directory}' has no directory name to create"
+             '{}' has no directory name to create",
+            printable(home_directory)
         );
     }
     Ok(())
@@ -3873,7 +3880,7 @@ fn evaluate_value(
     config_vars: &HashMap<String, Option<String>>,
 ) -> Result<String> {
     crate::expressions::interpolate(value, host_env, config_vars)
-        .with_context(|| format!("cannot evaluate {field} ('{value}')"))
+        .with_context(|| format!("cannot evaluate {field} ('{}')", printable(value)))
 }
 
 /// Evaluates every expression-bearing value of one container — `image`
@@ -3936,7 +3943,12 @@ fn evaluate_container(
             } else {
                 anchor_path(&local.local, &volumes_anchor)
                     .map(|resolved| resolved.display().to_string())
-                    .with_context(|| format!("has an invalid 'volumes' entry '{}'", local.local))
+                    .with_context(|| {
+                        format!(
+                            "has an invalid 'volumes' entry '{}'",
+                            printable(&local.local)
+                        )
+                    })
             };
             store_or_record(&mut local.local, resolved, &mut failures);
         }
@@ -4049,7 +4061,27 @@ fn store_or_record(
 /// an evaluated value: the check's own message names the value, which
 /// doesn't say which field or expression it came from.
 fn deferred_check_context(field: &str, expression: &str) -> String {
-    format!("{field} ('{expression}') evaluates to a value that can't be used")
+    format!(
+        "{field} ('{}') evaluates to a value that can't be used",
+        printable(expression)
+    )
+}
+
+/// `value` with each control character escaped as Rust would (`\0`, `\n`),
+/// for quoting a user's value in a message: a raw NUL prints as nothing, so a
+/// path refused for holding one would otherwise look fine (#365). Nothing
+/// else is escaped, so an ordinary value reads exactly as it was written.
+fn printable(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| {
+            if c.is_control() {
+                c.escape_debug().to_string()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
 }
 
 /// Where each container came from, as far as evaluating it needs to know —
@@ -4185,7 +4217,15 @@ fn expand_home_directory(path: &str) -> Result<Option<PathBuf>> {
 /// path, e.g. `/project/./docker` instead of `/project/docker`. Purely
 /// cosmetic (the path still resolves correctly on disk either way), but
 /// worth avoiding since it's user-visible in errors.
+///
+/// A path holding a NUL is refused first, as Batect's `PathResolver` refuses
+/// it: no filesystem accepts one, so letting it through only fails later —
+/// at `create_dir_all`, or at the daemon once the container already exists
+/// (#365).
 fn anchor_path(path: &str, anchor: &Anchor<'_>) -> Result<PathBuf> {
+    if path.contains('\0') {
+        anyhow::bail!("'{}' is not a valid path", printable(path));
+    }
     let resolved = if let Some(home_relative) = expand_home_directory(path)? {
         // Already absolute (it's rooted at the home directory), so it never
         // joins onto the base path — same as any other absolute path below.
