@@ -126,8 +126,10 @@ Ratect checks a config when the file loads, and the report is its own:
 - **The wording** is Ratect's, not Batect's — `Configuration file "batect.yml"
   not found.` rather than `The file '<absolute path>' does not exist.`, and
   likewise for malformed volumes, ports, devices and includes, expressions,
-  durations, duplicate `build_ssh` ids, an undeclared `--config-var` and a name
-  defined in more than one file.
+  durations, duplicate `build_ssh` ids, an undeclared config variable given a
+  value — which names the variable but neither which of `--config-var` and
+  `--config-vars-file` gave it nor, for the file, its line — and a name defined
+  in more than one file.
 - **A check made once the file has parsed names what it's about** — the
   container or task — rather than giving Batect's YAML path, line and column.
 - **The full cause chain is printed**: `Error: <message>`, then a `Caused by:`
@@ -135,10 +137,11 @@ Ratect checks a config when the file loads, and the report is its own:
   own reason is in that list, under `Failed to parse config file "<path>"`. The
   same holds for every fatal error, not only a config one.
 - **With several problems, the one reported isn't necessarily Batect's first.**
-  Every config check runs before `--override-image` is checked, a
-  `--config-vars-file` is read before the config file, a duplicate
-  `build_ssh` id is checked after a container's image source, and a volume's
-  fields are checked in a different order.
+  Every config check runs before `--override-image` is checked, a duplicate
+  `build_ssh` id is checked after a container's image source, a volume's
+  fields are checked in a different order, and of several undeclared config
+  variables given values, the first by name is reported, where Batect reports
+  the file's first, in file order, before any `--config-var`.
 
 ## CLI flags
 

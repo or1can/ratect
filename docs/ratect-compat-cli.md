@@ -31,7 +31,7 @@ listed under.
 | Flag | Short | Default | Description |
 |---|---|---|---|
 | `--config-var <NAME=VALUE>` | — | — | Sets a [config variable](ratect-compat-config-reference.md#configvariable)'s value; repeatable. Takes precedence over `--config-vars-file` and the variable's `default`. |
-| `--config-vars-file <PATH>` | — | `batect.local.yml` if it exists | A flat YAML file of config variable `name: value` pairs, in the same format as `batect.yml` itself. Lower precedence than `--config-var`. When not given, defaults to `batect.local.yml` in the current directory *if that file exists* (an absent default file just means no overrides from a file, not an error) — matching Batect. |
+| `--config-vars-file <PATH>` | — | `batect.local.yml` if it exists | A flat YAML file of config variable `name: value` pairs, in the same format as `batect.yml` itself. Lower precedence than `--config-var`. When not given, defaults to `batect.local.yml` in the current directory *if that file exists* (an absent default file just means no overrides from a file, not an error) — matching Batect. Read only when a task runs, as in Batect: every command checks only that a named file is a file, so nothing in it, nor a `--config-var` naming an undeclared variable, stops `--list-tasks`. |
 
 ### Task execution
 

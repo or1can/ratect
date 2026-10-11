@@ -465,6 +465,19 @@ async fn run(mut args: Args) -> Result<()> {
     let color_mode =
         ratect_core::ui::resolve_color_mode(args.no_color, |name| std::env::var(name).ok());
 
+    // Batect's option parser checks only that a named config-variables file
+    // is a file, for every command. Its contents, like `--config-var`'s
+    // names, are read only when a task runs, so nothing in either stops
+    // `--list-tasks` (#355).
+    let config_vars_file =
+        resolve_config_vars_file(args.config_vars_file.clone(), &std::env::current_dir()?);
+    if let Some(path) = &config_vars_file {
+        anyhow::ensure!(
+            path.is_file(),
+            "--config-vars-file {path:?} does not exist or is not a file."
+        );
+    }
+
     if args.upgrade {
         eprintln!(
             "--upgrade has no effect: Ratect is a single native binary, not a self-updating \
@@ -477,13 +490,6 @@ async fn run(mut args: Args) -> Result<()> {
         return clean_caches(&args).await;
     }
 
-    let config_vars_file =
-        resolve_config_vars_file(args.config_vars_file.clone(), &std::env::current_dir()?);
-    let mut config_var_overrides: HashMap<String, String> = match &config_vars_file {
-        Some(path) => Config::load_config_vars_file(path)?,
-        None => HashMap::new(),
-    };
-    config_var_overrides.extend(args.config_var.iter().cloned());
     let project = load_project(&args.config_file).await?;
 
     // Gathered once, here, and reused for both the `--list-tasks` quiet-
@@ -518,6 +524,12 @@ async fn run(mut args: Args) -> Result<()> {
                     tracing::warn!("Failed to sweep stale Git include cache entries: {e}");
                 }
             });
+
+            let mut config_var_overrides: HashMap<String, String> = match &config_vars_file {
+                Some(path) => Config::load_config_vars_file(path)?,
+                None => HashMap::new(),
+            };
+            config_var_overrides.extend(args.config_var.iter().cloned());
 
             // The output-mode logger — one instance shared by the Docker
             // client (fine-grained pull/build progress) and the engine

@@ -457,6 +457,89 @@ fn list_tasks_succeeds_when_an_unused_container_cannot_be_evaluated() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "build\n");
 }
 
+/// #355: Batect reads a config-variables file only when a task runs, so
+/// nothing in one — malformed, or naming a variable the config doesn't
+/// declare — stops `--list-tasks`, whether it's an auto-discovered
+/// `batect.local.yml` or named by `--config-vars-file`. Batect's option
+/// parser does check that a named file is a file, for every command, so a
+/// missing one, or a directory, still fails. A run reads the file, so a
+/// malformed one still fails it.
+#[test]
+fn list_tasks_reads_no_config_variables_file() {
+    let dir = std::env::temp_dir().join(format!(
+        "ratect-compat-list-tasks-vars-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18.2\n\
+         tasks:\n  build:\n    run:\n      container: app\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("batect.local.yml"), "- not\n- a map\n").unwrap();
+    std::fs::write(dir.join("undeclared.yml"), "nowhere: x\n").unwrap();
+    let ratect = |args: &[&str]| {
+        ratect_command()
+            .current_dir(&dir)
+            .args(args)
+            .output()
+            .expect("failed to run ratect")
+    };
+
+    for args in [
+        &["--list-tasks", "-o", "quiet"][..],
+        &[
+            "--list-tasks",
+            "-o",
+            "quiet",
+            "--config-vars-file",
+            "undeclared.yml",
+        ],
+    ] {
+        let output = ratect(args);
+        assert!(
+            output.status.success(),
+            "{args:?}:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "build\n",
+            "{args:?}"
+        );
+    }
+
+    std::fs::create_dir(dir.join("a-directory")).unwrap();
+    for (flag, path) in [
+        ("--list-tasks", "missing.yml"),
+        ("--list-tasks", "a-directory"),
+        ("--clean", "missing.yml"),
+    ] {
+        let output = ratect(&[flag, "--config-vars-file", path]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{flag} {path}: {stderr}");
+        assert!(
+            stderr.contains("--config-vars-file") && stderr.contains(path),
+            "{flag} {path}: {stderr}"
+        );
+    }
+
+    let run = ratect(&["build"]);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("Failed to parse config vars file"),
+        "{stderr}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// The run's counterpart: a task is evaluated only when it is reached, and
 /// only the containers its own graph uses, so `deploy`'s values are never
 /// looked at (decisions/0014).
