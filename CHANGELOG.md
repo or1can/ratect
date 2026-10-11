@@ -36,6 +36,7 @@ history, from when it was the only binary.
 ### Changed
 
 - `ratect-compat --list-tasks` and `ratect tasks list` evaluate no `$VAR` or `<var` expression: they succeed when a value can't be evaluated on this machine, and a `--config-var` naming an undeclared variable is no longer an error there.
+- `ratect-compat --list-tasks` reads no config-variables file: a malformed `batect.local.yml`, or one naming an undeclared variable, no longer stops it. A `--config-vars-file` that doesn't exist or isn't a file is an error for every command, `--clean` and `--upgrade` included.
 - Running a task evaluates each task's values when the run reaches it — after its prerequisites, before any of its own containers starts — and only for the containers that task uses: a value this machine can't supply no longer fails a task that doesn't use it, and a prerequisite that fails on its own is reported rather than a later task's value.
 - A value that can't be evaluated is reported with its container or task, field and expression.
 - `ratect config validate` and `ratect doctor` (ratect only) report every value this machine can't evaluate as a warning naming its container or task, field and expression, and still run their other checks on every container that did evaluate. The same goes for an expression-valued `run_as_current_user.home_directory` that evaluates to an unusable path, and a Git-included container's host path that evaluates to somewhere outside its boundary.
