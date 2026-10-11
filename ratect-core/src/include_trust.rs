@@ -263,8 +263,8 @@ impl Boundary {
     /// `check_contains`/`check_contains_canonical` above (used only for
     /// further `include` resolution, which must stay entirely within the
     /// repository), a shared bundle may reasonably want to reference the
-    /// caller's own project directory (e.g.
-    /// `<{batect.project_directory}/output:/output`) — so `project_dir` is
+    /// caller's own project directory (e.g. a volume whose `local` is
+    /// `<{batect.project_directory}/output`) — so `project_dir` is
     /// accepted as a second allowed root alongside the repository's own
     /// clone directory.
     ///

@@ -10,7 +10,8 @@ containers:
   deploy:
     image: alpine:3.18.2
     volumes:
-      - $RATECT_TEST_NEVER_SET:/root/.aws
+      - local: $RATECT_TEST_NEVER_SET
+        container: /root/.aws
     environment:
       REGION: <never_declared
 tasks:

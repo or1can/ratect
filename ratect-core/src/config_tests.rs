@@ -203,6 +203,7 @@ tasks:
             local: "code".to_string(),
             container: "/code".to_string(),
             options: None,
+            compact: true,
         })]
     );
 
@@ -1755,6 +1756,7 @@ fn volume_mount_parses_two_part_string_as_local() {
             local: "code".to_string(),
             container: "/code".to_string(),
             options: None,
+            compact: true,
         })
     );
 }
@@ -1775,6 +1777,7 @@ fn volume_mount_parses_three_part_string_with_options_as_local() {
             local: "code".to_string(),
             container: "/code".to_string(),
             options: Some("ro".to_string()),
+            compact: true,
         })
     );
 }
@@ -2055,6 +2058,7 @@ fn evaluate_makes_relative_local_volume_host_path_absolute() {
         local: "code".to_string(),
         container: "/code".to_string(),
         options: None,
+        compact: false,
     })]);
     let mut config = Config {
         project_name: "demo".to_string(),
@@ -2084,6 +2088,7 @@ fn evaluate_leaves_absolute_local_volume_host_path_unchanged() {
         local: "/already/absolute".to_string(),
         container: "/code".to_string(),
         options: None,
+        compact: false,
     })]);
     let mut config = Config {
         project_name: "demo".to_string(),
@@ -2113,6 +2118,7 @@ fn evaluate_interpolates_relative_local_volume_host_path_expression() {
         local: "<subdir".to_string(),
         container: "/code".to_string(),
         options: None,
+        compact: false,
     })]);
     let mut config = Config {
         project_name: "demo".to_string(),
@@ -2151,6 +2157,7 @@ fn evaluate_interpolates_absolute_local_volume_host_path_expression_without_pref
         local: "<project_root".to_string(),
         container: "/code".to_string(),
         options: None,
+        compact: false,
     })]);
     let mut config = Config {
         project_name: "demo".to_string(),
@@ -2933,6 +2940,7 @@ fn load_accepts_a_non_slash_local_mount_path() {
         local: ".".to_string(),
         container: "C:\\code".to_string(),
         options: None,
+        compact: false,
     })]);
     let config = Config {
         project_name: "demo".to_string(),
@@ -7745,7 +7753,8 @@ containers:
         paths:
           - $SSH_KEY
     volumes:
-      - $CREDENTIALS:/root/.aws
+      - local: $CREDENTIALS
+        container: /root/.aws
     environment:
       REGION: <region
   orphan:
@@ -9547,7 +9556,8 @@ containers:
   expression:
     image: alpine:3.18
     volumes:
-      - $HOST_ROOT:/hostroot
+      - local: $HOST_ROOT
+        container: /hostroot
 tasks: {}
 "#
         .to_string(),
@@ -9780,7 +9790,8 @@ containers:
   bundled:
     image: alpine:3.18
     volumes:
-      - <{batect.project_directory}/output:/output
+      - local: <{batect.project_directory}/output
+        container: /output
 tasks: {}
 "#
         .to_string(),
@@ -10718,6 +10729,7 @@ fn evaluate_resolves_built_in_project_directory_var_in_volumes() {
         local: "<{batect.project_directory}/scripts".to_string(),
         container: "/scripts".to_string(),
         options: None,
+        compact: false,
     })]);
     let mut config = Config {
         project_name: "demo".to_string(),
@@ -11516,4 +11528,199 @@ async fn a_literal_batect_format_home_directory_is_still_checked() {
     );
     std::fs::remove_dir_all(&dir).unwrap();
     assert!(error.contains("'$HOME/me'"), "{error}");
+}
+
+/// #379: Batect reads a compact `volumes` entry's host path as a plain
+/// string — only the object form's `local` is an expression — so in a
+/// Batect-format file `$VAR` and `<var` there are part of a relative path,
+/// and an unset or undeclared one fails nothing.
+#[tokio::test]
+async fn a_batect_format_compact_volume_host_path_is_not_an_expression() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    volumes:\n      \
+         - $RATECT_379_UNSET/x:/c\n      - <undeclared:/d:ro\n",
+    )
+    .unwrap();
+    let project = load_project(&dir.join("batect.yml")).await.unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let evaluated = project
+        .evaluate(["app"], [], &HashMap::new(), no_host_env)
+        .unwrap();
+    let volumes = evaluated.containers["app"].volumes.as_ref().unwrap();
+    assert_eq!(
+        expect_local(&volumes[0]).local,
+        dir.join("$RATECT_379_UNSET/x").display().to_string()
+    );
+    assert_eq!(
+        expect_local(&volumes[1]).local,
+        dir.join("<undeclared").display().to_string()
+    );
+}
+
+/// The object form's `local` is still an expression in a Batect-format file,
+/// as in Batect; and both forms still expand a leading `~` and resolve
+/// against the file, which Batect's path resolution does for either.
+#[tokio::test]
+async fn a_batect_format_object_volume_host_path_is_still_an_expression() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    volumes:\n      \
+         - local: $RATECT_379_SET/x\n        container: /c\n      - ~/.cache/tool:/cache\n",
+    )
+    .unwrap();
+    let project = load_project(&dir.join("batect.yml")).await.unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let host_env = |name: &str| (name == "RATECT_379_SET").then(|| "set".to_string());
+    let evaluated = project
+        .evaluate(["app"], [], &HashMap::new(), host_env)
+        .unwrap();
+    let volumes = evaluated.containers["app"].volumes.as_ref().unwrap();
+    assert_eq!(
+        expect_local(&volumes[0]).local,
+        dir.join("set/x").display().to_string()
+    );
+    let home = crate::user::home_directory().unwrap();
+    assert_eq!(
+        expect_local(&volumes[1]).local,
+        home.join(".cache/tool").display().to_string()
+    );
+}
+
+/// The file decides, not the project: a YAML file a native project includes
+/// is Batect-shaped, so its compact entries are literal, while one in the
+/// project's own TOML is still an expression.
+#[tokio::test]
+async fn a_compact_volume_is_literal_in_a_yaml_include_and_evaluated_in_toml() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("extra.yml"),
+        "containers:\n  from-yaml:\n    image: alpine:3.18\n    volumes:\n      - <sub:/c\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "project_name = \"demo\"\ninclude = [{ path = \"extra.yml\" }]\n\n\
+         [config_variables.sub]\ndefault = \"dev\"\n\n\
+         [containers.from-toml]\nimage = \"alpine:3.18\"\nvolumes = [\"<sub:/c\"]\n",
+    )
+    .unwrap();
+    let project = load_project_native(&dir.join("ratect.toml")).await.unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let evaluated = project
+        .evaluate(["from-yaml", "from-toml"], [], &HashMap::new(), no_host_env)
+        .unwrap();
+    let local = |name: &str| {
+        expect_local(&evaluated.containers[name].volumes.as_ref().unwrap()[0])
+            .local
+            .clone()
+    };
+    assert_eq!(local("from-yaml"), dir.join("<sub").display().to_string());
+    assert_eq!(local("from-toml"), dir.join("dev").display().to_string());
+}
+
+/// Batect's `ConfigurationLoaderSpec`: with no expression in it, the expanded
+/// form means what the compact form does, with `options` absent when omitted.
+#[test]
+fn compact_and_expanded_volume_forms_agree_when_expression_free() {
+    let config = parse(
+        r#"
+project_name: demo
+containers:
+  app:
+    image: alpine:3.18
+    volumes:
+      - ../:/here
+      - /somewhere:/else:ro
+      - local: ../
+        container: /here
+      - local: /somewhere
+        container: /else
+        options: ro
+tasks: {}
+"#,
+    );
+    let volumes = config.containers["app"].volumes.as_ref().unwrap();
+    let shape = |mount: &VolumeMount| {
+        let local = expect_local(mount);
+        (
+            local.local.clone(),
+            local.container.clone(),
+            local.options.clone(),
+        )
+    };
+    assert_eq!(shape(&volumes[0]), ("../".into(), "/here".into(), None));
+    assert_eq!(shape(&volumes[0]), shape(&volumes[2]));
+    assert_eq!(shape(&volumes[1]), shape(&volumes[3]));
+    assert_eq!(shape(&volumes[3]).2.as_deref(), Some("ro"));
+}
+
+/// Each local entry is written back in the form it was read in — the two
+/// forms no longer mean the same thing in a Batect-format file, so `config
+/// convert` mustn't turn one into the other.
+#[test]
+fn a_local_volume_serializes_in_the_form_it_was_read_in() {
+    let config = parse(
+        r#"
+project_name: demo
+containers:
+  app:
+    image: alpine:3.18
+    volumes:
+      - ./a:/a:ro
+      - local: ./b
+        container: /b
+tasks: {}
+"#,
+    );
+    let json = serde_json::to_value(config.containers["app"].volumes.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!(["./a:/a:ro", { "local": "./b", "container": "/b" }])
+    );
+}
+
+/// A compact entry in a Git-included YAML bundle is a literal, so whether it
+/// escapes the bundle is judged when the file loads, like any other literal —
+/// not deferred as if `$` made it an expression.
+#[tokio::test]
+async fn a_bundles_literal_compact_volume_is_judged_at_load() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+"#,
+    )
+    .unwrap();
+    let mut files = HashMap::new();
+    files.insert(
+        "batect-bundle.yml".to_string(),
+        "containers:\n  app:\n    image: alpine:3.18\n    volumes:\n      \
+         - ../../$OUTSIDE:/c\ntasks: {}\n"
+            .to_string(),
+    );
+    let git = FakeGitClient::new().with_files("https://example.com/bundle.git", "v1.0.0", files);
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+    let loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+        .await
+        .unwrap();
+    let project_directory = project_directory_path(&dir).unwrap();
+
+    let err = check_values(&loaded.config, &loaded.provenance(), &project_directory)
+        .expect_err("a literal escaping path is a mistake in the file");
+    assert!(
+        format!("{err:#}").contains("escapes both the Git repository"),
+        "{err:#}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).unwrap();
 }

@@ -24,6 +24,7 @@ history, from when it was the only binary.
 ### Breaking
 
 - `run_as_current_user.home_directory` in a `batect.yml` — or in any YAML file a native project includes — is no longer an expression: it's used exactly as written, as in Batect, so `$VAR` and `<var` in it stay literal and an unset variable there no longer fails the load. In a `ratect.toml` it's still evaluated.
+- A `volumes` entry written as a string (`local:container[:options]`) in a `batect.yml` — or in any YAML file a native project includes — no longer evaluates expressions in its host path: it's used as written, as in Batect, so `$VAR` and `<var` there are part of a relative path and an unset or undeclared variable no longer fails the task. Write the entry as an object (`local`/`container`) to use an expression; in a `ratect.toml` both forms are still evaluated.
 
 ### Added
 
@@ -41,6 +42,7 @@ history, from when it was the only binary.
 - A value that can't be evaluated is reported with its container or task, field and expression.
 - `ratect config validate` and `ratect doctor` (ratect only) report every value this machine can't evaluate as a warning naming its container or task, field and expression, and still run their other checks on every container that did evaluate. The same goes for an expression-valued `run_as_current_user.home_directory` that evaluates to an unusable path, and a Git-included container's host path that evaluates to somewhere outside its boundary.
 - `ratect resources list`/`clean` (ratect only) read only the root file's `project_name` to scope themselves, so a project refused by its `ratect_version`, or holding a value that can't be evaluated on this machine, no longer stops them.
+- `ratect config convert` (ratect only) warns about each string-form `volumes` entry whose host path holds an expression, and writes each `volumes` entry in the form it was read in.
 - Upgraded `noyalib` to 0.0.57, which parses some edge-case YAML closer to the YAML 1.2 spec: `0X1F` and `0x-1` load as strings, a plain scalar whose line ends in a space continues on the next line, and folded scalars and escaped line breaks follow the spec exactly. A config relying on the old reading may load differently; see noyalib's [0.0.57 release notes](https://github.com/sebastienrousseau/noyalib/releases/tag/v0.0.57).
 
 ### Deprecated

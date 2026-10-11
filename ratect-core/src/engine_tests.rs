@@ -7396,6 +7396,7 @@ async fn container_tmpfs_mounts_reach_the_container() {
             local: "/host/code".to_string(),
             container: "/code".to_string(),
             options: None,
+            compact: false,
         }),
         crate::config::VolumeMount::Tmpfs(crate::config::TmpfsVolumeMount {
             container: "/code/tmp".to_string(),

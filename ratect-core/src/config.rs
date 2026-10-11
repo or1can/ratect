@@ -80,7 +80,9 @@
 //! `"local:container[:options]"` — `VolumeMount`'s string form is always
 //! `Local`; there's no compact string form for `Cache`/`Tmpfs`) or the expanded
 //! object form. A `VolumeMount::Local`'s host path is resolved when evaluated
-//! (against its declaring file's directory, same as `build_directory`); a `Cache`'s `name`/
+//! (against its declaring file's directory, same as `build_directory`) — and,
+//! except for the string form in a Batect-format file, which Batect reads as a
+//! plain string (#379), evaluated as an expression first; a `Cache`'s `name`/
 //! `container` are plain strings, not `Expression`s, matching Batect — nothing
 //! to resolve here at all, since `--cache-type` and the project's own cache
 //! key (needed to actually resolve one) aren't known until `engine.rs`/
@@ -866,14 +868,33 @@ pub enum VolumeMount {
     Tmpfs(TmpfsVolumeMount),
 }
 
-/// A host path bind-mounted into the container. `local` supports
-/// [expressions](#expressions) and is resolved against the declaring
-/// container's own base path — see [`LoadedProject::evaluate`].
+/// A host path bind-mounted into the container. `local` is resolved against
+/// the declaring container's own base path — see [`LoadedProject::evaluate`]
+/// — and supports [expressions](#expressions), except where
+/// [`local_is_expression`](Self::local_is_expression) says it doesn't.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalVolumeMount {
     pub local: String,
     pub container: String,
     pub options: Option<String>,
+    /// Whether this entry was written in the compact
+    /// `"local:container[:options]"` string form rather than as an object.
+    /// Kept because Batect gives the two forms different meanings — see
+    /// [`local_is_expression`](Self::local_is_expression) — and so that
+    /// re-serializing an entry writes it back in the form it came in.
+    pub compact: bool,
+}
+
+impl LocalVolumeMount {
+    /// Whether `local` is an expression, given whether the file that
+    /// declared it is Batect-format (see `ConfigFormat::batect_shaped_containers`).
+    /// Batect reads the compact string form's host path as a plain string
+    /// and only the object form's `local` as an expression (#379), so a `$`
+    /// or `<` in a compact entry of a Batect-format file is just part of the
+    /// path. `ratect.toml` evaluates both forms.
+    pub fn local_is_expression(&self, batect_shaped: bool) -> bool {
+        !(self.compact && batect_shaped)
+    }
 }
 
 /// A named cache volume — Batect's `cache` mount type. `name` (not `local`,
@@ -977,6 +998,7 @@ impl VolumeMount {
             local: local.to_string(),
             container: container.to_string(),
             options: options.map(|s| s.to_string()),
+            compact: true,
         }))
     }
 }
@@ -1052,6 +1074,7 @@ impl<'de> Deserialize<'de> for VolumeMount {
                             local,
                             container,
                             options,
+                            compact: false,
                         }))
                     }
                     "cache" => {
@@ -1104,13 +1127,25 @@ impl Serialize for VolumeMount {
         S: serde::Serializer,
     {
         match self {
-            // Re-emits the compact string form — round-trips through the
-            // same shape `parse_string` accepts.
-            VolumeMount::Local(mount) => match &mount.options {
+            // Re-emits the form it was read in — round-trips through the
+            // same shape `parse_string` or the object form accepts. The two
+            // forms differ in meaning in a Batect-format file (#379), so one
+            // is never rewritten as the other.
+            VolumeMount::Local(mount) if mount.compact => match &mount.options {
                 Some(options) => serializer
                     .serialize_str(&format!("{}:{}:{}", mount.local, mount.container, options)),
                 None => serializer.serialize_str(&format!("{}:{}", mount.local, mount.container)),
             },
+            VolumeMount::Local(mount) => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(3))?;
+                map.serialize_entry("local", &mount.local)?;
+                map.serialize_entry("container", &mount.container)?;
+                if let Some(options) = &mount.options {
+                    map.serialize_entry("options", options)?;
+                }
+                map.end()
+            }
             // No compact string form exists for `cache` — always the
             // expanded object.
             VolumeMount::Cache(mount) => {
@@ -3609,6 +3644,16 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
                     // resolved once `--cache-type` and the project's cache
                     // key are known — see `crate::cache::resolve_cache_mount`.
                     VolumeMount::Cache(cache) => validate_cache_name(&cache.name)?,
+                    // A compact entry in a Batect-format file is a literal
+                    // even when it holds a `$` or `<` (#379), so it is
+                    // judged now — `check_literal_path` would defer it.
+                    VolumeMount::Local(local)
+                        if !local.local_is_expression(anchor.batect_shaped) =>
+                    {
+                        if anchor.boundary.is_some() {
+                            anchor_path(&local.local, &anchor)?;
+                        }
+                    }
                     VolumeMount::Local(local) => check_literal_path(&local.local, &anchor)?,
                     // `container`/`options` are plain strings too, matching
                     // Batect's own `TmpfsMount` typing.
@@ -3886,7 +3931,13 @@ fn evaluate_container(
     for volume in container.volumes.iter_mut().flatten() {
         // `Cache` and `Tmpfs` mounts hold no expression — see `check_values`.
         if let VolumeMount::Local(local) = volume {
-            let resolved = resolve("'volumes'", &local.local, &volumes_anchor);
+            let resolved = if local.local_is_expression(volumes_anchor.batect_shaped) {
+                resolve("'volumes'", &local.local, &volumes_anchor)
+            } else {
+                anchor_path(&local.local, &volumes_anchor)
+                    .map(|resolved| resolved.display().to_string())
+                    .with_context(|| format!("has an invalid 'volumes' entry '{}'", local.local))
+            };
             store_or_record(&mut local.local, resolved, &mut failures);
         }
     }
