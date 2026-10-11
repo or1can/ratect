@@ -599,3 +599,26 @@ async fn a_home_directory_that_would_become_an_expression_is_warned_about() {
         "{warnings:?}"
     );
 }
+
+/// #379: a Batect-format compact `volumes` entry's host path is literal, but
+/// `ratect.toml` evaluates the same text, so `config convert` can't carry a
+/// `$`/`<` in one across unchanged. One warning per such entry, naming its
+/// container and value — and none for the object form, whose `local` is an
+/// expression in both formats.
+#[tokio::test]
+async fn a_compact_volume_that_would_become_an_expression_is_warned_about() {
+    let config = config_with(
+        "project_name: demo\ncontainers:\n  b:\n    image: alpine:3.18\n    volumes:\n      - $HOME/x:/x\n      - ./plain:/plain\n      - local: $HOME/y\n        container: /y\n  a:\n    image: alpine:3.18\n    volumes:\n      - <dir:/d:ro\n",
+    )
+    .await;
+    let warnings = compact_volume_expression_warnings(&config);
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+    assert!(
+        warnings[0].contains("'a'") && warnings[0].contains("'<dir'"),
+        "{warnings:?}"
+    );
+    assert!(
+        warnings[1].contains("'b'") && warnings[1].contains("'$HOME/x'"),
+        "{warnings:?}"
+    );
+}

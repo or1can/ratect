@@ -925,9 +925,10 @@ impl JsonSchema for VolumeMount {
                     "type": "string",
                     "description": "A host path bind-mounted into the container, as \
                                     \"local_path:container_path\" or \
-                                    \"local_path:container_path:options\". Only local mounts \
-                                    have this compact form — cache and tmpfs mounts must use \
-                                    the object form.",
+                                    \"local_path:container_path:options\". The host path is \
+                                    used as written, not as an expression — use the object \
+                                    form for one. Only local mounts have this compact form — \
+                                    cache and tmpfs mounts must use the object form.",
                     "examples": [".:/code", "./data:/data:ro"],
                 },
                 {

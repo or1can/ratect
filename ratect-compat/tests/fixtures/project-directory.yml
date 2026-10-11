@@ -9,7 +9,8 @@ containers:
     environment:
       PROJECT_DIR: <batect.project_directory
     volumes:
-      - <{batect.project_directory}:/mnt
+      - local: <{batect.project_directory}
+        container: /mnt
 tasks:
   print-project-dir:
     run:

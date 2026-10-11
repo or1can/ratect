@@ -1434,8 +1434,9 @@ async fn validate_config(
 /// the output is a starting point to review, not a blind drop-in — but the
 /// conversion is checked to round-trip losslessly first, so the configuration
 /// it encodes is guaranteed identical. How `ratect` *runs* that configuration
-/// isn't — see [`ratect_core::diagnostics::ungated_task_container_warnings`]
-/// and [`ratect_core::diagnostics::home_directory_expression_warnings`].
+/// isn't — see [`ratect_core::diagnostics::ungated_task_container_warnings`],
+/// [`ratect_core::diagnostics::home_directory_expression_warnings`] and
+/// [`ratect_core::diagnostics::compact_volume_expression_warnings`].
 async fn convert_config(
     args: ConfigConvertArgs,
     global: &GlobalArgs,
@@ -1471,6 +1472,10 @@ async fn convert_config(
             tracing::warn!("{warning}");
         }
         for warning in ratect_core::diagnostics::home_directory_expression_warnings(&loaded.config)
+        {
+            tracing::warn!("{warning}");
+        }
+        for warning in ratect_core::diagnostics::compact_volume_expression_warnings(&loaded.config)
         {
             tracing::warn!("{warning}");
         }

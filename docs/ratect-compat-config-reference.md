@@ -374,15 +374,18 @@ when omitted, requires `local` and forbids `name`.
 
 For a `local` mount, `local` (the host path) is resolved:
 
-- The path is interpolated first (see [Expressions](#expressions)) — so a config
-  variable that itself resolves to an absolute path is used as-is, not treated as a
-  literal relative fragment.
+- In the object form, the path is interpolated first (see
+  [Expressions](#expressions)) — so a config variable that itself resolves to an
+  absolute path is used as-is, not treated as a literal relative fragment. The
+  string form's host path is used as written, as in Batect: a `$` or `<` in
+  `$HOME/.m2:/root/.m2` is just part of a relative path, so a host path that needs
+  an expression is written as an object. (`ratect.toml` interpolates both forms.)
 - A leading `~` is then expanded to the host user's home directory, so
   `~/.cache/tool` mounts the real cache directory. Only a whole leading `~`
   *component* expands: `~user/…` (another user's home) isn't supported, and a `~`
   anywhere but the front is a literal character. Note that a bare `~` must be
   quoted (`local: "~"`) — unquoted, YAML reads it as null.
-- *After* interpolation, if the result is relative, it's resolved to an absolute path
+- *After* any interpolation, if the result is relative, it's resolved to an absolute path
   **relative to the directory containing the config file** (not the current working
   directory). If it's already absolute (whether literally written that way, expanded
   from `~`, or because that's what an expression resolved to), it's left unchanged.
@@ -830,7 +833,8 @@ config_variables:
 
 `environment` values (on [Container](#container), [TaskRun](#taskrun) and a task's
 [`customise`](#taskcontainercustomisation) entries), a
-volume's `host_path` (see [Volume path resolution](#volume-path-resolution)),
+volume's `local` host path in the object form (not the string form's — see [Volume
+path resolution](#volume-path-resolution)),
 `build_directory`, `build_args`, a `build_secrets` entry's `path` (not its
 `environment` — that's a literal host environment variable *name*, not itself
 interpolated), and a `build_ssh` entry's `paths` support two kinds of expression,
@@ -850,8 +854,8 @@ themselves get built, not automatically.
 > `batect.yml` rather than ignored, because Batect resolves nothing there and a
 > file using one would stop working under `batect` itself. In this format,
 > `--override-image` is the way to choose an image per run. It also resolves them
-> in [`run_as_current_user`](#user-mapping)'s `home_directory`, which a
-> `batect.yml` uses as written.
+> in [`run_as_current_user`](#user-mapping)'s `home_directory` and in a string-form
+> volume's host path, both of which a `batect.yml` uses as written.
 
 Literal
 text around an expression is left untouched (`"prefix-$VAR-suffix"` interpolates just

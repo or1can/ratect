@@ -166,8 +166,11 @@ in the comments. `my-task` lives in the root file, but the container it runs
 could equally have been declared there instead; only the volume paths'
 resolution depends on which file declares the container. In a `batect.yml`
 project the included file is `containers/extra.yml` <!-- example --> and its
-two entries are the string forms, `./data:/data` and
-`<{batect.project_directory}/scripts:/scripts`. (This project is
+two entries are `./data:/data` and an object whose `local` is
+`<{batect.project_directory}/scripts` — not the string form
+`<{batect.project_directory}/scripts:/scripts`, whose host path a `batect.yml`
+uses as written (see [Volume path
+resolution](ratect-compat-config-reference.md#volume-path-resolution)). (This project is
 illustrative; the nearest real one is
 [`ratect-compat/tests/fixtures/include.yml`](https://github.com/or1can/ratect/blob/main/ratect-compat/tests/fixtures/include.yml),
 whose included file mounts its own directory for exactly this reason.)

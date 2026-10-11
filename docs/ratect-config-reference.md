@@ -797,10 +797,11 @@ what [`ratect-compat-config-reference.md`](ratect-compat-config-reference.md) sa
 exceptions fall into four groups: places where `extends` gives a combination
 a meaning it cannot have in a `batect.yml`, which has no inheritance; places
 where this format is deliberately **stricter**, having no Batect
-compatibility to preserve; two places where it does **more** than Batect,
-resolving expressions in `image` and `run_as_current_user.home_directory` —
-the first of which `batect.yml` has to refuse rather than quietly accept, the
-second of which it uses as written, as Batect does; and one where it
+compatibility to preserve; three places where it does **more** than Batect,
+resolving expressions in `image`, `run_as_current_user.home_directory` and a
+string-form `volumes` entry's host path — the first of which `batect.yml` has
+to refuse rather than quietly accept, the other two of which it uses as
+written, as Batect does; and one where it
 deliberately does **less** — a task's own container has no
 readiness gate.
 
@@ -818,6 +819,7 @@ container, and the third about how a task runs its own container.
 | A **task's own container**'s `health_check`/`setup_commands` | Run alongside the main command, matching Batect; a failure while the main command is still running fails the task unless the command exits 0 within the next two seconds, and cancels it if it hasn't exited by then; once it has exited 0, a failure is forgiven — the cost and the race that leaves are in [known limitations](task-lifecycle.md#known-limitations) | Inert: no health wait, no setup commands, and the task's result is the main command's alone — see [Dependency Readiness](dependency-readiness.md#the-tasks-own-container) |
 | An **expression in `image`** | Rejected when the file loads — Batect resolves nothing there | Resolved like any other expression — see [Expressions in `image`](#expressions-in-image) |
 | An **expression in `run_as_current_user.home_directory`** | Used as written, matching Batect — a `$` or `<` is part of the path | Resolved like any other expression |
+| An **expression in a string-form `volumes` entry's host path** (`"$HOME/.m2:/root/.m2"`) | Used as written, matching Batect — a `$` or `<` is part of a relative path; the object form's `local` is still resolved | Resolved in either form |
 | A container with **both** `image` and `build_directory` | Rejected when the file loads, matching Batect | Allowed — `image` wins, and this is the only way to override a `build_directory` inherited from an `extends` parent, since inheritance is per-field with no way to unset one |
 | A container with **neither** `image` nor `build_directory` | Rejected when the file loads | Allowed — a container used only as an `extends` base needs neither; the requirement is enforced when a task actually runs a container, so no `abstract` marker is needed |
 | Setting **`stop_signal`/`stop_grace_period`** on a container | Rejected when the file loads — Batect has no equivalent field | Overrides Docker's own default stop signal/timeout during cleanup — see [above](#stop_signalstop_grace_period-graceful-shutdown) |

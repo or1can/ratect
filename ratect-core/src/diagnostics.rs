@@ -30,7 +30,7 @@
 //! already failed can skip it without this module needing any opinion of its
 //! own on what "no connection" means or how that got decided.
 
-use crate::config::{Config, WholeProjectEvaluation};
+use crate::config::{Config, VolumeMount, WholeProjectEvaluation};
 use crate::written_for::WrittenFor;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -319,9 +319,50 @@ pub fn home_directory_expression_warnings(config: &Config) -> Vec<String> {
         .collect()
 }
 
-/// What `ratect config convert` warns about: one of the two ways a converted
-/// project behaves differently from its source (ratect#267; the other is
-/// [`home_directory_expression_warnings`]). `ratect` runs a
+/// `config convert`'s warning for each compact `volumes` entry whose host
+/// path holds what `ratect.toml` would read as an expression (#379). A
+/// Batect-format file uses a compact entry's host path as written, and only
+/// the object form's `local` as an expression; the converted file evaluates
+/// both, so — as with [`home_directory_expression_warnings`] — the reader has
+/// to decide what they meant. Sorted by container name, then in list order.
+pub fn compact_volume_expression_warnings(config: &Config) -> Vec<String> {
+    let mut volumes: Vec<(&String, &str)> = config
+        .containers
+        .iter()
+        .flat_map(|(name, container)| {
+            container
+                .volumes
+                .iter()
+                .flatten()
+                .filter_map(move |volume| match volume {
+                    // `true`: convert reads a Batect-format file.
+                    VolumeMount::Local(local)
+                        if !local.local_is_expression(true)
+                            && crate::expressions::contains_expression(&local.local) =>
+                    {
+                        Some((name, local.local.as_str()))
+                    }
+                    _ => None,
+                })
+        })
+        .collect();
+    volumes.sort_by_key(|(name, _)| *name);
+    volumes
+        .into_iter()
+        .map(|(name, local)| {
+            format!(
+                "Container '{name}' has a volume host path '{local}', which batect.yml uses \
+                 as written but ratect evaluates as an expression — check what it resolves \
+                 to under ratect."
+            )
+        })
+        .collect()
+}
+
+/// What `ratect config convert` warns about: one of the three ways a converted
+/// project behaves differently from its source (ratect#267; the others are
+/// [`home_directory_expression_warnings`] and
+/// [`compact_volume_expression_warnings`]). `ratect` runs a
 /// task's own container with no readiness gate (decisions/0012), so a
 /// `health_check` on a container some task runs as its own `run.container`
 /// isn't waited on for that task, and its `setup_commands` don't run. One
