@@ -1,0 +1,20 @@
+# Every kind of `volumes` entry. Twin of batect.yml. The first two are the
+# compact string form: not canonical in a ratect.toml, but still parsed, and
+# the model records which form an entry was written in — so this is the only
+# way to say exactly what batect.yml says.
+ratect_version = "0.11.0"
+project_name = "twins"
+
+[containers.app]
+image = "alpine:3.18"
+volumes = [
+    ".:/code",
+    "./data:/data:ro",
+    { local = "data", container = "/data-object" },
+    { type = "local", local = "./$TWIN_HOST_VAR", container = "/evaluated", options = "cached" },
+    { type = "cache", name = "twin-cache", container = "/cache", options = "rw" },
+    { type = "tmpfs", container = "/scratch", options = "size=64m" },
+]
+
+[tasks.hello]
+run = { container = "app", command = "ls" }

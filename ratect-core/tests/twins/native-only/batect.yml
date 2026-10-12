@@ -1,0 +1,53 @@
+# Twin of ratect.toml's native-only fields, which a batect.yml can't write: the
+# same containers without them, and YAML anchors where ratect.toml uses
+# `extends`. Every native-only field is a listed divergence.
+project_name: twins
+
+.base: &base
+  image: alpine:3.18
+  environment:
+    SHARED: "yes"
+
+containers:
+  base:
+    <<: *base
+  child:
+    <<: *base
+    working_directory: /child
+    dependencies:
+      - migrate
+      - seeder
+      - api
+      - probe
+  migrate:
+    image: alpine:3.18
+  seeder:
+    image: alpine:3.18
+    dependencies:
+      - db-client
+    setup_commands:
+      - command: seed
+  db-client:
+    image: alpine:3.18
+  api:
+    image: alpine:3.18
+  probe:
+    image: alpine:3.18
+  sharer:
+    image: alpine:3.18
+    dependencies:
+      - api
+    volumes:
+      - type: cache
+        name: shared-cache
+        container: /cache
+
+tasks:
+  hello:
+    run:
+      container: child
+      command: echo hi
+  share:
+    run:
+      container: sharer
+      command: echo hi

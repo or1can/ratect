@@ -1,0 +1,9 @@
+# Both forms of a local `include`, one of them in a subdirectory whose relative
+# paths resolve against it. Twin of ratect.toml, whose includes are its
+# own TOML twins of the YAML ones here.
+project_name: twins
+
+include:
+  - containers.yml
+  - type: file
+    path: more/tasks.yml

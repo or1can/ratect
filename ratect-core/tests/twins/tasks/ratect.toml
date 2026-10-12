@@ -1,0 +1,48 @@
+# Tasks, and the project-level fields beside them. Twin of batect.yml.
+ratect_version = "0.11.0"
+project_name = "twins"
+forbid_telemetry = true
+
+[config_variables.greeting]
+description = "What to say"
+default = "hello"
+
+[config_variables.required_one]
+description = "Has no default"
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["sidecar"]
+
+[containers.sidecar]
+image = "alpine:3.18"
+
+[containers.helper]
+image = "alpine:3.18"
+
+[tasks.setup]
+description = "Runs first"
+group = "Setup"
+run = { container = "helper", command = "echo setup" }
+
+[tasks.everything]
+description = "Uses every task field"
+group = "Main"
+prerequisites = ["setup"]
+dependencies = ["helper"]
+
+[tasks.everything.run]
+container = "app"
+command = "echo <greeting"
+entrypoint = "/bin/sh -c"
+working_directory = "/run-here"
+environment = { GREETING = "<{greeting}", FROM_HOST = "$TWIN_HOST_VAR" }
+ports = [{ local = 3000, container = 3000 }]
+
+[tasks.everything.customise.sidecar]
+working_directory = "/side"
+environment = { SIDE = "car" }
+ports = [{ local = 4000, container = 4000 }]
+
+[tasks.prerequisites-only]
+prerequisites = ["setup"]

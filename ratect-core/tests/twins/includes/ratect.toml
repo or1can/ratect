@@ -1,0 +1,10 @@
+# Both forms of a local `include`, one of them in a subdirectory whose relative
+# paths resolve against it. Twin of batect.yml, whose includes are YAML
+# twins of the TOML ones here.
+ratect_version = "0.11.0"
+project_name = "twins"
+
+include = [
+    { path = "containers.toml" },
+    { type = "file", path = "more/tasks.toml" },
+]

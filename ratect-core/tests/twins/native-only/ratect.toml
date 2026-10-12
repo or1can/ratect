@@ -1,0 +1,55 @@
+# Every native-only field, on containers otherwise twinned with batect.yml —
+# which writes the same containers without them, and YAML anchors where this
+# uses `extends`. Every native-only field is a listed divergence.
+ratect_version = "0.11.0"
+project_name = "twins"
+
+[containers.base]
+image = "alpine:3.18"
+environment = { SHARED = "yes" }
+
+[containers.child]
+extends = "base"
+working_directory = "/child"
+dependencies = ["migrate", "seeder", "api", "probe"]
+stop_signal = "SIGINT"
+stop_grace_period = "30s"
+ulimits = [
+    { name = "nofile", soft = 1024, hard = 2048 },
+    { name = "core", soft = 0 },
+]
+dns = ["10.0.0.53"]
+dns_search = ["corp.example.com"]
+dns_options = ["ndots:2"]
+
+[containers.migrate]
+image = "alpine:3.18"
+run_to_completion = true
+
+[containers.seeder]
+image = "alpine:3.18"
+dependencies = ["db-client"]
+setup_commands = [{ command = "seed", run_in = "db-client" }]
+
+[containers.db-client]
+image = "alpine:3.18"
+
+[containers.api]
+image = "alpine:3.18"
+external_health_check = { type = "http", port = 8080, path = "/healthz", expected_status = 204, interval = "2s", retries = 3, timeout = "1s" }
+
+[containers.probe]
+image = "alpine:3.18"
+external_health_check = { type = "tcp", port = 5432, interval = "2s", retries = 3, timeout = "1s" }
+
+[containers.sharer]
+image = "alpine:3.18"
+dependencies = ["api"]
+network_mode = "container:api"
+volumes = [{ type = "cache", name = "shared-cache", container = "/cache", scope = "shared" }]
+
+[tasks.hello]
+run = { container = "child", command = "echo hi" }
+
+[tasks.share]
+run = { container = "sharer", command = "echo hi" }

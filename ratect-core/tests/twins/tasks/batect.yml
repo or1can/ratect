@@ -1,0 +1,55 @@
+# Tasks, and the project-level fields beside them. Twin of ratect.toml.
+project_name: twins
+forbid_telemetry: true
+
+config_variables:
+  greeting:
+    description: What to say
+    default: hello
+  required_one:
+    description: Has no default
+
+containers:
+  app:
+    image: alpine:3.18
+    dependencies:
+      - sidecar
+  sidecar:
+    image: alpine:3.18
+  helper:
+    image: alpine:3.18
+
+tasks:
+  setup:
+    description: Runs first
+    group: Setup
+    run:
+      container: helper
+      command: echo setup
+  everything:
+    description: Uses every task field
+    group: Main
+    prerequisites:
+      - setup
+    dependencies:
+      - helper
+    run:
+      container: app
+      command: echo <greeting
+      entrypoint: /bin/sh -c
+      working_directory: /run-here
+      environment:
+        GREETING: <{greeting}
+        FROM_HOST: $TWIN_HOST_VAR
+      ports:
+        - 3000:3000
+    customise:
+      sidecar:
+        working_directory: /side
+        environment:
+          SIDE: car
+        ports:
+          - 4000:4000
+  prerequisites-only:
+    prerequisites:
+      - setup
