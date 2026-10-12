@@ -57,7 +57,7 @@ group headings there, so the order alone carries them.
 | Command | What it does |
 | --- | --- |
 | `ratect config validate` | Checks the configuration loads and is problem-free, without a daemon — a CI-friendly gate. |
-| `ratect config convert` | Converts a `batect.yml` (point `-f` at it) into a native `ratect.toml`. |
+| `ratect config convert` | Converts a `batect.yml` project (point `-f` at it) into native `.toml` files, one per file. |
 | `ratect doctor` | Checks this project and this machine for problems, without running anything. |
 
 ### Shell integration
@@ -306,36 +306,56 @@ daemon. It takes the same `--config-var`/`--config-vars-file` options as `run`, 
 reads `ratect.local.toml` the same way, since evaluating the config can need them.
 A config that doesn't load stops at its first error.
 
-`ratect config convert` migrates a Batect-format `batect.yml` to a native
-`ratect.toml` — point `-f` at the `batect.yml`:
+`ratect config convert` migrates a Batect-format `batect.yml` project to the native
+format — point `-f` at the `batect.yml`:
 
 ```bash
-ratect -f batect.yml config convert          # writes ratect.toml beside it
+ratect -f batect.yml config convert          # writes ratect.toml beside it, and a .toml beside each include
 ratect -f batect.yml config convert --stdout  # prints instead, to review or pipe
 ```
 
 It's **one-directional** (`ratect-compat` stays YAML; the reverse would be lossy) and
-writes `ratect.toml` only if one doesn't already exist — pass `--force` to overwrite,
-or `--stdout` to print. The conversion **preserves the configuration, not formatting**:
-YAML anchors/aliases/merge keys are expanded inline, `include`d files (Git bundles too)
-are flattened into the one result, and comments are dropped — so the output carries a
-header and is a *starting point to review*, not a blind drop-in. Before writing, the
-conversion is checked to round-trip losslessly back to the same configuration, so
-whatever it produces is guaranteed to be the configuration you started with. `ratect`
-runs that configuration differently in three respects. A task's own container has no
-readiness gate, so its health check — from `health_check` or from its image's own
-`HEALTHCHECK` — isn't waited on, and its `setup_commands` don't run (see [Dependency
+converts **each file the project owns beside itself**: the root becomes `ratect.toml`,
+and every local `include`d file, at any depth, becomes a `.toml` with the same name in
+its own directory (`more/c.yml` <!-- example --> → `more/c.toml` <!-- example -->), with each `include` entry rewritten to
+point at the converted file. Nothing is re-based — every value is copied exactly as
+written — so a relative path in `more/c.toml` <!-- example --> resolves against `more/`, exactly as it
+did in `more/c.yml` <!-- example --> (see [Where relative paths resolve](includes.md#where-relative-paths-resolve)).
+A Git include stays a Git include, its `repo`, `ref`, `path` and `allow_host_paths`
+carried across: nothing from a bundle is copied out, and no file in one is converted.
+Nothing is written if any converted file already exists — the error lists them all;
+pass `--force` to overwrite them, or `--stdout` to print instead. With more than one
+file, `--stdout` prints each document in order, the root first, each under a
+`# === … ===` banner naming its file (`more/c.toml` <!-- example -->).
+
+The conversion **preserves each file's configuration, not formatting**: YAML
+anchors/aliases/merge keys are expanded inline and comments are dropped — so each
+output carries a header and is a *starting point to review*, not a blind drop-in.
+Before anything is written, every conversion is checked to round-trip losslessly back
+to the same configuration, so each file encodes the configuration you started with —
+and every way `ratect` *runs* that configuration differently is listed, as below.
+
+A task's own container has no readiness gate, so its health check — from
+`health_check` or from its image's own `HEALTHCHECK` — isn't waited on, and its
+`setup_commands` don't run (see [Dependency
 Readiness](dependency-readiness.md#the-tasks-own-container)). An image's `HEALTHCHECK`
 can't be seen without the image, so check those yourself. `run_as_current_user.home_directory`
 is used as written in a `batect.yml` but
 [evaluated](ratect-config-reference.md#where-the-semantics-differ) in a `ratect.toml`,
 so one containing a `$` or `<` expression changes value. Likewise, a string-form
 `volumes` entry's host path is used as written in a `batect.yml` but evaluated in a
-`ratect.toml`.
+`ratect.toml`. Two more concern a Git include. A pathless entry whose bundle also offers
+a `ratect-bundle.toml` would have `ratect` load that file instead of the
+`batect-bundle.yml` the `batect.yml` loaded, so convert sets its `path` to
+`batect-bundle.yml` and says so; remove `path` to switch to the native file. And a
+bundle declaring Git includes of its own is refused by `ratect` unless
+`allow_nested_git_includes` is set on that entry (see [Nested Git
+includes](includes.md#nested-git-includes)) — a grant convert never writes for you.
 
 `config convert` lists each place in the converted project where one of these
-applies, in order of container name — after converting, and again in the
-converted file's own header, so the list travels with the file. `ratect -f
+applies — per converted file, its `include` entries' items first, then its
+containers' in order of container name — after converting, and again in that
+file's own header, so the list travels with the file. `ratect -f
 batect.yml config convert --stdout`, captured in
 [`ratect/tests/fixtures/convert`](https://github.com/or1can/ratect/tree/main/ratect/tests/fixtures/convert)
 — a project with something to check:
@@ -344,7 +364,7 @@ batect.yml config convert --stdout`, captured in
 {{#include captures/config-convert-checks.ansi}}
 ```
 
-With `--stdout`, the document is all that reaches stdout; the heading and its list
+With `--stdout`, the documents are all that reaches stdout; each heading and its list
 after it are on stderr. Without it, they follow the success message on stdout,
 naming the file written. With nothing to check, neither the list nor the header
 block appears. Either way the conversion succeeds and exits 0, and the list prints

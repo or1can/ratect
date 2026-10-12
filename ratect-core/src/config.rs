@@ -2623,6 +2623,51 @@ pub(crate) enum IncludeEntry {
     },
 }
 
+/// Writes an entry the way the native format documents it — the object form,
+/// with only what the entry sets: a local file's `path`; a Git include's
+/// `type`, `repo` and `ref`, then `path`, `allow_host_paths` and
+/// `allow_nested_git_includes` only when set. The inverse of the
+/// `Deserialize` below for everything that model keeps (a `type: file`
+/// written out comes back as a bare `path`), which is what lets
+/// [`crate::convert`] prove a converted file round-trips.
+impl Serialize for IncludeEntry {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        match self {
+            IncludeEntry::File { path } => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("path", path)?;
+                map.end()
+            }
+            IncludeEntry::Git {
+                repo,
+                git_ref,
+                path,
+                allow_host_paths,
+                allow_nested_git_includes,
+            } => {
+                let mut map = serializer.serialize_map(None)?;
+                map.serialize_entry("type", "git")?;
+                map.serialize_entry("repo", repo)?;
+                map.serialize_entry("ref", git_ref)?;
+                if let Some(path) = path {
+                    map.serialize_entry("path", path)?;
+                }
+                if *allow_host_paths {
+                    map.serialize_entry("allow_host_paths", &true)?;
+                }
+                if let Some(nested) = allow_nested_git_includes {
+                    map.serialize_entry("allow_nested_git_includes", nested)?;
+                }
+                map.end()
+            }
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for IncludeEntry {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -2765,32 +2810,32 @@ pub(crate) struct ConfigFile {
     /// (with `--cache-type=volume`) its cache volumes. Taken from the root
     /// config file only; ignored in an included file. Defaults to the
     /// project directory's own name.
-    project_name: Option<String>,
+    pub(crate) project_name: Option<String>,
     /// The containers tasks can run in, keyed by name.
     #[serde(default)]
-    containers: HashMap<String, Container>,
+    pub(crate) containers: HashMap<String, Container>,
     /// The tasks this project defines, keyed by the name used to run them.
     #[serde(default)]
-    tasks: HashMap<String, Task>,
+    pub(crate) tasks: HashMap<String, Task>,
     /// Variables tasks and containers can refer to as `<name` or
     /// `<{name}`, overridable per-invocation with `--config-var`.
-    config_variables: Option<HashMap<String, ConfigVariable>>,
+    pub(crate) config_variables: Option<HashMap<String, ConfigVariable>>,
     /// Other configuration files to merge into this one — local files
     /// (relative to this file's own directory) or Git bundles.
     #[serde(default)]
-    include: Vec<IncludeEntry>,
+    pub(crate) include: Vec<IncludeEntry>,
     /// Recognized but has no effect: Ratect collects no telemetry, so
     /// there's nothing to forbid. Accepted so a config written for Batect
     /// still loads.
     #[serde(default)]
-    forbid_telemetry: Option<bool>,
+    pub(crate) forbid_telemetry: Option<bool>,
     /// The Ratect version a native project was written for. Read — and
     /// checked — by [`crate::written_for`] before this struct is ever
     /// parsed; here only so the full parse accepts it, and so a file that
     /// may not declare it can be refused ([`reject_misplaced_ratect_version`]).
     /// Skipped from the compat schema, added to the native one.
     #[cfg_attr(feature = "schema", schemars(skip))]
-    ratect_version: Option<String>,
+    pub(crate) ratect_version: Option<String>,
 }
 
 /// Which binary's rules govern a project — see `CONTEXT.md`'s **Dialect**.
@@ -3128,7 +3173,7 @@ fn parse_toml_config_file(path: &Path) -> Result<ConfigFile> {
 /// differently-spelled relative paths reach it, and for clear error
 /// messages) and to compute the directory a loaded file's own relative
 /// paths (`volumes`, `build_directory`) are resolved against.
-fn absolute_path(path: &Path) -> Result<PathBuf> {
+pub(crate) fn absolute_path(path: &Path) -> Result<PathBuf> {
     Ok(std::env::current_dir()?.join(path).clean())
 }
 
@@ -3213,9 +3258,47 @@ pub struct LoadedConfig {
     /// containers are Batect-shaped ([`ConfigFormat::batect_shaped_containers`]),
     /// and so which follow Batect's rules during resolution too.
     format: ConfigFormat,
+    /// Every file the load read, root first, then in the order `include`
+    /// traversal reached them — each as parsed, before the merge above.
+    /// Kept for [`crate::convert`], which writes one native file per source
+    /// file and so needs each file's own contents and `include` list, not
+    /// the merged result.
+    pub(crate) files: Vec<LoadedFile>,
+    /// Where each `type: git` include's `(repo, ref)` was cloned — for
+    /// [`crate::convert`], which looks in the clone for the bundle file a
+    /// native load would pick.
+    pub(crate) git_clones: HashMap<(String, String), PathBuf>,
+}
+
+/// One file as the load parsed it, before merging.
+#[derive(Debug)]
+pub(crate) struct LoadedFile {
+    /// Absolute and cleaned.
+    pub path: PathBuf,
+    pub file: ConfigFile,
+    /// The bundle this file belongs to, or `None` for a file the project
+    /// owner controls — the root, or a local include reached without
+    /// crossing a `type: git` include.
+    pub boundary: Option<Boundary>,
 }
 
 impl LoadedConfig {
+    /// The file `container` was declared in, for [`crate::convert`] to put
+    /// an item about it in that file's header.
+    pub(crate) fn container_origin(&self, container: &str) -> Option<&Path> {
+        self.container_origins.get(container).map(PathBuf::as_path)
+    }
+
+    /// The bundle `container` was declared in, or `None` for one declared in
+    /// a file the project owner controls — for [`crate::convert`], whose
+    /// items about a bundle's container go under the owned file that
+    /// included the bundle.
+    pub(crate) fn container_bundle(&self, container: &str) -> Option<&BundleId> {
+        self.container_boundaries
+            .get(container)
+            .map(|boundary| &boundary.bundle.id)
+    }
+
     /// Where each container was declared, as [`check_values`] and later
     /// [`LoadedProject::evaluate`] need it — before `extends`, so every
     /// container is its own supplier here.
@@ -3363,8 +3446,11 @@ impl Config {
             .map(|include| (root_dir.clone(), None, include))
             .collect();
 
-        let mut loaded: Vec<(PathBuf, PathBuf, ConfigFile, Option<Boundary>)> =
-            vec![(root_path, root_dir, root_file, None)];
+        let mut loaded: Vec<LoadedFile> = vec![LoadedFile {
+            path: root_path,
+            file: root_file,
+            boundary: None,
+        }];
 
         while let Some((containing_dir, boundary, include)) = queue.pop_front() {
             let (base_dir, candidates, boundary) = match &include {
@@ -3482,13 +3568,17 @@ impl Config {
                     .cloned()
                     .map(|include| (file_dir.clone(), boundary.clone(), include)),
             );
-            loaded.push((resolved, file_dir, file, boundary));
+            loaded.push(LoadedFile {
+                path: resolved,
+                file,
+                boundary,
+            });
         }
 
-        let project_name = loaded[0].2.project_name.clone().ok_or_else(|| {
+        let project_name = loaded[0].file.project_name.clone().ok_or_else(|| {
             anyhow::anyhow!("Configuration file is missing the required 'project_name' field")
         })?;
-        let forbid_telemetry = loaded[0].2.forbid_telemetry;
+        let forbid_telemetry = loaded[0].file.forbid_telemetry;
 
         let mut containers = HashMap::new();
         let mut container_base_paths = HashMap::new();
@@ -3499,8 +3589,16 @@ impl Config {
         let mut config_variables = HashMap::new();
         let mut config_variable_origins: HashMap<String, PathBuf> = HashMap::new();
 
-        for (file_path, file_dir, file, boundary) in loaded {
-            for (name, container) in file.containers {
+        // Borrowed, not consumed: each file is kept whole in `files` for
+        // `crate::convert`, which needs it as parsed rather than merged.
+        for LoadedFile {
+            path: file_path,
+            file,
+            boundary,
+        } in &loaded
+        {
+            let file_dir = file_path.parent().unwrap_or(Path::new("")).to_path_buf();
+            for (name, container) in &file.containers {
                 if let Some(previous) = container_origins.insert(name.clone(), file_path.clone()) {
                     anyhow::bail!(
                         "The container '{name}' is defined in multiple files: '{}' and '{}'",
@@ -3509,12 +3607,12 @@ impl Config {
                     );
                 }
                 container_base_paths.insert(name.clone(), file_dir.clone());
-                if let Some(boundary) = &boundary {
+                if let Some(boundary) = boundary {
                     container_boundaries.insert(name.clone(), boundary.clone());
                 }
-                containers.insert(name, container);
+                containers.insert(name.clone(), container.clone());
             }
-            for (name, task) in file.tasks {
+            for (name, task) in &file.tasks {
                 if let Some(previous) = task_origins.insert(name.clone(), file_path.clone()) {
                     anyhow::bail!(
                         "The task '{name}' is defined in multiple files: '{}' and '{}'",
@@ -3522,9 +3620,9 @@ impl Config {
                         file_path.display()
                     );
                 }
-                tasks.insert(name, task);
+                tasks.insert(name.clone(), task.clone());
             }
-            for (name, var) in file.config_variables.into_iter().flatten() {
+            for (name, var) in file.config_variables.iter().flatten() {
                 if let Some(previous) =
                     config_variable_origins.insert(name.clone(), file_path.clone())
                 {
@@ -3535,7 +3633,7 @@ impl Config {
                         file_path.display()
                     );
                 }
-                config_variables.insert(name, var);
+                config_variables.insert(name.clone(), var.clone());
             }
         }
 
@@ -3555,6 +3653,8 @@ impl Config {
             container_boundaries,
             container_origins,
             format,
+            files: loaded,
+            git_clones: git_repo_paths,
         })
     }
 
@@ -4472,42 +4572,6 @@ impl LoadedProject {
             provenance: Provenance::default(),
         }
     }
-}
-
-/// Serializes a merged, *unresolved* [`Config`] to native `ratect.toml` text —
-/// the rendering half of `ratect config convert`. Goes through `toml::Value`
-/// rather than serializing the struct directly, so scalar fields are emitted
-/// before table fields (raw struct serialization would produce a value after a
-/// `[table]` header — invalid TOML — because `Container` interleaves the two).
-///
-/// Proves the result **round-trips**: it parses the generated TOML straight
-/// back into a `Config` and checks the two are identical, so a lossy
-/// conversion — most plausibly in the hand-written `volumes`/`ports`/`devices`
-/// (de)serializers — can't be written out silently. This works precisely
-/// because both formats target the same `Config`: everything that survives to
-/// that model is preserved, and the things that don't (comments, key order)
-/// are exactly what a converted file is expected to lose.
-///
-/// Declares `written_for` — the converting binary's own version — as the
-/// result's `ratect_version` ([`crate::written_for`]): it was converted under
-/// that version's rules, so that is what it was written for. Added after the
-/// round-trip check, since `ratect_version` isn't part of [`Config`].
-pub fn to_native_toml(config: &Config, written_for: crate::written_for::Version) -> Result<String> {
-    let value = toml::Value::try_from(config).context("serializing the configuration")?;
-    let text = toml::to_string_pretty(&value).context("rendering TOML")?;
-
-    let reparsed: Config = toml::from_str(&text).context("re-parsing the generated TOML")?;
-    let reparsed_value =
-        toml::Value::try_from(&reparsed).context("re-serializing the generated TOML")?;
-    anyhow::ensure!(
-        reparsed_value == value,
-        "the conversion did not round-trip losslessly — this is a bug; please report it"
-    );
-    let declared = toml::Value::String(written_for.to_string());
-    Ok(format!(
-        "{} = {declared}\n{text}",
-        crate::written_for::FIELD
-    ))
 }
 
 /// The `project_name` `config_file` declares, read from that one file and

@@ -289,23 +289,36 @@ pub async fn leftover_finding<D: crate::resources::ResourceInventory + Send + Sy
 /// in the converted file's own header, rendered as a [`Finding::Warning`].
 ///
 /// Not a [`Finding`] itself, because it carries what the list is ordered by
-/// and what places it: an item belongs in the header of the file holding the
-/// value it is about, which [`container`](Self::container) identifies. While
-/// convert writes one file, every item goes in it.
+/// and what places it: an item belongs in the header of the converted file
+/// holding the value it is about — the file declaring
+/// [`container`](Self::container), or the one declaring the `include` entry
+/// an item with no container is about, or, for a container declared in a
+/// Git bundle (whose files aren't converted), the owned file whose include
+/// reached it — which [`crate::convert`] places it in.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ConversionCheck {
     /// The container whose value the item is about — the one declaring it,
-    /// even when the item also names the tasks that run it.
-    pub container: String,
+    /// even when the item also names the tasks that run it. `None` for an
+    /// item about an `include` entry, which [`crate::convert`] produces.
+    pub container: Option<String>,
     pub kind: ConversionCheckKind,
     /// What to check, naming the container (or task), field and value.
     pub message: String,
 }
 
 /// Which way a converted project behaves differently. The declaration order
-/// is the order a container's items are listed in.
+/// is the order one container's — or one `include` entry's — items are
+/// listed in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ConversionCheckKind {
+    /// A pathless Git include whose clone also offers a `ratect-bundle.toml`,
+    /// which a native load would pick over the `batect-bundle.yml` the
+    /// Batect-format load read — pinned to the latter by [`crate::convert`].
+    BundleOffersNativeFile,
+    /// A Git include whose bundle declares Git includes of its own, which a
+    /// native project refuses without `allow_nested_git_includes` — a grant
+    /// [`crate::convert`] never writes.
+    BundleDeclaresGitIncludes,
     /// A task's own container has a `health_check` or `setup_commands`,
     /// which `ratect` doesn't gate it on.
     UngatedTaskContainer,
@@ -325,8 +338,10 @@ impl ConversionCheck {
 }
 
 /// Everything `config convert` asks the reader of `config`'s conversion to
-/// check, ordered by container name, then by kind — so a container's items
-/// sit together — and within one kind as its own producer orders them.
+/// check about its *containers*, ordered by container name, then by kind —
+/// so a container's items sit together — and within one kind as its own
+/// producer orders them. The items about `include` entries are
+/// [`crate::convert`]'s own, since only the per-file load knows them.
 pub fn conversion_checks(config: &Config) -> Vec<ConversionCheck> {
     let mut checks = ungated_task_container_checks(config);
     checks.extend(home_directory_expression_checks(config));
@@ -363,7 +378,7 @@ fn home_directory_expression_checks(config: &Config) -> Vec<ConversionCheck> {
     containers
         .into_iter()
         .map(|(name, home)| ConversionCheck {
-            container: name.clone(),
+            container: Some(name.clone()),
             kind: ConversionCheckKind::HomeDirectoryExpression,
             message: format!(
                 "Container '{name}' has run_as_current_user.home_directory '{home}', which \
@@ -405,7 +420,7 @@ fn compact_volume_expression_checks(config: &Config) -> Vec<ConversionCheck> {
     volumes
         .into_iter()
         .map(|(name, local)| ConversionCheck {
-            container: name.clone(),
+            container: Some(name.clone()),
             kind: ConversionCheckKind::CompactVolumeExpression,
             message: format!(
                 "Container '{name}' has a volume host path '{local}', which batect.yml uses \
@@ -475,7 +490,7 @@ fn ungated_task_container_checks(config: &Config) -> Vec<ConversionCheck> {
                 [] => unreachable!("every entry was created by pushing a task name"),
             };
             Some(ConversionCheck {
-                container: container_name.to_string(),
+                container: Some(container_name.to_string()),
                 kind: ConversionCheckKind::UngatedTaskContainer,
                 message: format!(
                     "{tasks_run}, so under ratect {} — a task's own container has no readiness \

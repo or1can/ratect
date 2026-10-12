@@ -33,6 +33,7 @@
 pub mod cache;
 pub mod config;
 pub mod container_spec;
+pub mod convert;
 pub mod diagnostics;
 pub mod docker;
 pub mod engine;

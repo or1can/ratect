@@ -937,6 +937,7 @@
       ]
     },
     "include": {
+      "default": [],
       "description": "Other configuration files to merge into this one — local files (relative to this file's own directory) or Git bundles.",
       "items": {
         "$ref": "#/definitions/Include"
