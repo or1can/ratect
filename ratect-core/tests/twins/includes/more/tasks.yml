@@ -1,0 +1,15 @@
+containers:
+  helper:
+    image: alpine:3.18
+    volumes:
+      - local: .
+        container: /more
+
+tasks:
+  hello:
+    run:
+      container: app
+      command: echo hi
+      working_directory: /code
+    dependencies:
+      - helper

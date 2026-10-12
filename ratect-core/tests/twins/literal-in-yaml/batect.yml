@@ -1,0 +1,20 @@
+# The two places a batect.yml uses an expression's text as written, matching
+# Batect, where ratect.toml evaluates it: a compact `volumes` entry's host path
+# (#379) and `run_as_current_user.home_directory` (#462). Twin of ratect.toml,
+# which writes the same text and gets the evaluated value.
+project_name: twins
+
+containers:
+  app:
+    image: alpine:3.18
+    volumes:
+      - $TWIN_HOST_VAR/literal:/literal
+    run_as_current_user:
+      enabled: true
+      home_directory: /home/$TWIN_HOST_VAR
+
+tasks:
+  hello:
+    run:
+      container: app
+      command: ls

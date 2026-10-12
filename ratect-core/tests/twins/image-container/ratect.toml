@@ -1,0 +1,41 @@
+# The runtime fields of an `image` container. Twin of batect.yml.
+ratect_version = "0.11.0"
+project_name = "twins"
+
+[containers.app]
+image = "alpine:3.18"
+image_pull_policy = "Always"
+command = "sh -c 'echo hi'"
+entrypoint = "/bin/sh"
+working_directory = "/work"
+environment = { LITERAL = "plain", FROM_HOST = "$TWIN_HOST_VAR", DEFAULTED = "${TWIN_UNSET:-fallback}" }
+dependencies = ["db"]
+ports = [
+    { local = 8080, container = 80 },
+    { local = "1000-1001", container = "2000-2001" },
+    { local = 5353, container = 53, protocol = "udp" },
+    { local = 9000, container = 90, protocol = "udp" },
+]
+devices = [
+    { local = "/dev/null", container = "/dev/xnull" },
+    { local = "/dev/zero", container = "/dev/xzero", options = "rwm" },
+]
+additional_hostnames = ["app.internal"]
+additional_hosts = { "gateway.internal" = "10.0.0.1" }
+capabilities_to_add = ["NET_ADMIN"]
+capabilities_to_drop = ["MKNOD"]
+privileged = true
+enable_init_process = true
+shm_size = "2G"
+labels = { team = "twins" }
+log_driver = "json-file"
+log_options = { max-size = "10m" }
+run_as_current_user = { enabled = true, home_directory = "/home/twin" }
+
+[containers.db]
+image = "postgres:16"
+health_check = { command = "pg_isready", interval = "2s", retries = 5, start_period = "1s", timeout = "3s" }
+setup_commands = [{ command = "psql -c 'select 1'", working_directory = "/tmp" }]
+
+[tasks.hello]
+run = { container = "app" }

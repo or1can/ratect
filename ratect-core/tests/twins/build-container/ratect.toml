@@ -1,0 +1,18 @@
+# The image-building fields of a `build_directory` container. Twin of
+# batect.yml.
+ratect_version = "0.11.0"
+project_name = "twins"
+
+[containers.builder]
+build_directory = "build"
+dockerfile = "Custom.Dockerfile"
+build_target = "final"
+build_args = { VERSION = "1.0", FROM_HOST = "$TWIN_HOST_VAR" }
+build_secrets = { token = { environment = "TWIN_HOST_VAR" }, file = { path = "secret.txt" } }
+build_ssh = [
+    { id = "default" },
+    { id = "deploy", paths = ["id_test"] },
+]
+
+[tasks.build]
+run = { container = "builder", command = "true" }

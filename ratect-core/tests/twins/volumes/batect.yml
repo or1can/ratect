@@ -1,0 +1,28 @@
+# Every kind of `volumes` entry. Twin of ratect.toml.
+project_name: twins
+
+containers:
+  app:
+    image: alpine:3.18
+    volumes:
+      - .:/code
+      - ./data:/data:ro
+      - local: data
+        container: /data-object
+      - type: local
+        local: ./$TWIN_HOST_VAR
+        container: /evaluated
+        options: cached
+      - type: cache
+        name: twin-cache
+        container: /cache
+        options: rw
+      - type: tmpfs
+        container: /scratch
+        options: size=64m
+
+tasks:
+  hello:
+    run:
+      container: app
+      command: ls

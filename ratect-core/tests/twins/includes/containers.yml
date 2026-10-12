@@ -1,0 +1,6 @@
+containers:
+  app:
+    image: alpine:3.18
+    volumes:
+      - local: .
+        container: /code
