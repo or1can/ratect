@@ -511,12 +511,16 @@ async fn an_ungated_task_containers_health_check_is_warned_about() {
     .await;
 
     assert_eq!(
-        ungated_task_container_warnings(&config),
-        vec![format!(
-            "Task 't' runs container 'app' as its own, so under ratect the container's \
-             'health_check' isn't waited on — a task's own container has no readiness gate \
-             (see {OWN_CONTAINER_LINK})."
-        )]
+        ungated_task_container_checks(&config),
+        vec![ConversionCheck {
+            container: "app".to_string(),
+            kind: ConversionCheckKind::UngatedTaskContainer,
+            message: format!(
+                "Task 't' runs container 'app' as its own, so under ratect the container's \
+                 'health_check' isn't waited on — a task's own container has no readiness \
+                 gate (see {OWN_CONTAINER_LINK})."
+            ),
+        }]
     );
 }
 
@@ -528,8 +532,12 @@ async fn an_ungated_task_container_shared_by_several_tasks_is_warned_about_once(
     )
     .await;
 
+    let messages: Vec<String> = ungated_task_container_checks(&config)
+        .into_iter()
+        .map(|check| check.message)
+        .collect();
     assert_eq!(
-        ungated_task_container_warnings(&config),
+        messages,
         vec![format!(
             "Tasks 't', 'u' and 'v' run container 'app' as their own, so under ratect the \
              container's 'health_check' isn't waited on and its 'setup_commands' don't run — \
@@ -547,7 +555,7 @@ async fn gated_or_empty_readiness_fields_are_not_warned_about() {
     )
     .await;
 
-    assert!(ungated_task_container_warnings(&config).is_empty());
+    assert!(ungated_task_container_checks(&config).is_empty());
 }
 
 /// decisions/0015: a project that doesn't say what it was written for
@@ -588,14 +596,14 @@ async fn a_home_directory_that_would_become_an_expression_is_warned_about() {
         "project_name: demo\ncontainers:\n  b:\n    image: alpine:3.18\n    run_as_current_user:\n      enabled: true\n      home_directory: /home/$USER\n  a:\n    image: alpine:3.18\n    run_as_current_user:\n      enabled: true\n      home_directory: /home/<who\n  plain:\n    image: alpine:3.18\n    run_as_current_user:\n      enabled: true\n      home_directory: /home/me\n",
     )
     .await;
-    let warnings = home_directory_expression_warnings(&config);
+    let warnings = home_directory_expression_checks(&config);
     assert_eq!(warnings.len(), 2, "{warnings:?}");
     assert!(
-        warnings[0].contains("'a'") && warnings[0].contains("'/home/<who'"),
+        warnings[0].container == "a" && warnings[0].message.contains("'/home/<who'"),
         "{warnings:?}"
     );
     assert!(
-        warnings[1].contains("'b'") && warnings[1].contains("'/home/$USER'"),
+        warnings[1].container == "b" && warnings[1].message.contains("'/home/$USER'"),
         "{warnings:?}"
     );
 }
@@ -611,14 +619,48 @@ async fn a_compact_volume_that_would_become_an_expression_is_warned_about() {
         "project_name: demo\ncontainers:\n  b:\n    image: alpine:3.18\n    volumes:\n      - $HOME/x:/x\n      - ./plain:/plain\n      - local: $HOME/y\n        container: /y\n  a:\n    image: alpine:3.18\n    volumes:\n      - <dir:/d:ro\n",
     )
     .await;
-    let warnings = compact_volume_expression_warnings(&config);
+    let warnings = compact_volume_expression_checks(&config);
     assert_eq!(warnings.len(), 2, "{warnings:?}");
     assert!(
-        warnings[0].contains("'a'") && warnings[0].contains("'<dir'"),
+        warnings[0].container == "a" && warnings[0].message.contains("'<dir'"),
         "{warnings:?}"
     );
     assert!(
-        warnings[1].contains("'b'") && warnings[1].contains("'$HOME/x'"),
+        warnings[1].container == "b" && warnings[1].message.contains("'$HOME/x'"),
         "{warnings:?}"
+    );
+}
+
+/// #578: every kind together, ordered by container name, then by kind — a
+/// container's own items stay together, whichever producer found them — and
+/// a compact volume's items in list order. Each renders as `doctor` renders
+/// a warning.
+#[tokio::test]
+async fn conversion_checks_are_ordered_by_container_then_kind() {
+    let config = config_with(
+        "project_name: demo\ncontainers:\n  b:\n    image: alpine:3.18\n    volumes:\n      - $HOME/2:/2\n      - $HOME/1:/1\n    run_as_current_user:\n      enabled: true\n      home_directory: /home/$USER\n    setup_commands:\n      - command: ./migrate.sh\n  a:\n    image: alpine:3.18\n    volumes:\n      - $HOME/a:/a\ntasks:\n  t:\n    run:\n      container: b\n",
+    )
+    .await;
+
+    let checks = conversion_checks(&config);
+    let placed: Vec<(&str, ConversionCheckKind)> = checks
+        .iter()
+        .map(|check| (check.container.as_str(), check.kind))
+        .collect();
+    assert_eq!(
+        placed,
+        vec![
+            ("a", ConversionCheckKind::CompactVolumeExpression),
+            ("b", ConversionCheckKind::UngatedTaskContainer),
+            ("b", ConversionCheckKind::HomeDirectoryExpression),
+            ("b", ConversionCheckKind::CompactVolumeExpression),
+            ("b", ConversionCheckKind::CompactVolumeExpression),
+        ]
+    );
+    assert!(checks[3].message.contains("'$HOME/2'"), "{checks:?}");
+    assert!(checks[4].message.contains("'$HOME/1'"), "{checks:?}");
+    assert_eq!(
+        checks[0].finding(),
+        Finding::Warning(checks[0].message.clone())
     );
 }

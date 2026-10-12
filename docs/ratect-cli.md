@@ -325,15 +325,28 @@ whatever it produces is guaranteed to be the configuration you started with. `ra
 runs that configuration differently in three respects. A task's own container has no
 readiness gate, so its health check — from `health_check` or from its image's own
 `HEALTHCHECK` — isn't waited on, and its `setup_commands` don't run (see [Dependency
-Readiness](dependency-readiness.md#the-tasks-own-container)). `config convert` warns
-on stderr about each task container whose `health_check` or `setup_commands` this
-affects; an image's `HEALTHCHECK` can't be seen without the image, so check those
-yourself. And `run_as_current_user.home_directory` is used as written in a `batect.yml`
-but [evaluated](ratect-config-reference.md#where-the-semantics-differ) in a
-`ratect.toml`, so `config convert` also warns about each one containing a `$` or `<`
-expression, whose converted value would change. Likewise, a string-form `volumes`
-entry's host path is used as written in a `batect.yml` but evaluated in a
-`ratect.toml`, and `config convert` warns about each one holding an expression. The result declares the converting binary's own version as its
+Readiness](dependency-readiness.md#the-tasks-own-container)). An image's `HEALTHCHECK`
+can't be seen without the image, so check those yourself. `run_as_current_user.home_directory`
+is used as written in a `batect.yml` but
+[evaluated](ratect-config-reference.md#where-the-semantics-differ) in a `ratect.toml`,
+so one containing a `$` or `<` expression changes value. Likewise, a string-form
+`volumes` entry's host path is used as written in a `batect.yml` but evaluated in a
+`ratect.toml`.
+
+`config convert` lists each place in the converted project where one of these
+applies — each task container whose `health_check` or `setup_commands` the first
+affects, and each `home_directory` or volume host path holding an expression — in
+two places, both in order of container name. After a successful conversion it
+prints `Check before using <file>:` — naming the `ratect.toml` it wrote, or would
+have written — and one line per item, as `doctor` prints a warning: on stdout,
+after the success message if there is one, or on stderr with `--stdout`, so the
+document on stdout is only the converted file. And the converted file's header
+gains a `# Check before use:` block with the same items, one comment line each, so
+the list travels with the file. With nothing to check, neither appears. Either way
+the conversion succeeds and exits 0, and neither depends on `RUST_LOG` or the
+output style — the list prints under `-o quiet` too.
+
+The result declares the converting binary's own version as its
 [`ratect_version`](ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for). (It emits
 the compact `"8080:80"` string form for `ports` rather than the object form, and
 each `volumes` entry in the form it was written in; both forms are valid, and

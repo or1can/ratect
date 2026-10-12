@@ -59,9 +59,10 @@ Readiness](dependency-readiness.md#the-tasks-own-container)), and an expression 
 `run_as_current_user.home_directory` or a string-form `volumes` entry's host path
 is evaluated rather than used as written (see [Where the semantics
 differ](ratect-config-reference.md#where-the-semantics-differ)). `config convert`
-warns about each task container whose `health_check` or `setup_commands` the first
-affects, and each `home_directory` or volume the second does; a
-health check from the image itself can't be seen without the image. Review it
+lists each task container whose `health_check` or `setup_commands` the first
+affects, and each `home_directory` or volume the second does, after converting and
+in the converted file's own header; a health check from the image itself can't be
+seen without the image. Review it
 field-by-field against [Configuration Reference](ratect-config-reference.md)
 before deleting the original — this is the fastest route to fully native, but
 still one diff worth reading closely, not a step to run and forget.
