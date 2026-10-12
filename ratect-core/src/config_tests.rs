@@ -11724,3 +11724,194 @@ include:
     std::fs::remove_dir_all(&dir).unwrap();
     std::fs::remove_dir_all(&cache_root).unwrap();
 }
+
+/// #365: no filesystem accepts a NUL in a path, so a host path holding one is
+/// refused when evaluated — naming the container and the entry, as Batect's
+/// "is not a valid path" does — rather than reaching `create_dir_all` or the
+/// daemon, which fail later and, without `run_as_current_user`, only after
+/// the container exists.
+#[tokio::test]
+async fn a_literal_volume_path_containing_a_nul_is_not_a_valid_path() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    \
+         volumes:\n      - \"/tmp/ab\\0cd:/data\"\n",
+    )
+    .unwrap();
+    let project = load_project(&dir.join("batect.yml")).await.unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let err = project
+        .evaluate(["app"], [], &HashMap::new(), no_host_env)
+        .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(message.contains("Container 'app'"), "{message}");
+    assert!(
+        message.contains(r"'/tmp/ab\0cd' is not a valid path"),
+        "{message}"
+    );
+}
+
+/// #365: the expression form names the expression as well as what it
+/// evaluated to, since the value alone doesn't say where it came from.
+#[tokio::test]
+async fn an_expression_volume_path_evaluating_to_a_nul_is_not_a_valid_path() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\nconfig_variables:\n  badpath:\n    default: \"/tmp/ab\\0cd\"\n\
+         containers:\n  app:\n    image: alpine:3.18\n    \
+         volumes:\n      - local: <badpath\n        container: /data\n",
+    )
+    .unwrap();
+    let project = load_project(&dir.join("batect.yml")).await.unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let err = project
+        .evaluate(["app"], [], &HashMap::new(), no_host_env)
+        .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(message.contains("'volumes' ('<badpath')"), "{message}");
+    assert!(
+        message.contains(r"'/tmp/ab\0cd' is not a valid path"),
+        "{message}"
+    );
+}
+
+/// #365: every host path is resolved by one function, so `build_directory`
+/// (like `build_secrets` and `build_ssh` paths) is refused the same way —
+/// Batect's own build step does too.
+#[tokio::test]
+async fn a_build_directory_containing_a_nul_is_not_a_valid_path() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    build_directory: \"ab\\0cd\"\n",
+    )
+    .unwrap();
+    let project = load_project(&dir.join("batect.yml")).await.unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let err = project
+        .evaluate(["app"], [], &HashMap::new(), no_host_env)
+        .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(
+        message.contains(r"'build_directory' ('ab\0cd')"),
+        "{message}"
+    );
+    assert!(message.contains("is not a valid path"), "{message}");
+    assert!(
+        !message.contains('\0'),
+        "a raw NUL prints as nothing: {message}"
+    );
+}
+
+/// #365: an include path is a host path too, and Batect refuses one holding
+/// a NUL as not a valid path — not as a file that doesn't exist.
+#[tokio::test]
+async fn an_include_path_containing_a_nul_is_not_a_valid_path() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ninclude:\n  - \"ab\\0cd.yml\"\n",
+    )
+    .unwrap();
+    let err = load_project(&dir.join("batect.yml")).await.unwrap_err();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let message = format!("{err:#}");
+    assert!(
+        message.contains(r"Include path 'ab\0cd.yml' is not a valid path"),
+        "{message}"
+    );
+}
+
+/// #365: a NUL written into the expression itself is escaped where the
+/// message quotes the expression, not only where it quotes the value.
+#[tokio::test]
+async fn an_expression_holding_a_nul_is_escaped_where_it_is_quoted() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    \
+         volumes:\n      - local: \"/tmp/ab\\0$RATECT_365\"\n        container: /data\n",
+    )
+    .unwrap();
+    let project = load_project(&dir.join("batect.yml")).await.unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let env = |_: &str| Some("cd".to_string());
+    let err = project
+        .evaluate(["app"], [], &HashMap::new(), env)
+        .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(
+        message.contains(r"'volumes' ('/tmp/ab\0$RATECT_365')"),
+        "{message}"
+    );
+    assert!(
+        !message.contains('\0'),
+        "a raw NUL prints as nothing: {message}"
+    );
+}
+
+/// #365: the message refusing a `home_directory` for holding a control
+/// character quotes it escaped, or the character it names isn't visible.
+#[tokio::test]
+async fn a_home_directory_refused_for_a_control_character_quotes_it_escaped() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    \
+         run_as_current_user:\n      enabled: true\n      home_directory: \"/home/a\\nb\"\n",
+    )
+    .unwrap();
+    let err = load_project(&dir.join("batect.yml")).await.unwrap_err();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let message = format!("{err:#}");
+    assert!(
+        message.contains(r"'/home/a\nb' contains a ':'"),
+        "{message}"
+    );
+}
+
+/// #365: a value that can't be evaluated is quoted escaped too.
+#[tokio::test]
+async fn a_value_that_cannot_be_evaluated_is_quoted_escaped() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    \
+         volumes:\n      - local: \"/tmp/ab\\0$RATECT_365_UNSET\"\n        container: /data\n",
+    )
+    .unwrap();
+    let project = load_project(&dir.join("batect.yml")).await.unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let err = project
+        .evaluate(["app"], [], &HashMap::new(), no_host_env)
+        .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(
+        message.contains(r"cannot evaluate 'volumes' ('/tmp/ab\0$RATECT_365_UNSET')"),
+        "{message}"
+    );
+}
+
+/// #365 in a `ratect.toml`, where a compact `volumes` entry is evaluated
+/// rather than taken as written — the other branch of `evaluate_container`
+/// from a `batect.yml`'s compact entry. TOML spells the NUL `\u0000`.
+#[tokio::test]
+async fn a_native_volume_path_containing_a_nul_is_not_a_valid_path() {
+    let project = load_native_toml(
+        "project_name = \"demo\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n\
+         volumes = [\"/tmp/ab\\u0000cd:/data\"]\n",
+    )
+    .await
+    .unwrap();
+    let err = project
+        .evaluate(["app"], [], &HashMap::new(), no_host_env)
+        .unwrap_err();
+    let message = format!("{err:#}");
+    assert!(message.contains("Container 'app'"), "{message}");
+    assert!(
+        message.contains(r"'/tmp/ab\0cd' is not a valid path"),
+        "{message}"
+    );
+}

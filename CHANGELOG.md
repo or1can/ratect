@@ -52,6 +52,8 @@ history, from when it was the only binary.
 ### Fixed
 
 - `customise.<container>.environment` values are evaluated as expressions, as `environment` values are, rather than reaching the container as written.
+- A host path containing a NUL character — a `volumes` entry, `build_directory`, `build_secrets` or `build_ssh` path, literal or evaluated from an expression — is reported as not a valid path before the task's containers are created.
+- An `include` path containing a NUL character is reported as not a valid path, not as a file that doesn't exist.
 
 ## [ratect-compat 0.31.0 · ratect 0.10.0] - 2026-10-02
 
