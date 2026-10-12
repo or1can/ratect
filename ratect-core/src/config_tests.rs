@@ -11915,3 +11915,150 @@ async fn a_native_volume_path_containing_a_nul_is_not_a_valid_path() {
         "{message}"
     );
 }
+
+/// The `.yaml` spelling of a YAML include is as Batect-shaped as `.yml`
+/// (ratect#572's branch audit found neither `ConfigFormat::parse` nor
+/// `batect_shaped_containers` ever exercised with it): the same native-only
+/// field is refused in one and accepted in a `.toml` include.
+#[tokio::test]
+async fn a_yaml_extension_include_is_batect_shaped_like_a_yml_one() {
+    let (fragment, result) = load_native_including(
+        "frag.yaml",
+        "containers:\n  app:\n    image: alpine:3.18\n    stop_signal: SIGINT\n",
+    )
+    .await;
+    let error = format!(
+        "{:#}",
+        result.expect_err("a .yaml file keeps Batect's fields")
+    );
+    assert!(error.contains("stop_signal"), "{error}");
+    assert!(error.contains(&fragment.display().to_string()), "{error}");
+
+    let (_, result) = load_native_including(
+        "frag.toml",
+        "[containers.app]\nimage = \"alpine:3.18\"\nstop_signal = \"SIGINT\"\n",
+    )
+    .await;
+    result.expect("the same field in a .toml include is native");
+}
+
+/// `ratect-compat` reads its file as YAML whatever it's called, as Batect
+/// does; `ratect` picks the parser by extension and refuses one it doesn't
+/// know rather than guessing.
+#[tokio::test]
+async fn compat_parses_any_extension_as_yaml_where_native_refuses_it() {
+    let dir = unique_temp_dir();
+    let path = dir.join("project.conf");
+    std::fs::write(&path, "project_name: demo\ncontainers: {}\ntasks: {}\n").unwrap();
+    let compat = Config::load_from_file(&path).await;
+    let native = Config::load_from_file_native(&path).await;
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    assert_eq!(compat.unwrap().config.project_name, "demo");
+    let message = format!("{:#}", native.unwrap_err());
+    assert!(
+        message.contains("Unrecognized config file extension"),
+        "{message}"
+    );
+}
+
+/// A compact `volumes` entry inherited through `extends` is literal or an
+/// expression according to the file that wrote it, not the child's — the
+/// `volumes` counterpart of
+/// `an_inherited_batect_format_home_directory_stays_literal`.
+#[tokio::test]
+async fn an_inherited_compact_volume_keeps_its_suppliers_format() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("extra.yml"),
+        "containers:\n  yaml-base:\n    image: alpine:3.18\n    volumes:\n      - <sub:/c\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "project_name = \"demo\"\ninclude = [{ path = \"extra.yml\" }]\n\n\
+         [config_variables.sub]\ndefault = \"dev\"\n\n\
+         [containers.toml-base]\nimage = \"alpine:3.18\"\nvolumes = [\"<sub:/c\"]\n\n\
+         [containers.from-yaml]\nextends = \"yaml-base\"\n\n\
+         [containers.from-toml]\nextends = \"toml-base\"\n",
+    )
+    .unwrap();
+    let project = load_project_native(&dir.join("ratect.toml")).await.unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let evaluated = project
+        .evaluate(["from-yaml", "from-toml"], [], &HashMap::new(), no_host_env)
+        .unwrap();
+    let local = |name: &str| {
+        expect_local(&evaluated.containers[name].volumes.as_ref().unwrap()[0])
+            .local
+            .clone()
+    };
+    assert_eq!(local("from-yaml"), dir.join("<sub").display().to_string());
+    assert_eq!(local("from-toml"), dir.join("dev").display().to_string());
+}
+
+/// The image-source rules `ratect.toml` relaxes for `extends`' sake — `image`
+/// alongside `build_directory`, or alongside a build-only field — still hold
+/// in a `.yml` include of the same native project, and are lifted in a
+/// `.toml` one.
+#[tokio::test]
+async fn image_alongside_a_build_field_is_refused_in_yaml_and_allowed_in_toml() {
+    for (field, yaml, toml) in [
+        (
+            "build_directory",
+            "    build_directory: ctx\n",
+            "build_directory = \"ctx\"\n",
+        ),
+        (
+            "build_args",
+            "    build_args:\n      A: b\n",
+            "build_args = { A = \"b\" }\n",
+        ),
+    ] {
+        let (_, result) = load_native_including(
+            "frag.yml",
+            &format!("containers:\n  app:\n    image: alpine:3.18\n{yaml}"),
+        )
+        .await;
+        let error = format!(
+            "{:#}",
+            result.expect_err("a YAML file keeps Batect's one-image-source rule")
+        );
+        assert!(error.contains(field), "{field}: {error}");
+
+        let (_, result) = load_native_including(
+            "frag.toml",
+            &format!("[containers.app]\nimage = \"alpine:3.18\"\n{toml}"),
+        )
+        .await;
+        let project = result.unwrap_or_else(|e| panic!("{field} in TOML: {e:#}"));
+        assert_eq!(
+            project.config.containers["app"].image.as_deref(),
+            Some("alpine:3.18")
+        );
+    }
+}
+
+/// A Batect-format `home_directory` is literal, so it is judged when the file
+/// loads even if it looks like an expression — in a `.yml` include of a native
+/// project too, where the same text in a `.toml` include is deferred to
+/// evaluation (see `a_home_directory_is_judged_at_load_only_when_it_is_a_literal`).
+#[tokio::test]
+async fn a_yaml_includes_home_directory_is_judged_at_load_and_a_toml_ones_is_not() {
+    let (_, result) = load_native_including(
+        "frag.yml",
+        "containers:\n  app:\n    image: alpine:3.18\n    \
+         run_as_current_user:\n      enabled: true\n      home_directory: $HOME/me\n",
+    )
+    .await;
+    let error = format!("{:#}", result.expect_err("a literal relative path"));
+    assert!(error.contains("'$HOME/me'"), "{error}");
+
+    let (_, result) = load_native_including(
+        "frag.toml",
+        "[containers.app]\nimage = \"alpine:3.18\"\n\
+         run_as_current_user = { enabled = true, home_directory = \"$HOME/me\" }\n",
+    )
+    .await;
+    result.expect("an expression is judged when it is evaluated, not at load");
+}
