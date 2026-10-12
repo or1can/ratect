@@ -742,16 +742,27 @@ fn config_convert_to_stdout_writes_no_file() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// Runs `config convert` on `batect_yml` both ways — writing the file and
-/// `--stdout` — with `RUST_LOG` cleared so the caller's environment can't
-/// hide a warning. Returns each run's stderr, and asserts the two documents
-/// are the same, so a warning can never leak into the converted output.
-fn convert_both_ways(batect_yml: &str) -> (String, String) {
+/// One `batect.yml` converted both ways — written to a file and `--stdout`.
+struct Conversion {
+    /// The converted file's path, as the heading names it.
+    output: PathBuf,
+    written_stdout: String,
+    written_stderr: String,
+    /// The document, which the test checks is the same as the written file.
+    printed_stdout: String,
+    printed_stderr: String,
+}
+
+/// Runs `config convert` on `batect_yml` both ways, with `RUST_LOG=off`, so
+/// what it asks the reader to check can't be riding on the log (#578). Asserts
+/// both runs succeed and that the two documents are the same, so nothing it
+/// reports can leak into the converted output.
+fn convert_both_ways(batect_yml: &str) -> Conversion {
     let dir = unique_project_dir();
     std::fs::write(dir.join("batect.yml"), batect_yml).unwrap();
     let convert = |extra: &[&str]| {
         let output = ratect_command()
-            .env_remove("RUST_LOG")
+            .env("RUST_LOG", "off")
             .arg("-f")
             .arg(dir.join("batect.yml"))
             .args(["config", "convert"])
@@ -768,88 +779,235 @@ fn convert_both_ways(batect_yml: &str) -> (String, String) {
 
     let written = convert(&[]);
     let printed = convert(&["--stdout"]);
+    let printed_stdout = String::from_utf8_lossy(&printed.stdout).into_owned();
     assert_eq!(
-        String::from_utf8_lossy(&printed.stdout),
+        printed_stdout,
         std::fs::read_to_string(dir.join("ratect.toml")).unwrap(),
         "--stdout and the written file should be the same document"
     );
     std::fs::remove_dir_all(&dir).ok();
-    (
-        String::from_utf8_lossy(&written.stderr).into_owned(),
-        String::from_utf8_lossy(&printed.stderr).into_owned(),
-    )
+    Conversion {
+        output: dir.join("ratect.toml"),
+        written_stdout: String::from_utf8_lossy(&written.stdout).into_owned(),
+        written_stderr: String::from_utf8_lossy(&written.stderr).into_owned(),
+        printed_stdout,
+        printed_stderr: String::from_utf8_lossy(&printed.stderr).into_owned(),
+    }
+}
+
+/// The items `conversion` asked the reader to check, after asserting it
+/// reported the same ones, in the same order, in all three places (#578):
+/// after the success message on stdout when writing the file; on stderr with
+/// `--stdout`, so the document is untouched; and in the document's own header.
+/// Writing the file puts nothing on stderr.
+fn reported_checks(conversion: &Conversion) -> Vec<String> {
+    let heading = format!("Check before using {}:", conversion.output.display());
+    let listed = |output: &str| -> Vec<String> {
+        let mut lines = output.lines().skip_while(|line| *line != heading);
+        if lines.next().is_none() {
+            return Vec::new();
+        }
+        lines
+            .map(|line| {
+                line.strip_prefix("  warning ")
+                    .unwrap_or_else(|| panic!("not rendered as a warning: {line:?}\n{output}"))
+                    .to_string()
+            })
+            .collect()
+    };
+
+    let written = listed(&conversion.written_stdout);
+    assert!(
+        conversion.written_stdout.starts_with("Converted "),
+        "the list comes after the success message:\n{}",
+        conversion.written_stdout
+    );
+    assert_eq!(conversion.written_stderr, "", "nothing on stderr");
+    assert_eq!(
+        listed(&conversion.printed_stderr),
+        written,
+        "--stdout's list"
+    );
+    assert!(
+        !conversion.printed_stdout.contains("Check before using"),
+        "--stdout's document holds no terminal list:\n{}",
+        conversion.printed_stdout
+    );
+
+    let comments: Vec<&str> = conversion
+        .printed_stdout
+        .lines()
+        .take_while(|line| line.starts_with('#'))
+        .collect();
+    let in_header: Vec<String> = match comments
+        .iter()
+        .position(|line| *line == "# Check before use:")
+    {
+        Some(at) => {
+            assert_eq!(
+                comments[at - 1],
+                "#",
+                "a blank comment line before the block"
+            );
+            comments[at + 1..]
+                .iter()
+                .map(|line| line.strip_prefix("# ").unwrap().to_string())
+                .collect()
+        }
+        None => Vec::new(),
+    };
+    assert_eq!(in_header, written, "the header's block");
+    written
 }
 
 /// Converted config is identical, but `ratect` runs a task's own container
 /// with no readiness gate (decisions/0012), so a task container's
-/// `setup_commands` would silently stop running (ratect#267). Warned about on
-/// stderr either way the output goes, naming the container and the field.
+/// `setup_commands` would silently stop running (ratect#267). Reported
+/// either way the output goes, naming the container and the field.
 #[test]
-fn config_convert_warns_about_a_task_containers_readiness_fields() {
-    let (written, printed) = convert_both_ways(
+fn config_convert_reports_a_task_containers_readiness_fields() {
+    let checks = reported_checks(&convert_both_ways(
         "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    setup_commands:\n      - command: ./migrate.sh\ntasks:\n  t:\n    run:\n      container: app\n",
+    ));
+    assert_eq!(checks.len(), 1, "{checks:?}");
+    assert!(
+        checks[0].contains("'app'")
+            && checks[0].contains("'setup_commands'")
+            && checks[0].contains("dependency-readiness.md#the-tasks-own-container"),
+        "expected an item naming 'app' and 'setup_commands': {checks:?}"
     );
-
-    for (label, stderr) in [("written", &written), ("--stdout", &printed)] {
-        assert!(
-            stderr.contains("'app'")
-                && stderr.contains("'setup_commands'")
-                && stderr.contains("dependency-readiness.md#the-tasks-own-container"),
-            "{label}: expected a warning naming 'app' and 'setup_commands':\n{stderr}"
-        );
-        assert!(
-            !stderr.contains("'health_check'"),
-            "{label}: only the fields the container has should be named:\n{stderr}"
-        );
-    }
+    assert!(
+        !checks[0].contains("'health_check'"),
+        "only the fields the container has should be named: {checks:?}"
+    );
 }
 
 /// #462: `ratect.toml` evaluates a `home_directory` that `batect.yml` uses as
-/// written, so a converted `$`/`<` changes meaning — warned about either way
-/// the conversion is written.
+/// written, so a converted `$`/`<` changes meaning — reported either way the
+/// conversion is written.
 #[test]
-fn config_convert_warns_about_a_home_directory_that_becomes_an_expression() {
-    let (written, printed) = convert_both_ways(
+fn config_convert_reports_a_home_directory_that_becomes_an_expression() {
+    let checks = reported_checks(&convert_both_ways(
         "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    run_as_current_user:\n      enabled: true\n      home_directory: /home/$USER\n",
+    ));
+    assert_eq!(checks.len(), 1, "{checks:?}");
+    assert!(
+        checks[0].contains("'app'") && checks[0].contains("'/home/$USER'"),
+        "expected an item naming 'app' and its home_directory: {checks:?}"
     );
-    for (label, stderr) in [("written", &written), ("--stdout", &printed)] {
-        assert!(
-            stderr.contains("'app'") && stderr.contains("'/home/$USER'"),
-            "{label}: expected a warning naming 'app' and its home_directory:\n{stderr}"
-        );
-    }
 }
 
 /// #379: `ratect.toml` evaluates a compact `volumes` host path that
 /// `batect.yml` uses as written, so a converted `$`/`<` changes meaning —
-/// warned about either way the conversion is written.
+/// reported either way the conversion is written.
 #[test]
-fn config_convert_warns_about_a_compact_volume_that_becomes_an_expression() {
-    let (written, printed) = convert_both_ways(
+fn config_convert_reports_a_compact_volume_that_becomes_an_expression() {
+    let checks = reported_checks(&convert_both_ways(
         "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    volumes:\n      - $HOME/cache:/cache\n",
+    ));
+    assert_eq!(checks.len(), 1, "{checks:?}");
+    assert!(
+        checks[0].contains("'app'") && checks[0].contains("'$HOME/cache'"),
+        "expected an item naming 'app' and its volume: {checks:?}"
     );
-    for (label, stderr) in [("written", &written), ("--stdout", &printed)] {
-        assert!(
-            stderr.contains("'app'") && stderr.contains("'$HOME/cache'"),
-            "{label}: expected a warning naming 'app' and its volume:\n{stderr}"
-        );
-    }
+}
+
+/// #578: several items, one per line in the same order everywhere — by
+/// container name, then kind.
+#[test]
+fn config_convert_reports_its_items_in_container_order() {
+    let checks = reported_checks(&convert_both_ways(
+        "project_name: demo\ncontainers:\n  b:\n    image: alpine:3.18\n    volumes:\n      - $HOME/b:/b\n  a:\n    image: alpine:3.18\n    run_as_current_user:\n      enabled: true\n      home_directory: /home/$USER\n    volumes:\n      - $HOME/a:/a\n",
+    ));
+    assert_eq!(checks.len(), 3, "{checks:?}");
+    assert!(checks[0].contains("'/home/$USER'"), "{checks:?}");
+    assert!(checks[1].contains("'$HOME/a'"), "{checks:?}");
+    assert!(checks[2].contains("'$HOME/b'"), "{checks:?}");
 }
 
 /// The same fields on a *dependency* still run under `ratect`, so there is
-/// nothing to warn about.
+/// nothing to report — no heading, no list, and a header that is exactly the
+/// generic one.
 #[test]
-fn config_convert_does_not_warn_about_a_dependencys_readiness_fields() {
-    let (written, printed) = convert_both_ways(
+fn config_convert_does_not_report_a_dependencys_readiness_fields() {
+    let conversion = convert_both_ways(
         "project_name: demo\ncontainers:\n  db:\n    image: postgres:16\n    health_check:\n      command: pg_isready\n    setup_commands:\n      - command: ./seed.sh\n  app:\n    image: alpine:3.18\n    dependencies: [db]\ntasks:\n  t:\n    run:\n      container: app\n",
     );
 
-    for (label, stderr) in [("written", &written), ("--stdout", &printed)] {
-        assert!(
-            !stderr.contains("'db'") && !stderr.contains("dependency-readiness"),
-            "{label}: a dependency's readiness fields should not be warned about:\n{stderr}"
-        );
-    }
+    assert_eq!(reported_checks(&conversion), Vec::<String>::new());
+    assert_eq!(conversion.printed_stderr, "");
+    let source = conversion.output.with_file_name("batect.yml");
+    let header = format!(
+        "# Generated by `ratect config convert` from {}.\n\
+         # Review before use: comments were not carried over, and any included\n\
+         # files were flattened into this one.\n\nratect_version = ",
+        source.display()
+    );
+    assert!(
+        conversion.printed_stdout.starts_with(&header),
+        "{}",
+        conversion.printed_stdout
+    );
+}
+
+/// An item quotes a value from the source, which can hold a line break; in
+/// the header that would end the comment and put the rest of the value into
+/// the file as TOML. Escaped there, so the item stays one comment line and
+/// the converted file still loads as the configuration it was converted from.
+#[test]
+fn config_convert_keeps_a_line_break_in_an_item_out_of_the_converted_file() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    run_as_current_user:\n      enabled: true\n      home_directory: \"/home/$USER\\n[tasks.injected]\"\n",
+    )
+    .unwrap();
+    let convert = ratect_command()
+        .arg("-f")
+        .arg(dir.join("batect.yml"))
+        .args(["config", "convert"])
+        .output()
+        .expect("failed to run ratect");
+    assert!(convert.status.success(), "{convert:?}");
+    let document = std::fs::read_to_string(dir.join("ratect.toml")).unwrap();
+    assert!(
+        document.contains("'/home/$USER\\n[tasks.injected]'"),
+        "{document}"
+    );
+
+    let list = ratect_command()
+        .arg("-f")
+        .arg(dir.join("ratect.toml"))
+        .args(["tasks", "list", "-o", "quiet"])
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(list.status.success(), "{list:?}\n{document}");
+    assert!(
+        !String::from_utf8_lossy(&list.stdout).contains("injected"),
+        "{document}"
+    );
+}
+
+/// The `convert/` fixture, so `docs/ratect-cli.md`'s captured `config convert
+/// --stdout` comes from a checked-in project rather than an invented one:
+/// its two items, in every place convert reports them.
+#[test]
+fn config_convert_reports_the_convert_fixtures_checks() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/convert/batect.yml");
+    let checks = reported_checks(&convert_both_ways(
+        &std::fs::read_to_string(fixture).unwrap(),
+    ));
+    assert_eq!(checks.len(), 2, "{checks:?}");
+    assert!(
+        checks[0].contains("Task 'test' runs container 'app'")
+            && checks[0].contains("'setup_commands' don't run"),
+        "{checks:?}"
+    );
+    assert!(
+        checks[1].contains("Container 'app' has a volume host path '$HOME/.cache'"),
+        "{checks:?}"
+    );
 }
 
 /// The other half of why `batect.yml`'s image-source validation is

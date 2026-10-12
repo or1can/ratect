@@ -283,7 +283,60 @@ pub async fn leftover_finding<D: crate::resources::ResourceInventory + Send + Sy
     })
 }
 
-/// `config convert`'s warning for each container whose
+/// One thing `ratect config convert` asks the reader to check in the file it
+/// wrote: a place where the converted project, though the same configuration,
+/// behaves differently from its source (#578). Listed after a conversion and
+/// in the converted file's own header, rendered as a [`Finding::Warning`].
+///
+/// Not a [`Finding`] itself, because it carries what the list is ordered by
+/// and what places it: an item belongs in the header of the file holding the
+/// value it is about, which [`container`](Self::container) identifies. While
+/// convert writes one file, every item goes in it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ConversionCheck {
+    /// The container whose value the item is about — the one declaring it,
+    /// even when the item also names the tasks that run it.
+    pub container: String,
+    pub kind: ConversionCheckKind,
+    /// What to check, naming the container (or task), field and value.
+    pub message: String,
+}
+
+/// Which way a converted project behaves differently. The declaration order
+/// is the order a container's items are listed in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ConversionCheckKind {
+    /// A task's own container has a `health_check` or `setup_commands`,
+    /// which `ratect` doesn't gate it on.
+    UngatedTaskContainer,
+    /// A `run_as_current_user.home_directory` that would become an
+    /// expression.
+    HomeDirectoryExpression,
+    /// A compact `volumes` entry's host path that would become an
+    /// expression.
+    CompactVolumeExpression,
+}
+
+impl ConversionCheck {
+    /// As `doctor` would report it.
+    pub fn finding(&self) -> Finding {
+        Finding::Warning(self.message.clone())
+    }
+}
+
+/// Everything `config convert` asks the reader of `config`'s conversion to
+/// check, ordered by container name, then by kind — so a container's items
+/// sit together — and within one kind as its own producer orders them.
+pub fn conversion_checks(config: &Config) -> Vec<ConversionCheck> {
+    let mut checks = ungated_task_container_checks(config);
+    checks.extend(home_directory_expression_checks(config));
+    checks.extend(compact_volume_expression_checks(config));
+    // Stable, so a container's volumes keep their list order.
+    checks.sort_by(|a, b| (&a.container, a.kind).cmp(&(&b.container, b.kind)));
+    checks
+}
+
+/// `config convert`'s check for each container whose
 /// `run_as_current_user.home_directory` holds what `ratect.toml` would read as
 /// an expression (#462). A Batect-format file uses the value as written; the
 /// converted file evaluates the same text, and has no escape that would keep
@@ -291,9 +344,9 @@ pub async fn leftover_finding<D: crate::resources::ResourceInventory + Send + Sy
 /// reader has to decide what they meant. Sorted by container name.
 ///
 /// Not one of [`config_findings`] for the same reason as
-/// [`ungated_task_container_warnings`]: it's only news to someone moving a
+/// [`ungated_task_container_checks`]: it's only news to someone moving a
 /// file from one format to the other.
-pub fn home_directory_expression_warnings(config: &Config) -> Vec<String> {
+fn home_directory_expression_checks(config: &Config) -> Vec<ConversionCheck> {
     let mut containers: Vec<(&String, &str)> = config
         .containers
         .iter()
@@ -309,23 +362,25 @@ pub fn home_directory_expression_warnings(config: &Config) -> Vec<String> {
     containers.sort_unstable();
     containers
         .into_iter()
-        .map(|(name, home)| {
-            format!(
+        .map(|(name, home)| ConversionCheck {
+            container: name.clone(),
+            kind: ConversionCheckKind::HomeDirectoryExpression,
+            message: format!(
                 "Container '{name}' has run_as_current_user.home_directory '{home}', which \
                  batect.yml uses as written but ratect evaluates as an expression — check \
                  what it resolves to under ratect."
-            )
+            ),
         })
         .collect()
 }
 
-/// `config convert`'s warning for each compact `volumes` entry whose host
+/// `config convert`'s check for each compact `volumes` entry whose host
 /// path holds what `ratect.toml` would read as an expression (#379). A
 /// Batect-format file uses a compact entry's host path as written, and only
 /// the object form's `local` as an expression; the converted file evaluates
-/// both, so — as with [`home_directory_expression_warnings`] — the reader has
+/// both, so — as with [`home_directory_expression_checks`] — the reader has
 /// to decide what they meant. Sorted by container name, then in list order.
-pub fn compact_volume_expression_warnings(config: &Config) -> Vec<String> {
+fn compact_volume_expression_checks(config: &Config) -> Vec<ConversionCheck> {
     let mut volumes: Vec<(&String, &str)> = config
         .containers
         .iter()
@@ -349,20 +404,23 @@ pub fn compact_volume_expression_warnings(config: &Config) -> Vec<String> {
     volumes.sort_by_key(|(name, _)| *name);
     volumes
         .into_iter()
-        .map(|(name, local)| {
-            format!(
+        .map(|(name, local)| ConversionCheck {
+            container: name.clone(),
+            kind: ConversionCheckKind::CompactVolumeExpression,
+            message: format!(
                 "Container '{name}' has a volume host path '{local}', which batect.yml uses \
                  as written but ratect evaluates as an expression — check what it resolves \
                  to under ratect."
-            )
+            ),
         })
         .collect()
 }
 
-/// What `ratect config convert` warns about: one of the three ways a converted
+/// `config convert`'s check for each container some task runs as its own
+/// whose readiness fields stop applying: one of the three ways a converted
 /// project behaves differently from its source (ratect#267; the others are
-/// [`home_directory_expression_warnings`] and
-/// [`compact_volume_expression_warnings`]). `ratect` runs a
+/// [`home_directory_expression_checks`] and
+/// [`compact_volume_expression_checks`]). `ratect` runs a
 /// task's own container with no readiness gate (decisions/0012), so a
 /// `health_check` on a container some task runs as its own `run.container`
 /// isn't waited on for that task, and its `setup_commands` don't run. One
@@ -376,7 +434,7 @@ pub fn compact_volume_expression_warnings(config: &Config) -> Vec<String> {
 /// does gate a task's own container. An image's own `HEALTHCHECK` isn't
 /// waited on either, but can't be seen without the image, so it isn't
 /// covered here.
-pub fn ungated_task_container_warnings(config: &Config) -> Vec<String> {
+fn ungated_task_container_checks(config: &Config) -> Vec<ConversionCheck> {
     let mut tasks_by_container: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for (task_name, task) in &config.tasks {
         if let Some(run) = &task.run {
@@ -416,11 +474,15 @@ pub fn ungated_task_container_warnings(config: &Config) -> Vec<String> {
                 ),
                 [] => unreachable!("every entry was created by pushing a task name"),
             };
-            Some(format!(
-                "{tasks_run}, so under ratect {} — a task's own container has no readiness \
-                 gate (see https://github.com/or1can/ratect/blob/main/docs/dependency-readiness.md#the-tasks-own-container).",
-                effects.join(" and ")
-            ))
+            Some(ConversionCheck {
+                container: container_name.to_string(),
+                kind: ConversionCheckKind::UngatedTaskContainer,
+                message: format!(
+                    "{tasks_run}, so under ratect {} — a task's own container has no readiness \
+                     gate (see https://github.com/or1can/ratect/blob/main/docs/dependency-readiness.md#the-tasks-own-container).",
+                    effects.join(" and ")
+                ),
+            })
         })
         .collect()
 }
