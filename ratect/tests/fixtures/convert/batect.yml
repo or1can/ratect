@@ -1,0 +1,27 @@
+# Backs `config_convert_reports_the_convert_fixtures_checks`
+# in tests/cli.rs and the captured `ratect config convert --stdout`
+# transcript on docs/ratect-cli.md: a conversion with something to check
+# before use, which no project under examples/ has. In its own directory,
+# like doctor/, so the capture run from here names batect.yml and
+# ratect.toml with no path in front.
+#
+# - `test` runs `app` as its own container, and `app` has `setup_commands`:
+#   under ratect they don't run (docs/dependency-readiness.md).
+# - `app`'s string-form volume names `$HOME`, which batect.yml uses as
+#   written but ratect.toml evaluates.
+project_name: convert-fixture
+
+containers:
+  app:
+    image: alpine:3.18.2
+    volumes:
+      - $HOME/.cache:/cache
+    setup_commands:
+      - command: ./warm-cache.sh
+
+tasks:
+  test:
+    description: Runs the tests
+    run:
+      container: app
+      command: ./run-tests.sh

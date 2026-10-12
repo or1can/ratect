@@ -989,6 +989,27 @@ fn config_convert_keeps_a_line_break_in_an_item_out_of_the_converted_file() {
     );
 }
 
+/// The `convert/` fixture, so `docs/ratect-cli.md`'s captured `config convert
+/// --stdout` comes from a checked-in project rather than an invented one:
+/// its two items, in every place convert reports them.
+#[test]
+fn config_convert_reports_the_convert_fixtures_checks() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/convert/batect.yml");
+    let checks = reported_checks(&convert_both_ways(
+        &std::fs::read_to_string(fixture).unwrap(),
+    ));
+    assert_eq!(checks.len(), 2, "{checks:?}");
+    assert!(
+        checks[0].contains("Task 'test' runs container 'app'")
+            && checks[0].contains("'setup_commands' don't run"),
+        "{checks:?}"
+    );
+    assert!(
+        checks[1].contains("Container 'app' has a volume host path '$HOME/.cache'"),
+        "{checks:?}"
+    );
+}
+
 /// The other half of why `batect.yml`'s image-source validation is
 /// deliberately not applied to the native format: `extends` is
 /// `child.or(parent)` with no way to *unset* an inherited field, so setting

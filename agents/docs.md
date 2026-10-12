@@ -94,8 +94,10 @@ Captured so far (#161, then #166's sweep): `simple`/`quiet`/`all` on `docs/outpu
 (`fancy` is the recording, per rule 2; each
 style is one subsection — clarifying prose beside its capture, not a
 description of every style followed by a gallery of them), Getting Started's first run, `docs/ratect-cli.md`'s
-`caches`/`includes`/`resources`/`doctor` blocks, and
-`docs/migrating-batect-project.md`'s `config convert`. Task listings are the
+`caches`/`includes`/`resources`/`doctor` blocks,
+`docs/migrating-batect-project.md`'s `config convert`, and
+`docs/ratect-cli.md`'s `config convert --stdout` with something to check
+(#578, from `ratect/tests/fixtures/convert`). Task listings are the
 plain `<!-- verify: -->` form instead — the binary prints them uncoloured, so
 a capture would add nothing the marker's re-run doesn't already prove.
 

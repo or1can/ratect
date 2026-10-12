@@ -334,17 +334,21 @@ so one containing a `$` or `<` expression changes value. Likewise, a string-form
 `ratect.toml`.
 
 `config convert` lists each place in the converted project where one of these
-applies — each task container whose `health_check` or `setup_commands` the first
-affects, and each `home_directory` or volume host path holding an expression — in
-two places, both in order of container name. After a successful conversion it
-prints `Check before using <file>:` — naming the `ratect.toml` it wrote, or would
-have written — and one line per item, as `doctor` prints a warning: on stdout,
-after the success message if there is one, or on stderr with `--stdout`, so the
-document on stdout is only the converted file. And the converted file's header
-gains a `# Check before use:` block with the same items, one comment line each, so
-the list travels with the file. With nothing to check, neither appears. Either way
-the conversion succeeds and exits 0, and neither depends on `RUST_LOG` or the
-output style — the list prints under `-o quiet` too.
+applies, in order of container name — after converting, and again in the
+converted file's own header, so the list travels with the file. `ratect -f
+batect.yml config convert --stdout`, captured in
+[`ratect/tests/fixtures/convert`](https://github.com/or1can/ratect/tree/main/ratect/tests/fixtures/convert)
+— a project with something to check:
+
+```ansi
+{{#include captures/config-convert-checks.ansi}}
+```
+
+With `--stdout`, the document is all that reaches stdout; the heading and its list
+after it are on stderr. Without it, they follow the success message on stdout,
+naming the file written. With nothing to check, neither the list nor the header
+block appears. Either way the conversion succeeds and exits 0, and the list prints
+whatever `RUST_LOG` is set to, under `-o quiet` too.
 
 The result declares the converting binary's own version as its
 [`ratect_version`](ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for). (It emits
