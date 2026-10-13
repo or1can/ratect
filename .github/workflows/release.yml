@@ -135,12 +135,15 @@ jobs:
       # "ratect-compat/v0.28.0") for a Singular announcement — fine as an id,
       # not as a Release title a human reads.
       TITLE: ${{ fromJson(needs.plan.outputs.val).releases[0].app_name }} ${{ fromJson(needs.plan.outputs.val).releases[0].app_version }}
-      # ROADMAP.md's versioning section marks every release `prerelease:
-      # true` until a binary's own 1.0.0 — a rule about the binary's own
-      # maturity, not the tagged version string's own SemVer shape, so
-      # dist's `announcement_is_prerelease` (true only for a `-rc.1`-style
-      # suffix) is the wrong source for it here.
-      PRERELEASE_FLAG: "${{ startsWith(fromJson(needs.plan.outputs.val).releases[0].app_version, '0.') && '--prerelease' || '' }}"
+      # A pre-release is one tagged with an `-rc.1`-style suffix, which is
+      # what dist's `announcement_is_prerelease` detects — the same source
+      # `host`'s own undraft step below uses, so the two can't disagree. A
+      # plain `0.x` version is a normal release: SemVer's `0.` already says
+      # its interface may change, and a flag on every release distinguished
+      # nothing (AGENTS.md's Version Lifecycle guideline). Until 2026-10-13
+      # this flagged every `0.`-prefixed version, citing a ROADMAP.md rule
+      # the declutter pass had already removed.
+      PRERELEASE_FLAG: "${{ fromJson(needs.plan.outputs.val).announcement_is_prerelease && '--prerelease' || '' }}"
       # dist-workspace.toml's own note on the bare `vX.Y.Z` tag form: it
       # isn't blocked outright, and it announces every dist-able package at
       # that version at once (2, not 1) — the same releases[0]-only
