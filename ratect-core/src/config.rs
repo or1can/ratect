@@ -3584,9 +3584,12 @@ impl Config {
         let mut container_boundaries: HashMap<String, Boundary> = HashMap::new();
         let mut container_origins: HashMap<String, PathBuf> = HashMap::new();
         let mut tasks = IndexMap::new();
-        let mut task_origins: HashMap<String, PathBuf> = HashMap::new();
         let mut config_variables = IndexMap::new();
-        let mut config_variable_origins: HashMap<String, PathBuf> = HashMap::new();
+        // Every file each name is defined in, in load order — judged once
+        // every file has loaded, so a duplicate's error can name them all.
+        let mut container_files: IndexMap<&str, Vec<&Path>> = IndexMap::new();
+        let mut task_files: IndexMap<&str, Vec<&Path>> = IndexMap::new();
+        let mut config_variable_files: IndexMap<&str, Vec<&Path>> = IndexMap::new();
 
         // Borrowed, not consumed: each file is kept whole in `files` for
         // `crate::convert`, which needs it as parsed rather than merged.
@@ -3598,41 +3601,48 @@ impl Config {
         {
             let file_dir = file_path.parent().unwrap_or(Path::new("")).to_path_buf();
             for (name, container) in &file.containers {
-                if let Some(previous) = container_origins.insert(name.clone(), file_path.clone()) {
-                    anyhow::bail!(
-                        "The container '{name}' is defined in multiple files: '{}' and '{}'",
-                        previous.display(),
-                        file_path.display()
-                    );
+                let files = container_files.entry(name).or_default();
+                files.push(file_path);
+                if files.len() == 1 {
+                    container_origins.insert(name.clone(), file_path.clone());
+                    container_base_paths.insert(name.clone(), file_dir.clone());
+                    if let Some(boundary) = boundary {
+                        container_boundaries.insert(name.clone(), boundary.clone());
+                    }
+                    containers.insert(name.clone(), container.clone());
                 }
-                container_base_paths.insert(name.clone(), file_dir.clone());
-                if let Some(boundary) = boundary {
-                    container_boundaries.insert(name.clone(), boundary.clone());
-                }
-                containers.insert(name.clone(), container.clone());
             }
             for (name, task) in &file.tasks {
-                if let Some(previous) = task_origins.insert(name.clone(), file_path.clone()) {
-                    anyhow::bail!(
-                        "The task '{name}' is defined in multiple files: '{}' and '{}'",
-                        previous.display(),
-                        file_path.display()
-                    );
+                let files = task_files.entry(name).or_default();
+                files.push(file_path);
+                if files.len() == 1 {
+                    tasks.insert(name.clone(), task.clone());
                 }
-                tasks.insert(name.clone(), task.clone());
             }
             for (name, var) in file.config_variables.iter().flatten() {
-                if let Some(previous) =
-                    config_variable_origins.insert(name.clone(), file_path.clone())
-                {
-                    anyhow::bail!(
-                        "The config variable '{name}' is defined in multiple files: '{}' and \
-                         '{}'",
-                        previous.display(),
-                        file_path.display()
-                    );
+                let files = config_variable_files.entry(name).or_default();
+                files.push(file_path);
+                if files.len() == 1 {
+                    config_variables.insert(name.clone(), var.clone());
                 }
-                config_variables.insert(name.clone(), var.clone());
+            }
+        }
+        // Tasks, then containers, then config variables, as Batect checks
+        // them; within each, the first duplicated name as declared.
+        for (kind, defined_in) in [
+            ("task", &task_files),
+            ("container", &container_files),
+            ("config variable", &config_variable_files),
+        ] {
+            if let Some((name, files)) = defined_in.iter().find(|(_, files)| files.len() > 1) {
+                let files: Vec<String> = files
+                    .iter()
+                    .map(|file| format!("'{}'", file.display()))
+                    .collect();
+                anyhow::bail!(
+                    "The {kind} '{name}' is defined in multiple files: {}",
+                    crate::engine::human_readable_list(&files, "and")
+                );
             }
         }
 

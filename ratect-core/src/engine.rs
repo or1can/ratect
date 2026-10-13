@@ -404,7 +404,7 @@ fn suggest_task_names(tasks: &IndexMap<String, Task>, name: &str) -> Vec<String>
 /// Joins `items` into a human-readable list — `["a"]` → `"a"`, `["a", "b"]`
 /// → `"a or b"`, `["a", "b", "c"]` → `"a, b or c"` (no Oxford comma) — ported
 /// from Batect's own `Collection<String>.asHumanReadableList`.
-fn human_readable_list(items: &[String], conjunction: &str) -> String {
+pub(crate) fn human_readable_list(items: &[String], conjunction: &str) -> String {
     match items {
         [] => String::new(),
         [only] => only.clone(),

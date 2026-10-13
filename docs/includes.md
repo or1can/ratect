@@ -59,7 +59,7 @@ include:
 
 Every loaded file's `containers`, `tasks` and `config_variables` are merged
 into one flat set. A name defined in more than one file is a hard error naming
-the conflicting files — it is never treated as one file overriding another,
+every file that defines it — it is never treated as one file overriding another,
 so a project can't redefine a container that came from a bundle (see [what a
 consuming project can and can't
 change](reusable-building-blocks.md#what-a-consuming-project-can-and-cant-change)

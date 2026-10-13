@@ -8221,7 +8221,13 @@ tasks:
     .unwrap();
 
     let result = Config::load_from_file(&dir.join("batect.yml")).await;
-    assert!(format!("{:?}", result.unwrap_err()).contains("build"));
+    let d = dir.display();
+    assert_eq!(
+        format!("{:#}", result.unwrap_err()),
+        format!(
+            "The task 'build' is defined in multiple files: '{d}/batect.yml' and '{d}/extra.yml'"
+        )
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -12156,4 +12162,123 @@ async fn evaluating_several_bad_values_reports_the_first_declared() {
         format!("{error:#}").contains("'customise.zz.environment.B'"),
         "{error:#}"
     );
+}
+
+/// Writes `files` (name, body) into a fresh directory and loads its
+/// `batect.yml`, returning the error and the directory.
+async fn duplicate_definition_error(files: &[(&str, &str)]) -> (String, PathBuf) {
+    let dir = unique_temp_dir();
+    for (name, body) in files {
+        std::fs::write(dir.join(name), body).unwrap();
+    }
+    let error = Config::load_from_file(&dir.join("batect.yml"))
+        .await
+        .unwrap_err();
+    std::fs::remove_dir_all(&dir).ok();
+    (format!("{error:#}"), dir)
+}
+
+// A name defined in more than one file is reported once every file has
+// loaded: tasks, then containers, then config variables, the first
+// duplicated name as declared, naming every file that defines it (#432).
+
+#[tokio::test]
+async fn a_container_defined_in_three_files_names_all_three() {
+    let (error, dir) = duplicate_definition_error(&[
+        (
+            "batect.yml",
+            "project_name: demo\ninclude: [1.yml, 2.yml]\ncontainers:\n  c1: {image: alpine}\n",
+        ),
+        ("1.yml", "containers:\n  c1: {image: alpine}\n"),
+        ("2.yml", "containers:\n  c1: {image: alpine}\n"),
+    ])
+    .await;
+    let d = dir.display();
+    assert_eq!(
+        error,
+        format!(
+            "The container 'c1' is defined in multiple files: '{d}/batect.yml', '{d}/1.yml' and \
+             '{d}/2.yml'"
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_task_defined_in_three_files_names_all_three() {
+    let (error, dir) = duplicate_definition_error(&[
+        (
+            "batect.yml",
+            "project_name: demo\ninclude: [1.yml, 2.yml]\ncontainers:\n  c: {image: alpine}\ntasks:\n  t1: {run: {container: c}}\n",
+        ),
+        ("1.yml", "tasks:\n  t1: {run: {container: c}}\n"),
+        ("2.yml", "tasks:\n  t1: {run: {container: c}}\n"),
+    ])
+    .await;
+    let d = dir.display();
+    assert_eq!(
+        error,
+        format!(
+            "The task 't1' is defined in multiple files: '{d}/batect.yml', '{d}/1.yml' and \
+             '{d}/2.yml'"
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_config_variable_defined_in_three_files_names_all_three() {
+    let (error, dir) = duplicate_definition_error(&[
+        (
+            "batect.yml",
+            "project_name: demo\ninclude: [1.yml, 2.yml]\nconfig_variables:\n  v: {}\n",
+        ),
+        ("1.yml", "config_variables:\n  v: {}\n"),
+        ("2.yml", "config_variables:\n  v: {}\n"),
+    ])
+    .await;
+    let d = dir.display();
+    assert_eq!(
+        error,
+        format!(
+            "The config variable 'v' is defined in multiple files: '{d}/batect.yml', '{d}/1.yml' \
+             and '{d}/2.yml'"
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_duplicate_task_is_reported_before_a_duplicate_container() {
+    let (error, _) = duplicate_definition_error(&[
+        (
+            "batect.yml",
+            "project_name: demo\ninclude: [1.yml]\ncontainers:\n  c1: {image: alpine}\ntasks:\n  t1: {run: {container: c1}}\n",
+        ),
+        (
+            "1.yml",
+            "containers:\n  c1: {image: alpine}\ntasks:\n  t1: {run: {container: c1}}\n",
+        ),
+    ])
+    .await;
+    assert!(
+        error.starts_with("The task 't1' is defined in multiple files"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn of_several_duplicate_tasks_the_first_declared_is_reported() {
+    let tasks: String = (1..=8)
+        .map(|n| format!("  t{n}: {{run: {{container: c}}}}\n"))
+        .collect();
+    let root = format!(
+        "project_name: demo\ninclude: [1.yml]\ncontainers:\n  c: {{image: alpine}}\ntasks:\n{tasks}"
+    );
+    let included = format!("tasks:\n{tasks}");
+    for _ in 0..8 {
+        let (error, _) =
+            duplicate_definition_error(&[("batect.yml", &root), ("1.yml", &included)]).await;
+        assert!(
+            error.starts_with("The task 't1' is defined in multiple files"),
+            "{error}"
+        );
+    }
 }
