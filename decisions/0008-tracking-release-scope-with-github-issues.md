@@ -2,20 +2,17 @@
 
 ## Status
 
-Accepted — adopted immediately for the in-progress `ratect-compat 0.27.0` /
-`ratect 0.6.0` release's *remaining* scope. A GitHub Milestone named
-`ratect-compat 0.27.0 · ratect 0.6.0` exists, holding the five issues (#2-#6)
-this decision's own originating work produced.
-
-`RELEASES.md`'s existing `0.6.0` entry is not rewritten by this decision —
-it still holds the live scope-then-strikethrough record of the first six
-candidates, landed under the old convention before this decision was made.
-The **append-only guarantee protects a version once it ships** (tagged,
-bumped off `-dev`) — not while it's still being written. So that entry is
-expected to be rewritten *once*, wholesale, into this decision's short
-retrospective form when `0.6.0` actually ships (covering both candidate
-batches, old and new), rather than gaining more hand-written strikethrough
-bullets for issues #2-#6 as they land. No action is needed on it now.
+Accepted — adopted for the `ratect-compat 0.27.0` / `ratect 0.6.0` release's
+*remaining* scope, tracked in the Milestone named
+`ratect-compat 0.27.0 · ratect 0.6.0` (issues #2-#6, this decision's own
+originating work). That release has shipped, and `RELEASES.md`'s `0.6.0`
+entry — the last written under the old live scope-then-strikethrough
+convention — was rewritten once, wholesale, into this decision's short
+retrospective form when it did, as planned: the **append-only guarantee
+protects a version once it ships** (tagged, bumped off `-dev`), not while
+it's still being written. Every release since has had its short entry
+written once, after shipping; no in-progress entry under the old convention
+remains.
 
 ## Context
 
