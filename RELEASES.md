@@ -1248,6 +1248,25 @@ to live at, so links written before the split still resolve.
   documentation is now a published, searchable site. See the closed
   [milestone](https://github.com/or1can/ratect/milestone/7) for everything
   that shipped.
+- **0.32.0** — Two themes, shared with [`ratect` 0.11.0](#ratect) below
+  through `ratect-core`, with two breaking changes for this binary, both
+  listed under Breaking in [`CHANGELOG.md`](CHANGELOG.md). **Config is
+  checked at load and evaluated per task**
+  ([decisions/0014](decisions/0014-config-checked-at-load-evaluated-per-task.md)):
+  loading judges only what the file says, a run evaluates each task's values
+  when it reaches that task and only for the containers it uses, and a value
+  this machine can't supply fails only a task that needs it — so
+  `--list-tasks` lists, and reads no config-variables file, whatever the
+  machine lacks. **The spec-level Batect parity sweep is closed**: every
+  area swept and recorded, each remaining gap its own issue, and the ones
+  fixed here follow Batect where the outcome differed — a `batect.yml`'s
+  `run_as_current_user.home_directory` and string-form volume host paths
+  are used as written (the two breaking changes), a NUL in a host path and a
+  missing build-secret file are refused before any container exists, a
+  name defined in several files names every file, and of several problems
+  the first declared is the one reported. See the closed
+  [milestone](https://github.com/or1can/ratect/milestone/11) for everything
+  that shipped.
 - **1.0.0** — the [Batect Parity](ROADMAP.md#batect-parity) section above substantially checked
   off (all of the above, including 0.7.0–0.19.0, not just the items shipped through
   0.6.0), and verified against real Batect projects — the conformance corpus above
@@ -1571,6 +1590,23 @@ to live at, so links written before the split still resolve.
   convert` warns about task containers whose gate stops running.
   See the closed
   [milestone](https://github.com/or1can/ratect/milestone/7) for everything
+  that shipped.
+- **0.11.0** — The config-compatibility release, on top of the shared
+  `ratect-core` work in [`ratect-compat` 0.32.0](#ratect-compat) above. A
+  root `ratect.toml` can declare the Ratect version it was written for, and
+  `ratect` refuses a project written for a newer one, or one whose meaning a
+  later release changed, naming the change
+  ([decisions/0015](decisions/0015-native-project-records-its-written-for-version.md)).
+  `config validate` and `doctor` evaluate the whole project and warn about
+  each value this machine can't evaluate instead of stopping at the first.
+  `config convert` converts each file beside itself rather than flattening
+  a project into one, and prints what to check afterwards — in the output
+  and in each file's header. `resources` reads only the root file's
+  `project_name`, so a refused or unevaluable project no longer stops it.
+  `tasks list`'s config-variable options are deprecated, having nothing
+  left to do. The two breaking changes above apply here to any YAML file a
+  native project includes. See the closed
+  [milestone](https://github.com/or1can/ratect/milestone/11) for everything
   that shipped.
 
 Its **1.0.0** means something different from `ratect-compat`'s: interface stability
