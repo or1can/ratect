@@ -45,7 +45,7 @@ jobs:
       # gradle-wrapper/pip_requirements for examples/'s per-ecosystem
       # projects (see renovate.json5's own ignorePaths comment for why
       # those need the same coverage as everything else here).
-      - uses: renovatebot/github-action@v46.3.0
+      - uses: renovatebot/github-action@v46.3.8
         env:
           RENOVATE_ENABLED_MANAGERS: "cargo,dockerfile,batect,npm,gomod,gradle,gradle-wrapper,pip_requirements"
           # Without this, Renovate does nothing and warns "No repositories
