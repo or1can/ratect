@@ -74,7 +74,7 @@ fn write_converted(converted: &ConvertedProject) {
 /// it converted per file, which a project with no includes is promised to
 /// keep byte for byte. The three-part rendering ([`render`]'s scalars,
 /// `include`, tables) must therefore join back into `toml`'s own one-part
-/// rendering when there's no `include`.
+/// rendering of the same [`sorted`] value when there's no `include`.
 #[test]
 fn a_file_with_no_includes_renders_as_one_pretty_document() {
     let yaml = r#"
@@ -97,7 +97,7 @@ tasks:
     let document: Document = noyalib::from_str(yaml).unwrap();
     let rendered = render(&document, Some(version())).unwrap();
     let config: Config = noyalib::from_str(yaml).unwrap();
-    let whole = toml::to_string_pretty(&toml::Value::try_from(&config).unwrap()).unwrap();
+    let whole = toml::to_string_pretty(&sorted(toml::Value::try_from(&config).unwrap())).unwrap();
     assert_eq!(rendered, format!("ratect_version = \"{VERSION}\"\n{whole}"));
 
     // Pins `config convert`'s documented limitation: `ports`/`volumes` come
@@ -602,5 +602,22 @@ async fn two_sources_converting_to_one_target_is_an_error() {
         error.contains(&dir.join("shared.toml").display().to_string())
             && error.contains("overwrite it with its own conversion"),
         "{error}"
+    );
+}
+
+/// Every table is written with its keys sorted, at every depth and inside
+/// arrays — the alphabetical output `config convert` had before `toml`'s
+/// `preserve_order`. Checked against literal text, independently of
+/// [`sorted`] (the test above uses it to check the join, not the order).
+/// Containers declared `zz` first, a struct's fields (`local` before
+/// `container`) and an object-form volume inside an array each fail
+/// unsorted every time; `environment`, a `HashMap`, almost every time.
+#[test]
+fn every_table_is_written_in_key_order() {
+    let yaml = "project_name: demo\ncontainers:\n  zz:\n    image: alpine\n    volumes:\n      - {local: ., container: /code}\n    environment: {J: '10', I: '9', H: '8', G: '7', F: '6', E: '5', D: '4', C: '3', B: '2', A: '1'}\n  aa:\n    image: alpine\n";
+    let document: Document = noyalib::from_str(yaml).unwrap();
+    assert_eq!(
+        render(&document, None).unwrap(),
+        "project_name = \"demo\"\n\n[containers.aa]\nimage = \"alpine\"\n\n[containers.zz]\nimage = \"alpine\"\n\n[containers.zz.environment]\nA = \"1\"\nB = \"2\"\nC = \"3\"\nD = \"4\"\nE = \"5\"\nF = \"6\"\nG = \"7\"\nH = \"8\"\nI = \"9\"\nJ = \"10\"\n\n[[containers.zz.volumes]]\ncontainer = \"/code\"\nlocal = \".\"\n"
     );
 }

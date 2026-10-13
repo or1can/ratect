@@ -85,6 +85,7 @@ use crate::docker::ContainerRuntime;
 use crate::ui::{EventSink, TaskEvent};
 use anyhow::{Context, Result};
 use async_recursion::async_recursion;
+use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -331,7 +332,7 @@ fn wildcard_to_regex(pattern: &str) -> Result<regex::Regex> {
 /// used" rule as a natural side effect, with no extra list-level dedup
 /// needed here.
 fn expand_prerequisite_wildcards(
-    tasks: &HashMap<String, Task>,
+    tasks: &IndexMap<String, Task>,
     patterns: &[String],
 ) -> Result<Vec<String>> {
     let mut expanded = Vec::new();
@@ -387,7 +388,7 @@ fn edit_distance(a: &str, b: &str) -> usize {
 /// suggestion, dropping the other. This breaks ties alphabetically instead,
 /// so a tie shows every equally-close match rather than an arbitrary one of
 /// them.
-fn suggest_task_names(tasks: &HashMap<String, Task>, name: &str) -> Vec<String> {
+fn suggest_task_names(tasks: &IndexMap<String, Task>, name: &str) -> Vec<String> {
     let mut suggestions: Vec<(usize, &String)> = tasks
         .keys()
         .map(|task_name| (edit_distance(name, task_name), task_name))
@@ -417,7 +418,7 @@ fn human_readable_list(items: &[String], conjunction: &str) -> String {
 /// Builds the `" Did you mean 'x' or 'y'?"` suffix Batect appends to a
 /// "task does not exist" error — an empty string when nothing is close
 /// enough to suggest. See `suggest_task_names`.
-fn format_task_suggestions(tasks: &HashMap<String, Task>, name: &str) -> String {
+fn format_task_suggestions(tasks: &IndexMap<String, Task>, name: &str) -> String {
     let suggestions = suggest_task_names(tasks, name);
     if suggestions.is_empty() {
         return String::new();
@@ -1588,7 +1589,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             .as_ref()
             .map(|run| {
                 container_names_in_task(
-                    &self.project.config.containers,
+                    |name| self.project.config.containers.get(name),
                     &run.container,
                     task.dependencies.as_deref(),
                 )
@@ -1721,8 +1722,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // dependency) gets the same `no_proxy` exemption list, matching
         // Batect's `allContainersInNetwork` being fixed for the whole graph
         // rather than recomputed per container.
-        let no_proxy_entries =
-            container_names_in_task(&containers, &run.container, task.dependencies.as_deref());
+        let no_proxy_entries = container_names_in_task(
+            |name| containers.get(name),
+            &run.container,
+            task.dependencies.as_deref(),
+        );
         // Identifies every resource this one task execution creates (see
         // `crate::labels`). The id is generated here rather than alongside
         // the network below, so it exists even under `--use-network`, where
@@ -2500,7 +2504,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         cells: &Mutex<HashMap<String, ReadyCell>>,
         created_dependencies: &CreatedDependencies,
         no_proxy_entries: &std::collections::BTreeSet<String>,
-        customisations: Option<&HashMap<String, TaskContainerCustomisation>>,
+        customisations: Option<&IndexMap<String, TaskContainerCustomisation>>,
         run_labels: &crate::labels::RunLabels,
         dependency_watchers: &Mutex<Vec<tokio::task::JoinHandle<()>>>,
     ) -> Result<String> {

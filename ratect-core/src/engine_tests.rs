@@ -1066,7 +1066,7 @@ fn task(container: &str, command: &str) -> Task {
 }
 
 fn config_with_cycle() -> Config {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         Container {
@@ -1113,7 +1113,7 @@ fn config_with_cycle() -> Config {
         },
     );
 
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert(
         "a".to_string(),
         Task {
@@ -1163,8 +1163,8 @@ fn config_with_cycle() -> Config {
 fn empty_config() -> Config {
     Config {
         project_name: "demo".to_string(),
-        containers: HashMap::new(),
-        tasks: HashMap::new(),
+        containers: IndexMap::new(),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     }
@@ -1173,7 +1173,7 @@ fn empty_config() -> Config {
 /// Mirrors the diamond-shaped dependency graph in the sample `batect.yml`:
 /// two tasks share a common prerequisite, and a final task depends on both.
 fn config_with_shared_prerequisite() -> Config {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         Container {
@@ -1236,7 +1236,7 @@ fn config_with_shared_prerequisite() -> Config {
         customise: None,
     };
 
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("shared-prereq".to_string(), task("shared-prereq", None));
     tasks.insert(
         "prereq-task".to_string(),
@@ -1353,10 +1353,10 @@ async fn shared_prerequisite_runs_once_and_image_pulled_once() {
 }
 
 fn config_with_wildcard_prerequisite_tasks() -> Config {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container("alpine:3.18", None));
 
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("lint:bar".to_string(), task("build-env", "lint-bar"));
     tasks.insert("lint:foo".to_string(), task("build-env", "lint-foo"));
     tasks.insert("build".to_string(), task("build-env", "build"));
@@ -1398,9 +1398,9 @@ async fn wildcard_prerequisite_expands_to_matching_tasks_in_alphabetical_order()
 
 #[tokio::test]
 async fn wildcard_prerequisite_matching_no_tasks_is_not_an_error() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     let mut ci_task = task("build-env", "ci");
     ci_task.prerequisites = Some(vec!["nonexistent:*".to_string()]);
     tasks.insert("ci".to_string(), ci_task);
@@ -1428,9 +1428,9 @@ async fn wildcard_prerequisite_matching_no_tasks_is_not_an_error() {
 
 #[tokio::test]
 async fn explicit_prerequisite_and_overlapping_wildcard_only_runs_once() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("lint:foo".to_string(), task("build-env", "lint-foo"));
     let mut ci_task = task("build-env", "ci");
     ci_task.prerequisites = Some(vec!["lint:foo".to_string(), "lint:*".to_string()]);
@@ -1461,9 +1461,9 @@ async fn explicit_prerequisite_and_overlapping_wildcard_only_runs_once() {
 
 #[tokio::test]
 async fn nonexistent_literal_prerequisite_still_errors() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     let mut ci_task = task("build-env", "ci");
     ci_task.prerequisites = Some(vec!["does-not-exist".to_string()]);
     tasks.insert("ci".to_string(), ci_task);
@@ -1484,9 +1484,9 @@ async fn nonexistent_literal_prerequisite_still_errors() {
 
 #[tokio::test]
 async fn wildcard_pattern_with_multiple_asterisks_matches() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert(
         "lint:foo:unit".to_string(),
         task("build-env", "lint-foo-unit"),
@@ -1539,7 +1539,7 @@ fn wildcard_expansion_treats_regex_metacharacters_in_task_names_literally() {
         }
     }
 
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build.env".to_string(), minimal_task());
     tasks.insert("buildXenv".to_string(), minimal_task());
 
@@ -1656,9 +1656,9 @@ async fn without_prerequisites_scopes_to_whichever_task_is_named_as_top_level() 
 
 #[tokio::test]
 async fn only_the_top_level_tasks_own_container_run_is_interactive_eligible() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -1682,10 +1682,10 @@ async fn only_the_top_level_tasks_own_container_run_is_interactive_eligible() {
 
 #[tokio::test]
 async fn prerequisite_tasks_own_container_is_never_interactive() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
     containers.insert("setup".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("setup".to_string(), task("setup", "echo setting up"));
     tasks.insert(
         "run".to_string(),
@@ -1811,9 +1811,9 @@ async fn cache_mounts_are_owned_by_the_mapped_user() {
             scope: Default::default(),
         }),
     ]);
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -1880,9 +1880,9 @@ async fn a_read_only_cache_mount_is_not_owned_by_the_mapped_user() {
             scope: Default::default(),
         }),
     ]);
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -1912,12 +1912,12 @@ async fn a_read_only_cache_mount_is_not_owned_by_the_mapped_user() {
 
 #[tokio::test]
 async fn run_as_current_user_reaches_the_container() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "app".to_string(),
         container_with_run_as_current_user("alpine:3.18", None, "/home/container-user"),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -1946,7 +1946,7 @@ async fn run_as_current_user_reaches_the_container() {
 
 #[tokio::test]
 async fn a_dependencys_run_as_current_user_is_independent_of_its_own_containers() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "database".to_string(),
         container_with_run_as_current_user("alpine:3.18", None, "/home/container-user"),
@@ -1955,7 +1955,7 @@ async fn a_dependencys_run_as_current_user_is_independent_of_its_own_containers(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -1990,9 +1990,9 @@ async fn a_dependencys_run_as_current_user_is_independent_of_its_own_containers(
 
 #[tokio::test]
 async fn container_without_run_as_current_user_reaches_the_container_with_no_mapping() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2025,7 +2025,7 @@ fn container_with_network_options(
 
 #[tokio::test]
 async fn additional_hostnames_and_hosts_reach_a_tasks_own_container() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "app".to_string(),
         container_with_network_options(
@@ -2038,7 +2038,7 @@ async fn additional_hostnames_and_hosts_reach_a_tasks_own_container() {
             )])),
         ),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2068,7 +2068,7 @@ async fn additional_hostnames_and_hosts_reach_a_tasks_own_container() {
 
 #[tokio::test]
 async fn additional_hostnames_and_hosts_reach_a_dependency_independently() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
@@ -2082,7 +2082,7 @@ async fn additional_hostnames_and_hosts_reach_a_dependency_independently() {
             None,
         ),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2131,12 +2131,12 @@ fn container_with_ports(image: &str, ports: Vec<PortMapping>) -> Container {
 
 #[tokio::test]
 async fn ports_reach_the_container() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "app".to_string(),
         container_with_ports("alpine:3.18", vec![single_port(8080, 80, "tcp")]),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2157,12 +2157,12 @@ async fn ports_reach_the_container() {
 
 #[tokio::test]
 async fn task_run_ports_are_added_to_the_containers_own_ports() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "app".to_string(),
         container_with_ports("alpine:3.18", vec![single_port(8080, 80, "tcp")]),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     let mut task_config = task("app", "echo hi");
     task_config.run.as_mut().unwrap().ports = Some(vec![single_port(9090, 90, "tcp")]);
     tasks.insert("run".to_string(), task_config);
@@ -2187,12 +2187,12 @@ async fn task_run_ports_are_added_to_the_containers_own_ports() {
 
 #[tokio::test]
 async fn disable_port_publishing_suppresses_configured_ports() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "app".to_string(),
         container_with_ports("alpine:3.18", vec![single_port(8080, 80, "tcp")]),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2221,7 +2221,7 @@ async fn disable_port_publishing_suppresses_configured_ports() {
 
 #[tokio::test]
 async fn run_as_current_user_explicitly_disabled_reaches_the_container_with_no_mapping() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "app".to_string(),
         Container {
@@ -2270,7 +2270,7 @@ async fn run_as_current_user_explicitly_disabled_reaches_the_container_with_no_m
             network_mode: None,
         },
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2342,12 +2342,12 @@ fn container_with_build_directory(
 
 #[tokio::test]
 async fn build_directory_container_builds_then_runs_the_built_image() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         container_with_build_directory("./docker", None),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2387,12 +2387,12 @@ async fn build_directory_container_builds_then_runs_the_built_image() {
 
 #[tokio::test]
 async fn build_directory_container_does_not_force_pull_by_default() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         container_with_build_directory("./docker", None),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2412,7 +2412,7 @@ async fn build_directory_container_does_not_force_pull_by_default() {
 
 #[tokio::test]
 async fn build_directory_container_with_always_policy_force_pulls_the_base_image() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         Container {
@@ -2420,7 +2420,7 @@ async fn build_directory_container_with_always_policy_force_pulls_the_base_image
             ..container_with_build_directory("./docker", None)
         },
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2440,7 +2440,7 @@ async fn build_directory_container_with_always_policy_force_pulls_the_base_image
 
 #[tokio::test]
 async fn build_directory_container_passes_dockerfile_and_target_through() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         Container {
@@ -2449,7 +2449,7 @@ async fn build_directory_container_passes_dockerfile_and_target_through() {
             ..container_with_build_directory("./docker", None)
         },
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2474,12 +2474,12 @@ async fn build_directory_container_passes_dockerfile_and_target_through() {
 
 #[tokio::test]
 async fn build_directory_container_defaults_dockerfile_when_unset() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         container_with_build_directory("./docker", None),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2503,12 +2503,12 @@ async fn build_directory_container_defaults_dockerfile_when_unset() {
 
 #[tokio::test]
 async fn build_directory_container_without_secrets_or_ssh_skips_buildkit() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         container_with_build_directory("./docker", None),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2531,7 +2531,7 @@ async fn build_directory_container_passes_secrets_and_ssh_through_as_buildkit_op
     // A file secret has to exist by the time the build runs (#315).
     let cert = std::env::temp_dir().join(format!("ratect-cert-{}", uuid::Uuid::new_v4()));
     std::fs::write(&cert, "cert").unwrap();
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         Container {
@@ -2552,7 +2552,7 @@ async fn build_directory_container_passes_secrets_and_ssh_through_as_buildkit_op
             ..container_with_build_directory("./docker", None)
         },
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2595,7 +2595,7 @@ async fn build_directory_container_passes_secrets_and_ssh_through_as_buildkit_op
 #[tokio::test]
 async fn a_missing_build_secret_file_fails_before_the_image_is_built() {
     let missing = std::env::temp_dir().join(format!("ratect-315-{}", uuid::Uuid::new_v4()));
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         Container {
@@ -2606,7 +2606,7 @@ async fn a_missing_build_secret_file_fails_before_the_image_is_built() {
             ..container_with_build_directory("./docker", None)
         },
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2642,7 +2642,7 @@ async fn a_missing_build_secret_file_fails_before_the_image_is_built() {
 /// how config becomes a `SshAgentSource` would go unnoticed there.
 #[tokio::test]
 async fn build_ssh_key_paths_reach_docker_as_a_named_key_source() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         Container {
@@ -2662,7 +2662,7 @@ async fn build_ssh_key_paths_reach_docker_as_a_named_key_source() {
             ..container_with_build_directory("./docker", None)
         },
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2699,7 +2699,7 @@ async fn build_ssh_key_paths_reach_docker_as_a_named_key_source() {
 /// searching. Every other config error in Ratect names its container.
 #[tokio::test]
 async fn an_invalid_build_ssh_entry_names_the_container_it_came_from() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     let mut container = container_with_build_directory("./docker", None);
     // Two sockets under one id: rejected, and only reachable from here
     // because whether a path is a socket is a filesystem question that
@@ -2719,7 +2719,7 @@ async fn an_invalid_build_ssh_entry_names_the_container_it_came_from() {
         paths: sockets,
     }]);
     containers.insert("build-env".to_string(), container);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2753,12 +2753,12 @@ async fn an_invalid_build_ssh_entry_names_the_container_it_came_from() {
 /// for.
 #[tokio::test]
 async fn a_failed_build_names_the_container_whatever_layer_failed() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         container_with_build_directory("./docker", None),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2787,12 +2787,12 @@ async fn a_failed_build_names_the_container_whatever_layer_failed() {
 
 #[tokio::test]
 async fn built_image_is_tagged_with_project_and_container_name() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         container_with_build_directory("./docker", None),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2819,12 +2819,12 @@ async fn built_image_is_tagged_with_project_and_container_name() {
 
 #[tokio::test]
 async fn build_directory_is_only_built_once_when_reused_across_tasks() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         container_with_build_directory("./docker", None),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("first".to_string(), task("build-env", "echo one"));
     tasks.insert(
         "second".to_string(),
@@ -2870,12 +2870,12 @@ async fn build_directory_is_only_built_once_when_reused_across_tasks() {
 async fn build_args_reach_the_build() {
     let mut build_args = HashMap::new();
     build_args.insert("VERSION".to_string(), "1.2.3".to_string());
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         container_with_build_directory("./docker", Some(build_args)),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2902,7 +2902,7 @@ async fn build_args_reach_the_build() {
 
 #[tokio::test]
 async fn dependency_container_with_build_directory_is_built_and_started() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "database".to_string(),
         container_with_build_directory("./db", None),
@@ -2911,7 +2911,7 @@ async fn dependency_container_with_build_directory_is_built_and_started() {
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -2957,7 +2957,7 @@ async fn dependency_container_with_build_directory_is_built_and_started() {
 
 #[tokio::test]
 async fn container_without_image_or_build_directory_errors() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         Container {
@@ -3003,7 +3003,7 @@ async fn container_without_image_or_build_directory_errors() {
             network_mode: None,
         },
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -3030,9 +3030,9 @@ async fn container_without_image_or_build_directory_errors() {
 
 #[tokio::test]
 async fn dependency_less_task_still_gets_its_own_network() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -3074,9 +3074,9 @@ async fn dependency_less_task_still_gets_its_own_network() {
 
 #[tokio::test]
 async fn use_network_reuses_an_existing_network_instead_of_creating_one() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -3134,13 +3134,13 @@ async fn network_mode_applies_to_its_own_container_alone() {
             Some(vec!["sharer".to_string(), "isolated".to_string()]),
         );
         app.network_mode = Some(NetworkMode::Host);
-        let containers = HashMap::from([
+        let containers = IndexMap::from([
             ("peer".to_string(), container("alpine:3.18", None)),
             ("sharer".to_string(), sharer),
             ("isolated".to_string(), isolated),
             ("app".to_string(), app),
         ]);
-        let tasks = HashMap::from([("build".to_string(), task("app", "echo hi"))]);
+        let tasks = IndexMap::from([("build".to_string(), task("app", "echo hi"))]);
         let config = Config {
             project_name: "demo".to_string(),
             containers,
@@ -3181,9 +3181,9 @@ async fn network_mode_applies_to_its_own_container_alone() {
 
 #[tokio::test]
 async fn use_network_errors_clearly_when_the_network_does_not_exist() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -3220,9 +3220,9 @@ async fn a_missing_network_still_posts_task_failed() {
     // the failure now reaches the same TaskFailed contract every other
     // infrastructure failure does, with no CleanupStarting/
     // RemovingNetwork posted (nothing was ever created to clean up).
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -3263,13 +3263,13 @@ async fn a_missing_network_still_posts_task_failed() {
 
 #[tokio::test]
 async fn dependency_starts_before_main_container_and_is_cleaned_up() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), container("postgres:16", None));
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -3327,13 +3327,13 @@ async fn dependency_starts_before_main_container_and_is_cleaned_up() {
 fn config_with_database_dependency(configure: impl FnOnce(&mut Container)) -> Config {
     let mut database = container("postgres:16", None);
     configure(&mut database);
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), database);
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     Config {
         project_name: "demo".to_string(),
@@ -3557,7 +3557,7 @@ async fn setup_command_falls_back_to_a_customised_working_directory() {
             run_in: None,
         }]);
     });
-    config.tasks.get_mut("start").unwrap().customise = Some(HashMap::from([(
+    config.tasks.get_mut("start").unwrap().customise = Some(IndexMap::from([(
         "database".to_string(),
         TaskContainerCustomisation {
             environment: None,
@@ -3831,7 +3831,7 @@ async fn unhealthy_dependency_fails_the_task_and_still_cleans_up() {
 /// Two sibling dependencies of `app`, `peer` and `fails`, for the
 /// cut-short-start tests below (ratect#224).
 fn config_with_sibling_dependencies() -> Config {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("peer".to_string(), container("alpine:3.18", None));
     containers.insert("fails".to_string(), container("alpine:3.18", None));
     containers.insert(
@@ -3841,7 +3841,7 @@ fn config_with_sibling_dependencies() -> Config {
             Some(vec!["peer".to_string(), "fails".to_string()]),
         ),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     Config {
         project_name: "demo".to_string(),
@@ -4010,7 +4010,7 @@ fn config_with_an_external_health_check() -> Config {
     companion.run_to_completion = Some(true);
     companion.reports_readiness_for = Some("database".to_string());
 
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), database);
     containers.insert(COMPANION.to_string(), companion);
     containers.insert(
@@ -4020,7 +4020,7 @@ fn config_with_an_external_health_check() -> Config {
             Some(vec!["database".to_string(), COMPANION.to_string()]),
         ),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     Config {
         project_name: "demo".to_string(),
@@ -4197,7 +4197,7 @@ async fn failing_run_to_completion_dependency_fails_the_task_and_still_cleans_up
 /// run-to-completion one at once, in any combination.
 #[tokio::test]
 async fn run_to_completion_and_regular_dependencies_can_be_mixed() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("migrate".to_string(), {
         let mut c = container("alpine:3.18", None);
         c.run_to_completion = Some(true);
@@ -4211,7 +4211,7 @@ async fn run_to_completion_and_regular_dependencies_can_be_mixed() {
             Some(vec!["migrate".to_string(), "cache".to_string()]),
         ),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -4252,7 +4252,7 @@ async fn run_to_completion_and_regular_dependencies_can_be_mixed() {
 /// mirrors `independent_dependencies_start_concurrently_not_sequentially`.
 #[tokio::test(start_paused = true)]
 async fn independent_run_to_completion_dependencies_run_concurrently() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("migrate-a".to_string(), {
         let mut c = container("alpine:3.18", None);
         c.run_to_completion = Some(true);
@@ -4270,7 +4270,7 @@ async fn independent_run_to_completion_dependencies_run_concurrently() {
             Some(vec!["migrate-a".to_string(), "migrate-b".to_string()]),
         ),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -4302,14 +4302,14 @@ async fn independent_run_to_completion_dependencies_run_concurrently() {
 /// readiness gate either way.
 #[tokio::test]
 async fn run_to_completion_dependency_declared_directly_on_the_task() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("migrate".to_string(), {
         let mut c = container("alpine:3.18", None);
         c.run_to_completion = Some(true);
         c
     });
     containers.insert("app".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     let mut task = task("app", "echo hi");
     task.dependencies = Some(vec!["migrate".to_string()]);
     tasks.insert("start".to_string(), task);
@@ -4348,14 +4348,14 @@ async fn run_to_completion_dependency_declared_directly_on_the_task() {
 #[tokio::test]
 async fn run_to_completion_is_inert_on_a_tasks_own_container() {
     let config = || {
-        let mut containers = HashMap::new();
+        let mut containers = IndexMap::new();
         containers.insert("c".to_string(), {
             let mut c = container("alpine:3.18", None);
             c.run_to_completion = Some(true);
             c
         });
         containers.insert("app".to_string(), container("alpine:3.18", None));
-        let mut tasks = HashMap::new();
+        let mut tasks = IndexMap::new();
         tasks.insert("a".to_string(), task("c", "echo hi"));
         let mut b = task("app", "echo hi");
         b.dependencies = Some(vec!["c".to_string()]);
@@ -4911,7 +4911,7 @@ async fn task_containers_own_health_check_reaches_docker_and_is_waited_on() {
     // the same readiness gate a dependency always has (see
     // `run_task_container_readiness`), run concurrently with its main
     // command rather than gating anything.
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     let mut app = container("alpine:3.18", None);
     app.health_check = Some(crate::config::HealthCheckConfig {
         command: Some("wget -q localhost".to_string()),
@@ -4921,7 +4921,7 @@ async fn task_containers_own_health_check_reaches_docker_and_is_waited_on() {
         timeout: None,
     });
     containers.insert("app".to_string(), app);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -4956,7 +4956,7 @@ async fn task_containers_own_health_check_reaches_docker_and_is_waited_on() {
 
 #[tokio::test(start_paused = true)]
 async fn unhealthy_task_container_fails_the_task() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     let mut app = container("alpine:3.18", None);
     app.health_check = Some(crate::config::HealthCheckConfig {
         command: Some("wget -q localhost".to_string()),
@@ -4966,7 +4966,7 @@ async fn unhealthy_task_container_fails_the_task() {
         timeout: None,
     });
     containers.insert("app".to_string(), app);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -4992,7 +4992,7 @@ async fn unhealthy_task_container_fails_the_task() {
 
 #[tokio::test]
 async fn task_containers_own_setup_commands_run() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     let mut app = container("alpine:3.18", None);
     app.setup_commands = Some(vec![crate::config::SetupCommand {
         command: "./migrate.sh".to_string(),
@@ -5000,7 +5000,7 @@ async fn task_containers_own_setup_commands_run() {
         run_in: None,
     }]);
     containers.insert("app".to_string(), app);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -5029,7 +5029,7 @@ async fn task_containers_own_setup_commands_run() {
 fn config_with_task_working_directory_and_setup_command(
     setup_command_working_directory: Option<&str>,
 ) -> Config {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     let mut app = container("alpine:3.18", None);
     app.working_directory = Some("/from-container".to_string());
     app.setup_commands = Some(vec![crate::config::SetupCommand {
@@ -5040,7 +5040,7 @@ fn config_with_task_working_directory_and_setup_command(
     containers.insert("app".to_string(), app);
     let mut start = task("app", "echo hi");
     start.run.as_mut().unwrap().working_directory = Some("/from-task".to_string());
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), start);
     Config {
         project_name: "demo".to_string(),
@@ -5080,7 +5080,7 @@ async fn task_containers_setup_commands_own_working_directory_overrides_the_task
 
 #[tokio::test(start_paused = true)]
 async fn failing_setup_command_on_the_tasks_own_container_fails_the_task() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     let mut app = container("alpine:3.18", None);
     app.setup_commands = Some(vec![crate::config::SetupCommand {
         command: "./migrate.sh".to_string(),
@@ -5088,7 +5088,7 @@ async fn failing_setup_command_on_the_tasks_own_container_fails_the_task() {
         run_in: None,
     }]);
     containers.insert("app".to_string(), app);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -5235,7 +5235,7 @@ async fn a_run_container_failure_before_creation_reports_rather_than_hanging() {
 /// shared fixture for the three cleanup-policy tests above, which differ
 /// only in which flag they set.
 fn config_with_failing_task_container_setup_command() -> Config {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     let mut app = container("alpine:3.18", None);
     app.setup_commands = Some(vec![crate::config::SetupCommand {
         command: "./migrate.sh".to_string(),
@@ -5243,7 +5243,7 @@ fn config_with_failing_task_container_setup_command() -> Config {
         run_in: None,
     }]);
     containers.insert("app".to_string(), app);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     Config {
         project_name: "demo".to_string(),
@@ -5264,7 +5264,7 @@ async fn task_containers_own_setup_commands_run_concurrently_with_its_main_comma
     // readiness) model would take roughly their sum, while running them
     // concurrently (matching Batect — see docs/task-lifecycle.md's
     // "Known limitations") takes roughly just the one delay.
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     let mut app = container("alpine:3.18", None);
     app.setup_commands = Some(vec![crate::config::SetupCommand {
         command: "./migrate.sh".to_string(),
@@ -5272,7 +5272,7 @@ async fn task_containers_own_setup_commands_run_concurrently_with_its_main_comma
         run_in: None,
     }]);
     containers.insert("app".to_string(), app);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -5930,13 +5930,13 @@ async fn a_dependencys_readiness_failure_fails_the_task_in_either_dialect() {
 
 #[tokio::test]
 async fn task_fails_when_container_exits_nonzero_but_dependencies_are_still_cleaned_up() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), container("postgres:16", None));
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "exit 1"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -6096,7 +6096,7 @@ async fn without_cleanup_after_failure_has_no_effect_on_a_successful_run() {
 
 #[tokio::test]
 async fn nested_dependencies_start_in_order_on_same_network() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("cache".to_string(), container("redis:7", None));
     containers.insert(
         "database".to_string(),
@@ -6106,7 +6106,7 @@ async fn nested_dependencies_start_in_order_on_same_network() {
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -6152,7 +6152,7 @@ async fn nested_dependencies_start_in_order_on_same_network() {
 async fn independent_dependencies_start_concurrently_not_sequentially() {
     // "dep-a" and "dep-b" share no dependency relationship — 0.15.0
     // should start both at once rather than one after the other.
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("dep-a".to_string(), container("alpine:3.18", None));
     containers.insert("dep-b".to_string(), container("alpine:3.18", None));
     containers.insert(
@@ -6162,7 +6162,7 @@ async fn independent_dependencies_start_concurrently_not_sequentially() {
             Some(vec!["dep-a".to_string(), "dep-b".to_string()]),
         ),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -6195,7 +6195,7 @@ async fn concurrent_dependencies_sharing_an_image_only_pull_it_once() {
     // between them) but share one image — with a delay long enough that
     // both branches genuinely overlap while the first one is still
     // deciding/pulling, proving the pull is memoized rather than raced.
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("dep-a".to_string(), container("shared-image:1", None));
     containers.insert("dep-b".to_string(), container("shared-image:1", None));
     containers.insert(
@@ -6205,7 +6205,7 @@ async fn concurrent_dependencies_sharing_an_image_only_pull_it_once() {
             Some(vec!["dep-a".to_string(), "dep-b".to_string()]),
         ),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -6240,7 +6240,7 @@ async fn concurrent_dependencies_sharing_an_image_only_pull_it_once() {
 /// graph's own structure could explain serialization — only
 /// `--max-parallelism`'s own cap could.
 fn config_with_two_independent_image_pulls() -> Config {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("dep-a".to_string(), container("image-a:1", None));
     containers.insert("dep-b".to_string(), container("image-b:1", None));
     containers.insert(
@@ -6250,7 +6250,7 @@ fn config_with_two_independent_image_pulls() -> Config {
             Some(vec!["dep-a".to_string(), "dep-b".to_string()]),
         ),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     Config {
         project_name: "demo".to_string(),
@@ -6334,7 +6334,7 @@ async fn default_unbounded_parallelism_still_lets_independent_pulls_overlap() {
 /// `config_with_two_independent_image_pulls` but sharing one image
 /// (irrelevant here — nothing in these tests is keyed by image name).
 fn config_with_two_independent_dependencies() -> Config {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("dep-a".to_string(), container("alpine:3.18", None));
     containers.insert("dep-b".to_string(), container("alpine:3.18", None));
     containers.insert(
@@ -6344,7 +6344,7 @@ fn config_with_two_independent_dependencies() -> Config {
             Some(vec!["dep-a".to_string(), "dep-b".to_string()]),
         ),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     Config {
         project_name: "demo".to_string(),
@@ -6448,7 +6448,7 @@ async fn max_parallelism_does_not_gate_health_check_waits() {
 
 #[tokio::test]
 async fn shared_nested_dependency_started_once_per_task() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("cache".to_string(), container("redis:7", None));
     containers.insert(
         "database".to_string(),
@@ -6465,7 +6465,7 @@ async fn shared_nested_dependency_started_once_per_task() {
             Some(vec!["database".to_string(), "search".to_string()]),
         ),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -6507,14 +6507,14 @@ async fn shared_nested_dependency_started_once_per_task() {
 
 #[tokio::test]
 async fn task_level_dependency_starts_alongside_container_level_ones() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("cache".to_string(), container("redis:7", None));
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["cache".to_string()])),
     );
     containers.insert("queue".to_string(), container("redis:7", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     let mut start_task = task("app", "echo hi");
     start_task.dependencies = Some(vec!["queue".to_string()]);
     tasks.insert("start".to_string(), start_task);
@@ -6549,13 +6549,13 @@ async fn task_level_dependency_starts_alongside_container_level_ones() {
 
 #[tokio::test]
 async fn task_level_dependency_shared_with_a_container_level_one_only_starts_once() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("cache".to_string(), container("redis:7", None));
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["cache".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     // Task-level `dependencies` names the same container "app" already
     // depends on at the container level — must dedup to a single start,
     // not start "cache" twice.
@@ -6591,7 +6591,7 @@ async fn task_level_dependency_shared_with_a_container_level_one_only_starts_onc
 async fn deeply_nested_dependencies_all_start_in_order() {
     // a -> b -> c -> d, four levels total, to prove the recursion isn't
     // accidentally limited to one or two levels.
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("d".to_string(), container("alpine:3.18", None));
     containers.insert(
         "c".to_string(),
@@ -6605,7 +6605,7 @@ async fn deeply_nested_dependencies_all_start_in_order() {
         "app".to_string(),
         container("alpine:3.18", Some(vec!["b".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -6647,13 +6647,13 @@ async fn deeply_nested_dependencies_all_start_in_order() {
 
 #[tokio::test]
 async fn separate_tasks_each_get_their_own_dependency_instance() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), container("postgres:16", None));
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("migrate".to_string(), task("app", "migrate"));
     tasks.insert(
         "test".to_string(),
@@ -6710,7 +6710,7 @@ async fn separate_tasks_each_get_their_own_dependency_instance() {
 
 #[tokio::test]
 async fn dependency_without_image_or_build_directory_errors() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "database".to_string(),
         Container {
@@ -6760,7 +6760,7 @@ async fn dependency_without_image_or_build_directory_errors() {
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -6781,7 +6781,7 @@ async fn dependency_without_image_or_build_directory_errors() {
 
 #[tokio::test]
 async fn detects_circular_container_dependency() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "a".to_string(),
         container("alpine:3.18", Some(vec!["b".to_string()])),
@@ -6794,7 +6794,7 @@ async fn detects_circular_container_dependency() {
         "app".to_string(),
         container("alpine:3.18", Some(vec!["a".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -6860,7 +6860,7 @@ async fn a_wildly_misspelled_task_name_suggests_nothing() {
 
 #[test]
 fn suggests_multiple_close_matches_as_a_human_readable_list() {
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     for name in ["test", "text", "tent", "unrelated"] {
         tasks.insert(
             name.to_string(),
@@ -6906,7 +6906,7 @@ async fn task_run_environment_reaches_the_container() {
         "CONTAINER_VAR".to_string(),
         "container-value".to_string(),
     )]));
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
 
     let mut task_config = task("build-env", "echo hi");
@@ -6914,7 +6914,7 @@ async fn task_run_environment_reaches_the_container() {
         "RUN_VAR".to_string(),
         "run-value".to_string(),
     )]));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task_config);
 
     let config = Config {
@@ -6945,7 +6945,7 @@ async fn task_run_environment_overrides_container_environment_on_key_collision()
         "SHARED".to_string(),
         "from-container".to_string(),
     )]));
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
 
     let mut task_config = task("build-env", "echo hi");
@@ -6953,7 +6953,7 @@ async fn task_run_environment_overrides_container_environment_on_key_collision()
         "SHARED".to_string(),
         "from-run".to_string(),
     )]));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task_config);
 
     let config = Config {
@@ -6977,10 +6977,10 @@ async fn task_run_environment_overrides_container_environment_on_key_collision()
 async fn container_working_directory_reaches_the_container() {
     let mut container_config = container("alpine:3.18", None);
     container_config.working_directory = Some("/app".to_string());
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
 
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
 
     let config = Config {
@@ -7006,12 +7006,12 @@ async fn container_working_directory_reaches_the_container() {
 async fn task_run_working_directory_overrides_container_working_directory() {
     let mut container_config = container("alpine:3.18", None);
     container_config.working_directory = Some("/from-container".to_string());
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
 
     let mut task_config = task("build-env", "echo hi");
     task_config.run.as_mut().unwrap().working_directory = Some("/from-run".to_string());
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task_config);
 
     let config = Config {
@@ -7041,10 +7041,10 @@ async fn container_command_reaches_the_container_when_run_command_is_unset() {
     // the task's own `run` doesn't set one.
     let mut container_config = container("alpine:3.18", None);
     container_config.command = Some("/from-container".to_string());
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
 
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert(
         "test".to_string(),
         Task {
@@ -7090,10 +7090,10 @@ async fn container_command_reaches_the_container_when_run_command_is_unset() {
 async fn container_entrypoint_reaches_the_container() {
     let mut container_config = container("alpine:3.18", None);
     container_config.entrypoint = Some("/bin/sh -c".to_string());
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
 
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
 
     let config = Config {
@@ -7122,10 +7122,10 @@ async fn container_labels_reach_the_container() {
         "com.example.owner".to_string(),
         "platform-team".to_string(),
     )]));
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
 
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
 
     let config = Config {
@@ -7157,12 +7157,12 @@ async fn container_labels_reach_the_container() {
 /// orphaned-resource entry.
 #[tokio::test]
 async fn every_resource_a_run_creates_is_labelled_with_that_run() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), container("postgres:16", None));
     let mut app = container("alpine:3.18", None);
     app.dependencies = Some(vec!["database".to_string()]);
     containers.insert("app".to_string(), app);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("check".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -7217,12 +7217,12 @@ async fn every_resource_a_run_creates_is_labelled_with_that_run() {
 /// one — the containers still have to agree on which run they're from.
 #[tokio::test]
 async fn containers_share_a_run_id_even_with_an_existing_network() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), container("postgres:16", None));
     let mut app = container("alpine:3.18", None);
     app.dependencies = Some(vec!["database".to_string()]);
     containers.insert("app".to_string(), app);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("check".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -7259,10 +7259,10 @@ async fn container_capabilities_reach_the_container() {
     container_config.capabilities_to_add =
         Some(HashSet::from([crate::config::Capability::NetAdmin]));
     container_config.capabilities_to_drop = Some(HashSet::from([crate::config::Capability::Chown]));
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
 
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
 
     let config = Config {
@@ -7292,10 +7292,10 @@ async fn container_capabilities_reach_the_container() {
 async fn container_privileged_reaches_the_container() {
     let mut container_config = container("alpine:3.18", None);
     container_config.privileged = Some(true);
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
 
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
 
     let config = Config {
@@ -7318,10 +7318,10 @@ async fn container_privileged_reaches_the_container() {
 async fn container_shm_size_reaches_the_container() {
     let mut container_config = container("alpine:3.18", None);
     container_config.shm_size = Some(128 * 1024 * 1024);
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
 
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
 
     let config = Config {
@@ -7348,10 +7348,10 @@ async fn container_devices_reach_the_container() {
         container: "/dev/xvda".to_string(),
         options: Some("rwm".to_string()),
     }]);
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
 
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
 
     let config = Config {
@@ -7381,10 +7381,10 @@ async fn container_devices_reach_the_container() {
 async fn container_enable_init_process_reaches_the_container() {
     let mut container_config = container("alpine:3.18", None);
     container_config.enable_init_process = Some(true);
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
 
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
 
     let config = Config {
@@ -7409,10 +7409,10 @@ async fn container_log_driver_and_log_options_reach_the_container() {
     container_config.log_driver = Some("json-file".to_string());
     container_config.log_options =
         Some(HashMap::from([("max-size".to_string(), "10m".to_string())]));
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
 
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
 
     let config = Config {
@@ -7453,10 +7453,10 @@ async fn container_tmpfs_mounts_reach_the_container() {
             options: Some("size=64m".to_string()),
         }),
     ]);
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
 
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
 
     let config = Config {
@@ -7491,10 +7491,10 @@ async fn container_tmpfs_mount_without_options_defaults_to_an_empty_string() {
             options: None,
         },
     )]);
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
 
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
 
     let config = Config {
@@ -7519,9 +7519,9 @@ async fn container_tmpfs_mount_without_options_defaults_to_an_empty_string() {
 #[tokio::test]
 async fn if_not_present_policy_pulls_when_the_image_is_missing_locally() {
     // No image_pull_policy set — IfNotPresent is the default.
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -7543,9 +7543,9 @@ async fn if_not_present_policy_pulls_when_the_image_is_missing_locally() {
 async fn if_not_present_policy_skips_the_pull_when_the_image_already_exists_locally() {
     let mut container_config = container("alpine:3.18", None);
     container_config.image_pull_policy = Some(crate::config::ImagePullPolicy::IfNotPresent);
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -7567,9 +7567,9 @@ async fn if_not_present_policy_skips_the_pull_when_the_image_already_exists_loca
 async fn always_policy_pulls_even_when_the_image_already_exists_locally() {
     let mut container_config = container("alpine:3.18", None);
     container_config.image_pull_policy = Some(crate::config::ImagePullPolicy::Always);
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -7589,9 +7589,9 @@ async fn always_policy_pulls_even_when_the_image_already_exists_locally() {
 
 #[tokio::test]
 async fn image_override_pulls_the_override_instead_of_the_configured_image() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -7631,9 +7631,9 @@ async fn image_override_ignores_the_containers_configured_pull_policy() {
     // patched copy of the original.
     let mut container_config = container("alpine:3.18", None);
     container_config.image_pull_policy = Some(crate::config::ImagePullPolicy::Always);
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -7664,12 +7664,12 @@ async fn image_override_ignores_the_containers_configured_pull_policy() {
 
 #[tokio::test]
 async fn image_override_replaces_a_build_directory_container_with_a_pull_instead() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     let mut container_config = container("unused-if-overridden", None);
     container_config.image = None;
     container_config.build_directory = Some(".".to_string());
     containers.insert("build-env".to_string(), container_config);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -7703,9 +7703,9 @@ async fn image_override_replaces_a_build_directory_container_with_a_pull_instead
 
 #[test]
 fn with_settings_rejects_an_unknown_image_override_container_name() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -7737,15 +7737,15 @@ fn with_settings_rejects_an_unknown_image_override_container_name() {
 /// each one is checked against the field the equivalent builder sets.
 #[test]
 fn with_settings_applies_every_setting() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
         containers,
         tasks,
-        config_variables: Some(HashMap::from([(
+        config_variables: Some(IndexMap::from([(
             "flavour".to_string(),
             crate::config::ConfigVariable {
                 description: None,
@@ -7813,8 +7813,8 @@ fn with_settings_applies_every_setting() {
 fn default_settings_leave_an_engine_in_its_no_flags_state() {
     let config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::new(),
-        tasks: HashMap::new(),
+        containers: IndexMap::new(),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -7843,8 +7843,8 @@ fn default_settings_leave_an_engine_in_its_no_flags_state() {
 fn with_settings_still_rejects_an_unknown_image_override() {
     let config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::new(),
-        tasks: HashMap::new(),
+        containers: IndexMap::new(),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -7868,12 +7868,12 @@ fn with_settings_still_rejects_an_unknown_image_override() {
 
 #[tokio::test]
 async fn tag_image_tags_a_built_image_in_addition_to_the_default_tag() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         container_with_build_directory(".", None),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -7906,9 +7906,9 @@ async fn tag_image_tags_a_built_image_in_addition_to_the_default_tag() {
 
 #[tokio::test]
 async fn tag_image_errors_immediately_when_the_container_uses_a_pulled_image() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -7941,12 +7941,12 @@ async fn tag_image_errors_immediately_when_the_container_uses_a_pulled_image() {
 
 #[tokio::test]
 async fn tag_image_errors_immediately_when_an_override_image_replaces_a_build_with_a_pull() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         container_with_build_directory(".", None),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -7981,12 +7981,12 @@ async fn tag_image_errors_immediately_when_an_override_image_replaces_a_build_wi
 
 #[tokio::test]
 async fn tag_image_errors_once_the_task_finishes_if_the_tagged_container_never_ran() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         container_with_build_directory(".", None),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -8022,10 +8022,10 @@ async fn tag_image_errors_once_the_task_finishes_if_the_tagged_container_never_r
 async fn task_run_command_overrides_container_command() {
     let mut container_config = container("alpine:3.18", None);
     container_config.command = Some("/from-container".to_string());
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
 
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "/from-run"));
 
     let config = Config {
@@ -8054,12 +8054,12 @@ async fn task_run_command_overrides_container_command() {
 async fn task_run_entrypoint_overrides_container_entrypoint() {
     let mut container_config = container("alpine:3.18", None);
     container_config.entrypoint = Some("/from-container".to_string());
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container_config);
 
     let mut task_config = task("build-env", "echo hi");
     task_config.run.as_mut().unwrap().entrypoint = Some("/from-run".to_string());
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task_config);
 
     let config = Config {
@@ -8083,9 +8083,9 @@ async fn task_run_entrypoint_overrides_container_entrypoint() {
 
 #[tokio::test]
 async fn proxy_environment_variables_reach_a_tasks_own_container() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -8120,9 +8120,9 @@ async fn explicit_environment_overrides_a_proxy_derived_value_on_collision() {
         "http_proxy".to_string(),
         "http://explicit.example.com".to_string(),
     )]));
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container_config);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -8149,9 +8149,9 @@ async fn explicit_environment_overrides_a_proxy_derived_value_on_collision() {
 
 #[tokio::test]
 async fn no_proxy_vars_flag_suppresses_propagation() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -8215,9 +8215,9 @@ fn proc_net_tcp(address: &str, port: u16) -> String {
 /// A one-container project, since every test below differs only in the
 /// engine it builds around it.
 fn proxy_warning_config() -> Config {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     Config {
         project_name: "demo".to_string(),
@@ -8309,9 +8309,9 @@ fn a_host_with_no_proc_net_tcp_reports_nothing() {
 /// add the entry, or it has swapped one unreachable URL for another.
 #[tokio::test]
 async fn a_rewritten_proxy_url_adds_the_host_gateway_to_a_tasks_own_container() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -8338,13 +8338,13 @@ async fn a_rewritten_proxy_url_adds_the_host_gateway_to_a_tasks_own_container() 
 /// nothing about it makes the name resolve on its own.
 #[tokio::test]
 async fn a_rewritten_proxy_url_adds_the_host_gateway_to_a_dependencys_container() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
     containers.insert("database".to_string(), container("postgres:16", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -8368,9 +8368,9 @@ async fn a_rewritten_proxy_url_adds_the_host_gateway_to_a_dependencys_container(
 /// image it produces would have worked.
 #[tokio::test]
 async fn a_rewritten_proxy_url_adds_the_host_gateway_to_an_image_build() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container_with_build_directory(".", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -8397,9 +8397,9 @@ async fn a_rewritten_proxy_url_adds_the_host_gateway_to_an_image_build() {
 /// name into every container that nothing in the run asked for.
 #[tokio::test]
 async fn a_proxy_url_that_was_not_rewritten_adds_no_host_gateway() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -8422,13 +8422,13 @@ async fn a_proxy_url_that_was_not_rewritten_adds_no_host_gateway() {
 
 #[tokio::test]
 async fn a_dependencys_name_is_exempted_from_the_tasks_own_no_proxy() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
     containers.insert("database".to_string(), container("postgres:16", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -8460,10 +8460,10 @@ async fn a_dependencys_name_is_exempted_from_the_tasks_own_no_proxy() {
 
 #[tokio::test]
 async fn a_task_level_dependencys_name_is_exempted_from_the_tasks_own_no_proxy() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
     containers.insert("queue".to_string(), container("redis:7", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     let mut run_task = task("app", "echo hi");
     run_task.dependencies = Some(vec!["queue".to_string()]);
     tasks.insert("run".to_string(), run_task);
@@ -8489,7 +8489,7 @@ async fn a_task_level_dependencys_name_is_exempted_from_the_tasks_own_no_proxy()
 
 #[tokio::test]
 async fn customise_overrides_a_dependencys_working_directory_environment_and_ports() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     let mut database = container_with_ports("postgres:16", vec![single_port(5432, 5432, "tcp")]);
     database.environment = Some(HashMap::from([("BASE".to_string(), "base".to_string())]));
     database.working_directory = Some("/from-container".to_string());
@@ -8498,9 +8498,9 @@ async fn customise_overrides_a_dependencys_working_directory_environment_and_por
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     let mut run_task = task("app", "echo hi");
-    run_task.customise = Some(HashMap::from([(
+    run_task.customise = Some(IndexMap::from([(
         "database".to_string(),
         TaskContainerCustomisation {
             environment: Some(HashMap::from([(
@@ -8544,7 +8544,7 @@ async fn customise_overrides_a_dependencys_working_directory_environment_and_por
 /// A config whose only unevaluable value sits in `deploy`, a container no
 /// task here uses — what decisions/0014's per-task evaluation is for.
 fn config_with_an_unevaluable_container(unevaluable: &str) -> Config {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
     let mut deploy = container("alpine:3.18", None);
     deploy.environment = Some(HashMap::from([(
@@ -8552,7 +8552,7 @@ fn config_with_an_unevaluable_container(unevaluable: &str) -> Config {
         "$RATECT_TEST_UNSET".to_string(),
     )]));
     containers.insert(unevaluable.to_string(), deploy);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("app", "echo build"));
     let mut test = task("app", "echo test");
     test.prerequisites = Some(vec!["build".to_string()]);
@@ -8626,7 +8626,7 @@ async fn a_failing_prerequisite_is_reported_before_a_later_tasks_unevaluable_val
 
 #[tokio::test]
 async fn a_tasks_values_are_evaluated_against_the_host_and_its_config_variables() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     let mut database = container("postgres:16", None);
     database.environment = Some(HashMap::from([(
         "FROM_CONTAINER".to_string(),
@@ -8642,7 +8642,7 @@ async fn a_tasks_values_are_evaluated_against_the_host_and_its_config_variables(
         "FROM_RUN".to_string(),
         "<flavour".to_string(),
     )]));
-    run_task.customise = Some(HashMap::from([(
+    run_task.customise = Some(IndexMap::from([(
         "database".to_string(),
         TaskContainerCustomisation {
             environment: Some(HashMap::from([(
@@ -8656,8 +8656,8 @@ async fn a_tasks_values_are_evaluated_against_the_host_and_its_config_variables(
     let config = Config {
         project_name: "demo".to_string(),
         containers,
-        tasks: HashMap::from([("run".to_string(), run_task)]),
-        config_variables: Some(HashMap::from([(
+        tasks: IndexMap::from([("run".to_string(), run_task)]),
+        config_variables: Some(IndexMap::from([(
             "flavour".to_string(),
             crate::config::ConfigVariable {
                 description: None,
@@ -8702,9 +8702,9 @@ fn with_settings_rejects_an_override_for_an_undeclared_config_variable() {
 
 #[tokio::test]
 async fn term_env_var_reaches_a_tasks_own_container_when_interactive() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -8726,9 +8726,9 @@ async fn term_env_var_reaches_a_tasks_own_container_when_interactive() {
 
 #[tokio::test]
 async fn term_env_var_is_absent_when_host_has_no_term_set() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -8752,13 +8752,13 @@ async fn term_env_var_is_absent_when_host_has_no_term_set() {
 
 #[tokio::test]
 async fn term_env_var_does_not_reach_a_dependency_container() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
     containers.insert("database".to_string(), container("postgres:16", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -8788,9 +8788,9 @@ async fn term_env_var_does_not_reach_a_dependency_container() {
 async fn explicit_environment_overrides_term_on_collision() {
     let mut container_config = container("alpine:3.18", None);
     container_config.environment = Some(HashMap::from([("TERM".to_string(), "dumb".to_string())]));
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container_config);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -8816,10 +8816,10 @@ async fn explicit_environment_overrides_term_on_collision() {
 
 #[tokio::test]
 async fn term_env_var_is_absent_for_a_prerequisite_tasks_own_container() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
     containers.insert("setup".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("setup".to_string(), task("setup", "echo setting up"));
     tasks.insert(
         "run".to_string(),
@@ -8874,12 +8874,12 @@ async fn build_args_get_proxy_vars_merged_with_explicit_build_args_winning() {
         "http_proxy".to_string(),
         "http://explicit.example.com".to_string(),
     );
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         container_with_build_directory("./docker", Some(build_args)),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("build".to_string(), task("build-env", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -8925,13 +8925,13 @@ async fn dependency_container_environment_reaches_the_sidecar() {
         "POSTGRES_PASSWORD".to_string(),
         "secret".to_string(),
     )]));
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), database);
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -8957,13 +8957,13 @@ async fn dependency_container_environment_reaches_the_sidecar() {
 async fn dependency_container_working_directory_reaches_the_sidecar() {
     let mut database = container("postgres:16", None);
     database.working_directory = Some("/var/lib/postgresql".to_string());
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), database);
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -8988,13 +8988,13 @@ async fn dependency_container_working_directory_reaches_the_sidecar() {
 async fn dependency_container_entrypoint_reaches_the_sidecar() {
     let mut database = container("postgres:16", None);
     database.entrypoint = Some("/entrypoint.sh".to_string());
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), database);
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -9024,13 +9024,13 @@ async fn dependency_container_command_reaches_the_sidecar() {
     // set an explicit one of its own.
     let mut database = container("postgres:16", None);
     database.command = Some("postgres -c max_connections=200".to_string());
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), database);
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -9058,13 +9058,13 @@ async fn dependency_container_labels_reach_the_sidecar() {
         "com.example.role".to_string(),
         "database".to_string(),
     )]));
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), database);
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -9088,13 +9088,13 @@ async fn dependency_container_labels_reach_the_sidecar() {
 async fn dependency_container_capabilities_reach_the_sidecar() {
     let mut database = container("postgres:16", None);
     database.capabilities_to_add = Some(HashSet::from([crate::config::Capability::SysPtrace]));
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), database);
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -9119,13 +9119,13 @@ async fn dependency_container_capabilities_reach_the_sidecar() {
 async fn dependency_container_privileged_reaches_the_sidecar() {
     let mut database = container("postgres:16", None);
     database.privileged = Some(true);
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), database);
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -9147,13 +9147,13 @@ async fn dependency_container_privileged_reaches_the_sidecar() {
 async fn dependency_container_shm_size_reaches_the_sidecar() {
     let mut database = container("postgres:16", None);
     database.shm_size = Some(256 * 1024 * 1024);
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), database);
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -9179,13 +9179,13 @@ async fn dependency_container_devices_reach_the_sidecar() {
         container: "/dev/xvdb".to_string(),
         options: None,
     }]);
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), database);
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -9219,13 +9219,13 @@ async fn dependency_container_tmpfs_mounts_reach_the_sidecar() {
             options: None,
         },
     )]);
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), database);
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -9250,13 +9250,13 @@ async fn dependency_container_tmpfs_mounts_reach_the_sidecar() {
 async fn dependency_container_enable_init_process_reaches_the_sidecar() {
     let mut database = container("postgres:16", None);
     database.enable_init_process = Some(true);
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), database);
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -9278,13 +9278,13 @@ async fn dependency_container_enable_init_process_reaches_the_sidecar() {
 async fn dependency_container_log_driver_reaches_the_sidecar() {
     let mut database = container("postgres:16", None);
     database.log_driver = Some("syslog".to_string());
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("database".to_string(), database);
     containers.insert(
         "app".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("start".to_string(), task("app", "echo hi"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -9327,7 +9327,7 @@ impl EventSink for RecordingEventSink {
 
 #[tokio::test]
 async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
@@ -9339,7 +9339,7 @@ async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
         run_in: None,
     }]);
     containers.insert("database".to_string(), database);
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "cargo test"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -9480,9 +9480,9 @@ async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
 async fn posts_pull_events_only_when_a_pull_actually_happens() {
     // `Config` isn't `Clone`, so build a fresh one per engine.
     let config = || {
-        let mut containers = HashMap::new();
+        let mut containers = IndexMap::new();
         containers.insert("build-env".to_string(), container("alpine:3.18", None));
-        let mut tasks = HashMap::new();
+        let mut tasks = IndexMap::new();
         tasks.insert("test".to_string(), task("build-env", "cargo test"));
         Config {
             project_name: "demo".to_string(),
@@ -9541,9 +9541,9 @@ async fn image_resolved_posts_even_when_no_pull_or_build_happens() {
     // never posts any of them at all. ImageResolved is the reliable
     // per-task "this container's image is ready" signal a display
     // needs regardless — this proves it posts even in that case.
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert("build-env".to_string(), container("alpine:3.18", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "cargo test"));
     let config = Config {
         project_name: "demo".to_string(),
@@ -9667,13 +9667,13 @@ async fn setup_command_output_only_posts_when_the_sink_wants_progress_detail() {
 
 #[tokio::test]
 async fn interleaved_policy_disables_interactive_and_sets_dumb_term_everywhere() {
-    let mut containers = HashMap::new();
+    let mut containers = IndexMap::new();
     containers.insert(
         "build-env".to_string(),
         container("alpine:3.18", Some(vec!["database".to_string()])),
     );
     containers.insert("database".to_string(), container("postgres:15", None));
-    let mut tasks = HashMap::new();
+    let mut tasks = IndexMap::new();
     tasks.insert("test".to_string(), task("build-env", "cargo test"));
     let config = Config {
         project_name: "demo".to_string(),

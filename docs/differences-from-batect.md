@@ -137,7 +137,11 @@ Ratect checks a config when the file loads, and the report is its own:
   own reason is in that list, under `Failed to parse config file "<path>"`. The
   same holds for every fatal error, not only a config one.
 - **With several problems, the one reported isn't necessarily Batect's first.**
-  Every config check runs before `--override-image` is checked, a duplicate
+  Of several containers, tasks or `customise` entries failing the same check,
+  the first the files declare is reported, as in Batect, but each check runs
+  over every container before the next check starts, and over containers
+  before tasks, so of two failing different checks the one reported can
+  differ. Every config check runs before `--override-image` is checked, a duplicate
   `build_ssh` id is checked after a container's image source, a volume's
   fields are checked in a different order, and of several undeclared config
   variables given values, the first by name is reported, where Batect reports

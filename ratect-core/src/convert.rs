@@ -60,6 +60,7 @@ use crate::config::{
 use crate::diagnostics::{conversion_checks, ConversionCheck, ConversionCheckKind};
 use crate::include_trust::BundleId;
 use anyhow::{Context, Result};
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -412,18 +413,19 @@ fn bundle_declares_git_includes(
 #[serde(deny_unknown_fields)]
 struct Document {
     project_name: Option<String>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    containers: HashMap<String, Container>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    tasks: HashMap<String, Task>,
-    config_variables: Option<HashMap<String, ConfigVariable>>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    containers: IndexMap<String, Container>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    tasks: IndexMap<String, Task>,
+    config_variables: Option<IndexMap<String, ConfigVariable>>,
     #[serde(default)]
     include: Vec<IncludeEntry>,
     forbid_telemetry: Option<bool>,
 }
 
 /// The order an `include` entry's keys are written in — what a reader
-/// expects, rather than the alphabetical order `toml::Value` keeps.
+/// expects, rather than the alphabetical order [`sorted`] gives every
+/// table, an entry included until this reorders it.
 const INCLUDE_KEY_ORDER: [&str; 6] = [
     "type",
     "repo",
@@ -432,6 +434,30 @@ const INCLUDE_KEY_ORDER: [&str; 6] = [
     "allow_host_paths",
     "allow_nested_git_includes",
 ];
+
+/// `value` with every table's keys sorted, at every depth, tables inside
+/// arrays included — so a converted file lists its containers, tasks and
+/// every field by name, as it did before `toml`'s `preserve_order` (which
+/// the loader needs) made tables keep insertion order. Without it,
+/// containers would follow the source file's order, a struct's fields its
+/// declaration order, and a `HashMap` field such as `environment` a
+/// different order each run.
+fn sorted(value: toml::Value) -> toml::Value {
+    match value {
+        toml::Value::Table(table) => {
+            let mut entries: Vec<(String, toml::Value)> = table.into_iter().collect();
+            entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+            toml::Value::Table(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, sorted(value)))
+                    .collect(),
+            )
+        }
+        toml::Value::Array(values) => toml::Value::Array(values.into_iter().map(sorted).collect()),
+        other => other,
+    }
+}
 
 /// Renders `document` as native TOML and proves it round-trips, then
 /// declares `written_for` first when given (the root).
@@ -443,7 +469,7 @@ const INCLUDE_KEY_ORDER: [&str; 6] = [
 /// rendered in three parts for the same reason: its scalars, then the
 /// `include` list inline, then its tables.
 fn render(document: &Document, written_for: Option<crate::written_for::Version>) -> Result<String> {
-    let value = toml::Value::try_from(document).context("serializing the configuration")?;
+    let value = sorted(toml::Value::try_from(document).context("serializing the configuration")?);
     let toml::Value::Table(table) = &value else {
         unreachable!("a struct serializes to a table");
     };
