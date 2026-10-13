@@ -44,6 +44,7 @@ history, from when it was the only binary.
 - `ratect resources list`/`clean` (ratect only) read only the root file's `project_name` to scope themselves, so a project refused by its `ratect_version`, or holding a value that can't be evaluated on this machine, no longer stops them.
 - `ratect config convert` (ratect only) warns about each string-form `volumes` entry whose host path holds an expression, and writes each `volumes` entry in the form it was read in.
 - `ratect config convert` (ratect only) lists what to check in the converted file on stdout after the success message (on stderr with `--stdout`), as `doctor` lists warnings, whatever `RUST_LOG` is set to, and repeats the list in the file's header.
+- `ratect config convert` (ratect only) converts each file the project owns beside itself — the root to `ratect.toml`, each local include to a `.toml` of the same name in its own directory, `include` entries rewritten to match — and keeps a Git include as an include. It refuses to write over any existing converted file unless forced, and `--stdout` prints each document under a banner naming its file.
 - Upgraded `noyalib` to 0.0.57, which parses some edge-case YAML closer to the YAML 1.2 spec: `0X1F` and `0x-1` load as strings, a plain scalar whose line ends in a space continues on the next line, and folded scalars and escaped line breaks follow the spec exactly. A config relying on the old reading may load differently; see noyalib's [0.0.57 release notes](https://github.com/sebastienrousseau/noyalib/releases/tag/v0.0.57).
 
 ### Deprecated

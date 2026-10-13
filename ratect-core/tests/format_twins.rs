@@ -44,7 +44,8 @@
 //! conformance projects as cases — they prove engine and Docker behaviour, and
 //! an edit to one shouldn't fail a test here.
 
-use ratect_core::config::{load_project, load_project_native, to_native_toml, Config};
+use ratect_core::config::{load_project, load_project_native, Config};
+use ratect_core::convert::convert_project;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -105,11 +106,10 @@ const ANY: &str = "*";
 const BOTH: &[Between] = &[Between::Twins, Between::Converted];
 /// A difference between the twins that the converter doesn't share: it writes
 /// the `batect.yml`'s text into a `ratect.toml`, which reads it as the twin
-/// does.
+/// does. (A difference only the converter makes — a known bug in it, cited by
+/// its issue until fixed — would list `Between::Converted` alone; none does
+/// today.)
 const TWINS: &[Between] = &[Between::Twins];
-/// A difference only the converter makes: its output says something the
-/// `batect.yml` doesn't, which the hand-written twin doesn't either.
-const CONVERTED: &[Between] = &[Between::Converted];
 
 /// Where `external_health_check`, and the companion container it generates,
 /// are documented.
@@ -122,14 +122,6 @@ const EXTERNAL_HEALTH_CHECK: &str =
 /// own container having no readiness gate in `ratect`, isn't a difference in
 /// [`Config`] and isn't listed; nor is a field one format refuses at load.
 const DIVERGENCES: &[Divergence] = &[
-    Divergence {
-        between: CONVERTED,
-        case: "includes",
-        pointer: "/containers/helper/volumes/0/local",
-        left: r#""<case>""#,
-        right: r#""<case>/more""#,
-        because: "ratect#574: flattening an include re-anchors its relative paths at the root",
-    },
     Divergence {
         between: TWINS,
         case: "literal-in-yaml",
@@ -475,9 +467,12 @@ fn copy_dir(from: &Path, to: &Path) {
 }
 
 /// `ratect config convert` checked on its own terms: its output for each
-/// case's `batect.yml`, loaded the way `ratect` loads it, against the
-/// hand-written twin. Converted in a copy of the case, so the output resolves
-/// its paths against the same files without writing into the source tree.
+/// case's `batect.yml` — the root and every converted include — loaded the
+/// way `ratect` loads it, against the hand-written twin. Written into a copy
+/// of the case's YAML side, so the output resolves its paths against the same
+/// files without writing into the source tree, and with the case's own
+/// `.toml` files left out of the copy, so a converted include that failed to
+/// be written can't be stood in for by the twin's.
 #[tokio::test]
 async fn converting_each_twins_yaml_gives_its_toml_twins_config() {
     // Only `ratect_version`, which isn't part of `Config`, depends on it.
@@ -487,14 +482,24 @@ async fn converting_each_twins_yaml_gives_its_toml_twins_config() {
         let loaded = Config::load_from_file(&case.join("batect.yml"))
             .await
             .unwrap();
-        let converted = to_native_toml(&loaded.config, version).unwrap();
+        let converted = convert_project(&loaded, version).unwrap();
 
         let scratch = scratch_dir(case_name(&case));
         let copy = &scratch.0;
         copy_dir(&case, copy);
-        let converted_file = copy.join("converted.toml");
-        std::fs::write(&converted_file, converted).unwrap();
-        let from_converted = load_project_native(&converted_file).await.unwrap();
+        for twin_file in case_files("toml") {
+            if let Ok(relative) = twin_file.strip_prefix(&case) {
+                std::fs::remove_file(copy.join(relative)).unwrap();
+            }
+        }
+        for file in &converted.files {
+            let target = copy.join(file.target.strip_prefix(&case).unwrap());
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::write(target, &file.toml).unwrap();
+        }
+        let from_converted = load_project_native(&copy.join("ratect.toml"))
+            .await
+            .unwrap();
         let twin = load_project_native(&case.join("ratect.toml"))
             .await
             .unwrap();

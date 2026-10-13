@@ -4571,59 +4571,6 @@ fn completion_excludes_a_nested_git_include_the_bundle_was_not_granted() {
     std::fs::remove_dir_all(&project).ok();
 }
 
-/// `to_native_toml` renders a config (here one with the interleaved scalar
-/// and table fields that trip naive TOML serialization, plus the custom
-/// `volumes`/`ports` (de)serializers) and its own round-trip check passes,
-/// so the result parses straight back to an equivalent `Config`.
-#[test]
-fn to_native_toml_renders_and_round_trips() {
-    let config = parse(
-        r#"
-project_name: demo
-containers:
-  app:
-    image: alpine:3.18
-    environment:
-      TZ: UTC
-    volumes:
-      - .:/code
-    ports:
-      - "8080:80"
-tasks:
-  build:
-    run:
-      container: app
-      command: echo hi
-"#,
-    );
-    let text = to_native_toml(&config, "0.11.0".parse().unwrap()).unwrap();
-    let reparsed: ConfigFile = toml::from_str(&text).unwrap();
-    // `config convert` declares the converting binary's version (decisions/0015).
-    assert_eq!(reparsed.ratect_version.as_deref(), Some("0.11.0"));
-    assert_eq!(reparsed.project_name.as_deref(), Some("demo"));
-    assert!(reparsed.containers.contains_key("app"));
-    assert!(reparsed.tasks.contains_key("build"));
-    assert_eq!(
-        reparsed.containers["app"].image.as_deref(),
-        Some("alpine:3.18")
-    );
-
-    // Pins `config convert`'s documented v1 limitation: `ports`/`volumes`
-    // come out in the compact *string* form (the existing Batect-compatible
-    // `Serialize` impls), not the object form the native format documents
-    // as canonical. Both are accepted and both round-trip, so nothing is
-    // broken — but a change here is a change to documented behaviour, and
-    // should be noticed rather than discovered.
-    assert!(
-        text.contains("\"8080:80/tcp\""),
-        "ports should still serialize to the compact string form: {text}"
-    );
-    assert!(
-        text.contains("\".:/code\""),
-        "volumes should still serialize to the compact string form: {text}"
-    );
-}
-
 /// A helper: run the native load-and-resolve path on a single TOML string
 /// written to a temp `ratect.toml`, returning the resolved project.
 async fn load_native_toml(body: &str) -> Result<LoadedProject> {

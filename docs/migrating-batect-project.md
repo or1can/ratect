@@ -41,8 +41,11 @@ reference](ratect-cli.md#differences-from-ratect-compat).
 ### Path A: convert everything in one pass
 
 `ratect config convert` reads a project's actual root `batect.yml` — includes
-and all — and flattens every included file (Git bundles too) into one
-`ratect.toml`. `ratect config convert -f batect.yml`, captured in
+and all — and converts each file the project owns beside itself: the root to
+`ratect.toml`, every local included file to a `.toml` with the same name in its
+own directory, with each `include` entry rewritten to match, so every relative
+path keeps the directory it resolves against. A Git include stays a Git include.
+`ratect config convert -f batect.yml`, captured in
 [`examples/jvm`](https://github.com/or1can/ratect/tree/main/examples/jvm) —
 the one example kept as a `batect.yml`:
 
@@ -52,19 +55,21 @@ the one example kept as a `batect.yml`:
 
 The output is a starting point, not a finished file: [`config
 convert`](ratect-cli.md#config) doesn't carry comments over, though it does
-check the result round-trips losslessly before writing it. The same
-configuration runs differently in two respects under `ratect`: a task's own
+check each file round-trips losslessly before writing anything. The same
+configuration runs differently in a few respects under `ratect`: a task's own
 container has no readiness gate (see [Dependency
-Readiness](dependency-readiness.md#the-tasks-own-container)), and an expression in
+Readiness](dependency-readiness.md#the-tasks-own-container)), an expression in
 `run_as_current_user.home_directory` or a string-form `volumes` entry's host path
 is evaluated rather than used as written (see [Where the semantics
-differ](ratect-config-reference.md#where-the-semantics-differ)). `config convert`
+differ](ratect-config-reference.md#where-the-semantics-differ)), and a Git
+include's bundle may offer a `ratect-bundle.toml` or declare Git includes of its
+own (see [the `config convert` section](ratect-cli.md#config)). `config convert`
 lists each task container whose `health_check` or `setup_commands` the first
-affects, and each `home_directory` or volume the second does, after converting and
-in the converted file's own header; a health check from the image itself can't be
-seen without the image. Review it
-field-by-field against [Configuration Reference](ratect-config-reference.md)
-before deleting the original — this is the fastest route to fully native, but
+affects, each `home_directory` or volume the second does, and each Git include
+the third does, after converting and in each converted file's own header; a
+health check from the image itself can't be seen without the image. Review each
+file against [Configuration Reference](ratect-config-reference.md)
+before deleting the originals — this is the fastest route to fully native, but
 still one diff worth reading closely, not a step to run and forget.
 
 ### Path B: migrate incrementally
@@ -127,11 +132,13 @@ into smaller files along whatever lines make sense (one per container group,
 one per pipeline stage — Batect's own `include` already supports this), then
 convert each piece in turn: since `config convert` only accepts a full root
 project (a file with its own `project_name`), converting one piece means
-pointing it at a standalone copy with a temporary `project_name` line, then
-copying the relevant `[containers...]`/`[tasks...]` tables out of its output
-into a new `.toml` file. Swap that one `include` entry from `.yml` to `.toml`,
-and move on whenever you're ready — there's no deadline, and a project can
-stay a mix of both formats indefinitely.
+pointing it at a throwaway root — a `batect.yml` in a scratch directory, with
+a temporary `project_name` line and an `include` entry naming the piece — which
+writes the piece's own `.toml` beside it, and one beside each file the piece
+itself includes, their `include` entries pointing at each other (plus a
+`ratect.toml` beside the throwaway root, to delete with it). Swap that one
+`include` entry from `.yml` to `.toml`, and move on whenever you're ready —
+there's no deadline, and a project can stay a mix of both formats indefinitely.
 
 What decides *when* a piece has to move is the feature you want. A container
 still declared in a `.yml` is a Batect container wherever it is included, so

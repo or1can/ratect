@@ -186,13 +186,13 @@ enum ConfigCommand {
     /// Convert a Batect-format `batect.yml` into this binary's native
     /// `ratect.toml`. Point `-f` at the `batect.yml` to convert.
     ///
+    /// Each local `include`d file becomes a `.toml` beside it, with the
+    /// entry rewritten to point there; a Git include stays a Git include.
     /// The output is a reviewable starting point, not a blind drop-in:
-    /// comments are lost, and any `include`d files are flattened into the one
-    /// result (Git bundles included). It preserves the configuration, not
-    /// formatting — the conversion is checked to round-trip losslessly before
-    /// it's written. Under ratect a task's own container has no readiness
-    /// gate, so a warning on stderr names each task container whose
-    /// `health_check` or `setup_commands` that affects.
+    /// comments are lost. It preserves each file's configuration, not
+    /// formatting — every conversion is checked to round-trip losslessly
+    /// before anything is written — and lists what to check where ratect
+    /// runs that configuration differently.
     Convert(ConfigConvertArgs),
 }
 
@@ -204,7 +204,7 @@ struct ConfigValidateArgs {
 
 #[derive(ClapArgs, Debug)]
 struct ConfigConvertArgs {
-    /// Overwrite `ratect.toml` if it already exists.
+    /// Overwrite any converted file that already exists.
     #[arg(long = "force")]
     force: bool,
 
@@ -1423,20 +1423,29 @@ async fn validate_config(
     report_findings(&global.config_file, &findings, style)
 }
 
-/// `ratect config convert` — translate a Batect-format `batect.yml` into a
-/// native `ratect.toml`. One-directional: `ratect-compat` stays YAML, and the
+/// `ratect config convert` — translate a Batect-format `batect.yml` project
+/// into native files. One-directional: `ratect-compat` stays YAML, and the
 /// reverse is both pointless and lossy.
 ///
 /// Loads the source through the compat (YAML) path, so its anchors/aliases/
-/// merge keys are expanded by the parser — the "inline for correctness" half —
-/// and serializes the merged but *unresolved* config, so expressions (`<var`,
-/// `$ENV`) and relative paths survive verbatim rather than being baked in.
-/// `include`d files are flattened into the one result. Comments are lost, so
-/// the output is a starting point to review, not a blind drop-in — but the
-/// conversion is checked to round-trip losslessly first, so the configuration
-/// it encodes is guaranteed identical. How `ratect` *runs* that configuration
-/// isn't — see [`ratect_core::diagnostics::conversion_checks`], listed after
-/// converting and in the converted file's header.
+/// merge keys are expanded by the parser — the "inline for correctness" half
+/// — and hands the per-file result to [`ratect_core::convert`], which
+/// writes one `.toml` per file the project owns (the root as `ratect.toml`,
+/// each local include beside itself, its `include` entries rewritten) so
+/// every relative path keeps the directory it resolves against (#574), and
+/// keeps a Git include an include. Values are *unresolved*, so expressions
+/// (`<var`, `$ENV`) survive verbatim rather than being baked in. Comments
+/// are lost, so the output is a starting point to review, not a blind
+/// drop-in — but each conversion is checked to round-trip losslessly first,
+/// so the configuration each file encodes is guaranteed identical. How
+/// `ratect` *runs* that configuration isn't — see
+/// [`ratect_core::diagnostics::ConversionCheck`], listed per file after
+/// converting and in each converted file's header.
+///
+/// The files are written all or nothing as far as can be known up front:
+/// every target is worked out first, a target that already exists refuses
+/// the whole conversion without `--force`, and a write that fails partway
+/// names what was already written.
 async fn convert_config(
     args: ConfigConvertArgs,
     global: &GlobalArgs,
@@ -1454,12 +1463,48 @@ async fn convert_config(
     let loaded = Config::load_from_file(source)
         .await
         .with_context(|| format!("Failed to load {} for conversion", source.display()))?;
-
-    let toml = ratect_core::config::to_native_toml(&loaded.config, running_version())
+    let converted = ratect_core::convert::convert_project(&loaded, running_version())
         .with_context(|| format!("Failed to convert {}", source.display()))?;
-    let checks = ratect_core::diagnostics::conversion_checks(&loaded.config);
-    let document = format!("{}\n{toml}", conversion_header(source, &checks));
-    let output = ratect_core::config::base_path_for(source).join(DEFAULT_CONFIG_FILE);
+
+    // Each path as the user would name it: the root's directory spelled as
+    // `-f` spelled it, then the file's place under it — never the absolute
+    // path the loader works in, unless an include lies outside that
+    // directory altogether.
+    let root_dir = converted.files[0]
+        .source
+        .parent()
+        .unwrap_or(Path::new(""))
+        .to_path_buf();
+    let shown = |path: &Path| -> PathBuf {
+        match path.strip_prefix(&root_dir) {
+            Ok(under_root) => ratect_core::config::base_path_for(source).join(under_root),
+            Err(_) => path.to_path_buf(),
+        }
+    };
+    let documents: Vec<ConvertedDocument> = converted
+        .files
+        .into_iter()
+        .map(|file| {
+            let source = shown(&file.source);
+            // The header names the source as seen from the converted file,
+            // which sits beside it: the bare name is true wherever the file
+            // is read, where `-f`'s spelling is true only from this cwd.
+            let text = format!(
+                "{}\n{}",
+                conversion_header(
+                    Path::new(file.source.file_name().unwrap_or_default()),
+                    &file.checks
+                ),
+                file.toml
+            );
+            ConvertedDocument {
+                source,
+                target: shown(&file.target),
+                text,
+                checks: file.checks,
+            }
+        })
+        .collect();
 
     // The list comes after the output exists, not before: a write refused by
     // no-clobber has nothing to check yet. On stderr with `--stdout`, so the
@@ -1467,33 +1512,107 @@ async fn convert_config(
     // `tracing`, for the same reason as the fatal error: it's what the user
     // has to act on, so `RUST_LOG` mustn't be able to hide it (#578).
     if args.stdout {
-        print!("{document}");
-        eprint!("{}", conversion_check_list(&output, &checks));
+        for (index, document) in documents.iter().enumerate() {
+            if documents.len() > 1 {
+                // A banner names each document when there's more than one;
+                // a single file is the file, unmarked.
+                if index > 0 {
+                    println!();
+                }
+                println!("# === {} ===", document.target.display());
+            }
+            print!("{}", document.text);
+        }
+        for document in &documents {
+            eprint!(
+                "{}",
+                conversion_check_list(&document.target, &document.checks)
+            );
+        }
         return Ok(());
     }
 
-    write_generated_config(&output, &document, args.force)?;
+    if !args.force {
+        let existing: Vec<String> = documents
+            .iter()
+            .filter(|document| document.target.exists())
+            .map(|document| document.target.display().to_string())
+            .collect();
+        if !existing.is_empty() {
+            anyhow::bail!(
+                "{} already exist{} — pass --force to overwrite {}, or --stdout to print instead.",
+                join_names(&existing),
+                if existing.len() == 1 { "s" } else { "" },
+                if existing.len() == 1 { "it" } else { "them" }
+            );
+        }
+    }
+    let mut written: Vec<String> = Vec::new();
+    for document in &documents {
+        if let Err(error) = write_generated_config(&document.target, &document.text, args.force) {
+            return Err(if written.is_empty() {
+                error
+            } else {
+                error.context(format!("Already written: {}", join_names(&written)))
+            });
+        }
+        written.push(document.target.display().to_string());
+    }
 
     if style != OutputStyle::Quiet {
-        println!("Converted {} to {}.", source.display(), output.display());
+        for document in &documents {
+            println!(
+                "Converted {} to {}.",
+                document.source.display(),
+                document.target.display()
+            );
+        }
+        let sources: Vec<String> = documents
+            .iter()
+            .map(|document| document.source.display().to_string())
+            .collect();
         println!(
-            "Review it, then remove {} (and any now-flattened includes).",
-            source.display()
+            "Review {}, then remove {}.",
+            if sources.len() == 1 { "it" } else { "them" },
+            join_names(&sources)
         );
     }
     // Even in quiet: what's left to check is what needs acting on.
-    print!("{}", conversion_check_list(&output, &checks));
+    for document in &documents {
+        print!(
+            "{}",
+            conversion_check_list(&document.target, &document.checks)
+        );
+    }
     Ok(())
 }
 
-/// A converted file's header: what it was generated from and why to review
-/// it, then — only when there is something to check — a `Check before use:`
+/// One converted file as this binary writes or prints it: the header and
+/// the document together, with the paths as the user would name them.
+struct ConvertedDocument {
+    source: PathBuf,
+    target: PathBuf,
+    text: String,
+    checks: Vec<ConversionCheck>,
+}
+
+/// `a`, `a and b`, `a, b and c`.
+fn join_names(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// A converted file's header: what it was generated from (`source`, as
+/// named from the converted file's own directory) and why to review it,
+/// then — only when there is something to check — a `Check before use:`
 /// block with one comment line per item.
 fn conversion_header(source: &Path, checks: &[ConversionCheck]) -> String {
     let mut header = format!(
         "# Generated by `ratect config convert` from {}.\n\
-         # Review before use: comments were not carried over, and any included\n\
-         # files were flattened into this one.\n",
+         # Review before use: comments were not carried over.\n",
         source.display()
     );
     if !checks.is_empty() {
@@ -1533,12 +1652,13 @@ fn conversion_check_list(output: &Path, checks: &[ConversionCheck]) -> String {
     list
 }
 
-/// Writes a converted `ratect.toml` without ever truncating an existing file
-/// in place — the output is exactly the file the user is told to hand-edit
+/// Writes one converted file without ever truncating an existing file in
+/// place — the output is exactly the file the user is told to hand-edit
 /// afterwards, so a half-written or clobbered result would lose real work.
 ///
 /// Without `--force`, the OS itself enforces no-clobber (`create_new`), which
-/// also closes the check-then-write race a separate `exists()` test would
+/// also closes the check-then-write race the up-front `exists()` sweep in
+/// `convert_config` (there to list every clash at once) would otherwise
 /// leave open. With `--force`, the new content is written to a temp sibling
 /// and atomically `rename`d over the target, so an interrupted write (full
 /// disk, signal) leaves the previous file intact rather than truncated.

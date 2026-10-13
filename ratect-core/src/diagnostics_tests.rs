@@ -513,7 +513,7 @@ async fn an_ungated_task_containers_health_check_is_warned_about() {
     assert_eq!(
         ungated_task_container_checks(&config),
         vec![ConversionCheck {
-            container: "app".to_string(),
+            container: Some("app".to_string()),
             kind: ConversionCheckKind::UngatedTaskContainer,
             message: format!(
                 "Task 't' runs container 'app' as its own, so under ratect the container's \
@@ -599,11 +599,13 @@ async fn a_home_directory_that_would_become_an_expression_is_warned_about() {
     let warnings = home_directory_expression_checks(&config);
     assert_eq!(warnings.len(), 2, "{warnings:?}");
     assert!(
-        warnings[0].container == "a" && warnings[0].message.contains("'/home/<who'"),
+        warnings[0].container.as_deref() == Some("a")
+            && warnings[0].message.contains("'/home/<who'"),
         "{warnings:?}"
     );
     assert!(
-        warnings[1].container == "b" && warnings[1].message.contains("'/home/$USER'"),
+        warnings[1].container.as_deref() == Some("b")
+            && warnings[1].message.contains("'/home/$USER'"),
         "{warnings:?}"
     );
 }
@@ -622,11 +624,11 @@ async fn a_compact_volume_that_would_become_an_expression_is_warned_about() {
     let warnings = compact_volume_expression_checks(&config);
     assert_eq!(warnings.len(), 2, "{warnings:?}");
     assert!(
-        warnings[0].container == "a" && warnings[0].message.contains("'<dir'"),
+        warnings[0].container.as_deref() == Some("a") && warnings[0].message.contains("'<dir'"),
         "{warnings:?}"
     );
     assert!(
-        warnings[1].container == "b" && warnings[1].message.contains("'$HOME/x'"),
+        warnings[1].container.as_deref() == Some("b") && warnings[1].message.contains("'$HOME/x'"),
         "{warnings:?}"
     );
 }
@@ -645,7 +647,7 @@ async fn conversion_checks_are_ordered_by_container_then_kind() {
     let checks = conversion_checks(&config);
     let placed: Vec<(&str, ConversionCheckKind)> = checks
         .iter()
-        .map(|check| (check.container.as_str(), check.kind))
+        .map(|check| (check.container.as_deref().unwrap(), check.kind))
         .collect();
     assert_eq!(
         placed,
