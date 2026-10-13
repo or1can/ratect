@@ -21,6 +21,8 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+## [ratect-compat 0.32.0 · ratect 0.11.0] - 2026-10-13
+
 ### Breaking
 
 - `run_as_current_user.home_directory` in a `batect.yml` — or in any YAML file a native project includes — is no longer an expression: it's used exactly as written, as in Batect, so `$VAR` and `<var` in it stay literal and an unset variable there no longer fails the load. In a `ratect.toml` it's still evaluated.
