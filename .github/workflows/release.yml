@@ -174,18 +174,19 @@ jobs:
           # `host` already undrafted — passing `--draft` to `gh release
           # edit` unconditionally sets it, which would re-draft an already
           # published release out from under users.
-          # `--target` pins the draft to the tagged commit from the start.
-          # Without it the draft targets `main`, and `host`'s publish step
-          # (dist's own `gh release edit --target "$GITHUB_SHA"`) then moves
-          # it — a move the REST API refuses to GITHUB_TOKEN with `HTTP 403:
-          # Resource not accessible by integration` whenever `main` has
-          # gained a `.github/workflows/` change since the tagged commit
-          # ("Update a release": a target change that alters workflow files
-          # needs a token authorised to modify workflows). That is what
-          # stranded ratect-compat/v0.32.0 as a draft: a workflow PR merged
-          # between the two binaries' publish steps, 49 seconds after one
-          # succeeded. With the target already right, the publish step's
-          # `--target` changes nothing and the check never fires.
+          # `--target` pins the draft to the tagged commit; without it the
+          # draft targets `main`, and `main` is wrong for a tag's release even
+          # before `host`'s publish step re-points it. It does not avert the
+          # one way that publish step has been seen to fail: GITHUB_TOKEN may
+          # not publish a release whose target commit's `.github/workflows/`
+          # differs from the default branch's (REST "Update a release": the
+          # token must then be authorised to modify workflows, which it never
+          # is), surfacing as `HTTP 403: Resource not accessible by
+          # integration`. That stranded ratect-compat/v0.32.0 as a draft when
+          # a `release.yml` PR merged 49 seconds after ratect/v0.11.0's
+          # publish, and four re-runs — one with this target already set —
+          # failed the same way. The rule and the recovery are in AGENTS.md's
+          # Version Lifecycle guideline.
           is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || echo "missing")"
           case "$is_draft" in
             true)
