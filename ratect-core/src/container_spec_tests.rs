@@ -313,6 +313,100 @@ fn derive_build_spec_includes_buildkit_only_when_secrets_or_ssh_are_set() {
     assert!(buildkit.ssh_agents.is_empty());
 }
 
+/// A container whose only `build_secrets` entry, `cert`, reads `path`.
+fn container_with_secret_file(path: &std::path::Path) -> Container {
+    let mut container_config = sample_container();
+    container_config.build_secrets = Some(HashMap::from([(
+        "cert".to_string(),
+        crate::config::BuildSecret::Path(path.display().to_string()),
+    )]));
+    container_config
+}
+
+/// #315: a file secret is checked before the build, as Batect does, rather
+/// than left to BuildKit — which reads it only if a `RUN` step mounts it, so
+/// a missing one that nothing mounts would build and run without complaint.
+#[test]
+fn derive_build_spec_refuses_a_secret_file_that_does_not_exist() {
+    let missing = std::env::temp_dir().join(format!("ratect-315-{}", uuid::Uuid::new_v4()));
+    let err = derive_build_spec(
+        &container_with_secret_file(&missing),
+        "/project",
+        "tag",
+        None,
+    )
+    .expect_err("a missing secret file should fail before the build");
+    assert_eq!(
+        format!("{err:#}"),
+        format!(
+            "The 'build_secrets' entry 'cert' reads '{}', which does not exist",
+            missing.display()
+        )
+    );
+}
+
+/// #315: anything that isn't a regular file — here a directory — is refused
+/// too. (Batect's own message for this case says "is not a directory", the
+/// opposite of what it checks; this one says what it means.)
+#[test]
+fn derive_build_spec_refuses_a_secret_path_that_is_not_a_file() {
+    let directory = std::env::temp_dir();
+    let err = derive_build_spec(
+        &container_with_secret_file(&directory),
+        "/project",
+        "tag",
+        None,
+    )
+    .expect_err("a directory secret should fail before the build");
+    assert_eq!(
+        format!("{err:#}"),
+        format!(
+            "The 'build_secrets' entry 'cert' reads '{}', which is not a file",
+            directory.display()
+        )
+    );
+}
+
+/// #315: of several bad entries, the same one is reported every run — the
+/// first by id — rather than whichever the map happens to yield first.
+#[test]
+fn derive_build_spec_reports_the_first_bad_secret_by_id() {
+    let missing = std::env::temp_dir().join(format!("ratect-315-{}", uuid::Uuid::new_v4()));
+    let mut container_config = sample_container();
+    container_config.build_secrets = Some(
+        ('a'..='z')
+            .map(|id| {
+                (
+                    id.to_string(),
+                    crate::config::BuildSecret::Path(missing.display().to_string()),
+                )
+            })
+            .collect(),
+    );
+    let err = derive_build_spec(&container_config, "/project", "tag", None).unwrap_err();
+    assert!(
+        format!("{err:#}").starts_with("The 'build_secrets' entry 'a' "),
+        "{err:#}"
+    );
+}
+
+/// #315: an existing regular file passes through unchanged.
+#[test]
+fn derive_build_spec_accepts_a_secret_file_that_exists() {
+    let file = std::env::temp_dir().join(format!("ratect-315-{}", uuid::Uuid::new_v4()));
+    std::fs::write(&file, "secret").unwrap();
+    let result = derive_build_spec(&container_with_secret_file(&file), "/project", "tag", None);
+    std::fs::remove_file(&file).unwrap();
+    let buildkit = result
+        .unwrap()
+        .buildkit
+        .expect("build_secrets requires BuildKit");
+    assert_eq!(
+        buildkit.secrets.get("cert"),
+        Some(&crate::docker::BuildSecretSource::File(file))
+    );
+}
+
 /// `build_args` merges proxy-derived variables with the container's own
 /// (matching today's call, `term_var`/`overlay_env` both absent), and
 /// `proxy_host_gateway` carries the same rewritten-URL entry `NetworkOptions`

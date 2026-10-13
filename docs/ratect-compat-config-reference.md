@@ -230,7 +230,9 @@ task's own container, as a dependency, or by more than one task) — but never r
   the built image's layers — keyed by the `id` such a `RUN` instruction references.
   Each entry is either `{environment: NAME}` (read from *this* `ratect` process's own
   environment at build time) or `{path: ...}` (read from a file on the host, resolved
-  like `build_directory`); exactly one of the two is required. Requires the BuildKit
+  like `build_directory`); exactly one of the two is required. A `path` must exist
+  and be a file, not a directory: as in Batect, one that isn't fails the build
+  before it begins, whether or not a `RUN` instruction mounts it. Requires the BuildKit
   builder (see builder selection above). Using `build_secrets` disables the build
   cache for that build entirely — BuildKit deliberately excludes a secret's *value*
   from its cache key (so it can't leak into one), which would otherwise let an
