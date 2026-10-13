@@ -52,7 +52,7 @@
 //! module's existence.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -738,10 +738,12 @@ fn tmpfs_mounts(
 ///
 /// Each `build_ssh` entry's already-resolved `paths` are classified into a
 /// source here — see [`crate::docker::classify_ssh_agent_paths`], which is
-/// what makes this fallible. Ids are unique by the time this runs, checked
+/// what makes this fallible, along with each `build_secrets` file's own
+/// check (`check_secret_file`). Ids are unique by the time this runs, checked
 /// when the configuration loads (`crate::config::load_project`).
 ///
-/// Failures here name an agent id rather than a container, deliberately:
+/// Failures here name an agent or secret id rather than a container,
+/// deliberately:
 /// `TaskEngine::resolve_image` attributes every way one container's build
 /// can fail, in a single place, so nothing along the path carries the name
 /// itself.
@@ -761,27 +763,55 @@ fn buildkit_options(container: &Container) -> Result<Option<crate::docker::Build
         );
     }
 
+    // Sorted by id, so which of several bad entries is reported doesn't
+    // vary from run to run with the map's iteration order.
+    let mut entries: Vec<_> = secrets.into_iter().flatten().collect();
+    entries.sort_by_key(|(id, _)| *id);
+    let mut secret_sources = HashMap::new();
+    for (id, secret) in entries {
+        let source = match secret {
+            BuildSecret::Environment(name) => {
+                crate::docker::BuildSecretSource::Environment(name.clone())
+            }
+            BuildSecret::Path(path) => {
+                let path = PathBuf::from(path);
+                check_secret_file(id, &path)?;
+                crate::docker::BuildSecretSource::File(path)
+            }
+        };
+        secret_sources.insert(id.clone(), source);
+    }
+
     Ok(Some(crate::docker::BuildKitOptions {
-        secrets: secrets
-            .map(|secrets| {
-                secrets
-                    .iter()
-                    .map(|(id, secret)| {
-                        let source = match secret {
-                            BuildSecret::Environment(name) => {
-                                crate::docker::BuildSecretSource::Environment(name.clone())
-                            }
-                            BuildSecret::Path(path) => {
-                                crate::docker::BuildSecretSource::File(PathBuf::from(path))
-                            }
-                        };
-                        (id.clone(), source)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
+        secrets: secret_sources,
         ssh_agents,
     }))
+}
+
+/// Refuses a `build_secrets` file that doesn't exist or isn't a regular file
+/// (a symlink to one is fine), before the build starts — as Batect's
+/// `resolveFileSecretPath` does (#315). BuildKit reads a secret only when a
+/// `RUN` step mounts it, so leaving the check to it means a missing secret
+/// nothing mounts builds without complaint, and a mounted one fails partway
+/// through the build.
+fn check_secret_file(id: &str, path: &Path) -> Result<()> {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => Ok(()),
+        Ok(_) => anyhow::bail!(
+            "The 'build_secrets' entry '{id}' reads '{}', which is not a file",
+            path.display()
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => anyhow::bail!(
+            "The 'build_secrets' entry '{id}' reads '{}', which does not exist",
+            path.display()
+        ),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "The 'build_secrets' entry '{id}' reads '{}', which cannot be read",
+                path.display()
+            )
+        }),
+    }
 }
 
 #[cfg(test)]

@@ -2528,6 +2528,9 @@ async fn build_directory_container_without_secrets_or_ssh_skips_buildkit() {
 
 #[tokio::test]
 async fn build_directory_container_passes_secrets_and_ssh_through_as_buildkit_options() {
+    // A file secret has to exist by the time the build runs (#315).
+    let cert = std::env::temp_dir().join(format!("ratect-cert-{}", uuid::Uuid::new_v4()));
+    std::fs::write(&cert, "cert").unwrap();
     let mut containers = HashMap::new();
     containers.insert(
         "build-env".to_string(),
@@ -2539,7 +2542,7 @@ async fn build_directory_container_passes_secrets_and_ssh_through_as_buildkit_op
                 ),
                 (
                     "cert".to_string(),
-                    BuildSecret::Path("/base/cert.pem".to_string()),
+                    BuildSecret::Path(cert.display().to_string()),
                 ),
             ])),
             build_ssh: Some(vec![crate::config::SshAgent {
@@ -2562,7 +2565,9 @@ async fn build_directory_container_passes_secrets_and_ssh_through_as_buildkit_op
     let docker = FakeContainerRuntime::default();
     let engine = engine(config, docker.clone());
 
-    engine.run_task("build", &[]).await.unwrap();
+    let result = engine.run_task("build", &[]).await;
+    std::fs::remove_file(&cert).unwrap();
+    result.unwrap();
 
     let buildkit = docker
         .buildkit_options_for("demo-build-env")
@@ -2579,10 +2584,55 @@ async fn build_directory_container_passes_secrets_and_ssh_through_as_buildkit_op
     );
     assert_eq!(
         buildkit.secrets.get("cert"),
-        Some(&crate::docker::BuildSecretSource::File(PathBuf::from(
-            "/base/cert.pem"
-        )))
+        Some(&crate::docker::BuildSecretSource::File(cert))
     );
+}
+
+/// #315: a file secret that doesn't exist fails the build before Docker is
+/// asked to build anything — whether or not the Dockerfile mounts it, which
+/// the fake can't see and Batect doesn't consult — attributed to the
+/// container whose entry it is.
+#[tokio::test]
+async fn a_missing_build_secret_file_fails_before_the_image_is_built() {
+    let missing = std::env::temp_dir().join(format!("ratect-315-{}", uuid::Uuid::new_v4()));
+    let mut containers = HashMap::new();
+    containers.insert(
+        "build-env".to_string(),
+        Container {
+            build_secrets: Some(HashMap::from([(
+                "cert".to_string(),
+                BuildSecret::Path(missing.display().to_string()),
+            )])),
+            ..container_with_build_directory("./docker", None)
+        },
+    );
+    let mut tasks = HashMap::new();
+    tasks.insert("build".to_string(), task("build-env", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    let err = engine.run_task("build", &[]).await.unwrap_err();
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("Failed to build the image for container 'build-env'"),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "The 'build_secrets' entry 'cert' reads '{}', which does not exist",
+            missing.display()
+        )),
+        "{message}"
+    );
+    assert_eq!(docker.build_spec_for("demo-build-env"), None);
 }
 
 /// The other two `build_ssh` shapes reaching Docker: several agents
