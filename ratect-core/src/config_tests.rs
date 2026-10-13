@@ -52,8 +52,13 @@ fn check_and_evaluate_in_place(
         config_var_overrides,
         host_env,
     )?;
-    config.containers = containers;
-    config.tasks = tasks;
+    // Written back in place, so `config` keeps its declaration order.
+    for (name, container) in containers {
+        config.containers[&name] = container;
+    }
+    for (name, task) in tasks {
+        config.tasks[&name] = task;
+    }
     Ok(())
 }
 
@@ -307,7 +312,7 @@ fn task_with_description_and_group(description: Option<&str>, group: Option<&str
 
 #[test]
 fn format_task_list_is_a_flat_sorted_list_when_no_task_declares_a_group() {
-    let tasks = HashMap::from([
+    let tasks = IndexMap::from([
         (
             "build".to_string(),
             task_with_description_and_group(Some("Builds the app"), None),
@@ -326,7 +331,7 @@ fn format_task_list_is_a_flat_sorted_list_when_no_task_declares_a_group() {
 
 #[test]
 fn format_task_list_groups_tasks_with_the_ungrouped_bucket_sorted_last() {
-    let tasks = HashMap::from([
+    let tasks = IndexMap::from([
         (
             "lint".to_string(),
             task_with_description_and_group(None, Some("verification")),
@@ -363,7 +368,7 @@ fn format_task_list_groups_tasks_with_the_ungrouped_bucket_sorted_last() {
 
 #[test]
 fn format_task_list_quiet_is_sorted_tab_separated_and_ignores_groups() {
-    let tasks = HashMap::from([
+    let tasks = IndexMap::from([
         (
             "test".to_string(),
             task_with_description_and_group(Some("Runs the test suite"), Some("verification")),
@@ -2062,8 +2067,8 @@ fn evaluate_makes_relative_local_volume_host_path_absolute() {
     })]);
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([("build-env".to_string(), container)]),
-        tasks: HashMap::new(),
+        containers: IndexMap::from([("build-env".to_string(), container)]),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -2092,8 +2097,8 @@ fn evaluate_leaves_absolute_local_volume_host_path_unchanged() {
     })]);
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([("build-env".to_string(), container)]),
-        tasks: HashMap::new(),
+        containers: IndexMap::from([("build-env".to_string(), container)]),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -2122,9 +2127,9 @@ fn evaluate_interpolates_relative_local_volume_host_path_expression() {
     })]);
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([("build-env".to_string(), container)]),
-        tasks: HashMap::new(),
-        config_variables: Some(HashMap::from([(
+        containers: IndexMap::from([("build-env".to_string(), container)]),
+        tasks: IndexMap::new(),
+        config_variables: Some(IndexMap::from([(
             "subdir".to_string(),
             ConfigVariable {
                 default: Some("code".to_string()),
@@ -2161,9 +2166,9 @@ fn evaluate_interpolates_absolute_local_volume_host_path_expression_without_pref
     })]);
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([("build-env".to_string(), container)]),
-        tasks: HashMap::new(),
-        config_variables: Some(HashMap::from([(
+        containers: IndexMap::from([("build-env".to_string(), container)]),
+        tasks: IndexMap::new(),
+        config_variables: Some(IndexMap::from([(
             "project_root".to_string(),
             ConfigVariable {
                 default: Some("/abs/root".to_string()),
@@ -2197,8 +2202,8 @@ fn evaluate_does_not_touch_cache_volume_mounts() {
     })]);
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([("build-env".to_string(), container)]),
-        tasks: HashMap::new(),
+        containers: IndexMap::from([("build-env".to_string(), container)]),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -2674,11 +2679,11 @@ fn container_with_build(build_directory: &str, build_args: HashMap<String, Strin
 fn evaluate_resolves_build_directory_relative_path() {
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([(
+        containers: IndexMap::from([(
             "build-env".to_string(),
             container_with_build("docker", HashMap::new()),
         )]),
-        tasks: HashMap::new(),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -2704,11 +2709,11 @@ fn evaluate_interpolates_build_args() {
     build_args.insert("MESSAGE".to_string(), "$HOST_VAR".to_string());
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([(
+        containers: IndexMap::from([(
             "build-env".to_string(),
             container_with_build("./docker", build_args),
         )]),
-        tasks: HashMap::new(),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -2737,8 +2742,8 @@ fn evaluate_resolves_build_secret_path_relative_to_base() {
     )]));
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([("build-env".to_string(), container)]),
-        tasks: HashMap::new(),
+        containers: IndexMap::from([("build-env".to_string(), container)]),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -2770,8 +2775,8 @@ fn evaluate_leaves_build_secret_environment_name_unresolved() {
     )]));
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([("build-env".to_string(), container)]),
-        tasks: HashMap::new(),
+        containers: IndexMap::from([("build-env".to_string(), container)]),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -2827,7 +2832,7 @@ fn compat_rejects_build_only_fields_alongside_an_image() {
     ] {
         let mut container = image_container();
         mutate(&mut container);
-        let containers = HashMap::from([("app".to_string(), container)]);
+        let containers = IndexMap::from([("app".to_string(), container)]);
 
         let err = validate_image_sources_in_compat(&batect_shaped_for_test(&containers))
             .expect_err("{field} alongside 'image' should be rejected");
@@ -2845,7 +2850,7 @@ fn compat_rejects_build_only_fields_alongside_an_image() {
 fn compat_rejects_a_container_with_both_image_and_build_directory() {
     let mut container = image_container();
     container.build_directory = Some("./docker".to_string());
-    let containers = HashMap::from([("app".to_string(), container)]);
+    let containers = IndexMap::from([("app".to_string(), container)]);
 
     let err = validate_image_sources_in_compat(&batect_shaped_for_test(&containers))
         .expect_err("both an image and a build directory should be rejected");
@@ -2864,7 +2869,7 @@ fn compat_rejects_a_container_with_both_image_and_build_directory() {
 fn compat_rejects_a_container_with_neither_image_nor_build_directory() {
     let mut container = image_container();
     container.image = None;
-    let containers = HashMap::from([("app".to_string(), container)]);
+    let containers = IndexMap::from([("app".to_string(), container)]);
 
     let err = validate_image_sources_in_compat(&batect_shaped_for_test(&containers))
         .expect_err("a container with no image source should be rejected");
@@ -2909,8 +2914,8 @@ fn a_relative_cache_path_under_run_as_current_user_is_rejected_naming_the_contai
     })]);
     let config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([("build-env".to_string(), container)]),
-        tasks: HashMap::new(),
+        containers: IndexMap::from([("build-env".to_string(), container)]),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -2944,8 +2949,8 @@ fn load_accepts_a_non_slash_local_mount_path() {
     })]);
     let config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([("build-env".to_string(), container)]),
-        tasks: HashMap::new(),
+        containers: IndexMap::from([("build-env".to_string(), container)]),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -3005,8 +3010,8 @@ fn load_rejects_one_cache_name_with_two_scopes() {
 
     let config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([("a".to_string(), first), ("b".to_string(), second)]),
-        tasks: HashMap::new(),
+        containers: IndexMap::from([("a".to_string(), first), ("b".to_string(), second)]),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -3053,8 +3058,8 @@ fn the_reported_scope_conflict_does_not_depend_on_hashmap_order() {
 
             let config = Config {
                 project_name: "demo".to_string(),
-                containers: HashMap::from([("a".to_string(), first), ("b".to_string(), second)]),
-                tasks: HashMap::new(),
+                containers: IndexMap::from([("a".to_string(), first), ("b".to_string(), second)]),
+                tasks: IndexMap::new(),
                 config_variables: None,
                 forbid_telemetry: None,
             };
@@ -3101,8 +3106,8 @@ fn load_rejects_a_cache_name_that_is_a_path() {
         })]);
         let config = Config {
             project_name: "demo".to_string(),
-            containers: HashMap::from([("build-env".to_string(), container)]),
-            tasks: HashMap::new(),
+            containers: IndexMap::from([("build-env".to_string(), container)]),
+            tasks: IndexMap::new(),
             config_variables: None,
             forbid_telemetry: None,
         };
@@ -3139,8 +3144,8 @@ fn load_accepts_ordinary_cache_names() {
         })]);
         let config = Config {
             project_name: "demo".to_string(),
-            containers: HashMap::from([("build-env".to_string(), container)]),
-            tasks: HashMap::new(),
+            containers: IndexMap::from([("build-env".to_string(), container)]),
+            tasks: IndexMap::new(),
             config_variables: None,
             forbid_telemetry: None,
         };
@@ -3236,14 +3241,14 @@ fn container_with_build_ssh(agents: Vec<SshAgent>) -> Container {
 fn load_accepts_a_single_default_ssh_agent() {
     let config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([(
+        containers: IndexMap::from([(
             "build-env".to_string(),
             container_with_build_ssh(vec![SshAgent {
                 id: "default".to_string(),
                 paths: Vec::new(),
             }]),
         )]),
-        tasks: HashMap::new(),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -3286,7 +3291,7 @@ tasks: {}
 fn load_accepts_several_distinctly_named_build_ssh_agents() {
     let config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([(
+        containers: IndexMap::from([(
             "build-env".to_string(),
             container_with_build_ssh(vec![
                 SshAgent {
@@ -3299,7 +3304,7 @@ fn load_accepts_several_distinctly_named_build_ssh_agents() {
                 },
             ]),
         )]),
-        tasks: HashMap::new(),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -3317,7 +3322,7 @@ fn load_accepts_several_distinctly_named_build_ssh_agents() {
 fn evaluate_resolves_build_ssh_paths_against_the_config_directory() {
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([(
+        containers: IndexMap::from([(
             "build-env".to_string(),
             container_with_build_ssh(vec![SshAgent {
                 id: "default".to_string(),
@@ -3327,7 +3332,7 @@ fn evaluate_resolves_build_ssh_paths_against_the_config_directory() {
                 ],
             }]),
         )]),
-        tasks: HashMap::new(),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -3357,7 +3362,7 @@ fn evaluate_resolves_build_ssh_paths_against_the_config_directory() {
 fn load_rejects_duplicate_build_ssh_agent_ids() {
     let config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([(
+        containers: IndexMap::from([(
             "build-env".to_string(),
             container_with_build_ssh(vec![
                 SshAgent {
@@ -3370,7 +3375,7 @@ fn load_rejects_duplicate_build_ssh_agent_ids() {
                 },
             ]),
         )]),
-        tasks: HashMap::new(),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -3436,8 +3441,8 @@ fn container_with_run_as_current_user(enabled: bool, home_directory: Option<&str
 fn config_with_container(container: Container) -> Config {
     Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([("build-env".to_string(), container)]),
-        tasks: HashMap::new(),
+        containers: IndexMap::from([("build-env".to_string(), container)]),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     }
@@ -4744,17 +4749,15 @@ run = { container = "app" }
 /// (ratect#214), for a test that builds containers by hand rather than
 /// loading a file: no origin, so every one is judged — which is what a
 /// hand-built `Config` means.
-fn batect_shaped_for_test(containers: &HashMap<String, Container>) -> Vec<BatectShaped<'_>> {
-    let mut shaped: Vec<BatectShaped<'_>> = containers
+fn batect_shaped_for_test(containers: &IndexMap<String, Container>) -> Vec<BatectShaped<'_>> {
+    containers
         .iter()
         .map(|(name, container)| BatectShaped {
             name: name.as_str(),
             container,
             origin: None,
         })
-        .collect();
-    shaped.sort_unstable_by_key(|entry| entry.name);
-    shaped
+        .collect()
 }
 
 /// A native project whose root `ratect.toml` includes one fragment — the
@@ -7958,7 +7961,7 @@ async fn evaluating_the_whole_project_reports_every_failure_and_keeps_the_rest()
     // With every variable set, nothing fails.
     let every_host_var = |name: &str| Some(format!("/set/{name}"));
     let mut without_orphan = project;
-    without_orphan.config.containers.remove("orphan");
+    without_orphan.config.containers.shift_remove("orphan");
     let whole = without_orphan
         .evaluate_whole_project(&region, every_host_var)
         .unwrap();
@@ -8218,7 +8221,13 @@ tasks:
     .unwrap();
 
     let result = Config::load_from_file(&dir.join("batect.yml")).await;
-    assert!(format!("{:?}", result.unwrap_err()).contains("build"));
+    let d = dir.display();
+    assert_eq!(
+        format!("{:#}", result.unwrap_err()),
+        format!(
+            "The task 'build' is defined in multiple files: '{d}/batect.yml' and '{d}/extra.yml'"
+        )
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -9526,7 +9535,7 @@ tasks: {}
         "{message}"
     );
 
-    loaded.config.containers.remove("literal");
+    loaded.config.containers.shift_remove("literal");
     check_values(&loaded.config, &loaded.provenance(), &project_directory)
         .expect("an expression can't be judged before it is evaluated");
     let project = LoadedProject {
@@ -10399,11 +10408,11 @@ fn evaluate_expands_host_var() {
     environment.insert("FOO".to_string(), "$HOST_VAR".to_string());
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([(
+        containers: IndexMap::from([(
             "build-env".to_string(),
             container_with_environment(environment),
         )]),
-        tasks: HashMap::new(),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -10429,11 +10438,11 @@ fn evaluate_uses_default_when_host_var_unset() {
     environment.insert("FOO".to_string(), "${HOST_VAR:-fallback}".to_string());
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([(
+        containers: IndexMap::from([(
             "build-env".to_string(),
             container_with_environment(environment),
         )]),
-        tasks: HashMap::new(),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -10456,11 +10465,11 @@ fn evaluate_errors_when_host_var_unset_without_default() {
     environment.insert("FOO".to_string(), "$HOST_VAR".to_string());
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([(
+        containers: IndexMap::from([(
             "build-env".to_string(),
             container_with_environment(environment),
         )]),
-        tasks: HashMap::new(),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -10478,7 +10487,7 @@ fn evaluate_errors_when_host_var_unset_without_default() {
 fn evaluate_prefers_cli_override_over_default() {
     let mut environment = HashMap::new();
     environment.insert("FOO".to_string(), "<env_name".to_string());
-    let mut config_variables = HashMap::new();
+    let mut config_variables = IndexMap::new();
     config_variables.insert(
         "env_name".to_string(),
         ConfigVariable {
@@ -10488,11 +10497,11 @@ fn evaluate_prefers_cli_override_over_default() {
     );
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([(
+        containers: IndexMap::from([(
             "build-env".to_string(),
             container_with_environment(environment),
         )]),
-        tasks: HashMap::new(),
+        tasks: IndexMap::new(),
         config_variables: Some(config_variables),
         forbid_telemetry: None,
     };
@@ -10512,7 +10521,7 @@ fn evaluate_prefers_cli_override_over_default() {
 fn evaluate_falls_back_to_config_variable_default() {
     let mut environment = HashMap::new();
     environment.insert("FOO".to_string(), "<env_name".to_string());
-    let mut config_variables = HashMap::new();
+    let mut config_variables = IndexMap::new();
     config_variables.insert(
         "env_name".to_string(),
         ConfigVariable {
@@ -10522,11 +10531,11 @@ fn evaluate_falls_back_to_config_variable_default() {
     );
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([(
+        containers: IndexMap::from([(
             "build-env".to_string(),
             container_with_environment(environment),
         )]),
-        tasks: HashMap::new(),
+        tasks: IndexMap::new(),
         config_variables: Some(config_variables),
         forbid_telemetry: None,
     };
@@ -10549,11 +10558,11 @@ fn evaluate_errors_on_undeclared_config_variable_reference() {
     environment.insert("FOO".to_string(), "<missing".to_string());
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([(
+        containers: IndexMap::from([(
             "build-env".to_string(),
             container_with_environment(environment),
         )]),
-        tasks: HashMap::new(),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -10571,7 +10580,7 @@ fn evaluate_errors_on_undeclared_config_variable_reference() {
 fn evaluate_errors_on_declared_config_variable_with_no_value() {
     let mut environment = HashMap::new();
     environment.insert("FOO".to_string(), "<env_name".to_string());
-    let mut config_variables = HashMap::new();
+    let mut config_variables = IndexMap::new();
     config_variables.insert(
         "env_name".to_string(),
         ConfigVariable {
@@ -10581,11 +10590,11 @@ fn evaluate_errors_on_declared_config_variable_with_no_value() {
     );
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([(
+        containers: IndexMap::from([(
             "build-env".to_string(),
             container_with_environment(environment),
         )]),
-        tasks: HashMap::new(),
+        tasks: IndexMap::new(),
         config_variables: Some(config_variables),
         forbid_telemetry: None,
     };
@@ -10603,8 +10612,8 @@ fn evaluate_errors_on_declared_config_variable_with_no_value() {
 fn evaluate_errors_on_unknown_cli_override() {
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::new(),
-        tasks: HashMap::new(),
+        containers: IndexMap::new(),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -10621,11 +10630,11 @@ fn evaluate_leaves_literal_values_unchanged() {
     environment.insert("FOO".to_string(), "literal-value".to_string());
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([(
+        containers: IndexMap::from([(
             "build-env".to_string(),
             container_with_environment(environment),
         )]),
-        tasks: HashMap::new(),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -10648,11 +10657,11 @@ fn evaluate_resolves_built_in_project_directory_var_in_environment() {
     environment.insert("FOO".to_string(), "<batect.project_directory".to_string());
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([(
+        containers: IndexMap::from([(
             "build-env".to_string(),
             container_with_environment(environment),
         )]),
-        tasks: HashMap::new(),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -10680,8 +10689,8 @@ fn evaluate_resolves_built_in_project_directory_var_in_volumes() {
     })]);
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([("build-env".to_string(), container)]),
-        tasks: HashMap::new(),
+        containers: IndexMap::from([("build-env".to_string(), container)]),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -10707,11 +10716,11 @@ fn evaluate_cleans_project_directory_var_when_base_path_is_empty() {
     environment.insert("FOO".to_string(), "<batect.project_directory".to_string());
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::from([(
+        containers: IndexMap::from([(
             "build-env".to_string(),
             container_with_environment(environment),
         )]),
-        tasks: HashMap::new(),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -10729,7 +10738,7 @@ fn evaluate_cleans_project_directory_var_when_base_path_is_empty() {
 
 #[test]
 fn load_errors_if_project_directory_is_declared_in_config_variables() {
-    let mut config_variables = HashMap::new();
+    let mut config_variables = IndexMap::new();
     config_variables.insert(
         "batect.project_directory".to_string(),
         ConfigVariable {
@@ -10739,8 +10748,8 @@ fn load_errors_if_project_directory_is_declared_in_config_variables() {
     );
     let config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::new(),
-        tasks: HashMap::new(),
+        containers: IndexMap::new(),
+        tasks: IndexMap::new(),
         config_variables: Some(config_variables),
         forbid_telemetry: None,
     };
@@ -10753,8 +10762,8 @@ fn load_errors_if_project_directory_is_declared_in_config_variables() {
 fn evaluate_errors_if_project_directory_is_given_as_a_cli_override() {
     let mut config = Config {
         project_name: "demo".to_string(),
-        containers: HashMap::new(),
-        tasks: HashMap::new(),
+        containers: IndexMap::new(),
+        tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
     };
@@ -11264,8 +11273,9 @@ run = { container = "app" }
     );
 }
 
-/// Several bad references report the same one every time — containers in
-/// name order before tasks, and within each, in the order written.
+/// Several bad references report the same one every time — containers
+/// before tasks, each in the order the file declares them, and within each,
+/// in the order written.
 #[tokio::test]
 async fn undeclared_container_references_are_reported_deterministically() {
     for _ in 0..8 {
@@ -11290,8 +11300,25 @@ run = { container = "ghost-r" }
         .unwrap_err();
         assert_eq!(
             format!("{err:#}"),
-            "The container 'ghost-a' referenced by container 'a' does not exist."
+            "The container 'ghost-b2' referenced by container 'b' does not exist."
         );
+    }
+}
+
+/// Of several names the project doesn't declare, the first by name is
+/// reported, whatever order the caller passes them in.
+#[tokio::test]
+async fn evaluating_several_undeclared_names_reports_the_first_by_name() {
+    let project = load_native_toml("project_name = \"demo\"\n").await.unwrap();
+    for names in [["y", "x"], ["x", "y"]] {
+        let error = project
+            .evaluate(names, [], &HashMap::new(), no_host_env)
+            .unwrap_err();
+        assert_eq!(format!("{error:#}"), "No container named 'x' is declared");
+        let error = project
+            .evaluate([], names, &HashMap::new(), no_host_env)
+            .unwrap_err();
+        assert_eq!(format!("{error:#}"), "No task named 'x' is declared");
     }
 }
 
@@ -12008,4 +12035,250 @@ async fn a_yaml_includes_home_directory_is_judged_at_load_and_a_toml_ones_is_not
     )
     .await;
     result.expect("an expression is judged when it is evaluated, not at load");
+}
+
+/// The error loading `body` reports, written to a temp file named
+/// `file_name` (`batect.yml` loads through the compat path, `ratect.toml`
+/// through the native one) and checked to be the same over several loads —
+/// one load would pass by luck if the order came from a hash.
+async fn the_load_error(file_name: &str, body: &str) -> String {
+    let dir = unique_temp_dir();
+    let path = dir.join(file_name);
+    std::fs::write(&path, body).unwrap();
+    let load = || async {
+        let result = if file_name == "ratect.toml" {
+            load_project_native(&path).await
+        } else {
+            load_project(&path).await
+        };
+        format!("{:#}", result.unwrap_err())
+    };
+    let first = load().await;
+    for _ in 0..8 {
+        assert_eq!(load().await, first);
+    }
+    std::fs::remove_dir_all(&dir).ok();
+    first
+}
+
+// Several offenders against one load-time check are reported in the order
+// the file declares them, not by name (decisions/0014; #405, #433).
+
+#[tokio::test]
+async fn several_tasks_breaking_one_rule_report_the_first_declared_in_yaml() {
+    let yaml = "project_name: demo\ntasks:\n  zz: {description: x}\n  mm: {description: x}\n  aa: {description: x}\n";
+    assert_eq!(
+        the_load_error("batect.yml", yaml).await,
+        "Task 'zz' must have at least one of 'run' or 'prerequisites'"
+    );
+}
+
+#[tokio::test]
+async fn several_tasks_breaking_one_rule_report_the_first_declared_in_toml() {
+    let toml = "project_name = \"demo\"\n[tasks.zz]\ndescription = \"x\"\n[tasks.mm]\ndescription = \"x\"\n[tasks.aa]\ndescription = \"x\"\n";
+    assert_eq!(
+        the_load_error("ratect.toml", toml).await,
+        "Task 'zz' must have at least one of 'run' or 'prerequisites'"
+    );
+}
+
+#[tokio::test]
+async fn several_containers_without_an_image_source_report_the_first_declared() {
+    let yaml = "project_name: demo\ncontainers:\n  zz: {command: x}\n  aa: {command: x}\n";
+    let error = the_load_error("batect.yml", yaml).await;
+    assert!(
+        error.starts_with("Container 'zz' has neither 'image' nor 'build_directory' set"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn several_containers_with_a_home_directory_but_not_enabled_report_the_first_declared() {
+    let yaml = "project_name: demo\ncontainers:\n  zz: {image: alpine, run_as_current_user: {enabled: false, home_directory: /h}}\n  mm: {image: alpine, run_as_current_user: {enabled: false, home_directory: /h}}\n  aa: {image: alpine, run_as_current_user: {enabled: false, home_directory: /h}}\n";
+    let error = the_load_error("batect.yml", yaml).await;
+    assert!(error.starts_with("Container 'zz': "), "{error}");
+}
+
+#[tokio::test]
+async fn several_customisations_outside_the_task_graph_report_the_first_declared() {
+    let yaml = "project_name: demo\ncontainers:\n  main: {image: alpine}\n  zz: {image: alpine}\n  aa: {image: alpine}\ntasks:\n  t:\n    run: {container: main}\n    customise:\n      zz: {working_directory: /w}\n      aa: {working_directory: /w}\n";
+    let error = the_load_error("batect.yml", yaml).await;
+    assert!(
+        error.starts_with("Task 't' has customisations for container 'zz'"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn several_customisations_adding_ports_off_the_task_network_report_the_first_declared() {
+    let toml = "project_name = \"demo\"\n[containers.main]\nimage = \"alpine\"\ndependencies = [\"zz\", \"aa\"]\n[containers.zz]\nimage = \"alpine\"\nnetwork_mode = \"host\"\n[containers.aa]\nimage = \"alpine\"\nnetwork_mode = \"host\"\n[tasks.t]\nrun = { container = \"main\" }\ncustomise.zz = { ports = [\"80:80\"] }\ncustomise.aa = { ports = [\"80:80\"] }\n";
+    let error = the_load_error("ratect.toml", toml).await;
+    assert!(
+        error.starts_with("The task 't' sets 'ports' for the container 'zz'"),
+        "{error}"
+    );
+}
+
+/// Batect skips the main-container customisation check for a task with no
+/// `run`, since it has no main container; so does Ratect.
+#[tokio::test]
+async fn a_task_without_run_may_customise_its_prerequisites_containers() {
+    let yaml = "project_name: demo\ncontainers:\n  b: {image: alpine}\ntasks:\n  o:\n    run: {container: b}\n  t:\n    prerequisites: [o]\n    customise:\n      b: {working_directory: /w}\n";
+    let dir = unique_temp_dir();
+    let path = dir.join("batect.yml");
+    std::fs::write(&path, yaml).unwrap();
+    let result = load_project(&path).await;
+    std::fs::remove_dir_all(&dir).ok();
+    result.expect("a run-less task's customisations aren't checked against a main container");
+}
+
+/// Evaluation is one point of failure too: of several containers, or a
+/// task's several customisations, the first declared is reported, whatever
+/// order the caller names them in (decisions/0014).
+#[tokio::test]
+async fn evaluating_several_bad_values_reports_the_first_declared() {
+    let dir = unique_temp_dir();
+    let path = dir.join("batect.yml");
+    std::fs::write(
+        &path,
+        "project_name: demo\ncontainers:\n  main: {image: alpine, dependencies: [zz, aa]}\n  zz: {image: alpine, environment: {A: $UNSET}}\n  aa: {image: alpine, environment: {A: $UNSET}}\ntasks:\n  t:\n    run: {container: main}\n    customise:\n      zz: {environment: {B: $UNSET}}\n      aa: {environment: {B: $UNSET}}\n",
+    )
+    .unwrap();
+    let project = load_project(&path).await.unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+
+    let error = project
+        .evaluate(["aa", "zz"], [], &HashMap::new(), no_host_env)
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").starts_with("Container 'zz'"),
+        "{error:#}"
+    );
+
+    let error = project
+        .evaluate([], ["t"], &HashMap::new(), no_host_env)
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("'customise.zz.environment.B'"),
+        "{error:#}"
+    );
+}
+
+/// Writes `files` (name, body) into a fresh directory and loads its
+/// `batect.yml`, returning the error and the directory.
+async fn duplicate_definition_error(files: &[(&str, &str)]) -> (String, PathBuf) {
+    let dir = unique_temp_dir();
+    for (name, body) in files {
+        std::fs::write(dir.join(name), body).unwrap();
+    }
+    let error = Config::load_from_file(&dir.join("batect.yml"))
+        .await
+        .unwrap_err();
+    std::fs::remove_dir_all(&dir).ok();
+    (format!("{error:#}"), dir)
+}
+
+// A name defined in more than one file is reported once every file has
+// loaded: tasks, then containers, then config variables, the first
+// duplicated name as declared, naming every file that defines it (#432).
+
+#[tokio::test]
+async fn a_container_defined_in_three_files_names_all_three() {
+    let (error, dir) = duplicate_definition_error(&[
+        (
+            "batect.yml",
+            "project_name: demo\ninclude: [1.yml, 2.yml]\ncontainers:\n  c1: {image: alpine}\n",
+        ),
+        ("1.yml", "containers:\n  c1: {image: alpine}\n"),
+        ("2.yml", "containers:\n  c1: {image: alpine}\n"),
+    ])
+    .await;
+    let d = dir.display();
+    assert_eq!(
+        error,
+        format!(
+            "The container 'c1' is defined in multiple files: '{d}/batect.yml', '{d}/1.yml' and \
+             '{d}/2.yml'"
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_task_defined_in_three_files_names_all_three() {
+    let (error, dir) = duplicate_definition_error(&[
+        (
+            "batect.yml",
+            "project_name: demo\ninclude: [1.yml, 2.yml]\ncontainers:\n  c: {image: alpine}\ntasks:\n  t1: {run: {container: c}}\n",
+        ),
+        ("1.yml", "tasks:\n  t1: {run: {container: c}}\n"),
+        ("2.yml", "tasks:\n  t1: {run: {container: c}}\n"),
+    ])
+    .await;
+    let d = dir.display();
+    assert_eq!(
+        error,
+        format!(
+            "The task 't1' is defined in multiple files: '{d}/batect.yml', '{d}/1.yml' and \
+             '{d}/2.yml'"
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_config_variable_defined_in_three_files_names_all_three() {
+    let (error, dir) = duplicate_definition_error(&[
+        (
+            "batect.yml",
+            "project_name: demo\ninclude: [1.yml, 2.yml]\nconfig_variables:\n  v: {}\n",
+        ),
+        ("1.yml", "config_variables:\n  v: {}\n"),
+        ("2.yml", "config_variables:\n  v: {}\n"),
+    ])
+    .await;
+    let d = dir.display();
+    assert_eq!(
+        error,
+        format!(
+            "The config variable 'v' is defined in multiple files: '{d}/batect.yml', '{d}/1.yml' \
+             and '{d}/2.yml'"
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_duplicate_task_is_reported_before_a_duplicate_container() {
+    let (error, _) = duplicate_definition_error(&[
+        (
+            "batect.yml",
+            "project_name: demo\ninclude: [1.yml]\ncontainers:\n  c1: {image: alpine}\ntasks:\n  t1: {run: {container: c1}}\n",
+        ),
+        (
+            "1.yml",
+            "containers:\n  c1: {image: alpine}\ntasks:\n  t1: {run: {container: c1}}\n",
+        ),
+    ])
+    .await;
+    assert!(
+        error.starts_with("The task 't1' is defined in multiple files"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn of_several_duplicate_tasks_the_first_declared_is_reported() {
+    let tasks: String = (1..=8)
+        .map(|n| format!("  t{n}: {{run: {{container: c}}}}\n"))
+        .collect();
+    let root = format!(
+        "project_name: demo\ninclude: [1.yml]\ncontainers:\n  c: {{image: alpine}}\ntasks:\n{tasks}"
+    );
+    let included = format!("tasks:\n{tasks}");
+    for _ in 0..8 {
+        let (error, _) =
+            duplicate_definition_error(&[("batect.yml", &root), ("1.yml", &included)]).await;
+        assert!(
+            error.starts_with("The task 't1' is defined in multiple files"),
+            "{error}"
+        );
+    }
 }

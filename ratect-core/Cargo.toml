@@ -120,7 +120,18 @@ nix = { version = "0.31.3", features = ["user"] }
 # low-risk-addition reasoning as `nix` above.
 url = "2.5.8"
 sha2 = "0.11"
-toml = "1.1"
+# **`toml`**: parses `ratect.toml`. `preserve_order` keeps a table's keys in
+# the order the file writes them (the default sorts them), which is what lets
+# a load-time error name the first offender as declared rather than the first
+# by name (decisions/0014; #433). `config convert` sorts what it writes
+# itself, so its output doesn't depend on it.
+toml = { version = "1.1", features = ["preserve_order"] }
+# **`indexmap`** (feature `serde`): the map type the config model keeps its
+# containers, tasks, config variables and `customise` entries in, so
+# declaration order survives parsing — see `toml` above. Already resolved in
+# `Cargo.lock` transitively (via `toml`'s own `preserve_order` and `h2`), so
+# not a new quantity; drop it only alongside going back to name order.
+indexmap = { version = "2", features = ["serde"] }
 regex = "1"
 # **`unicode-width`**: real terminal display-column widths (CJK wide
 # characters count as 2, zero-width/combining marks count as 0) for
@@ -174,8 +185,9 @@ rustls-native-certs = "0.8"
 # optional `[dev-dependencies]`, and `default-features = false` keeps
 # `reqwest` and a TLS stack out of the tree (nothing here ever resolves a
 # remote `$ref`). Ratect's first optional dependencies — every other entry
-# above is unconditional.
-schemars = { version = "1.2", optional = true }
+# above is unconditional. Feature `indexmap2` gives `indexmap`'s map (see
+# above) the same schema as a `HashMap`.
+schemars = { version = "1.2", optional = true, features = ["indexmap2"] }
 jsonschema = { version = "0.58", optional = true, default-features = false }
 # **`ssh-key`** (`default-features = false`, features
 # `std`/`ed25519`/`rsa`/`p256`/`p384`/`p521`/`getrandom`), plus

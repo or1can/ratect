@@ -2340,6 +2340,7 @@ dependencies = [
  "futures",
  "hyper-rustls",
  "hyper-util",
+ "indexmap",
  "jsonschema",
  "nix 0.31.3",
  "noyalib",
@@ -2624,6 +2625,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "687274d293b6cdc6e73e0fee520bf2049650090d7164f87672d212a3c530cf4a"
 dependencies = [
  "dyn-clone",
+ "indexmap",
  "ref-cast",
  "schemars_derive",
  "serde",

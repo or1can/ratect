@@ -57,6 +57,8 @@ history, from when it was the only binary.
 - A host path containing a NUL character — a `volumes` entry, `build_directory`, `build_secrets` or `build_ssh` path, literal or evaluated from an expression — is reported as not a valid path before the task's containers are created.
 - An `include` path containing a NUL character is reported as not a valid path, not as a file that doesn't exist.
 - A `build_secrets` `path` that doesn't exist or isn't a file fails the build before it starts, naming the entry and the path, whether or not the Dockerfile mounts that secret.
+- A name defined in more than one file is reported naming every file that defines it, not only the first two, and a duplicated task is reported before a duplicated container, and a container before a config variable.
+- Of several containers, tasks or `customise` entries failing the same check, at load or when a task's values are evaluated, the one reported is the first the configuration declares, rather than the first by name.
 
 ## [ratect-compat 0.31.0 · ratect 0.10.0] - 2026-10-02
 

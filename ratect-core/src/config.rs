@@ -116,6 +116,7 @@
 //! same precedent as `project_name`), but never read anywhere else.
 
 use anyhow::{Context, Result};
+use indexmap::IndexMap;
 use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -134,9 +135,9 @@ const PROJECT_DIRECTORY_VAR: &str = "batect.project_directory";
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub project_name: String,
-    pub containers: HashMap<String, Container>,
-    pub tasks: HashMap<String, Task>,
-    pub config_variables: Option<HashMap<String, ConfigVariable>>,
+    pub containers: IndexMap<String, Container>,
+    pub tasks: IndexMap<String, Task>,
+    pub config_variables: Option<IndexMap<String, ConfigVariable>>,
     /// Recognized but inert — Ratect collects no telemetry, so there's
     /// nothing to forbid. Accepted purely so a real Batect config using it
     /// doesn't fail to load under [`Config`]'s `deny_unknown_fields`, the
@@ -2399,7 +2400,7 @@ pub struct Task {
     /// `reject_customisations_outside_the_task_graph`, which runs after
     /// `extends` because membership depends on `dependencies` a container
     /// can inherit. Applied in `TaskEngine::start_dependency`.
-    pub customise: Option<HashMap<String, TaskContainerCustomisation>>,
+    pub customise: Option<IndexMap<String, TaskContainerCustomisation>>,
 }
 
 /// One entry in a task's `customise` map — see [`Task::customise`].
@@ -2440,8 +2441,8 @@ pub struct TaskContainerCustomisation {
 /// Visited-set-guarded so a config cycle can't hang this pure walk — real
 /// cycle detection (which actually rejects a cycle as a user-facing error)
 /// still happens separately, in `TaskEngine::start_dependency`.
-pub fn container_names_in_task(
-    containers: &HashMap<String, Container>,
+pub fn container_names_in_task<'a>(
+    container: impl Fn(&str) -> Option<&'a Container>,
     root: &str,
     task_dependencies: Option<&[String]>,
 ) -> std::collections::BTreeSet<String> {
@@ -2452,7 +2453,7 @@ pub fn container_names_in_task(
         if !names.insert(name.clone()) {
             continue;
         }
-        if let Some(dependencies) = containers.get(&name).and_then(|c| c.dependencies.as_ref()) {
+        if let Some(dependencies) = container(&name).and_then(|c| c.dependencies.as_ref()) {
             stack.extend(dependencies.iter().cloned());
         }
     }
@@ -2464,7 +2465,7 @@ pub fn container_names_in_task(
 /// present when the task has a non-blank description) — no header, no
 /// grouping, nothing else, so the output is machine-parsable. An exact port
 /// of Batect's own `ListTasksCommand.printMachineReadableFormat`.
-pub fn format_task_list_quiet(tasks: &HashMap<String, Task>) -> String {
+pub fn format_task_list_quiet(tasks: &IndexMap<String, Task>) -> String {
     let mut names: Vec<_> = tasks.keys().collect();
     names.sort();
     names
@@ -2491,7 +2492,7 @@ pub fn format_task_list_quiet(tasks: &HashMap<String, Task>) -> String {
 /// alphabetically within a group — but not its header: Batect opens a flat
 /// list with `Available tasks:` and a grouped one with its first group
 /// heading, a divergence recorded in `docs/differences-from-batect.md`.
-pub fn format_task_list(project_name: &str, tasks: &HashMap<String, Task>) -> String {
+pub fn format_task_list(project_name: &str, tasks: &IndexMap<String, Task>) -> String {
     let mut lines = vec![format!("Tasks in {}:", project_name)];
 
     if tasks.values().all(|task| task.group.is_none()) {
@@ -2813,13 +2814,13 @@ pub(crate) struct ConfigFile {
     pub(crate) project_name: Option<String>,
     /// The containers tasks can run in, keyed by name.
     #[serde(default)]
-    pub(crate) containers: HashMap<String, Container>,
+    pub(crate) containers: IndexMap<String, Container>,
     /// The tasks this project defines, keyed by the name used to run them.
     #[serde(default)]
-    pub(crate) tasks: HashMap<String, Task>,
+    pub(crate) tasks: IndexMap<String, Task>,
     /// Variables tasks and containers can refer to as `<name` or
     /// `<{name}`, overridable per-invocation with `--config-var`.
-    pub(crate) config_variables: Option<HashMap<String, ConfigVariable>>,
+    pub(crate) config_variables: Option<IndexMap<String, ConfigVariable>>,
     /// Other configuration files to merge into this one — local files
     /// (relative to this file's own directory) or Git bundles.
     #[serde(default)]
@@ -2944,17 +2945,17 @@ impl ConfigFormat {
     ///
     /// `Compat` is every container, whatever a file is named: that format
     /// parses each file as YAML regardless of extension, so every container
-    /// in such a project is Batect-shaped by construction. Sorted by name,
-    /// so a project with several offenders always reports the same one
-    /// rather than whichever the hash order surfaced — which is why no
-    /// check below sorts for itself.
+    /// in such a project is Batect-shaped by construction. In the order the
+    /// files declare them, so of several offenders the first declared is
+    /// reported (decisions/0014) — which is why no check below orders for
+    /// itself.
     fn batect_shaped_containers<'a>(
         &self,
         config: &'a Config,
         origins: &'a HashMap<String, PathBuf>,
         boundaries: &HashMap<String, Boundary>,
     ) -> Vec<BatectShaped<'a>> {
-        let mut shaped: Vec<BatectShaped<'a>> = config
+        config
             .containers
             .iter()
             .filter_map(|(name, container)| {
@@ -2971,9 +2972,7 @@ impl ConfigFormat {
                     origin: origin.map(|origin| describe_origin(origin, boundaries.get(name))),
                 })
             })
-            .collect();
-        shaped.sort_unstable_by_key(|entry| entry.name);
-        shaped
+            .collect()
     }
 
     /// The full set of fields a Batect-format file may not use — every
@@ -3580,14 +3579,17 @@ impl Config {
         })?;
         let forbid_telemetry = loaded[0].file.forbid_telemetry;
 
-        let mut containers = HashMap::new();
+        let mut containers = IndexMap::new();
         let mut container_base_paths = HashMap::new();
         let mut container_boundaries: HashMap<String, Boundary> = HashMap::new();
         let mut container_origins: HashMap<String, PathBuf> = HashMap::new();
-        let mut tasks = HashMap::new();
-        let mut task_origins: HashMap<String, PathBuf> = HashMap::new();
-        let mut config_variables = HashMap::new();
-        let mut config_variable_origins: HashMap<String, PathBuf> = HashMap::new();
+        let mut tasks = IndexMap::new();
+        let mut config_variables = IndexMap::new();
+        // Every file each name is defined in, in load order — judged once
+        // every file has loaded, so a duplicate's error can name them all.
+        let mut container_files: IndexMap<&str, Vec<&Path>> = IndexMap::new();
+        let mut task_files: IndexMap<&str, Vec<&Path>> = IndexMap::new();
+        let mut config_variable_files: IndexMap<&str, Vec<&Path>> = IndexMap::new();
 
         // Borrowed, not consumed: each file is kept whole in `files` for
         // `crate::convert`, which needs it as parsed rather than merged.
@@ -3599,41 +3601,48 @@ impl Config {
         {
             let file_dir = file_path.parent().unwrap_or(Path::new("")).to_path_buf();
             for (name, container) in &file.containers {
-                if let Some(previous) = container_origins.insert(name.clone(), file_path.clone()) {
-                    anyhow::bail!(
-                        "The container '{name}' is defined in multiple files: '{}' and '{}'",
-                        previous.display(),
-                        file_path.display()
-                    );
+                let files = container_files.entry(name).or_default();
+                files.push(file_path);
+                if files.len() == 1 {
+                    container_origins.insert(name.clone(), file_path.clone());
+                    container_base_paths.insert(name.clone(), file_dir.clone());
+                    if let Some(boundary) = boundary {
+                        container_boundaries.insert(name.clone(), boundary.clone());
+                    }
+                    containers.insert(name.clone(), container.clone());
                 }
-                container_base_paths.insert(name.clone(), file_dir.clone());
-                if let Some(boundary) = boundary {
-                    container_boundaries.insert(name.clone(), boundary.clone());
-                }
-                containers.insert(name.clone(), container.clone());
             }
             for (name, task) in &file.tasks {
-                if let Some(previous) = task_origins.insert(name.clone(), file_path.clone()) {
-                    anyhow::bail!(
-                        "The task '{name}' is defined in multiple files: '{}' and '{}'",
-                        previous.display(),
-                        file_path.display()
-                    );
+                let files = task_files.entry(name).or_default();
+                files.push(file_path);
+                if files.len() == 1 {
+                    tasks.insert(name.clone(), task.clone());
                 }
-                tasks.insert(name.clone(), task.clone());
             }
             for (name, var) in file.config_variables.iter().flatten() {
-                if let Some(previous) =
-                    config_variable_origins.insert(name.clone(), file_path.clone())
-                {
-                    anyhow::bail!(
-                        "The config variable '{name}' is defined in multiple files: '{}' and \
-                         '{}'",
-                        previous.display(),
-                        file_path.display()
-                    );
+                let files = config_variable_files.entry(name).or_default();
+                files.push(file_path);
+                if files.len() == 1 {
+                    config_variables.insert(name.clone(), var.clone());
                 }
-                config_variables.insert(name.clone(), var.clone());
+            }
+        }
+        // Tasks, then containers, then config variables, as Batect checks
+        // them; within each, the first duplicated name as declared.
+        for (kind, defined_in) in [
+            ("task", &task_files),
+            ("container", &container_files),
+            ("config variable", &config_variable_files),
+        ] {
+            if let Some((name, files)) = defined_in.iter().find(|(_, files)| files.len() > 1) {
+                let files: Vec<String> = files
+                    .iter()
+                    .map(|file| format!("'{}'", file.display()))
+                    .collect();
+                anyhow::bail!(
+                    "The {kind} '{name}' is defined in multiple files: {}",
+                    crate::engine::human_readable_list(&files, "and")
+                );
             }
         }
 
@@ -3718,8 +3727,9 @@ impl Config {
 /// after the one before it had been found, which is the reason this
 /// paragraph exists rather than another comment asserting the pass is fine.
 ///
-/// Containers and tasks are each judged in name order, so a project with
-/// several offenders always reports the same one.
+/// Containers and tasks are each judged in the order the files declare
+/// them, so of several offenders the first declared is reported
+/// (decisions/0014).
 fn check_values(config: &Config, provenance: &Provenance, project_directory: &Path) -> Result<()> {
     if config
         .config_variables
@@ -3732,10 +3742,7 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
         );
     }
 
-    let mut container_names: Vec<&String> = config.containers.keys().collect();
-    container_names.sort_unstable();
-    for container_name in container_names {
-        let container = &config.containers[container_name];
+    for (container_name, container) in &config.containers {
         let anchor = provenance.anchor(container_name, project_directory);
         // One attribution point for the whole block, as in
         // `evaluate_container`: nothing below knows which container asked.
@@ -3822,10 +3829,7 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
         .with_context(|| format!("Container '{container_name}'"))?;
     }
 
-    let mut task_names: Vec<&String> = config.tasks.keys().collect();
-    task_names.sort_unstable();
-    for task_name in task_names {
-        let task = &config.tasks[task_name];
+    for (task_name, task) in &config.tasks {
         if task.run.is_none() && task.prerequisites.as_ref().is_none_or(|p| p.is_empty()) {
             anyhow::bail!(
                 "Task '{}' must have at least one of 'run' or 'prerequisites'",
@@ -4126,11 +4130,9 @@ fn evaluate_task(
         );
         store_or_record(value, evaluated, &mut failures);
     }
-    // In name order, so which of two bad values is reported doesn't depend
-    // on a `HashMap`'s iteration order.
-    let mut customisations: Vec<_> = task.customise.iter_mut().flatten().collect();
-    customisations.sort_unstable_by_key(|(container, _)| *container);
-    for (container, customisation) in customisations {
+    // In the order the task declares them, so of two bad values the first
+    // declared is reported (decisions/0014).
+    for (container, customisation) in task.customise.iter_mut().flatten() {
         for (key, value) in customisation.environment.iter_mut().flatten() {
             let evaluated = evaluate_value(
                 &format!("'customise.{container}.environment.{key}'"),
@@ -4433,8 +4435,8 @@ pub struct WholeProjectEvaluation {
     /// failure is left out rather than offered half-evaluated.
     pub evaluated: Evaluated,
     /// Every value that couldn't be evaluated, or failed a check deferred
-    /// from load — containers in name order, then tasks, each in field
-    /// order — each naming its container or task, field and expression.
+    /// from load — containers in declaration order, then tasks, each in
+    /// field order — each naming its container or task, field and expression.
     pub failures: Vec<anyhow::Error>,
 }
 
@@ -4451,9 +4453,10 @@ impl LoadedProject {
     /// must stay inside its bundle's boundary. An expression-valued
     /// `home_directory` gets the shape check a literal one had at load.
     ///
-    /// Containers are evaluated in name order, then tasks, and the first
-    /// failure is returned, naming the container or task, the field and the
-    /// expression. A name the project doesn't declare is an error.
+    /// Containers are evaluated in the order the files declare them, then
+    /// tasks, and the first failure is returned, naming the container or
+    /// task, the field and the expression. A name the project doesn't
+    /// declare is an error.
     pub fn evaluate<'n>(
         &self,
         containers: impl IntoIterator<Item = &'n str>,
@@ -4500,8 +4503,10 @@ impl LoadedProject {
             config_variable_values(&self.config, config_var_overrides, &self.project_directory)?;
         let mut failures = Vec::new();
 
+        // Declaration order; names the project doesn't declare sort first,
+        // by name, and the first is reported below.
         let mut container_names: Vec<&str> = containers.into_iter().collect();
-        container_names.sort_unstable();
+        container_names.sort_by_key(|name| (self.config.containers.get_index_of(*name), *name));
         container_names.dedup();
         let mut evaluated_containers = HashMap::new();
         for name in container_names {
@@ -4530,7 +4535,7 @@ impl LoadedProject {
         }
 
         let mut task_names: Vec<&str> = tasks.into_iter().collect();
-        task_names.sort_unstable();
+        task_names.sort_by_key(|name| (self.config.tasks.get_index_of(*name), *name));
         task_names.dedup();
         let mut evaluated_tasks = HashMap::new();
         for name in task_names {
@@ -4879,9 +4884,8 @@ async fn load_project_impl(config_file: &Path, format: ConfigFormat) -> Result<L
 /// — it keeps positions on its parsed nodes and Ratect doesn't, and the
 /// container name is what the rest of Ratect's config errors identify.
 fn validate_image_sources_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
-    // Already sorted by name, so a project with more than one offending
-    // container always reports the same one — see
-    // `ConfigFormat::batect_shaped_containers`.
+    // Already in declaration order, so of several offending containers the
+    // first declared is reported — see `ConfigFormat::batect_shaped_containers`.
     for entry in containers {
         let name = entry.name;
         let container = entry.container;
@@ -5149,10 +5153,8 @@ fn reject_network_mode_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> 
 /// [`Container::dns`]. The error names the container, the field and the
 /// entry, none of which Docker's own rejection would.
 fn validate_dns_servers(config: &Config) -> Result<()> {
-    let mut names: Vec<&String> = config.containers.keys().collect();
-    names.sort_unstable();
-    for name in names {
-        for server in config.containers[name].dns.iter().flatten() {
+    for (name, container) in &config.containers {
+        for server in container.dns.iter().flatten() {
             if server.parse::<std::net::IpAddr>().is_err() {
                 anyhow::bail!(
                     "The container '{name}' has a 'dns' entry, '{server}', that is not an IP \
@@ -5249,10 +5251,7 @@ fn reject_setup_command_run_in_compat(containers: &[BatectShaped<'_>]) -> Result
 /// effective `dependencies` (and its target's effective
 /// `run_to_completion`) aren't known until inheritance has resolved them.
 fn validate_setup_command_targets(config: &Config) -> Result<()> {
-    let mut names: Vec<&String> = config.containers.keys().collect();
-    names.sort_unstable();
-    for name in names {
-        let container = &config.containers[name];
+    for (name, container) in &config.containers {
         for setup_command in container.setup_commands.iter().flatten() {
             let Some(target) = setup_command.run_in.as_deref() else {
                 continue;
@@ -5311,10 +5310,7 @@ fn validate_setup_command_targets(config: &Config) -> Result<()> {
 /// unless that one is on `host`/`none` and the field needs the task's
 /// network; under `host`/`none`, and in that case, remove it.
 fn validate_network_modes(config: &Config) -> Result<()> {
-    let mut names: Vec<&String> = config.containers.keys().collect();
-    names.sort_unstable();
-    for name in names {
-        let container = &config.containers[name];
+    for (name, container) in &config.containers {
         let Some(mode) = &container.network_mode else {
             continue;
         };
@@ -5396,21 +5392,16 @@ fn validate_network_modes(config: &Config) -> Result<()> {
         }
     }
     // A task's `run` block and its `customise` overlays can add `ports` too.
-    let mut task_names: Vec<&String> = config.tasks.keys().collect();
-    task_names.sort_unstable();
-    for task_name in task_names {
-        let task = &config.tasks[task_name];
+    for (task_name, task) in &config.tasks {
         let run = task
             .run
             .iter()
             .map(|run| (&run.container, run.ports.is_some()));
-        let mut customised: Vec<_> = task
+        let customised = task
             .customise
             .iter()
             .flatten()
-            .map(|(name, customisation)| (name, customisation.ports.is_some()))
-            .collect();
-        customised.sort_unstable();
+            .map(|(name, customisation)| (name, customisation.ports.is_some()));
         for (name, _) in run.chain(customised).filter(|(_, has_ports)| *has_ports) {
             match config
                 .containers
@@ -5516,7 +5507,7 @@ fn validate_cache_name(name: &str) -> Result<()> {
 /// over here. Whole-file is also what [`validate_image_sources_in_compat`]
 /// does, for the same reason.
 fn reject_image_expressions_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
-    // Already sorted by name — see `ConfigFormat::batect_shaped_containers`.
+    // Already in declaration order — see `ConfigFormat::batect_shaped_containers`.
     let offender = containers.iter().find_map(|entry| {
         let image = entry.container.image.as_deref()?;
         crate::expressions::contains_expression(image).then_some((entry, image))
@@ -5592,33 +5583,9 @@ fn reject_shared_caches_in_compat(containers: &[BatectShaped<'_>]) -> Result<()>
 /// (`scope`) that could ever produce a conflict there.
 fn reject_conflicting_cache_scopes(config: &Config) -> Result<()> {
     let mut seen: std::collections::BTreeMap<&str, CacheScope> = std::collections::BTreeMap::new();
-    // Sorted, so a project with more than one conflict always reports the
-    // same one — `config.containers` is a `HashMap`, and its order varies
-    // between runs. Same reason [`reject_shared_caches_in_compat`] sorts.
-    //
-    // The container name breaks ties, which is what makes this an order at
-    // all: two containers can share a lowest cache name, and a sort that
-    // leaves them equal falls back to the `HashMap` order this exists to
-    // escape.
-    fn lowest_cache_name(container: &Container) -> &str {
-        container
-            .volumes
-            .iter()
-            .flatten()
-            .filter_map(|volume| match volume {
-                VolumeMount::Cache(cache) => Some(cache.name.as_str()),
-                _ => None,
-            })
-            .min()
-            .unwrap_or("")
-    }
-    let mut containers: Vec<(&String, &Container)> = config.containers.iter().collect();
-    containers.sort_by(|(left_name, left), (right_name, right)| {
-        lowest_cache_name(left)
-            .cmp(lowest_cache_name(right))
-            .then_with(|| left_name.cmp(right_name))
-    });
-    for (_, container) in containers {
+    // In the order the files declare them, so of several conflicts the
+    // first declared is reported (decisions/0014).
+    for container in config.containers.values() {
         for volume in container.volumes.iter().flatten() {
             let VolumeMount::Cache(cache) = volume else {
                 continue;
@@ -5676,17 +5643,12 @@ fn reject_references_to_undeclared_containers(config: &Config) -> Result<()> {
         }
         anyhow::bail!("The container '{reference}' referenced by {referrer} does not exist.")
     };
-    let mut names: Vec<&String> = config.containers.keys().collect();
-    names.sort_unstable();
-    for name in names {
-        for dependency in config.containers[name].dependencies.iter().flatten() {
+    for (name, container) in &config.containers {
+        for dependency in container.dependencies.iter().flatten() {
             check(dependency, format!("container '{name}'"))?;
         }
     }
-    let mut task_names: Vec<&String> = config.tasks.keys().collect();
-    task_names.sort_unstable();
-    for task_name in task_names {
-        let task = &config.tasks[task_name];
+    for (task_name, task) in &config.tasks {
         let references = task
             .run
             .iter()
@@ -5710,24 +5672,16 @@ fn reject_references_to_undeclared_containers(config: &Config) -> Result<()> {
 /// it. Unlike the two sibling rules that moved for the same reason, this one
 /// rejected valid configuration rather than accepting invalid.
 fn reject_customisations_outside_the_task_graph(config: &Config) -> Result<()> {
-    let mut task_names: Vec<&String> = config.tasks.keys().collect();
-    task_names.sort_unstable();
-    for task_name in task_names {
-        let task = &config.tasks[task_name];
+    for (task_name, task) in &config.tasks {
         let (Some(run), Some(customise)) = (&task.run, &task.customise) else {
             continue;
         };
         let names_in_task = container_names_in_task(
-            &config.containers,
+            |name| config.containers.get(name),
             &run.container,
             task.dependencies.as_deref(),
         );
-        let mut customised: Vec<&String> = customise.keys().collect();
-        customised.sort_unstable();
-        if let Some(name) = customised
-            .into_iter()
-            .find(|name| !names_in_task.contains(*name))
-        {
+        if let Some(name) = customise.keys().find(|name| !names_in_task.contains(*name)) {
             anyhow::bail!(
                 "Task '{task_name}' has customisations for container '{name}', but the \
                  container '{name}' will not be started as part of the task"
@@ -5757,10 +5711,7 @@ fn reject_customisations_outside_the_task_graph(config: &Config) -> Result<()> {
 /// this lived in the pass before `extends`, now [`check_values`]; see that
 /// function's doc comment for the general rule.
 fn reject_relative_cache_mounts_under_user_mapping(config: &Config) -> Result<()> {
-    let mut names: Vec<&String> = config.containers.keys().collect();
-    names.sort_unstable();
-    for name in names {
-        let container = &config.containers[name];
+    for (name, container) in &config.containers {
         if !container
             .run_as_current_user
             .as_ref()
@@ -5803,10 +5754,7 @@ fn reject_relative_cache_mounts_under_user_mapping(config: &Config) -> Result<()
 /// so it is the way to make an inheriting container legal here rather than
 /// something to reject.
 fn reject_run_to_completion_conflicts(config: &Config) -> Result<()> {
-    let mut names: Vec<&String> = config.containers.keys().collect();
-    names.sort_unstable();
-    for name in names {
-        let container = &config.containers[name];
+    for (name, container) in &config.containers {
         if !container.run_to_completion.unwrap_or(false) {
             continue;
         }
@@ -5842,21 +5790,28 @@ fn reject_run_to_completion_conflicts(config: &Config) -> Result<()> {
 /// resolve an inherited relative path where it pointed on the parent. See
 /// decisions/0003.
 fn resolve_extends(
-    containers: &mut HashMap<String, Container>,
+    containers: &mut IndexMap<String, Container>,
 ) -> Result<HashMap<String, Suppliers>> {
     let mut resolved: HashMap<String, Container> = HashMap::new();
     let mut suppliers: HashMap<String, Suppliers> = HashMap::new();
     let names: Vec<String> = containers.keys().cloned().collect();
-    for name in names {
+    for name in &names {
         resolve_container_extends(
-            &name,
+            name,
             containers,
             &mut resolved,
             &mut suppliers,
             &mut Vec::new(),
         )?;
     }
-    *containers = resolved;
+    // Rebuilt in declaration order, not the order resolution reached them.
+    *containers = names
+        .into_iter()
+        .map(|name| {
+            let container = resolved.remove(&name).expect("every name was resolved");
+            (name, container)
+        })
+        .collect();
     Ok(suppliers)
 }
 
@@ -5866,7 +5821,7 @@ fn resolve_extends(
 /// container extending itself).
 fn resolve_container_extends(
     name: &str,
-    source: &HashMap<String, Container>,
+    source: &IndexMap<String, Container>,
     resolved: &mut HashMap<String, Container>,
     suppliers: &mut HashMap<String, Suppliers>,
     ancestors: &mut Vec<String>,
@@ -5976,16 +5931,11 @@ fn validate_external_health_check_path(container: &str, path: &str) -> Result<()
 /// container gains nothing, because nothing waits on a task's own container
 /// in the first place (see [`Container::external_health_check`]).
 fn expand_external_health_checks(config: &mut Config) -> Result<()> {
-    // Sorted before anything is judged, not after: every check below can
-    // fail, and iterating a `HashMap` would report whichever offender its
-    // hashing happened to reach first — a different one run to run, for the
-    // same file.
-    let mut names: Vec<&String> = config.containers.keys().collect();
-    names.sort_unstable();
-
+    // Every check below can fail, so containers are judged in the order the
+    // file declares them, and of several offenders the first declared is
+    // reported (decisions/0014).
     let mut checked: Vec<(String, ExternalHealthCheck)> = Vec::new();
-    for name in names {
-        let container = &config.containers[name];
+    for (name, container) in &config.containers {
         let Some(check) = &container.external_health_check else {
             continue;
         };
