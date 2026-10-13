@@ -44,7 +44,6 @@ history, from when it was the only binary.
 - `ratect resources list`/`clean` (ratect only) read only the root file's `project_name` to scope themselves, so a project refused by its `ratect_version`, or holding a value that can't be evaluated on this machine, no longer stops them.
 - `ratect config convert` (ratect only) warns about each string-form `volumes` entry whose host path holds an expression, and writes each `volumes` entry in the form it was read in.
 - `ratect config convert` (ratect only) lists what to check in the converted file on stdout after the success message (on stderr with `--stdout`), as `doctor` lists warnings, whatever `RUST_LOG` is set to, and repeats the list in the file's header.
-- `ratect config convert` (ratect only) converts each file the project owns beside itself — the root to `ratect.toml`, each local include to a `.toml` of the same name in its own directory, `include` entries rewritten to match — and keeps a Git include as an include. It refuses to write over any existing converted file unless forced, and `--stdout` prints each document under a banner naming its file.
 - Upgraded `noyalib` to 0.0.57, which parses some edge-case YAML closer to the YAML 1.2 spec: `0X1F` and `0x-1` load as strings, a plain scalar whose line ends in a space continues on the next line, and folded scalars and escaped line breaks follow the spec exactly. A config relying on the old reading may load differently; see noyalib's [0.0.57 release notes](https://github.com/sebastienrousseau/noyalib/releases/tag/v0.0.57).
 
 ### Deprecated
@@ -59,6 +58,7 @@ history, from when it was the only binary.
 - A `build_secrets` `path` that doesn't exist or isn't a file fails the build before it starts, naming the entry and the path, whether or not the Dockerfile mounts that secret.
 - A name defined in more than one file is reported naming every file that defines it, not only the first two, and a duplicated task is reported before a duplicated container, and a container before a config variable.
 - Of several containers, tasks or `customise` entries failing the same check, at load or when a task's values are evaluated, the one reported is the first the configuration declares, rather than the first by name.
+- `ratect config convert` (ratect only) converts each file the project owns beside itself — the root to `ratect.toml`, each local include to a `.toml` of the same name in its own directory, `include` entries rewritten to match — and keeps a Git include as an include. It refuses to write over any existing converted file unless forced, and `--stdout` prints each document under a banner naming its file.
 
 ## [ratect-compat 0.31.0 · ratect 0.10.0] - 2026-10-02
 
