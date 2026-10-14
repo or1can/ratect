@@ -110,8 +110,19 @@ any kind, *escalates* (whatever is left is force-removed, with no grace
 period); an interrupt after that *abandons* cleanup. Only the abandon rung
 looks at the kind, because a keyboard is the one thing that sends `SIGINT`
 twice, while a supervisor's timed follow-up is a `SIGTERM` and never means
-"leave it". A run that finished normally but was signalled during its
-cleanup reports that signal, as a run the signal ended does.
+"leave it". A signal during the cleanup of a finished run doesn't change
+what the run exits with — the task's container reported its own exit code,
+and that stands — unless the abandon rung leaves something behind, which is
+a cleanup failure ([0016](decisions/0016-exit-codes.md); until #540 lands,
+a passing run signalled during cleanup still reports the signal).
+
+**Cleanup failure** — Ratect failing to remove something it set out to
+remove: a removal the daemon refused, or the cleanup ladder's abandon rung
+reached with something still to remove. What a `--no-cleanup*` flag leaves
+in place on purpose is not one. Reported on stderr always; under
+[0016](decisions/0016-exit-codes.md) (landing with #540) it changes the exit
+code, to `125`, only for a run whose container exited `0`, since a task's
+own non-zero code is never overridden.
 
 ## Caches
 
