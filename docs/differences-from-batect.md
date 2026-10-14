@@ -157,7 +157,7 @@ list. The exceptions:
 | Flag | Notes |
 |---|---|
 | `--version` | Prints one line, `ratect-compat <version>`, rather than Batect's seven labelled lines (its version, build date and commit, and the JVM, OS, Docker and Git versions) and the help blurb after them. Also gets a `-V` short form Batect doesn't have (a `clap` default). Acts as soon as it's reached: whatever follows it on the command line is never parsed or checked, so `--version --bogus` exits `0`, where Batect checks every option first and rejects it. |
-| `--help` / `-h` | The layout and text are `clap`'s rather than Batect's, including `<CONFIG_FILE>`-style value placeholders and `[default: …]` for a fixed default. A description never shows an environment variable's current value — Batect's say, for example, whether `DOCKER_HOST` is currently set, and to what. Like `--version`, acts as soon as it's reached, without checking what follows it. See [Options](ratect-compat-cli.md#options). |
+| `--help` / `-h` | The layout and text are `clap`'s rather than Batect's, including `<CONFIG_FILE>`-style value placeholders and `[default: …]` for a fixed default. A description never shows an environment variable's current value — Batect's say, for example, whether `DOCKER_HOST` is currently set, and to what. Like `--version`, acts as soon as it's reached, without checking what follows it. Exits `0`, as help conventionally does; Batect's `HelpCommand` returns `1`. See [Options](ratect-compat-cli.md#options) and [decisions/0016](../decisions/0016-exit-codes.md). |
 | `--list-tasks` / `-T` | The listing opens with `Tasks in <project>:`, followed, when any task has a `group`, by a blank line before the first group heading. Batect's opens a flat list with `Available tasks:`, and a grouped one with its first group heading. The `-o quiet` listing, the one meant for scripts, has no header in either. |
 | `--config-var` | `--config-var NAME=` sets the variable to an empty value, which Batect rejects as having no value. A value containing `=` is split at its first `=`, so `--config-var a=b=c` sets `a` to `b=c`; Batect splits at the last, setting `a=b` to `c`. `--override-image` and `--tag-image` also split at the first `=`. |
 | `TASK_NAME` (positional) | A misspelled task name's `Did you mean` suggestions include every task tied on edit distance; Batect keeps only one name per distance. See [Exit codes and error reporting](ratect-compat-cli.md#exit-codes-and-error-reporting). |
@@ -183,7 +183,9 @@ Beyond any one flag:
   `error: …` line in its own words, sometimes followed by a tip or a usage
   line, then `For more information, try '--help'.` Batect prints a single message of its
   own instead, such as `Invalid option '--bogus'. Run './batect --help' for a
-  list of valid options.`
+  list of valid options.` The exit code is `2`, the usage-error convention
+  `clap` and the POSIX utilities share; Batect's is `-1` (255), the same as for
+  any other failure ([decisions/0016](../decisions/0016-exit-codes.md)).
 - **Short options combine, and take an attached value**: `-Tf batect.yml`,
   `-fbatect.yml` and `-oquiet` are accepted. Batect looks an option up by its
   exact text up to any `=`, and rejects each of those as an invalid option.
@@ -212,7 +214,9 @@ tables above:
     escalates `SIGINT` → `SIGTERM` → `SIGKILL` on a timer usually gets a finished
     cleanup before the `SIGKILL`, though a slow daemon can still lose that race. A run
     that finished normally but was signalled during its cleanup exits
-    128 + that signal's number, as a run the signal ended does. Whatever an abandoned
+    128 + that signal's number, as a run the signal ended does — a rule
+    [decisions/0016](../decisions/0016-exit-codes.md) replaces, with #540: the
+    task's own code will stand unless the cleanup leaves something behind. Whatever an abandoned
     cleanup leaves still carries Ratect's ownership labels, so [`ratect resources
     list`/`clean`](ratect-cli.md#managing-resources) finds it (`ratect`-only;
     `ratect-compat` has no equivalent verb, so from it the sweep is `docker` itself,

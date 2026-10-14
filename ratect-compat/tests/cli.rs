@@ -694,6 +694,25 @@ fn unknown_task_fails_with_nonzero_exit_and_logged_error() {
     );
 }
 
+/// `--help` exits `0` and a usage error exits `2` — `clap`'s conventions,
+/// and both divergences from Batect (`1` and `255`) that
+/// `decisions/0016-exit-codes.md` keeps. Pinned so a `clap` upgrade can't
+/// move either unnoticed.
+#[test]
+fn help_exits_zero_and_a_usage_error_exits_two() {
+    let help = ratect_command()
+        .arg("--help")
+        .output()
+        .expect("failed to run ratect");
+    assert_eq!(help.status.code(), Some(0));
+
+    let usage_error = ratect_command()
+        .arg("--bogus")
+        .output()
+        .expect("failed to run ratect");
+    assert_eq!(usage_error.status.code(), Some(2));
+}
+
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
 /// Run explicitly with `cargo test -- --ignored`.
 #[test]
