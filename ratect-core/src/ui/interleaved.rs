@@ -37,8 +37,8 @@
 //!   stdout; and a failed setup command or network check is reported, where
 //!   Batect's `all` prints nothing for either.
 //!
-//! The prefix colours also differ — see `CONTAINER_COLORS` — but that
-//! choice isn't settled yet.
+//! The prefix colours also differ — see `CONTAINER_COLORS`; the palette and
+//! order decided in decisions/0017 land with ratect#489.
 
 use super::{Color, ColorMode, Console, ContainerIoStreaming, EventSink, OnceFlag, TaskEvent};
 use std::collections::HashMap;
