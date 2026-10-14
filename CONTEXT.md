@@ -124,6 +124,35 @@ in place on purpose is not one. Reported on stderr always; under
 code, to `125`, only for a run whose container exited `0`, since a task's
 own non-zero code is never overridden.
 
+## Output
+
+**Result** — what an invocation was asked to produce: for a run, the task
+container's own output; for any other verb, what that verb produces (a
+listing, a report, a conversion). Ratect's own progress and a dependency's
+output are not part of it.
+
+**Progress console** — the stream Ratect's own progress is written to: stderr
+for `ratect`, stdout for `ratect-compat` (under
+[0017](decisions/0017-output-streams-and-styles.md), landing with #535;
+until then both write it to stdout).
+
+**Milestone** — a lifecycle event rendered to the progress console: a line
+under `simple` and `all`, a status-line state under `fancy`.
+
+**Notice** — a stderr line about the run that marks no problem and asks for
+no action: the interrupt notice, a completed cleanup after an interrupt,
+what a `--no-cleanup*` flag left in place. A cleanup that left something
+behind is a *cleanup failure*, above, and so an error, not a notice.
+
+**Warning** — a stderr line, marked `Warning:`, about something the user
+should change though the run proceeds.
+
+**Error** — a stderr line, marked `Error:`, reporting that Ratect failed to do
+what was asked: for a run, to run the task or to clean up after it.
+
+The markers and the printed notices are
+[0017](decisions/0017-output-streams-and-styles.md)'s, landing with #535.
+
 ## Caches
 
 **Project cache** — cache storage private to one project.

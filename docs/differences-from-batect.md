@@ -226,7 +226,11 @@ tables above:
     and Ctrl+C after that to stop cleaning up.`, then `Error: Interrupted` once
     cleanup ends. Batect prints `Task cancelled: Interrupt received during
     execution.` and that it is waiting for outstanding operations. The warning
-    goes through `RUST_LOG` like any other.
+    goes through `RUST_LOG` like any other — a rule
+    [decisions/0017](../decisions/0017-output-streams-and-styles.md) replaces,
+    with #369: the notice will be printed whatever `RUST_LOG` says, and the
+    cleanup's outcome — complete, or what it left behind — not `Error:
+    Interrupted`, will end the sequence.
 
   `SIGKILL` remains untrappable by either tool, same underlying OS limitation — the
   same labels are what a post-hoc `ratect resources clean` needs to find what it left.
