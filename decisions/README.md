@@ -73,3 +73,4 @@ never delete one (same append-only spirit as the roadmap's versioned lists).
 | [0013](0013-when-ratect-compat-copies-batect.md) | When `ratect-compat` copies Batect, and when it diverges | Accepted — adopted (parity triage, #284) |
 | [0014](0014-config-checked-at-load-evaluated-per-task.md) | Config is checked at load, and evaluated per task | Accepted — checking implemented; per-task evaluation planned (ratect-compat 0.32.0 · ratect 0.11.0) |
 | [0015](0015-native-project-records-its-written-for-version.md) | A native project records the Ratect version it was written for | Accepted — planned (ratect-compat 0.32.0 · ratect 0.11.0) |
+| [0016](0016-exit-codes.md) | What a run exits with | Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0) |

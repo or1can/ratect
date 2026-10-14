@@ -1511,6 +1511,25 @@ fn an_unknown_subcommand_is_rejected_with_the_usage_message() {
     );
 }
 
+/// `--help` exits `0` and a usage error exits `2` — `clap`'s conventions,
+/// and both divergences from Batect (`1` and `255`) that
+/// `decisions/0016-exit-codes.md` keeps. Pinned so a `clap` upgrade can't
+/// move either unnoticed.
+#[test]
+fn help_exits_zero_and_a_usage_error_exits_two() {
+    let help = ratect_command()
+        .arg("--help")
+        .output()
+        .expect("failed to run ratect");
+    assert_eq!(help.status.code(), Some(0));
+
+    let usage_error = ratect_command()
+        .arg("--bogus")
+        .output()
+        .expect("failed to run ratect");
+    assert_eq!(usage_error.status.code(), Some(2));
+}
+
 /// `doctor` is meant to be usable as a CI step, which means its exit code
 /// has to mean something: non-zero when it found something that will fail a
 /// run, zero when it only found things worth knowing.

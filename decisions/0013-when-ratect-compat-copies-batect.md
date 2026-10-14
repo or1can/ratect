@@ -2,8 +2,7 @@
 
 **Status:** Accepted — adopted during the triage of the spec-level parity sweep
 ([#284](https://github.com/or1can/ratect/issues/284)). Exit codes are decided
-separately
-([#540](https://github.com/or1can/ratect/issues/540)).
+separately, in [0016](0016-exit-codes.md).
 
 ## Context
 
