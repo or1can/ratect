@@ -159,3 +159,24 @@ The markers and the printed notices are
 
 **Shared cache** — cache storage identified by name alone, so every project on
 the machine naming it addresses the same storage.
+
+## Built images
+
+**Built image** — the image a container's `build_directory` produces, as
+distinct from an image a container names to be pulled.
+
+**Automatic tag** — the name every built image is given,
+`<project_name>-<container name>`; the only name Ratect writes without being
+asked.
+
+**Extra tag** — a further name given to one container's built image for one
+run (`--tag-image`).
+
+**Image override** — a pulled image substituted for a container's own for one
+run (`--override-image`); a container with an override builds nothing.
+
+**Image-name component** — the rule `project_name` and every container name
+satisfy: lowercase letters and digits, with `.`, `_`, `__` or a run of `-`
+between them, and nothing else.
+
+The naming is [0018](decisions/0018-built-images-named-for-people-found-by-labels.md)'s.
