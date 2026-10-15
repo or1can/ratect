@@ -21,6 +21,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Changed
+
+- A Docker daemon advertising a `Builder-Version` other than empty, `1` or `2` is an error the first time a run builds an image, unless `DOCKER_BUILDKIT` or `--enable-buildkit` chooses the builder.
+
 ### Fixed
 
 - Files in an image's build context are sent owned by root, so a BuildKit `COPY` without `--chown` leaves them root-owned in the image.

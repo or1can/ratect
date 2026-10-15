@@ -1733,12 +1733,15 @@ fn docker_buildkit_env_value(
 /// `--enable-buildkit` default, and the docker CLI's own override
 /// convention); otherwise the builder the daemon itself advertises as its
 /// default (the `/_ping` response's `Builder-Version` header — `"2"` is
-/// BuildKit) is used, which is BuildKit on any modern daemon. A missing
-/// header (a daemon old enough to predate it) falls back to the classic
-/// builder. A `DOCKER_BUILDKIT` value that parses as neither is a hard error
-/// naming the value rather than a silent guess — raised when a build first
-/// needs the builder, not on every command as in Batect and the docker CLI
-/// (see `docs/differences-from-batect.md`'s `--enable-buildkit` row).
+/// BuildKit) is used, which is BuildKit on any modern daemon. A missing or
+/// empty header (a daemon old enough to predate it) or `"1"` means the
+/// classic builder. A `DOCKER_BUILDKIT` value that parses as neither, or a
+/// header value that is none of those — when no `DOCKER_BUILDKIT` overrides
+/// it — is a hard error naming the value rather than a silent guess, as
+/// docker-client's `BuilderVersion.fromAPI` makes it. Both are raised when a
+/// build first needs the builder, not on every command as in Batect (and,
+/// for `DOCKER_BUILDKIT`, the docker CLI; see
+/// `docs/differences-from-batect.md`'s `--enable-buildkit` row).
 ///
 /// Pure (both inputs injected) so the whole decision table is
 /// unit-testable; [`DockerClient`] feeds it the real environment variable
@@ -1759,10 +1762,15 @@ fn select_builder_version(
             )),
         };
     }
-    Ok(match daemon_advertised {
-        Some("2") => BuilderVersion::BuilderBuildKit,
-        _ => BuilderVersion::BuilderV1,
-    })
+    match daemon_advertised {
+        None | Some("") | Some("1") => Ok(BuilderVersion::BuilderV1),
+        Some("2") => Ok(BuilderVersion::BuilderBuildKit),
+        Some(other) => Err(anyhow::anyhow!(
+            "The Docker daemon's Builder-Version ping header is '{other}', which is not a builder \
+             Ratect knows — set the DOCKER_BUILDKIT environment variable to '1' to use BuildKit \
+             or '0' to use the classic builder."
+        )),
+    }
 }
 
 /// The oldest Docker Engine API version Ratect's own features actually
