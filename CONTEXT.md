@@ -71,7 +71,11 @@ One gate per container, whatever it consists of: ordinarily two steps — a
 health-check step (Docker's own health check), then its setup commands. An
 externally checked container's gate is its external health check alone, and
 a run-to-completion container's is exiting 0. For a
-dependency, nothing that depends on it starts before it passes. A task's own
+dependency, nothing that depends on it starts before it passes. Under
+[0019](decisions/0019-readiness-gates-starting-only.md) only starting waits —
+a dependent's image is pulled or built (landing with #312) and its container
+created (#603) without regard to its dependencies; until each lands, that
+step waits too. A task's own
 container's gate gates nothing: under the Batect-compatible dialect it runs
 alongside the main command; under the native dialect it has none.
 
