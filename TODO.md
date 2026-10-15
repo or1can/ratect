@@ -96,6 +96,16 @@ Confirmed against GitHub's own `/markdown` API, not assumed.
   container's start path. The ownership labels and `ratect resources`
   cover it meanwhile.
 
+- **17.** **A YAML type mismatch's `found` is vaguer than it was before
+  config files were parsed straight from text** (#415): noyalib's streaming
+  walker reports `expected string, found non-string scalar` or `expected
+  bool, found other` where the `Value`-based path said `found float` /
+  `found string`, and `from_str` keeps the streaming wording by design
+  (its `locate_streaming_error`). The location and path now attached point
+  at the value, so nothing is lost that a user can't see; the fix is
+  upstream, in `noyalib`'s `streaming.rs` `TypeMismatch` arms, which have
+  consumed the event by the time they name what they found.
+
 ## Test coverage
 
 - **4.** **`ratect-compat/tests/cli.rs`'s `task_output` helper weakens ~18 converted e2e

@@ -415,7 +415,9 @@ fn unsupported_config_key_reports_error() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("unknown field") && stderr.contains("not_a_real_field"),
+        stderr.contains("line 8, column 23")
+            && stderr
+                .contains("containers.build-env.not_a_real_field: unknown field: not_a_real_field"),
         "stderr:\n{}",
         stderr
     );

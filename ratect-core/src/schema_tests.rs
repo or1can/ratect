@@ -119,7 +119,7 @@ fn every_config_ratect_accepts_validates_against_the_schema() {
         .parent()
         .expect("ratect-core always has a parent directory")
         .join("ratect-compat/tests/fixtures");
-    let mut checked = 0;
+    let mut checked = Vec::new();
     for entry in std::fs::read_dir(&fixtures).expect("failed to list the fixture directory") {
         let path = entry
             .expect("failed to read a fixture directory entry")
@@ -128,11 +128,11 @@ fn every_config_ratect_accepts_validates_against_the_schema() {
             continue;
         }
         let text = std::fs::read_to_string(&path).expect("failed to read a fixture");
-        // Parsed twice deliberately: once into the real config type
-        // (which decides whether this fixture is one Ratect accepts at
-        // all), and once into plain JSON (which is what the schema
-        // describes — the same document an editor sees).
-        if noyalib::from_str::<crate::config::ConfigFile>(&text).is_err() {
+        // Parsed twice deliberately: once the way Ratect reads a YAML
+        // config file (which decides whether this fixture is one Ratect
+        // accepts at all), and once into plain JSON (which is what the
+        // schema describes — the same document an editor sees).
+        if crate::config::parse_yaml_config_file(&path).is_err() {
             continue;
         }
         let document: serde_json::Value =
@@ -143,12 +143,21 @@ fn every_config_ratect_accepts_validates_against_the_schema() {
                 path.display()
             );
         }
-        checked += 1;
+        checked.push(path.file_name().unwrap().to_string_lossy().into_owned());
     }
     // A misspelled directory would otherwise make this pass vacuously.
     assert!(
-        checked > 10,
-        "expected to validate the repository's fixtures, but only found {checked}"
+        checked.len() > 10,
+        "expected to validate the repository's fixtures, but only found {}",
+        checked.len()
+    );
+    // And a fixture only Ratect's real YAML path accepts — top-level
+    // extension keys, skipped by `parse_yaml_config_file` and nothing
+    // else — would otherwise be skipped as "not config", and never reach
+    // the schema at all.
+    assert!(
+        checked.iter().any(|name| name == "yaml-extensions.yml"),
+        "yaml-extensions.yml should be validated, but only these were: {checked:?}"
     );
 }
 

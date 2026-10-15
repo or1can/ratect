@@ -39,10 +39,11 @@
 //! See [decisions/0003](https://github.com/or1can/ratect/blob/main/decisions/0003-ratect-native-config-format.md).
 //! Two Batect behaviours worth knowing, both found by running real-world bundles
 //! and both applying to *either* format's YAML: a top-level key starting with `.`
-//! is an **extension** (it exists only to hold a YAML anchor and is stripped
-//! before the schema sees it — which is why YAML is deserialized in two steps,
-//! text → `noyalib::Value` → `ConfigFile`, since anchors must resolve *before*
-//! the key is dropped), and a **leading `~`** in a host path expands to the home
+//! is an **extension** (it exists only to hold a YAML anchor and is skipped
+//! before the schema sees it — `parse_yaml_config_file` reads the file straight
+//! into `ConfigFile` through a key filter, so every error keeps its line, column
+//! and path, and the parser has resolved anchors before any key is skipped), and
+//! a **leading `~`** in a host path expands to the home
 //! directory (component-wise, matching Batect's `PathResolver.resolveHomeDir`, so
 //! `~user/…` stays literal). `task_names_for_completion` is a deliberate
 //! *non*-load for shell completion: names only, follows local and
@@ -599,6 +600,35 @@ impl DeviceMapping {
     }
 }
 
+/// Reads an object-form field that may be left out but, when given, must
+/// hold a `T` — so a null is rejected, where a bare `Option<T>` would read
+/// it as left out. For the optional fields of [`object_fields`]' structs.
+fn present<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+/// Reads a hand-written visitor's object form into a derived `*Fields`
+/// struct (`deny_unknown_fields`), leaving the visitor only the rules that
+/// span fields.
+///
+/// Why a derived struct, never a loop over `next_key::<String>()`: serde's
+/// derive reads each key through the deserializer's own `next_key_seed`,
+/// which is where noyalib locates an unknown key — at its entry, with the
+/// key in the error's path (#415). A loop that reads the key as a `String`
+/// and rejects it afterwards gets the location of the mapping's first line
+/// instead, pointing the user at a line that is fine.
+fn object_fields<'de, A, F>(map: A) -> std::result::Result<F, A::Error>
+where
+    A: serde::de::MapAccess<'de>,
+    F: Deserialize<'de>,
+{
+    F::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+}
+
 impl<'de> Deserialize<'de> for DeviceMapping {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -623,29 +653,23 @@ impl<'de> Deserialize<'de> for DeviceMapping {
                 DeviceMapping::parse_string(v).map_err(serde::de::Error::custom)
             }
 
-            fn visit_map<A>(self, mut map: A) -> std::result::Result<DeviceMapping, A::Error>
+            fn visit_map<A>(self, map: A) -> std::result::Result<DeviceMapping, A::Error>
             where
                 A: serde::de::MapAccess<'de>,
             {
-                let mut local: Option<String> = None;
-                let mut container: Option<String> = None;
-                let mut options: Option<String> = None;
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "local" => local = Some(map.next_value()?),
-                        "container" => container = Some(map.next_value()?),
-                        "options" => options = Some(map.next_value()?),
-                        other => {
-                            return Err(serde::de::Error::unknown_field(
-                                other,
-                                &["local", "container", "options"],
-                            ))
-                        }
-                    }
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct DeviceMappingFields {
+                    local: String,
+                    container: String,
+                    #[serde(default, deserialize_with = "present")]
+                    options: Option<String>,
                 }
-                let local = local.ok_or_else(|| serde::de::Error::missing_field("local"))?;
-                let container =
-                    container.ok_or_else(|| serde::de::Error::missing_field("container"))?;
+                let DeviceMappingFields {
+                    local,
+                    container,
+                    options,
+                } = object_fields(map)?;
                 Ok(DeviceMapping {
                     local,
                     container,
@@ -822,28 +846,19 @@ impl<'de> Deserialize<'de> for Ulimit {
                 f.write_str("an object with 'name'/'soft'/'hard' fields")
             }
 
-            fn visit_map<A>(self, mut map: A) -> std::result::Result<Ulimit, A::Error>
+            fn visit_map<A>(self, map: A) -> std::result::Result<Ulimit, A::Error>
             where
                 A: serde::de::MapAccess<'de>,
             {
-                let mut name: Option<UlimitResource> = None;
-                let mut soft: Option<i64> = None;
-                let mut hard: Option<i64> = None;
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "name" => name = Some(map.next_value()?),
-                        "soft" => soft = Some(map.next_value()?),
-                        "hard" => hard = Some(map.next_value()?),
-                        other => {
-                            return Err(serde::de::Error::unknown_field(
-                                other,
-                                &["name", "soft", "hard"],
-                            ))
-                        }
-                    }
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct UlimitFields {
+                    name: UlimitResource,
+                    soft: i64,
+                    #[serde(default, deserialize_with = "present")]
+                    hard: Option<i64>,
                 }
-                let name = name.ok_or_else(|| serde::de::Error::missing_field("name"))?;
-                let soft = soft.ok_or_else(|| serde::de::Error::missing_field("soft"))?;
+                let UlimitFields { name, soft, hard } = object_fields(map)?;
                 // Omitted `hard` means "both limits", same as the string
                 // form's single value.
                 let hard = hard.unwrap_or(soft);
@@ -1028,34 +1043,33 @@ impl<'de> Deserialize<'de> for VolumeMount {
                 VolumeMount::parse_string(v).map_err(serde::de::Error::custom)
             }
 
-            fn visit_map<A>(self, mut map: A) -> std::result::Result<VolumeMount, A::Error>
+            fn visit_map<A>(self, map: A) -> std::result::Result<VolumeMount, A::Error>
             where
                 A: serde::de::MapAccess<'de>,
             {
-                let mut local: Option<String> = None;
-                let mut container: Option<String> = None;
-                let mut options: Option<String> = None;
-                let mut name: Option<String> = None;
-                let mut mount_type: Option<String> = None;
-                let mut scope: Option<CacheScope> = None;
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "local" => local = Some(map.next_value()?),
-                        "container" => container = Some(map.next_value()?),
-                        "options" => options = Some(map.next_value()?),
-                        "name" => name = Some(map.next_value()?),
-                        "type" => mount_type = Some(map.next_value()?),
-                        "scope" => scope = Some(map.next_value()?),
-                        other => {
-                            return Err(serde::de::Error::unknown_field(
-                                other,
-                                &["local", "container", "options", "name", "type", "scope"],
-                            ))
-                        }
-                    }
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct VolumeMountFields {
+                    #[serde(default, deserialize_with = "present")]
+                    local: Option<String>,
+                    container: String,
+                    #[serde(default, deserialize_with = "present")]
+                    options: Option<String>,
+                    #[serde(default, deserialize_with = "present")]
+                    name: Option<String>,
+                    #[serde(rename = "type", default, deserialize_with = "present")]
+                    mount_type: Option<String>,
+                    #[serde(default, deserialize_with = "present")]
+                    scope: Option<CacheScope>,
                 }
-                let container =
-                    container.ok_or_else(|| serde::de::Error::missing_field("container"))?;
+                let VolumeMountFields {
+                    local,
+                    container,
+                    options,
+                    name,
+                    mount_type,
+                    scope,
+                } = object_fields(map)?;
 
                 match mount_type.as_deref().unwrap_or("local") {
                     "local" => {
@@ -1499,24 +1513,19 @@ impl<'de> Deserialize<'de> for BuildSecret {
                 f.write_str("an object with either an 'environment' or a 'path' field")
             }
 
-            fn visit_map<A>(self, mut map: A) -> std::result::Result<BuildSecret, A::Error>
+            fn visit_map<A>(self, map: A) -> std::result::Result<BuildSecret, A::Error>
             where
                 A: serde::de::MapAccess<'de>,
             {
-                let mut environment: Option<String> = None;
-                let mut path: Option<String> = None;
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "environment" => environment = Some(map.next_value()?),
-                        "path" => path = Some(map.next_value()?),
-                        other => {
-                            return Err(serde::de::Error::unknown_field(
-                                other,
-                                &["environment", "path"],
-                            ))
-                        }
-                    }
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct BuildSecretFields {
+                    #[serde(default, deserialize_with = "present")]
+                    environment: Option<String>,
+                    #[serde(default, deserialize_with = "present")]
+                    path: Option<String>,
                 }
+                let BuildSecretFields { environment, path } = object_fields(map)?;
 
                 match (environment, path) {
                     (Some(_), Some(_)) => Err(serde::de::Error::custom(
@@ -2312,29 +2321,23 @@ impl<'de> Deserialize<'de> for PortMapping {
                 PortMapping::parse_string(v).map_err(serde::de::Error::custom)
             }
 
-            fn visit_map<A>(self, mut map: A) -> std::result::Result<PortMapping, A::Error>
+            fn visit_map<A>(self, map: A) -> std::result::Result<PortMapping, A::Error>
             where
                 A: serde::de::MapAccess<'de>,
             {
-                let mut local: Option<PortRange> = None;
-                let mut container: Option<PortRange> = None;
-                let mut protocol: Option<String> = None;
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "local" => local = Some(map.next_value()?),
-                        "container" => container = Some(map.next_value()?),
-                        "protocol" => protocol = Some(map.next_value()?),
-                        other => {
-                            return Err(serde::de::Error::unknown_field(
-                                other,
-                                &["local", "container", "protocol"],
-                            ))
-                        }
-                    }
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct PortMappingFields {
+                    local: PortRange,
+                    container: PortRange,
+                    #[serde(default, deserialize_with = "present")]
+                    protocol: Option<String>,
                 }
-                let local = local.ok_or_else(|| serde::de::Error::missing_field("local"))?;
-                let container =
-                    container.ok_or_else(|| serde::de::Error::missing_field("container"))?;
+                let PortMappingFields {
+                    local,
+                    container,
+                    protocol,
+                } = object_fields(map)?;
                 let protocol = protocol.unwrap_or_else(|| "tcp".to_string());
                 PortMapping::new(local, container, protocol).map_err(serde::de::Error::custom)
             }
@@ -2695,41 +2698,34 @@ impl<'de> Deserialize<'de> for IncludeEntry {
                 })
             }
 
-            fn visit_map<A>(self, mut map: A) -> std::result::Result<IncludeEntry, A::Error>
+            fn visit_map<A>(self, map: A) -> std::result::Result<IncludeEntry, A::Error>
             where
                 A: serde::de::MapAccess<'de>,
             {
-                let mut path: Option<String> = None;
-                let mut include_type: Option<String> = None;
-                let mut repo: Option<String> = None;
-                let mut git_ref: Option<String> = None;
-                let mut allow_host_paths: Option<bool> = None;
-                let mut allow_nested_git_includes: Option<bool> = None;
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "path" => path = Some(map.next_value()?),
-                        "type" => include_type = Some(map.next_value()?),
-                        "repo" => repo = Some(map.next_value()?),
-                        "ref" => git_ref = Some(map.next_value()?),
-                        "allow_host_paths" => allow_host_paths = Some(map.next_value()?),
-                        "allow_nested_git_includes" => {
-                            allow_nested_git_includes = Some(map.next_value()?)
-                        }
-                        other => {
-                            return Err(serde::de::Error::unknown_field(
-                                other,
-                                &[
-                                    "path",
-                                    "type",
-                                    "repo",
-                                    "ref",
-                                    "allow_host_paths",
-                                    "allow_nested_git_includes",
-                                ],
-                            ))
-                        }
-                    }
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct IncludeEntryFields {
+                    #[serde(default, deserialize_with = "present")]
+                    path: Option<String>,
+                    #[serde(rename = "type", default, deserialize_with = "present")]
+                    include_type: Option<String>,
+                    #[serde(default, deserialize_with = "present")]
+                    repo: Option<String>,
+                    #[serde(rename = "ref", default, deserialize_with = "present")]
+                    git_ref: Option<String>,
+                    #[serde(default, deserialize_with = "present")]
+                    allow_host_paths: Option<bool>,
+                    #[serde(default, deserialize_with = "present")]
+                    allow_nested_git_includes: Option<bool>,
                 }
+                let IncludeEntryFields {
+                    path,
+                    include_type,
+                    repo,
+                    git_ref,
+                    allow_host_paths,
+                    allow_nested_git_includes,
+                } = object_fields(map)?;
 
                 match include_type.as_deref() {
                     Some("git") => {
@@ -3137,26 +3133,125 @@ fn config_file_format(path: &Path) -> Result<FileFormat> {
 const EXTENSION_KEY_PREFIX: char = '.';
 
 /// Parses a YAML config file, dropping Batect's top-level *extension* entries
-/// (see [`EXTENSION_KEY_PREFIX`]) before deserializing.
+/// (see [`EXTENSION_KEY_PREFIX`]) as it deserializes.
 ///
-/// Deserialized in two steps — text to [`noyalib::Value`], then `Value` to
-/// [`ConfigFile`] — rather than straight into `ConfigFile`, purely so the
-/// extension keys can be removed in between. The parse step is what resolves
-/// anchors, aliases and merge keys, so by the time an extension entry is
-/// dropped its content has already been inlined everywhere it was aliased —
-/// which is exactly what makes dropping it safe. Only *top-level* keys are
-/// considered, matching kaml, so a `.`-prefixed key nested anywhere else still
-/// reaches the schema (and is still rejected if it isn't a real field).
-fn parse_yaml_config_file(path: &Path) -> Result<ConfigFile> {
+/// Deserialized straight from the text, through [`ExtensibleConfigFile`],
+/// rather than text to [`noyalib::Value`] and `Value` to [`ConfigFile`] with
+/// the extension keys removed in between: only the direct path gives every
+/// error its line, column and YAML path, since the spans belong to the
+/// text and a `Value` has none (#415). The parser resolves anchors, aliases
+/// and merge keys before the deserializer sees a single entry, so by the
+/// time an extension entry is skipped its content has already been inlined
+/// everywhere it was aliased — which is exactly what makes skipping it
+/// safe. Only *top-level* keys are considered, matching kaml, so a
+/// `.`-prefixed key nested anywhere else still reaches the schema (and is
+/// still rejected if it isn't a real field).
+pub(crate) fn parse_yaml_config_file(path: &Path) -> Result<ConfigFile> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to open config file {:?}", path))?;
-    let mut document: noyalib::Value = noyalib::from_str(&text)
+    let ExtensibleConfigFile(file) = noyalib::from_str(&text)
         .with_context(|| format!("Failed to parse config file {:?}", path))?;
-    if let noyalib::Value::Mapping(mapping) = &mut document {
-        mapping.retain(|key, _| !key.starts_with(EXTENSION_KEY_PREFIX));
+    Ok(file)
+}
+
+/// A [`ConfigFile`] read from a mapping whose top-level extension entries
+/// (see [`EXTENSION_KEY_PREFIX`]) are skipped, key and value both. Every
+/// other entry reaches `ConfigFile`'s own derived deserializer
+/// unchanged, so `deny_unknown_fields` and every field's rule still apply
+/// as if the extensions weren't there.
+///
+/// The skipping happens *inside* the deserializer's own `next_key_seed`
+/// ([`ExtensionSkippingKey`]), not after reading the key out: an unknown
+/// top-level key is then rejected where noyalib reads that key, which is
+/// what locates the error at the entry and names the key in its path.
+struct ExtensibleConfigFile(ConfigFile);
+
+impl<'de> Deserialize<'de> for ExtensibleConfigFile {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ConfigFileVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for ConfigFileVisitor {
+            type Value = ExtensibleConfigFile;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a config file mapping")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                map: A,
+            ) -> Result<Self::Value, A::Error> {
+                ConfigFile::deserialize(serde::de::value::MapAccessDeserializer::new(
+                    SkippingExtensions(map),
+                ))
+                .map(ExtensibleConfigFile)
+            }
+        }
+
+        deserializer.deserialize_map(ConfigFileVisitor)
     }
-    noyalib::from_value(&document)
-        .with_context(|| format!("Failed to parse config file {:?}", path))
+}
+
+/// The top-level mapping with its extension entries skipped: a key that is
+/// one is consumed with its value and the next entry read instead.
+struct SkippingExtensions<A>(A);
+
+impl<'de, A: serde::de::MapAccess<'de>> serde::de::MapAccess<'de> for SkippingExtensions<A> {
+    type Error = A::Error;
+
+    fn next_key_seed<K: serde::de::DeserializeSeed<'de>>(
+        &mut self,
+        mut seed: K,
+    ) -> Result<Option<K::Value>, A::Error> {
+        loop {
+            match self.0.next_key_seed(ExtensionSkippingKey(seed))? {
+                None => return Ok(None),
+                Some(TopLevelKey::Field(key)) => return Ok(Some(key)),
+                Some(TopLevelKey::Extension(unused_seed)) => {
+                    self.0.next_value::<serde::de::IgnoredAny>()?;
+                    seed = unused_seed;
+                }
+            }
+        }
+    }
+
+    fn next_value_seed<V: serde::de::DeserializeSeed<'de>>(
+        &mut self,
+        seed: V,
+    ) -> Result<V::Value, A::Error> {
+        self.0.next_value_seed(seed)
+    }
+}
+
+/// Reads a top-level key as text first; an extension key is reported as
+/// one, handing the field seed back unused, and any other key is given to
+/// that seed — `ConfigFile`'s own field identifier — as if it had been read
+/// directly.
+struct ExtensionSkippingKey<K>(K);
+
+enum TopLevelKey<Seed, Field> {
+    Extension(Seed),
+    Field(Field),
+}
+
+impl<'de, K: serde::de::DeserializeSeed<'de>> serde::de::DeserializeSeed<'de>
+    for ExtensionSkippingKey<K>
+{
+    type Value = TopLevelKey<K, K::Value>;
+
+    fn deserialize<D: serde::Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> Result<Self::Value, D::Error> {
+        use serde::de::IntoDeserializer;
+        let key = String::deserialize(deserializer)?;
+        if key.starts_with(EXTENSION_KEY_PREFIX) {
+            return Ok(TopLevelKey::Extension(self.0));
+        }
+        self.0
+            .deserialize(key.into_deserializer())
+            .map(TopLevelKey::Field)
+    }
 }
 
 fn parse_toml_config_file(path: &Path) -> Result<ConfigFile> {

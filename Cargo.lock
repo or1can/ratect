@@ -1840,8 +1840,7 @@ dependencies = [
 [[package]]
 name = "noyalib"
 version = "0.0.57"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70b8960f9f4668b69cae4ca71106c84d38ca1ea9f41a9acc20ce55473b967849"
+source = "git+https://github.com/or1can/noyalib.git?branch=fix%2Flocate-unknown-and-missing-field#0c54c2c7fbe212e3dc662666f92f615105f8345d"
 dependencies = [
  "hashbrown",
  "indexmap",
