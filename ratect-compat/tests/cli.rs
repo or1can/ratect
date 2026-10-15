@@ -1939,6 +1939,37 @@ fn failing_prerequisite_stops_the_chain() {
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
 /// Run explicitly with `cargo test -- --ignored`.
 ///
+/// Mirrors Batect's `SessionRunnerSpec`, "the task has a prerequisite" /
+/// "the dependency finishes with an exit code of 0": "returns the exit code
+/// of the main task".
+#[test]
+#[ignore]
+fn main_task_exit_code_wins_over_a_successful_prerequisite() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(exit_code_config_path())
+        .arg("fails-after-prerequisite")
+        .output()
+        .expect("failed to run ratect");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(42),
+        "stdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("succeeds finished with exit code 0 in ")),
+        "the prerequisite must have run:\n{stdout}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
 /// The second arg deliberately contains a space — proves args arrive as
 /// literal argv appended after the tokenized `command`, matching Batect's
 /// own `ADDITIONAL_ARGS` mechanism, rather than being concatenated into the

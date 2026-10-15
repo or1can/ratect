@@ -1,7 +1,9 @@
 # Exercises container exit code propagation: `succeeds` and `fails` prove
 # ratect fails the process (with the exact exit code) when the task's own
-# command exits non-zero, and `stops-prerequisite-chain` proves a failing
-# prerequisite stops the rest of the chain from running at all.
+# command exits non-zero, `stops-prerequisite-chain` proves a failing
+# prerequisite stops the rest of the chain from running at all, and
+# `fails-after-prerequisite` proves a run whose prerequisite succeeds exits
+# with the main task's code, not the prerequisite's.
 project_name: ratect-exit-code-test
 containers:
   build-env:
@@ -21,3 +23,9 @@ tasks:
     run:
       container: build-env
       command: echo "should never print this"
+  fails-after-prerequisite:
+    prerequisites:
+      - succeeds
+    run:
+      container: build-env
+      command: sh -c "exit 42"

@@ -62,6 +62,9 @@ type CapturedStopOptions = Arc<Mutex<HashMap<String, StopOptionsValue>>>;
 struct FakeContainerRuntime {
     events: Arc<Mutex<Vec<String>>>,
     fail_run: Arc<Mutex<bool>>,
+    // Container name -> the exit code its `run_container` reports, overriding
+    // `fail_run` for that container alone (see `with_run_exit`).
+    run_exits: Arc<Mutex<HashMap<String, i64>>>,
     // Every `run_container`/`start_background_container` call, in order —
     // see `CapturedSpecs`'s own doc comment.
     specs: CapturedSpecs,
@@ -180,6 +183,7 @@ impl Default for FakeContainerRuntime {
         Self {
             events: Default::default(),
             fail_run: Default::default(),
+            run_exits: Default::default(),
             specs: Default::default(),
             build_specs: Default::default(),
             network_exists_result: Arc::new(Mutex::new(true)),
@@ -222,6 +226,17 @@ impl FakeContainerRuntime {
     /// non-zero, the same way the real `DockerClient` does.
     fn failing_run(self) -> Self {
         *self.fail_run.lock().unwrap() = true;
+        self
+    }
+
+    /// Makes `run_container` for container `name` report its command
+    /// exiting with `exit_code`, whatever `failing_run` says — so one task
+    /// in a chain can succeed while another fails with a code of its own.
+    fn with_run_exit(self, name: &str, exit_code: i64) -> Self {
+        self.run_exits
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), exit_code);
         self
     }
 
@@ -928,8 +943,13 @@ impl ContainerRuntime for FakeContainerRuntime {
         if let Some(drain) = drain {
             tokio::time::sleep(drain).await;
         }
-        if *self.fail_run.lock().unwrap() {
-            return Err(crate::docker::ContainerExitedNonZero { exit_code: 1 }.into());
+        let exit_code = match self.run_exits.lock().unwrap().get(name) {
+            Some(&exit_code) => exit_code,
+            None if *self.fail_run.lock().unwrap() => 1,
+            None => 0,
+        };
+        if exit_code != 0 {
+            return Err(crate::docker::ContainerExitedNonZero { exit_code }.into());
         }
         Ok(())
     }
@@ -8622,6 +8642,156 @@ async fn a_failing_prerequisite_is_reported_before_a_later_tasks_unevaluable_val
         "the prerequisite's own failure, not deploy's value: {error:#}"
     );
     assert_eq!(crate::exit_code::for_error(&error), 1);
+}
+
+/// `test`, whose container `app` runs only after its prerequisite `prepare`
+/// has run in `prep` — separate containers, so the fake can give each its
+/// own exit code. `builder` is built from a directory and used by neither
+/// task, so tagging it with `--tag-image` can never be satisfied.
+fn config_with_a_prerequisite_in_its_own_container() -> Config {
+    let mut containers = IndexMap::new();
+    containers.insert("prep".to_string(), container("alpine:3.18", None));
+    containers.insert("app".to_string(), container("alpine:3.18", None));
+    containers.insert(
+        "builder".to_string(),
+        container_with_build_directory(".", None),
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("prepare".to_string(), task("prep", "echo prepare"));
+    let mut test = task("app", "echo test");
+    test.prerequisites = Some(vec!["prepare".to_string()]);
+    tasks.insert("test".to_string(), test);
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+fn ran(docker: &FakeContainerRuntime, container: &str) -> bool {
+    let prefix = format!("run:{container}:");
+    docker
+        .events()
+        .iter()
+        .any(|event| event.starts_with(&prefix))
+}
+
+/// Mirrors Batect's `SessionRunnerSpec`, "the task has a prerequisite" /
+/// "the dependency finishes with an exit code of 0": "returns the exit code
+/// of the main task" — the run's code is the main task's, not the
+/// prerequisite's.
+#[tokio::test]
+async fn a_main_task_failing_after_its_prerequisite_succeeds_exits_with_its_own_code() {
+    let docker = FakeContainerRuntime::default().with_run_exit("app", 42);
+    let engine = engine(
+        config_with_a_prerequisite_in_its_own_container(),
+        docker.clone(),
+    );
+
+    let error = engine
+        .run_task("test", &[])
+        .await
+        .expect_err("the main task's command exits 42");
+
+    assert_eq!(
+        error
+            .downcast_ref::<crate::docker::ContainerExitedNonZero>()
+            .map(|exited| exited.exit_code),
+        Some(42),
+        "the main task's own exit code: {error:#}"
+    );
+    assert!(
+        ran(&docker, "prep"),
+        "the prerequisite ran: {:?}",
+        docker.events()
+    );
+    assert!(
+        ran(&docker, "app"),
+        "the main task ran: {:?}",
+        docker.events()
+    );
+}
+
+/// Mirrors Batect's `SessionRunnerSpec`, "the task has a prerequisite" /
+/// "and the dependency finishes with a non-zero exit code": "returns the exit
+/// code of the dependency task". The run stops there, so the check that every
+/// `--tag-image` container ran is never reached, and its error never replaces
+/// that exit code.
+#[tokio::test]
+async fn a_failing_prerequisite_skips_the_untagged_image_check() {
+    let docker = FakeContainerRuntime::default().failing_run();
+    let tags = HashMap::from([(
+        "builder".to_string(),
+        HashSet::from(["my.registry/builder:v1".to_string()]),
+    )]);
+    let engine = engine(
+        config_with_a_prerequisite_in_its_own_container(),
+        docker.clone(),
+    )
+    .with_settings(TaskEngineSettings {
+        image_tags: tags,
+        ..Default::default()
+    })
+    .unwrap();
+
+    let error = engine
+        .run_task("test", &[])
+        .await
+        .expect_err("the prerequisite fails");
+
+    assert_eq!(
+        error
+            .downcast_ref::<crate::docker::ContainerExitedNonZero>()
+            .map(|exited| exited.exit_code),
+        Some(1),
+        "the prerequisite's own exit code, not the untagged-image error: {error:#}"
+    );
+    assert!(
+        ran(&docker, "prep"),
+        "the prerequisite ran: {:?}",
+        docker.events()
+    );
+    assert!(
+        !ran(&docker, "app"),
+        "the main task must not run: {:?}",
+        docker.events()
+    );
+}
+
+/// Mirrors Batect's `SessionRunnerSpec`, "the task has a prerequisite" /
+/// "and the dependency finishes with a non-zero exit code": "does not run
+/// the main task". The simple and fancy loggers print the blank line between
+/// tasks only when the next `TaskStarting` arrives, so the main task's never
+/// being posted is what keeps a failed prerequisite from being followed by
+/// one.
+#[tokio::test]
+async fn a_failing_prerequisite_posts_no_task_starting_for_the_main_task() {
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_a_prerequisite_in_its_own_container()),
+        FakeContainerRuntime::default().failing_run(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine
+        .run_task("test", &[])
+        .await
+        .expect_err("the prerequisite fails");
+
+    let starting: Vec<TaskEvent> = sink
+        .events()
+        .into_iter()
+        .filter(|event| matches!(event, TaskEvent::TaskStarting { .. }))
+        .collect();
+    assert_eq!(
+        starting,
+        vec![TaskEvent::TaskStarting {
+            task: "prepare".into()
+        }]
+    );
 }
 
 #[tokio::test]
