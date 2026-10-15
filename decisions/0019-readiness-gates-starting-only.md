@@ -1,8 +1,9 @@
 # 0019 — A dependency's readiness gates only the start of what depends on it
 
-**Status:** Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0; image
-work [#312](https://github.com/or1can/ratect/issues/312), container creation
-[#603](https://github.com/or1can/ratect/issues/603)).
+**Status:** Accepted — image work shipped
+([#312](https://github.com/or1can/ratect/issues/312), ratect-compat 0.33.0 ·
+ratect 0.12.0); container creation planned
+([#603](https://github.com/or1can/ratect/issues/603)).
 
 ## Context
 
@@ -64,7 +65,8 @@ started proceeds without regard to its dependencies:
    memoised as today (one pull per image, one build per container) so two
    containers sharing an image share one in-flight pull. `--max-parallelism`
    caps each pull and build as it does now. A pull or build that fails ends
-   the run there, before any dependency has run a setup command.
+   the run as soon as it fails — not once every dependency is ready, by
+   which time its setup commands have run.
 2. **A container is created once its own image and the network are ready**,
    whether or not its dependencies are. Creation and starting become two
    steps in the runtime, for dependencies and for the task's own container

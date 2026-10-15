@@ -149,10 +149,16 @@ check configured to retry forever waits forever.
 
 ## Resolution order
 
-Dependencies are resolved **concurrently, gated by readiness**: a container with
-dependencies of its own never starts before every one of them is ready, but two
-containers with no dependency relationship to each other start at the same time
-rather than one after the other. For example:
+Dependencies are resolved **concurrently, gated by readiness** — and the gate is
+on *starting*: a container with dependencies of its own never starts before
+every one of them is ready, but two containers with no dependency relationship
+to each other start at the same time rather than one after the other. Its image
+doesn't wait at all: every container's image in the task's graph, the task's
+own included, is pulled or built from the moment the task's network exists, so
+a pull or build that fails ends the task as soon as it fails — not once every
+dependency is ready and its setup commands have run — and the pulls along a
+chain overlap rather than each following the previous container's readiness.
+For example:
 
 ```toml
 [containers.app]
@@ -173,9 +179,11 @@ graph TD
     database --> cache
 ```
 
-Running a task against `app` starts `cache` first (nothing else is holding it
-back), then `database` once `cache` is ready, then `app` once `database` is
-ready — a straight chain, so each one is genuinely waiting on the last. All
+Running a task against `app` starts pulling all three images at once. `cache`
+starts as soon as its own image is ready (nothing else is holding it back),
+then `database` once `cache` is ready and its own image is, then `app` once
+`database` is ready — a straight chain, so each *start* is genuinely waiting
+on the last. All
 three share one network and are reachable by their container-config name (e.g.
 `app`'s command can reach `database:5432` and `cache:6379`).
 
@@ -242,9 +250,10 @@ double-pulling its image. A circular container dependency (`a` depends on `b`
 depends on `a`) is detected up front, before any container starts, and reported
 as an error rather than hanging.
 
-This concurrency is unbounded by default — every independent branch's
-pull/build, create+start, and setup commands can all be in flight at once,
-across the whole invocation, not just within one task. `--max-parallelism <N>`
+This concurrency is unbounded by default — every container's pull/build, and
+every independent branch's create+start and setup commands, can all be in
+flight at once, across the whole invocation, not just within one task.
+`--max-parallelism <N>`
 caps it: at most `N` of those specific operations run at a time,
 invocation-wide. The health-check wait itself is deliberately *not* capped (it's
 a polling wait, not real work), so two dependencies can still become healthy at

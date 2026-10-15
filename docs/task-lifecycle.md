@@ -68,8 +68,9 @@ sequenceDiagram
 
     Engine->>Docker: create_network()
 
-    par independent branches of the dependency graph
+    par every container in the task's graph, the task's own included
         Engine->>Docker: pull_image()/build_image() (per image_pull_policy, unless already decided this run)
+    and independent branches of the dependency graph, each once its own image is ready
         Engine->>Docker: start_background_container(alias, network)
         Docker-->>Dep: created, started, joined to network
         Engine->>Docker: wait_for_container_healthy()
@@ -80,9 +81,8 @@ sequenceDiagram
         end
     end
 
-    Note over Engine: a container with dependencies of its own doesn't start<br/>its own branch above until all of them are ready
+    Note over Engine: a container with dependencies of its own doesn't start<br/>its own branch above until all of them are ready — its image is pulled or built regardless
 
-    Engine->>Docker: pull_image() (task's own image, per image_pull_policy, unless already decided)
     Engine->>Docker: run_container(name, network)
     Docker-->>Main: created, started, joined to network
     par the main command

@@ -23,6 +23,7 @@ history, from when it was the only binary.
 
 ### Changed
 
+- Every container's image — each dependency's and the task's own — is pulled or built as soon as the task's network is ready, concurrently. A pull or build that fails ends the run as soon as it fails, and `-o all`/`fancy` show image progress from the start.
 - A `--tag-image` value that `docker tag` would refuse — `_nonsense`, an uppercase repository name, a digest — is rejected while the arguments are parsed, naming the value and Docker's reason.
 - Every tag for a built image, including the automatic `<project_name>-<container name>` one, is checked before the image is built.
 - When tags applied after a build fail, every failed tag is reported.
