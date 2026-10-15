@@ -674,6 +674,11 @@ fn build_port_config(ports: Option<&Vec<(u16, u16, String)>>) -> Option<(Vec<Str
 /// special-casing (otherwise a broad `*` pattern would exclude the file the
 /// build needs).
 ///
+/// Every entry is owned by root (uid and gid 0), as docker-client makes
+/// Batect's, keeping each file's own mode: BuildKit carries a context file's
+/// ownership into a `COPY` without `--chown`, so the host user's uid would
+/// otherwise end up on files in the image.
+///
 /// Known simplifications: symlinks are silently skipped (rare in build
 /// contexts; proper support needs tar symlink entries, not just file
 /// copies), and empty directories aren't preserved as their own tar
@@ -700,9 +705,15 @@ fn build_context_tar(build_directory: &Path, dockerfile: &str) -> Result<Vec<u8>
         if !force_include && matcher.matches_or_parent_matches(&relative_path) {
             continue;
         }
-        builder
-            .append_path_with_name(&absolute_path, &relative_path)
-            .with_context(|| format!("Failed to add {:?} to build context", absolute_path))?;
+        let mut add = || -> std::io::Result<()> {
+            let file = fs::File::open(&absolute_path)?;
+            let mut header = tar::Header::new_gnu();
+            header.set_metadata_in_mode(&file.metadata()?, tar::HeaderMode::Complete);
+            header.set_uid(0);
+            header.set_gid(0);
+            builder.append_data(&mut header, &relative_path, file)
+        };
+        add().with_context(|| format!("Failed to add {:?} to build context", absolute_path))?;
     }
 
     builder

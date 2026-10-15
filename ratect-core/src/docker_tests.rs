@@ -755,6 +755,48 @@ fn build_context_tar_includes_everything_when_no_dockerignore() {
     fs::remove_dir_all(&dir).unwrap();
 }
 
+/// docker-client resets every context entry to root (`resetUIDAndGID`); the
+/// host's ownership would otherwise reach a BuildKit `COPY`. Fails whenever
+/// the host user isn't root, which is every CI run.
+#[test]
+fn build_context_tar_entries_are_root_owned_and_keep_their_mode() {
+    let dir = unique_temp_dir();
+    fs::write(dir.join("Dockerfile"), "FROM alpine").unwrap();
+    fs::create_dir_all(dir.join("subdir")).unwrap();
+    fs::write(dir.join("subdir/run.sh"), "#!/bin/sh").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir.join("subdir/run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let tar_bytes = build_context_tar(&dir, "Dockerfile").unwrap();
+    let mut archive = tar::Archive::new(tar_bytes.as_slice());
+    let mut seen = Vec::new();
+    for entry in archive.entries().unwrap() {
+        let entry = entry.unwrap();
+        let header = entry.header();
+        let path = entry.path().unwrap().to_string_lossy().into_owned();
+        assert_eq!(header.uid().unwrap(), 0, "{path}");
+        assert_eq!(header.gid().unwrap(), 0, "{path}");
+        for name in [header.username().unwrap(), header.groupname().unwrap()] {
+            assert!(
+                matches!(name, None | Some("") | Some("root")),
+                "{path}: {name:?}"
+            );
+        }
+        #[cfg(unix)]
+        if path == "subdir/run.sh" {
+            assert_eq!(header.mode().unwrap() & 0o777, 0o755);
+        }
+        seen.push(path);
+    }
+    seen.sort();
+    assert_eq!(seen, vec!["Dockerfile", "subdir/run.sh"]);
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn build_context_tar_excludes_dockerignore_matches() {
     let dir = unique_temp_dir();

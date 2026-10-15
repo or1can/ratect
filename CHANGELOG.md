@@ -21,6 +21,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Fixed
+
+- Files in an image's build context are sent owned by root, so a BuildKit `COPY` without `--chown` leaves them root-owned in the image.
+
 ## [ratect-compat 0.32.0 · ratect 0.11.0] - 2026-10-13
 
 ### Breaking

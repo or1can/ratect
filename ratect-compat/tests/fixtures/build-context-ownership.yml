@@ -1,0 +1,16 @@
+# Exercises the build context's ownership end-to-end against a real BuildKit
+# build: every file Ratect sends is owned by root, so a `COPY` without
+# `--chown` lands root-owned, however the files are owned on the host. The
+# Dockerfile's own `RUN test` assertions fail the build otherwise, so a
+# successful build here is the proof — but only when the test runs as a
+# non-root host user; as root, the host's ownership is already 0:0 and the
+# build passes either way.
+project_name: ratect-build-context-ownership-test
+containers:
+  build-env:
+    build_directory: ./build-context-ownership
+tasks:
+  check:
+    run:
+      container: build-env
+      command: echo done
