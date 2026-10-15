@@ -116,6 +116,14 @@ struct FakeContainerRuntime {
     // container is created (see `failing_start_after_create`).
     failing_starts_after_create: Arc<Mutex<HashSet<String>>>,
     pull_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
+    // Images whose `pull_image` fails, after any `pull_delays` entry for
+    // them has elapsed (see `with_failing_pull`).
+    failing_pulls: Arc<Mutex<HashSet<String>>>,
+    // Same idea as `pull_delays`, for `build_image` (keyed by the build's
+    // tag — see `with_build_delay`).
+    build_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
+    // Makes `create_network` fail (see `failing_network_creation`).
+    fail_network_creation: Arc<Mutex<bool>>,
     // Same idea, for `exec_in_container` (keyed by command) and
     // `wait_for_container_healthy` (keyed by container id) — used to
     // prove `--max-parallelism` serializes setup-command execution but
@@ -201,6 +209,9 @@ impl Default for FakeContainerRuntime {
             start_delays_after_create: Default::default(),
             failing_starts_after_create: Default::default(),
             pull_delays: Default::default(),
+            failing_pulls: Default::default(),
+            build_delays: Default::default(),
+            fail_network_creation: Default::default(),
             exec_delays: Default::default(),
             health_check_delays: Default::default(),
             run_delays: Default::default(),
@@ -281,6 +292,13 @@ impl FakeContainerRuntime {
     /// the build.
     fn failing_image_build(self) -> Self {
         *self.fail_image_build.lock().unwrap() = true;
+        self
+    }
+
+    /// Makes `create_network` fail, as a daemon with an exhausted address
+    /// pool would.
+    fn failing_network_creation(self) -> Self {
+        *self.fail_network_creation.lock().unwrap() = true;
         self
     }
 
@@ -424,6 +442,25 @@ impl FakeContainerRuntime {
             .lock()
             .unwrap()
             .insert(image.to_string(), delay);
+        self
+    }
+
+    /// Makes `pull_image` fail for `image` — after its `with_pull_delay`,
+    /// if it has one — as a registry that doesn't have it would.
+    fn with_failing_pull(self, image: &str) -> Self {
+        self.failing_pulls.lock().unwrap().insert(image.to_string());
+        self
+    }
+
+    /// Makes `build_image` for the build tagged `tag` artificially
+    /// `tokio::time::sleep` for `delay` before doing anything else — used
+    /// with `#[tokio::test(start_paused = true)]` to hold a build open
+    /// while a dependency's startup runs alongside it.
+    fn with_build_delay(self, tag: &str, delay: std::time::Duration) -> Self {
+        self.build_delays
+            .lock()
+            .unwrap()
+            .insert(tag.to_string(), delay);
         self
     }
 
@@ -714,6 +751,9 @@ impl ContainerRuntime for FakeContainerRuntime {
         if let Some(delay) = delay {
             tokio::time::sleep(delay).await;
         }
+        if self.failing_pulls.lock().unwrap().contains(image) {
+            anyhow::bail!("manifest for {image} not found");
+        }
         self.push(format!("pull:{image}"));
         Ok(())
     }
@@ -723,6 +763,10 @@ impl ContainerRuntime for FakeContainerRuntime {
     }
 
     async fn build_image(&self, spec: &crate::container_spec::BuildSpec) -> Result<String> {
+        let delay = self.build_delays.lock().unwrap().get(&spec.tag).copied();
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
         self.build_specs
             .lock()
             .unwrap()
@@ -750,6 +794,9 @@ impl ContainerRuntime for FakeContainerRuntime {
     }
 
     async fn create_network(&self, name: &str, labels: &HashMap<String, String>) -> Result<()> {
+        if *self.fail_network_creation.lock().unwrap() {
+            anyhow::bail!("could not find an available, non-overlapping IPv4 address pool");
+        }
         self.push(format!("network-create:{name}"));
         *self.network_labels.lock().unwrap() = Some(labels.clone());
         Ok(())
@@ -6357,6 +6404,294 @@ async fn default_unbounded_parallelism_still_lets_independent_pulls_overlap() {
     );
 }
 
+/// A chain — the task's container depends on `b`, which depends on `a` —
+/// with every image given the same pull delay. The three pulls overlap
+/// (decisions/0019: image work waits for the network, not for a
+/// dependency's readiness), so the run takes about one delay, not three.
+fn config_with_a_dependency_chain_of_three_pulls() -> Config {
+    let mut containers = IndexMap::new();
+    containers.insert("a".to_string(), container("image-a:1", None));
+    containers.insert(
+        "b".to_string(),
+        container("image-b:1", Some(vec!["a".to_string()])),
+    );
+    containers.insert(
+        "app".to_string(),
+        container("image-app:1", Some(vec!["b".to_string()])),
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("start".to_string(), task("app", "echo hi"));
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn pulls_along_a_dependency_chain_overlap() {
+    let delay = std::time::Duration::from_millis(100);
+    let docker = FakeContainerRuntime::default()
+        .with_pull_delay("image-a:1", delay)
+        .with_pull_delay("image-b:1", delay)
+        .with_pull_delay("image-app:1", delay);
+    let engine = engine(config_with_a_dependency_chain_of_three_pulls(), docker);
+
+    let start = tokio::time::Instant::now();
+    engine.run_task("start", &[]).await.unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < delay * 2,
+        "the three pulls along a dependency chain should overlap rather than each wait for \
+         the previous container's readiness (elapsed: {elapsed:?})"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn max_parallelism_of_one_still_serializes_pulls_along_a_dependency_chain() {
+    let delay = std::time::Duration::from_millis(100);
+    let docker = FakeContainerRuntime::default()
+        .with_pull_delay("image-a:1", delay)
+        .with_pull_delay("image-b:1", delay)
+        .with_pull_delay("image-app:1", delay);
+    let engine = engine(config_with_a_dependency_chain_of_three_pulls(), docker)
+        .with_settings(TaskEngineSettings {
+            max_parallelism: Some(1),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let start = tokio::time::Instant::now();
+    engine.run_task("start", &[]).await.unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed >= delay * 3,
+        "with --max-parallelism 1, the three pulls still each hold the one permit in turn \
+         (elapsed: {elapsed:?})"
+    );
+}
+
+/// A dependency with a setup command, and a task container whose image
+/// can't be pulled. The pull is attempted alongside the dependency's
+/// startup, and its failure ends the run the moment it lands — here,
+/// while the setup command is still in flight, so it never completes —
+/// asserted on the fake's exec record, which only ever holds a command
+/// that actually ran.
+#[tokio::test(start_paused = true)]
+async fn a_failed_pull_of_the_task_image_stops_a_dependency_before_its_setup_command() {
+    let mut containers = IndexMap::new();
+    let mut database = container("postgres:15", None);
+    database.setup_commands = Some(vec![crate::config::SetupCommand {
+        command: "./init.sh".to_string(),
+        working_directory: None,
+        run_in: None,
+    }]);
+    containers.insert("database".to_string(), database);
+    containers.insert(
+        "app".to_string(),
+        container("nope:does-not-exist", Some(vec!["database".to_string()])),
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("start".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    // The pull takes a moment to fail, and the setup command takes longer
+    // than that to run: the failure lands while the exec is in flight.
+    let docker = FakeContainerRuntime::default()
+        .with_pull_delay("nope:does-not-exist", std::time::Duration::from_millis(100))
+        .with_failing_pull("nope:does-not-exist")
+        .with_exec_delay("./init.sh", std::time::Duration::from_secs(1));
+    let engine = engine(config, docker.clone());
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(
+        format!("{error:?}").contains("manifest for nope:does-not-exist not found"),
+        "the run should fail with the pull error: {error:?}"
+    );
+    assert!(
+        docker.exec_for("./init.sh").is_none(),
+        "the dependency's setup command should never have run: {:?}",
+        docker.events()
+    );
+}
+
+/// The task container's build runs alongside its dependency's startup:
+/// `ImageBuildStarting` for the task container is posted before the
+/// dependency's `SetupCommandsCompleted`, and the task container still
+/// doesn't run until both have finished.
+#[tokio::test(start_paused = true)]
+async fn a_build_starts_before_a_dependency_is_ready() {
+    let mut containers = IndexMap::new();
+    let mut database = container("postgres:15", None);
+    database.setup_commands = Some(vec![crate::config::SetupCommand {
+        command: "./init.sh".to_string(),
+        working_directory: None,
+        run_in: None,
+    }]);
+    containers.insert("database".to_string(), database);
+    let mut app = container_with_build_directory("./docker", None);
+    app.dependencies = Some(vec!["database".to_string()]);
+    containers.insert("app".to_string(), app);
+    let mut tasks = IndexMap::new();
+    tasks.insert("start".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let sink = RecordingEventSink::default();
+    let docker = FakeContainerRuntime::default()
+        .with_build_delay("demo-app", std::time::Duration::from_millis(100));
+    let engine = TaskEngine::new(
+        project(config),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let events = sink.events();
+    let position = |wanted: &TaskEvent| {
+        events
+            .iter()
+            .position(|event| event == wanted)
+            .unwrap_or_else(|| panic!("missing {wanted:?} in {events:?}"))
+    };
+    let build_starting = position(&TaskEvent::ImageBuildStarting {
+        container: "app".into(),
+    });
+    let build_completed = position(&TaskEvent::ImageBuildCompleted {
+        container: "app".into(),
+    });
+    let setup_completed = position(&TaskEvent::SetupCommandsCompleted {
+        container: "database".into(),
+    });
+    let running = position(&TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: Some("echo hi".into()),
+    });
+    assert!(
+        build_starting < setup_completed,
+        "the task container's build should start before its dependency is ready: {events:?}"
+    );
+    assert!(
+        build_completed < running && setup_completed < running,
+        "the task container should run only once its build and its dependency have both \
+         finished: {events:?}"
+    );
+}
+
+/// Two `build_directory` containers, one depending on the other, each
+/// wait for their *own* build: the dependency's start follows its own
+/// build's completion, not the task container's (which finishes first).
+#[tokio::test(start_paused = true)]
+async fn each_built_container_waits_for_its_own_build() {
+    let mut containers = IndexMap::new();
+    containers.insert(
+        "dep".to_string(),
+        container_with_build_directory("./dep", None),
+    );
+    let mut app = container_with_build_directory("./app", None);
+    app.dependencies = Some(vec!["dep".to_string()]);
+    containers.insert("app".to_string(), app);
+    let mut tasks = IndexMap::new();
+    tasks.insert("start".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let dep_build = std::time::Duration::from_millis(300);
+    let docker = FakeContainerRuntime::default()
+        .with_build_delay("demo-app", std::time::Duration::from_millis(100))
+        .with_build_delay("demo-dep", dep_build);
+    let engine = engine(config, docker.clone());
+
+    let start = tokio::time::Instant::now();
+    engine.run_task("start", &[]).await.unwrap();
+    let elapsed = start.elapsed();
+
+    let events = docker.events();
+    let position = |prefix: &str| {
+        events
+            .iter()
+            .position(|event| event.starts_with(prefix))
+            .unwrap_or_else(|| panic!("missing {prefix} in {events:?}"))
+    };
+    assert!(
+        position("build:demo-app:") < position("build:demo-dep:")
+            && position("build:demo-dep:") < position("sidecar-start:dep:"),
+        "dep should start after its own build, not after app's: {events:?}"
+    );
+    assert!(
+        elapsed >= dep_build,
+        "dep's start should have waited for its own build (elapsed: {elapsed:?})"
+    );
+}
+
+/// The network comes first, and stays first (a recorded divergence from
+/// Batect, which creates it alongside the pulls): a failure to create it
+/// is the run's error, before any pull or build has been attempted.
+#[tokio::test]
+async fn a_failed_network_creation_attempts_no_pull_or_build() {
+    let mut containers = IndexMap::new();
+    containers.insert(
+        "dep".to_string(),
+        container_with_build_directory("./dep", None),
+    );
+    containers.insert(
+        "app".to_string(),
+        container("alpine:3.18", Some(vec!["dep".to_string()])),
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("start".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default().failing_network_creation();
+    let engine = engine(config, docker.clone());
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(
+        format!("{error:?}").contains("non-overlapping IPv4 address pool"),
+        "the run should fail with the network error: {error:?}"
+    );
+    let image_work: Vec<_> = docker
+        .events()
+        .iter()
+        .filter(|event| event.starts_with("pull:") || event.starts_with("build:"))
+        .cloned()
+        .collect();
+    assert!(
+        image_work.is_empty(),
+        "no image should be pulled or built once the network has failed: {image_work:?}"
+    );
+}
+
 /// Shared by the three `max_parallelism` tests below covering start/
 /// setup-command/health-check concurrency: two independent dependencies
 /// (no relationship to each other), same shape as
@@ -9680,6 +10015,21 @@ async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
         TaskEvent::TaskStarting {
             task: "test".into(),
         },
+        // Every container's image work starts before any dependency does
+        // (decisions/0019), in container-name order (`build-env` before
+        // `database`); the fake's pulls complete instantly, so here each
+        // image's milestones all land before the next one's start, and
+        // before `database` starts. Against a real daemon the pulls
+        // overlap, and only their starting order is fixed.
+        TaskEvent::ImagePullStarting {
+            image: "alpine:3.18".into(),
+        },
+        TaskEvent::ImagePullCompleted {
+            image: "alpine:3.18".into(),
+        },
+        TaskEvent::ImageResolved {
+            container: "build-env".into(),
+        },
         TaskEvent::ImagePullStarting {
             image: "postgres:15".into(),
         },
@@ -9707,15 +10057,6 @@ async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
         },
         TaskEvent::SetupCommandsCompleted {
             container: "database".into(),
-        },
-        TaskEvent::ImagePullStarting {
-            image: "alpine:3.18".into(),
-        },
-        TaskEvent::ImagePullCompleted {
-            image: "alpine:3.18".into(),
-        },
-        TaskEvent::ImageResolved {
-            container: "build-env".into(),
         },
         TaskEvent::RunningTaskContainer {
             container: "build-env".into(),

@@ -1445,6 +1445,47 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         }
     }
 
+    /// `resolve_image` for `name`, memoized per task execution in `cells`
+    /// (one [`ReadyCell`] per container, same shape as `ensure_container_ready`'s)
+    /// and followed by its `ImageResolved` milestone — unless `name` is a
+    /// readiness companion, which narrates nothing of its own (ratect#202).
+    ///
+    /// Memoized because it is reached twice: `run_task_internal` fans out
+    /// over every container in the task's graph the moment the network is
+    /// ready, so every pull and build starts at once (decisions/0019), and
+    /// each container then awaits its own cell again at the point it is
+    /// about to be created — a hit when the fan-out got there first, the
+    /// same in-flight work otherwise. One mechanism for both, so no call
+    /// site can resolve an image a second time or post the milestone twice.
+    async fn ensure_image_resolved(
+        &self,
+        name: &str,
+        containers: &HashMap<String, Container>,
+        cells: &Mutex<HashMap<String, ReadyCell>>,
+    ) -> Result<String> {
+        let cell = get_or_create_cell(cells, name);
+        let result = cell
+            .get_or_init(|| async {
+                let outcome: Result<String> = async {
+                    let container_config = containers
+                        .get(name)
+                        .with_context(|| undeclared_container_bug(name))?;
+                    let image = self.resolve_image(name, container_config).await?;
+                    if container_config.reports_readiness_for.is_none() {
+                        self.event_sink.post(TaskEvent::ImageResolved {
+                            container: name.to_string(),
+                        });
+                    }
+                    Ok(image)
+                }
+                .await;
+                outcome.map_err(Arc::new)
+            })
+            .await;
+
+        unshare(result)
+    }
+
     /// `None` unless `container_config.run_as_current_user` is enabled — in
     /// which case, resolves the actual host user to map the container onto.
     /// Applies per-container, matching Batect: a task's own container and
@@ -1746,6 +1787,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // for every task that uses it — see docs/task-lifecycle.md's
         // "Cross-task isolation".
         let ready_cells: Mutex<HashMap<String, ReadyCell>> = Mutex::new(HashMap::new());
+        // The same, for each container's image — see `ensure_image_resolved`.
+        // Per task like `ready_cells` (the pull and build dedup underneath
+        // is what persists for the invocation), so a later task's
+        // `ImageResolved` milestones post again, as its startup is narrated
+        // afresh.
+        let image_cells: Mutex<HashMap<String, ReadyCell>> = Mutex::new(HashMap::new());
         // Fixed for the whole task, computed once up front — every
         // container started for this task (the task's own and each
         // dependency) gets the same `no_proxy` exemption list, matching
@@ -1857,11 +1904,31 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 containers: container_infos,
             });
             let root_dependencies = graph.get(&run.container).cloned().unwrap_or_default();
+            // Every image in the graph — each dependency's, each readiness
+            // companion's, the task container's own — is pulled or built
+            // now, concurrently, with the network ready and nothing else
+            // (decisions/0019; Batect's `PullImageStepRule`/
+            // `BuildImageStepRule` are likewise ready at once). A doomed
+            // pull or build therefore fails the run as soon as it fails —
+            // not once every dependency is ready, by which time their setup
+            // commands have had their side effects — and pulls along a
+            // dependency chain overlap instead of each waiting for the
+            // previous container's readiness. In container-name order so
+            // the order each image's work *starts* in is fixed, rather than
+            // a `HashMap`'s; the pulls run concurrently, so what finishes
+            // first — and when its milestones post — is the daemon's.
+            let mut image_names: Vec<&String> = graph.keys().collect();
+            image_names.sort();
+            let images = futures::future::try_join_all(
+                image_names
+                    .iter()
+                    .map(|name| self.ensure_image_resolved(name, &containers, &image_cells)),
+            );
             // Independent branches of the dependency graph start
             // concurrently; a dependent container's own
             // `ensure_container_ready` call still waits on its dependencies
-            // first (see that function) — matching Batect's own within-task
-            // container concurrency (see docs/dependency-readiness.md).
+            // first (see that function) — the readiness gate gates
+            // starting, and only starting (see docs/dependency-readiness.md).
             // Kept for the same reason as the fan-out inside
             // `ensure_container_ready`: the task container's own `run_in`
             // setup commands (ratect#111) and `container:` network mode
@@ -1869,7 +1936,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // adjacency is the union of the container's own `dependencies`
             // and the task's, so it is a superset of what the config loader
             // allows as a target.
-            let dependency_ids: HashMap<String, String> =
+            let dependencies =
                 futures::future::try_join_all(root_dependencies.iter().map(|dependency_name| {
                     self.ensure_container_ready(
                         dependency_name,
@@ -1877,23 +1944,28 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         &containers,
                         &network_name,
                         &ready_cells,
+                        &image_cells,
                         &created_dependencies,
                         &no_proxy_entries,
                         task.customise.as_ref(),
                         &run_labels,
                         &dependency_watchers,
                     )
-                }))
-                .await?
+                }));
+            // One `try_join`, so a failure on either side drops the other
+            // at once — the startup-failure behaviour
+            // docs/differences-from-batect.md already records.
+            let (_, dependency_ids) = futures::future::try_join(images, dependencies).await?;
+            let dependency_ids: HashMap<String, String> = dependency_ids
                 .into_iter()
                 .zip(root_dependencies.iter())
                 .map(|(id, dependency_name)| (dependency_name.clone(), id))
                 .collect();
 
-            let image = self.resolve_image(&run.container, container_config).await?;
-            self.event_sink.post(TaskEvent::ImageResolved {
-                container: run.container.clone(),
-            });
+            // Resolved above, alongside everything else's; this is the hit.
+            let image = self
+                .ensure_image_resolved(&run.container, &containers, &image_cells)
+                .await?;
             // Eligibility only — `ContainerRuntime::run_container` further
             // gates this on the local process's own stdin/stdout genuinely
             // being terminals before actually attaching a TTY, and stdin
@@ -2512,11 +2584,14 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// node (a diamond in the dependency graph) share one `ReadyCell`, so the
     /// second awaits the first's in-flight work instead of starting it
     /// twice. Fans out to `name`'s own dependencies (`graph[name]`)
-    /// concurrently, via `try_join_all`, before doing any of its own work —
-    /// this and the memoization together are what let independent branches
-    /// of one task's dependency graph run at the same time while a container
-    /// with dependencies of its own still waits for them first (see
-    /// docs/dependency-readiness.md). No cycle guard here any more (pre-0.15.0's
+    /// concurrently, via `try_join_all`, before creating and starting its
+    /// own container — this and the memoization together are what let
+    /// independent branches of one task's dependency graph run at the same
+    /// time while a container with dependencies of its own still waits for
+    /// them first (see docs/dependency-readiness.md). Its image is the one
+    /// thing that doesn't wait: `run_task_internal` resolves every
+    /// container's up front, and the `ensure_image_resolved` call here
+    /// awaits that same work (decisions/0019). No cycle guard here any more (pre-0.15.0's
     /// `resolving`/`running` params): `graph` is already proven acyclic by
     /// `build_dependency_graph`, run once, synchronously, before this is
     /// ever called.
@@ -2531,6 +2606,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         containers: &HashMap<String, Container>,
         network: &str,
         cells: &Mutex<HashMap<String, ReadyCell>>,
+        image_cells: &Mutex<HashMap<String, ReadyCell>>,
         created_dependencies: &CreatedDependencies,
         no_proxy_entries: &std::collections::BTreeSet<String>,
         customisations: Option<&IndexMap<String, TaskContainerCustomisation>>,
@@ -2558,6 +2634,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                                 containers,
                                 network,
                                 cells,
+                                image_cells,
                                 created_dependencies,
                                 no_proxy_entries,
                                 customisations,
@@ -2586,12 +2663,9 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     // task's own graph).
                     let customisation = customisations.and_then(|c| c.get(name));
 
-                    let image = self.resolve_image(name, dependency_config).await?;
-                    if dependency_config.reports_readiness_for.is_none() {
-                        self.event_sink.post(TaskEvent::ImageResolved {
-                            container: name.to_string(),
-                        });
-                    }
+                    let image = self
+                        .ensure_image_resolved(name, containers, image_cells)
+                        .await?;
                     let user_mapping = self.resolve_user_mapping(dependency_config).await?;
                     let proxy = self.proxy_environment(no_proxy_entries);
                     // A dependency is never interactive — see

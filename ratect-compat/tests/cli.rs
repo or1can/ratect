@@ -1673,6 +1673,101 @@ tasks:
 /// Requires a running Docker daemon with network access to pull
 /// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
 ///
+/// Image work doesn't wait for a dependency's readiness (ratect#312,
+/// decisions/0019): the task container's image is pulled alongside the
+/// dependency's startup, so a pull that fails ends the run before the
+/// dependency's setup command has had its effect. The setup command here
+/// sleeps for two minutes and then drops a marker onto a bind-mounted
+/// scratch directory; the pull of an image under a `.invalid` hostname
+/// fails in well under that (a name that can't resolve — a daemon whose
+/// proxy or mirror accepts the connection and times out instead would
+/// need longer), and cleanup then stops the container, sleep and all.
+/// Under the old order the pull wasn't attempted until the marker
+/// existed.
+///
+/// Run twice in one test, since a scratch directory that starts empty
+/// passes the first run whatever the order (AGENTS.md guideline 15).
+#[test]
+#[ignore]
+fn a_failed_task_image_pull_stops_a_dependency_before_its_setup_command_via_docker() {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let test_id = format!(
+        "{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let scratch_dir = std::env::temp_dir().join(format!("ratect-image-order-test-{test_id}"));
+    std::fs::create_dir_all(&scratch_dir).unwrap();
+    let config_path = std::env::temp_dir().join(format!("ratect-image-order-test-{test_id}.yml"));
+
+    let config = format!(
+        r#"
+project_name: ratect-image-order-test
+containers:
+  dep:
+    image: alpine:3.18.2
+    command: sh -c 'trap "exit 0" TERM; while :; do sleep 1; done'
+    setup_commands:
+      - command: sh -c "sleep 120 && touch /scratch/setup-ran"
+    volumes:
+      - {scratch}:/scratch
+  app:
+    image: ratect-image-order-test.invalid/nope:does-not-exist
+    dependencies:
+      - dep
+tasks:
+  check:
+    run:
+      container: app
+      command: echo unreachable
+"#,
+        scratch = scratch_dir.display()
+    );
+    std::fs::write(&config_path, &config).expect("failed to write temp config");
+
+    let cleanup = || {
+        let _ = std::fs::remove_dir_all(&scratch_dir);
+        let _ = std::fs::remove_file(&config_path);
+    };
+
+    for run in 1..=2 {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(&config_path)
+            .arg("check")
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        if output.status.success() || !stderr.contains("Failed to pull image") {
+            cleanup();
+            panic!(
+                "run {run} should have failed on the pull: status {}\nstdout:\n{}\nstderr:\n{stderr}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+            );
+        }
+        let marker = scratch_dir.join("setup-ran");
+        if marker.exists() {
+            cleanup();
+            panic!(
+                "run {run}: the dependency's setup command should not have completed before \
+                 the task image's pull failed\nstdout:\n{}\nstderr:\n{stderr}",
+                String::from_utf8_lossy(&output.stdout),
+            );
+        }
+    }
+
+    cleanup();
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
 /// The other half of the readiness gate (0.21.0): the task's *own*
 /// container's `setup_commands` run too, concurrently with its main command
 /// — see `tests/fixtures/task-container-setup-commands.yml` for why the

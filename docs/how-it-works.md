@@ -147,10 +147,17 @@ in-flight operation instead of racing. Dependency readiness, by contrast, is sco
 to a single **task execution** and discarded when it finishes.
 
 Concurrency follows Batect's in outline: **prerequisites run sequentially**, one to
-completion after another, even when independent — while **one task's dependency
-startup is concurrent**, with independent branches of its graph pulling, building,
-starting and health-waiting at the same time, gated only on each container's own
-`dependencies` being ready. The task's network is created before any of that
+completion after another, even when independent — while **one task's startup is
+concurrent**. Every container's image — each dependency's and the task's own —
+is pulled or built at once, the moment the task's network is ready, so a pull
+or build that fails ends the task as soon as it fails — not once every
+dependency is ready, by which time their setup commands have run. Starting is
+what a container's own `dependencies` gate: independent branches of the graph
+start and health-wait at the same time, and a container starts once its own
+image is ready and every container it depends on has passed its readiness
+gate (see [decision
+0019](https://github.com/or1can/ratect/blob/main/decisions/0019-readiness-gates-starting-only.md)).
+The task's network is created before any of that
 starts, where Batect creates it alongside — see [Differences from
 Batect](differences-from-batect.md#runtime-behavior-gaps). Running independent prerequisites concurrently too is
 a possible Rust-specific enhancement beyond Batect — tracked as
