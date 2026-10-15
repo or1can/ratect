@@ -132,6 +132,15 @@ Ratect checks a config when the file loads, and the report is its own:
   in more than one file.
 - **A check made once the file has parsed names what it's about** — the
   container or task — rather than giving Batect's YAML path, line and column.
+- **An error raised while the file is parsed gives its line, column and YAML
+  path in Ratect's own layout** — `deserialization error at line 8, column 23:
+  containers.build-env.not_a_real_field: unknown field: not_a_real_field`,
+  under the `Failed to parse config file "<path>"` line of the cause chain
+  below — where Batect prints `<file> (at <path> on line L, column C):
+  <message>`. The wording is Ratect's too: `unknown field: X` with no list of
+  the known ones, `missing field: X`, and for a value of the wrong type the
+  path and the mismatch, with no `Value for 'X' is invalid:` prefix. An
+  unknown field's column is its value's, not its key's.
 - **The full cause chain is printed**: `Error: <message>`, then a `Caused by:`
   list when there is a cause, where Batect prints one message. A parse error's
   own reason is in that list, under `Failed to parse config file "<path>"`. The

@@ -18,7 +18,9 @@ serde = { version = "1.0", features = ["derive"] }
 # the same derive-based approach applied to actual JSON.
 serde_json = "1.0"
 # **`noyalib`**: Safe, pure-Rust YAML parser (used as a modern alternative
-# to `serde_yaml`).
+# to `serde_yaml`). Consumed through a `[patch.crates-io]` fork pinned in the
+# root `Cargo.toml` — see its comment there for what the fork carries and when
+# the pin, and this version, move.
 noyalib = { version = "0.0.57", features = ["compat-serde-yaml"] }
 # **`bollard`** (`features = ["buildkit_providerless", "chrono", "ssl"]`,
 # **consumed via a `[patch.crates-io]` fork** — see the root `Cargo.toml`):

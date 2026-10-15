@@ -830,7 +830,344 @@ fn a_dot_prefixed_key_below_the_top_level_is_still_rejected() {
         "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    .oops: x\ntasks: {}\n",
     )
     .unwrap();
-    assert!(parse_yaml_config_file(&path).is_err());
+    let message = format!("{:#}", parse_yaml_config_file(&path).unwrap_err());
+    assert!(
+        message.contains("unknown field: .oops") && message.contains("line 5, column"),
+        "{message}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The full error chain `parse_yaml_config_file` gives for `yaml`, written
+/// to a file first — the deserialization tests on `try_parse` bypass that
+/// function, so a location assertion made with them would pass against a
+/// path that drops locations (#415).
+fn yaml_config_file_error(yaml: &str) -> String {
+    let dir = unique_temp_dir();
+    let path = dir.join("batect.yml");
+    std::fs::write(&path, yaml).unwrap();
+    let message = format!("{:#}", parse_yaml_config_file(&path).unwrap_err());
+    std::fs::remove_dir_all(&dir).ok();
+    message
+}
+
+/// Every error raised while deserializing a YAML config file says where
+/// the bad value is — its line, column and YAML path in the file as
+/// written (#415). The cases below are the error kinds the loader raises:
+/// a custom validation (a port range), a type mismatch, a scalar-only
+/// map's null, an unknown field (at the top level, in a derived struct, in
+/// a hand-written visitor's mapping) and a missing field. An unknown
+/// field's location is its entry's — the column is the value's — and its
+/// path names the key; a missing field's is the mapping's.
+#[test]
+fn a_malformed_port_in_a_second_entry_is_located() {
+    let message = yaml_config_file_error(
+        "project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   ports:\n\
+         \x20     - local: 1\n\
+         \x20       container: 2\n\
+         \x20     - local: '1-a'\n\
+         \x20       container: 3\n\
+         tasks: {}\n",
+    );
+    assert!(
+        message.contains("line 8, column 16")
+            && message.contains("containers.app.ports[1].local: Port range '1-a' is invalid"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_sequence_where_a_string_is_expected_is_located() {
+    let message = yaml_config_file_error(
+        "project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image:\n\
+         \x20     - alpine\n\
+         tasks: {}\n",
+    );
+    assert!(
+        message.contains("line 5, column 7") && message.contains("containers.app.image: "),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_null_environment_value_is_located() {
+    let message = yaml_config_file_error(
+        "project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   environment:\n\
+         \x20     THING:\n\
+         tasks: {}\n",
+    );
+    assert!(
+        message.contains("line 6, column 12")
+            && message.contains("containers.app.environment.THING: "),
+        "{message}"
+    );
+}
+
+#[test]
+fn an_unknown_top_level_key_is_located() {
+    let message = yaml_config_file_error(
+        "project_name: demo\n\
+         thing: 1\n\
+         containers: {}\n\
+         tasks: {}\n",
+    );
+    assert!(
+        message.contains("line 2, column 8") && message.contains("thing: unknown field: thing"),
+        "{message}"
+    );
+}
+
+#[test]
+fn an_unknown_key_in_a_container_is_located() {
+    let message = yaml_config_file_error(
+        "project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   not_a_real_field: x\n\
+         tasks: {}\n",
+    );
+    assert!(
+        message.contains("line 5, column 23")
+            && message.contains("containers.app.not_a_real_field: unknown field: not_a_real_field"),
+        "{message}"
+    );
+}
+
+#[test]
+fn an_unknown_key_in_an_expanded_volume_mount_is_located() {
+    let message = yaml_config_file_error(
+        "project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   volumes:\n\
+         \x20     - local: .\n\
+         \x20       container: /code\n\
+         \x20       something_else: x\n\
+         tasks: {}\n",
+    );
+    assert!(
+        message.contains("line 8, column 25")
+            && message.contains(
+                "containers.app.volumes[0].something_else: unknown field: something_else"
+            ),
+        "{message}"
+    );
+}
+
+/// A task `run` port in object form, with `container` missing, then with
+/// `local` missing — both located at the mapping they're about — then with
+/// a key that isn't a field, located at that key's entry.
+#[test]
+fn a_run_port_missing_a_field_or_holding_an_unknown_one_is_located() {
+    let run_port = |entry: &str| {
+        yaml_config_file_error(&format!(
+            "project_name: demo\n\
+             containers:\n\
+             \x20 app:\n\
+             \x20   image: alpine\n\
+             tasks:\n\
+             \x20 t:\n\
+             \x20   run:\n\
+             \x20     container: app\n\
+             \x20     ports:\n\
+             \x20       - {entry}\n"
+        ))
+    };
+    for (entry, location, expected) in [
+        (
+            "local: 1",
+            "line 10, column 11",
+            "tasks.t.run.ports[0]: missing field: container",
+        ),
+        (
+            "container: 1",
+            "line 10, column 11",
+            "tasks.t.run.ports[0]: missing field: local",
+        ),
+        (
+            "local: 1\n          container: 2\n          something_else: 3",
+            "line 12, column 27",
+            "tasks.t.run.ports[0].something_else: unknown field: something_else",
+        ),
+    ] {
+        let message = run_port(entry);
+        assert!(
+            message.contains(location) && message.contains(expected),
+            "{entry}: {message}"
+        );
+    }
+}
+
+/// Dropping the top-level extension entries doesn't shift a line number:
+/// the location names the line of the file as the user wrote it, with the
+/// extensions (and their anchors, resolved before anything is dropped)
+/// still counted.
+#[test]
+fn extension_entries_before_a_malformed_field_do_not_shift_its_line() {
+    let message = yaml_config_file_error(
+        ".common: &common\n\
+         \x20 AWS_REGION: eu-west-2\n\
+         .more: &more\n\
+         \x20 <<: *common\n\
+         project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   environment:\n\
+         \x20     <<: *more\n\
+         \x20   ports:\n\
+         \x20     - local: zz\n\
+         \x20       container: 1\n\
+         tasks: {}\n",
+    );
+    assert!(
+        message.contains("line 12, column 16")
+            && message.contains("containers.app.ports[0].local: Port range 'zz' is invalid"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_yaml_syntax_error_is_located() {
+    let message = yaml_config_file_error("project_name: demo\ncontainers:\n  app: [unclosed\n");
+    assert!(
+        message.contains("line ") && message.contains(", column "),
+        "{message}"
+    );
+}
+
+/// Reading the file straight from text, rather than through a
+/// `noyalib::Value`, keeps noyalib's guard against two distinct keys that
+/// read as the same string — `1` and `"1"` — so the second still can't
+/// silently replace the first (#415's change of parse path).
+#[test]
+fn keys_colliding_after_string_conversion_are_still_rejected() {
+    let message = yaml_config_file_error(
+        "project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   environment:\n\
+         \x20     1: a\n\
+         \x20     \"1\": b\n\
+         tasks: {}\n",
+    );
+    assert!(
+        message.contains("collide") && message.contains("line 7, column 7"),
+        "{message}"
+    );
+}
+
+/// An object-form entry naming the same key twice keeps the last value,
+/// as it always has, and a key that is present must hold a value: a null
+/// `options` isn't read as leaving it out. Pinned when the visitors that
+/// read these entries moved to derived structs for #415. The first half is
+/// noyalib's doing, not the visitors': it keeps the last of a repeated key
+/// while parsing, so a derived struct — which would reject the repeat as a
+/// duplicate field — never sees it.
+#[test]
+fn an_object_form_entry_keeps_a_repeated_keys_last_value_and_rejects_a_null() {
+    let dir = unique_temp_dir();
+    let path = dir.join("batect.yml");
+    std::fs::write(
+        &path,
+        "project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   volumes:\n\
+         \x20     - local: .\n\
+         \x20       container: /first\n\
+         \x20       container: /second\n\
+         tasks: {}\n",
+    )
+    .unwrap();
+    let file = parse_yaml_config_file(&path).unwrap();
+    let volumes = file.containers["app"].volumes.as_ref().unwrap();
+    assert_eq!(expect_local(&volumes[0]).container, "/second");
+    std::fs::remove_dir_all(&dir).ok();
+
+    let message = yaml_config_file_error(
+        "project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   devices:\n\
+         \x20     - local: /dev/a\n\
+         \x20       container: /dev/b\n\
+         \x20       options: ~\n\
+         tasks: {}\n",
+    );
+    assert!(
+        message.contains("containers.app.devices[0].options: "),
+        "{message}"
+    );
+}
+
+/// A null on a *required* object-form field is rejected too, as a value of
+/// the wrong type rather than read as the field being left out — pinned
+/// when those fields became plain types in the derived structs for #415.
+#[test]
+fn an_object_form_entry_rejects_a_null_required_field() {
+    let message = yaml_config_file_error(
+        "project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   ports:\n\
+         \x20     - local: ~\n\
+         \x20       container: 1\n\
+         tasks: {}\n",
+    );
+    assert!(
+        message.contains("line 6, column 16")
+            && message.contains("containers.app.ports[0].local: invalid type"),
+        "{message}"
+    );
+}
+
+/// An included file's error names the include's own path and the location
+/// inside *that* file.
+#[tokio::test]
+async fn an_error_in_an_included_file_is_located_in_the_include() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("containers.yml"),
+        "containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   ports:\n\
+         \x20     - local: zz\n\
+         \x20       container: 1\n",
+    )
+    .unwrap();
+    let config_path = dir.join("batect.yml");
+    std::fs::write(
+        &config_path,
+        "project_name: demo\ninclude:\n  - containers.yml\ntasks: {}\n",
+    )
+    .unwrap();
+
+    let message = format!("{:#}", load_project(&config_path).await.unwrap_err());
+    assert!(
+        message.contains("containers.yml")
+            && message.contains("line 5, column 16")
+            && message.contains("containers.app.ports[0].local: Port range 'zz' is invalid"),
+        "{message}"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 
