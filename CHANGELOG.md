@@ -23,6 +23,9 @@ history, from when it was the only binary.
 
 ### Changed
 
+- A `--tag-image` value that `docker tag` would refuse — `_nonsense`, an uppercase repository name, a digest — is rejected while the arguments are parsed, naming the value and Docker's reason.
+- Every tag for a built image, including the automatic `<project_name>-<container name>` one, is checked before the image is built.
+- When tags applied after a build fail, every failed tag is reported.
 - A Docker daemon advertising a `Builder-Version` other than empty, `1` or `2` is an error the first time a run builds an image, unless `DOCKER_BUILDKIT` or `--enable-buildkit` chooses the builder.
 
 ### Fixed

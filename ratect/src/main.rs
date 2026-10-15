@@ -429,8 +429,9 @@ struct RunArgs {
 
     /// Tag the image a container builds, as CONTAINER=TAG (repeatable; name
     /// a container more than once for multiple tags). Only valid for a
-    /// container that actually builds an image.
-    #[arg(long = "tag-image", value_parser = parse_key_value)]
+    /// container that actually builds an image. A TAG Docker would refuse
+    /// is rejected before anything runs.
+    #[arg(long = "tag-image", value_parser = parse_tag_image)]
     tag_image: Vec<(String, String)>,
 
     /// Leave every container this task created running, whatever happens,
@@ -610,6 +611,15 @@ fn parse_key_value(value: &str) -> std::result::Result<(String, String), String>
         Some((name, value)) => Ok((name.to_string(), value.to_string())),
         None => Err(format!("expected NAME=VALUE, got '{value}'")),
     }
+}
+
+/// `--tag-image`'s `CONTAINER=TAG`, with TAG checked against Docker's
+/// reference grammar while the arguments are parsed (decisions/0018).
+/// `--override-image` stays unchecked.
+fn parse_tag_image(value: &str) -> std::result::Result<(String, String), String> {
+    let (container, tag) = parse_key_value(value)?;
+    ratect_core::image_reference::check_tag(&tag)?;
+    Ok((container, tag))
 }
 
 /// Diagnostics go to stderr, filtered by `RUST_LOG` (default `info`) — the

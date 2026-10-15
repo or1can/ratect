@@ -40,6 +40,7 @@ pub mod engine;
 pub mod exit_code;
 pub mod expressions;
 pub mod git_include;
+pub mod image_reference;
 // Deliberately un-documented here: an outer doc comment on a `mod` item is
 // resolved in *this* module's scope, so every intra-doc link in the module's
 // own `//!` header would silently break. See the header itself.

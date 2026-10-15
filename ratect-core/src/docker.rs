@@ -1395,13 +1395,14 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// the image this call just built.
     async fn build_image(&self, spec: &crate::container_spec::BuildSpec) -> Result<String>;
 
-    /// Tags `image_id` (the ID `build_image` returned) with each of `tags`,
-    /// in addition to `build_image`'s own `tag` — used by `--tag-image`.
-    /// Both bollard's classic and BuildKit build options only ever accept
-    /// one `t` value each, so extra tags are applied as separate `docker
+    /// Tags `image_id` (the ID `build_image` returned) with `tag`, in
+    /// addition to `build_image`'s own `tag` — used by `--tag-image`. Both
+    /// bollard's classic and BuildKit build options only ever accept one `t`
+    /// value each, so extra tags are applied as separate `docker
     /// tag`-equivalent calls after the build completes, rather than folded
-    /// into the build request itself.
-    async fn tag_image(&self, image_id: &str, tags: &[String]) -> Result<()>;
+    /// into the build request itself. One tag per call, so the engine can
+    /// attempt every tag and report each one the daemon refuses.
+    async fn tag_image(&self, image_id: &str, tag: &str) -> Result<()>;
 
     /// Creates a task-scoped network. `labels` are Ratect's own ownership
     /// labels (see [`crate::labels`]) — a network has no user-configurable
@@ -2520,19 +2521,17 @@ impl ContainerRuntime for DockerClient {
         Ok(image_id)
     }
 
-    async fn tag_image(&self, image_id: &str, tags: &[String]) -> Result<()> {
-        for tag in tags {
-            let (repo, tag_component) = split_image_reference(tag);
-            let options = bollard::query_parameters::TagImageOptionsBuilder::default()
-                .repo(repo)
-                .tag(tag_component.unwrap_or("latest"))
-                .build();
-            self.docker
-                .tag_image(image_id, Some(options))
-                .await
-                .with_context(|| format!("Failed to tag image '{}' as '{}'", image_id, tag))?;
-            tracing::debug!(image_id, tag, "tagged image");
-        }
+    async fn tag_image(&self, image_id: &str, tag: &str) -> Result<()> {
+        let (repo, tag_component) = split_image_reference(tag);
+        let options = bollard::query_parameters::TagImageOptionsBuilder::default()
+            .repo(repo)
+            .tag(tag_component.unwrap_or("latest"))
+            .build();
+        self.docker
+            .tag_image(image_id, Some(options))
+            .await
+            .with_context(|| format!("Failed to tag the image as '{tag}'"))?;
+        tracing::debug!(image_id, tag, "tagged image");
         Ok(())
     }
 

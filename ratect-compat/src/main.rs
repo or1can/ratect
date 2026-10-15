@@ -78,7 +78,8 @@ struct Args {
     /// a container may be given more than once to apply multiple tags).
     /// Only valid for a container that actually builds an image — errors
     /// if it ends up using a pulled image, or if it never runs at all.
-    #[arg(long = "tag-image", value_parser = parse_container_value_pair, help_heading = "Task execution")]
+    /// A TAG Docker would refuse is rejected before anything runs.
+    #[arg(long = "tag-image", value_parser = parse_tag_image, help_heading = "Task execution")]
     tag_image: Vec<(String, String)>,
 
     /// If an infrastructure error occurs before the task's own container can
@@ -340,6 +341,16 @@ fn parse_container_value_pair(s: &str) -> std::result::Result<(String, String), 
         Some((container, value)) => Ok((container.to_string(), value.to_string())),
         None => Err(format!("expected CONTAINER=VALUE, got '{s}'")),
     }
+}
+
+/// `--tag-image`'s `CONTAINER=TAG`, with TAG checked against Docker's
+/// reference grammar while the arguments are parsed — earlier than Batect,
+/// which checks it when that image's build starts (decisions/0018).
+/// `--override-image` stays unchecked, as in Batect.
+fn parse_tag_image(s: &str) -> std::result::Result<(String, String), String> {
+    let (container, tag) = parse_container_value_pair(s)?;
+    ratect_core::image_reference::check_tag(&tag)?;
+    Ok((container, tag))
 }
 
 /// `log_file`, when given (`--log-file`), tees the same log output into

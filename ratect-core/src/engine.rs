@@ -1356,8 +1356,28 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             let result = cell
                 .get_or_init(|| async {
                     let build: Result<String> = async {
-                        let tag =
-                            format!("{}-{}", self.project.config.project_name, container_name);
+                        let project_name = &self.project.config.project_name;
+                        let tag = format!("{project_name}-{container_name}");
+                        let mut extra_tags: Vec<String> = self
+                            .image_tags
+                            .get(container_name)
+                            .map(|tags| tags.iter().cloned().collect())
+                            .unwrap_or_default();
+                        extra_tags.sort();
+                        // Every tag is checked before anything is built, as
+                        // Batect checks its build request's, so a bad one
+                        // costs no build and leaves no tag half-applied.
+                        crate::image_reference::check(&tag).map_err(|reason| {
+                            anyhow::anyhow!(
+                                "'{tag}', the tag made from project_name '{project_name}' \
+                                 and container name '{container_name}', is not a valid \
+                                 image tag: {reason}"
+                            )
+                        })?;
+                        for extra_tag in &extra_tags {
+                            crate::image_reference::check_tag(extra_tag)
+                                .map_err(anyhow::Error::msg)?;
+                        }
                         // No `extra_no_proxy_entries` at build time — matches
                         // Batect, which never adds container names to
                         // `no_proxy` for a build (nothing's running yet to be
@@ -1380,12 +1400,21 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         // `--tag-image`: applied once here (inside this
                         // cell's do-once build), never re-applied on a later
                         // cache hit for the same container this invocation.
-                        if let Some(tags) = self.image_tags.get(container_name) {
-                            if !tags.is_empty() {
-                                let mut tags: Vec<String> = tags.iter().cloned().collect();
-                                tags.sort();
-                                self.docker.tag_image(&image_id, &tags).await?;
+                        // Every tag is attempted and every refusal reported
+                        // (decisions/0018): each has passed the grammar check
+                        // above, so a failure here is the daemon's, and one
+                        // shouldn't hide the next.
+                        let mut refused = Vec::new();
+                        for extra_tag in &extra_tags {
+                            if let Err(error) = self.docker.tag_image(&image_id, extra_tag).await {
+                                refused.push(format!("{error:#}"));
                             }
+                        }
+                        if !refused.is_empty() {
+                            anyhow::bail!(
+                                "The image was built, but applying its tags failed:\n  {}",
+                                refused.join("\n  ")
+                            );
                         }
                         Ok(image_id)
                     }
