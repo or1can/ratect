@@ -581,8 +581,6 @@ impl From<CacheTypeArg> for ratect_core::cache::CacheType {
     }
 }
 
-/// Parses a `NAME=VALUE` pair — `--config-var`, `--override-image` and
-/// `--tag-image` all take one.
 /// `--older-than`, as a plain `<number><unit>` (`90s`, `30m`, `2h`, `7d`).
 ///
 /// Deliberately not [`ratect_core::config::parse_duration`], Batect's
@@ -606,6 +604,8 @@ fn parse_age(value: &str) -> std::result::Result<std::time::Duration, String> {
     Ok(std::time::Duration::from_secs(number * seconds))
 }
 
+/// Parses a `NAME=VALUE` pair — `--config-var` and `--override-image` take
+/// one, and `--tag-image` before checking its value.
 fn parse_key_value(value: &str) -> std::result::Result<(String, String), String> {
     match value.split_once('=') {
         Some((name, value)) => Ok((name.to_string(), value.to_string())),
