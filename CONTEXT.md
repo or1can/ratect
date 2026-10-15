@@ -41,9 +41,7 @@ the first Git include entry to reach it. Distinct from what a later entry
 reaching the same file asks for.
 
 An owned file has *no* effective boundary, which is not the same as one that
-grants nothing: the first is unrestricted, the second is contained. They sit at
-opposite ends of the same scale, so a model with one value for both orders them
-backwards.
+grants nothing: the first is unrestricted, the second is contained.
 
 ## Formats
 
@@ -66,18 +64,14 @@ recorded in `docs/differences-from-batect.md`.
 
 ## Readiness
 
-**Readiness gate** — the check a container passes before it counts as ready.
-One gate per container, whatever it consists of: ordinarily two steps — a
-health-check step (Docker's own health check), then its setup commands. An
-externally checked container's gate is its external health check alone, and
-a run-to-completion container's is exiting 0. For a
-dependency, nothing that depends on it starts before it passes. Under
-[0019](decisions/0019-readiness-gates-starting-only.md) only starting waits —
-a dependent's image is pulled or built without regard to its dependencies,
-and its container will be created without regard to them too once #603
-lands; until then, creation waits with the start. A task's own
-container's gate gates nothing: under the Batect-compatible dialect it runs
-alongside the main command; under the native dialect it has none.
+**Readiness gate** — the check a container passes before it counts as ready:
+a health-check step (Docker's own health check), then its setup commands. An
+externally checked container's gate is its external health check alone; a
+run-to-completion container's is exiting 0. A dependency's gate gates the
+start of what depends on it, and nothing else
+([0019](decisions/0019-readiness-gates-starting-only.md)); a task's own
+container's gate gates nothing
+([0012](decisions/0012-native-task-container-has-no-readiness-gate.md)).
 
 ## Identity
 
@@ -98,35 +92,21 @@ neither resolves nor synthesizes anything from it.
 **Termination signal** — any signal Ratect traps so a run cleans up after
 itself: `SIGINT`, `SIGTERM` or `SIGHUP`. The engine treats all three alike.
 
-**Interrupt** — `SIGINT` specifically, the one a terminal raises from Ctrl+C.
-It is *one* termination signal, not the category.
+**Interrupt** — `SIGINT` specifically, the one a terminal raises from Ctrl+C:
+*one* termination signal, not the category. The code's `Interrupt` tracker
+counts every termination signal; `TerminationSignal::Interrupt` is `SIGINT`
+alone.
 
-The distinction is worth writing down because the code says both words with
-one vocabulary: `Interrupt` (the tracker), `interrupted()` and `count()` mean
-any termination signal, while `TerminationSignal::Interrupt` and
-`Interrupt::record()` mean `SIGINT` alone. Reading either as the other gives
-the wrong answer about what a run exits with, and about which rung of the
-cleanup ladder a further one during cleanup reaches.
-
-**Cleanup ladder** — what a termination signal means once cleanup has
-started, counted from how many had arrived when the run ended: one more, of
-any kind, *escalates* (whatever is left is force-removed, with no grace
-period); an interrupt after that *abandons* cleanup. Only the abandon rung
-looks at the kind, because a keyboard is the one thing that sends `SIGINT`
-twice, while a supervisor's timed follow-up is a `SIGTERM` and never means
-"leave it". A signal during the cleanup of a finished run doesn't change
-what the run exits with — the task's container reported its own exit code,
-and that stands — unless the abandon rung leaves something behind, which is
-a cleanup failure ([0016](decisions/0016-exit-codes.md); until #540 lands,
-a passing run signalled during cleanup still reports the signal).
+**Cleanup ladder** — what a further termination signal means once cleanup has
+started: the first, of any kind, *escalates* (whatever is left is
+force-removed); an interrupt after that *abandons* cleanup. What a run then
+exits with is [0016](decisions/0016-exit-codes.md)'s.
 
 **Cleanup failure** — Ratect failing to remove something it set out to
 remove: a removal the daemon refused, or the cleanup ladder's abandon rung
 reached with something still to remove. What a `--no-cleanup*` flag leaves
-in place on purpose is not one. Reported on stderr always; under
-[0016](decisions/0016-exit-codes.md) (landing with #540) it changes the exit
-code, to `125`, only for a run whose container exited `0`, since a task's
-own non-zero code is never overridden.
+in place on purpose is not one. An error, with
+[0016](decisions/0016-exit-codes.md)'s exit code.
 
 ## Output
 
@@ -135,18 +115,15 @@ container's own output; for any other verb, what that verb produces (a
 listing, a report, a conversion). Ratect's own progress and a dependency's
 output are not part of it.
 
-**Progress console** — the stream Ratect's own progress is written to: stderr
-for `ratect`, stdout for `ratect-compat` (under
-[0017](decisions/0017-output-streams-and-styles.md), landing with #535;
-until then both write it to stdout).
+**Progress console** — the stream Ratect's own progress is written to;
+[0017](decisions/0017-output-streams-and-styles.md) says which, per binary.
 
 **Milestone** — a lifecycle event rendered to the progress console: a line
 under `simple` and `all`, a status-line state under `fancy`.
 
 **Notice** — a stderr line about the run that marks no problem and asks for
-no action: the interrupt notice, a completed cleanup after an interrupt,
-what a `--no-cleanup*` flag left in place. A cleanup that left something
-behind is a *cleanup failure*, above, and so an error, not a notice.
+no action. A cleanup that left something behind is a *cleanup failure*, and
+so an error, not a notice.
 
 **Warning** — a stderr line, marked `Warning:`, about something the user
 should change though the run proceeds.
@@ -154,8 +131,8 @@ should change though the run proceeds.
 **Error** — a stderr line, marked `Error:`, reporting that Ratect failed to do
 what was asked: for a run, to run the task or to clean up after it.
 
-The markers and the printed notices are
-[0017](decisions/0017-output-streams-and-styles.md)'s, landing with #535.
+The markers and the notices are
+[0017](decisions/0017-output-streams-and-styles.md)'s.
 
 ## Caches
 

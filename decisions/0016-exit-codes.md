@@ -162,8 +162,9 @@ container is a failure CI should see, not borrowed from anywhere.
   signalled during its cleanup exits `0` (or `125` if the
   cleanup is then abandoned or fails) rather than `128 + n`; a passing run
   whose cleanup fails exits `125` rather than `0`.
-- The cleanup ladder's abandon rung now has an exit-code consequence, and
-  `CONTEXT.md`'s entry for it says what a signal during cleanup reports.
+- The cleanup ladder's abandon rung now has an exit-code consequence;
+  `CONTEXT.md`'s entry for it defers here for what a signal during cleanup
+  reports.
 - [#339](https://github.com/or1can/ratect/issues/339) and
   [#458](https://github.com/or1can/ratect/issues/458) were closed against
   this record as it was written — both keep today's behaviour;
