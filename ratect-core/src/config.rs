@@ -3146,7 +3146,7 @@ const EXTENSION_KEY_PREFIX: char = '.';
 /// safe. Only *top-level* keys are considered, matching kaml, so a
 /// `.`-prefixed key nested anywhere else still reaches the schema (and is
 /// still rejected if it isn't a real field).
-fn parse_yaml_config_file(path: &Path) -> Result<ConfigFile> {
+pub(crate) fn parse_yaml_config_file(path: &Path) -> Result<ConfigFile> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to open config file {:?}", path))?;
     let ExtensibleConfigFile(file) = noyalib::from_str(&text)
