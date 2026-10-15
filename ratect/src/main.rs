@@ -429,8 +429,9 @@ struct RunArgs {
 
     /// Tag the image a container builds, as CONTAINER=TAG (repeatable; name
     /// a container more than once for multiple tags). Only valid for a
-    /// container that actually builds an image.
-    #[arg(long = "tag-image", value_parser = parse_key_value)]
+    /// container that actually builds an image. A TAG Docker would refuse
+    /// is rejected before anything runs.
+    #[arg(long = "tag-image", value_parser = parse_tag_image)]
     tag_image: Vec<(String, String)>,
 
     /// Leave every container this task created running, whatever happens,
@@ -580,8 +581,6 @@ impl From<CacheTypeArg> for ratect_core::cache::CacheType {
     }
 }
 
-/// Parses a `NAME=VALUE` pair — `--config-var`, `--override-image` and
-/// `--tag-image` all take one.
 /// `--older-than`, as a plain `<number><unit>` (`90s`, `30m`, `2h`, `7d`).
 ///
 /// Deliberately not [`ratect_core::config::parse_duration`], Batect's
@@ -605,11 +604,22 @@ fn parse_age(value: &str) -> std::result::Result<std::time::Duration, String> {
     Ok(std::time::Duration::from_secs(number * seconds))
 }
 
+/// Parses a `NAME=VALUE` pair — `--config-var` and `--override-image` take
+/// one, and `--tag-image` before checking its value.
 fn parse_key_value(value: &str) -> std::result::Result<(String, String), String> {
     match value.split_once('=') {
         Some((name, value)) => Ok((name.to_string(), value.to_string())),
         None => Err(format!("expected NAME=VALUE, got '{value}'")),
     }
+}
+
+/// `--tag-image`'s `CONTAINER=TAG`, with TAG checked against Docker's
+/// reference grammar while the arguments are parsed (decisions/0018).
+/// `--override-image` stays unchecked.
+fn parse_tag_image(value: &str) -> std::result::Result<(String, String), String> {
+    let (container, tag) = parse_key_value(value)?;
+    ratect_core::image_reference::check_tag(&tag)?;
+    Ok((container, tag))
 }
 
 /// Diagnostics go to stderr, filtered by `RUST_LOG` (default `info`) — the

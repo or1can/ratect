@@ -180,6 +180,10 @@ fn build_with_dockerignore_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-with-dockerignore.yml")
 }
 
+fn build_context_ownership_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-context-ownership.yml")
+}
+
 fn build_customization_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-customization.yml")
 }
@@ -2819,6 +2823,32 @@ fn dockerignore_semantics_hold_against_a_real_docker_build() {
         .arg("-f")
         .arg(build_with_dockerignore_config_path())
         .arg("check")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves a BuildKit `COPY` of the build context lands root-owned, which
+/// `build_context_tar`'s unit test can only show of the tar's headers. Pinned
+/// to BuildKit, where the headers' ownership reaches the image (the classic
+/// builder chowns a `COPY` to root regardless). Meaningful only as a non-root
+/// host user — see the fixture's header.
+#[test]
+#[ignore]
+fn build_context_files_are_root_owned_in_a_buildkit_build() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(build_context_ownership_config_path())
+        .arg("check")
+        .env("DOCKER_BUILDKIT", "1")
         .output()
         .expect("failed to run ratect");
 

@@ -304,6 +304,35 @@ fn rejects_config_var_without_equals_sign() {
 }
 
 #[test]
+fn rejects_a_tag_image_value_docker_would_refuse_while_parsing_arguments() {
+    let error = Args::try_parse_from(["ratect", "--tag-image", "app=_nonsense", "--list-tasks"])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("'_nonsense' is not a valid image tag: invalid reference format"),
+        "{error}"
+    );
+}
+
+#[test]
+fn accepts_a_tag_image_value_naming_a_registry_repository_and_tag() {
+    let args = args(&["ratect", "--tag-image", "app=myorg/app:1.0", "build"]);
+    assert_eq!(
+        args.tag_image,
+        vec![("app".to_string(), "myorg/app:1.0".to_string())]
+    );
+}
+
+#[test]
+fn override_image_values_stay_unchecked() {
+    let args = args(&["ratect", "--override-image", "app=_nonsense", "build"]);
+    assert_eq!(
+        args.override_image,
+        vec![("app".to_string(), "_nonsense".to_string())]
+    );
+}
+
+#[test]
 fn parses_config_vars_file() {
     let args = Args::try_parse_from(["ratect", "--config-vars-file", "vars.yml", "build"]).unwrap();
     assert_eq!(args.config_vars_file, Some(PathBuf::from("vars.yml")));

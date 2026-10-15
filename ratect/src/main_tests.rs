@@ -302,6 +302,29 @@ fn no_flags_maps_to_the_engines_own_defaults() {
     );
 }
 
+#[test]
+fn rejects_a_tag_image_value_docker_would_refuse_while_parsing_arguments() {
+    let error = Cli::try_parse_from(["ratect", "run", "build", "--tag-image", "app=_nonsense"])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("'_nonsense' is not a valid image tag: invalid reference format"),
+        "{error}"
+    );
+}
+
+#[test]
+fn override_image_values_stay_unchecked() {
+    assert!(Cli::try_parse_from([
+        "ratect",
+        "run",
+        "build",
+        "--override-image",
+        "app=_nonsense"
+    ])
+    .is_ok());
+}
+
 /// Values, not just which field moved — the per-flag test above proves
 /// a flag reaches the right setting, this proves what it puts there.
 #[test]

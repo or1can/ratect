@@ -755,6 +755,48 @@ fn build_context_tar_includes_everything_when_no_dockerignore() {
     fs::remove_dir_all(&dir).unwrap();
 }
 
+/// docker-client resets every context entry to root (`resetUIDAndGID`); the
+/// host's ownership would otherwise reach a BuildKit `COPY`. Fails whenever
+/// the host user isn't root, which is every CI run.
+#[test]
+fn build_context_tar_entries_are_root_owned_and_keep_their_mode() {
+    let dir = unique_temp_dir();
+    fs::write(dir.join("Dockerfile"), "FROM alpine").unwrap();
+    fs::create_dir_all(dir.join("subdir")).unwrap();
+    fs::write(dir.join("subdir/run.sh"), "#!/bin/sh").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir.join("subdir/run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let tar_bytes = build_context_tar(&dir, "Dockerfile").unwrap();
+    let mut archive = tar::Archive::new(tar_bytes.as_slice());
+    let mut seen = Vec::new();
+    for entry in archive.entries().unwrap() {
+        let entry = entry.unwrap();
+        let header = entry.header();
+        let path = entry.path().unwrap().to_string_lossy().into_owned();
+        assert_eq!(header.uid().unwrap(), 0, "{path}");
+        assert_eq!(header.gid().unwrap(), 0, "{path}");
+        for name in [header.username().unwrap(), header.groupname().unwrap()] {
+            assert!(
+                matches!(name, None | Some("") | Some("root")),
+                "{path}: {name:?}"
+            );
+        }
+        #[cfg(unix)]
+        if path == "subdir/run.sh" {
+            assert_eq!(header.mode().unwrap() & 0o777, 0o755);
+        }
+        seen.push(path);
+    }
+    seen.sort();
+    assert_eq!(seen, vec!["Dockerfile", "subdir/run.sh"]);
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn build_context_tar_excludes_dockerignore_matches() {
     let dir = unique_temp_dir();
@@ -866,6 +908,44 @@ fn builder_selection_falls_back_to_classic_when_the_daemon_advertises_nothing() 
     use bollard::query_parameters::BuilderVersion;
     assert_eq!(
         select_builder_version(None, None).unwrap(),
+        BuilderVersion::BuilderV1
+    );
+}
+
+#[test]
+fn builder_selection_treats_an_empty_header_as_classic() {
+    use bollard::query_parameters::BuilderVersion;
+    assert_eq!(
+        select_builder_version(None, Some("")).unwrap(),
+        BuilderVersion::BuilderV1
+    );
+}
+
+/// docker-client's `BuilderVersion.fromAPI` throws on anything but `""`,
+/// `"1"` or `"2"`; guessing the classic builder would hide a daemon this
+/// code doesn't understand.
+#[test]
+fn builder_selection_rejects_an_unknown_daemon_advertised_builder() {
+    let error = select_builder_version(None, Some("3"))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        error,
+        "The Docker daemon's Builder-Version ping header is '3', which is not a builder \
+         Ratect knows — set the DOCKER_BUILDKIT environment variable to '1' to use BuildKit or \
+         '0' to use the classic builder."
+    );
+}
+
+#[test]
+fn an_explicit_builder_choice_ignores_an_unknown_daemon_advertised_builder() {
+    use bollard::query_parameters::BuilderVersion;
+    assert_eq!(
+        select_builder_version(Some("1"), Some("3")).unwrap(),
+        BuilderVersion::BuilderBuildKit
+    );
+    assert_eq!(
+        select_builder_version(Some("0"), Some("3")).unwrap(),
         BuilderVersion::BuilderV1
     );
 }

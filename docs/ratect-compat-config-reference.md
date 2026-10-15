@@ -212,7 +212,8 @@ task's own container, as a dependency, or by more than one task) — but never r
   over `DOCKER_BUILDKIT` too — there's no `--disable-buildkit` counterpart;
   force the classic builder via `DOCKER_BUILDKIT=0`/`false` instead. A daemon old
   enough not to advertise a default builder at all falls back to the classic
-  builder. Note that `build_secrets` and `build_ssh` *require* BuildKit —
+  builder; one advertising a builder Ratect doesn't know is an error unless
+  `DOCKER_BUILDKIT` or `--enable-buildkit` chooses the builder. Note that `build_secrets` and `build_ssh` *require* BuildKit —
   combining them with a forced (or daemon-imposed) classic builder is a clear
   error rather than a silent build without them.
 - The Dockerfile built is `dockerfile` (a path relative to `build_directory`'s own

@@ -96,6 +96,7 @@ struct FakeContainerRuntime {
     // Makes `build_image` fail, standing in for any Docker-layer build
     // failure (see `failing_image_build`).
     fail_image_build: Arc<Mutex<bool>>,
+    rejected_tags: Arc<Mutex<HashSet<String>>>,
     // Images `image_exists_locally` reports as already present (see
     // `with_local_image`) — defaults to empty, so tests that don't care
     // about `image_pull_policy` see the "always needs a pull" behavior
@@ -194,6 +195,7 @@ impl Default for FakeContainerRuntime {
             failing_setup_command: Default::default(),
             fail_container_creation: Default::default(),
             fail_image_build: Default::default(),
+            rejected_tags: Default::default(),
             locally_present_images: Default::default(),
             start_delays: Default::default(),
             start_delays_after_create: Default::default(),
@@ -279,6 +281,12 @@ impl FakeContainerRuntime {
     /// the build.
     fn failing_image_build(self) -> Self {
         *self.fail_image_build.lock().unwrap() = true;
+        self
+    }
+
+    /// Makes `tag_image` fail for `tag`, as a daemon refusing it would.
+    fn rejecting_tag(self, tag: &str) -> Self {
+        self.rejected_tags.lock().unwrap().insert(tag.to_string());
         self
     }
 
@@ -733,9 +741,10 @@ impl ContainerRuntime for FakeContainerRuntime {
         Ok(spec.tag.clone())
     }
 
-    async fn tag_image(&self, image_id: &str, tags: &[String]) -> Result<()> {
-        for tag in tags {
-            self.push(format!("tag:{image_id}:{tag}"));
+    async fn tag_image(&self, image_id: &str, tag: &str) -> Result<()> {
+        self.push(format!("tag:{image_id}:{tag}"));
+        if self.rejected_tags.lock().unwrap().contains(tag) {
+            anyhow::bail!("the daemon refused '{tag}'");
         }
         Ok(())
     }
@@ -7920,6 +7929,121 @@ async fn tag_image_tags_a_built_image_in_addition_to_the_default_tag() {
     let events = docker.events();
     assert!(
         events.contains(&"tag:demo-build-env:my.registry/build-env:v1".to_string()),
+        "{events:?}"
+    );
+}
+
+fn config_building(project_name: &str, container_name: &str) -> Config {
+    let mut containers = IndexMap::new();
+    containers.insert(
+        container_name.to_string(),
+        container_with_build_directory(".", None),
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("test".to_string(), task(container_name, "echo hi"));
+    Config {
+        project_name: project_name.to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+/// `--tag-image` values are checked at argument parse, but `image_tags` is a
+/// library setting too; the engine checks every tag before it builds, so a
+/// bad one costs no build and leaves no tag half-applied.
+#[tokio::test]
+async fn an_invalid_extra_tag_fails_before_the_image_is_built_or_tagged() {
+    let docker = FakeContainerRuntime::default();
+    let tags = HashMap::from([(
+        "build-env".to_string(),
+        HashSet::from(["good:1".to_string(), "_nonsense".to_string()]),
+    )]);
+    let engine = engine(config_building("demo", "build-env"), docker.clone())
+        .with_settings(TaskEngineSettings {
+            image_tags: tags,
+            ..Default::default()
+        })
+        .unwrap();
+
+    let error = engine.run_task("test", &[]).await.unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("'_nonsense' is not a valid image tag: invalid reference format"),
+        "{message}"
+    );
+    assert!(message.contains("container 'build-env'"), "{message}");
+    let events = docker.events();
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.starts_with("build:") || e.starts_with("tag:")),
+        "{events:?}"
+    );
+}
+
+/// ADR 0018: once every tag has passed the grammar check, a tag can fail only
+/// on the daemon, and every one that does is reported — the rest are still
+/// applied.
+#[tokio::test]
+async fn every_tag_the_daemon_refuses_is_reported_and_the_rest_applied() {
+    let docker = FakeContainerRuntime::default()
+        .rejecting_tag("a:1")
+        .rejecting_tag("c:1");
+    let tags = HashMap::from([(
+        "build-env".to_string(),
+        HashSet::from(["a:1".to_string(), "b:1".to_string(), "c:1".to_string()]),
+    )]);
+    let engine = engine(config_building("demo", "build-env"), docker.clone())
+        .with_settings(TaskEngineSettings {
+            image_tags: tags,
+            ..Default::default()
+        })
+        .unwrap();
+
+    let error = engine.run_task("test", &[]).await.unwrap_err();
+
+    let message = format!("{error:#}");
+    for line in [
+        "The image was built, but applying its tags failed:",
+        "the daemon refused 'a:1'",
+        "the daemon refused 'c:1'",
+    ] {
+        assert!(message.lines().any(|l| l.trim() == line), "{message}");
+    }
+    let events = docker.events();
+    for tag in ["a:1", "b:1", "c:1"] {
+        assert!(
+            events.contains(&format!("tag:demo-build-env:{tag}")),
+            "every tag should be attempted: {events:?}"
+        );
+    }
+}
+
+/// Until project and container names are checked at load (#290), a name
+/// that makes the automatic tag unparseable is caught here, before the
+/// build, naming the fields the tag is made from.
+#[tokio::test]
+async fn an_invalid_automatic_tag_fails_before_the_image_is_built() {
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config_building("S4-i290", "build-env"), docker.clone());
+
+    let error = engine.run_task("test", &[]).await.unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains(
+            "'S4-i290-build-env', the tag made from project_name 'S4-i290' and container \
+             name 'build-env', is not a valid image tag: invalid reference format: repository \
+             name (library/S4-i290-build-env) must be lowercase"
+        ),
+        "{message}"
+    );
+    let events = docker.events();
+    assert!(
+        !events.iter().any(|e| e.starts_with("build:")),
         "{events:?}"
     );
 }
