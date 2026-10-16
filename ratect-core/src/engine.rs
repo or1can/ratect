@@ -2781,7 +2781,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             );
             if !left.is_empty() {
                 self.post_notice(format!(
-                    "Left running (--no-cleanup): {}. Remove with: {}",
+                    "Left in place (--no-cleanup): {}. Remove with: {}",
                     left.list(),
                     left.command()
                 ));

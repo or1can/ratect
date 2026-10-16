@@ -37,7 +37,7 @@ both binaries, whatever `RUST_LOG` is set to: an error (`Error: ` in bold red,
 then the message), a warning (`Warning: ` in bold yellow — a deprecated flag,
 a proxy bound to loopback that containers can't reach, a credential helper
 that failed), and a notice (unmarked: the interrupt notice with its "press
-Ctrl+C again" instructions, and what `--no-cleanup*` left running and how to
+Ctrl+C again" instructions, and what `--no-cleanup*` left in place and how to
 remove it). Only the fourth kind, progress, is shaped by `-o`.
 `RUST_LOG` filters Ratect's internal diagnostics
 ([Filtering `RUST_LOG`](troubleshooting.md#filtering-rust_log)), which are a

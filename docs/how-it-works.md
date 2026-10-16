@@ -239,7 +239,7 @@ it** ([decisions/0017](https://github.com/or1can/ratect/blob/main/decisions/0017
   and never goes through `tracing`. The *result* — a run's task-container
   output, a `tasks list` listing — is stdout. Everything *about* the run is
   stderr: errors (`Error: `), warnings (`Warning: `), notices (the interrupt
-  notice, what `--no-cleanup*` left running), in every style including
+  notice, what `--no-cleanup*` left in place), in every style including
   `quiet`; and progress ("Running build...", "Pulling alpine:3.18...", "build
   finished with exit code 0 in 2.3s."), the one class `--output`/`-o` shapes.
   Progress is the one place the binaries differ: `ratect` writes it to stderr,

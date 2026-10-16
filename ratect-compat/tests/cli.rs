@@ -1298,7 +1298,7 @@ fn ownership_labels_reach_real_containers_and_networks_via_docker() {
     // config name and id and the command that works when pasted.
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("Left running (--no-cleanup): app (")
+        stderr.contains("Left in place (--no-cleanup): app (")
             && stderr.contains(", database (")
             && stderr.contains(", network ratect-")
             && stderr.contains(". Remove with: docker rm -f -v ")

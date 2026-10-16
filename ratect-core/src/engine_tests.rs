@@ -11125,7 +11125,7 @@ async fn disabled_cleanup_posts_a_notice_naming_what_it_kept() {
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert!(
         notices[0].starts_with(
-            "Left running (--no-cleanup): app (sidecar-id-a), database (sidecar-id-d), \
+            "Left in place (--no-cleanup): app (sidecar-id-a), database (sidecar-id-d), \
              network ratect-"
         ),
         "{}",
@@ -11171,7 +11171,7 @@ async fn disabled_cleanup_posts_a_notice_naming_what_it_kept() {
     // (decisions/0019), so it was kept too — never started, but there.
     assert!(
         notices[0].starts_with(
-            "Left running (--no-cleanup): app (sidecar-id-a), database (sidecar-id-d), \
+            "Left in place (--no-cleanup): app (sidecar-id-a), database (sidecar-id-d), \
              network ratect-"
         ),
         "{}",
@@ -11233,7 +11233,7 @@ async fn an_interrupted_run_with_cleanup_disabled_still_posts_a_notice() {
     let notices = messages(&sink.events(), notice);
     assert_eq!(notices[0], "Interrupted; not cleaning up.", "{notices:?}");
     assert!(
-        notices[1].starts_with("Left running (--no-cleanup): "),
+        notices[1].starts_with("Left in place (--no-cleanup): "),
         "{notices:?}"
     );
 }
