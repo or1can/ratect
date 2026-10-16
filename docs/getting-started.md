@@ -134,9 +134,10 @@ Ratect separates two kinds of output:
 
 - **stdout**: the actual output of your command — this is what your task produces, and
   what `tasks list` prints. Safe to pipe or redirect.
-- **stderr**: Ratect's own diagnostics (task lifecycle messages, warnings, errors),
-  logged via [`tracing`](https://docs.rs/tracing). Control verbosity with the
-  `RUST_LOG` environment variable, e.g.:
+- **stderr**: everything Ratect itself says — its progress (the lifecycle lines, shaped
+  by [`--output`](output-styles.md)), warnings and errors, and its internal
+  diagnostics, logged via [`tracing`](https://docs.rs/tracing). Only the diagnostics
+  answer to the `RUST_LOG` environment variable, e.g.:
 
 ```bash
 RUST_LOG=debug ratect run hello

@@ -36,14 +36,24 @@
 //! - A reported width of 0 counts as unknown, so lines print unclipped;
 //!   Batect clips every line to nothing.
 
-use super::{Color, ColorMode, Console, EventSink, TaskContainerInfo, TaskEvent};
+use super::{Console, EventSink, TaskContainerInfo, TaskEvent};
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Mutex;
 use unicode_width::UnicodeWidthChar;
 
 pub struct FancyEventLogger {
+    /// The progress console — see `create_event_sink`.
     console: Console,
+    /// Errors, warnings and notices, in every style — see `post` for what a
+    /// line here does to the live display.
+    stderr: Console,
+    /// Whether a line on `stderr` lands on the screen the live display is
+    /// drawn on: always under `ratect`, whose progress console *is* stderr,
+    /// and under `ratect-compat` unless stderr is redirected. When it
+    /// doesn't, the display's own cursor arithmetic is unaffected and it
+    /// carries on in place.
+    stderr_on_screen: bool,
     /// A fixed terminal width, overriding live detection — `0` (no valid
     /// terminal is ever this width) in production (`stdout`), which
     /// queries the real terminal live on every repaint via
@@ -98,8 +108,16 @@ struct State {
     started_containers: BTreeSet<String>,
     /// The task's own network is being removed (the last cleanup step).
     removing_network: bool,
-    /// The live cleanup line is currently on screen.
+    /// The cleanup countdown is the line directly above the cursor, so the
+    /// next repaint may move up over it. Cleared whenever anything else is
+    /// printed below it.
     cleanup_shown: bool,
+    /// Cleanup is under way — from `CleanupStarting` to `CleanupFinished` —
+    /// so the countdown is still worth repainting. Separate from
+    /// `cleanup_shown`: a line printed mid-cleanup leaves the countdown live
+    /// but no longer directly above the cursor, and a line printed after
+    /// cleanup has finished must never be followed by one.
+    cleanup_live: bool,
     /// The terminal width in effect when the cleanup line was last
     /// painted — same purpose as `painted_width`, for the single cleanup
     /// line rather than the multi-line startup block.
@@ -211,9 +229,7 @@ impl ContainerLine {
             Stage::Ready => "ready".to_string(),
             Stage::RunningCommand(Some(command)) => format!("running {command}"),
             Stage::RunningCommand(None) => "running".to_string(),
-            Stage::ExitedUnexpectedly(exit_code) => {
-                format!("exited unexpectedly with exit code {exit_code}")
-            }
+            Stage::ExitedUnexpectedly(exit_code) => super::exited_unexpectedly(*exit_code),
         }
     }
 
@@ -297,20 +313,17 @@ fn display_width(text: &str) -> usize {
 const CURSOR_UP_ONE_AND_CLEAR: &str = "\x1b[1A\r\x1b[2K";
 
 impl FancyEventLogger {
-    pub fn new(console: Console) -> Self {
+    /// Colorless fancy keeps the live repaint, only dropping bold/color
+    /// (see [`Console`]); the width is queried live from the terminal.
+    /// `stderr_on_screen` — see the field.
+    pub fn new(console: Console, stderr: Console, stderr_on_screen: bool) -> Self {
         Self {
             console,
+            stderr,
+            stderr_on_screen,
             fixed_width: AtomicU16::new(0),
             state: Mutex::new(State::default()),
         }
-    }
-
-    /// The logger `main.rs` actually wires up: real stdout, colored
-    /// according to `color_mode` (see [`ColorMode`]) — colorless fancy
-    /// keeps the live repaint, only dropping bold/color — width queried
-    /// live from the terminal.
-    pub fn stdout(color_mode: ColorMode) -> Self {
-        Self::new(Console::stdout(color_mode))
     }
 
     /// The terminal's current display width, or `None` if it can't be
@@ -502,6 +515,21 @@ impl FancyEventLogger {
         self.console.write_raw(&frame);
     }
 
+    /// Removes the countdown, if it is the line directly above the cursor —
+    /// once cleanup has finished it would say work was still under way.
+    /// Same width check as `repaint_cleanup`: if the terminal was resized
+    /// since it was painted, it is left and a fresh line started instead.
+    fn clear_cleanup_line(&self, state: &mut State) {
+        if state.cleanup_shown {
+            if state.cleanup_width == self.current_width() {
+                self.console.write_raw(CURSOR_UP_ONE_AND_CLEAR);
+            } else {
+                self.console.println("");
+            }
+            state.cleanup_shown = false;
+        }
+    }
+
     fn line_mut<'state>(
         state: &'state mut State,
         container: &str,
@@ -520,6 +548,31 @@ impl EventSink for FancyEventLogger {
 
     fn post(&self, event: TaskEvent) {
         let mut state = self.state.lock().unwrap();
+        if self.stderr.print_stderr_class(&event) {
+            // Whatever is live is now above a line no repaint accounts for
+            // (ratect#73's row-count hazard again), so nothing may move the
+            // cursor up over it: the live block stays where it is as a
+            // snapshot, and is painted afresh below the line on its next
+            // update — not now, so a burst of warnings leaves one block
+            // below them rather than one per warning. Whether anything is
+            // still live to update is the engine's to say (`RunEnded`,
+            // `CleanupFinished`), never inferred from the line's class.
+            if self.stderr_on_screen {
+                state.painted_lines = 0;
+                state.last_rendered = None;
+                state.cleanup_shown = false;
+                // The countdown is the exception to waiting: a notice
+                // during cleanup is the escalation rung's, and the next
+                // cleanup step may be a whole forced-removal round-trip
+                // away — or never come, if every removal is refused. Bursts
+                // only happen during startup, so there is nothing to
+                // coalesce here.
+                if state.cleanup_live {
+                    self.repaint_cleanup(&mut state);
+                }
+            }
+            return;
+        }
         match event {
             TaskEvent::TaskStarting { task } => {
                 let printed_a_task = state.printed_a_task;
@@ -765,9 +818,17 @@ impl EventSink for FancyEventLogger {
                     // regardless of what's already on screen below the
                     // frozen block.
                     self.console.println(&format!(
-                        "{} {container} exited unexpectedly with exit code {exit_code}.",
-                        self.console.colored(Color::Yellow, "Warning:")
+                        "{container} {}.",
+                        super::exited_unexpectedly(exit_code)
                     ));
+                    // Printed below whatever was last painted — possibly the
+                    // cleanup countdown, since a dependency's watcher can
+                    // still report as cleanup starts — so no cursor-up may
+                    // land on this line instead.
+                    state.cleanup_shown = false;
+                    if state.cleanup_live {
+                        self.repaint_cleanup(&mut state);
+                    }
                 }
             }
             TaskEvent::TaskContainerCreated { container } => {
@@ -796,25 +857,36 @@ impl EventSink for FancyEventLogger {
                 state.keep_updating_startup = false;
                 self.console.println("");
             }
-            TaskEvent::CleanupStarting => {
-                // On an infrastructure failure the block may still be live
-                // — cleanup freezes it, exactly like the task starting
-                // does (Batect stops startup updates on the first
-                // CleanupStep).
+            // The run is over — the startup block, if still live (an
+            // infrastructure failure, a signal), stops here, before any
+            // notice about how it ended is printed below it.
+            TaskEvent::RunEnded { .. } => {
                 state.keep_updating_startup = false;
+            }
+            TaskEvent::CleanupStarting => {
+                // The startup block is already frozen: `RunEnded` comes
+                // first, and is the one event that ends it.
+                state.cleanup_live = true;
                 self.repaint_cleanup(&mut state);
             }
             TaskEvent::ContainerRemoved { container } => {
                 state.started_containers.remove(&container);
-                if state.cleanup_shown {
+                if state.cleanup_live {
                     self.repaint_cleanup(&mut state);
                 }
             }
             TaskEvent::RemovingNetwork => {
                 state.removing_network = true;
-                if state.cleanup_shown {
+                if state.cleanup_live {
                     self.repaint_cleanup(&mut state);
                 }
+            }
+            // Cleanup is over, so the countdown goes: no summary follows an
+            // infrastructure failure to replace it, and nothing may repaint
+            // it under a line reporting what cleanup left.
+            TaskEvent::CleanupFinished => {
+                state.cleanup_live = false;
+                self.clear_cleanup_line(&mut state);
             }
             TaskEvent::TaskFinished {
                 task,
@@ -827,14 +899,7 @@ impl EventSink for FancyEventLogger {
                 // place if the terminal hasn't been resized since it was
                 // last painted, otherwise leave it and print the summary
                 // on a fresh line below.
-                if state.cleanup_shown {
-                    if state.cleanup_width == self.current_width() {
-                        self.console.write_raw(CURSOR_UP_ONE_AND_CLEAR);
-                    } else {
-                        self.console.println("");
-                    }
-                    state.cleanup_shown = false;
-                }
+                self.clear_cleanup_line(&mut state);
                 self.console.println(&super::format_task_summary(
                     &self.console,
                     &self.console.bold(&task),
@@ -842,16 +907,16 @@ impl EventSink for FancyEventLogger {
                     duration,
                 ));
             }
-            TaskEvent::TaskFailed { .. } => {
-                // Freeze everything; the error itself reaches stderr via
-                // the normal error chain after cleanup. The cleanup line
-                // (if shown) stays as the last thing on stdout.
-                state.keep_updating_startup = false;
-            }
+            // Nothing left live by now: `RunEnded` froze the startup block
+            // and `CleanupFinished` cleared the countdown. The error itself
+            // reaches stderr through the normal error chain.
+            TaskEvent::TaskFailed { .. } => {}
             // Interleaved-mode events — never posted under this logger's
             // (default) TaskContainerOnly streaming policy, and setup
             // command output has no place in the live block regardless.
             TaskEvent::ContainerOutput { .. } | TaskEvent::SetupCommandOutput { .. } => {}
+            // Printed on stderr before the match (`print_stderr_class`).
+            TaskEvent::Error { .. } | TaskEvent::Warning { .. } | TaskEvent::Notice { .. } => {}
         }
     }
 }

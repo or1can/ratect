@@ -55,6 +55,90 @@ fn console_stdout_off_never_colors_regardless_of_the_terminal() {
     assert_eq!(console.colored(Color::Green, "0"), "0");
 }
 
+/// stderr's colour is stderr's own decision: `Off` and `ForcedOn` apply to
+/// it exactly as to stdout, and `Auto` asks stderr's `is_terminal()` —
+/// which `cargo test`'s capture makes false here, so `Auto` is plain.
+#[test]
+fn console_stderr_decides_colour_from_its_own_stream_and_the_color_mode() {
+    assert!(!Console::stderr(ColorMode::Off).color_enabled());
+    assert!(Console::stderr(ColorMode::ForcedOn).color_enabled());
+    assert_eq!(
+        Console::stderr(ColorMode::Auto).color_enabled(),
+        std::io::stderr().is_terminal()
+    );
+    assert!(Console::for_stream(ProgressStream::Stderr, ColorMode::ForcedOn).color_enabled());
+    assert!(!Console::for_stream(ProgressStream::Stdout, ColorMode::Off).color_enabled());
+}
+
+/// The exact bytes of the two markers (decisions/0017): bold and colour
+/// as one SGR sequence, the message in the default colour after it; a
+/// notice carries none. Pinned byte for byte since nothing type-checks
+/// an escape sequence (ratect#493).
+#[test]
+fn error_and_warning_markers_are_bold_red_and_bold_yellow_and_a_notice_is_unmarked() {
+    let buffer = test_support::SharedBuffer::default();
+    let console = Console::new(Box::new(buffer.clone()), true);
+    console.error("it broke");
+    console.warning("it might");
+    console.notice("it happened");
+    assert_eq!(
+        buffer.contents(),
+        "\x1b[1;31mError:\x1b[0m it broke\n\
+         \x1b[1;33mWarning:\x1b[0m it might\n\
+         it happened\n"
+    );
+
+    let plain_buffer = test_support::SharedBuffer::default();
+    let plain = Console::new(Box::new(plain_buffer.clone()), false);
+    plain.error("it broke");
+    plain.warning("it might");
+    assert_eq!(
+        plain_buffer.contents(),
+        "Error: it broke\nWarning: it might\n"
+    );
+}
+
+/// `print_stderr_class` renders exactly the three stderr classes and says so,
+/// and leaves every other event alone.
+#[test]
+fn print_stderr_class_renders_only_the_three_stderr_classes() {
+    let buffer = test_support::SharedBuffer::default();
+    let console = Console::new(Box::new(buffer.clone()), false);
+    assert!(console.print_stderr_class(&TaskEvent::Error {
+        message: "e".into()
+    }));
+    assert!(console.print_stderr_class(&TaskEvent::Warning {
+        message: "w".into()
+    }));
+    assert!(console.print_stderr_class(&TaskEvent::Notice {
+        message: "n".into()
+    }));
+    assert!(!console.print_stderr_class(&TaskEvent::CleanupStarting));
+    assert_eq!(buffer.contents(), "Error: e\nWarning: w\nn\n");
+}
+
+/// `quiet` means no progress, not nothing: the three classes still print.
+#[test]
+fn the_quiet_logger_prints_the_stderr_classes_and_no_progress() {
+    let buffer = test_support::SharedBuffer::default();
+    let logger = QuietEventLogger::new(Console::new(Box::new(buffer.clone()), false));
+    logger.post(TaskEvent::TaskStarting {
+        task: "build".into(),
+    });
+    logger.post(TaskEvent::Notice {
+        message: "Left running (--no-cleanup): app (abc)".into(),
+    });
+    logger.post(TaskEvent::TaskFinished {
+        task: "build".into(),
+        exit_code: 0,
+        duration: Duration::from_secs(1),
+    });
+    assert_eq!(
+        buffer.contents(),
+        "Left running (--no-cleanup): app (abc)\n"
+    );
+}
+
 #[test]
 fn console_println_writes_line_with_newline() {
     let buffer = test_support::SharedBuffer::default();
@@ -88,15 +172,81 @@ fn format_task_summary_colors_exit_code_by_outcome() {
 }
 
 /// `select_output_style(requested, no_color, &TerminalFacts { term,
-/// stdout_is_terminal: tty, console_dimensions_available: dimensions })`
-/// shorthand for the decision-table tests below.
+/// stdout_is_terminal: tty, console_dimensions_available: dimensions },
+/// Stdout)` shorthand for the decision-table tests below — the progress
+/// console on stdout, so `tty` is the stream that matters.
 fn auto(no_color: bool, tty: bool, term: Option<&str>, dimensions: bool) -> OutputStyle {
     let terminal = TerminalFacts {
         term: term.map(str::to_string),
         stdout_is_terminal: tty,
+        stderr_is_terminal: false,
         console_dimensions_available: dimensions,
     };
-    select_output_style(None, no_color, &terminal)
+    select_output_style(None, no_color, &terminal, ProgressStream::Stdout)
+}
+
+/// The decision is the progress console's stream's, not stdout's: with the
+/// console on stderr (`ratect`), stdout redirected and stderr a terminal
+/// still gets `fancy` — the pipe took the result, not the conversation —
+/// and a terminal stdout with stderr redirected doesn't (decisions/0017).
+#[test]
+fn fancy_is_decided_by_the_progress_consoles_own_stream() {
+    let facts = |stdout: bool, stderr: bool| TerminalFacts {
+        term: Some("xterm".to_string()),
+        stdout_is_terminal: stdout,
+        stderr_is_terminal: stderr,
+        console_dimensions_available: true,
+    };
+    let select =
+        |facts: &TerminalFacts, progress| select_output_style(None, false, facts, progress);
+
+    assert_eq!(
+        select(&facts(false, true), ProgressStream::Stderr),
+        OutputStyle::Fancy
+    );
+    assert_eq!(
+        select(&facts(true, false), ProgressStream::Stderr),
+        OutputStyle::Simple
+    );
+    assert_eq!(
+        select(&facts(false, true), ProgressStream::Stdout),
+        OutputStyle::Simple
+    );
+    assert_eq!(
+        select(&facts(true, false), ProgressStream::Stdout),
+        OutputStyle::Fancy
+    );
+}
+
+/// The refusal names the stream it checked — stderr for `ratect`, stdout
+/// for `ratect-compat` — so the advice fits the binary that gave it.
+#[test]
+fn an_explicit_fancy_refusal_names_the_progress_consoles_stream() {
+    let terminal = TerminalFacts {
+        term: Some("xterm".to_string()),
+        stdout_is_terminal: false,
+        stderr_is_terminal: false,
+        console_dimensions_available: true,
+    };
+    for (progress, name) in [
+        (ProgressStream::Stderr, "stderr"),
+        (ProgressStream::Stdout, "stdout"),
+    ] {
+        let error = create_event_sink(
+            Some(OutputStyle::Fancy),
+            ColorMode::Off,
+            &terminal,
+            progress,
+        )
+        .err()
+        .expect("fancy without an interactive console is refused");
+        assert!(
+            error.to_string().starts_with(&format!(
+                "Fancy output requires an interactive console ({name} isn't"
+            )),
+            "{error}"
+        );
+    }
 }
 
 #[test]
@@ -104,6 +254,7 @@ fn an_explicit_request_always_wins() {
     let terminal = TerminalFacts {
         term: None,
         stdout_is_terminal: false,
+        stderr_is_terminal: false,
         console_dimensions_available: false,
     };
     // Even on a console that couldn't support it — an explicitly
@@ -116,7 +267,10 @@ fn an_explicit_request_always_wins() {
         OutputStyle::Quiet,
         OutputStyle::All,
     ] {
-        assert_eq!(select_output_style(Some(style), true, &terminal), style);
+        assert_eq!(
+            select_output_style(Some(style), true, &terminal, ProgressStream::Stdout),
+            style
+        );
     }
 }
 

@@ -39,17 +39,25 @@
 //!
 //! The prefix colours also differ — see `CONTAINER_COLORS`; the palette and
 //! order decided in decisions/0017 land with ratect#489.
+//!
+//! Streams (decisions/0017): every prefixed line goes to the progress
+//! console — stdout under `ratect-compat` (Batect's placement, kept), stderr
+//! under `ratect` — *except* the task container's own output lines, which
+//! are the run's result and go to stdout in both binaries, prefixed like
+//! everything else so `all` still reads as one interleaved log on a
+//! terminal. So `ratect run x -o all 2>/dev/null` is the task's own lines
+//! and nothing else, and `ratect-compat -o all` is unchanged.
 
-use super::{Color, ColorMode, Console, ContainerIoStreaming, EventSink, OnceFlag, TaskEvent};
+use super::{Color, Console, ContainerIoStreaming, EventSink, OnceFlag, TaskEvent};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use unicode_width::UnicodeWidthStr;
 
 /// The prefix colors assigned to containers, round-robin in (sorted) name
-/// order — deliberately excluding white (task-level lines) and red
-/// (errors). Those two exclusions match Batect; the rest doesn't: Batect
-/// also cycles black, and assigns by the containers' order in its set
-/// rather than by name.
+/// order — deliberately excluding red (errors); the task-level prefix is
+/// bold in the default foreground. Batect also excludes red and cycles
+/// black, paints the task prefix white, and assigns by the containers'
+/// order in its set rather than by name.
 const CONTAINER_COLORS: [Color; 5] = [
     Color::Blue,
     Color::Cyan,
@@ -59,14 +67,25 @@ const CONTAINER_COLORS: [Color; 5] = [
 ];
 
 pub struct InterleavedEventLogger {
+    /// The progress console — see `create_event_sink`.
     console: Console,
+    /// Errors, warnings and notices, in every style — unprefixed here
+    /// (ratect#367).
+    stderr: Console,
+    /// The task container's own output lines — the run's result, so stdout
+    /// in both binaries (the same stream as `console` under `ratect-compat`).
+    result: Console,
     state: Mutex<State>,
 }
 
 #[derive(Default)]
 struct State {
-    /// The current task's name — the prefix for task-level lines (white).
+    /// The current task's name — the prefix for task-level lines (bold,
+    /// default foreground).
     task: Option<String>,
+    /// The task's own container's name, from `TaskGraphResolved` — whose
+    /// `ContainerOutput` lines go to `result` rather than `console`.
+    task_container: Option<String>,
     /// Deferred `Running <task>...` preamble: printed once the graph
     /// arrives, so it aligns with the container prefixes (the padding width
     /// isn't known until then).
@@ -88,20 +107,27 @@ struct State {
 }
 
 impl InterleavedEventLogger {
-    pub fn new(console: Console) -> Self {
+    pub fn new(console: Console, stderr: Console, result: Console) -> Self {
         Self {
             console,
+            stderr,
+            result,
             state: Mutex::new(State::default()),
         }
     }
 
-    /// The logger `main.rs` actually wires up: real stdout, colored
-    /// according to `color_mode` (see [`ColorMode`]).
-    pub fn stdout(color_mode: ColorMode) -> Self {
-        Self::new(Console::stdout(color_mode))
-    }
-
-    fn print_prefixed(&self, state: &State, name: &str, color: Color, line: &str) {
+    /// `line` under `name`'s prefix, padded to the common column and
+    /// styled — bold always, in `color` when there is one, the default
+    /// foreground otherwise (never white: decisions/0017) — written to
+    /// `console`.
+    fn print_prefixed(
+        &self,
+        console: &Console,
+        state: &State,
+        name: &str,
+        color: Option<Color>,
+        line: &str,
+    ) {
         // Padded by hand (not `format!("{name:width$}")`, which pads by
         // `char` count) — `prefix_width` is a display-column measurement,
         // and `char` count agrees with that only for single-width
@@ -110,20 +136,23 @@ impl InterleavedEventLogger {
         // and break alignment with every other column.
         let padding = " ".repeat(state.prefix_width.saturating_sub(name.width()));
         let padded = format!("{name}{padding}");
-        let prefix = self.console.colored(color, &self.console.bold(&padded));
-        self.console.println(&format!("{prefix} | {line}"));
+        let prefix = match color {
+            Some(color) => console.colored(color, &console.bold(&padded)),
+            None => console.bold(&padded),
+        };
+        console.println(&format!("{prefix} | {line}"));
     }
 
-    /// A milestone/output line belonging to `container`.
+    /// A milestone line belonging to `container`, on the progress console.
     fn print_for_container(&self, state: &State, container: &str, line: &str) {
-        let color = state.colors.get(container).copied().unwrap_or(Color::White);
-        self.print_prefixed(state, container, color, line);
+        let color = state.colors.get(container).copied();
+        self.print_prefixed(&self.console, state, container, color, line);
     }
 
-    /// A task-level line (the task's own prefix, white).
+    /// A task-level line (the task's own prefix), on the progress console.
     fn print_for_task(&self, state: &State, line: &str) {
         let task = state.task.clone().unwrap_or_default();
-        self.print_prefixed(state, &task, Color::White, line);
+        self.print_prefixed(&self.console, state, &task, None, line);
     }
 
     /// Prints the deferred "Running `<task>`..." preamble if it hasn't
@@ -172,6 +201,9 @@ impl EventSink for InterleavedEventLogger {
     }
 
     fn post(&self, event: TaskEvent) {
+        if self.stderr.print_stderr_class(&event) {
+            return;
+        }
         let mut state = self.state.lock().unwrap();
         match event {
             TaskEvent::TaskStarting { task } => {
@@ -182,6 +214,10 @@ impl EventSink for InterleavedEventLogger {
                 };
             }
             TaskEvent::TaskGraphResolved { containers } => {
+                state.task_container = containers
+                    .iter()
+                    .find(|info| info.is_task_container)
+                    .map(|info| info.name.clone());
                 let task_width = state.task.as_deref().map_or(0, UnicodeWidthStr::width);
                 state.prefix_width = containers
                     .iter()
@@ -311,10 +347,7 @@ impl EventSink for InterleavedEventLogger {
                 self.print_for_container(
                     &state,
                     &container,
-                    &format!(
-                        "{} exited unexpectedly with exit code {exit_code}.",
-                        self.console.colored(Color::Yellow, "Warning:")
-                    ),
+                    &format!("{}.", super::exited_unexpectedly(exit_code)),
                 );
             }
             TaskEvent::RunningTaskContainer { container, command } => {
@@ -325,7 +358,15 @@ impl EventSink for InterleavedEventLogger {
                 self.print_for_container(&state, &container, &line);
             }
             TaskEvent::ContainerOutput { container, line } => {
-                self.print_for_container(&state, &container, &line);
+                // The task container's lines are the result — stdout, in
+                // both binaries (see the module docs); a dependency's go
+                // with the progress.
+                if state.task_container.as_deref() == Some(container.as_str()) {
+                    let color = state.colors.get(&container).copied();
+                    self.print_prefixed(&self.result, &state, &container, color, &line);
+                } else {
+                    self.print_for_container(&state, &container, &line);
+                }
             }
             TaskEvent::CleanupStarting => {
                 if state.started_cleanup.fire_once() {
@@ -361,6 +402,11 @@ impl EventSink for InterleavedEventLogger {
             TaskEvent::TaskFailed { .. } => {
                 self.flush_preamble_if_pending(&mut state);
             }
+            // Nothing to show: `all` has no live display to stop, and
+            // `CleanupStarting`'s line already said cleanup began.
+            TaskEvent::RunEnded { .. } | TaskEvent::CleanupFinished => {}
+            // Printed on stderr before the match (`print_stderr_class`).
+            TaskEvent::Error { .. } | TaskEvent::Warning { .. } | TaskEvent::Notice { .. } => {}
         }
     }
 }

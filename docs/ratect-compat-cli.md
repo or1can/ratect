@@ -87,7 +87,7 @@ accepts them; they're used only when it actually connects.
 |---|---|---|---|
 | `--output <STYLE>` | `-o` | auto | `fancy`, `simple`, `quiet` or `all`; unset auto-selects `fancy` on an interactive console, `simple` otherwise — see [Output Styles](output-styles.md). |
 | `--no-color` | — | — | No color in Ratect's own output (a task's own output is never affected), and `simple` becomes the auto-selected style — see [Colour](output-styles.md#colour) for how it combines with `NO_COLOR`/`CLICOLOR_FORCE`. |
-| `--log-file <PATH>` | — | — | Writes Ratect's own internal logs to this file, in addition to stderr (both still governed by `RUST_LOG` — see [Environment variables](#environment-variables)). Plain text, no ANSI color codes, regardless of stderr's own coloring. |
+| `--log-file <PATH>` | — | — | Writes Ratect's own internal logs to this file, in addition to stderr (both still governed by `RUST_LOG` — see [Environment variables](#environment-variables)). Plain text, no ANSI color codes — on stderr too, while the file is in use. |
 
 ### Recognized, no effect
 
@@ -218,15 +218,22 @@ so it exits `1` on its own failure (a config that doesn't parse under `--list-ta
 `--log-file` that can't be opened) and `0` otherwise. A usage error (an unknown flag)
 exits `2`, and `--help` exits `0`.
 
-Every failure is printed to stderr as `Error: <message>` — deliberately *not* through
-`tracing::error!`/`RUST_LOG` (which every other diagnostic goes through — see
+Every failure of Ratect's own is printed to stderr as `Error: <message>` (the marker in
+bold red when stderr is a terminal) — deliberately *not* through
+`tracing::error!`/`RUST_LOG` (which Ratect's internal diagnostics go through — see
 [how it works](how-it-works.md#5-logging-vs-output)): a fatal error is the reason the
 process is about to exit non-zero, not an optional diagnostic, so it stays visible even
 under `RUST_LOG=off` or a filter that excludes Ratect's own target — including under
-[`-o quiet`](output-styles.md#quiet), whose whole contract is "only error messages".
+[`-o quiet`](output-styles.md#quiet). Two kinds of failed run print no `Error:` line,
+because something else already reported them: a task's own non-zero exit (rule 1 — the
+exit code, and outside `quiet` the `finished with exit code N` summary line, say it,
+and the container's own output says why), and a run ended by a signal (rule 2 — the
+interrupt notice said so when it arrived). A cleanup failure is reported once, as it
+happens, by a line naming what was left behind and the `docker` command that removes
+it.
 
-- Running with no task name at all (and not `--list-tasks`) **exits `0`** — Ratect logs
-  a warning but doesn't fail the process. This is a rough edge, not intentional design;
+- Running with no task name at all (and not `--list-tasks`) **exits `0`** — Ratect prints
+  a `Warning:` on stderr but doesn't fail the process. This is a rough edge, not intentional design;
   don't rely on it in scripts.
 - A misspelled task name (whether given directly on the command line, or as a
   [`prerequisites`](ratect-compat-config-reference.md#task) entry) gets a `Did you mean 'x'?`
@@ -254,7 +261,7 @@ under `RUST_LOG=off` or a filter that excludes Ratect's own target — including
 | `DOCKER_TLS_VERIFY` | The default for `--docker-tls-verify` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |
 | `DOCKER_BUILDKIT` | Forces the image builder on (`1`/`true`) or off (`0`/`false`) — see `--enable-buildkit` and [config reference](ratect-compat-config-reference.md#image-building). |
 | `NO_COLOR` | If set, exactly the same effect as `--no-color` — see [Colour](output-styles.md#colour). |
-| `CLICOLOR_FORCE` | Forces colored output even when stdout isn't a terminal, unless `--no-color`/`NO_COLOR` is set — see [Colour](output-styles.md#colour). |
+| `CLICOLOR_FORCE` | Forces colored output even when the stream isn't a terminal, unless `--no-color`/`NO_COLOR` is set — see [Colour](output-styles.md#colour). |
 
 Ratect supports interpolating host environment variables and config variables into
 `environment` values, volume host paths, `build_directory`, `build_args`,

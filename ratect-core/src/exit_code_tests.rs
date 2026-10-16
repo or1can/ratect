@@ -148,3 +148,36 @@ fn only_a_runs_failure_goes_through_the_mapping() {
     assert_eq!(for_failure(&container, false), VERB_FAILED);
     assert_eq!(for_failure(&other, false), VERB_FAILED);
 }
+
+/// The three failures a run has already reported by another route — the
+/// task's own exit (its code and the summary line), a signal (the interrupt
+/// notice), a cleanup failure (the engine's own `Error:` line) — need no
+/// `Error:` from `main`; everything else does. Through `anyhow` context too,
+/// since the binaries see the error after the engine's own wrapping.
+#[test]
+fn already_reported_names_exactly_the_three_failures_reported_elsewhere() {
+    use anyhow::Context;
+
+    assert!(already_reported(&anyhow::Error::new(
+        crate::docker::ContainerExitedNonZero { exit_code: 42 }
+    )));
+    assert!(already_reported(&anyhow::Error::new(TaskInterrupted::new(
+        TerminationSignal::Terminate
+    ))));
+    assert!(already_reported(&anyhow::Error::new(cleanup_failed())));
+    let wrapped = Err::<(), _>(anyhow::Error::new(crate::docker::ContainerExitedNonZero {
+        exit_code: 3,
+    }))
+    .context("while running 'build'")
+    .unwrap_err();
+    assert!(already_reported(&wrapped));
+
+    assert!(!already_reported(&anyhow::anyhow!(
+        "the config file is empty"
+    )));
+    assert!(!already_reported(
+        &Err::<(), _>(anyhow::anyhow!("no such image"))
+            .context("Failed to pull image alpine")
+            .unwrap_err()
+    ));
+}

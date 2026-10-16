@@ -464,6 +464,108 @@ impl std::fmt::Display for CleanupFailed {
 
 impl std::error::Error for CleanupFailed {}
 
+/// What a cleanup left in place — a removal the daemon refused, one the
+/// abandon rung never reached, or everything a `--no-cleanup*` flag kept —
+/// and the one command that removes it, for the line that reports it
+/// (decisions/0017: `left behind: <what>. Remove with: <command>`, the same
+/// tail on the cleanup-failure error and the `--no-cleanup*` notice).
+///
+/// The command is `docker`'s, not `ratect resources clean`: this is shared
+/// core, and `resources` is a `ratect` verb `ratect-compat` doesn't have,
+/// while `docker` works from either. It names containers by id — Ratect
+/// creates them without a name, so Docker's is random words the engine
+/// never learns; the id, shortened to the twelve characters `docker ps`
+/// shows, is what Docker resolves — and removes them with `-f -v`, since
+/// that is what Ratect's own removal does (force, and the anonymous volumes
+/// with them); a plain `docker rm -f` would leave those volumes. The list
+/// names each by its config name too, since that is the one the user knows.
+struct LeftBehind {
+    /// `(config name, container id)`.
+    containers: Vec<(String, String)>,
+    network: Option<String>,
+}
+
+impl LeftBehind {
+    fn new<'a>(
+        containers: impl IntoIterator<Item = (&'a str, &'a str)>,
+        network: Option<&str>,
+    ) -> Self {
+        Self {
+            containers: containers
+                .into_iter()
+                .map(|(name, id)| (name.to_string(), id.to_string()))
+                .collect(),
+            network: network.map(str::to_string),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.containers.is_empty() && self.network.is_none()
+    }
+
+    /// The cleanup-failure error: what went wrong — abandonment, a refusal,
+    /// or both, since a refusal before the abandonment still says why its
+    /// container was left — then what is left and how to remove it.
+    /// `refusals` are the daemon's own messages, in the order they came.
+    fn failure_message(&self, abandoned: bool, refusals: &[String]) -> String {
+        let what = match (abandoned, refusals.is_empty()) {
+            (true, true) => "Cleanup abandoned".to_string(),
+            (true, false) => format!("Cleanup abandoned after failing: {}", refusals.join("; ")),
+            (false, _) => format!("Cleanup failed: {}", refusals.join("; ")),
+        };
+        if self.is_empty() {
+            format!("{what}. Nothing is known to be left behind.")
+        } else {
+            format!(
+                "{what}; left behind: {}. Remove with: {}",
+                self.list(),
+                self.command()
+            )
+        }
+    }
+
+    /// The id as `docker ps` shows it — its first twelve characters, which
+    /// Docker resolves like the full id.
+    fn short_id(id: &str) -> &str {
+        id.get(..12).unwrap_or(id)
+    }
+
+    /// `db (a1b2c3d4e5f6), app (0f1e2d3c4b5a), network ratect-…`.
+    fn list(&self) -> String {
+        self.containers
+            .iter()
+            .map(|(name, id)| format!("{name} ({})", Self::short_id(id)))
+            .chain(
+                self.network
+                    .iter()
+                    .map(|network| format!("network {network}")),
+            )
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// `docker rm -f -v a1b2c3d4e5f6 0f1e2d3c4b5a; docker network rm
+    /// ratect-…` — the network last, since it can't go while a container
+    /// is still attached. Joined with `;`, not `&&`: an abandoned removal
+    /// the daemon finished anyway is listed too, and `docker rm` failing on
+    /// that one id must not stop the network's removal after it.
+    fn command(&self) -> String {
+        let mut steps = Vec::new();
+        if !self.containers.is_empty() {
+            let ids: Vec<&str> = self
+                .containers
+                .iter()
+                .map(|(_, id)| Self::short_id(id))
+                .collect();
+            steps.push(format!("docker rm -f -v {}", ids.join(" ")));
+        }
+        if let Some(network) = &self.network {
+            steps.push(format!("docker network rm {network}"));
+        }
+        steps.join("; ")
+    }
+}
+
 pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// The project as loaded — its values unevaluated. Each task's
     /// containers and values are [evaluated](LoadedProject::evaluate) when
@@ -1186,6 +1288,35 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         crate::proxy::loopback_only_ports_in(&(self.proc_net_tcp)(), proxy.rewritten_ports())
     }
 
+    /// Whether `task_name` has already run to completion this invocation —
+    /// `run_task_scoped` would return at once, starting nothing.
+    fn has_run(&self, task_name: &str) -> bool {
+        self.executed_tasks.lock().unwrap().contains(task_name)
+    }
+
+    /// Ends the run before `next` starts if a signal has arrived since
+    /// `baseline` — reported by a notice naming the task that won't start,
+    /// since nothing else says so: an escalation notice from the cleanup the
+    /// signal hurried says only what happened to that cleanup, and `main`
+    /// prints no `Error:` for a signalled run (decisions/0017).
+    fn stop_if_signalled(&self, baseline: usize, next: &str) -> Result<()> {
+        if self.interrupt.count() <= baseline {
+            return Ok(());
+        }
+        let signal = self.interrupt.last_signal();
+        self.post_notice(format!(
+            "{}; not starting task '{next}'.",
+            signal.ended_run()
+        ));
+        Err(crate::interrupt::TaskInterrupted::new(signal).into())
+    }
+
+    /// Posts `message` as a notice — printed on stderr in every style, never
+    /// logged (decisions/0017).
+    fn post_notice(&self, message: String) {
+        self.event_sink.post(TaskEvent::Notice { message });
+    }
+
     /// Warns, once per invocation, about every rewritten proxy URL whose
     /// port the host is listening on through loopback only.
     ///
@@ -1197,13 +1328,15 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// already turns propagation off for one that shouldn't.
     fn warn_about_unreachable_proxies(&self) {
         for port in self.unreachable_proxy_ports() {
-            tracing::warn!(
-                "The proxy on port {port} is listening on loopback addresses only, so containers \
-                 in this run cannot reach it even though its URL now names the host. Bind the \
-                 proxy to 0.0.0.0 to make it reachable — which also exposes it to anything else \
-                 that can reach this machine, so do that only on a network you trust. Use \
-                 --no-proxy-vars if this run doesn't need the proxy."
-            );
+            self.event_sink.post(TaskEvent::Warning {
+                message: format!(
+                    "The proxy on port {port} is listening on loopback addresses only, so \
+                     containers in this run cannot reach it even though its URL now names the \
+                     host. Bind the proxy to 0.0.0.0 to make it reachable — which also exposes \
+                     it to anything else that can reach this machine, so do that only on a \
+                     network you trust. Use --no-proxy-vars if this run doesn't need the proxy."
+                ),
+            });
         }
     }
 
@@ -1751,6 +1884,18 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 let prerequisites =
                     expand_prerequisite_wildcards(&self.project.config.tasks, prerequisites)?;
                 for prerequisite in &prerequisites {
+                    // A signal that landed during an earlier prerequisite's
+                    // cleanup — or just after it — left that one passed, but
+                    // ends the run: this one never starts, so nothing is
+                    // created only to be torn down again (decisions/0016,
+                    // rule 2). Checked before each prerequisite that would
+                    // actually run, not only before the task itself, or it
+                    // starts, is interrupted at once and reports the same
+                    // signal a second time. One that already ran this
+                    // invocation starts nothing, so it is no reason to stop.
+                    if !self.has_run(prerequisite) {
+                        self.stop_if_signalled(interrupts_before_prerequisites, prerequisite)?;
+                    }
                     self.run_task_scoped(prerequisite, &[], false).await?;
                 }
             }
@@ -1775,18 +1920,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             return Ok(());
         };
 
-        // A signal that landed during a prerequisite — its cleanup included,
-        // which a prerequisite that had already passed survives with `Ok` —
-        // ended the run before this task started, so it never does: nothing
-        // is created only to be torn down again, and the run reports the
-        // signal (decisions/0016, rule 2). Counted against this task's own
-        // starting point, so a signal before any prerequisite ran is left to
-        // the run's own interrupt handling below.
-        if self.interrupt.count() > interrupts_before_prerequisites {
-            return Err(
-                crate::interrupt::TaskInterrupted::new(self.interrupt.last_signal()).into(),
-            );
-        }
+        // The same check before the task's own run. A prerequisite-only task
+        // never gets here: once its last prerequisite has passed, nothing is
+        // left to start, so a signal during that one's cleanup ended
+        // nothing — exactly as one during a passing run's own cleanup ends
+        // nothing.
+        self.stop_if_signalled(interrupts_before_prerequisites, task_name)?;
 
         // Run the task itself
         let container_config = containers
@@ -2242,6 +2381,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 self.interrupt.count(),
             ),
         };
+        // Before any notice about how it ended: a live display needs to know
+        // the run is over before it prints anything that says so.
+        self.event_sink.post(TaskEvent::RunEnded {
+            task: task_name.to_string(),
+        });
         // `Some(signal)` is the "was it signalled" question and "which one"
         // in the same read — the cleanup message below has to name the
         // signal, and there is no second source for it once the failure is
@@ -2364,22 +2508,34 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             self.interrupt.wait_for_interrupts(interrupts + 1).await;
         };
 
-        if should_cleanup {
-            if let Some(signal) = interrupted_by {
-                // Named rather than fixed at "Interrupted"/"Press Ctrl+C":
-                // a run stopped with `SIGTERM` was not interrupted by
-                // anyone at a terminal, and telling whoever reads the log
-                // to press Ctrl+C would send them somewhere with no
-                // keyboard attached to this process at all.
-                tracing::warn!(
-                    task = task_name,
+        if let Some(signal) = interrupted_by {
+            // Named rather than fixed at "Interrupted"/"Press Ctrl+C":
+            // a run stopped with `SIGTERM` was not interrupted by
+            // anyone at a terminal, and telling whoever reads the log
+            // to press Ctrl+C would send them somewhere with no
+            // keyboard attached to this process at all.
+            //
+            // A notice, printed, never `tracing` (decisions/0017): this
+            // is the one line the person at the keyboard must read, and
+            // `RUST_LOG=off` used to hide it (ratect#369). Posted whether
+            // or not cleanup runs: with `--no-cleanup*` it is still the only
+            // line saying why the run stopped.
+            tracing::debug!(task = task_name, signal = signal.name(), "run interrupted");
+            self.post_notice(if should_cleanup {
+                format!(
                     "{}; cleaning up. {} to force-remove what's left, and Ctrl+C after \
                      that to stop cleaning up.",
                     signal.ended_run(),
                     signal.send_again(),
-                );
-            }
-            if !created_sidecars.is_empty() || owns_network || task_container_id.is_some() {
+                )
+            } else {
+                format!("{}; not cleaning up.", signal.ended_run())
+            });
+        }
+        if should_cleanup {
+            let narrates_cleanup =
+                !created_sidecars.is_empty() || owns_network || task_container_id.is_some();
+            if narrates_cleanup {
                 self.event_sink.post(TaskEvent::CleanupStarting);
             }
             // Every removal below is raced against the next signal rather
@@ -2408,28 +2564,35 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 narrate: bool,
                 is_task_container: bool,
             }
+            // What cleanup ends by saying is built from these: the ids of
+            // the containers it confirmed removed (anything else it set out
+            // to remove is left behind — refused, or never reached on the
+            // abandon rung) and what the daemon said when it refused. One
+            // line at the end rather than one per refusal, so the user gets
+            // the whole list and one command to remove it with.
+            let removed: Mutex<std::collections::HashSet<String>> = Mutex::default();
+            let refusals: Mutex<Vec<String>> = Mutex::default();
             let report = |removal: &Removal<'_>, outcome: Result<()>| match outcome {
-                Ok(()) if removal.narrate => {
-                    self.event_sink.post(TaskEvent::ContainerRemoved {
-                        container: removal.name.to_string(),
-                    });
+                Ok(()) => {
+                    removed
+                        .lock()
+                        .unwrap()
+                        .insert(removal.container_id.to_string());
+                    if removal.narrate {
+                        self.event_sink.post(TaskEvent::ContainerRemoved {
+                            container: removal.name.to_string(),
+                        });
+                    }
                 }
-                Ok(()) => {}
                 Err(e) => {
                     cleanup_failed.store(true, Ordering::Relaxed);
-                    if removal.is_task_container {
-                        tracing::warn!(
-                            container = removal.name,
-                            error = ?e,
-                            "Failed to clean up the task's own container"
-                        );
-                    } else {
-                        tracing::warn!(
-                            dependency = removal.name,
-                            error = ?e,
-                            "Failed to clean up dependency container"
-                        );
-                    }
+                    tracing::debug!(
+                        container = removal.name,
+                        task_container = removal.is_task_container,
+                        error = ?e,
+                        "failed to remove container"
+                    );
+                    refusals.lock().unwrap().push(format!("{e:#}"));
                 }
             };
 
@@ -2460,6 +2623,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     is_task_container: false,
                 });
             }
+            // Everything cleanup set out to remove, for the report at the
+            // end — `removals` itself is consumed by the rungs below.
+            let to_remove: Vec<(&str, &str)> = removals
+                .iter()
+                .map(|removal| (removal.name, removal.container_id))
+                .collect();
 
             // Graceful, one at a time in dependency order, until the ladder's
             // first rung — reached either by a signal cutting a stop short or
@@ -2497,12 +2666,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 interrupts_at_escalation = Some(self.interrupt.interrupt_count());
                 // Always Ctrl+C: the abandon rung is `SIGINT`-only, and the
                 // only sender it is advice for is a person at a terminal.
-                tracing::warn!(
-                    task = task_name,
+                self.post_notice(format!(
                     "{} during cleanup; force-removing what's left. Press Ctrl+C to stop \
                      cleaning up.",
                     signal.ended_run(),
-                );
+                ));
                 let forced = futures::future::join_all(removals.iter().map(|removal| async {
                     let outcome = self
                         .docker
@@ -2518,22 +2686,26 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     abandoned = true;
                 }
             }
+            let mut network_removed = false;
             if owns_network && !abandoned {
-                let network_name = network_name.expect("owns_network implies network_name is Some");
+                let network_name = network_name
+                    .as_deref()
+                    .expect("owns_network implies network_name is Some");
                 self.event_sink.post(TaskEvent::RemovingNetwork);
                 // A network has no faster removal to escalate to, so it is
                 // raced against the abandonment rung alone; a first signal
                 // landing here lets it finish, and doesn't change what the
                 // run exits with (decisions/0016).
-                let removal = self.docker.remove_network(&network_name);
+                let removal = self.docker.remove_network(network_name);
                 match self
                     .until_interrupted(abandon_rung(interrupts_at_escalation), removal)
                     .await
                 {
-                    Some(Ok(())) => {}
+                    Some(Ok(())) => network_removed = true,
                     Some(Err(e)) => {
                         cleanup_failed.store(true, Ordering::Relaxed);
-                        tracing::warn!(network = network_name.as_str(), error = ?e, "Failed to remove network");
+                        tracing::debug!(network = network_name, error = ?e, "failed to remove network");
+                        refusals.lock().unwrap().push(format!("{e:#}"));
                     }
                     None => abandoned = true,
                 }
@@ -2544,40 +2716,63 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // don't exist is its own small betrayal.
             if abandoned {
                 cleanup_failed.store(true, Ordering::Relaxed);
-                // Names the label rather than a `ratect` command: this is
-                // shared core, and `resources` is a `ratect` verb that
-                // `ratect-compat` doesn't have — so naming it would be wrong
-                // advice for half the binaries that reach this line. The
-                // label works for both, and is what `resources` itself
-                // searches on.
-                //
-                // Both `ps` and `network ls`, because the abandoned step is
-                // just as often the network: with no sidecars it is the only
-                // thing left to abandon, so a containers-only hint would list
-                // nothing at all in exactly that case.
-                tracing::warn!(
-                    task = task_name,
-                    run = run_id.as_str(),
-                    "Stopped cleaning up. Anything left behind carries the label \
-                     eu.orican.ratect.run with this run's id — `docker ps -a --filter \
-                     label=eu.orican.ratect.run=<run>` and `docker network ls --filter \
-                     label=eu.orican.ratect.run=<run>` list it."
+            }
+            // A cleanup that left something behind is a cleanup failure, and
+            // is reported as the error it is (decisions/0017) — here, where
+            // what was left and what the daemon said are known, rather than
+            // by `main` from the `CleanupFailed` it may (a passing task) or
+            // may not (a task that exited `3`, a signalled run) get back; so
+            // `main` prints nothing further for a `CleanupFailed`
+            // (`exit_code::already_reported`). Abandonment names itself;
+            // a refusal quotes the daemon.
+            // Before the failure report, if any: that line is about a
+            // cleanup that is over, and a live countdown painted after it
+            // would say otherwise.
+            if narrates_cleanup {
+                self.event_sink.post(TaskEvent::CleanupFinished);
+            }
+            if cleanup_failed.load(Ordering::Relaxed) {
+                let removed = removed.into_inner().unwrap();
+                let left = LeftBehind::new(
+                    to_remove
+                        .iter()
+                        .filter(|(_, id)| !removed.contains(*id))
+                        .copied(),
+                    network_name
+                        .as_deref()
+                        .filter(|_| owns_network && !network_removed),
                 );
+                self.event_sink.post(TaskEvent::Error {
+                    message: left.failure_message(abandoned, &refusals.into_inner().unwrap()),
+                });
             }
         } else {
             // The task's own container is reported here like any other:
             // nothing else deals with it now, so a run kept for
-            // investigation says so once, for everything it kept.
-            let kept_task_container = task_container_id.as_ref().map(|_| run.container.as_str());
-            if !created_sidecars.is_empty() || owns_network || kept_task_container.is_some() {
-                tracing::info!(
-                    task = task_name,
-                    task_container = kept_task_container,
-                    dependencies = created_sidecars.len(),
-                    network = network_name.as_deref(),
-                    "cleanup disabled; leaving containers and the task network in place \
-                     for investigation"
-                );
+            // investigation says so once, for everything it kept — by what
+            // the flag left and how to remove it (decisions/0017). Not a
+            // failure, so a notice, with the same tail as the cleanup
+            // failure above: one shape, learned once. Names the flag family
+            // (`--no-cleanup`), as the ADR writes it, not the bucket that
+            // applied: after a task that exited `3`, "after-success" reads
+            // as a contradiction to the person who typed `--no-cleanup`.
+            let kept_task_container = task_container_id
+                .as_deref()
+                .map(|id| (run.container.as_str(), id));
+            let left = LeftBehind::new(
+                kept_task_container.into_iter().chain(
+                    created_sidecars
+                        .iter()
+                        .map(|(name, id)| (name.as_str(), id.as_str())),
+                ),
+                network_name.as_deref().filter(|_| owns_network),
+            );
+            if !left.is_empty() {
+                self.post_notice(format!(
+                    "Left running (--no-cleanup): {}. Remove with: {}",
+                    left.list(),
+                    left.command()
+                ));
             }
         }
 

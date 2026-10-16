@@ -3373,6 +3373,9 @@ async fn a_missing_network_still_posts_task_failed() {
             TaskEvent::TaskStarting {
                 task: "build".into()
             },
+            TaskEvent::RunEnded {
+                task: "build".into()
+            },
             TaskEvent::TaskFailed {
                 task: "build".into()
             },
@@ -10300,6 +10303,11 @@ async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
         TaskEvent::ContainerBecameHealthy {
             container: "build-env".into(),
         },
+        // The run is over before cleanup says anything — what lets a live
+        // display stop before any line about how it ended.
+        TaskEvent::RunEnded {
+            task: "test".into(),
+        },
         TaskEvent::CleanupStarting,
         // The task's own container is removed by the engine like any
         // other, and first — before the dependencies it was using.
@@ -10312,6 +10320,7 @@ async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
             container: "database".into(),
         },
         TaskEvent::RemovingNetwork,
+        TaskEvent::CleanupFinished,
     ];
     assert_eq!(
         &events[..expected_prefix.len()],
@@ -10570,4 +10579,528 @@ async fn interleaved_policy_disables_interactive_and_sets_dumb_term_everywhere()
             "container '{name}' should get TERM=dumb: {environment:?}"
         );
     }
+}
+
+// ---- Printed, not logged: the stderr classes the engine posts (decisions/0017) ----
+
+/// The events of one class, as their messages.
+fn messages(events: &[TaskEvent], class: fn(&TaskEvent) -> Option<&String>) -> Vec<String> {
+    events.iter().filter_map(class).cloned().collect()
+}
+
+fn notice(event: &TaskEvent) -> Option<&String> {
+    match event {
+        TaskEvent::Notice { message } => Some(message),
+        _ => None,
+    }
+}
+
+fn warning(event: &TaskEvent) -> Option<&String> {
+    match event {
+        TaskEvent::Warning { message } => Some(message),
+        _ => None,
+    }
+}
+
+fn error_line(event: &TaskEvent) -> Option<&String> {
+    match event {
+        TaskEvent::Error { message } => Some(message),
+        _ => None,
+    }
+}
+
+/// The interrupt notice — the one line a person at the keyboard must read —
+/// is a notice event the loggers print on stderr in every style, not a
+/// `tracing::warn!` that `RUST_LOG=off` would hide (ratect#369). The words
+/// are `TerminationSignal::ended_run`/`send_again`'s, unchanged.
+#[tokio::test]
+async fn an_interrupted_run_posts_the_interrupt_notice() {
+    for (signal, expected) in [
+        (
+            crate::interrupt::TerminationSignal::Interrupt,
+            "Interrupted; cleaning up. Press Ctrl+C again to force-remove what's left, and \
+             Ctrl+C after that to stop cleaning up.",
+        ),
+        (
+            crate::interrupt::TerminationSignal::Terminate,
+            "Terminated by SIGTERM; cleaning up. Send SIGTERM again to force-remove what's \
+             left, and Ctrl+C after that to stop cleaning up.",
+        ),
+    ] {
+        let docker = FakeContainerRuntime::default()
+            .with_run_delay("app", std::time::Duration::from_secs(60));
+        let interrupt = crate::interrupt::Interrupt::new();
+        interrupt.record_signal(signal);
+        let sink = RecordingEventSink::default();
+        let engine = TaskEngine::new(
+            project(config_with_database_dependency(|_| {})),
+            docker,
+            Arc::new(sink.clone()),
+            interrupt,
+        );
+
+        let error = engine.run_task("start", &[]).await.unwrap_err();
+
+        assert!(error.is::<crate::interrupt::TaskInterrupted>(), "{error:#}");
+        let events = sink.events();
+        assert_eq!(messages(&events, notice), vec![expected.to_string()]);
+        assert!(messages(&events, warning).is_empty(), "{events:?}");
+        assert!(
+            messages(&events, error_line).is_empty(),
+            "a clean cleanup after a signal is no error: {events:?}"
+        );
+    }
+}
+
+/// The escalation rung's notice, likewise — and, on the abandon rung, the
+/// cleanup failure is an `Error:` naming what was left (by config name and
+/// Docker id) and the one `docker` command that removes it: `rm -f -v`, as
+/// Ratect's own removal would have, the network last.
+#[tokio::test]
+async fn an_abandoned_cleanup_posts_the_escalation_notice_and_reports_what_it_left() {
+    let interrupt = crate::interrupt::Interrupt::new();
+    interrupt.record();
+    let docker = FakeContainerRuntime::default()
+        .with_run_delay("app", std::time::Duration::from_secs(60))
+        .signalling_on_removal(
+            &interrupt,
+            &[
+                crate::interrupt::TerminationSignal::Interrupt,
+                crate::interrupt::TerminationSignal::Interrupt,
+            ],
+        );
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        interrupt,
+    );
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let events = sink.events();
+    let notices = messages(&events, notice);
+    assert_eq!(notices.len(), 2, "{notices:?}");
+    assert_eq!(
+        notices[1],
+        "Interrupted during cleanup; force-removing what's left. Press Ctrl+C to stop \
+         cleaning up."
+    );
+    let errors = messages(&events, error_line);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let error = &errors[0];
+    assert!(
+        error.starts_with(
+            "Cleanup abandoned; left behind: app (sidecar-id-a), database (sidecar-id-d), \
+             network ratect-"
+        ),
+        "{error}"
+    );
+    assert!(
+        error.contains(
+            ". Remove with: docker rm -f -v sidecar-id-a sidecar-id-d; docker network rm ratect-"
+        ),
+        "{error}"
+    );
+}
+
+/// A removal the daemon refuses is reported once, at the end of cleanup,
+/// quoting the daemon and listing only what was actually left — the rest
+/// of cleanup still ran. The engine's line is the report: `main` prints no
+/// second `Error:` for the `CleanupFailed` it gets back
+/// (`exit_code::already_reported`).
+#[tokio::test]
+async fn a_refused_removal_reports_the_daemons_reason_and_what_was_left() {
+    let docker = FakeContainerRuntime::default().refusing_container_removal("sidecar-id-database");
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(error.is::<CleanupFailed>(), "{error:#}");
+    let errors = messages(&sink.events(), error_line);
+    assert_eq!(
+        errors,
+        vec![
+            "Cleanup failed: No such container: sidecar-id-database; left behind: database \
+             (sidecar-id-d). Remove with: docker rm -f -v sidecar-id-d"
+                .to_string()
+        ]
+    );
+
+    let docker = FakeContainerRuntime::default().refusing_network_removal();
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let errors = messages(&sink.events(), error_line);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].starts_with("Cleanup failed: error while removing network: network ratect-"),
+        "{}",
+        errors[0]
+    );
+    assert!(
+        errors[0].contains("has active endpoints; left behind: network ratect-"),
+        "{}",
+        errors[0]
+    );
+    assert!(
+        errors[0].contains(". Remove with: docker network rm ratect-"),
+        "{}",
+        errors[0]
+    );
+}
+
+/// What a `--no-cleanup*` flag keeps is a notice — not a failure, so no
+/// marker — with the same `left behind`/`Remove with` tail as the cleanup
+/// failure, whichever of the two flags did the keeping.
+#[tokio::test]
+async fn disabled_cleanup_posts_a_notice_naming_what_it_kept() {
+    let docker = FakeContainerRuntime::default();
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_success: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let notices = messages(&sink.events(), notice);
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(
+        notices[0].starts_with(
+            "Left running (--no-cleanup): app (sidecar-id-a), database (sidecar-id-d), \
+             network ratect-"
+        ),
+        "{}",
+        notices[0]
+    );
+    assert!(
+        notices[0].contains(
+            ". Remove with: docker rm -f -v sidecar-id-a sidecar-id-d; docker network rm ratect-"
+        ),
+        "{}",
+        notices[0]
+    );
+
+    // An infrastructure failure is the other flag's bucket.
+    let config = config_with_database_dependency(|database| {
+        database.health_check = Some(crate::config::HealthCheckConfig {
+            command: Some("pg_isready".to_string()),
+            interval: None,
+            retries: None,
+            start_period: None,
+            timeout: None,
+        });
+    });
+    let docker = FakeContainerRuntime::default().with_unhealthy_container("database");
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_failure: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let notices = messages(&sink.events(), notice);
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(
+        notices[0]
+            .starts_with("Left running (--no-cleanup): database (sidecar-id-d), network ratect-"),
+        "{}",
+        notices[0]
+    );
+}
+
+/// The loopback-proxy warning is a warning event — printed in every style —
+/// not a `tracing::warn!`; `a_rewritten_proxy_url_on_a_loopback_bound_port_is_reported`
+/// pins the decision, this pins the route.
+#[test]
+fn the_loopback_proxy_warning_is_posted_as_a_warning_event() {
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(proxy_warning_config()),
+        FakeContainerRuntime::default(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_host_env(|name| (name == "http_proxy").then(|| "http://localhost:3333".to_string()))
+    .with_proc_net_tcp(|| vec![proc_net_tcp("0100007F", 3333)]);
+
+    engine.warn_about_unreachable_proxies();
+
+    let warnings = messages(&sink.events(), warning);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].starts_with("The proxy on port 3333 is listening on loopback addresses only"),
+        "{}",
+        warnings[0]
+    );
+}
+
+/// A signal that ends a run with cleanup disabled still says so: the
+/// notice is the only line explaining why the run stopped, since `main`
+/// prints no `Error: Interrupted` (decisions/0017).
+#[tokio::test]
+async fn an_interrupted_run_with_cleanup_disabled_still_posts_a_notice() {
+    let docker =
+        FakeContainerRuntime::default().with_run_delay("app", std::time::Duration::from_secs(60));
+    let interrupt = crate::interrupt::Interrupt::new();
+    interrupt.record();
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        interrupt,
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_failure: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(error.is::<crate::interrupt::TaskInterrupted>(), "{error:#}");
+    let notices = messages(&sink.events(), notice);
+    assert_eq!(notices[0], "Interrupted; not cleaning up.", "{notices:?}");
+    assert!(
+        notices[1].starts_with("Left running (--no-cleanup): "),
+        "{notices:?}"
+    );
+}
+
+/// Every path that ends a run on a signal reports it — here a signal during
+/// a prerequisite's cleanup, which ends the run before the next task starts.
+/// The cleanup's own escalation notice says only what happened to that
+/// cleanup, so the skipped task gets a notice of its own naming it.
+#[tokio::test]
+async fn a_signal_during_a_prerequisites_cleanup_is_reported() {
+    let mut config = config_with_database_dependency(|_| {});
+    config
+        .containers
+        .insert("tool".to_string(), container("alpine:3.18", None));
+    config
+        .tasks
+        .insert("prepare".to_string(), task("app", "true"));
+    let mut main = task("tool", "true");
+    main.prerequisites = Some(vec!["prepare".to_string()]);
+    config.tasks.insert("main".to_string(), main);
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default().signalling_on_removal(
+        &interrupt,
+        &[crate::interrupt::TerminationSignal::Terminate],
+    );
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config),
+        docker,
+        Arc::new(sink.clone()),
+        Arc::clone(&interrupt),
+    );
+
+    engine.run_task("main", &[]).await.unwrap_err();
+
+    let notices = messages(&sink.events(), notice);
+    assert_eq!(
+        notices,
+        [
+            "Terminated by SIGTERM during cleanup; force-removing what's left. Press Ctrl+C \
+             to stop cleaning up.",
+            "Terminated by SIGTERM; not starting task 'main'.",
+        ]
+    );
+}
+
+/// A signal during one prerequisite's cleanup stops the run before the
+/// *next prerequisite*, not only before the task itself. Checked only after
+/// the last, the next prerequisite started, was interrupted at once, and
+/// reported the same signal a second time as if it had interrupted it.
+#[tokio::test]
+async fn a_signal_between_prerequisites_stops_before_the_next_one() {
+    let mut config = config_with_database_dependency(|_| {});
+    for name in ["tool", "other"] {
+        config
+            .containers
+            .insert(name.to_string(), container("alpine:3.18", None));
+    }
+    config
+        .tasks
+        .insert("prepare".to_string(), task("app", "true"));
+    config
+        .tasks
+        .insert("second".to_string(), task("other", "true"));
+    let mut main = task("tool", "true");
+    main.prerequisites = Some(vec!["prepare".to_string(), "second".to_string()]);
+    config.tasks.insert("main".to_string(), main);
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default().signalling_on_removal(
+        &interrupt,
+        &[crate::interrupt::TerminationSignal::Interrupt],
+    );
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config),
+        docker,
+        Arc::new(sink.clone()),
+        Arc::clone(&interrupt),
+    );
+
+    let error = engine.run_task("main", &[]).await.unwrap_err();
+
+    assert!(error.is::<crate::interrupt::TaskInterrupted>(), "{error:#}");
+    let started: Vec<TaskEvent> = sink
+        .events()
+        .into_iter()
+        .filter(|event| matches!(event, TaskEvent::TaskStarting { .. }))
+        .collect();
+    assert_eq!(
+        started,
+        [TaskEvent::TaskStarting {
+            task: "prepare".into()
+        }],
+        "neither 'second' nor 'main' starts"
+    );
+    let notices = messages(&sink.events(), notice);
+    assert_eq!(
+        notices.last().map(String::as_str),
+        Some("Interrupted; not starting task 'second'."),
+        "{notices:?}"
+    );
+    assert!(
+        !notices
+            .iter()
+            .any(|notice| notice.contains("cleaning up. Press")),
+        "no second interrupt notice for the same signal: {notices:?}"
+    );
+}
+
+/// A prerequisite-only task whose last prerequisite passed has nothing left
+/// to start, so a signal during that prerequisite's cleanup ended nothing —
+/// the run passes, as one during a passing run's own cleanup does
+/// (decisions/0016).
+#[tokio::test]
+async fn a_signal_after_a_prerequisite_only_tasks_last_prerequisite_ends_nothing() {
+    let mut config = config_with_database_dependency(|_| {});
+    config
+        .tasks
+        .insert("prepare".to_string(), task("app", "true"));
+    let mut all = task("app", "true");
+    all.run = None;
+    all.prerequisites = Some(vec!["prepare".to_string()]);
+    config.tasks.insert("all".to_string(), all);
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default().signalling_on_removal(
+        &interrupt,
+        &[crate::interrupt::TerminationSignal::Terminate],
+    );
+    let engine = TaskEngine::new(
+        project(config),
+        docker,
+        Arc::new(NullEventSink),
+        Arc::clone(&interrupt),
+    );
+
+    engine.run_task("all", &[]).await.unwrap();
+}
+
+/// Every shape of the cleanup-failure message: abandonment alone, a refusal
+/// alone, and both — where the refusal made before the abandonment is kept,
+/// since it is the one place the daemon's reason appears — plus the case
+/// with nothing left, which still reads as a sentence. Pure, since a
+/// refusal followed by an abandonment can't be staged reliably through the
+/// fake runtime: which removals finish is decided by the abandon race.
+#[test]
+fn the_cleanup_failure_message_keeps_every_refusal_and_reads_as_a_sentence() {
+    let left = LeftBehind::new([("db", "0123456789abcdef")], Some("ratect-run"));
+    let refusal = vec!["device or resource busy".to_string()];
+
+    assert_eq!(
+        left.failure_message(true, &[]),
+        "Cleanup abandoned; left behind: db (0123456789ab), network ratect-run. Remove with: \
+         docker rm -f -v 0123456789ab; docker network rm ratect-run"
+    );
+    assert_eq!(
+        left.failure_message(true, &refusal),
+        "Cleanup abandoned after failing: device or resource busy; left behind: db \
+         (0123456789ab), network ratect-run. Remove with: docker rm -f -v 0123456789ab; \
+         docker network rm ratect-run"
+    );
+    assert_eq!(
+        left.failure_message(false, &refusal),
+        "Cleanup failed: device or resource busy; left behind: db (0123456789ab), network \
+         ratect-run. Remove with: docker rm -f -v 0123456789ab; docker network rm ratect-run"
+    );
+    assert_eq!(
+        LeftBehind::new([], None).failure_message(false, &refusal),
+        "Cleanup failed: device or resource busy. Nothing is known to be left behind."
+    );
+}
+
+/// A prerequisite that already ran this invocation starts nothing, so a
+/// signal is no reason to stop before it — and no "not starting" notice
+/// names a task that was never going to start. Here `main` has
+/// [prepare, prepare]: the second is a no-op, so the run reaches `main`
+/// itself, and that is the task the notice names.
+#[tokio::test]
+async fn a_prerequisite_that_already_ran_is_not_named_as_skipped() {
+    let mut config = config_with_database_dependency(|_| {});
+    config
+        .containers
+        .insert("tool".to_string(), container("alpine:3.18", None));
+    config
+        .tasks
+        .insert("prepare".to_string(), task("app", "true"));
+    let mut main = task("tool", "true");
+    main.prerequisites = Some(vec!["prepare".to_string(), "prepare".to_string()]);
+    config.tasks.insert("main".to_string(), main);
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default().signalling_on_removal(
+        &interrupt,
+        &[crate::interrupt::TerminationSignal::Interrupt],
+    );
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config),
+        docker,
+        Arc::new(sink.clone()),
+        Arc::clone(&interrupt),
+    );
+
+    engine.run_task("main", &[]).await.unwrap_err();
+
+    let notices = messages(&sink.events(), notice);
+    assert_eq!(
+        notices.last().map(String::as_str),
+        Some("Interrupted; not starting task 'main'."),
+        "{notices:?}"
+    );
 }

@@ -1,14 +1,14 @@
-[37m[1mjourney-test[0m[0m | Running [1mjourney-test[0m...
-[32m[1mdb          [0m[0m | Starting container...
+[1mjourney-test[0m | Running [1mjourney-test[0m...
 [36m[1mcache       [0m[0m | Starting container...
+[32m[1mdb          [0m[0m | Starting container...
 [36m[1mcache       [0m[0m | Container started.
-[36m[1mcache       [0m[0m | 1:C 23 Sep 2026 22:01:01.755 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
-[36m[1mcache       [0m[0m | 1:C 23 Sep 2026 22:01:01.755 * Redis version=7.4.11, bits=64, commit=00000000, modified=0, pid=1, just started
-[36m[1mcache       [0m[0m | 1:C 23 Sep 2026 22:01:01.755 # Warning: no config file specified, using the default config. In order to specify a config file use redis-server /path/to/redis.conf
-[36m[1mcache       [0m[0m | 1:M 23 Sep 2026 22:01:01.755 * monotonic clock: POSIX clock_gettime
-[36m[1mcache       [0m[0m | 1:M 23 Sep 2026 22:01:01.755 * Running mode=standalone, port=6379.
-[36m[1mcache       [0m[0m | 1:M 23 Sep 2026 22:01:01.755 * Server initialized
-[36m[1mcache       [0m[0m | 1:M 23 Sep 2026 22:01:01.755 * Ready to accept connections tcp
+[36m[1mcache       [0m[0m | 1:C 16 Oct 2026 12:29:48.800 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+[36m[1mcache       [0m[0m | 1:C 16 Oct 2026 12:29:48.800 * Redis version=7.4.11, bits=64, commit=00000000, modified=0, pid=1, just started
+[36m[1mcache       [0m[0m | 1:C 16 Oct 2026 12:29:48.800 # Warning: no config file specified, using the default config. In order to specify a config file use redis-server /path/to/redis.conf
+[36m[1mcache       [0m[0m | 1:M 16 Oct 2026 12:29:48.800 * monotonic clock: POSIX clock_gettime
+[36m[1mcache       [0m[0m | 1:M 16 Oct 2026 12:29:48.801 * Running mode=standalone, port=6379.
+[36m[1mcache       [0m[0m | 1:M 16 Oct 2026 12:29:48.801 * Server initialized
+[36m[1mcache       [0m[0m | 1:M 16 Oct 2026 12:29:48.801 * Ready to accept connections tcp
 [32m[1mdb          [0m[0m | Container started.
 [32m[1mdb          [0m[0m | ********************************************************************************
 [32m[1mdb          [0m[0m | WARNING: POSTGRES_HOST_AUTH_METHOD has been set to "trust". This will allow
@@ -43,45 +43,45 @@
 [32m[1mdb          [0m[0m | performing post-bootstrap initialization ... ok
 [32m[1mdb          [0m[0m | syncing data to disk ... ok
 [32m[1mdb          [0m[0m | 
+[32m[1mdb          [0m[0m | initdb: warning: enabling "trust" authentication for local connections
+[32m[1mdb          [0m[0m | initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
 [32m[1mdb          [0m[0m | 
 [32m[1mdb          [0m[0m | Success. You can now start the database server using:
 [32m[1mdb          [0m[0m | 
 [32m[1mdb          [0m[0m |     pg_ctl -D /var/lib/postgresql/data -l logfile start
 [32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | initdb: warning: enabling "trust" authentication for local connections
-[32m[1mdb          [0m[0m | initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
-[36m[1mcache       [0m[0m | Container became healthy.
-[32m[1mdb          [0m[0m | waiting for server to start....2026-09-23 22:01:02.788 UTC [54] LOG:  starting PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:02.791 UTC [54] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:02.793 UTC [57] LOG:  database system was shut down at 2026-09-23 22:01:01 UTC
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:02.795 UTC [54] LOG:  database system is ready to accept connections
+[32m[1mdb          [0m[0m | waiting for server to start....2026-10-16 12:29:49.692 UTC [48] LOG:  starting PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:49.694 UTC [48] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:49.696 UTC [51] LOG:  database system was shut down at 2026-10-16 12:29:49 UTC
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:49.698 UTC [48] LOG:  database system is ready to accept connections
 [32m[1mdb          [0m[0m |  done
 [32m[1mdb          [0m[0m | server started
 [32m[1mdb          [0m[0m | 
 [32m[1mdb          [0m[0m | /usr/local/bin/docker-entrypoint.sh: running /docker-entrypoint-initdb.d/01-schema.sql
+[36m[1mcache       [0m[0m | Container became healthy.
 [32m[1mdb          [0m[0m | CREATE TABLE
 [32m[1mdb          [0m[0m | INSERT 0 1000000
 [32m[1mdb          [0m[0m | CREATE INDEX
 [32m[1mdb          [0m[0m | 
 [32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | waiting for server to shut down....2026-09-23 22:01:04.237 UTC [54] LOG:  received fast shutdown request
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:04.238 UTC [54] LOG:  aborting any active transactions
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:04.239 UTC [54] LOG:  background worker "logical replication launcher" (PID 60) exited with exit code 1
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:04.239 UTC [55] LOG:  shutting down
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:04.239 UTC [55] LOG:  checkpoint starting: shutdown immediate
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:04.372 UTC [55] LOG:  checkpoint complete: wrote 10152 buffers (62.0%); 0 WAL file(s) added, 0 removed, 10 recycled; write=0.080 s, sync=0.041 s, total=0.134 s; sync files=45, longest=0.023 s, average=0.001 s; distance=174130 kB, estimate=174130 kB; lsn=0/BEFF470, redo lsn=0/BEFF470
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:04.378 UTC [54] LOG:  database system is shut down
+[32m[1mdb          [0m[0m | waiting for server to shut down....2026-10-16 12:29:51.094 UTC [48] LOG:  received fast shutdown request
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.095 UTC [48] LOG:  aborting any active transactions
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.096 UTC [48] LOG:  background worker "logical replication launcher" (PID 54) exited with exit code 1
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.096 UTC [49] LOG:  shutting down
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.098 UTC [49] LOG:  checkpoint starting: shutdown immediate
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.232 UTC [49] LOG:  checkpoint complete: wrote 10152 buffers (62.0%); 0 WAL file(s) added, 0 removed, 10 recycled; write=0.068 s, sync=0.046 s, total=0.136 s; sync files=45, longest=0.023 s, average=0.002 s; distance=174130 kB, estimate=174130 kB; lsn=0/BEFF470, redo lsn=0/BEFF470
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.237 UTC [48] LOG:  database system is shut down
 [32m[1mdb          [0m[0m |  done
 [32m[1mdb          [0m[0m | server stopped
 [32m[1mdb          [0m[0m | 
 [32m[1mdb          [0m[0m | PostgreSQL init process complete; ready for start up.
 [32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:04.456 UTC [1] LOG:  starting PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:04.457 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:04.457 UTC [1] LOG:  listening on IPv6 address "::", port 5432
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:04.459 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:04.461 UTC [77] LOG:  database system was shut down at 2026-09-23 22:01:04 UTC
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:04.463 UTC [1] LOG:  database system is ready to accept connections
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.311 UTC [1] LOG:  starting PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.311 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.311 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.312 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.314 UTC [77] LOG:  database system was shut down at 2026-10-16 12:29:51 UTC
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.316 UTC [1] LOG:  database system is ready to accept connections
 [32m[1mdb          [0m[0m | Container became healthy.
 [32m[1mdb          [0m[0m | Running setup command psql -U postgres -c "ANALYZE visits;" (1 of 1)...
 [32m[1mdb          [0m[0m | Setup command 1 | ANALYZE
@@ -89,7 +89,7 @@
 [34m[1mapp         [0m[0m | Starting container...
 [34m[1mapp         [0m[0m | Container started.
 [34m[1mapp         [0m[0m | 
-[34m[1mapp         [0m[0m | added 100 packages, and audited 101 packages in 1s
+[34m[1mapp         [0m[0m | added 99 packages, and audited 100 packages in 2s
 [34m[1mapp         [0m[0m | 
 [34m[1mapp         [0m[0m | 18 packages are looking for funding
 [34m[1mapp         [0m[0m |   run `npm fund` for details
@@ -102,51 +102,29 @@
 [34m[1mapp         [0m[0m | Listening on port 8080
 [34m[1mapp         [0m[0m | Container became healthy.
 [35m[1mjourney-test[0m[0m | Running sh -c 'npm ci && node test.js'...
-[35m[1mjourney-test[0m[0m | Container became healthy.
 [35m[1mjourney-test[0m[0m | 
-[35m[1mjourney-test[0m[0m | added 7 packages, and audited 8 packages in 985ms
+[35m[1mjourney-test[0m[0m | added 6 packages, and audited 7 packages in 1s
 [35m[1mjourney-test[0m[0m | 
 [35m[1mjourney-test[0m[0m | found 0 vulnerabilities
 [35m[1mjourney-test[0m[0m | app responded: {"message":"Hello from Ratect!","visit_id":1000001,"total_visits":1000001,"count_source":"database"}
 [35m[1mjourney-test[0m[0m | cache holds visits:count=1000001, confirming app and this container share the same cache
 [35m[1mjourney-test[0m[0m | journey test passed
-[37m[1mjourney-test[0m[0m | Cleaning up...
+[1mjourney-test[0m | Cleaning up...
 [35m[1mjourney-test[0m[0m | Container removed.
-[36m[1mcache       [0m[0m | 1:signal-handler (1790200868) Received SIGTERM scheduling shutdown...
-[36m[1mcache       [0m[0m | 1:M 23 Sep 2026 22:01:08.951 * User requested shutdown...
-[36m[1mcache       [0m[0m | 1:M 23 Sep 2026 22:01:08.951 * Saving the final RDB snapshot before exiting.
-[36m[1mcache       [0m[0m | 1:M 23 Sep 2026 22:01:08.954 * DB saved on disk
-[36m[1mcache       [0m[0m | 1:M 23 Sep 2026 22:01:08.954 # Redis is now ready to exit, bye bye...
-[34m[1mapp         [0m[0m | Redis client error: SocketClosedUnexpectedlyError: Socket closed unexpectedly
-[34m[1mapp         [0m[0m |     at Socket.<anonymous> (/code/node_modules/@redis/client/dist/lib/client/socket.js:307:33)
-[34m[1mapp         [0m[0m |     at Object.onceWrapper (node:events:634:26)
-[34m[1mapp         [0m[0m |     at Socket.emit (node:events:519:28)
-[34m[1mapp         [0m[0m |     at TCP.<anonymous> (node:net:347:12)
-[34m[1mapp         [0m[0m | Redis client error: Error: connect ECONNREFUSED 192.168.97.2:6379
-[34m[1mapp         [0m[0m |     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1638:16) {
-[34m[1mapp         [0m[0m |   errno: -111,
-[34m[1mapp         [0m[0m |   code: 'ECONNREFUSED',
-[34m[1mapp         [0m[0m |   syscall: 'connect',
-[34m[1mapp         [0m[0m |   address: '192.168.97.2',
-[34m[1mapp         [0m[0m |   port: 6379
-[34m[1mapp         [0m[0m | }
-[34m[1mapp         [0m[0m | Redis client error: Error: connect ECONNREFUSED 192.168.97.2:6379
-[34m[1mapp         [0m[0m |     at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1638:16) {
-[34m[1mapp         [0m[0m |   errno: -111,
-[34m[1mapp         [0m[0m |   code: 'ECONNREFUSED',
-[34m[1mapp         [0m[0m |   syscall: 'connect',
-[34m[1mapp         [0m[0m |   address: '192.168.97.2',
-[34m[1mapp         [0m[0m |   port: 6379
-[34m[1mapp         [0m[0m | }
-[36m[1mcache       [0m[0m | Container removed.
 [34m[1mapp         [0m[0m | Container removed.
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:09.329 UTC [1] LOG:  received fast shutdown request
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:09.330 UTC [1] LOG:  aborting any active transactions
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:09.332 UTC [1] LOG:  background worker "logical replication launcher" (PID 80) exited with exit code 1
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:09.332 UTC [75] LOG:  shutting down
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:09.333 UTC [75] LOG:  checkpoint starting: shutdown immediate
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:09.345 UTC [75] LOG:  checkpoint complete: wrote 14 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.008 s, total=0.014 s; sync files=12, longest=0.002 s, average=0.001 s; distance=20 kB, estimate=20 kB; lsn=0/BF044B8, redo lsn=0/BF044B8
-[32m[1mdb          [0m[0m | 2026-09-23 22:01:09.347 UTC [1] LOG:  database system is shut down
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:56.473 UTC [1] LOG:  received fast shutdown request
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:56.475 UTC [1] LOG:  aborting any active transactions
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:56.476 UTC [1] LOG:  background worker "logical replication launcher" (PID 80) exited with exit code 1
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:56.476 UTC [75] LOG:  shutting down
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:56.478 UTC [75] LOG:  checkpoint starting: shutdown immediate
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:56.494 UTC [75] LOG:  checkpoint complete: wrote 14 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.004 s, sync=0.009 s, total=0.018 s; sync files=12, longest=0.003 s, average=0.001 s; distance=20 kB, estimate=20 kB; lsn=0/BF044A8, redo lsn=0/BF044A8
+[32m[1mdb          [0m[0m | 2026-10-16 12:29:56.495 UTC [1] LOG:  database system is shut down
 [32m[1mdb          [0m[0m | Container removed.
-[37m[1mjourney-test[0m[0m | Removing task network...
-[37m[1mjourney-test[0m[0m | journey-test finished with exit code [32m0[0m in 8.0s.
+[36m[1mcache       [0m[0m | 1:signal-handler (1792153796) Received SIGTERM scheduling shutdown...
+[36m[1mcache       [0m[0m | 1:M 16 Oct 2026 12:29:56.735 * User requested shutdown...
+[36m[1mcache       [0m[0m | 1:M 16 Oct 2026 12:29:56.735 * Saving the final RDB snapshot before exiting.
+[36m[1mcache       [0m[0m | 1:M 16 Oct 2026 12:29:56.737 * DB saved on disk
+[36m[1mcache       [0m[0m | 1:M 16 Oct 2026 12:29:56.737 # Redis is now ready to exit, bye bye...
+[36m[1mcache       [0m[0m | Container removed.
+[1mjourney-test[0m | Removing task network...
+[1mjourney-test[0m | journey-test finished with exit code [32m0[0m in 8.4s.

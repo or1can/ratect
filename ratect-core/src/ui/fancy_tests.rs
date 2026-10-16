@@ -16,20 +16,29 @@ use super::super::test_support::SharedBuffer;
 use super::*;
 use std::time::Duration;
 
-fn logger_with_width(width: u16) -> (FancyEventLogger, SharedBuffer) {
+/// A logger whose progress console is the first buffer and whose stderr
+/// console is the second. Color disabled so expectations stay readable —
+/// bold/color are covered by Console's own tests; cursor movement is
+/// emitted regardless (the independent-axes design).
+fn logger_with_width_and_stderr(width: u16) -> (FancyEventLogger, SharedBuffer, SharedBuffer) {
     let buffer = SharedBuffer::default();
-    // Color disabled so expectations stay readable — bold/color are
-    // covered by Console's own tests; cursor movement is emitted
-    // regardless (the independent-axes design).
-    let console = Console::new(Box::new(buffer.clone()), false);
+    let stderr = SharedBuffer::default();
     (
         FancyEventLogger {
-            console,
+            console: Console::new(Box::new(buffer.clone()), false),
+            stderr: Console::new(Box::new(stderr.clone()), false),
+            stderr_on_screen: true,
             fixed_width: AtomicU16::new(width),
             state: Mutex::new(State::default()),
         },
         buffer,
+        stderr,
     )
+}
+
+fn logger_with_width(width: u16) -> (FancyEventLogger, SharedBuffer) {
+    let (logger, buffer, _) = logger_with_width_and_stderr(width);
+    (logger, buffer)
 }
 
 fn info(name: &str, image: Option<&str>, deps: &[&str], is_task: bool) -> TaskContainerInfo {
@@ -303,8 +312,10 @@ fn dependency_exiting_while_the_block_is_still_live_repaints_that_line_in_place(
     );
 }
 
+/// A milestone, not a warning (decisions/0017): no `Warning:` marker, the
+/// same phrase as the in-block line and as `simple`.
 #[test]
-fn dependency_exiting_after_the_block_has_frozen_prints_a_plain_warning() {
+fn dependency_exiting_after_the_block_has_frozen_prints_a_plain_milestone() {
     let (logger, buffer) = logger_with_width(120);
     logger.post(TaskEvent::TaskGraphResolved {
         containers: vec![info("app", Some("app:1"), &[], true)],
@@ -324,8 +335,254 @@ fn dependency_exiting_after_the_block_has_frozen_prints_a_plain_warning() {
     // the already-frozen block above it.
     assert_eq!(
         buffer.contents(),
-        format!("{after_freeze}Warning: db exited unexpectedly with exit code 137.\n")
+        format!("{after_freeze}db exited unexpectedly with exit code 137.\n")
     );
+}
+
+/// A stderr-class line lands below the live block, so nothing may move the
+/// cursor up over it: the block is painted afresh below the line on its
+/// next update — not at once — and is live from there.
+#[test]
+fn a_warning_mid_startup_is_followed_by_a_fresh_block_on_the_next_update() {
+    let (logger, buffer, stderr) = logger_with_width_and_stderr(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::ImagePullStarting {
+        image: "app:1".into(),
+    });
+    let before = buffer.contents();
+
+    logger.post(TaskEvent::Warning {
+        message: "credential helper failed".into(),
+    });
+    assert_eq!(buffer.contents(), before, "nothing repainted at once");
+    logger.post(TaskEvent::ImagePullCompleted {
+        image: "app:1".into(),
+    });
+    let fresh = buffer.contents()[before.len()..].to_string();
+    logger.post(TaskEvent::ImageResolved {
+        container: "app".into(),
+    });
+    let after = buffer.contents()[before.len() + fresh.len()..].to_string();
+
+    assert_eq!(stderr.contents(), "Warning: credential helper failed\n");
+    assert!(
+        !fresh.contains("\x1b[1A") && fresh.contains("\x1b[2Kapp: "),
+        "painted fresh below the warning, no cursor-up: {fresh:?}"
+    );
+    assert!(
+        after.is_empty() || after.starts_with("\x1b[1A"),
+        "and live again in place from there: {after:?}"
+    );
+}
+
+/// Several warnings in a row leave one fresh block below them, not one per
+/// warning — the repaint waits for the next update.
+#[test]
+fn a_burst_of_warnings_is_followed_by_one_block() {
+    let (logger, buffer, _) = logger_with_width_and_stderr(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    let before = buffer.contents();
+
+    for registry in ["a", "b", "c"] {
+        logger.post(TaskEvent::Warning {
+            message: format!("registry {registry}"),
+        });
+    }
+    logger.post(TaskEvent::ImagePullStarting {
+        image: "app:1".into(),
+    });
+
+    let after = &buffer.contents()[before.len()..];
+    assert_eq!(after.matches("app: ").count(), 1, "{after:?}");
+}
+
+/// The engine says when the run is over (`RunEnded`), and from then on the
+/// startup block stops where it is — nothing is repainted below a line
+/// reporting how the run ended. Whether a block is live comes from the
+/// engine, never from the class of the line printed.
+#[test]
+fn after_run_ended_nothing_repaints_below_a_stderr_line() {
+    for event in [
+        TaskEvent::Notice {
+            message: "Interrupted; not cleaning up.".into(),
+        },
+        TaskEvent::Warning {
+            message: "late warning".into(),
+        },
+    ] {
+        let (logger, buffer, stderr) = logger_with_width_and_stderr(120);
+        logger.post(TaskEvent::TaskGraphResolved {
+            containers: vec![info("app", Some("app:1"), &[], true)],
+        });
+        logger.post(TaskEvent::ImagePullStarting {
+            image: "app:1".into(),
+        });
+        logger.post(TaskEvent::RunEnded { task: "t".into() });
+        let before = buffer.contents();
+
+        logger.post(event);
+        logger.post(TaskEvent::ImagePullCompleted {
+            image: "app:1".into(),
+        });
+
+        assert!(!stderr.contents().is_empty());
+        assert_eq!(buffer.contents(), before);
+    }
+}
+
+/// A notice mid-cleanup (the escalation rung's) is followed at once by the
+/// countdown painted afresh below it — never a cursor-up over the notice,
+/// and not deferred to the next cleanup step, which may be a whole forced
+/// removal away or never come; from there it is live in place again.
+#[test]
+fn a_notice_during_cleanup_is_followed_by_a_fresh_countdown() {
+    let (logger, buffer, stderr) = logger_with_width_and_stderr(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("app", Some("app:1"), &[], true),
+            info("db", Some("db:1"), &[], false),
+        ],
+    });
+    for container in ["app", "db"] {
+        logger.post(TaskEvent::TaskContainerCreated {
+            container: container.into(),
+        });
+    }
+    logger.post(TaskEvent::RunEnded { task: "t".into() });
+    logger.post(TaskEvent::CleanupStarting);
+    let painted = buffer.contents();
+
+    logger.post(TaskEvent::Notice {
+        message: "Interrupted during cleanup; force-removing what's left.".into(),
+    });
+    let fresh = buffer.contents()[painted.len()..].to_string();
+    logger.post(TaskEvent::ContainerRemoved {
+        container: "app".into(),
+    });
+    let next = buffer.contents()[painted.len() + fresh.len()..].to_string();
+
+    assert_eq!(
+        stderr.contents(),
+        "Interrupted during cleanup; force-removing what's left.\n"
+    );
+    assert!(
+        fresh.starts_with("\nCleaning up: 2 containers") && !fresh.contains("\x1b[1A"),
+        "{fresh:?}"
+    );
+    assert!(next.starts_with(CURSOR_UP_ONE_AND_CLEAR), "{next:?}");
+}
+
+/// A dependency's exit reported after cleanup has started — its watcher can
+/// still be mid-report as cleanup begins — is printed below the countdown,
+/// so the next update paints the countdown afresh below it rather than
+/// moving up over the exit line and erasing it.
+#[test]
+fn a_dependency_exit_during_cleanup_is_not_painted_over() {
+    let (logger, buffer, _) = logger_with_width_and_stderr(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("app", Some("app:1"), &[], true),
+            info("db", Some("db:1"), &[], false),
+        ],
+    });
+    logger.post(TaskEvent::TaskContainerCreated {
+        container: "app".into(),
+    });
+    logger.post(TaskEvent::RunEnded { task: "t".into() });
+    logger.post(TaskEvent::CleanupStarting);
+    let painted = buffer.contents();
+
+    logger.post(TaskEvent::DependencyExitedUnexpectedly {
+        container: "db".into(),
+        exit_code: 1,
+    });
+    logger.post(TaskEvent::ContainerRemoved {
+        container: "app".into(),
+    });
+
+    // The exit line, a fresh countdown below it, then an update that moves
+    // up over the countdown only.
+    assert_eq!(
+        &buffer.contents()[painted.len()..],
+        "db exited unexpectedly with exit code 1.\n\
+         \nCleaning up: 1 container (app) left to remove...\n\
+         \x1b[1A\r\x1b[2KCleaning up...\n"
+    );
+}
+
+/// When cleanup finishes, the countdown is cleared: on an infrastructure
+/// failure no summary follows to replace it, and left on screen it would
+/// say cleanup was still under way.
+#[test]
+fn the_countdown_is_cleared_when_cleanup_finishes() {
+    let (logger, buffer, _) = logger_with_width_and_stderr(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::RunEnded { task: "t".into() });
+    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::RemovingNetwork);
+    let painted = buffer.contents();
+
+    logger.post(TaskEvent::CleanupFinished);
+    logger.post(TaskEvent::TaskFailed { task: "t".into() });
+
+    assert_eq!(&buffer.contents()[painted.len()..], CURSOR_UP_ONE_AND_CLEAR);
+}
+
+/// Once cleanup has finished, a line reporting what it left (the
+/// cleanup-failure error) is never followed by the countdown — it would
+/// say cleanup is still running, under the line saying it gave up.
+#[test]
+fn nothing_repaints_the_countdown_after_cleanup_finished() {
+    let (logger, buffer, _) = logger_with_width_and_stderr(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::TaskContainerCreated {
+        container: "app".into(),
+    });
+    logger.post(TaskEvent::RunEnded { task: "t".into() });
+    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupFinished);
+    let before = buffer.contents();
+
+    logger.post(TaskEvent::Error {
+        message: "Cleanup abandoned; left behind: app (abc).".into(),
+    });
+    logger.post(TaskEvent::ContainerRemoved {
+        container: "app".into(),
+    });
+    logger.post(TaskEvent::TaskFailed { task: "t".into() });
+
+    assert_eq!(buffer.contents(), before);
+}
+
+/// Under `ratect-compat` with stderr redirected, a stderr line never reaches
+/// the screen, so the display's own cursor arithmetic still holds and it
+/// carries on in place — no second copy of the block drawn below itself.
+#[test]
+fn a_stderr_line_off_screen_leaves_the_display_updating_in_place() {
+    let (mut logger, buffer, _) = logger_with_width_and_stderr(120);
+    logger.stderr_on_screen = false;
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    let before = buffer.contents();
+
+    logger.post(TaskEvent::Warning {
+        message: "to a file".into(),
+    });
+    logger.post(TaskEvent::ImagePullStarting {
+        image: "app:1".into(),
+    });
+
+    let after = &buffer.contents()[before.len()..];
+    assert!(after.starts_with("\x1b[1A"), "{after:?}");
 }
 
 #[test]

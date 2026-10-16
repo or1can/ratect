@@ -22,7 +22,8 @@ which is written here.
 Ratect's own diagnostics go to stderr, filtered by the `RUST_LOG`
 environment variable (default `info`) — [Logging vs.
 output](how-it-works.md#5-logging-vs-output) is the split between them and
-the task's own output. `RUST_LOG=debug` adds every container creation,
+Ratect's output proper, which `RUST_LOG` never filters: progress, errors,
+warnings and notices are printed whatever it says. `RUST_LOG=debug` adds every container creation,
 start and removal, each `setup_commands` exec's raw output, and every image
 build's log lines, which is usually what "what is Ratect doing?" is asking
 for.

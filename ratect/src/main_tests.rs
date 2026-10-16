@@ -676,3 +676,101 @@ fn marked_breaking_changes_are_found_under_their_release() {
         vec!["0.13.0".to_string(), "0.12.0".to_string()]
     );
 }
+
+/// A `ResourceInventory` whose removals of `refused` ids fail — enough to
+/// drive `remove_leftovers` without a daemon.
+struct RefusingInventory {
+    refused: Vec<&'static str>,
+    attempted: std::sync::Mutex<Vec<String>>,
+}
+
+impl RefusingInventory {
+    fn remove(&self, id: &str) -> Result<()> {
+        self.attempted.lock().unwrap().push(id.to_string());
+        anyhow::ensure!(!self.refused.contains(&id), "'{id}' is still in use");
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl ratect_core::resources::ResourceInventory for RefusingInventory {
+    async fn list_containers(
+        &self,
+        _labels: &[(&str, Option<&str>)],
+    ) -> Result<Vec<ratect_core::docker::LabelledResource>> {
+        Ok(Vec::new())
+    }
+
+    async fn list_networks(
+        &self,
+        _labels: &[(&str, Option<&str>)],
+    ) -> Result<Vec<ratect_core::docker::LabelledResource>> {
+        Ok(Vec::new())
+    }
+
+    async fn remove_network(&self, name: &str) -> Result<()> {
+        self.remove(name)
+    }
+
+    async fn stop_and_remove_container(
+        &self,
+        container_id: &str,
+        _stop_signal: Option<&str>,
+        _stop_grace_period: Option<Duration>,
+    ) -> Result<()> {
+        self.remove(container_id)
+    }
+}
+
+fn leftover(id: &str) -> Leftover {
+    Leftover::new(
+        ratect_core::docker::LabelledResource {
+            id: id.to_string(),
+            name: id.to_string(),
+            labels: HashMap::new(),
+            created: Some(0),
+            state: None,
+        },
+        0,
+    )
+}
+
+/// A refused removal doesn't stop the sweep, but it fails the verb once the
+/// sweep is done — so `resources clean` exits `1` with one `Error:` naming
+/// each refusal, rather than printing a red `Error:` and exiting `0`
+/// (decisions/0017: `Error:` is Ratect failing at what was asked).
+#[tokio::test]
+async fn resources_clean_fails_after_trying_everything_when_a_removal_is_refused() {
+    let inventory = RefusingInventory {
+        refused: vec!["b"],
+        attempted: Default::default(),
+    };
+
+    let error = remove_leftovers(
+        &inventory,
+        &[leftover("a"), leftover("b"), leftover("c")],
+        true,
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(*inventory.attempted.lock().unwrap(), ["a", "b", "c"]);
+    let message = error.to_string();
+    assert!(
+        message.starts_with("Failed to remove ") && message.contains("'b' is still in use"),
+        "{message}"
+    );
+    assert!(!ratect_core::exit_code::already_reported(&error));
+    assert_eq!(
+        ratect_core::exit_code::for_failure(&error, false),
+        ratect_core::exit_code::VERB_FAILED
+    );
+
+    let clean = RefusingInventory {
+        refused: vec![],
+        attempted: Default::default(),
+    };
+    remove_leftovers(&clean, &[leftover("a")], true)
+        .await
+        .expect("nothing refused, nothing to report");
+}

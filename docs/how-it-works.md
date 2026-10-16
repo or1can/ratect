@@ -221,32 +221,45 @@ log anywhere.
 
 ## 5. Logging vs. output
 
-Ratect keeps two channels deliberately separate:
+Ratect keeps two channels deliberately separate — and output itself follows
+one rule: **stdout is the result, stderr is everything said about producing
+it** ([decisions/0017](https://github.com/or1can/ratect/blob/main/decisions/0017-output-streams-and-styles.md)).
 
-- **stdout**: the task's user-facing output — container log output, `--list-tasks`
-  listings, and Ratect's own progress lines ("Running build...", "Pulling
-  alpine:3.18...", "build finished with exit code 0 in 2.3s."), matching where
-  Batect puts them. Internally these progress lines are typed events
+- **Output** is what a user with `RUST_LOG` unset would be worse off without,
+  and never goes through `tracing`. The *result* — a run's task-container
+  output, a `tasks list` listing — is stdout. Everything *about* the run is
+  stderr: errors (`Error: `), warnings (`Warning: `), notices (the interrupt
+  notice, what `--no-cleanup*` left running), in every style including
+  `quiet`; and progress ("Running build...", "Pulling alpine:3.18...", "build
+  finished with exit code 0 in 2.3s."), the one class `--output`/`-o` shapes.
+  Progress is the one place the binaries differ: `ratect` writes it to stderr,
+  `ratect-compat` to stdout, where Batect puts it — see
+  [Streams](output-styles.md#streams). Internally these lines are typed events
   (`ratect-core/src/ui/`): `engine.rs` and `docker.rs` post task-execution
-  milestones to an event sink instead of printing, and the selected
-  [output style](output-styles.md) (`--output`/`-o`) decides what
-  each event renders as — `fancy`'s live per-container status block on an
-  interactive terminal, `simple`'s plain append-only lines otherwise, nothing at
-  all under `quiet` (whose stdout is then exactly the containers' own output,
-  safe to pipe), or `all`'s per-container prefixed lines (the one style where
-  even container stdout routes through the event sink, line-buffered, instead of
-  streaming to stdout directly).
-- **stderr**: Ratect's own diagnostics, via [`tracing`](https://docs.rs/tracing) /
-  [`tracing-subscriber`](https://docs.rs/tracing-subscriber), filtered by `RUST_LOG`
-  (defaults to `info`) — except a *fatal* error (the reason the process is about to
-  exit non-zero), which `main.rs` prints directly (`Error: <message>`) rather than
-  through `tracing::error!`: it must stay visible even when `RUST_LOG` suppresses
-  everything else, since there'd otherwise be no visible explanation at all for the
-  failure under `RUST_LOG=off` combined with [`-o quiet`](output-styles.md#quiet).
+  milestones, and the three stderr classes, to an event sink instead of
+  printing, and the selected [output style](output-styles.md) decides what
+  each renders as — `fancy`'s live per-container status block on an
+  interactive terminal, `simple`'s plain append-only lines otherwise, no
+  progress at all under `quiet`, or `all`'s per-container prefixed lines (the
+  one style where even container output routes through the event sink,
+  line-buffered, instead of streaming to stdout directly — the task container's
+  own lines still landing on stdout). Each `main` names which stream its
+  progress console is; nothing inside the loggers chooses.
+- **Diagnostics** are breadcrumbs — Docker API calls, what resolved to what,
+  a best-effort retry that then succeeded — via
+  [`tracing`](https://docs.rs/tracing) /
+  [`tracing-subscriber`](https://docs.rs/tracing-subscriber) on stderr,
+  filtered by `RUST_LOG` (defaults to `info`). A fatal error is never one of
+  these: `main.rs` prints it directly (`Error: <message>`), so it stays visible
+  under `RUST_LOG=off` and `-o quiet` alike — except for a run's failure the
+  run has already reported by another route (the task's own non-zero exit, a
+  signal, a cleanup failure the engine reported as it happened), which gets no
+  second line.
 
-Colors (e.g. the exit code in the task summary line) are, by default, only emitted
-when stdout is actually a terminal — see [Colour](output-styles.md#colour) for the
-controls that change that.
+Colours (e.g. the exit code in the task summary line, the `Error:` marker) are,
+by default, only emitted when the stream being written to is actually a
+terminal — each stream decides for itself, `tracing`'s lines included — see
+[Colour](output-styles.md#colour) for the controls that change that.
 
 ### Filtering `RUST_LOG`
 

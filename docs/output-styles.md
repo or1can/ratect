@@ -1,14 +1,54 @@
 # Output Styles
 
-`--output`/`-o` controls how Ratect reports its own progress on stdout — never
-what the task's command itself prints, which always streams through unmodified.
-Both binaries take it (`ratect` on every command, `ratect-compat` on every
-invocation) and render each style with the same code
+`--output`/`-o` controls how much Ratect says about its own progress — never
+what the task's command itself prints, which always streams through unmodified,
+and never *where* anything goes. Both binaries take it (`ratect` on every
+command, `ratect-compat` on every invocation) and render each style with the
+same code
 ([`ui.rs`](https://github.com/or1can/ratect/blob/main/ratect-core/src/ui.rs)),
 so this page is the one
 description of the four styles; the [`ratect`](ratect-cli.md#global-options)
 and [`ratect-compat`](ratect-compat-cli.md#output) CLI references only link
 here.
+
+## Streams
+
+Stdout is the result; stderr is everything said about producing it
+([decisions/0017](https://github.com/or1can/ratect/blob/main/decisions/0017-output-streams-and-styles.md)).
+For a run, the result is the task container's own output. Everything else —
+progress, the summary line, notices, warnings and errors — is about the run,
+and `-o` shapes how much of it is said, not which stream it is said on.
+
+The two binaries differ in one thing: where their **progress** goes.
+
+- **`ratect`** writes its progress — the milestones, the summary line, and
+  under `all` the prefixed lines of every container but the task's own — to
+  **stderr**. Its stdout is the task container's output and nothing else, in
+  every style, so `ratect run test > out.txt` captures the result alone and
+  `2>/dev/null` silences the conversation without touching it.
+- **`ratect-compat`** writes its progress to **stdout**, where Batect does,
+  because a Batect project's scripts may read it. Under `simple` those lines
+  share stdout with the task's own output, unmarked, exactly as under Batect;
+  `-o quiet` is the escape for a script that needs stdout to be the
+  container's output alone, and `-o all` prefixes every line.
+
+Three kinds of line reach stderr in **every** style, `quiet` included, from
+both binaries, whatever `RUST_LOG` is set to: an error (`Error: ` in bold red,
+then the message), a warning (`Warning: ` in bold yellow — a deprecated flag,
+a proxy bound to loopback that containers can't reach, a credential helper
+that failed), and a notice (unmarked: the interrupt notice with its "press
+Ctrl+C again" instructions, and what `--no-cleanup*` left running and how to
+remove it). Only the fourth kind, progress, is shaped by `-o`.
+`RUST_LOG` filters Ratect's internal diagnostics
+([Filtering `RUST_LOG`](troubleshooting.md#filtering-rust_log)), which are a
+separate stream of breadcrumbs on stderr; nothing a user needs to act on is
+behind it.
+
+A task's own non-zero exit is reported by the exit code and, outside `quiet`,
+by the summary line — never by an `Error:` line; a run ended by a signal is
+reported by the interrupt notice and its exit code, with no trailing
+`Error: Interrupted`. `Error:` is reserved for Ratect's own failures: it could
+not run the task, or could not clean up after it.
 
 Each style is shown below from the *same* real run — `ratect run journey-test`
 against
@@ -16,9 +56,12 @@ against
 — so you compare styles rather than projects.
 
 When `--output` isn't given, Ratect auto-selects: `fancy` on an interactive
-console (stdout a real terminal, `TERM` set and not `dumb`, terminal size
-queryable, no `--no-color`); `simple` otherwise. `quiet` and `all` are never
-auto-selected.
+console (the stream its progress goes to — stderr for `ratect`, stdout for
+`ratect-compat` — is a real terminal, `TERM` is set and not `dumb`, the
+terminal size is queryable, and there is no `--no-color`); `simple`
+otherwise. `quiet` and `all` are never auto-selected. So `ratect run test >
+out.txt` on a terminal still gets `fancy` — the pipe took the result, not the
+conversation — where `ratect-compat test > out.txt` gets `simple`.
 
 ## `fancy`
 
@@ -42,9 +85,9 @@ clipped to the terminal's current width. After that width changes, the block is
 drawn afresh below the old one rather than over it, since the terminal has
 re-wrapped the old lines. Because it repaints, it requires an interactive
 console: an explicit `-o fancy` without one, or with `TERM=dumb`, fails up front
-with a clear error (Batect instead accepts it, then crashes on the first repaint
-when stdout isn't a terminal, or garbles a `TERM=dumb` terminal with cursor
-movements it can't perform). Works with
+with a clear error naming the stream it checked (Batect instead accepts it,
+then crashes on the first repaint when stdout isn't a terminal, or garbles a
+`TERM=dumb` terminal with cursor movements it can't perform). Works with
 [`--no-color`](#colour) — the repaint stays; bold/color go — a combination
 Batect rejects.
 
@@ -58,7 +101,10 @@ Batect rejects.
 ```
 
 Append-only, with no live-updating progress detail at all, so it is safe for
-CI logs and redirected output. The health/setup-command milestones are shown
+CI logs and redirected output. A dependency that exits on its own while the
+task runs is reported as a milestone (`db exited unexpectedly with exit code
+137.`), not a warning — the run's failure, if one follows, is what explains
+it. The health/setup-command milestones are shown
 for *dependency* containers only. Under `ratect` the task's own container has
 no readiness gate to report (see [Dependency
 Readiness](dependency-readiness.md#the-tasks-own-container)); under
@@ -76,9 +122,11 @@ in every style.
 {{#include captures/output-styles-quiet.ansi}}
 ```
 
-Stdout is exactly the containers' own output, so it's safe to pipe; error
-reporting stays on stderr, unchanged. Nothing from `app`/`db`/`cache` — a
-dependency's own stdout is never shown outside `all`, whatever the style.
+No progress at all: stdout is exactly the task container's own output (under
+`ratect` it is in every style; `quiet` is where `ratect-compat` matches it),
+and stderr carries only [errors, warnings and notices](#streams). Nothing
+from `app`/`db`/`cache` — a dependency's own stdout is never shown outside
+`all`, whatever the style.
 
 `quiet` also switches a task listing (`ratect tasks list`, `ratect-compat
 --list-tasks`) to a machine-readable format: one task per line, sorted by
@@ -112,15 +160,22 @@ point at here.
 ## Colour
 
 Colour in Ratect's own output (the exit code in the summary line, `all`'s
-per-container prefixes) is, by default, emitted only when stdout is a terminal
-— piped or redirected output gets plain text — and a task command's own output
-is never touched either way. Three controls adjust that, and their precedence is fixed:
+per-container prefixes, the `Error:`/`Warning:` markers) is, by default,
+emitted only when the stream being written to is a terminal — each stream
+decides for itself, so with `ratect run test > out.txt` the progress on stderr
+is still coloured while a `2>err.txt` gets plain text, `RUST_LOG` lines
+included — and a task command's own output is never touched either way. No
+message depends on its colour to be read: colour only distinguishes one
+container's prefix from another's or emphasises a marker word, a name or the
+exit code, and Ratect never paints text in the terminal's own white or black,
+which some themes render invisible. Three controls adjust that, and their
+precedence is fixed:
 
 | Control | Effect |
 |---|---|
-| `--no-color` | Disables colour in Ratect's own output. Since colour is already skipped when stdout isn't a terminal, this only matters on an interactive console — unless `CLICOLOR_FORCE` is also set, which it overrides. Also makes `simple`, not `fancy`, the auto-selected style; an explicit `-o fancy --no-color` still gets a colourless `fancy`. |
+| `--no-color` | Disables colour in Ratect's own output, on both streams. Since colour is already skipped when a stream isn't a terminal, this only matters on an interactive console — unless `CLICOLOR_FORCE` is also set, which it overrides. Also makes `simple`, not `fancy`, the auto-selected style; an explicit `-o fancy --no-color` still gets a colourless `fancy`. |
 | `NO_COLOR` | If set — to anything, even empty, per [no-color.org](https://no-color.org) — exactly the same effect as `--no-color`. |
-| `CLICOLOR_FORCE` | If set to anything other than `0`, forces colour even when stdout isn't a terminal (a CI log viewer that renders ANSI despite the pipe). Never affects which style is auto-selected. |
+| `CLICOLOR_FORCE` | If set to anything other than `0`, forces colour even when a stream isn't a terminal (a CI log viewer that renders ANSI despite the pipe). Never affects which style is auto-selected. |
 
 `--no-color`/`NO_COLOR` always win: if either is set, `CLICOLOR_FORCE` is
 ignored.

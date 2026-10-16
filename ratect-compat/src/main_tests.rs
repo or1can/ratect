@@ -704,9 +704,13 @@ async fn clean_cache_type_directory_short_circuits_before_touching_the_config_fi
         "/no/such/batect.yml",
     ])
     .unwrap();
-    run(args)
-        .await
-        .expect("--clean should return Ok without touching the config file");
+    run(
+        args,
+        ColorMode::Off,
+        &Console::new(Box::new(std::io::sink()), false),
+    )
+    .await
+    .expect("--clean should return Ok without touching the config file");
 }
 
 #[test]
@@ -756,9 +760,13 @@ async fn upgrade_flag_short_circuits_before_touching_the_config_file() {
     // genuine short-circuit rather than a flag that happens to be
     // harmless most of the time.
     let args = Args::try_parse_from(["ratect", "--upgrade", "-f", "/no/such/batect.yml"]).unwrap();
-    run(args)
-        .await
-        .expect("--upgrade should return Ok without touching the config file");
+    run(
+        args,
+        ColorMode::Off,
+        &Console::new(Box::new(std::io::sink()), false),
+    )
+    .await
+    .expect("--upgrade should return Ok without touching the config file");
 }
 
 #[test]

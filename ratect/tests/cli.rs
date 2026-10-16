@@ -57,6 +57,12 @@ fn native_fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native.toml")
 }
 
+/// A task that exits `42`, and one whose image can't be pulled — what this
+/// binary's own `Error:` line does and doesn't report.
+fn exit_code_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/exit-code.toml")
+}
+
 /// `run_to_completion` (ratect#97) — native-only, so its own fixture (unlike
 /// most engine/Docker behaviour) lives here rather than under
 /// `ratect-compat/tests/fixtures/`.
@@ -235,12 +241,14 @@ fn tasks_list_warns_that_its_config_variable_options_are_deprecated() {
     .unwrap();
     std::fs::write(dir.join("ratect.local.toml"), "not toml at all = = =\n").unwrap();
 
+    // `RUST_LOG=off`: the warning is printed, not logged (decisions/0017).
     let list = |args: &[&str]| {
         ratect_command()
             .arg("-f")
             .arg(dir.join("ratect.toml"))
             .args(["tasks", "list", "-o", "quiet"])
             .args(args)
+            .env("RUST_LOG", "off")
             .output()
             .expect("failed to run ratect")
     };
@@ -265,7 +273,8 @@ fn tasks_list_warns_that_its_config_variable_options_are_deprecated() {
         assert!(output.status.success(), "{args:?}:\n{stderr}");
         assert_eq!(String::from_utf8_lossy(&output.stdout), "build\n");
         assert!(
-            stderr.contains("deprecated") && stderr.contains("no effect"),
+            stderr.starts_with("Warning: --config-var and --config-vars-file are deprecated")
+                && stderr.contains("no effect"),
             "{args:?}:\n{stderr}"
         );
     }
@@ -1924,6 +1933,117 @@ fn run_executes_a_task_via_docker() {
         String::from_utf8_lossy(&output.stdout).contains("built"),
         "the task's own command output should reach stdout:\n{}",
         String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// This binary's stdout is the task container's own output and nothing else
+/// (decisions/0017): progress — milestones and the summary line — is on
+/// stderr, so `ratect run x > out.txt` captures the result alone.
+/// `ratect-compat` keeps Batect's stdout for progress; its own suite pins
+/// that.
+#[test]
+#[ignore]
+fn run_keeps_stdout_for_the_tasks_own_output_via_docker() {
+    let _guard = serial_docker();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(fixture_path())
+        .args(["run", "build", "-o", "simple"])
+        .output()
+        .expect("failed to run ratect");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr:\n{stderr}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "built\n",
+        "stdout is exactly the task's own output"
+    );
+    assert!(
+        stderr.contains("Running build...") && stderr.contains("build finished with exit code"),
+        "progress is on stderr:\n{stderr}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Under `all`, the task container's own lines still go to stdout — prefixed
+/// like every other line — while Ratect's own lines (and, with dependencies,
+/// theirs) follow the progress console to stderr, so `2>/dev/null` leaves
+/// the task's lines alone.
+#[test]
+#[ignore]
+fn run_all_keeps_stdout_for_the_task_containers_lines_via_docker() {
+    let _guard = serial_docker();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(fixture_path())
+        .args(["run", "build", "-o", "all"])
+        .output()
+        .expect("failed to run ratect");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr:\n{stderr}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "build-env | built\n",
+        "stdout is the task container's prefixed lines and nothing else"
+    );
+    assert!(
+        stderr.contains("build     | Running build...")
+            && stderr.contains("build     | build finished with exit code"),
+        "Ratect's own prefixed lines are on stderr:\n{stderr}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// A task's own non-zero exit is reported by the exit code — and, outside
+/// `quiet`, by the summary line — never by an `Error:` line (ratect#454;
+/// decisions/0017's report-once rule). A failure of Ratect's own still is,
+/// in every style and under `RUST_LOG=off`.
+#[test]
+#[ignore]
+fn a_tasks_own_exit_code_prints_no_error_line_but_ratects_own_failure_does_via_docker() {
+    let _guard = serial_docker();
+    let run = |task: &str, style: &str| {
+        ratect_command()
+            .arg("-f")
+            .arg(exit_code_fixture_path())
+            .args(["run", task, "-o", style])
+            .env("RUST_LOG", "off")
+            .output()
+            .expect("failed to run ratect")
+    };
+
+    let quiet = run("fails", "quiet");
+    assert_eq!(quiet.status.code(), Some(42));
+    assert_eq!(String::from_utf8_lossy(&quiet.stdout), "");
+    assert_eq!(
+        String::from_utf8_lossy(&quiet.stderr),
+        "",
+        "a task's own exit is no error of Ratect's"
+    );
+
+    let simple = run("fails", "simple");
+    assert_eq!(simple.status.code(), Some(42));
+    let stderr = String::from_utf8_lossy(&simple.stderr);
+    assert!(
+        stderr.contains("fails finished with exit code 42") && !stderr.contains("Error:"),
+        "the summary line reports the exit, nothing else does:\n{stderr}"
+    );
+
+    let broken = run("unpullable", "quiet");
+    assert_eq!(broken.status.code(), Some(125));
+    let stderr = String::from_utf8_lossy(&broken.stderr);
+    assert!(
+        stderr.starts_with("Error: ") && stderr.contains("Failed to pull image"),
+        "Ratect's own failure is printed whatever RUST_LOG says:\n{stderr}"
     );
 }
 

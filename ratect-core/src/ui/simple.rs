@@ -18,19 +18,23 @@
 //! deliberately ignored — only their start/finish milestones print). The
 //! mode every non-interactive console gets by default.
 //!
-//! This means a non-interactive `ratect`/`ratect-compat`'s default stdout is
-//! no longer pipe-pure: these milestone lines interleave with the task
-//! container's own raw output on the same stdout, matching Batect's own
-//! `simple` mode (a deliberate, CHANGELOG-documented parity change,
-//! 0.16.0) rather than a stricter container-output-only default. `-o quiet`
-//! is the documented escape hatch for a script that needs exact
-//! container-output-only stdout.
+//! Under `ratect-compat` the progress console is stdout, so these milestone
+//! lines interleave with the task container's own raw output on the same
+//! stream, unmarked, matching Batect's own `simple` mode (a deliberate,
+//! CHANGELOG-documented parity change, 0.16.0, and kept by
+//! decisions/0017: a prefix would change every CI log captured from a
+//! Batect project); `-o quiet` is that binary's escape for a script that
+//! needs exact container-output-only stdout. Under `ratect` the progress
+//! console is stderr and the question doesn't arise.
 
-use super::{Color, ColorMode, Console, EventSink, OnceFlag, TaskEvent};
+use super::{Console, EventSink, OnceFlag, TaskEvent};
 use std::sync::Mutex;
 
 pub struct SimpleEventLogger {
+    /// The progress console — see `create_event_sink`.
     console: Console,
+    /// Errors, warnings and notices, in every style.
+    stderr: Console,
     state: Mutex<State>,
 }
 
@@ -52,22 +56,20 @@ struct State {
 }
 
 impl SimpleEventLogger {
-    pub fn new(console: Console) -> Self {
+    pub fn new(console: Console, stderr: Console) -> Self {
         Self {
             console,
+            stderr,
             state: Mutex::new(State::default()),
         }
-    }
-
-    /// The logger `main.rs` actually wires up: real stdout, colored
-    /// according to `color_mode` (see [`ColorMode`]).
-    pub fn stdout(color_mode: ColorMode) -> Self {
-        Self::new(Console::stdout(color_mode))
     }
 }
 
 impl EventSink for SimpleEventLogger {
     fn post(&self, event: TaskEvent) {
+        if self.stderr.print_stderr_class(&event) {
+            return;
+        }
         match event {
             TaskEvent::TaskStarting { task } => {
                 let mut state = self.state.lock().unwrap();
@@ -157,8 +159,8 @@ impl EventSink for SimpleEventLogger {
                 exit_code,
             } => {
                 self.console.println(&format!(
-                    "{} {container} exited unexpectedly with exit code {exit_code}.",
-                    self.console.colored(Color::Yellow, "Warning:")
+                    "{container} {}.",
+                    super::exited_unexpectedly(exit_code)
                 ));
             }
             TaskEvent::RunningTaskContainer { container, command } => {
@@ -198,8 +200,12 @@ impl EventSink for SimpleEventLogger {
             | TaskEvent::ContainerRemoved { .. }
             | TaskEvent::RemovingNetwork
             | TaskEvent::TaskFailed { .. }
+            | TaskEvent::RunEnded { .. }
+            | TaskEvent::CleanupFinished
             | TaskEvent::ContainerOutput { .. }
             | TaskEvent::SetupCommandOutput { .. } => {}
+            // Printed on stderr before the match (`print_stderr_class`).
+            TaskEvent::Error { .. } | TaskEvent::Warning { .. } | TaskEvent::Notice { .. } => {}
         }
     }
 }

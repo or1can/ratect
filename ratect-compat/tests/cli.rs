@@ -1058,21 +1058,71 @@ fn all_output_prefixes_every_line_and_shows_dependency_output_via_docker() {
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
 /// Run explicitly with `cargo test -- --ignored`.
 ///
-/// The failure half of quiet's pipe-safety: a failing task must leave
-/// stdout untouched too — no milestone lines, no summary line, nothing but
-/// what the container itself printed (here: nothing) — while the exit code
-/// still propagates and the error still reaches stderr.
+/// A task's own non-zero exit is reported by the exit code — and, outside
+/// `quiet`, by the summary line — and never by an `Error:` line on stderr
+/// (ratect#454; decisions/0017's report-once rule). Under `quiet` that leaves
+/// both streams empty: stdout untouched (the failure half of quiet's
+/// pipe-safety), stderr with nothing to add.
 #[test]
 #[ignore]
-fn quiet_output_stays_silent_on_stdout_when_the_task_fails_via_docker() {
-    let output = ratect_command()
+fn a_tasks_own_exit_code_prints_no_error_line_via_docker() {
+    let quiet = ratect_command()
         .args(["-o", "quiet", "-f"])
         .arg(exit_code_config_path())
         .arg("fails")
         .output()
         .expect("failed to run ratect");
 
-    assert_eq!(output.status.code(), Some(42));
+    assert_eq!(quiet.status.code(), Some(42));
+    assert_eq!(
+        String::from_utf8_lossy(&quiet.stdout),
+        "",
+        "quiet stdout must stay empty on failure"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&quiet.stderr),
+        "",
+        "a task's own exit is no error of Ratect's, so stderr stays empty"
+    );
+
+    let simple = ratect_command()
+        .args(["-o", "simple", "-f"])
+        .arg(exit_code_config_path())
+        .arg("fails")
+        .output()
+        .expect("failed to run ratect");
+
+    assert_eq!(simple.status.code(), Some(42));
+    let stdout = String::from_utf8_lossy(&simple.stdout);
+    assert!(
+        stdout.contains("fails finished with exit code 42"),
+        "the summary line reports the exit:\n{stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&simple.stderr);
+    assert!(
+        !stderr.contains("Error:") && !stderr.contains("exited with code 42"),
+        "no second report on stderr:\n{stderr}"
+    );
+}
+
+/// Requires a running Docker daemon. Run explicitly with `cargo test -- --ignored`.
+///
+/// The failure half of quiet's pipe-safety for a failure of Ratect's own: a
+/// run that fails before its command runs leaves stdout untouched — no
+/// milestone lines, nothing — while the exit code is `125` and the error
+/// still reaches stderr, `quiet` included (ratect#359's quiet-mode
+/// infrastructure-failure case).
+#[test]
+#[ignore]
+fn quiet_output_stays_silent_on_stdout_when_the_run_fails_via_docker() {
+    let output = ratect_command()
+        .args(["-o", "quiet", "-f"])
+        .arg(exit_code_config_path())
+        .arg("unpullable")
+        .output()
+        .expect("failed to run ratect");
+
+    assert_eq!(output.status.code(), Some(125));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(
         stdout, "",
@@ -1080,39 +1130,37 @@ fn quiet_output_stays_silent_on_stdout_when_the_task_fails_via_docker() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("exited with code 42") || stderr.contains("code 42"),
-        "the failure should still be reported on stderr:\n{stderr}"
+        stderr.contains("Error:") && stderr.contains("Failed to pull image"),
+        "the failure should be reported on stderr:\n{stderr}"
     );
 }
 
-/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
-/// Run explicitly with `cargo test -- --ignored`.
+/// Requires a running Docker daemon. Run explicitly with `cargo test -- --ignored`.
 ///
-/// Proves a failing task's fatal error is visible on stderr even with
-/// `RUST_LOG=off` — the error used to reach stderr solely through
-/// `tracing::error!`, which `RUST_LOG` can suppress entirely; a failure
-/// under `-o quiet` (whose whole contract is "only error messages") plus a
+/// Proves a run's fatal error is visible on stderr even with `RUST_LOG=off`
+/// — the error used to reach stderr solely through `tracing::error!`, which
+/// `RUST_LOG` can suppress entirely; a failure under `-o quiet` plus a
 /// suppressed log level would then exit non-zero with no visible reason
-/// anywhere. The error is now printed directly, independent of `RUST_LOG`.
+/// anywhere. The error is printed directly, independent of `RUST_LOG`.
 #[test]
 #[ignore]
 fn fatal_error_reaches_stderr_even_with_logging_disabled() {
     let output = ratect_command()
         .args(["-o", "quiet", "-f"])
         .arg(exit_code_config_path())
-        .arg("fails")
+        .arg("unpullable")
         .env("RUST_LOG", "off")
         .output()
         .expect("failed to run ratect");
 
-    assert_eq!(output.status.code(), Some(42));
+    assert_eq!(output.status.code(), Some(125));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !stderr.trim().is_empty(),
-        "the fatal error must still reach stderr under RUST_LOG=off"
+        stderr.starts_with("Error: "),
+        "the fatal error must still reach stderr under RUST_LOG=off:\n{stderr}"
     );
     assert!(
-        stderr.contains("code 42"),
+        stderr.contains("Failed to pull image"),
         "stderr should name the actual failure:\n{stderr}"
     );
 }
@@ -1231,17 +1279,35 @@ fn ownership_labels_reach_real_containers_and_networks_via_docker() {
     // filter can't match a concurrently-running test's containers.
     let project_filter = "label=eu.orican.ratect.project=ratect-labels-test";
 
+    // `RUST_LOG=off`: the reminder below is printed, not logged.
     let output = ratect_command()
         .arg("-f")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/labels.yml"))
         .arg("--no-cleanup-after-success")
         .arg("check")
+        .env("RUST_LOG", "off")
         .output()
         .expect("failed to run ratect");
     assert!(
         output.status.success(),
         "stderr:\n{}",
         String::from_utf8_lossy(&output.stderr)
+    );
+    // What the flag kept, and how to remove it, is a notice on stderr
+    // whatever `RUST_LOG` says (decisions/0017) — naming the containers by
+    // config name and id and the command that works when pasted.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Left running (--no-cleanup): app (")
+            && stderr.contains(", database (")
+            && stderr.contains(", network ratect-")
+            && stderr.contains(". Remove with: docker rm -f -v ")
+            && stderr.contains("; docker network rm ratect-"),
+        "the reminder names what was kept and how to remove it:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Error:") && !stderr.contains("Warning:"),
+        "a deliberate keep is a notice, not a failure:\n{stderr}"
     );
 
     let containers = docker_ids("container", project_filter);
@@ -1442,9 +1508,19 @@ fn a_passing_run_whose_cleanup_fails_exits_125_via_docker() {
     let (code, stderr) = run_with_network_removal_refused("pass");
 
     assert_eq!(code, Some(125), "stderr:\n{stderr}");
+    // The engine's own line, quoting the daemon and naming what was left and
+    // how to remove it — and only that line: `main` prints no second
+    // `Error:` for the `CleanupFailed` it exits `125` with (decisions/0017).
     assert!(
-        stderr.contains("task 'pass' passed, but cleaning up after it failed"),
-        "the failure says what went wrong:\n{stderr}"
+        stderr.contains("Error: Cleanup failed: ")
+            && stderr.contains("left behind: network ratect-")
+            && stderr.contains(". Remove with: docker network rm ratect-"),
+        "the failure says what went wrong and what to do:\n{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("Error:").count(),
+        1,
+        "one cleanup failure, one Error: line:\n{stderr}"
     );
 }
 
@@ -1600,12 +1676,17 @@ fn signalling_a_run_cleans_up_via_docker(
         false
     }
 
+    // `RUST_LOG=off`: the interrupt notice asserted below is printed, not
+    // logged, so the one line a person at the keyboard must read survives
+    // any filter (decisions/0017; ratect#369). Stderr is read after exit:
+    // the few lines a signalled run writes never fill the pipe.
     let mut child = ratect_command()
         .arg("-f")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/interrupt.yml"))
         .arg("wait")
+        .env("RUST_LOG", "off")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("failed to spawn ratect");
 
@@ -1664,6 +1745,13 @@ fn signalling_a_run_cleans_up_via_docker(
     }
     let status = status.expect("exited implies a status");
     let exit_took = first_signal_at.elapsed();
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr was piped")
+        .read_to_string(&mut stderr)
+        .expect("failed to read ratect's stderr");
 
     // Cleanup is synchronous before exit, so by here the daemon should already
     // be clean — but stopping two containers is real work against a real
@@ -1699,6 +1787,27 @@ fn signalling_a_run_cleans_up_via_docker(
              container's kill timeout, but took {exit_took:?} to exit (limit {limit:?})"
         );
     }
+    // The notice names what ended the run and the next step, and the run
+    // ends on the exit code — never on a trailing `Error: Interrupted`.
+    let (ended_run, send_again) = match signals[0] {
+        "SIGINT" => ("Interrupted; cleaning up.", "Press Ctrl+C again"),
+        "SIGTERM" => ("Terminated by SIGTERM; cleaning up.", "Send SIGTERM again"),
+        other => panic!("no expected notice for {other}"),
+    };
+    assert!(
+        stderr.contains(ended_run) && stderr.contains(send_again),
+        "the interrupt notice must be printed whatever RUST_LOG says:\n{stderr}"
+    );
+    if signals.len() > 1 {
+        assert!(
+            stderr.contains("during cleanup; force-removing what's left."),
+            "the escalation notice too:\n{stderr}"
+        );
+    }
+    assert!(
+        !stderr.contains("Error:"),
+        "a signalled run that cleaned up is no error of Ratect's:\n{stderr}"
+    );
 }
 
 /// Requires a running Docker daemon with network access to pull `redis:7-alpine`
@@ -4866,4 +4975,91 @@ fn a_run_that_fails_exits_125_and_list_tasks_1() {
     assert_eq!(list, Some(1));
     assert_eq!(log_file_run, Some(125));
     assert_eq!(log_file_list, Some(1));
+}
+
+/// Runs `ratect-compat` with `args` and `env` on a pseudo-terminal and
+/// returns everything it wrote (stdout and stderr are the one terminal),
+/// once it has exited.
+fn run_on_a_terminal(args: &[&str], env: &[(&str, &str)]) -> String {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 24,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("failed to open pty");
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect-compat"));
+    cmd.args(args);
+    cmd.env("TERM", "xterm-256color");
+    for (name, value) in env {
+        cmd.env(name, value);
+    }
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
+        .expect("failed to spawn ratect in the pty");
+    drop(pair.slave);
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .expect("failed to clone pty reader");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    child.wait().expect("failed to wait for ratect");
+    drop(pair.master);
+    let mut output = Vec::new();
+    while let Ok(chunk) = rx.recv_timeout(Duration::from_secs(5)) {
+        output.extend_from_slice(&chunk);
+    }
+    String::from_utf8_lossy(&output).into_owned()
+}
+
+/// The `Error:` and `Warning:` markers are bold red and bold yellow, each
+/// one SGR sequence, when stderr is a terminal, and plain under
+/// `NO_COLOR`/`--no-color` — pinned byte for byte, since nothing type-checks
+/// an escape sequence (ratect#493; decisions/0017). A missing config file
+/// and a missing task name both stop before any daemon is needed, so this
+/// runs in the default suite.
+#[test]
+fn error_and_warning_markers_are_bold_on_a_terminal_and_plain_without_color() {
+    let args = ["-f", "/no/such/batect.yml", "build"];
+
+    let colored = run_on_a_terminal(&args, &[]);
+    assert!(
+        colored.contains("\x1b[1;31mError:\x1b[0m "),
+        "the marker should be bold red on a terminal: {colored:?}"
+    );
+    // The warning marker likewise — no task name is a warning, not a
+    // failure, and needs no daemon either.
+    let warned = run_on_a_terminal(&["-f", &sample_config_path().to_string_lossy()], &[]);
+    assert!(
+        warned.contains("\x1b[1;33mWarning:\x1b[0m No task name provided."),
+        "the warning marker should be bold yellow on a terminal: {warned:?}"
+    );
+
+    for env in [&[("NO_COLOR", "1")][..], &[][..]] {
+        let mut plain_args = args.to_vec();
+        if env.is_empty() {
+            plain_args.push("--no-color");
+        }
+        let plain = run_on_a_terminal(&plain_args, env);
+        assert!(
+            plain.contains("Error: ") && !plain.contains("\x1b["),
+            "no SGR at all under {env:?}/{plain_args:?}: {plain:?}"
+        );
+    }
 }

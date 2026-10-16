@@ -97,7 +97,7 @@ and `ratect run build -f custom.yml` are the same invocation.
 | Option | Default | Description |
 | --- | --- | --- |
 | `-f`, `--config-file <PATH>` | `ratect.toml` | The configuration file. Parsed by extension — `.toml` as the native format, `.yml`/`.yaml` as Batect-format YAML — so `-f batect.yml` keeps reading a Batect config while migrating. `caches` uses it only to locate the project *directory* — it never reads the contents. |
-| `-o`, `--output <STYLE>` | auto | `fancy`, `simple`, `quiet` or `all`; unset auto-selects `fancy` on an interactive console, `simple` otherwise — see [Output Styles](output-styles.md). |
+| `-o`, `--output <STYLE>` | auto | `fancy`, `simple`, `quiet` or `all`; unset auto-selects `fancy` when stderr is an interactive console, `simple` otherwise. `ratect`'s own progress is on stderr in every style; stdout is the task's own output — see [Output Styles](output-styles.md#streams). |
 | `--no-color` | — | No color in Ratect's own output (never affects a task's own output), and `simple` becomes the auto-selected style — see [Colour](output-styles.md#colour) for how it combines with `NO_COLOR`/`CLICOLOR_FORCE`. |
 
 Narrower options attach to the commands that actually use them, rather than being
@@ -273,8 +273,8 @@ in-flight run. `--older-than 1h` is the safe form when anything else might be ru
 
 Under `-o quiet`, `list` prints resource ids one per line and nothing else, ready to
 pipe into `docker rm`. Removal takes containers before networks, since a network
-still holding an endpoint can't be removed; a resource that fails to remove is
-reported and the rest still go.
+still holding an endpoint can't be removed; a resource that fails to remove doesn't
+stop the rest, but `clean` then exits `1` with one `Error:` naming each refusal.
 
 `resources` reads one thing from the configuration — the root file's
 `project_name`, to scope itself to this project — and nothing else in it, so neither
@@ -491,8 +491,12 @@ removal the daemon refused, or a cleanup stopped with Ctrl+C — exits `125` too
 prerequisite whose cleanup fails stops the chain there; a task's own non-zero code is
 never overridden. Every other verb runs nothing, and exits `1` on
 its own failure (`doctor` finding a problem, `config validate` on a bad file, `caches
-list` with the daemon down) and `0` otherwise. A usage error exits `2`, `--help` `0`. The
-reason always reaches stderr — in every output style, including `quiet`. [`ratect-compat`'s
+list` with the daemon down) and `0` otherwise. A usage error exits `2`, `--help` `0`. A
+task's own exit code is reported by the code itself and, outside `quiet`, by the
+`finished with exit code N` summary line — never by an `Error:` line; a run a signal
+ended is reported by the interrupt notice and its code, with no `Error: Interrupted`
+after it; every other failure's reason always reaches stderr as `Error: <message>`, in
+every output style including `quiet`, whatever `RUST_LOG` says. [`ratect-compat`'s
 section](ratect-compat-cli.md#exit-codes-and-error-reporting) has each rule in full, and
 [decisions/0016](../decisions/0016-exit-codes.md) why. Any of the three signals abandons
 the run and then cleans up after it; a second one *during* that cleanup force-removes

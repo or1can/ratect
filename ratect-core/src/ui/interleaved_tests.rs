@@ -17,12 +17,32 @@ use super::super::TaskContainerInfo;
 use super::*;
 use std::time::Duration;
 
-fn logger() -> (InterleavedEventLogger, SharedBuffer) {
+/// A logger over three buffers — progress, stderr and the result (stdout)
+/// console the task container's own lines go to — colour off on all three
+/// unless `color`: expectations stay readable, and prefix padding is the
+/// structural thing worth asserting.
+fn logger_with_streams(
+    color: bool,
+) -> (
+    InterleavedEventLogger,
+    SharedBuffer,
+    SharedBuffer,
+    SharedBuffer,
+) {
     let buffer = SharedBuffer::default();
-    // Color disabled: expectations stay readable, and prefix padding is
-    // the structural thing worth asserting.
-    let console = Console::new(Box::new(buffer.clone()), false);
-    (InterleavedEventLogger::new(console), buffer)
+    let stderr = SharedBuffer::default();
+    let result = SharedBuffer::default();
+    let logger = InterleavedEventLogger::new(
+        Console::new(Box::new(buffer.clone()), color),
+        Console::new(Box::new(stderr.clone()), color),
+        Console::new(Box::new(result.clone()), color),
+    );
+    (logger, buffer, stderr, result)
+}
+
+fn logger() -> (InterleavedEventLogger, SharedBuffer) {
+    let (logger, buffer, _, _) = logger_with_streams(false);
+    (logger, buffer)
 }
 
 fn info(name: &str, image: Option<&str>, build_tag: Option<&str>) -> TaskContainerInfo {
@@ -279,8 +299,10 @@ fn task_level_lines_use_the_task_name_prefix() {
     );
 }
 
+/// A milestone, not a warning (decisions/0017): under its own prefix, with
+/// no `Warning:` marker.
 #[test]
-fn dependency_exiting_unexpectedly_prints_a_warning_with_its_own_prefix() {
+fn dependency_exiting_unexpectedly_is_a_milestone_with_its_own_prefix() {
     let (logger, buffer) = logger();
     start_task(&logger, vec![info("db", Some("postgres:15"), None)]);
     logger.post(TaskEvent::DependencyExitedUnexpectedly {
@@ -290,7 +312,107 @@ fn dependency_exiting_unexpectedly_prints_a_warning_with_its_own_prefix() {
     assert_eq!(
         buffer.contents(),
         "test | Running test...\n\
-             db   | Warning: exited unexpectedly with exit code 137.\n"
+             db   | exited unexpectedly with exit code 137.\n"
+    );
+}
+
+/// The three stderr classes are unprefixed (ratect#367) and go to stderr,
+/// whatever the progress console is.
+#[test]
+fn errors_warnings_and_notices_are_unprefixed_on_stderr() {
+    let (logger, buffer, stderr, _) = logger_with_streams(false);
+    start_task(&logger, vec![info("db", Some("postgres:15"), None)]);
+    logger.post(TaskEvent::Error {
+        message: "Cleanup failed: no".into(),
+    });
+    logger.post(TaskEvent::Warning {
+        message: "careful".into(),
+    });
+    logger.post(TaskEvent::Notice {
+        message: "Interrupted; cleaning up.".into(),
+    });
+    assert_eq!(
+        stderr.contents(),
+        "Error: Cleanup failed: no\nWarning: careful\nInterrupted; cleaning up.\n"
+    );
+    assert_eq!(buffer.contents(), "test | Running test...\n");
+}
+
+/// The task container's own output lines are the run's result, so they go
+/// to the result console (stdout in both binaries), prefixed like every
+/// other line; a dependency's follow the progress console. This is what
+/// makes `ratect run x -o all 2>/dev/null` the task's own lines alone.
+#[test]
+fn the_task_containers_output_goes_to_the_result_console_and_a_dependencys_to_progress() {
+    let (logger, buffer, _, result) = logger_with_streams(false);
+    let mut app = info("app", Some("app:1"), None);
+    app.is_task_container = true;
+    start_task(&logger, vec![info("db", Some("postgres:15"), None), app]);
+    logger.post(TaskEvent::ContainerOutput {
+        container: "db".into(),
+        line: "ready to accept connections".into(),
+    });
+    logger.post(TaskEvent::ContainerOutput {
+        container: "app".into(),
+        line: "built".into(),
+    });
+    assert_eq!(
+        buffer.contents(),
+        "test | Running test...\n\
+             db   | ready to accept connections\n"
+    );
+    assert_eq!(result.contents(), "app  | built\n");
+}
+
+/// No white (SGR 37) or black (SGR 30) anywhere, bright or not — the
+/// task-level prefix is bold in the default foreground, a container's is
+/// bold in its palette colour, and a container the graph never named gets
+/// the default foreground too (decisions/0017).
+#[test]
+fn no_prefix_is_ever_white_or_black() {
+    let (logger, buffer, stderr, result) = logger_with_streams(true);
+    start_task(&logger, vec![info("db", Some("postgres:15"), None)]);
+    logger.post(TaskEvent::ContainerOutput {
+        container: "db".into(),
+        line: "hi".into(),
+    });
+    logger.post(TaskEvent::ContainerOutput {
+        container: "unknown".into(),
+        line: "hi".into(),
+    });
+    logger.post(TaskEvent::CleanupStarting);
+    let everything = format!(
+        "{}{}{}",
+        buffer.contents(),
+        stderr.contents(),
+        result.contents()
+    );
+    for code in [
+        "\x1b[37m", "\x1b[30m", "\x1b[97m", "\x1b[90m", ";37m", ";30m",
+    ] {
+        assert!(
+            !everything.contains(code),
+            "{code:?} found in {everything:?}"
+        );
+    }
+    assert!(
+        buffer
+            .contents()
+            .starts_with("\x1b[1mtest\x1b[0m | Running \x1b[1mtest\x1b[0m...\n"),
+        "{:?}",
+        buffer.contents()
+    );
+    assert!(
+        buffer
+            .contents()
+            .contains("\x1b[34m\x1b[1mdb  \x1b[0m\x1b[0m | hi\n"),
+        "{:?}",
+        buffer.contents()
+    );
+    assert!(
+        buffer.contents().contains("\x1b[1munknown\x1b[0m | hi\n"),
+        "{:?}",
+        buffer.contents()
     );
 }
 
