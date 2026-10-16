@@ -1,6 +1,6 @@
 # 0016 — What a run exits with
 
-**Status:** Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0,
+**Status:** Accepted — implemented (ratect-compat 0.33.0 · ratect 0.12.0,
 [#540](https://github.com/or1can/ratect/issues/540)).
 
 ## Context
@@ -51,13 +51,16 @@ exited `0`.
    place on purpose is not one. A task's own non-zero code is never
    overridden: the failure is the thing the user needs to see, and a leak is
    reported on stderr either way. Forced removal that completes is a faster
-   cleanup, not a failed one.
+   cleanup, not a failed one. A *prerequisite* whose cleanup fails this way
+   ends the chain there, like any other failure of Ratect's own: the tasks
+   after it never run, so rule 3 decides the run, and it exits `125`.
 2. **A termination signal ended it → `128` + that signal's number** (`130`
    `SIGINT`, `143` `SIGTERM`, `129` `SIGHUP`), whatever cleanup does after.
    Only a signal that ended the command earns this: one that arrives during
-   the cleanup of a finished run didn't end anything, so rule 1 applies. The
-   signal is still reported on stderr, and still escalates or abandons the
-   cleanup as the ladder says.
+   the cleanup of a finished run didn't end anything, so rule 1 applies. One
+   that arrives during a *prerequisite's* cleanup ends the run before the
+   next task starts, so it earns this code. The signal is still reported on
+   stderr, and still escalates or abandons the cleanup as the ladder says.
 3. **It never ran, or never finished, for any other reason → `125`.** One
    code: config that doesn't load, unknown task, daemon unreachable, image pull
    or build failed, a dependency that exited or never became ready, a setup

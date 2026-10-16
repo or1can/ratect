@@ -2924,3 +2924,33 @@ fn a_tcp_host_stays_plain_when_docker_tls_verify_is_off() {
         );
     }
 }
+
+/// Only a run's failure exits `125`; every other verb's exits `1` — the same
+/// unloadable config, two verbs (decisions/0016). Needs no daemon: the config
+/// fails before anything connects.
+#[test]
+fn a_run_that_fails_exits_125_and_any_other_verb_1() {
+    let directory = std::env::temp_dir().join(format!("ratect-exit-codes-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let config = directory.join("ratect.toml");
+    std::fs::write(&config, "nonsense = [").unwrap();
+    let exit_code = |args: &[&str]| {
+        ratect_command()
+            .args(args)
+            .arg("-f")
+            .arg(&config)
+            .output()
+            .expect("failed to run ratect")
+            .status
+            .code()
+    };
+
+    let run = exit_code(&["run", "build"]);
+    let list = exit_code(&["tasks", "list"]);
+    let validate = exit_code(&["config", "validate"]);
+    std::fs::remove_dir_all(&directory).unwrap();
+
+    assert_eq!(run, Some(125));
+    assert_eq!(list, Some(1));
+    assert_eq!(validate, Some(1));
+}

@@ -1,0 +1,43 @@
+# Proves what a run exits with when something happens after its task's command
+# has already exited (decisions/0016): a cleanup the daemon refuses, and a
+# signal that arrives only during cleanup.
+#
+# `pass` and `fail` finish on their own after a few seconds — long enough for
+# the test to attach a bystander container to the task network, so the
+# network's removal is refused (`403: ... has active endpoints`), the second of
+# #316's reproductions. `finish` has a dependency whose `sleep` runs as PID 1
+# and so ignores `SIGTERM`: its graceful stop takes Docker's whole ten-second
+# kill timeout, which is the window the test signals in.
+#
+# `project_name` is its own so the label filters in the tests can't match a
+# concurrently-running test's resources.
+project_name: ratect-cleanup-outcome-test
+
+containers:
+  database:
+    image: alpine:3.18
+    command: sleep 600
+
+  app:
+    image: alpine:3.18
+
+  client:
+    image: alpine:3.18
+    dependencies:
+      - database
+
+tasks:
+  pass:
+    run:
+      container: app
+      command: sleep 5
+
+  fail:
+    run:
+      container: app
+      command: sh -c 'sleep 5; exit 3'
+
+  finish:
+    run:
+      container: client
+      command: sleep 3

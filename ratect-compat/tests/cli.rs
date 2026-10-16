@@ -1342,6 +1342,201 @@ fn a_supervisors_escalation_still_cleans_up_via_docker() {
     );
 }
 
+/// Serializes the cleanup-outcome tests below, which share
+/// `tests/fixtures/cleanup-outcome.yml`'s project label for the same reason
+/// `INTERRUPT_PROJECT` exists.
+static CLEANUP_OUTCOME_PROJECT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+const CLEANUP_OUTCOME_PROJECT_FILTER: &str =
+    "label=eu.orican.ratect.project=ratect-cleanup-outcome-test";
+
+/// `docker <kind> ls -q --filter <filter>`, `-a` when `all`.
+fn docker_ids(kind: &str, filter: &str, all: bool) -> Vec<String> {
+    let mut arguments = vec![kind, "ls", "-q", "--filter", filter];
+    if all {
+        arguments.insert(2, "-a");
+    }
+    let output = Command::new("docker")
+        .args(&arguments)
+        .output()
+        .expect("failed to run docker ls");
+    assert!(output.status.success(), "docker {kind} ls failed");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// Polls `condition` every 200 ms until it holds or `timeout` passes.
+fn poll_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if condition() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    false
+}
+
+/// Runs `task` from the cleanup-outcome fixture with a bystander container
+/// attached to its network mid-run, so the network's removal is refused, and
+/// returns the exit code and stderr. Removes the bystander and the network
+/// afterwards, whatever happened.
+fn run_with_network_removal_refused(task: &str) -> (Option<i32>, String) {
+    let filter = CLEANUP_OUTCOME_PROJECT_FILTER;
+    let bystander_label = "ratect-cleanup-outcome-bystander";
+    let child = ratect_command()
+        .arg("-f")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cleanup-outcome.yml"))
+        .args(["-o", "simple", task])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn ratect");
+
+    let mut network = None;
+    let found = poll_until(Duration::from_secs(120), || {
+        network = docker_ids("network", filter, false).into_iter().next();
+        network.is_some()
+    });
+    let attached = found
+        && Command::new("docker")
+            .args(["run", "-d", "--label", bystander_label, "--network"])
+            .arg(network.as_deref().unwrap())
+            .args(["alpine:3.18", "sleep", "120"])
+            .output()
+            .expect("failed to run docker run")
+            .status
+            .success();
+
+    let output = child.wait_with_output().expect("failed to wait on ratect");
+    for id in docker_ids("container", &format!("label={bystander_label}"), true) {
+        let _ = Command::new("docker").args(["rm", "-fv", &id]).output();
+    }
+    for id in docker_ids("container", filter, true) {
+        let _ = Command::new("docker").args(["rm", "-fv", &id]).output();
+    }
+    for id in docker_ids("network", filter, false) {
+        let _ = Command::new("docker").args(["network", "rm", &id]).output();
+    }
+    assert!(
+        attached,
+        "the test never attached a bystander to the task network, so proved nothing"
+    );
+    (
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// A passing task whose network removal the daemon refuses exits 125 rather
+/// than 0 — #316's reproduction, against a real daemon (decisions/0016).
+#[test]
+#[ignore]
+fn a_passing_run_whose_cleanup_fails_exits_125_via_docker() {
+    let _shared_project = CLEANUP_OUTCOME_PROJECT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let (code, stderr) = run_with_network_removal_refused("pass");
+
+    assert_eq!(code, Some(125), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("task 'pass' passed, but cleaning up after it failed"),
+        "the failure says what went wrong:\n{stderr}"
+    );
+}
+
+/// The same refusal after a task that exited 3 leaves the 3 alone: a task's
+/// own non-zero code is never overridden.
+#[test]
+#[ignore]
+fn a_failing_run_whose_cleanup_fails_keeps_its_own_code_via_docker() {
+    let _shared_project = CLEANUP_OUTCOME_PROJECT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let (code, stderr) = run_with_network_removal_refused("fail");
+
+    assert_eq!(code, Some(3), "stderr:\n{stderr}");
+}
+
+/// A signal that arrives only during the cleanup of a passing run hurries
+/// that cleanup and ends nothing, so the run still exits 0 — not 130, as it
+/// did before decisions/0016 — and leaves nothing behind.
+#[test]
+#[ignore]
+#[cfg(unix)]
+fn a_signal_during_a_passing_runs_cleanup_still_exits_0_via_docker() {
+    let _shared_project = CLEANUP_OUTCOME_PROJECT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let filter = CLEANUP_OUTCOME_PROJECT_FILTER;
+    let mut child = ratect_command()
+        .arg("-f")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cleanup-outcome.yml"))
+        .args(["-o", "simple", "finish"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn ratect");
+    let force_cleanup = || {
+        for id in docker_ids("container", filter, true) {
+            let _ = Command::new("docker").args(["rm", "-fv", &id]).output();
+        }
+        for id in docker_ids("network", filter, false) {
+            let _ = Command::new("docker").args(["network", "rm", &id]).output();
+        }
+    };
+
+    // Both running, then only the dependency left at all: the task's own
+    // container has been *removed*, which only cleanup does, so the run has
+    // already ended and cleanup is stopping the dependency, which takes ten
+    // seconds. Merely exited isn't enough — the engine may not have seen the
+    // exit yet, and a signal then would end the run instead.
+    let started = poll_until(Duration::from_secs(120), || {
+        docker_ids("container", filter, false).len() >= 2
+    });
+    let cleaning_up = started
+        && poll_until(Duration::from_secs(30), || {
+            docker_ids("container", filter, true).len() == 1
+        });
+    if !cleaning_up {
+        let _ = child.kill();
+        let _ = child.wait();
+        force_cleanup();
+        panic!("the run never reached its cleanup with the dependency still running");
+    }
+    let signalled = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("failed to run kill");
+    assert!(signalled.success(), "could not send SIGINT to ratect");
+
+    let mut status = None;
+    let exited = poll_until(Duration::from_secs(60), || {
+        status = child.try_wait().expect("failed to poll ratect");
+        status.is_some()
+    });
+    if !exited {
+        let _ = child.kill();
+    }
+    let output = child.wait_with_output().expect("failed to wait on ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let leftovers = (
+        docker_ids("container", filter, true),
+        docker_ids("network", filter, false),
+    );
+    force_cleanup();
+
+    assert_eq!(status.and_then(|s| s.code()), Some(0), "stderr:\n{stderr}");
+    assert!(
+        leftovers.0.is_empty() && leftovers.1.is_empty(),
+        "the forced cleanup completes: {leftovers:?}"
+    );
+}
+
 /// Signalling a real run against a real daemon leaves nothing behind.
 ///
 /// `ratect-core`'s own unit tests prove the engine's *decisions* against a fake
@@ -1917,7 +2112,7 @@ fn a_task_containers_failing_setup_command_cancels_its_main_command_via_docker()
     };
     let stderr = stderr.join().unwrap();
 
-    assert_eq!(status.code(), Some(1), "stderr:\n{stderr}");
+    assert_eq!(status.code(), Some(125), "stderr:\n{stderr}");
     assert!(
         stderr.contains("Setup command 'false'"),
         "the setup command's failure should be the reported error:\n{stderr}"
@@ -4638,4 +4833,37 @@ tasks:
         "Always should fail attempting a real pull of the base image, tagged under a name \
          that exists on no registry"
     );
+}
+
+/// Only a run's failure exits `125`; `--list-tasks`'s exits `1` — the same
+/// unloadable config, and the same unopenable `--log-file`, either way
+/// (decisions/0016). Needs no daemon: both fail before anything connects.
+#[test]
+fn a_run_that_fails_exits_125_and_list_tasks_1() {
+    let directory =
+        std::env::temp_dir().join(format!("ratect-compat-exit-codes-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let config = directory.join("batect.yml");
+    std::fs::write(&config, "nonsense: [").unwrap();
+    let exit_code = |args: &[&str]| {
+        ratect_command()
+            .arg("-f")
+            .arg(&config)
+            .args(args)
+            .output()
+            .expect("failed to run ratect-compat")
+            .status
+            .code()
+    };
+
+    let run = exit_code(&["build"]);
+    let list = exit_code(&["--list-tasks"]);
+    let log_file_run = exit_code(&["--log-file", "/nonexistent/dir/x", "build"]);
+    let log_file_list = exit_code(&["--log-file", "/nonexistent/dir/x", "--list-tasks"]);
+    std::fs::remove_dir_all(&directory).unwrap();
+
+    assert_eq!(run, Some(125));
+    assert_eq!(list, Some(1));
+    assert_eq!(log_file_run, Some(125));
+    assert_eq!(log_file_list, Some(1));
 }

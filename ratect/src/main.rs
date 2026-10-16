@@ -648,8 +648,9 @@ async fn main() {
     let cli = Cli::parse();
     init_tracing();
 
+    let is_run = matches!(cli.command, Command::Run(_));
     let exit_code = match run(cli).await {
-        Ok(()) => 0,
+        Ok(()) => ratect_core::exit_code::SUCCESS,
         Err(error) => {
             // Straight to stderr, never through `tracing::error!`, which
             // `RUST_LOG=off` (or any filter excluding this target) would
@@ -658,7 +659,7 @@ async fn main() {
             // reasoning, and the same `{:?}` full-context-chain formatting,
             // as `ratect-compat`'s own top-level handler.
             eprintln!("Error: {error:?}");
-            ratect_core::exit_code::for_error(&error)
+            ratect_core::exit_code::for_failure(&error, is_run)
         }
     };
 

@@ -176,20 +176,58 @@ If neither the task's `run` nor its container has a `command`, `ADDITIONAL_ARGS`
 
 ## Exit codes and error reporting
 
-Ratect uses a plain `0` (success) / non-zero (failure) convention, but note that it
-doesn't distinguish "nothing to do" from "success":
+A run — `ratect-compat <task>` — exits with one of three things, answering one question:
+did the task's own container run to an exit code of its own? The design is
+[decisions/0016](../decisions/0016-exit-codes.md).
 
-- Running with no task name at all (and not `--list-tasks`) **exits `0`** —
-  Ratect logs a warning but doesn't fail the process. This is a rough edge, not
-  intentional design; don't rely on it in scripts.
-- A missing or malformed config file (fails to parse), a task/container referenced by
-  name that doesn't exist, or a dependency cycle all cause a non-zero (`1`) exit. The
-  error is printed to stderr as `Error: <message>` — deliberately *not* through
-  `tracing::error!`/`RUST_LOG` (which every other diagnostic goes through — see
-  [how it works](how-it-works.md#5-logging-vs-output)): a fatal error is the reason the
-  process is about to exit non-zero, not an optional diagnostic, so it stays visible
-  even under `RUST_LOG=off` or a filter that excludes Ratect's own target — including
-  under [`-o quiet`](output-styles.md#quiet), whose whole contract is "only error messages".
+1. **It did: that exit code, `0` included.** Ratect waits for the container to exit and
+   inspects its status — a task whose command is `exit 42` makes `ratect-compat` itself
+   exit `42`, matching `docker run`'s convention rather than collapsing every failure to
+   one code. A task's own `125`, `126` or `127` passes through the same way. A task that
+   runs as a [prerequisite](ratect-compat-config-reference.md#task) and fails this way
+   stops the rest of the chain immediately — no other prerequisites, and not the task
+   that depended on it, will run — matching
+   [Batect's documented behavior](https://github.com/batect/batect.dev/blob/main/docs/reference/config/tasks.md#prerequisites).
+   One exception: if every container exited `0` but Ratect then **fails to clean up** —
+   the daemon refuses to remove a container or the task network, or a Ctrl+C stops the
+   cleanup with something still to remove — the run exits `125` instead, and a
+   prerequisite that fails this way stops the chain there. A task's own
+   non-zero code is never overridden, and what `--no-cleanup`,
+   `--no-cleanup-after-success` or `--no-cleanup-after-failure` leaves in place on purpose
+   isn't a cleanup failure.
+2. **A termination signal ended it: 128 + that signal's own number** — `130` for Ctrl+C
+   (`SIGINT`), `143` for `SIGTERM`, `129` for `SIGHUP` — the shell's own convention, so
+   a script or CI job can tell a cancelled run apart from a failed one *and* tell what
+   cancelled it, whatever cleanup does afterwards. All three abandon the run and then
+   clean it up — see
+   [Differences from Batect](differences-from-batect.md#runtime-behavior-gaps) for the
+   full behavior, including what `--no-cleanup-after-failure` does to it and what a
+   *second* signal does. A signal that arrives only during the cleanup of a run that
+   had already finished ended nothing, so rule 1 applies: a passing run whose cleanup
+   then completes still exits `0`. One that arrives during a prerequisite's cleanup
+   ends the run before the next task starts, and exits 128 + its number.
+3. **It never ran, or never finished, for any other reason: `125`** — `docker run`'s own
+   code for "the `docker` command itself failed". A missing or malformed config file, a
+   task or container referenced by name that doesn't exist, a dependency cycle, an
+   unreachable daemon, an image pull or build that fails, a dependency that exits or
+   never becomes ready, a setup command that fails, a `--log-file` that can't be opened:
+   all `125`, one code, with the reason on stderr.
+
+Everything other than a run — `--list-tasks`, `--clean`, `--clean-cache` — runs nothing,
+so it exits `1` on its own failure (a config that doesn't parse under `--list-tasks`, a
+`--log-file` that can't be opened) and `0` otherwise. A usage error (an unknown flag)
+exits `2`, and `--help` exits `0`.
+
+Every failure is printed to stderr as `Error: <message>` — deliberately *not* through
+`tracing::error!`/`RUST_LOG` (which every other diagnostic goes through — see
+[how it works](how-it-works.md#5-logging-vs-output)): a fatal error is the reason the
+process is about to exit non-zero, not an optional diagnostic, so it stays visible even
+under `RUST_LOG=off` or a filter that excludes Ratect's own target — including under
+[`-o quiet`](output-styles.md#quiet), whose whole contract is "only error messages".
+
+- Running with no task name at all (and not `--list-tasks`) **exits `0`** — Ratect logs
+  a warning but doesn't fail the process. This is a rough edge, not intentional design;
+  don't rely on it in scripts.
 - A misspelled task name (whether given directly on the command line, or as a
   [`prerequisites`](ratect-compat-config-reference.md#task) entry) gets a `Did you mean 'x'?`
   suggestion appended to the error, for every existing task name within a Levenshtein
@@ -198,21 +236,6 @@ doesn't distinguish "nothing to do" from "success":
   suggested, e.g. `Did you mean 'build' or 'bulid'?` — Batect's own implementation
   can silently drop one of two equally-close suggestions (its sorting comparator
   doubles as its de-duplication key), which Ratect's deliberately doesn't replicate.
-- **A run ended by a signal exits 128 + that signal's own number** — `130` for Ctrl+C
-  (`SIGINT`), `143` for `SIGTERM`, `129` for `SIGHUP` — the shell's own convention, so
-  a script or CI job can tell a cancelled run apart from a failed one *and* tell what
-  cancelled it. All three abandon the run and then clean it up — see
-  [Differences from Batect](differences-from-batect.md#runtime-behavior-gaps) for the
-  full behavior, including what `--no-cleanup-after-failure` does to it and what a
-  *second* signal does.
-- **A failing command *inside* the container fails the `ratect` process too, with the
-  same exit code.** Ratect waits for the container to exit and inspects its status —
-  a task whose command is `exit 42` makes `ratect` itself exit `42`, matching
-  `docker run`'s convention rather than collapsing every failure to a generic `1`. A
-  task that runs as a [prerequisite](ratect-compat-config-reference.md#task) and fails this way
-  stops the rest of the chain immediately — no other prerequisites, and not the task
-  that depended on it, will run — matching
-  [Batect's documented behavior](https://github.com/batect/batect.dev/blob/main/docs/reference/config/tasks.md#prerequisites).
 - **A crash (a genuine bug, not one of the above) exits `101`**, Rust's own default for
   an unhandled panic. `ratect-compat` prints where to report it
   (https://github.com/or1can/ratect/issues/new), the binary's version and platform, and

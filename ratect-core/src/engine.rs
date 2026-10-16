@@ -88,6 +88,7 @@ use async_recursion::async_recursion;
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::OnceCell;
 use uuid::Uuid;
@@ -426,6 +427,42 @@ fn format_task_suggestions(tasks: &IndexMap<String, Task>, name: &str) -> String
     let quoted: Vec<String> = suggestions.iter().map(|s| format!("'{}'", s)).collect();
     format!(" Did you mean {}?", human_readable_list(&quoted, "or"))
 }
+
+/// The error a task fails with when its command exited `0` but cleanup then
+/// failed to remove something it set out to remove — the daemon refused a
+/// removal, or the cleanup ladder's abandon rung was reached with something
+/// still to remove. Like any other failure it ends the chain: a prerequisite
+/// that fails this way stops the run before the task that depends on it.
+///
+/// A distinct type, like [`crate::docker::ContainerExitedNonZero`] and
+/// [`crate::interrupt::TaskInterrupted`], so [`crate::exit_code::for_error`]
+/// can give it [`crate::exit_code::RATECT_FAILED`] without inspecting a
+/// message. Only ever returned in place of `Ok`: a run that failed keeps its
+/// own error, cleanup notwithstanding (decisions/0016). What `--no-cleanup*`
+/// leaves in place on purpose is not a cleanup failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CleanupFailed {
+    /// The task whose cleanup failed — a prerequisite's, as often as not.
+    pub task: String,
+    /// That task's run id, the value of [`crate::labels::RUN`] on whatever
+    /// it left behind.
+    pub run: String,
+}
+
+impl std::fmt::Display for CleanupFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "task '{}' passed, but cleaning up after it failed; anything left behind \
+             carries the label {}={}",
+            self.task,
+            crate::labels::RUN,
+            self.run
+        )
+    }
+}
+
+impl std::error::Error for CleanupFailed {}
 
 pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// The project as loaded — its values unevaluated. Each task's
@@ -1708,6 +1745,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // the top-level task — never for a prerequisite task itself, which
         // always runs its own prerequisites regardless (matching Batect: the
         // flag only ever names the one task given on the command line).
+        let interrupts_before_prerequisites = self.interrupt.count();
         if !(top_level && self.skip_prerequisites) {
             if let Some(prerequisites) = &task.prerequisites {
                 let prerequisites =
@@ -1736,6 +1774,19 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             );
             return Ok(());
         };
+
+        // A signal that landed during a prerequisite — its cleanup included,
+        // which a prerequisite that had already passed survives with `Ok` —
+        // ended the run before this task started, so it never does: nothing
+        // is created only to be torn down again, and the run reports the
+        // signal (decisions/0016, rule 2). Counted against this task's own
+        // starting point, so a signal before any prerequisite ran is left to
+        // the run's own interrupt handling below.
+        if self.interrupt.count() > interrupts_before_prerequisites {
+            return Err(
+                crate::interrupt::TaskInterrupted::new(self.interrupt.last_signal()).into(),
+            );
+        }
 
         // Run the task itself
         let container_config = containers
@@ -2235,7 +2286,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // regardless of whether `n` is zero (see `cleanup_after_success`'s
         // doc comment) — `None` means a genuine infrastructure failure
         // (`cleanup_after_failure`'s bucket instead).
-        let mut exit_code = match &result {
+        let exit_code = match &result {
             Ok(()) => Some(0),
             Err(error) => error
                 .downcast_ref::<crate::docker::ContainerExitedNonZero>()
@@ -2297,6 +2348,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // been detected. Before then the rung is reached in two steps:
         // whatever escalates, then a `SIGINT`.
         let mut interrupts_at_escalation: Option<usize> = None;
+        // Set by any removal the daemon refuses, and by an abandoned cleanup —
+        // see `CleanupFailed`. Atomic rather than a `Cell` because the closures
+        // that set it are held across awaits, and `async_recursion` requires
+        // this future to be `Send`.
+        let cleanup_failed = AtomicBool::new(false);
         let abandon_rung = |interrupts_at_escalation: Option<usize>| async move {
             let interrupts = match interrupts_at_escalation {
                 Some(interrupts) => interrupts,
@@ -2307,13 +2363,6 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             };
             self.interrupt.wait_for_interrupts(interrupts + 1).await;
         };
-        // The signal that escalated cleanup, once one has — read at the moment
-        // that is detected rather than when the run ended: the run may never
-        // have been signalled at all, and when it was, the signal that hurried
-        // its cleanup can be a different one from the one that ended it. The
-        // tracker keeps only the most recent signal, so two landing in one
-        // window report the later.
-        let mut cleanup_signal: Option<crate::interrupt::TerminationSignal> = None;
 
         if should_cleanup {
             if let Some(signal) = interrupted_by {
@@ -2366,16 +2415,22 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     });
                 }
                 Ok(()) => {}
-                Err(e) if removal.is_task_container => tracing::warn!(
-                    container = removal.name,
-                    error = ?e,
-                    "Failed to clean up the task's own container"
-                ),
-                Err(e) => tracing::warn!(
-                    dependency = removal.name,
-                    error = ?e,
-                    "Failed to clean up dependency container"
-                ),
+                Err(e) => {
+                    cleanup_failed.store(true, Ordering::Relaxed);
+                    if removal.is_task_container {
+                        tracing::warn!(
+                            container = removal.name,
+                            error = ?e,
+                            "Failed to clean up the task's own container"
+                        );
+                    } else {
+                        tracing::warn!(
+                            dependency = removal.name,
+                            error = ?e,
+                            "Failed to clean up dependency container"
+                        );
+                    }
+                }
             };
 
             // First, and unconditionally: `run_container` never removes the
@@ -2439,7 +2494,6 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // what is left goes out in one round-trip rather than one each.
             if !removals.is_empty() {
                 let signal = self.interrupt.last_signal();
-                cleanup_signal = Some(signal);
                 interrupts_at_escalation = Some(self.interrupt.interrupt_count());
                 // Always Ctrl+C: the abandon rung is `SIGINT`-only, and the
                 // only sender it is advice for is a person at a terminal.
@@ -2469,8 +2523,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 self.event_sink.post(TaskEvent::RemovingNetwork);
                 // A network has no faster removal to escalate to, so it is
                 // raced against the abandonment rung alone; a first signal
-                // landing here is still recorded below, so the run reports
-                // it.
+                // landing here lets it finish, and doesn't change what the
+                // run exits with (decisions/0016).
                 let removal = self.docker.remove_network(&network_name);
                 match self
                     .until_interrupted(abandon_rung(interrupts_at_escalation), removal)
@@ -2478,22 +2532,18 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 {
                     Some(Ok(())) => {}
                     Some(Err(e)) => {
+                        cleanup_failed.store(true, Ordering::Relaxed);
                         tracing::warn!(network = network_name.as_str(), error = ?e, "Failed to remove network");
                     }
                     None => abandoned = true,
                 }
-            }
-            // A signal that landed during cleanup without cutting a removal
-            // short — during the network's, or between two steps — is still
-            // one the process was sent, and the exit code has to say so.
-            if cleanup_signal.is_none() && self.interrupt.count() >= escalate_at {
-                cleanup_signal = Some(self.interrupt.last_signal());
             }
             // Driven by work actually being cut short, not by the raw count:
             // an interrupt arriving once everything is already removed leaves
             // nothing behind, and sending someone hunting for leftovers that
             // don't exist is its own small betrayal.
             if abandoned {
+                cleanup_failed.store(true, Ordering::Relaxed);
                 // Names the label rather than a `ratect` command: this is
                 // shared core, and `resources` is a `ratect` verb that
                 // `ratect-compat` doesn't have — so naming it would be wrong
@@ -2531,25 +2581,25 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             }
         }
 
-        // A run that finished normally but whose cleanup was signalled is
-        // reported as stopped by that signal: the process was told to exit,
-        // and its exit code (128 + the signal) and the failure line have to
-        // say so rather than claiming the task finished. Matches Batect,
-        // where an interrupt in the cleanup stage fails the task. A run the
-        // signal *ended* keeps reporting that one — the exit code belongs to
-        // whatever stopped the task, not to whatever hurried its cleanup.
+        // A signal that arrived only during cleanup changes nothing here: the
+        // command had already exited, so the signal ended nothing, and the
+        // run's result stands (decisions/0016, rule 2) — a divergence from
+        // Batect, where an interrupt in the cleanup stage fails the task. If
+        // it led cleanup to be abandoned, that is a cleanup failure, recorded
+        // above like a refused removal.
         //
-        // Only a run that *succeeded*: a run that failed keeps its own error
-        // and exit code, since the failure is the thing the user needs to see
-        // and the signal during its cleanup is not what went wrong.
-        let result = match (result, cleanup_signal) {
-            (Ok(()), Some(signal)) => {
-                exit_code = None;
-                Err(anyhow::Error::new(crate::interrupt::TaskInterrupted::new(
-                    signal,
-                )))
+        // A cleanup failure replaces only an `Ok`: a task's own non-zero code,
+        // a signal that ended it, or an infrastructure failure is what the
+        // user needs to see, and the leak is reported on stderr either way.
+        // Returned like any other failure, so a prerequisite's ends the chain
+        // before the task that depends on it runs.
+        let result = match result {
+            Ok(()) if cleanup_failed.load(Ordering::Relaxed) => Err(CleanupFailed {
+                task: task_name.to_string(),
+                run: run_id.clone(),
             }
-            (result, _) => result,
+            .into()),
+            result => result,
         };
 
         // "Finished" means the task's own command ran to completion and

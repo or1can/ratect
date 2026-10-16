@@ -850,3 +850,19 @@ fn config_vars_file_default_is_absent_when_batect_local_yml_is_missing() {
     let dir = unique_temp_dir();
     assert_eq!(resolve_config_vars_file(None, &dir), None);
 }
+
+/// Only naming a task makes an invocation a run, and every flag `run`
+/// handles instead of running one makes it not — so a broken config under
+/// `--list-tasks` still exits `1`, and under a task name `125`
+/// (decisions/0016).
+#[test]
+fn only_a_named_task_with_nothing_handled_first_is_a_run() {
+    assert!(args(&["ratect", "build"]).runs_a_task());
+    assert!(args(&["ratect", "--log-file", "x", "build"]).runs_a_task());
+
+    assert!(!args(&["ratect"]).runs_a_task());
+    assert!(!args(&["ratect", "--list-tasks", "build"]).runs_a_task());
+    assert!(!args(&["ratect", "--clean", "build"]).runs_a_task());
+    assert!(!args(&["ratect", "--clean-cache", "cargo", "build"]).runs_a_task());
+    assert!(!args(&["ratect", "--upgrade", "build"]).runs_a_task());
+}
