@@ -17,7 +17,7 @@
 //! Most of what a binary presents is its own interface, and the two are
 //! deliberately allowed to differ: each spells its own `--output` values, its
 //! own flags, its own subcommands. Exit codes are the exception, and
-//! [`docs/ratect-cli.md`](../../../docs/ratect-cli.md) says so out loud —
+//! [`docs/ratect-cli.md`](../../docs/ratect-cli.md) says so out loud —
 //! `ratect`'s are "Identical to `ratect-compat`". A promise like that is not
 //! kept by writing the same `match` twice; two spellings of one contract can
 //! only ever differ by one of them being wrong.
