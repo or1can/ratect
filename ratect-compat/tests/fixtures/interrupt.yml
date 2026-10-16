@@ -9,11 +9,11 @@
 # to interrupt. A task that finishes on its own would race the signal and prove
 # nothing either way.
 #
-# The dependency is what makes this more than a one-container test. A task's own
-# container is removed by `run_container` itself on every path except an
-# interrupt, whereas a dependency is only ever removed by the engine's cleanup
-# section — so having both proves the interrupt path reaches each of them, plus
-# the network they share.
+# The dependency is what makes this more than a one-container test. The task's
+# own container and a dependency are started down different paths
+# (`run_container` and `start_background_container`), and both are only ever
+# removed by the engine's cleanup section — so having both proves the interrupt
+# path reaches each of them, plus the network they share.
 #
 # `project_name` is its own so the label filters in the test can't match a
 # concurrently-running test's containers.
