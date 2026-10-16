@@ -21,6 +21,12 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Breaking
+
+- A run (`ratect run`, `ratect-compat <task>`) that fails without its task's command exiting — a config that doesn't load, an unknown task, an unreachable daemon, a failed image pull or build, a dependency that never becomes ready, or (`ratect-compat` only) a `--log-file` that can't be opened — exits `125` instead of `1`. Every other command still exits `1` on failure.
+- A run whose task's command exited `0` exits `0` even if a signal arrives during its cleanup, instead of 128 + the signal's number, unless that cleanup is then abandoned or fails.
+- A run whose every container exited `0` but whose cleanup fails — the daemon refusing to remove a container or the task network, or a cleanup abandoned with something left to remove — exits `125` instead of `0`, and a prerequisite whose cleanup fails stops the run before the tasks after it. A task's own non-zero exit code is kept.
+
 ### Changed
 
 - Every container's image — each dependency's and the task's own — is pulled or built as soon as the task's network is ready, concurrently. A pull or build that fails ends the run as soon as it fails, and `-o all`/`fancy` show image progress from the start.

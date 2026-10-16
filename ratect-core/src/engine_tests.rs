@@ -185,6 +185,12 @@ struct FakeContainerRuntime {
             )>,
         >,
     >,
+    // Container ids whose removal — graceful or forced — the daemon refuses
+    // (see `refusing_container_removal`).
+    refused_container_removals: Arc<Mutex<HashSet<String>>>,
+    // Makes `remove_network` fail, as a daemon refusing to remove a network
+    // with an endpoint still attached does (see `refusing_network_removal`).
+    refuse_network_removal: Arc<Mutex<bool>>,
 }
 
 impl Default for FakeContainerRuntime {
@@ -222,6 +228,8 @@ impl Default for FakeContainerRuntime {
             dependency_exits: Default::default(),
             container_outputs: Default::default(),
             signals_on_removal: Default::default(),
+            refused_container_removals: Default::default(),
+            refuse_network_removal: Default::default(),
         }
     }
 }
@@ -251,6 +259,36 @@ impl FakeContainerRuntime {
             .unwrap()
             .insert(name.to_string(), exit_code);
         self
+    }
+
+    /// Makes every removal of `container_id` fail, as the daemon does for a
+    /// container something else already removed (`404: No such container`).
+    /// The removal records no event, since nothing was removed.
+    fn refusing_container_removal(self, container_id: &str) -> Self {
+        self.refused_container_removals
+            .lock()
+            .unwrap()
+            .insert(container_id.to_string());
+        self
+    }
+
+    /// Makes `remove_network` fail, as the daemon does while a container
+    /// outside the run is still attached (`403: … has active endpoints`).
+    fn refusing_network_removal(self) -> Self {
+        *self.refuse_network_removal.lock().unwrap() = true;
+        self
+    }
+
+    fn refuses_removal_of(&self, container_id: &str) -> Result<()> {
+        if self
+            .refused_container_removals
+            .lock()
+            .unwrap()
+            .contains(container_id)
+        {
+            anyhow::bail!("No such container: {container_id}");
+        }
+        Ok(())
     }
 
     /// Makes `network_exists` report `false` — simulates `--use-network`
@@ -1017,6 +1055,7 @@ impl ContainerRuntime for FakeContainerRuntime {
         // round-trip, so a signal landing on one of them finds the others
         // pending too — and dropped with it — rather than already done.
         tokio::task::yield_now().await;
+        self.refuses_removal_of(container_id)?;
         self.push(format!("force-remove:{container_id}"));
         Ok(())
     }
@@ -1042,6 +1081,9 @@ impl ResourceInventory for FakeContainerRuntime {
     }
 
     async fn remove_network(&self, name: &str) -> Result<()> {
+        if *self.refuse_network_removal.lock().unwrap() {
+            anyhow::bail!("error while removing network: network {name} has active endpoints");
+        }
         self.push(format!("network-remove:{name}"));
         Ok(())
     }
@@ -1057,6 +1099,7 @@ impl ResourceInventory for FakeContainerRuntime {
             (stop_signal.map(str::to_string), stop_grace_period),
         );
         self.signal_from_removal().await;
+        self.refuses_removal_of(container_id)?;
         self.push(format!("sidecar-stop:{container_id}"));
         Ok(())
     }
@@ -4637,8 +4680,9 @@ async fn an_interrupt_removes_the_tasks_own_container_too() {
 ///
 /// What that first signal does is *escalate*: the graceful stop in flight
 /// is dropped and everything left is force-removed instead, so nothing is
-/// left behind — and the run now reports the signal, since the process was
-/// told to stop and its exit code has to say so (ratect#249).
+/// left behind (ratect#249). The run still passes: the signal arrived after
+/// the command had exited `0`, so it ended nothing, and a forced removal that
+/// completes is a faster cleanup rather than a failed one (decisions/0016).
 #[tokio::test]
 async fn a_signal_during_cleanup_escalates_it_even_when_the_run_was_not_interrupted() {
     let config = config_with_database_dependency(|_| {});
@@ -4656,15 +4700,10 @@ async fn a_signal_during_cleanup_escalates_it_even_when_the_run_was_not_interrup
         Arc::clone(&interrupt),
     );
 
-    let error = engine.run_task("start", &[]).await.unwrap_err();
-    let interrupted = error
-        .downcast_ref::<crate::interrupt::TaskInterrupted>()
-        .expect("a signal during cleanup ends the run as interrupted");
-    assert_eq!(
-        interrupted.signal,
-        crate::interrupt::TerminationSignal::Terminate,
-        "the failure names the signal that actually arrived"
-    );
+    engine
+        .run_task("start", &[])
+        .await
+        .expect("a signal during a passing run's completed cleanup leaves it passing");
 
     assert_eq!(
         interrupt.count(),
@@ -4856,14 +4895,10 @@ async fn a_supervisors_follow_up_signal_after_escalation_does_not_abandon() {
         Arc::clone(&interrupt),
     );
 
-    let error = engine.run_task("start", &[]).await.unwrap_err();
-    let interrupted = error
-        .downcast_ref::<crate::interrupt::TaskInterrupted>()
-        .expect("a signal during cleanup ends the run as interrupted");
-    assert_eq!(
-        interrupted.signal,
-        crate::interrupt::TerminationSignal::Interrupt
-    );
+    engine
+        .run_task("start", &[])
+        .await
+        .expect("the run had passed, and its cleanup completed");
 
     let events = docker.events();
     assert!(
@@ -4875,9 +4910,10 @@ async fn a_supervisors_follow_up_signal_after_escalation_does_not_abandon() {
 }
 
 /// Two signals during the cleanup of a run that finished normally: the
-/// first escalates, a `SIGINT` after it abandons — and the run still
-/// reports the first, since that is the one that turned a finished run
-/// into a stopped one.
+/// first escalates, a `SIGINT` after it abandons — and an abandoned cleanup
+/// is a failed one, so a run that would have passed fails with
+/// `CleanupFailed` rather than reporting either signal, neither of which
+/// ended the command (decisions/0016).
 #[tokio::test]
 async fn an_interrupt_after_escalation_of_an_uninterrupted_runs_cleanup_abandons_it() {
     let config = config_with_database_dependency(|_| {});
@@ -4897,12 +4933,9 @@ async fn an_interrupt_after_escalation_of_an_uninterrupted_runs_cleanup_abandons
     );
 
     let error = engine.run_task("start", &[]).await.unwrap_err();
-    let interrupted = error
-        .downcast_ref::<crate::interrupt::TaskInterrupted>()
-        .expect("a signal during cleanup ends the run as interrupted");
-    assert_eq!(
-        interrupted.signal,
-        crate::interrupt::TerminationSignal::Hangup
+    assert!(
+        error.is::<CleanupFailed>(),
+        "an abandoned cleanup fails a passing run: {error:#}"
     );
 
     let events = docker.events();
@@ -4912,6 +4945,196 @@ async fn an_interrupt_after_escalation_of_an_uninterrupted_runs_cleanup_abandons
             .any(|e| e.starts_with("force-remove:sidecar-id-database"))
             && !events.iter().any(|e| e.starts_with("network-remove:")),
         "the second signal abandons what the first had hurried: {events:?}"
+    );
+}
+
+/// A failing run signalled during its cleanup keeps its own code whether
+/// that cleanup completes or is abandoned: the failure is what the user
+/// needs to see, and the signal ended nothing (decisions/0016, rule 1).
+#[tokio::test]
+async fn a_failing_run_signalled_during_cleanup_keeps_its_own_code() {
+    for signals in [
+        &[crate::interrupt::TerminationSignal::Interrupt][..],
+        &[
+            crate::interrupt::TerminationSignal::Interrupt,
+            crate::interrupt::TerminationSignal::Interrupt,
+        ][..],
+    ] {
+        let config = config_with_database_dependency(|_| {});
+        let interrupt = crate::interrupt::Interrupt::new();
+        let docker = FakeContainerRuntime::default()
+            .with_run_exit("app", 3)
+            .signalling_on_removal(&interrupt, signals);
+        let engine = TaskEngine::new(
+            project(config),
+            docker.clone(),
+            Arc::new(NullEventSink),
+            Arc::clone(&interrupt),
+        );
+
+        let error = engine.run_task("start", &[]).await.unwrap_err();
+        let failure = error
+            .downcast_ref::<crate::docker::ContainerExitedNonZero>()
+            .unwrap_or_else(|| panic!("{} signal(s): {error:#}", signals.len()));
+        assert_eq!(failure.exit_code, 3);
+    }
+}
+
+/// A passing run whose cleanup the daemon refuses fails with
+/// `CleanupFailed`, which both binaries exit `125` with — once each for the
+/// network and for a dependency, the two #316 reproduced. Everything else is
+/// still removed: one refusal doesn't stop the rest of cleanup.
+#[tokio::test]
+async fn a_passing_run_whose_cleanup_fails_fails_with_cleanup_failed() {
+    let network = FakeContainerRuntime::default().refusing_network_removal();
+    let dependency =
+        FakeContainerRuntime::default().refusing_container_removal("sidecar-id-database");
+    for docker in [network, dependency] {
+        let engine = engine(config_with_database_dependency(|_| {}), docker.clone());
+
+        let error = engine.run_task("start", &[]).await.unwrap_err();
+
+        assert!(error.is::<CleanupFailed>(), "{error:#}");
+        let events = docker.events();
+        assert!(
+            events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+            "the task's own container is still removed: {events:?}"
+        );
+    }
+}
+
+/// A task's own non-zero code is never overridden by a cleanup failure.
+#[tokio::test]
+async fn a_failing_run_whose_cleanup_fails_keeps_its_own_code() {
+    let docker = FakeContainerRuntime::default()
+        .with_run_exit("app", 3)
+        .refusing_network_removal();
+    let engine = engine(config_with_database_dependency(|_| {}), docker);
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    let failure = error
+        .downcast_ref::<crate::docker::ContainerExitedNonZero>()
+        .unwrap_or_else(|| panic!("{error:#}"));
+    assert_eq!(failure.exit_code, 3);
+}
+
+/// A run a signal ended keeps the signal's code, even when its cleanup then
+/// fails (decisions/0016, rule 2).
+#[tokio::test]
+async fn a_signalled_run_whose_cleanup_fails_keeps_the_signal() {
+    let config = config_with_database_dependency(|_| {});
+    let docker = FakeContainerRuntime::default()
+        .with_run_delay("app", std::time::Duration::from_secs(60))
+        .refusing_network_removal();
+    let interrupt = crate::interrupt::Interrupt::new();
+    interrupt.record_signal(crate::interrupt::TerminationSignal::Terminate);
+    let engine = TaskEngine::new(
+        project(config),
+        docker,
+        Arc::new(NullEventSink),
+        Arc::clone(&interrupt),
+    );
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    let interrupted = error
+        .downcast_ref::<crate::interrupt::TaskInterrupted>()
+        .unwrap_or_else(|| panic!("{error:#}"));
+    assert_eq!(
+        interrupted.signal,
+        crate::interrupt::TerminationSignal::Terminate
+    );
+}
+
+/// A prerequisite whose cleanup fails ends the chain like any other failure
+/// of Ratect's own: the task that depends on it never runs, so its code —
+/// whatever it would have been — never decides the run's (decisions/0016,
+/// rule 3).
+#[tokio::test]
+async fn a_prerequisites_cleanup_failure_stops_the_chain() {
+    let mut config = config_with_database_dependency(|_| {});
+    config
+        .containers
+        .insert("tool".to_string(), container("alpine:3.18", None));
+    config
+        .tasks
+        .insert("prepare".to_string(), task("app", "true"));
+    let mut main = task("tool", "true");
+    main.prerequisites = Some(vec!["prepare".to_string()]);
+    config.tasks.insert("main".to_string(), main);
+    let docker = FakeContainerRuntime::default()
+        .refusing_container_removal("sidecar-id-database")
+        .with_run_exit("tool", 3);
+    let engine = engine(config, docker.clone());
+
+    let error = engine.run_task("main", &[]).await.unwrap_err();
+
+    assert!(error.is::<CleanupFailed>(), "{error:#}");
+    let ran: Vec<String> = docker
+        .specs
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
+    assert!(
+        !ran.contains(&"tool".to_string()),
+        "the main task's container never runs: {ran:?}"
+    );
+}
+
+/// A signal during a prerequisite's cleanup leaves that prerequisite passed,
+/// but ends the run: the task that depends on it never starts, and the run
+/// reports the signal (decisions/0016, rule 2).
+#[tokio::test]
+async fn a_signal_during_a_prerequisites_cleanup_ends_the_run_before_the_next_task() {
+    let mut config = config_with_database_dependency(|_| {});
+    config
+        .containers
+        .insert("tool".to_string(), container("alpine:3.18", None));
+    config
+        .tasks
+        .insert("prepare".to_string(), task("app", "true"));
+    let mut main = task("tool", "true");
+    main.prerequisites = Some(vec!["prepare".to_string()]);
+    config.tasks.insert("main".to_string(), main);
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default().signalling_on_removal(
+        &interrupt,
+        &[crate::interrupt::TerminationSignal::Terminate],
+    );
+    let engine = TaskEngine::new(
+        project(config),
+        docker.clone(),
+        Arc::new(NullEventSink),
+        Arc::clone(&interrupt),
+    );
+
+    let error = engine.run_task("main", &[]).await.unwrap_err();
+
+    let interrupted = error
+        .downcast_ref::<crate::interrupt::TaskInterrupted>()
+        .unwrap_or_else(|| panic!("{error:#}"));
+    assert_eq!(
+        interrupted.signal,
+        crate::interrupt::TerminationSignal::Terminate
+    );
+    let events = docker.events();
+    assert!(
+        !events.iter().any(|e| e.starts_with("run:tool:")),
+        "the main task never starts: {events:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.starts_with("network-create:"))
+            .count(),
+        events
+            .iter()
+            .filter(|e| e.starts_with("network-remove:"))
+            .count(),
+        "every network created is removed: {events:?}"
     );
 }
 

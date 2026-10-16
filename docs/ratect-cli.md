@@ -481,13 +481,25 @@ until the first real run caches it.
 
 ## Exit codes and diagnostics
 
-Identical to `ratect-compat`: a task's own container exit code becomes `ratect`'s exit
-code, a run ended by a signal exits 128 + that signal's number (`130` for Ctrl+C, `143`
-for `SIGTERM`, `129` for `SIGHUP`), anything else that fails exits `1`, and the reason
-always reaches stderr — in every output style, including `quiet`. Any of those three
-signals abandons the run and then cleans up after it; a second one *during* that cleanup
-force-removes whatever is left, a Ctrl+C after that stops the cleanup, and `ratect
-resources list` finds whatever that leaves. `RUST_LOG` controls Ratect's own internal
+Identical to `ratect-compat`. A run — `ratect run` — exits with the task's own container's
+exit code, `0` included; with 128 + the signal's number if a signal ended it (`130` for
+Ctrl+C, `143` for `SIGTERM`, `129` for `SIGHUP`); and with `125` if the task's command
+never ran or never finished for any other reason — a config that doesn't load, an
+unknown task, an unreachable daemon, a failed pull or build, a dependency that never
+became ready. A run whose every container exited `0` but whose cleanup then failed — a
+removal the daemon refused, or a cleanup stopped with Ctrl+C — exits `125` too, and a
+prerequisite whose cleanup fails stops the chain there; a task's own non-zero code is
+never overridden. Every other verb runs nothing, and exits `1` on
+its own failure (`doctor` finding a problem, `config validate` on a bad file, `caches
+list` with the daemon down) and `0` otherwise. A usage error exits `2`, `--help` `0`. The
+reason always reaches stderr — in every output style, including `quiet`. [`ratect-compat`'s
+section](ratect-compat-cli.md#exit-codes-and-error-reporting) has each rule in full, and
+[decisions/0016](../decisions/0016-exit-codes.md) why. Any of the three signals abandons
+the run and then cleans up after it; a second one *during* that cleanup force-removes
+whatever is left, a Ctrl+C after that stops the cleanup, and `ratect resources list`
+finds whatever that leaves. A signal that arrives only during the cleanup of a run that
+had already finished doesn't change its exit code; one during a prerequisite's cleanup
+ends the run before the next task starts. `RUST_LOG` controls Ratect's own internal
 logging (default `info`, on stderr — see [Filtering
 `RUST_LOG`](troubleshooting.md#filtering-rust_log)). Unlike `ratect-compat` there's no `--log-file`;
 redirect stderr if you want one. A crash (a genuine bug) exits `101` and prints where to

@@ -223,10 +223,10 @@ tables above:
     follow-up is a `SIGTERM`, which only ever means "exit" — so a supervisor that
     escalates `SIGINT` → `SIGTERM` → `SIGKILL` on a timer usually gets a finished
     cleanup before the `SIGKILL`, though a slow daemon can still lose that race. A run
-    that finished normally but was signalled during its cleanup exits
-    128 + that signal's number, as a run the signal ended does — a rule
-    [decisions/0016](../decisions/0016-exit-codes.md) replaces, with #540: the
-    task's own code will stand unless the cleanup leaves something behind. Whatever an abandoned
+    that had already finished when the signal arrived keeps its own exit code, since the
+    signal ended nothing — unless the cleanup is then abandoned with something still to
+    remove, which turns a `0` into `125` ([decisions/0016](../decisions/0016-exit-codes.md)).
+    Batect fails such a run with `-1` (255) whatever its code was. Whatever an abandoned
     cleanup leaves still carries Ratect's ownership labels, so [`ratect resources
     list`/`clean`](ratect-cli.md#managing-resources) finds it (`ratect`-only;
     `ratect-compat` has no equivalent verb, so from it the sweep is `docker` itself,
@@ -244,6 +244,21 @@ tables above:
 
   `SIGKILL` remains untrappable by either tool, same underlying OS limitation — the
   same labels are what a post-hoc `ratect resources clean` needs to find what it left.
+- **A run that fails without its task's command exiting exits `125`**: a config
+  that doesn't load, an unknown task, an unreachable daemon, a failed image pull or
+  build, a dependency that never becomes ready, a setup command that fails. `125` is
+  `docker run`'s own code for its own failure. Batect returns `-1` (255) for all of
+  these, as for every failure other than the task's own command exiting non-zero.
+  Every other command — `--list-tasks`, `--clean`, `--clean-cache` — still exits `1`
+  on failure; Batect's is `-1` there too. See
+  [Exit codes and error reporting](ratect-compat-cli.md#exit-codes-and-error-reporting)
+  and [decisions/0016](../decisions/0016-exit-codes.md).
+- **A cleanup that fails after a passing run exits `125`; after a failing one, the
+  task's own code stands**: the daemon refusing to remove a container or the task
+  network fails a run whose containers all exited `0`, and leaves a run that already
+  failed with its own code. Batect fails both with `-1`
+  (255), so the task's own code is lost whenever its cleanup fails. See
+  [decisions/0016](../decisions/0016-exit-codes.md).
 - **Ownership labels**: every container and network Ratect creates carries
   `eu.orican.ratect.*` labels; Batect labels nothing of its own. An additive
   divergence — changes no behavior. See

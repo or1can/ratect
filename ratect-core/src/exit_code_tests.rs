@@ -16,6 +16,13 @@ use super::*;
 
 use crate::interrupt::{TaskInterrupted, TerminationSignal};
 
+fn cleanup_failed() -> crate::engine::CleanupFailed {
+    crate::engine::CleanupFailed {
+        task: "build".to_string(),
+        run: "run-id".to_string(),
+    }
+}
+
 /// The task's own command wins over everything: its code is what a script
 /// wants, and collapsing it to a generic failure is what `docker run` itself
 /// declines to do.
@@ -39,11 +46,74 @@ fn a_signalled_run_exits_with_that_signals_code() {
     assert_eq!(code(TerminationSignal::Hangup), 129);
 }
 
-/// Everything else is one code. Batect returns 255 for every failure
-/// including these; 1 is the deliberate divergence.
+/// Everything else is one code: the task's command never ran, or never
+/// finished, and Ratect is what failed. `125` is `docker run`'s own code for
+/// that, and coreutils' for any command-running wrapper — decisions/0016's
+/// rule 3. Batect returns 255; that divergence is on the differences page.
 #[test]
-fn any_other_failure_exits_1() {
-    assert_eq!(for_error(&anyhow::anyhow!("the config file is empty")), 1);
+fn any_other_failure_exits_125() {
+    assert_eq!(for_error(&anyhow::anyhow!("the config file is empty")), 125);
+    assert_eq!(RATECT_FAILED, 125);
+}
+
+/// A run whose command exited `0` but whose cleanup then failed exits `125`
+/// rather than the `0` it would otherwise have earned: a leaked container or
+/// network is Ratect failing at its own job, and CI should see it.
+#[test]
+fn a_passing_run_whose_cleanup_failed_exits_125() {
+    let error = anyhow::Error::new(cleanup_failed());
+
+    assert_eq!(for_error(&error), RATECT_FAILED);
+}
+
+/// The task's own non-zero code is never overridden by a cleanup failure —
+/// the engine keeps returning the container's failure, so that's all the
+/// mapping ever sees. Pinned here on an error carrying both, in case a later
+/// change starts wrapping one in the other.
+#[test]
+fn a_tasks_own_code_wins_over_a_cleanup_failure() {
+    use anyhow::Context;
+
+    let error = Err::<(), _>(anyhow::Error::new(cleanup_failed()))
+        .context(crate::docker::ContainerExitedNonZero { exit_code: 3 })
+        .unwrap_err();
+    assert_eq!(for_error(&error), 3);
+
+    let error = Err::<(), _>(anyhow::Error::new(crate::docker::ContainerExitedNonZero {
+        exit_code: 3,
+    }))
+    .context(cleanup_failed())
+    .unwrap_err();
+    assert_eq!(for_error(&error), 3);
+}
+
+/// A signal that ended the command wins over a cleanup failure after it,
+/// whichever wraps the other.
+#[test]
+fn a_signal_wins_over_a_cleanup_failure() {
+    use anyhow::Context;
+
+    let error = Err::<(), _>(anyhow::Error::new(cleanup_failed()))
+        .context(TaskInterrupted::new(TerminationSignal::Terminate))
+        .unwrap_err();
+    assert_eq!(for_error(&error), 143);
+
+    let error = Err::<(), _>(anyhow::Error::new(TaskInterrupted::new(
+        TerminationSignal::Terminate,
+    )))
+    .context(cleanup_failed())
+    .unwrap_err();
+    assert_eq!(for_error(&error), 143);
+}
+
+/// A task's own command may itself exit with one of the codes Ratect or
+/// Docker reserve; it passes through all the same, as `docker run` lets it.
+#[test]
+fn a_tasks_own_125_126_and_127_pass_through() {
+    for exit_code in [125, 126, 127] {
+        let error = anyhow::Error::new(crate::docker::ContainerExitedNonZero { exit_code });
+        assert_eq!(i64::from(for_error(&error)), exit_code);
+    }
 }
 
 /// The context an `anyhow` error accumulates on its way up must not hide the
@@ -63,4 +133,18 @@ fn context_added_on_the_way_up_does_not_hide_the_cause() {
     .unwrap_err();
 
     assert_eq!(for_error(&error), 3);
+}
+
+/// A verb that isn't a run exits `1` whatever failed — even an error the run
+/// mapping would give a code of its own — and a run's failure goes through
+/// the mapping (decisions/0016).
+#[test]
+fn only_a_runs_failure_goes_through_the_mapping() {
+    let container = anyhow::Error::new(crate::docker::ContainerExitedNonZero { exit_code: 3 });
+    let other = anyhow::anyhow!("the daemon is unreachable");
+
+    assert_eq!(for_failure(&container, true), 3);
+    assert_eq!(for_failure(&other, true), RATECT_FAILED);
+    assert_eq!(for_failure(&container, false), VERB_FAILED);
+    assert_eq!(for_failure(&other, false), VERB_FAILED);
 }

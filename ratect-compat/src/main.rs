@@ -240,6 +240,18 @@ struct Args {
 }
 
 impl Args {
+    /// Whether this invocation is a *run* — a task named, and none of the
+    /// flags that [`run`] handles instead of one — what
+    /// `ratect_core::exit_code::for_failure` is told (decisions/0016). Mirrors [`run`]'s own
+    /// dispatch order, which is why it reads the same flags.
+    fn runs_a_task(&self) -> bool {
+        !self.upgrade
+            && !self.clean
+            && self.clean_cache.is_empty()
+            && !self.list_tasks
+            && self.task_name.is_some()
+    }
+
     /// Maps the engine-affecting flags onto the engine's settings.
     ///
     /// Split out from [`run`] so it can be tested without a Docker daemon.
@@ -394,14 +406,16 @@ async fn main() {
     ratect_core::panic_hook::install(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
 
     let args = Args::parse();
+    let runs_a_task = args.runs_a_task();
+    let failed = |error: &anyhow::Error| ratect_core::exit_code::for_failure(error, runs_a_task);
 
     if let Err(err) = init_tracing(args.log_file.as_deref()) {
         eprintln!("Error: {:?}", err);
-        std::process::exit(1);
+        std::process::exit(failed(&err).into());
     }
 
     let exit_code = match run(args).await {
-        Ok(()) => 0,
+        Ok(()) => ratect_core::exit_code::SUCCESS,
         Err(err) => {
             // Printed directly to stderr, not through `tracing::error!` —
             // `RUST_LOG` can suppress that entirely (e.g. `RUST_LOG=off`,
@@ -419,7 +433,7 @@ async fn main() {
             // below, for why it doesn't).
             eprintln!("Error: {:?}", err);
 
-            ratect_core::exit_code::for_error(&err)
+            failed(&err)
         }
     };
 
