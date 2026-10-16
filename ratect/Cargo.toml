@@ -40,3 +40,12 @@ anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ratect-core = { path = "../ratect-core" }
+
+[dev-dependencies]
+# **`async-trait`** (tests only): `ratect_core::resources::ResourceInventory`
+# is an `#[async_trait]` trait, so a test fake implementing it needs the
+# macro — what `remove_leftovers`' tests use to make a removal fail without
+# a daemon. Already in the lockfile through `ratect-core`, so this adds no
+# crate to the build. Drop it if that trait stops being `async_trait`, or if
+# those tests move into `ratect-core`.
+async-trait = "0.1"

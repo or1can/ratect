@@ -1829,7 +1829,7 @@ async fn resolve_pull_credential(
 /// factored out so the wording only needs to stay consistent in one place.
 fn credential_resolution_warning(registry: &str, error: &anyhow::Error) -> String {
     format!(
-        "Could not resolve credentials for registry '{registry}': {error:#} — proceeding \
+        "Could not resolve credentials for registry '{registry}' ({error:#}); proceeding \
          without them."
     )
 }
@@ -2323,7 +2323,9 @@ impl ContainerRuntime for DockerClient {
         let (credentials, warning) =
             resolve_pull_credential(self.credential_resolver.as_ref(), image).await;
         if let Some(message) = warning {
-            tracing::warn!("{message}");
+            // Printed, not logged: a credential helper that failed is
+            // something the user should fix (decisions/0017).
+            self.event_sink.post(TaskEvent::Warning { message });
         }
 
         let options = CreateImageOptions {
@@ -2384,8 +2386,8 @@ impl ContainerRuntime for DockerClient {
         let registries = read_configured_registries(&self.docker_config_path).await;
         let (credentials, warnings) =
             resolve_build_credentials(self.credential_resolver.as_ref(), &registries).await;
-        for warning in &warnings {
-            tracing::warn!("{warning}");
+        for message in warnings {
+            self.event_sink.post(TaskEvent::Warning { message });
         }
         // `None` (not `Some(HashMap::new())`) when nothing resolved, so a
         // build with no registries configured sends exactly the request it

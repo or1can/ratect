@@ -16,16 +16,30 @@ use super::super::test_support::SharedBuffer;
 use super::*;
 use std::time::Duration;
 
-fn logger() -> (SimpleEventLogger, SharedBuffer) {
+/// A logger whose progress console is `buffer`; its stderr console is a
+/// buffer of its own, returned third — colour off on both.
+fn logger_with_stderr() -> (SimpleEventLogger, SharedBuffer, SharedBuffer) {
     let buffer = SharedBuffer::default();
+    let stderr = SharedBuffer::default();
     let console = Console::new(Box::new(buffer.clone()), false);
-    (SimpleEventLogger::new(console), buffer)
+    let stderr_console = Console::new(Box::new(stderr.clone()), false);
+    (
+        SimpleEventLogger::new(console, stderr_console),
+        buffer,
+        stderr,
+    )
+}
+
+fn logger() -> (SimpleEventLogger, SharedBuffer) {
+    let (logger, buffer, _) = logger_with_stderr();
+    (logger, buffer)
 }
 
 fn colored_logger() -> (SimpleEventLogger, SharedBuffer) {
     let buffer = SharedBuffer::default();
     let console = Console::new(Box::new(buffer.clone()), true);
-    (SimpleEventLogger::new(console), buffer)
+    let stderr = Console::new(Box::new(SharedBuffer::default()), true);
+    (SimpleEventLogger::new(console, stderr), buffer)
 }
 
 #[test]
@@ -105,17 +119,47 @@ fn a_run_in_setup_command_names_the_container_it_runs_in_and_the_one_that_declar
     );
 }
 
+/// A milestone, not a warning (decisions/0017): no `Warning:` marker, on
+/// the progress console like any other milestone, and worded by the one
+/// phrase `fancy` renders too (`ui::exited_unexpectedly`).
 #[test]
-fn dependency_exiting_unexpectedly_prints_a_warning() {
-    let (logger, buffer) = logger();
+fn dependency_exiting_unexpectedly_is_a_milestone_not_a_warning() {
+    let (logger, buffer, stderr) = logger_with_stderr();
     logger.post(TaskEvent::DependencyExitedUnexpectedly {
         container: "db".into(),
         exit_code: 137,
     });
     assert_eq!(
         buffer.contents(),
-        "Warning: db exited unexpectedly with exit code 137.\n"
+        "db exited unexpectedly with exit code 137.\n"
     );
+    assert_eq!(stderr.contents(), "");
+}
+
+/// The three stderr classes go to the stderr console, never the progress
+/// one, with the markers decisions/0017 gives them — and nothing else does.
+#[test]
+fn errors_warnings_and_notices_go_to_stderr_with_their_markers() {
+    let (logger, buffer, stderr) = logger_with_stderr();
+    logger.post(TaskEvent::Error {
+        message: "Cleanup failed: no".into(),
+    });
+    logger.post(TaskEvent::Warning {
+        message: "the proxy is on loopback".into(),
+    });
+    logger.post(TaskEvent::Notice {
+        message: "Interrupted; cleaning up.".into(),
+    });
+    logger.post(TaskEvent::TaskStarting {
+        task: "build".into(),
+    });
+    assert_eq!(
+        stderr.contents(),
+        "Error: Cleanup failed: no\n\
+         Warning: the proxy is on loopback\n\
+         Interrupted; cleaning up.\n"
+    );
+    assert_eq!(buffer.contents(), "Running build...\n");
 }
 
 #[test]

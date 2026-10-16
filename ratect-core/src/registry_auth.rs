@@ -179,6 +179,13 @@ impl RegistryCredentialResolver for DockerCredentialHelperResolver {
                 }) if is_credentials_not_found(&stdout) || is_credentials_not_found(&stderr) => {
                     Ok(None)
                 }
+                Err(docker_credential::CredentialRetrievalError::HelperFailure {
+                    helper,
+                    stdout,
+                    stderr,
+                }) => Err(anyhow::anyhow!(helper_failure_summary(
+                    &helper, &stdout, &stderr
+                ))),
                 Err(error) => Err(anyhow::Error::from(error)),
             }
         });
@@ -215,6 +222,27 @@ impl RegistryCredentialResolver for DockerCredentialHelperResolver {
 /// exactly one.
 fn is_credentials_not_found(output: &str) -> bool {
     output.contains("credentials not found in native keychain")
+}
+
+/// A credential helper's failure as one line: the helper, then what it
+/// printed — its stderr, where a helper explains itself, else its stdout —
+/// with line breaks and runs of whitespace collapsed to single spaces.
+///
+/// In place of `docker_credential`'s own message, which is a multi-line
+/// `stdout:`/`stderr:` block with both streams in full, blank ones
+/// included: harmless as a `tracing` record, but a warning is printed on
+/// stderr in every style (decisions/0017), and there it broke the sentence
+/// it sat in across half a dozen lines.
+fn helper_failure_summary(helper: &str, stdout: &str, stderr: &str) -> String {
+    let collapse = |output: &str| output.split_whitespace().collect::<Vec<_>>().join(" ");
+    let said = Some(collapse(stderr))
+        .filter(|said| !said.is_empty())
+        .unwrap_or_else(|| collapse(stdout));
+    if said.is_empty() {
+        format!("`{helper}` failed with no output")
+    } else {
+        format!("`{helper}` failed: {said}")
+    }
 }
 
 fn to_bollard_credentials(

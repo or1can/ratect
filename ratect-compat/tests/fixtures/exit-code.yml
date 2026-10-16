@@ -3,12 +3,20 @@
 # command exits non-zero, `stops-prerequisite-chain` proves a failing
 # prerequisite stops the rest of the chain from running at all, and
 # `fails-after-prerequisite` proves a run whose prerequisite succeeds exits
-# with the main task's code, not the prerequisite's.
+# with the main task's code, not the prerequisite's. `unpullable` is the
+# contrast: a failure of Ratect's own (`125`), reported as an `Error:` line
+# where a task's own exit never is.
 project_name: ratect-exit-code-test
 containers:
   build-env:
     image: alpine:3.18.2
+  unpullable:
+    image: ratect-exit-code-test.invalid/nope:does-not-exist
 tasks:
+  unpullable:
+    run:
+      container: unpullable
+      command: echo unreachable
   succeeds:
     run:
       container: build-env

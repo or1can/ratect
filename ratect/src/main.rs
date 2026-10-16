@@ -39,7 +39,7 @@ use ratect_core::engine::{TaskEngine, TaskEngineSettings};
 use ratect_core::resources::Leftover;
 use ratect_core::ui::{
     create_event_sink, resolve_color_mode, resolve_no_color, select_output_style, ColorMode,
-    OutputStyle, TerminalFacts,
+    Console, OutputStyle, ProgressStream, TerminalFacts,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -309,11 +309,11 @@ impl TasksListArgs {
     /// Accepted with a warning rather than refused, so a script passing them
     /// keeps working until they're removed. (A task's `description` is a
     /// plain string, not an expression, matching Batect's own typing.)
-    fn warn_about_deprecated_options(&self) {
+    fn warn_about_deprecated_options(&self, stderr: &Console) {
         if !self.config_var.is_empty() || self.config_vars_file.is_some() {
-            tracing::warn!(
+            stderr.warning(
                 "--config-var and --config-vars-file are deprecated for 'tasks list' and have \
-                 no effect: listing tasks evaluates no value"
+                 no effect: listing tasks evaluates no value",
             );
         }
     }
@@ -624,11 +624,15 @@ fn parse_tag_image(value: &str) -> std::result::Result<(String, String), String>
 
 /// Diagnostics go to stderr, filtered by `RUST_LOG` (default `info`) — the
 /// same arrangement `ratect-compat` has, minus its Batect-compatible
-/// `--log-file`, which nothing has asked this binary for yet.
-fn init_tracing() {
+/// `--log-file`, which nothing has asked this binary for yet. Coloured iff
+/// `color` — stderr's own decision (a terminal, and no `--no-color`/
+/// `NO_COLOR`), the same one every other line on stderr follows
+/// (decisions/0017; ratect#479).
+fn init_tracing(color: bool) {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
+        .with_ansi(color)
         .with_writer(std::io::stderr)
         .init();
 }
@@ -645,11 +649,25 @@ async fn main() {
     // normal invocation it's a cheap no-op and returns.
     clap_complete::CompleteEnv::with_factory(Cli::command).complete();
 
-    let cli = Cli::parse();
-    init_tracing();
+    let mut cli = Cli::parse();
+    // Folded in once, here, rather than at each of `global.no_color`'s own
+    // call sites below — see `resolve_no_color`'s own doc comment for what
+    // NO_COLOR does and why it's not narrowed to "color only".
+    cli.global.no_color = resolve_no_color(cli.global.no_color, |name| std::env::var(name).ok());
+    // `CLICOLOR_FORCE`, on top of that — see `resolve_color_mode`'s own doc
+    // comment for why this takes the already-resolved `no_color` rather
+    // than re-deriving it, and why it's a separate value from `no_color`
+    // rather than folded into it: `--output`'s own auto-selection below
+    // must never see anything but `Off`/not, so it still gets
+    // `global.no_color`, never this.
+    let color_mode = resolve_color_mode(cli.global.no_color, |name| std::env::var(name).ok());
+    // Resolved before `run`, because the subscriber and the fatal-error
+    // line below both need stderr's colour decision and both sit outside it.
+    let stderr = Console::stderr(color_mode);
+    init_tracing(stderr.color_enabled());
 
     let is_run = matches!(cli.command, Command::Run(_));
-    let exit_code = match run(cli).await {
+    let exit_code = match run(cli, color_mode, &stderr).await {
         Ok(()) => ratect_core::exit_code::SUCCESS,
         Err(error) => {
             // Straight to stderr, never through `tracing::error!`, which
@@ -657,8 +675,15 @@ async fn main() {
             // suppress entirely — leaving a non-zero exit with no visible
             // reason anywhere, in every output style including quiet. Same
             // reasoning, and the same `{:?}` full-context-chain formatting,
-            // as `ratect-compat`'s own top-level handler.
-            eprintln!("Error: {error:?}");
+            // as `ratect-compat`'s own top-level handler. Except for a run's
+            // failure that has already reached the user by another route —
+            // the task's own non-zero exit, a signal, a cleanup failure the
+            // engine reported as it happened — for which a second line
+            // would be the same event reported twice (decisions/0017; the
+            // list is `already_reported`'s).
+            if !ratect_core::exit_code::already_reported(&error) {
+                stderr.error(&format!("{error:?}"));
+            }
             ratect_core::exit_code::for_failure(&error, is_run)
         }
     };
@@ -671,29 +696,25 @@ async fn main() {
     std::process::exit(exit_code.into());
 }
 
-async fn run(cli: Cli) -> Result<()> {
-    let Cli {
-        mut global,
-        command,
-    } = cli;
-    // Folded in once, here, rather than at each of `global.no_color`'s own
-    // call sites below — see `resolve_no_color`'s own doc comment for what
-    // NO_COLOR does and why it's not narrowed to "color only".
-    global.no_color = resolve_no_color(global.no_color, |name| std::env::var(name).ok());
-    // `CLICOLOR_FORCE`, on top of that — see `resolve_color_mode`'s own doc
-    // comment for why this takes the already-resolved `no_color` rather
-    // than re-deriving it, and why it's a separate value from `no_color`
-    // rather than folded into it: `--output`'s own auto-selection below
-    // must never see anything but `Off`/not, so it still gets
-    // `global.no_color`, never this.
-    let color_mode = resolve_color_mode(global.no_color, |name| std::env::var(name).ok());
+/// This binary's progress console is stderr (decisions/0017): its stdout is
+/// the task container's output and nothing else, in every style, so a
+/// pipe gets the result and a terminal still gets `fancy`. `ratect-compat`'s
+/// is stdout, Batect's placement; that one line is the whole difference.
+const PROGRESS: ProgressStream = ProgressStream::Stderr;
+
+/// `color_mode` is `main`'s already-resolved `--no-color`/`NO_COLOR`/
+/// `CLICOLOR_FORCE` verdict; `global.no_color` is already folded too.
+/// `stderr` is `main`'s own stderr console, so the colour decision is made
+/// once and every line on stderr goes through one writer.
+async fn run(cli: Cli, color_mode: ColorMode, stderr: &Console) -> Result<()> {
+    let Cli { global, command } = cli;
 
     // Gathered once and shared between the output-format decisions and
     // (inside `create_event_sink`) the logger itself, rather than each
     // querying stdout/TERM/console dimensions separately.
     let terminal = TerminalFacts::gather();
     let requested_style = global.output.map(OutputStyle::from);
-    let style = select_output_style(requested_style, global.no_color, &terminal);
+    let style = select_output_style(requested_style, global.no_color, &terminal, PROGRESS);
 
     // Arms follow the `Command` enum's own order (see there).
     match command {
@@ -713,7 +734,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Tasks {
             command: TasksCommand::List(args),
         } => {
-            args.warn_about_deprecated_options();
+            args.warn_about_deprecated_options(stderr);
             let project = load(&global).await?;
             let listing = match style {
                 OutputStyle::Quiet => format_task_list_quiet(&project.config.tasks),
@@ -723,7 +744,7 @@ async fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         // Deliberately no `load` call: see `CachesArgs`.
-        Command::Caches { command } => manage_caches(command, &global, style).await,
+        Command::Caches { command } => manage_caches(command, &global, style, stderr).await,
         Command::Includes { command } => manage_includes(command, style).await,
         Command::Resources { command } => manage_resources(command, &global, style).await,
         Command::Config { command } => match command {
@@ -918,7 +939,7 @@ async fn run_task(
     // One logger, shared by the Docker client (pull/build progress) and the
     // engine (lifecycle milestones), so it sees the whole event stream in
     // order.
-    let event_sink = create_event_sink(requested_style, color_mode, &terminal)?;
+    let event_sink = create_event_sink(requested_style, color_mode, &terminal, PROGRESS)?;
 
     // Built before the connection options are consumed below.
     let settings = args.engine_settings(
@@ -1007,6 +1028,7 @@ async fn manage_caches(
     command: CachesCommand,
     global: &GlobalArgs,
     style: OutputStyle,
+    stderr: &Console,
 ) -> Result<()> {
     let (args, names) = match command {
         CachesCommand::List(args) => (args, None),
@@ -1117,14 +1139,14 @@ async fn manage_caches(
         // "for this project" points at the wrong storage entirely.
         match wanted {
             Some(ratect_core::config::CacheScope::Shared) => {
-                tracing::warn!("No shared cache named '{name}' exists.")
+                stderr.warning(&format!("No shared cache named '{name}' exists."))
             }
             Some(ratect_core::config::CacheScope::Project) => {
-                tracing::warn!("No cache named '{name}' exists for this project.")
+                stderr.warning(&format!("No cache named '{name}' exists for this project."))
             }
-            None => tracing::warn!(
+            None => stderr.warning(&format!(
                 "No cache named '{name}' exists for this project, or as a shared cache."
-            ),
+            )),
         }
     }
 
@@ -1206,7 +1228,7 @@ async fn manage_resources(
     }
 
     if removing {
-        remove_leftovers(&docker, &leftovers, quiet).await;
+        remove_leftovers(&docker, &leftovers, quiet).await?;
     } else {
         report_leftovers(&leftovers, quiet);
     }
@@ -1268,9 +1290,15 @@ fn report_leftovers(leftovers: &[Leftover], quiet: bool) {
 /// daemon doesn't leave `resources clean` looking hung. The ordering rule and
 /// the don't-abandon-the-rest behaviour belong to
 /// [`ratect_core::resources::remove`]; what's here is only how the outcomes
-/// read. Nothing here can fail — a removal that does is reported and counted,
-/// not propagated — so there is no `Result` to return.
-async fn remove_leftovers(docker: &DockerClient, leftovers: &[Leftover], quiet: bool) {
+/// read. A refused removal doesn't stop the sweep, but it does fail the verb
+/// once the sweep is done — one `Error:` from `main` listing every refusal,
+/// and exit `1`, so CI sees a clean that didn't clean (decisions/0017:
+/// `Error:` is Ratect failing at what was asked).
+async fn remove_leftovers<D>(docker: &D, leftovers: &[Leftover], quiet: bool) -> Result<()>
+where
+    D: ratect_core::resources::ResourceInventory + Send + Sync,
+{
+    let mut failures = Vec::new();
     let removed =
         ratect_core::resources::remove(docker, leftovers, |leftover, result| match result {
             Ok(()) => {
@@ -1278,13 +1306,19 @@ async fn remove_leftovers(docker: &DockerClient, leftovers: &[Leftover], quiet: 
                     println!("Removed {}.", leftover.describe());
                 }
             }
-            Err(error) => tracing::warn!("Failed to remove {}: {error:#}", leftover.describe()),
+            Err(error) => failures.push(format!("{} ({error:#})", leftover.describe())),
         })
         .await;
 
     if !quiet {
         println!("Removed {removed} of {}.", leftovers.len());
     }
+    anyhow::ensure!(
+        failures.is_empty(),
+        "Failed to remove {}",
+        failures.join("; ")
+    );
+    Ok(())
 }
 
 /// `ratect doctor` — what's wrong with this project, or this machine,

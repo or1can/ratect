@@ -1137,6 +1137,12 @@ async fn resolve_pull_credential_warns_and_proceeds_without_credentials_on_failu
         warning.contains("helper exploded"),
         "the warning should include the underlying reason: {warning}"
     );
+    assert_eq!(
+        warning,
+        "Could not resolve credentials for registry 'myregistry.example.com' (helper \
+         exploded); proceeding without them.",
+        "one sentence, the reason in parentheses"
+    );
 }
 
 /// A [`RegistryCredentialResolver`] with a different, pre-arranged answer

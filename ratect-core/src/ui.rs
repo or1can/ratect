@@ -14,7 +14,7 @@
 
 //! Ratect's user-facing output layer: the task-event model and the sinks
 //! ("event loggers") that turn execution milestones into what the user
-//! actually sees on stdout.
+//! actually sees.
 //!
 //! Ported from Batect's own design (its `TaskEventSink`/`EventLogger`
 //! interfaces and per-style logger implementations): execution code
@@ -27,9 +27,27 @@
 //! concurrent branches of the dependency graph, and each logger serializes
 //! its rendering internally rather than every call site racing to print.
 //!
-//! `tracing` remains separate and unchanged by this layer: diagnostics and
-//! breadcrumbs to stderr, controlled by `RUST_LOG`. Events here are the
-//! product's actual output, on stdout — see docs/how-it-works.md.
+//! **Streams** (decisions/0017). A logger writes to two consoles and never
+//! chooses either: the *progress console* — stdout for `ratect-compat`,
+//! stderr for `ratect`, the one file descriptor the two binaries differ in,
+//! which each `main` names as a [`ProgressStream`] — carries milestones,
+//! status and the summary line, the only class `-o` shapes; stderr carries
+//! the other three classes in every style, `quiet` included: an
+//! [`TaskEvent::Error`] (`Error: ` in bold red), a [`TaskEvent::Warning`]
+//! (`Warning: ` in bold yellow) and a [`TaskEvent::Notice`] (unmarked). A
+//! line a user with `RUST_LOG` unset would be worse off without is one of
+//! those three, posted as an event, never a `tracing::warn!` — `tracing`
+//! is for breadcrumbs and for failures of no consequence to the run, and a
+//! printed line may have a `debug!` beside it but never a `warn!` twin.
+//! Each [`Console`] decides colour from *its own* stream's `is_terminal()`,
+//! and `fancy`'s auto-selection asks the progress console's stream, so
+//! `ratect run x > out.txt` on a terminal still gets `fancy`. The task
+//! container's own output is the run's *result*, streamed to the real
+//! stdout by `docker.rs` in every style and both binaries; it never passes
+//! through here except under `all`, whose line-buffered
+//! [`TaskEvent::ContainerOutput`] lines for the task container go to
+//! stdout (prefixed) while a dependency's follow the progress console —
+//! so `ratect run x -o all 2>/dev/null` is still the task's own lines.
 //!
 //! The user-facing output layer (0.16.0's output-modes
 //! work) — a port of Batect's `TaskEventSink`/`EventLogger` design: `engine.rs`
@@ -258,6 +276,12 @@ pub enum TaskEvent {
     /// down (`--use-network`, no dependencies started, and no task
     /// container created).
     CleanupStarting,
+    /// Cleanup has ended, however it went — posted after the last removal
+    /// it attempted (or abandoned), and before any line reporting what it
+    /// left. Only posted when [`TaskEvent::CleanupStarting`] was. A live
+    /// cleanup display stops and clears its countdown here, so nothing
+    /// printed afterwards sits under a countdown for work that is over.
+    CleanupFinished,
     /// A container was stopped and removed during cleanup — a dependency,
     /// or the task's own.
     ContainerRemoved {
@@ -267,6 +291,15 @@ pub enum TaskEvent {
     /// step. Never posted under `--use-network` (Ratect didn't create that
     /// network, so it never removes it).
     RemovingNetwork,
+    /// The task's run has ended — its command finished, a failure stopped
+    /// it, or a signal did — and nothing more of its startup will happen.
+    /// Posted the moment the run resolves, before cleanup and before any
+    /// notice about how the run ended, so a live display can stop updating
+    /// first: the engine knows the run is over, and the display shouldn't
+    /// have to infer it from what is printed next.
+    RunEnded {
+        task: String,
+    },
     /// The task failed for an infrastructure reason (image build failed, a
     /// dependency never became healthy, ...) — the counterpart of
     /// [`TaskEvent::TaskFinished`], which covers the task's own command
@@ -294,6 +327,35 @@ pub enum TaskEvent {
         /// 1-based, matching [`TaskEvent::RunningSetupCommand`].
         index: usize,
         line: String,
+    },
+    /// Something about the run the user reads but need not act on — the
+    /// interrupt notice, what `--no-cleanup*` left in place. Printed on
+    /// stderr, unmarked, in every style including `quiet`; never `tracing`
+    /// (decisions/0017: a user with `RUST_LOG` unset is worse off without
+    /// it). The three stderr classes below are events rather than direct
+    /// `eprintln!`s from the engine so the loggers own every byte that
+    /// reaches a stream — `fancy` has to freeze its live block before any
+    /// of them lands, or the next repaint counts rows that aren't there.
+    Notice {
+        message: String,
+    },
+    /// Something the user should change, though the run proceeds — a proxy
+    /// bound to loopback, a credential helper that failed. `Warning: ` in
+    /// bold yellow, then the message in the default colour, on stderr in
+    /// every style.
+    Warning {
+        message: String,
+    },
+    /// Ratect failed to do something it set out to do, reported here rather
+    /// than by the error the run returns because the run's own error is a
+    /// different one (a task that exited `3` whose cleanup then failed) or
+    /// carries none of the detail (what the daemon refused, what was left
+    /// behind, how to remove it). `Error: ` in bold red, then the message in
+    /// the default colour, on stderr in every style. A failure reported this
+    /// way is already reported: `main` prints no second `Error:` for the
+    /// error it turns into (see `exit_code::already_reported`).
+    Error {
+        message: String,
     },
 }
 
@@ -350,20 +412,58 @@ pub struct TerminalFacts {
     pub term: Option<String>,
     /// Whether stdout is a real terminal, not piped/redirected.
     pub stdout_is_terminal: bool,
+    /// Whether stderr is a real terminal — asked separately, because the
+    /// two are redirected separately (`> out.txt` takes stdout alone) and
+    /// each stream's colour, and `fancy`'s eligibility, is decided from the
+    /// stream actually being written to (decisions/0017).
+    pub stderr_is_terminal: bool,
     /// Whether the terminal's dimensions are actually queryable — see
     /// [`console_dimensions_available`].
     pub console_dimensions_available: bool,
 }
 
 impl TerminalFacts {
-    /// Collects the three signals below — independent, already-existing
-    /// facts about this process's own environment, not an inference about
-    /// what they mean (that's [`supports_interactivity`]'s job).
+    /// Collects the signals below — independent, already-existing facts
+    /// about this process's own environment, not an inference about what
+    /// they mean (that's [`supports_interactivity`]'s job).
     pub fn gather() -> Self {
         Self {
             term: std::env::var("TERM").ok(),
             stdout_is_terminal: std::io::stdout().is_terminal(),
+            stderr_is_terminal: std::io::stderr().is_terminal(),
             console_dimensions_available: console_dimensions_available(),
+        }
+    }
+
+    /// Whether `stream` is a real terminal.
+    pub fn is_terminal(&self, stream: ProgressStream) -> bool {
+        match stream {
+            ProgressStream::Stdout => self.stdout_is_terminal,
+            ProgressStream::Stderr => self.stderr_is_terminal,
+        }
+    }
+}
+
+/// Which stream a binary's *progress console* is — the stream its own
+/// progress (milestones, status, the summary line) is written to. The one
+/// thing the two binaries differ in here (decisions/0017): `ratect-compat`
+/// keeps Batect's stdout, which a Batect user's scripts may read;
+/// `ratect`'s is stderr, so its stdout is the task container's output and
+/// nothing else. Each `main` names its own; nothing in this module decides
+/// it, and no dialect gate inside a logger ever should — that would be the
+/// next place a third difference crept in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgressStream {
+    Stdout,
+    Stderr,
+}
+
+impl ProgressStream {
+    /// How the stream is named in a message to the user.
+    pub fn name(self) -> &'static str {
+        match self {
+            ProgressStream::Stdout => "stdout",
+            ProgressStream::Stderr => "stderr",
         }
     }
 }
@@ -429,15 +529,28 @@ pub fn resolve_color_mode(no_color: bool, env: impl Fn(&str) -> Option<String>) 
     }
 }
 
+impl ColorMode {
+    /// Whether a stream is coloured under this mode: never for `Off`, always
+    /// for `ForcedOn`, and otherwise whatever `is_terminal` says of *that*
+    /// stream — asked lazily, so `Off` and `ForcedOn` never probe it.
+    pub fn enables_color(self, is_terminal: impl FnOnce() -> bool) -> bool {
+        match self {
+            ColorMode::Off => false,
+            ColorMode::ForcedOn => true,
+            ColorMode::Auto => is_terminal(),
+        }
+    }
+}
+
 /// Picks the output style when `--output` wasn't given — a port of Batect's
 /// `EventLoggerProvider`/`ConsoleInfo.supportsInteractivity` rule: `Fancy`
-/// on a console that can actually support it (stdout is a real terminal,
-/// `TERM` is set and isn't `dumb`, and the terminal's dimensions are
-/// queryable — each an independent signal that live repainting would
-/// misbehave), `Simple` otherwise. `--no-color` also forces `Simple` as the
-/// *default* (matching Batect) — an explicit `--output fancy --no-color`
-/// still gets colorless fancy (a deliberate Ratect extension; see
-/// [`Console`]). `Quiet` and `All` are never auto-selected.
+/// on a console that can actually support it (the progress console's stream
+/// is a real terminal, `TERM` is set and isn't `dumb`, and the terminal's
+/// dimensions are queryable — each an independent signal that live
+/// repainting would misbehave), `Simple` otherwise. `--no-color` also forces
+/// `Simple` as the *default* (matching Batect) — an explicit `--output fancy
+/// --no-color` still gets colorless fancy (a deliberate Ratect extension;
+/// see [`Console`]). `Quiet` and `All` are never auto-selected.
 ///
 /// Batect additionally special-cases mintty (a Windows terminal that fails
 /// `isatty`) and a legacy `TRAVIS` environment variable check; Ratect
@@ -450,20 +563,24 @@ pub fn select_output_style(
     requested: Option<OutputStyle>,
     no_color: bool,
     terminal: &TerminalFacts,
+    progress: ProgressStream,
 ) -> OutputStyle {
     if let Some(style) = requested {
         return style;
     }
-    if supports_interactivity(terminal) && !no_color {
+    if supports_interactivity(terminal, progress) && !no_color {
         OutputStyle::Fancy
     } else {
         OutputStyle::Simple
     }
 }
 
-/// Whether the console can support a live-repainting display — the shared
-/// half of [`select_output_style`]'s auto-selection rule, also used to
-/// validate an *explicit* `--output fancy` up front (with a clear error).
+/// Whether the progress console can support a live-repainting display — the
+/// shared half of [`select_output_style`]'s auto-selection rule, also used
+/// to validate an *explicit* `--output fancy` up front (with a clear error).
+/// Asked of `progress`'s stream, not stdout regardless: under `ratect` the
+/// block repaints on stderr, so `ratect run x > out.txt` on a terminal is
+/// as interactive as it ever was (decisions/0017).
 /// Batect never checks an explicit `fancy`: it crashes on the first repaint
 /// when stdout isn't a terminal, and with `TERM=dumb` writes cursor
 /// movements the terminal can't perform. Deliberately excludes
@@ -488,8 +605,8 @@ pub fn select_output_style(
 /// place — not a gap, just nothing to honour. `NO_COLOR`/`CLICOLOR_FORCE`
 /// *are* honoured (see [`resolve_no_color`]/[`resolve_color_mode`]) — that
 /// was the genuinely useful gap, not a terminfo integration.
-pub fn supports_interactivity(terminal: &TerminalFacts) -> bool {
-    terminal.stdout_is_terminal
+pub fn supports_interactivity(terminal: &TerminalFacts, progress: ProgressStream) -> bool {
+    terminal.is_terminal(progress)
         && terminal.term.as_deref().is_some_and(|term| term != "dumb")
         && terminal.console_dimensions_available
 }
@@ -522,34 +639,46 @@ pub fn console_dimensions_available() -> bool {
 /// documented divergence, see docs/differences-from-batect.md).
 /// Auto-selected fancy already implies an interactive console, so this can
 /// only actually fire for an explicit `-o fancy`.
+///
+/// `progress` is which stream the binary's progress console is (see
+/// [`ProgressStream`]); every logger gets that console plus a stderr one for
+/// the three classes every style prints, each coloured by its own stream.
 pub fn create_event_sink(
     requested: Option<OutputStyle>,
     color_mode: ColorMode,
     terminal: &TerminalFacts,
+    progress: ProgressStream,
 ) -> anyhow::Result<Arc<dyn EventSink>> {
     // Style selection only ever means "off or not" — `ForcedOn` must never
     // push the default toward `Simple` the way `Off` does (see
     // `resolve_color_mode`'s own doc comment for why).
     let no_color = color_mode == ColorMode::Off;
-    let style = select_output_style(requested, no_color, terminal);
+    let style = select_output_style(requested, no_color, terminal, progress);
+    let progress_console = Console::for_stream(progress, color_mode);
+    let stderr = Console::stderr(color_mode);
     Ok(match style {
-        OutputStyle::Simple => Arc::new(simple::SimpleEventLogger::stdout(color_mode)),
-        // Batect's quiet logger renders only task-failure events; Ratect
-        // reports failures via the error chain on stderr regardless of
-        // output style, so quiet's remaining job — suppressing every
-        // milestone — is exactly the null sink.
-        OutputStyle::Quiet => Arc::new(NullEventSink),
+        OutputStyle::Simple => Arc::new(simple::SimpleEventLogger::new(progress_console, stderr)),
+        OutputStyle::Quiet => Arc::new(QuietEventLogger::new(stderr)),
         OutputStyle::Fancy => {
-            if !supports_interactivity(terminal) {
+            if !supports_interactivity(terminal, progress) {
                 anyhow::bail!(
-                    "Fancy output requires an interactive console (stdout isn't a \
+                    "Fancy output requires an interactive console ({} isn't a \
                      terminal, TERM is unset or 'dumb', or the terminal size can't \
-                     be determined) — use --output simple instead."
+                     be determined) — use --output simple instead.",
+                    progress.name()
                 );
             }
-            Arc::new(fancy::FancyEventLogger::stdout(color_mode))
+            Arc::new(fancy::FancyEventLogger::new(
+                progress_console,
+                stderr,
+                terminal.stderr_is_terminal,
+            ))
         }
-        OutputStyle::All => Arc::new(interleaved::InterleavedEventLogger::stdout(color_mode)),
+        OutputStyle::All => Arc::new(interleaved::InterleavedEventLogger::new(
+            progress_console,
+            stderr,
+            Console::stdout(color_mode),
+        )),
     })
 }
 
@@ -634,15 +763,44 @@ pub trait EventSink: Send + Sync {
 /// Discards every event — the default sink wired into
 /// `TaskEngine`/`DockerClient` at construction, so unit tests (and any
 /// embedding that doesn't want UI output) stay silent unless a real logger
-/// is injected.
+/// is injected. Not what `-o quiet` gets: that is [`QuietEventLogger`],
+/// which still prints the stderr classes.
 pub struct NullEventSink;
 
 impl EventSink for NullEventSink {
     fn post(&self, _event: TaskEvent) {}
 }
 
+/// The `quiet` style: no progress at all — but errors, warnings and notices
+/// still reach stderr, as in every style. `quiet` means "no progress", not
+/// "nothing" (decisions/0017): the interrupt notice and the `--no-cleanup*`
+/// reminder are exactly the lines a scripted, quiet run can't do without.
+/// Batect's quiet logger renders only task-failure events; a run's failure
+/// reaches stderr through the error chain here regardless of style, so the
+/// three classes are all this one renders.
+pub struct QuietEventLogger {
+    stderr: Console,
+}
+
+impl QuietEventLogger {
+    pub fn new(stderr: Console) -> Self {
+        Self { stderr }
+    }
+}
+
+impl EventSink for QuietEventLogger {
+    fn post(&self, event: TaskEvent) {
+        self.stderr.print_stderr_class(&event);
+    }
+}
+
 /// The colors loggers actually use — grown as needed, not a full ANSI
-/// palette up front.
+/// palette up front. Never white or black (SGR 37/30, bright or not): those
+/// are the theme's own foreground and background, light grey on a dark theme
+/// and near-invisible on Solarized Light, so plain text is the default
+/// foreground (no SGR at all) and emphasis is [`Console::bold`]
+/// (decisions/0017). Only the plain 31–36 range, for the same reason — the
+/// bright variants are remapped to greys by some themes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Color {
     Red,
@@ -651,7 +809,6 @@ pub enum Color {
     Blue,
     Magenta,
     Cyan,
-    White,
 }
 
 impl Color {
@@ -663,7 +820,6 @@ impl Color {
             Color::Blue => "34",
             Color::Magenta => "35",
             Color::Cyan => "36",
-            Color::White => "37",
         }
     }
 }
@@ -690,12 +846,27 @@ impl Console {
     /// `enableComplexOutput = !disableColorOutput && stdoutIsTTY` for the
     /// `Auto`/`Off` cases, which is all Batect itself has.
     pub fn stdout(color_mode: ColorMode) -> Self {
-        let color_enabled = match color_mode {
-            ColorMode::Off => false,
-            ColorMode::ForcedOn => true,
-            ColorMode::Auto => std::io::stdout().is_terminal(),
-        };
+        let color_enabled = color_mode.enables_color(|| std::io::stdout().is_terminal());
         Self::new(Box::new(std::io::stdout()), color_enabled)
+    }
+
+    /// A console on the real stderr, colored by the same rule as
+    /// [`Console::stdout`] but asked of *stderr's* own `is_terminal()` —
+    /// Batect builds its two consoles the same way (`stdoutIsTTY` and
+    /// `stderrIsTTY` separately). What `ratect`'s progress and both
+    /// binaries' errors, warnings and notices are written to; the `tracing`
+    /// subscriber follows the same decision via [`Console::color_enabled`].
+    pub fn stderr(color_mode: ColorMode) -> Self {
+        let color_enabled = color_mode.enables_color(|| std::io::stderr().is_terminal());
+        Self::new(Box::new(std::io::stderr()), color_enabled)
+    }
+
+    /// [`Console::stdout`] or [`Console::stderr`], whichever `stream` names.
+    pub fn for_stream(stream: ProgressStream, color_mode: ColorMode) -> Self {
+        match stream {
+            ProgressStream::Stdout => Self::stdout(color_mode),
+            ProgressStream::Stderr => Self::stderr(color_mode),
+        }
     }
 
     pub fn new(writer: Box<dyn Write + Send>, color_enabled: bool) -> Self {
@@ -703,6 +874,51 @@ impl Console {
             writer: Mutex::new(writer),
             color_enabled,
         }
+    }
+
+    /// Whether this console applies SGR styling — decided once at
+    /// construction from its [`ColorMode`] and its own stream.
+    pub fn color_enabled(&self) -> bool {
+        self.color_enabled
+    }
+
+    /// `message` as an error line: `Error: ` in bold red, the message in the
+    /// default colour (decisions/0017's marker). The marker says "act on
+    /// this"; a message that is read, not acted on, is a [`Console::notice`].
+    pub fn error(&self, message: &str) {
+        self.println(&format!(
+            "{} {message}",
+            self.bold_colored(Color::Red, "Error:")
+        ));
+    }
+
+    /// `message` as a warning line: `Warning: ` in bold yellow, the message
+    /// in the default colour.
+    pub fn warning(&self, message: &str) {
+        self.println(&format!(
+            "{} {message}",
+            self.bold_colored(Color::Yellow, "Warning:")
+        ));
+    }
+
+    /// `message` as a notice: unmarked, since it asks for nothing.
+    pub fn notice(&self, message: &str) {
+        self.println(message);
+    }
+
+    /// Prints `event` if it is one of the three stderr classes
+    /// ([`TaskEvent::Error`]/[`TaskEvent::Warning`]/[`TaskEvent::Notice`])
+    /// and returns whether it was — the one rendering every logger shares,
+    /// so the markers can't drift between styles. Call on the stderr
+    /// console; a logger with a live display freezes it first.
+    pub fn print_stderr_class(&self, event: &TaskEvent) -> bool {
+        match event {
+            TaskEvent::Error { message } => self.error(message),
+            TaskEvent::Warning { message } => self.warning(message),
+            TaskEvent::Notice { message } => self.notice(message),
+            _ => return false,
+        }
+        true
     }
 
     /// Writes `line` plus a newline, flushed immediately — output must
@@ -738,6 +954,17 @@ impl Console {
     pub fn bold(&self, text: &str) -> String {
         if self.color_enabled {
             format!("\x1b[1m{text}\x1b[0m")
+        } else {
+            text.to_string()
+        }
+    }
+
+    /// `text` both bold and in `color`, as one SGR sequence (`1;31`) rather
+    /// than one nested in the other — what the `Error:`/`Warning:` markers
+    /// are, and what a test pins byte for byte.
+    pub fn bold_colored(&self, color: Color, text: &str) -> String {
+        if self.color_enabled {
+            format!("\x1b[1;{}m{}\x1b[0m", color.ansi_code(), text)
         } else {
             text.to_string()
         }
@@ -804,6 +1031,18 @@ pub(crate) fn format_task_summary(
         "{task_label} finished with exit code {exit_code} in {}.",
         format_duration(duration)
     )
+}
+
+/// What a dependency exiting on its own says — `exited unexpectedly with
+/// exit code <n>` — in `simple`'s milestone line and `fancy`'s status line
+/// alike. A milestone, not a warning (decisions/0017): a dependency exiting
+/// is the event the run's failure, if one follows, will explain, so it
+/// wears no `Warning:` and goes to the progress console like any other.
+/// One phrase, here, so a test pins the wording once; the same shape every
+/// other event the two styles share will take as ratect#505/#507 move them
+/// in.
+pub(crate) fn exited_unexpectedly(exit_code: i64) -> String {
+    format!("exited unexpectedly with exit code {exit_code}")
 }
 
 /// `duration` as a short human-readable string for the task summary line —

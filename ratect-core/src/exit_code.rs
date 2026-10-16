@@ -40,10 +40,14 @@
 //! `0` for `--help` (both `clap`'s), and `101` for a crash (Rust's panic
 //! default).
 //!
-//! What is *not* here is anything about how a failure is printed. That stays
-//! in each `main`, which is also the reason this takes an `anyhow::Error`
-//! rather than returning one: by the time a binary asks this question it has
-//! already reported the failure and only needs a number.
+//! How a failure is printed is not here either — each `main` prints its own
+//! `Error:` line — but *whether* it needs printing is, as [`already_reported`]:
+//! the same three error types [`for_error`] dispatches over are the ones a
+//! run has already reported by another route (decisions/0017), and two
+//! `main`s deciding that by hand could only ever differ by one being wrong.
+//! This takes an `anyhow::Error` rather than returning one for the same
+//! reason as before: by the time a binary asks, the run is over and it only
+//! needs a number and a yes or no.
 
 /// Everything asked for succeeded — for a run, the task's own command exited
 /// `0` and Ratect cleaned up after it.
@@ -89,6 +93,31 @@ pub fn for_error(error: &anyhow::Error) -> u8 {
         return interrupted.signal.exit_code();
     }
     RATECT_FAILED
+}
+
+/// Whether a run's failure has already reached the user by another route, so
+/// that `main` prints no `Error:` line for it — decisions/0017's rule that
+/// each class reports an event at most once, and `Error:` is reserved for
+/// Ratect's own failures:
+///
+/// - **The task's own command exited non-zero** — reported by the exit code,
+///   and in the non-quiet styles by the summary line; the container's own
+///   output said why. Never an `Error:` ([#454](https://github.com/or1can/ratect/issues/454)).
+/// - **A termination signal ended the run** — reported by the interrupt
+///   notice when it arrived and by the exit code. Never a trailing
+///   `Error: Interrupted`.
+/// - **Cleanup failed after a passing run** — reported by the engine's own
+///   `Error:` line at the time, which names what was left behind and how to
+///   remove it; a second `Error:` from `main` would say less, twice.
+///
+/// Every other failure — a config that doesn't load, an unknown task, a
+/// failed pull or build, a dependency that never became ready — is reported
+/// by nothing else, so `main` prints it, in every style and whatever
+/// `RUST_LOG` says. Downcasts through `anyhow` context like [`for_error`].
+pub fn already_reported(error: &anyhow::Error) -> bool {
+    error.is::<crate::docker::ContainerExitedNonZero>()
+        || error.is::<crate::interrupt::TaskInterrupted>()
+        || error.is::<crate::engine::CleanupFailed>()
 }
 
 /// The process exit code for a failed invocation: [`for_error`]'s for a run,

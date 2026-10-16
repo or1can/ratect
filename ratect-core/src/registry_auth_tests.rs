@@ -158,6 +158,32 @@ fn does_not_treat_an_unrelated_helper_failure_as_not_found() {
     ));
 }
 
+/// A helper's failure is one line: the helper, then what it printed —
+/// stderr, where a helper explains itself, else stdout — with its line
+/// breaks and blank lines collapsed. The library's own message is a
+/// multi-line `stdout:`/`stderr:` block, which on stderr in every style
+/// (decisions/0017) left `proceeding without them` stranded on a line of
+/// its own.
+#[test]
+fn a_helper_failure_is_summarised_on_one_line() {
+    assert_eq!(
+        helper_failure_summary("docker-credential-x", "", "helper exploded\n"),
+        "`docker-credential-x` failed: helper exploded"
+    );
+    assert_eq!(
+        helper_failure_summary("docker-credential-x", "  first\n\n second  \n", ""),
+        "`docker-credential-x` failed: first second"
+    );
+    assert_eq!(
+        helper_failure_summary("docker-credential-x", "on stdout", "on stderr"),
+        "`docker-credential-x` failed: on stderr"
+    );
+    assert_eq!(
+        helper_failure_summary("docker-credential-x", "\n", " \n"),
+        "`docker-credential-x` failed with no output"
+    );
+}
+
 /// A fresh, unique scratch directory — same pattern as `config_tests.rs`'s
 /// `unique_temp_dir`. Caller cleans up.
 fn unique_temp_dir() -> std::path::PathBuf {

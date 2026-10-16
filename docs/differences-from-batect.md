@@ -231,16 +231,15 @@ tables above:
     list`/`clean`](ratect-cli.md#managing-resources) finds it (`ratect`-only;
     `ratect-compat` has no equivalent verb, so from it the sweep is `docker` itself,
     filtering the same labels).
-  - **The notice names the signal and the next step**: a warning such as
+  - **The notice names the signal and the next step**: a line on stderr such as
     `Interrupted; cleaning up. Press Ctrl+C again to force-remove what's left,
-    and Ctrl+C after that to stop cleaning up.`, then `Error: Interrupted` once
-    cleanup ends. Batect prints `Task cancelled: Interrupt received during
-    execution.` and that it is waiting for outstanding operations. The warning
-    goes through `RUST_LOG` like any other — a rule
-    [decisions/0017](../decisions/0017-output-streams-and-styles.md) replaces,
-    with #369: the notice will be printed whatever `RUST_LOG` says, and the
-    cleanup's outcome — complete, or what it left behind — not `Error:
-    Interrupted`, will end the sequence.
+    and Ctrl+C after that to stop cleaning up.`, printed in every style whatever
+    `RUST_LOG` says, and no `Error: Interrupted` once cleanup ends — the exit
+    code says the run was signalled, and a cleanup that left something behind
+    is reported as the error it is, naming what was left and the `docker`
+    command that removes it. Batect prints `Task cancelled: Interrupt received
+    during execution.` and that it is waiting for outstanding operations, then
+    its manual-cleanup commands.
 
   `SIGKILL` remains untrappable by either tool, same underlying OS limitation — the
   same labels are what a post-hoc `ratect resources clean` needs to find what it left.
@@ -318,6 +317,15 @@ tables above:
   and `all` reports a failed setup command or network check, two failures
   Batect's `all` doesn't print at all. A setup command's output is trimmed, so
   output that is only whitespace counts as none.
+- **No white text.** Batect paints its `simple` status lines, and `all`'s
+  task-level prefix, in the terminal palette's white (SGR 37) — light grey on a
+  dark theme, near-invisible on a light one. Ratect's own lines are the
+  terminal's default foreground, with bold for emphasis, and it never sets the
+  palette's white or black
+  ([decisions/0017](../decisions/0017-output-streams-and-styles.md)). The
+  interrupt notice, the `--no-cleanup*` reminder and a cleanup that left
+  something behind are printed on stderr in every style rather than logged;
+  Batect prints its equivalents on stdout, as task output.
 - **An unhealthy dependency's error can lack the last health check's
   details.** If the container, or the daemon, goes away between Docker's
   unhealthy verdict and Ratect looking up that check's exit code and output,

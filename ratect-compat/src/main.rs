@@ -20,7 +20,10 @@ use ratect_core::config::{
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
 use ratect_core::git_include::GitIncludeCache;
-use ratect_core::ui::{create_event_sink, select_output_style, OutputStyle, TerminalFacts};
+use ratect_core::ui::{
+    create_event_sink, select_output_style, ColorMode, Console, OutputStyle, ProgressStream,
+    TerminalFacts,
+};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -369,8 +372,10 @@ fn parse_tag_image(s: &str) -> std::result::Result<(String, String), String> {
 /// that file *in addition to* stderr — matching Batect's own `--log-file`
 /// content, though not its silent-by-default behavior (Ratect always logs
 /// to stderr regardless; Batect's own default with no `--log-file` is a
-/// `NullLogSink`, nothing anywhere).
-fn init_tracing(log_file: Option<&Path>) -> Result<()> {
+/// `NullLogSink`, nothing anywhere). `stderr_color` is stderr's own colour
+/// decision (a terminal, and no `--no-color`/`NO_COLOR`), the same one every
+/// other line on stderr follows (decisions/0017; ratect#479).
+fn init_tracing(log_file: Option<&Path>, stderr_color: bool) -> Result<()> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let writer = match log_file {
         Some(path) => {
@@ -390,12 +395,9 @@ fn init_tracing(log_file: Option<&Path>) -> Result<()> {
         // ANSI color codes have no business ending up in a log *file* meant
         // for later grepping/processing, but this builder has no
         // per-writer ANSI control, so it's an all-or-nothing choice shared
-        // with stderr's own output. Stderr's own pre-existing behavior is
-        // already unconditionally-ANSI regardless of whether it's a real
-        // terminal (unrelated to `--log-file`, not something to fix here)
-        // — this line only changes anything when `--log-file` is actually
-        // given, trading stderr's color for a plain-text file.
-        .with_ansi(log_file.is_none())
+        // with stderr's own output: with `--log-file`, stderr goes plain
+        // too, trading its colour for a greppable file.
+        .with_ansi(log_file.is_none() && stderr_color)
         .with_writer(writer)
         .init();
     Ok(())
@@ -405,16 +407,33 @@ fn init_tracing(log_file: Option<&Path>) -> Result<()> {
 async fn main() {
     ratect_core::panic_hook::install(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
 
-    let args = Args::parse();
+    let mut args = Args::parse();
     let runs_a_task = args.runs_a_task();
     let failed = |error: &anyhow::Error| ratect_core::exit_code::for_failure(error, runs_a_task);
 
-    if let Err(err) = init_tracing(args.log_file.as_deref()) {
-        eprintln!("Error: {:?}", err);
+    // Folded in once, here, rather than at each of `args.no_color`'s own
+    // call sites below — see `resolve_no_color`'s own doc comment for what
+    // NO_COLOR does and why it's not narrowed to "color only".
+    args.no_color =
+        ratect_core::ui::resolve_no_color(args.no_color, |name| std::env::var(name).ok());
+    // `CLICOLOR_FORCE`, on top of that — see `resolve_color_mode`'s own doc
+    // comment for why this takes the already-resolved `no_color` rather
+    // than re-deriving it, and why it's a separate value from `no_color`
+    // rather than folded into it: `--output`'s own auto-selection must
+    // never see anything but `Off`/not, so `select_output_style` in `run`
+    // still gets `args.no_color`, never this.
+    let color_mode =
+        ratect_core::ui::resolve_color_mode(args.no_color, |name| std::env::var(name).ok());
+    // Resolved before `run`, because the subscriber and the fatal-error
+    // line below both need stderr's colour decision and both sit outside it.
+    let stderr = Console::stderr(color_mode);
+
+    if let Err(err) = init_tracing(args.log_file.as_deref(), stderr.color_enabled()) {
+        stderr.error(&format!("{err:?}"));
         std::process::exit(failed(&err).into());
     }
 
-    let exit_code = match run(args).await {
+    let exit_code = match run(args, color_mode, &stderr).await {
         Ok(()) => ratect_core::exit_code::SUCCESS,
         Err(err) => {
             // Printed directly to stderr, not through `tracing::error!` —
@@ -431,7 +450,17 @@ async fn main() {
             // `Termination` impl would have printed had `main` returned a
             // `Result` directly (see this function's own doc comment,
             // below, for why it doesn't).
-            eprintln!("Error: {:?}", err);
+            //
+            // The deliberate exception is a run's failure that has already
+            // reached the user by another route — the task's own non-zero
+            // exit (its code, the summary line and the container's own
+            // output say it), a signal (the interrupt notice did), a
+            // cleanup failure the engine reported as it happened — where a
+            // second line would be the same event twice (decisions/0017;
+            // the list is `already_reported`'s, shared with `ratect`).
+            if !ratect_core::exit_code::already_reported(&err) {
+                stderr.error(&format!("{err:?}"));
+            }
 
             failed(&err)
         }
@@ -468,6 +497,11 @@ fn resolve_config_vars_file(explicit: Option<PathBuf>, dir: &Path) -> Option<Pat
     })
 }
 
+/// This binary's progress console is stdout — Batect's placement, kept
+/// because a Batect user's scripts may read it (decisions/0017; `ratect`'s
+/// is stderr). That one line is the whole difference between the two.
+const PROGRESS: ProgressStream = ProgressStream::Stdout;
+
 /// The CLI's real work, once `Args` is parsed: `--upgrade` is a documented
 /// no-op (see its own doc comment), `--clean`/`--clean-cache` short-circuit
 /// into [`clean_caches`] before any config loads, `--list-tasks` prints and
@@ -475,21 +509,12 @@ fn resolve_config_vars_file(explicit: Option<PathBuf>, dir: &Path) -> Option<Pat
 /// config, builds the engine, and runs it. [`Args::engine_settings`] is kept
 /// synchronous and separate specifically so its flag-to-settings mapping can
 /// be unit-tested without a Docker daemon — see its own doc comment.
-async fn run(mut args: Args) -> Result<()> {
-    // Folded in once, here, rather than at each of `args.no_color`'s own
-    // call sites below — see `resolve_no_color`'s own doc comment for what
-    // NO_COLOR does and why it's not narrowed to "color only".
-    args.no_color =
-        ratect_core::ui::resolve_no_color(args.no_color, |name| std::env::var(name).ok());
-    // `CLICOLOR_FORCE`, on top of that — see `resolve_color_mode`'s own doc
-    // comment for why this takes the already-resolved `no_color` rather
-    // than re-deriving it, and why it's a separate value from `no_color`
-    // rather than folded into it: `--output`'s own auto-selection must
-    // never see anything but `Off`/not, so `select_output_style` below
-    // still gets `args.no_color`, never this.
-    let color_mode =
-        ratect_core::ui::resolve_color_mode(args.no_color, |name| std::env::var(name).ok());
-
+/// `color_mode` is `main`'s already-resolved `--no-color`/`NO_COLOR`/
+/// `CLICOLOR_FORCE` verdict; `args.no_color` is already folded too.
+/// `stderr` is `main`'s own stderr console, for the notices and warnings
+/// this function prints itself — the run's own go through the event sink
+/// (decisions/0017).
+async fn run(args: Args, color_mode: ColorMode, stderr: &Console) -> Result<()> {
     // Batect's option parser checks only that a named config-variables file
     // is a file, for every command. Its contents, like `--config-var`'s
     // names, are read only when a task runs, so nothing in either stops
@@ -504,9 +529,9 @@ async fn run(mut args: Args) -> Result<()> {
     }
 
     if args.upgrade {
-        eprintln!(
+        stderr.notice(
             "--upgrade has no effect: Ratect is a single native binary, not a self-updating \
-             wrapper script like Batect. Reinstall/rebuild to get a newer version instead."
+             wrapper script like Batect. Reinstall/rebuild to get a newer version instead.",
         );
         return Ok(());
     }
@@ -523,7 +548,7 @@ async fn run(mut args: Args) -> Result<()> {
     // dimensions again on top of the other.
     let terminal = TerminalFacts::gather();
     let requested_style = args.output.map(OutputStyle::from);
-    let output_style = select_output_style(requested_style, args.no_color, &terminal);
+    let output_style = select_output_style(requested_style, args.no_color, &terminal, PROGRESS);
 
     if args.list_tasks {
         let listing = match output_style {
@@ -563,7 +588,7 @@ async fn run(mut args: Args) -> Result<()> {
             // validation all live in `create_event_sink` — see its own docs
             // for why, and for the fancy-on-a-non-interactive-console error
             // it can return.
-            let event_sink = create_event_sink(requested_style, color_mode, &terminal)?;
+            let event_sink = create_event_sink(requested_style, color_mode, &terminal, PROGRESS)?;
             // Built before the connection options consume `args` below.
             let settings = args.engine_settings(
                 project.project_directory.clone(),
@@ -599,7 +624,8 @@ async fn run(mut args: Args) -> Result<()> {
             engine.run_task(task_name, &args.additional_args).await?;
         }
         None => {
-            tracing::warn!("No task name provided. Use --help for usage.");
+            // Printed, not logged: the one line explaining why nothing ran.
+            stderr.warning("No task name provided. Use --help for usage.");
         }
     }
 
