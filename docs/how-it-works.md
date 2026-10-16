@@ -114,8 +114,11 @@ where that lives and stays current.
    its own stops here and succeeds — it exists purely to chain prerequisites (see
    [config reference](ratect-compat-config-reference.md#task)), matching Batect's own
    `TaskRunner`.
-4. **Create the task's network** and start everything in the task's container
-   graph on it, before the task's own container, so it can reach them by name. The
+4. **Create the task's network**, then pull or build every image and create every
+   container in the task's container graph on it — the task's own included — as
+   soon as each one's image is ready, and start each dependency once every
+   container it depends on is ready, before the task's own container, so it can
+   reach them by name. The
    graph is the container's own `dependencies` unioned with the task's, resolved
    recursively, with any [`customise`](ratect-compat-config-reference.md#taskcontainercustomisation)
    overrides applied to whichever container they target at whatever depth. Every
@@ -149,13 +152,13 @@ to a single **task execution** and discarded when it finishes.
 Concurrency follows Batect's in outline: **prerequisites run sequentially**, one to
 completion after another, even when independent — while **one task's startup is
 concurrent**. Every container's image — each dependency's and the task's own —
-is pulled or built at once, the moment the task's network is ready, so a pull
-or build that fails ends the task as soon as it fails — not once every
-dependency is ready, by which time their setup commands have run. Starting is
-what a container's own `dependencies` gate: independent branches of the graph
-start and health-wait at the same time, and a container starts once its own
-image is ready and every container it depends on has passed its readiness
-gate (see [decision
+is pulled or built at once, the moment the task's network is ready, and each
+container is created as soon as its own image is, so a pull, build or create
+that fails ends the task as soon as it fails — not once every dependency is
+ready, by which time their setup commands have run. Starting is what a
+container's own `dependencies` gate: independent branches of the graph start
+and health-wait at the same time, and a container — already created — starts
+once every container it depends on has passed its readiness gate (see [decision
 0019](https://github.com/or1can/ratect/blob/main/decisions/0019-readiness-gates-starting-only.md)).
 The task's network is created before any of that
 starts, where Batect creates it alongside — see [Differences from
@@ -182,11 +185,21 @@ unit-tested with a fake implementation instead of a real Docker daemon.
   `docker.rs`'s (see [Logging vs. output](#5-logging-vs-output)). `build_image`
   first packs the build directory into an in-memory tar, honouring
   `.dockerignore` via the [`dockerignore`](../dockerignore) crate.
-- **`run_container`**: creates, starts and streams the task's own container until
-  it exits. Three start/attach paths sit behind it — fully non-interactive,
+- **`create_container`**: creates a container — a dependency's or the task's own
+  — ready to be started: Docker's create, the user-mapping upload, the join to the
+  task network. It hands the container's id back the moment that is done (inside
+  its error, if the upload or join failed after Docker's create), and the engine
+  registers it for cleanup there and then, so a container whose start later fails
+  or is cut short by another dependency failing is still removed. Its own step,
+  separate from starting, because it waits for less: a container is created once
+  its image and the network are ready, and started only once the containers it
+  depends on are — see [Dependency readiness](dependency-readiness.md#resolution-order).
+- **`run_container`**: starts and streams the task's own container until it exits.
+  Three attach-and-start paths sit behind it — fully non-interactive,
   stdin-forwarding, and a real TTY with raw mode and live resize — chosen by
   whether the task is [interactive](interactive-mode.md#which-container-is-eligible)-eligible
-  and whether Ratect's own stdin *and* stdout are terminals. It does **not** remove
+  and whether Ratect's own stdin *and* stdout are terminals; the two stdin paths
+  attach before Docker's start, so nothing typed early is lost. It does **not** remove
   the container: the engine's cleanup stage removes everything a task created, its
   own container included, so `--no-cleanup-*` is interpreted in exactly one place.
 - **`create_network` / `remove_network` / `network_exists`**: the per-task network,
@@ -194,10 +207,7 @@ unit-tested with a fake implementation instead of a real Docker daemon.
   rather than an unrelated API failure later.
 - **`start_background_container` / `stop_and_remove_container`**: the same, for a
   dependency or sidecar — started and left running alongside the task rather than
-  waited on, so no logs are streamed and no task `command` applies. Like
-  `run_container`, it hands the container's id back the moment Docker creates it,
-  so cleanup removes a dependency whose start failed or was cut short by another
-  dependency failing.
+  waited on, so no logs are streamed and no task `command` applies.
 - **`wait_for_container_healthy` / `exec_in_container`**: the two steps of the
   [dependency readiness gate](dependency-readiness.md#the-readiness-gate). The first
   blocks on Docker's own event stream, replayed from the beginning so a verdict

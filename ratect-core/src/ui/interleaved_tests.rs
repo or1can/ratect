@@ -144,6 +144,29 @@ fn a_run_in_setup_command_names_the_container_it_runs_in() {
     );
 }
 
+/// A container's creation prints nothing here — Batect's own interleaved
+/// logger has no line for a create either; the container's first line is
+/// its start.
+#[test]
+fn container_creation_prints_nothing() {
+    let (logger, buffer) = logger();
+    start_task(&logger, vec![info("db", Some("postgres:15"), None)]);
+    logger.post(TaskEvent::ContainerCreating {
+        container: "db".into(),
+    });
+    logger.post(TaskEvent::ContainerCreated {
+        container: "db".into(),
+    });
+    logger.post(TaskEvent::DependencyStarting {
+        container: "db".into(),
+    });
+    assert_eq!(
+        buffer.contents(),
+        "test | Running test...\n\
+             db   | Starting container...\n"
+    );
+}
+
 #[test]
 fn prefixes_are_padded_to_the_longest_name() {
     let (logger, buffer) = logger();

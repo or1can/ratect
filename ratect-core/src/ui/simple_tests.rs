@@ -60,6 +60,14 @@ fn renders_lifecycle_milestones_as_plain_lines() {
     logger.post(TaskEvent::ImageBuildCompleted {
         container: "app".into(),
     });
+    // A container's creation prints nothing — Batect's own simple logger
+    // has no line for a create either; the next line is its start.
+    logger.post(TaskEvent::ContainerCreating {
+        container: "db".into(),
+    });
+    logger.post(TaskEvent::ContainerCreated {
+        container: "db".into(),
+    });
     logger.post(TaskEvent::DependencyStarting {
         container: "db".into(),
     });

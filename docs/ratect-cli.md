@@ -147,7 +147,7 @@ Docker](connecting-to-docker.md), shared with `ratect-compat`.
 | `--override-image <CONTAINER=IMAGE>` | — | Replace a container's image. Repeatable — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution) for what it replaces and when it errors. |
 | `--tag-image <CONTAINER=TAG>` | — | Extra tag for an image a container builds. Repeatable — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution) for when it errors. |
 | `--no-cleanup`, `--no-cleanup-after-success`, `--no-cleanup-after-failure` | — | Leave the task's containers and network in place, running, after success (the task's own container ran, whatever its exit code), after failure (something failed before it could), or both — see [`ratect-compat`'s description](ratect-compat-cli.md#cleanup-after-a-run). |
-| `--max-parallelism <N>` | unbounded | Cap concurrent image pulls/builds, dependency container starts and setup commands — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution). |
+| `--max-parallelism <N>` | unbounded | Cap concurrent image pulls/builds, container creates, dependency container starts and setup commands — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution). |
 | `--cache-type <TYPE>` | `volume` | `volume` or `directory` — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution) and [cache volumes](ratect-compat-config-reference.md#cache-volumes). |
 
 ## `caches` options

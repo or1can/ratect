@@ -70,9 +70,11 @@ sequenceDiagram
 
     par every container in the task's graph, the task's own included
         Engine->>Docker: pull_image()/build_image() (per image_pull_policy, unless already decided this run)
-    and independent branches of the dependency graph, each once its own image is ready
-        Engine->>Docker: start_background_container(alias, network)
-        Docker-->>Dep: created, started, joined to network
+        Engine->>Docker: create_container(spec) — once its own image is ready
+        Docker-->>Engine: created, joined to network, not started
+    and independent branches of the dependency graph, each once every container it depends on is ready
+        Engine->>Docker: start_background_container(id)
+        Docker-->>Dep: started
         Engine->>Docker: wait_for_container_healthy()
         Docker-->>Engine: healthy (immediate if no health check)
         loop for each setup command, in declared order
@@ -81,10 +83,10 @@ sequenceDiagram
         end
     end
 
-    Note over Engine: a container with dependencies of its own doesn't start<br/>its own branch above until all of them are ready — its image is pulled or built regardless
+    Note over Engine: a dependency's readiness gates only the *start* of what depends on it —<br/>every container is pulled or built, then created, regardless
 
-    Engine->>Docker: run_container(name, network)
-    Docker-->>Main: created, started, joined to network
+    Engine->>Docker: run_container(id) — once every container the task's own depends on is ready
+    Docker-->>Main: started
     par the main command
         Main-->>Engine: runs to completion, logs streamed live to stdout
     and ratect-compat only: the task container's own readiness gate, gating nothing

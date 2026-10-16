@@ -22,7 +22,11 @@
 //! `ContainerRuntime::run_container`/`start_background_container` calls,
 //! independently assembled at engine.rs's two call sites (the task's own
 //! container, and `ensure_container_ready`'s recursive dependency start) with
-//! no shared code between them to keep the two in step. [`Overlay`] is
+//! no shared code between them to keep the two in step. Since the create/start
+//! split (decisions/0019) one call site derives it —
+//! `ensure_container_created`, for a dependency and the task's own container
+//! alike — and hands it to `ContainerRuntime::create_container`, then to the
+//! start call. [`Overlay`] is
 //! matched exactly once, inside `derive_spec`, and each arm destructures its
 //! config struct exhaustively by name (no `..`) — a field added to `TaskRun`
 //! or `TaskContainerCustomisation` becomes a compiler error here rather than
@@ -110,7 +114,7 @@ pub fn resolve_network(
                 .with_context(|| {
                     format!(
                         "The container '{target}' named by 'network_mode' has not been \
-                         started as a dependency."
+                         created as a dependency."
                     )
                 })?
                 .clone(),
@@ -118,13 +122,13 @@ pub fn resolve_network(
     })
 }
 
-/// Per-container network-facing options shared by `run_container` and
-/// `start_background_container`, nested inside `SharedContainerSpec` as a
-/// named sub-struct rather than four more flat fields there — grouping that
-/// predates `ContainerSpec` itself, from when these were bundled to keep the
-/// two methods' own parameter lists from growing past
-/// `#[allow(clippy::too_many_arguments)]`; both now take one `ContainerSpec`
-/// instead; the struct boundary stayed for the same organizational reason.
+/// Per-container network-facing options, nested inside `SharedContainerSpec`
+/// as a named sub-struct rather than four more flat fields there — grouping
+/// that predates `ContainerSpec` itself, from when these were bundled to keep
+/// `run_container`'s and `start_background_container`'s own parameter lists
+/// from growing past `#[allow(clippy::too_many_arguments)]`; `create_container`
+/// now takes one `ContainerSpec` instead; the struct boundary stayed for the
+/// same organizational reason.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NetworkOptions {
     /// Extra network aliases beyond the container's own name.
@@ -146,8 +150,7 @@ pub struct NetworkOptions {
     pub ports: Option<Vec<(u16, u16, String)>>,
 }
 
-/// Per-container runtime options shared by `run_container` and
-/// `start_background_container`, nested the same way and for the same
+/// Per-container runtime options, nested the same way and for the same
 /// reason as `NetworkOptions` above — as its own sub-struct rather than a
 /// growing list of flat fields, since Batect has several more of these
 /// container-level options still to land (see `ROADMAP.md`'s 0.13.0 entry).
@@ -290,11 +293,12 @@ pub struct SharedContainerSpec {
 }
 
 /// One container's complete, owned runtime specification — the argument
-/// `ContainerRuntime::run_container`/`start_background_container` take
-/// instead of their old flat parameter lists. Owned throughout (one clone
-/// per container start) rather than borrowed, so a fake `ContainerRuntime`
-/// can capture it wholesale instead of copying each field into its own
-/// captured-parameter maps.
+/// `ContainerRuntime::create_container` takes instead of
+/// `run_container`/`start_background_container`'s old flat parameter lists,
+/// and that those two start calls take again alongside the created id. Owned
+/// throughout (one clone per container) rather than borrowed, so a fake
+/// `ContainerRuntime` can capture it wholesale instead of copying each field
+/// into its own captured-parameter maps.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContainerSpec {
     pub shared: SharedContainerSpec,

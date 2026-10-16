@@ -725,7 +725,9 @@ network_mode = "container:database"
   `localhost`. Anything else is rejected when the file loads.
 - **A `container:<name>` target must be one of the container's own
   `dependencies`**, so it is already running when this one starts — the
-  dependency graph stays the one thing that orders startup. It may not be a
+  dependency graph stays the one thing that orders startup. This container is
+  created once the target has been created (Docker needs the target's id for
+  that), and started once the target is ready. It may not be a
   [`run_to_completion`](#run_to_completion-init-containers) container, which
   has exited by then. The target may share another container's network in
   turn, but a chain of them that leads back round on itself is rejected:

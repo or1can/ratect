@@ -271,8 +271,8 @@ impl EventSink for InterleavedEventLogger {
             // container exists before it is started; here the container's
             // own "Container removed." line during cleanup is enough, and
             // Batect's own interleaved logger reports no creation line
-            // either.
-            TaskEvent::TaskContainerCreated { .. } => {}
+            // either — for the create's start or its end.
+            TaskEvent::ContainerCreating { .. } | TaskEvent::ContainerCreated { .. } => {}
             TaskEvent::ImagePullCompleted { image } => {
                 for container in Self::containers_for_image(&state, &image) {
                     self.print_for_container(&state, &container, &format!("Pulled {image}."));

@@ -448,7 +448,7 @@ fn a_notice_during_cleanup_is_followed_by_a_fresh_countdown() {
         ],
     });
     for container in ["app", "db"] {
-        logger.post(TaskEvent::TaskContainerCreated {
+        logger.post(TaskEvent::ContainerCreated {
             container: container.into(),
         });
     }
@@ -489,7 +489,7 @@ fn a_dependency_exit_during_cleanup_is_not_painted_over() {
             info("db", Some("db:1"), &[], false),
         ],
     });
-    logger.post(TaskEvent::TaskContainerCreated {
+    logger.post(TaskEvent::ContainerCreated {
         container: "app".into(),
     });
     logger.post(TaskEvent::RunEnded { task: "t".into() });
@@ -543,7 +543,7 @@ fn nothing_repaints_the_countdown_after_cleanup_finished() {
     logger.post(TaskEvent::TaskGraphResolved {
         containers: vec![info("app", Some("app:1"), &[], true)],
     });
-    logger.post(TaskEvent::TaskContainerCreated {
+    logger.post(TaskEvent::ContainerCreated {
         container: "app".into(),
     });
     logger.post(TaskEvent::RunEnded { task: "t".into() });
@@ -699,7 +699,7 @@ fn cleanup_starts_on_a_fresh_line_even_after_unterminated_container_output() {
         container: "app".into(),
         command: None,
     });
-    logger.post(TaskEvent::TaskContainerCreated {
+    logger.post(TaskEvent::ContainerCreated {
         container: "app".into(),
     });
     // The task container's own output streams raw, outside this
@@ -736,11 +736,12 @@ fn cleanup_starts_on_a_fresh_line_even_after_unterminated_container_output() {
 /// Docker refusing `create_container` — has nothing of its own to clean
 /// up, and the countdown must not wait on it.
 ///
-/// `RunningTaskContainer` is posted *before* creation is even attempted,
-/// so counting the container from that event left this stuck at
+/// `RunningTaskContainer` used to be posted *before* creation was even
+/// attempted, so counting the container from that event left this stuck at
 /// "1 container (app) left to remove..." for the whole cleanup, never
-/// reaching the network line. Counting from `TaskContainerCreated`
-/// instead is what fixes it.
+/// reaching the network line. Counting from `ContainerCreated` instead is
+/// what fixes it — and it now follows creation, so a run posting it has a
+/// container to count.
 #[test]
 fn a_task_container_that_was_never_created_is_not_counted_for_cleanup() {
     let (logger, buffer) = logger_with_width(120);
@@ -751,7 +752,7 @@ fn a_task_container_that_was_never_created_is_not_counted_for_cleanup() {
         container: "app".into(),
         command: None,
     });
-    // No TaskContainerCreated — creation failed.
+    // No ContainerCreated — creation failed.
 
     logger.post(TaskEvent::CleanupStarting);
     logger.post(TaskEvent::RemovingNetwork);
@@ -765,6 +766,39 @@ fn a_task_container_that_was_never_created_is_not_counted_for_cleanup() {
     );
 }
 
+/// A dependency Docker created but never started — its start failed, or a
+/// sibling's failure dropped it — is still removed at cleanup, so it is
+/// counted from `ContainerCreated`, not from `DependencyStarted`, which it
+/// never reaches (ratect#499; Batect counts from its `ContainerCreatedEvent`
+/// for the same reason). The task's own container was never created here,
+/// so it isn't counted.
+#[test]
+fn a_dependency_created_but_never_started_is_counted_for_cleanup() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("app", Some("app:1"), &["db"], true),
+            info("db", Some("postgres:15"), &[], false),
+        ],
+    });
+    logger.post(TaskEvent::ContainerCreating {
+        container: "db".into(),
+    });
+    logger.post(TaskEvent::ContainerCreated {
+        container: "db".into(),
+    });
+    logger.post(TaskEvent::RunEnded { task: "t".into() });
+    logger.post(TaskEvent::CleanupStarting);
+
+    assert!(
+        buffer
+            .contents()
+            .ends_with("Cleaning up: 1 container (db) left to remove...\n"),
+        "{:?}",
+        buffer.contents()
+    );
+}
+
 #[test]
 fn cleanup_line_counts_down_then_summary_replaces_it() {
     let (logger, buffer) = logger_with_width(120);
@@ -774,15 +808,18 @@ fn cleanup_line_counts_down_then_summary_replaces_it() {
             info("db", Some("postgres:15"), &[], false),
         ],
     });
+    logger.post(TaskEvent::ContainerCreated {
+        container: "db".into(),
+    });
     logger.post(TaskEvent::DependencyStarted {
         container: "db".into(),
+    });
+    logger.post(TaskEvent::ContainerCreated {
+        container: "app".into(),
     });
     logger.post(TaskEvent::RunningTaskContainer {
         container: "app".into(),
         command: None,
-    });
-    logger.post(TaskEvent::TaskContainerCreated {
-        container: "app".into(),
     });
     logger.post(TaskEvent::CleanupStarting);
     // The task's own container counts too — it is removed during the
@@ -844,7 +881,7 @@ fn a_terminal_resize_since_the_cleanup_line_was_shown_starts_a_fresh_line() {
         container: "app".into(),
         command: None,
     });
-    logger.post(TaskEvent::TaskContainerCreated {
+    logger.post(TaskEvent::ContainerCreated {
         container: "app".into(),
     });
     logger.post(TaskEvent::CleanupStarting);
