@@ -45,21 +45,35 @@
 //! no gate at all, which `task_container_readiness_gate`, derived once from the
 //! project's dialect, is the only switch for; its creation is still recorded and
 //! announced either way. Why each of those, and where the outcome differs from
-//! Batect's, is decisions/0012. `run_container` takes two
-//! `oneshot::Sender`s for this:
-//! `created` (the container's id, sent the moment `create_container` returns —
-//! *before* it's started, matching Batect's own `containersCreated` set, which is
-//! what its `CleanupStagePlanner` plans removals from) and `started` (a bare `()`,
-//! right after Docker's own `start` call, which is when the readiness gate may
-//! begin — both its health inspect and its `docker exec` need a *running*
-//! container). `created` firing that early is what lets `run_container` `?` freely
-//! on every subsequent line: from that instant the engine can remove the
-//! container, so no failure can strand it. This replaced (0.25.0) a scheme where
-//! `run_container` removed its own container and took a third `readiness` channel
-//! purely to order that removal after the gate; the cleanup flags then had to be
-//! interpreted identically in two modules, and keeping them in step by hand
-//! produced a distinct bug in each of three consecutive review rounds. Don't
-//! reintroduce a removal here.
+//! Batect's, is decisions/0012. `run_container` takes a `started`
+//! `oneshot::Sender` for this — a bare `()`, sent right after Docker's own
+//! `start` call, which is when the readiness gate may begin (both its health
+//! inspect and its `docker exec` need a *running* container).
+//!
+//! Every container — a dependency's and the task's own — goes through **two
+//! memoised stages** per task execution (decisions/0019): *created*
+//! (`ensure_container_created`: its image resolved and the task network
+//! ready, plus the creation of any `container:` network-mode target → an id
+//! and the spec it was created from) and *ready* (`ensure_container_ready`:
+//! every container it depends on ready → started → through its readiness
+//! gate). A dependency's readiness gates only the *start* of what depends on
+//! it; creation waits for nothing but the image and the network, so a
+//! create-time failure (a bad mount, a log driver the daemon doesn't have)
+//! ends the run as soon as it lands — not once every dependency is ready, by
+//! which time their setup commands have had their side effects — and
+//! `run_task_internal` fans creation out over the whole graph the moment the
+//! network exists. `ContainerRuntime::create_container` returns the id
+//! synchronously (or carries it in its error, when Docker created the
+//! container but preparing it failed), and the engine registers it in
+//! `created_containers` before anything else can happen — matching Batect's
+//! own `containersCreated` set, which is what its `CleanupStagePlanner` plans
+//! removals from. From that instant the engine can remove the container, so
+//! no later failure can strand it, which is what lets `run_container` `?`
+//! freely. This replaced (0.25.0) a scheme where `run_container` removed its
+//! own container and took a `readiness` channel purely to order that removal
+//! after the gate; the cleanup flags then had to be interpreted identically in
+//! two modules, and keeping them in step by hand produced a distinct bug in
+//! each of three consecutive review rounds. Don't reintroduce a removal here.
 //! `resolve_volumes` (0.18.0) turns a container's `VolumeMount`s into the
 //! literal bind strings `docker.rs` expects — a `Local` mount's already fully
 //! resolved by `LoadedProject::evaluate` when its task is reached, nothing
@@ -185,20 +199,43 @@ struct ExecTarget<'a> {
 /// sees the same outcome without re-attempting the underlying Docker call.
 type SharedResult<T> = Result<T, Arc<anyhow::Error>>;
 
-/// A lazily-created, memoized cell holding the eventual outcome (image name/
-/// ID, or a started container's ID) for one cache key (an image name, or a
-/// container name) — see `get_or_create_cell`. `tokio::sync::OnceCell`
-/// (rather than `get_or_try_init`, which does *not* cache a failure) so a
-/// failed pull/build/start is cached just like a successful one: a later
+/// A lazily-created, memoized cell holding the eventual outcome for one cache
+/// key — see `get_or_create_cell`. `tokio::sync::OnceCell` (rather than
+/// `get_or_try_init`, which does *not* cache a failure) so a failed
+/// pull/build/create/start is cached just like a successful one: a later
 /// caller sharing the same key sees the same `Err` instead of retrying the
 /// real Docker call.
-type ReadyCell = Arc<OnceCell<SharedResult<String>>>;
+type Cell<T> = Arc<OnceCell<SharedResult<T>>>;
 
-/// Dependency name -> the receiving end of the `created` channel its
-/// `start_background_container` call sends the container's id on — see
-/// `run_task_internal`'s `created_dependencies` for why the receiver is kept rather
-/// than awaited.
-type CreatedDependencies = Mutex<HashMap<String, tokio::sync::oneshot::Receiver<String>>>;
+/// The cell for an image name or ID (`ensure_image_resolved`) or a *ready*
+/// container's ID (`ensure_container_ready`), keyed by container name.
+type ReadyCell = Cell<String>;
+
+/// The cell for a *created* container (`ensure_container_created`), keyed by
+/// container name.
+type CreatedCell = Cell<CreatedContainer>;
+
+/// What `ensure_container_created` yields: the container Docker created and
+/// the spec it was created from, which the ready stage needs again — the
+/// start call takes it, and the readiness gate's setup commands read their
+/// working directory, environment and user from it. Carried rather than
+/// re-derived so the two stages can't disagree about what the container is.
+#[derive(Clone)]
+struct CreatedContainer {
+    id: String,
+    spec: crate::container_spec::ContainerSpec,
+}
+
+/// Container name -> id, for every container Docker has created in this one
+/// task execution, the task's own included — registered the moment
+/// `create_container` hands the id back (whether as its result or inside its
+/// error), before anything else can fail or the run can be dropped. Read
+/// only at cleanup, which removes exactly this set: a container whose start
+/// was then abandoned (a sibling failed and `try_join_all` dropped it), or
+/// whose start failed, is still here (ratect#224). `Mutex`-guarded since
+/// independent branches of the dependency graph proceed concurrently and
+/// each registers itself from its own task.
+type CreatedContainers = Mutex<HashMap<String, String>>;
 
 /// Gets (or lazily creates) the shared cell for `key` in `cells`, under a
 /// short synchronous lock — the lock is dropped before the returned cell is
@@ -206,7 +243,7 @@ type CreatedDependencies = Mutex<HashMap<String, tokio::sync::oneshot::Receiver<
 /// for a `HashMap` lookup/insert, never across `.await` — same
 /// double-checked-lock convention this file already used for
 /// `pulled_images`/`built_images` pre-0.15.0.
-fn get_or_create_cell(cells: &Mutex<HashMap<String, ReadyCell>>, key: &str) -> ReadyCell {
+fn get_or_create_cell<T>(cells: &Mutex<HashMap<String, Cell<T>>>, key: &str) -> Cell<T> {
     let mut cells = cells.lock().unwrap();
     cells
         .entry(key.to_string())
@@ -220,8 +257,42 @@ fn get_or_create_cell(cells: &Mutex<HashMap<String, ReadyCell>>, key: &str) -> R
 /// context chain) rather than just its `Display` (the top message only),
 /// since this may be the only place a waiter *other than* the one that hit
 /// the real failure ever sees it.
-fn unshare(result: &SharedResult<String>) -> Result<String> {
+fn unshare<T: Clone>(result: &SharedResult<T>) -> Result<T> {
     result.clone().map_err(|e| anyhow::anyhow!("{:?}", e))
+}
+
+/// Everything one task execution's container stages share — the graph, the
+/// network, the memo cells, the registries, and what the task's own
+/// container is created with — handed to `ensure_container_created` and
+/// `ensure_container_ready` as one borrow instead of a dozen parameters each
+/// (the previous shape, which `#[allow(clippy::too_many_arguments)]` was
+/// excusing). Lives on `run_task_internal`'s stack for the run.
+struct TaskRunContext<'a> {
+    /// Container name -> its direct dependencies, proven acyclic by
+    /// `build_dependency_graph`; the root's entry is the union of its own
+    /// `dependencies` and the task's.
+    graph: &'a HashMap<String, Vec<String>>,
+    /// Every container in the task, evaluated.
+    containers: &'a HashMap<String, Container>,
+    /// The task's network — created, or `--use-network`'s.
+    network: &'a str,
+    created_cells: &'a Mutex<HashMap<String, CreatedCell>>,
+    ready_cells: &'a Mutex<HashMap<String, ReadyCell>>,
+    image_cells: &'a Mutex<HashMap<String, ReadyCell>>,
+    created_containers: &'a CreatedContainers,
+    no_proxy_entries: &'a std::collections::BTreeSet<String>,
+    customisations: Option<&'a IndexMap<String, TaskContainerCustomisation>>,
+    run_labels: &'a crate::labels::RunLabels,
+    dependency_watchers: &'a Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// The task's own container: its name, its `run` (the overlay it is
+    /// created with, where a dependency gets `customise`), the
+    /// `-- ADDITIONAL_ARGS` only it receives, and whether it is
+    /// interactive-eligible (`run_task_internal` decides; only the top-level
+    /// task's is).
+    root: &'a str,
+    run: &'a crate::config::TaskRun,
+    additional_args: &'a [String],
+    interactive: bool,
 }
 
 /// The error for a container name with no container behind it. The config
@@ -693,14 +764,19 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// Set via `--max-parallelism <N>`: caps how many resource-intensive
     /// operations run concurrently across the whole invocation — image
     /// pulls/builds (`resolve_pulled_image`/`resolve_image`'s build branch),
-    /// a dependency's own create+start (`ensure_container_ready`'s
-    /// `start_background_container` call), and setup-command execution
-    /// (`ensure_container_ready`'s `exec_in_container` call, one permit per
-    /// command — a single container's own setup commands already run
-    /// sequentially, so this only ever limits how many *different*
-    /// containers' setup commands overlap). `None` (the default) is
-    /// unbounded, matching both Ratect's own pre-existing behavior and
-    /// Batect's own default when the flag isn't passed.
+    /// every container's creation (`ensure_container_created`'s
+    /// `create_container` call, the task's own included), a dependency's
+    /// start (`ensure_container_ready`'s `start_background_container`
+    /// call), and setup-command execution (`run_setup_commands`'
+    /// `exec_in_container` call, one permit per command — a single
+    /// container's own setup commands already run sequentially, so this
+    /// only ever limits how many *different* containers' setup commands
+    /// overlap). A create and a start are separate permits, each released
+    /// when its step returns, and none is held while waiting for a
+    /// dependency to be ready — so a chain longer than the cap can't
+    /// deadlock on it (decisions/0019). `None` (the default) is unbounded,
+    /// matching both Ratect's own pre-existing behavior and Batect's own
+    /// default when the flag isn't passed.
     ///
     /// Deliberately *not* applied to `wait_for_container_healthy` (a health
     /// check is a polling wait, not CPU/disk work — gating it would only
@@ -711,7 +787,8 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// `RunContainerStep` exemption (`countsAgainstParallelismCap = false`):
     /// it's the actual task work, not setup, and is often long-running by
     /// design (an interactive shell, a dev server), so it must never
-    /// compete for or be blocked by this cap.
+    /// compete for or be blocked by this cap. Its *creation* counts, as
+    /// Batect's `CreateContainerStep` does.
     ///
     /// Still narrower than Batect's own flag, which schedules *every*
     /// setup/cleanup step (including the ones excluded here) through a
@@ -1377,8 +1454,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// Acquires a permit from `max_parallelism`'s semaphore, if configured —
     /// `None` (a no-op) when `--max-parallelism` wasn't given, unbounded as
     /// before. Every call site holds this only for the duration of the one
-    /// actual Docker-facing operation it wraps (a pull, a build, a
-    /// create+start, one setup-command exec) — see `max_parallelism`'s own
+    /// actual Docker-facing operation it wraps (a pull, a build, a create,
+    /// a start, one setup-command exec) — see `max_parallelism`'s own
     /// doc comment for exactly which operations that is, and why each
     /// acquire/release is scoped narrowly rather than held across a whole
     /// container's readiness sequence (nesting two acquisitions from the
@@ -1951,18 +2028,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // a network it can see was actually created.
         let network_name_cell: Mutex<Option<String>> = Mutex::new(None);
 
-        // One receiver per dependency, parked here *before* its
-        // `start_background_container` call, which sends the container's id
-        // the moment Docker creates it. Read only at cleanup, so an id sent
-        // by a start that was then abandoned (a sibling dependency failed,
-        // and `try_join_all` dropped it) or that failed after creating its
-        // container is still here: a oneshot keeps a sent value after its
-        // sender is gone. Awaiting the receiver alongside the start instead
-        // would lose exactly that value if both were dropped between the
-        // send and the next poll (ratect#224). `Mutex`-guarded since
-        // independent branches of the dependency graph start concurrently
-        // and each registers itself here from its own task.
-        let created_dependencies: CreatedDependencies = Mutex::new(HashMap::new());
+        // Every container Docker creates for this run, registered the
+        // moment `create_container` hands its id back — see
+        // `CreatedContainers`. Cleanup removes exactly this set.
+        let created_containers: CreatedContainers = Mutex::new(HashMap::new());
         // Every dependency-exit watcher `ensure_container_ready` spawns
         // once a dependency reaches `Ready` (see
         // `TaskEvent::DependencyExitedUnexpectedly`), collected so they can
@@ -1970,12 +2039,14 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // strictly before cleanup ever stops a container, so a deliberate
         // stop is never misreported as one of these.
         let dependency_watchers: Mutex<Vec<tokio::task::JoinHandle<()>>> = Mutex::new(Vec::new());
-        // Memoizes each container's own readiness future for this one task
-        // execution — see `ensure_container_ready`/`ReadyCell`. Reset per
-        // task (unlike `pulled_images`/`built_images`, which persist for the
-        // whole invocation): a dependency is deliberately re-started fresh
-        // for every task that uses it — see docs/task-lifecycle.md's
-        // "Cross-task isolation".
+        // Memoizes each container's creation and readiness futures for this
+        // one task execution — see `ensure_container_created`/
+        // `ensure_container_ready`. Reset per task (unlike
+        // `pulled_images`/`built_images`, which persist for the whole
+        // invocation): a dependency is deliberately re-created fresh for
+        // every task that uses it — see docs/task-lifecycle.md's "Cross-task
+        // isolation".
+        let created_cells: Mutex<HashMap<String, CreatedCell>> = Mutex::new(HashMap::new());
         let ready_cells: Mutex<HashMap<String, ReadyCell>> = Mutex::new(HashMap::new());
         // The same, for each container's image — see `ensure_image_resolved`.
         // Per task like `ready_cells` (the pull and build dedup underneath
@@ -2005,14 +2076,20 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             &run_id,
             self.ratect_version.as_deref(),
         );
-
-        // Recorded the moment Docker reports the task's own container as
-        // *created* — before it is started, and regardless of how the run
-        // ends. `run_container` removes nothing, so this is the only record
-        // of the container, and the cleanup stage below is the only place it
-        // is removed. Matches Batect's `containersCreated`, which is what its
-        // `CleanupStagePlanner` plans removals from.
-        let task_container_id: Mutex<Option<String>> = Mutex::new(None);
+        // Eligibility only — `ContainerRuntime::run_container` further
+        // gates this on the local process's own stdin/stdout genuinely
+        // being terminals before actually attaching a TTY, and stdin
+        // forwarding on `interactive` alone (see `run_container`'s own
+        // docs). Gated on `ContainerIoStreaming::allows_interactive` (not
+        // the interleaved-specific `interleaved_output()`) — the same
+        // method `docker.rs`'s own `task_container_io` independently
+        // re-checks, so the two can't disagree about which containers a
+        // policy allows to be interactive.
+        let interactive = top_level
+            && self
+                .event_sink
+                .container_io_streaming()
+                .allows_interactive();
 
         let execution = async {
             // Always created, even with no dependencies, so the task's own
@@ -2043,8 +2120,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             };
             // Recorded for the cleanup section below *before* any further
             // failure in this block — same "register before anything can
-            // fail" principle `ensure_container_ready` already applies to
-            // `created_dependencies`.
+            // fail" principle `ensure_container_created` applies to
+            // `created_containers`.
             *network_name_cell.lock().unwrap() = Some(network_name.clone());
 
             // Static, up-front cycle check (see `build_dependency_graph`) —
@@ -2094,25 +2171,45 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 containers: container_infos,
             });
             let root_dependencies = graph.get(&run.container).cloned().unwrap_or_default();
-            // Every image in the graph — each dependency's, each readiness
-            // companion's, the task container's own — is pulled or built
-            // now, concurrently, with the network ready and nothing else
-            // (decisions/0019; Batect's `PullImageStepRule`/
-            // `BuildImageStepRule` are likewise ready at once). A doomed
-            // pull or build therefore fails the run as soon as it fails —
-            // not once every dependency is ready, by which time their setup
-            // commands have had their side effects — and pulls along a
-            // dependency chain overlap instead of each waiting for the
-            // previous container's readiness. In container-name order so
-            // the order each image's work *starts* in is fixed, rather than
-            // a `HashMap`'s; the pulls run concurrently, so what finishes
+            let context = TaskRunContext {
+                graph: &graph,
+                containers: &containers,
+                network: &network_name,
+                created_cells: &created_cells,
+                ready_cells: &ready_cells,
+                image_cells: &image_cells,
+                created_containers: &created_containers,
+                no_proxy_entries: &no_proxy_entries,
+                customisations: task.customise.as_ref(),
+                run_labels: &run_labels,
+                dependency_watchers: &dependency_watchers,
+                root: &run.container,
+                run,
+                additional_args,
+                interactive,
+            };
+            // Every container in the graph — each dependency, each readiness
+            // companion, the task's own — is created now, concurrently, with
+            // the network ready and nothing else: each one's image is pulled
+            // or built first (`ensure_container_created` awaits it), and
+            // nothing waits for a dependency's readiness (decisions/0019;
+            // Batect's `PullImageStepRule`/`BuildImageStepRule` are likewise
+            // ready at once, and its `CreateContainerStepRule` waits only
+            // for the image and the network). A doomed pull, build or create
+            // therefore fails the run as soon as it fails — not once every
+            // dependency is ready, by which time their setup commands have
+            // had their side effects — and pulls along a dependency chain
+            // overlap instead of each waiting for the previous container's
+            // readiness. In container-name order so the order each
+            // container's work *starts* in is fixed, rather than a
+            // `HashMap`'s; the work runs concurrently, so what finishes
             // first — and when its milestones post — is the daemon's.
-            let mut image_names: Vec<&String> = graph.keys().collect();
-            image_names.sort();
-            let images = futures::future::try_join_all(
-                image_names
+            let mut container_names: Vec<&String> = graph.keys().collect();
+            container_names.sort();
+            let creations = futures::future::try_join_all(
+                container_names
                     .iter()
-                    .map(|name| self.ensure_image_resolved(name, &containers, &image_cells)),
+                    .map(|name| self.ensure_container_created(name, &context)),
             );
             // Independent branches of the dependency graph start
             // concurrently; a dependent container's own
@@ -2121,61 +2218,32 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // starting, and only starting (see docs/dependency-readiness.md).
             // Kept for the same reason as the fan-out inside
             // `ensure_container_ready`: the task container's own `run_in`
-            // setup commands (ratect#111) and `container:` network mode
-            // (ratect#106) resolve through it. `graph`'s root
+            // setup commands (ratect#111) resolve through it. `graph`'s root
             // adjacency is the union of the container's own `dependencies`
             // and the task's, so it is a superset of what the config loader
             // allows as a target.
-            let dependencies =
-                futures::future::try_join_all(root_dependencies.iter().map(|dependency_name| {
-                    self.ensure_container_ready(
-                        dependency_name,
-                        &graph,
-                        &containers,
-                        &network_name,
-                        &ready_cells,
-                        &image_cells,
-                        &created_dependencies,
-                        &no_proxy_entries,
-                        task.customise.as_ref(),
-                        &run_labels,
-                        &dependency_watchers,
-                    )
-                }));
+            let dependencies = futures::future::try_join_all(
+                root_dependencies
+                    .iter()
+                    .map(|dependency_name| self.ensure_container_ready(dependency_name, &context)),
+            );
             // One `try_join`, so a failure on either side drops the other
             // at once — the startup-failure behaviour
             // docs/differences-from-batect.md already records.
-            let (_, dependency_ids) = futures::future::try_join(images, dependencies).await?;
+            let (_, dependency_ids) = futures::future::try_join(creations, dependencies).await?;
             let dependency_ids: HashMap<String, String> = dependency_ids
                 .into_iter()
                 .zip(root_dependencies.iter())
                 .map(|(id, dependency_name)| (dependency_name.clone(), id))
                 .collect();
 
-            // Resolved above, alongside everything else's; this is the hit.
-            let image = self
-                .ensure_image_resolved(&run.container, &containers, &image_cells)
+            // Created above, alongside everything else; this is the hit.
+            let CreatedContainer {
+                id: container_id,
+                spec,
+            } = self
+                .ensure_container_created(&run.container, &context)
                 .await?;
-            // Eligibility only — `ContainerRuntime::run_container` further
-            // gates this on the local process's own stdin/stdout genuinely
-            // being terminals before actually attaching a TTY, and stdin
-            // forwarding on `interactive` alone (see `run_container`'s own
-            // docs). Computed here, ahead of the environment merge below,
-            // since `term_environment_variable` needs it. Gated on
-            // `ContainerIoStreaming::allows_interactive` (not the
-            // interleaved-specific `interleaved_output()`) — the same
-            // method `docker.rs`'s own `run_container` independently
-            // re-checks before actually attaching, so the two can't
-            // disagree about which containers a policy allows to be
-            // interactive.
-            let interactive = top_level
-                && self
-                    .event_sink
-                    .container_io_streaming()
-                    .allows_interactive();
-            let proxy = self.proxy_environment(&no_proxy_entries);
-            let term_var = self.term_environment_variable(interactive);
-            let user_mapping = self.resolve_user_mapping(container_config).await?;
             // Under the Batect-compatible dialect, the task's own container
             // goes through the same readiness gate as any dependency, run
             // *concurrently* with its main command instead of gating
@@ -2190,61 +2258,21 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 container: run.container.clone(),
                 command: command.map(str::to_string),
             });
-            let volumes = self
-                .resolve_volumes(container_config.volumes.as_ref())
-                .await?;
-            let spec =
-                crate::container_spec::derive_spec(crate::container_spec::ContainerSpecInputs {
-                    name: &run.container,
-                    container_config,
-                    overlay: crate::container_spec::Overlay::Run(run),
-                    image: &image,
-                    network: crate::container_spec::resolve_network(
-                        container_config.network_mode.as_ref(),
-                        &network_name,
-                        &dependency_ids,
-                    )?,
-                    interactive,
-                    additional_args,
-                    user_mapping: user_mapping.as_ref(),
-                    volumes: volumes.as_ref(),
-                    term_var: term_var.as_ref(),
-                    proxy: proxy.as_ref(),
-                    publish_ports: self.publish_ports,
-                    role: crate::labels::ContainerRole::Task,
-                    run_labels: &run_labels,
-                });
-            let (created_tx, created_rx) = tokio::sync::oneshot::channel();
             let (started_tx, started_rx) = tokio::sync::oneshot::channel();
             let run_future = self
                 .docker
-                .run_container(&spec, Some(created_tx), Some(started_tx));
-            // Two jobs, in order: take ownership of the container as soon as
-            // it exists, then — Batect-compatible dialect only — gate on its
+                .run_container(&container_id, &spec, Some(started_tx));
+            // Batect-compatible dialect only: gate on the container's
             // readiness once it's actually running. The `select!` below is
             // what drives this concurrently with `run_future` — without
-            // something polling it, neither channel would ever resolve.
+            // something polling it, the channel would never resolve.
             let readiness_future = async {
-                // A dropped sender means `run_container` failed before
-                // getting this far; its own error is the report, and there
-                // is nothing of ours to record or wait on.
-                let Ok(container_id) = created_rx.await else {
-                    return Ok(());
-                };
-                // Recorded before the container is even started, matching
-                // Batect's `containersCreated` (the set its cleanup stage
-                // plans removals from) rather than `containersStarted`. A
-                // container that fails to start still has to be removed.
-                *task_container_id.lock().unwrap() = Some(container_id.clone());
-                // Posted from the same place, so a display's idea of what is
-                // outstanding can never disagree with what cleanup will
-                // actually remove.
-                self.event_sink.post(TaskEvent::TaskContainerCreated {
-                    container: run.container.clone(),
-                });
                 if !self.task_container_readiness_gate {
                     return Ok(());
                 }
+                // A dropped sender means `run_container` failed before
+                // starting the container; its own error is the report, and
+                // there is nothing of ours to wait on.
                 if started_rx.await.is_err() {
                     return Ok(());
                 }
@@ -2266,14 +2294,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // main command still running, since that command may be waiting
             // on what the gate would have done. Dropping `run_future` is the
             // same cancel an interrupt makes, and the cleanup below stops
-            // and removes the container `readiness_future` has already
-            // recorded. The run's end ends the gate, whatever the exit code:
-            // a run that finishes first drops the gate instead, but only
-            // after polling it once more, since `readiness_future` is where
-            // the container's id is recorded, so it must not be dropped
-            // unpolled (which is also why this isn't `tokio::try_join!`).
-            // `biased` towards the run so a main command that has exited
-            // keeps its own exit code over a gate failing in the same poll.
+            // and removes the container, registered at its creation. The
+            // run's end ends the gate, whatever the exit code: a run that
+            // finishes first drops the gate instead (which is also why this
+            // isn't `tokio::try_join!`). `biased` towards the run so a main
+            // command that has exited keeps its own exit code over a gate
+            // failing in the same poll.
             //
             // A gate can also fail *because* the main command exited — the
             // health wait sees the container die, a setup command is killed
@@ -2291,25 +2317,16 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 run_result = &mut run_future => {
                     // A main command that has exited has ended the gate's
                     // question: whatever the gate is still doing is dropped
-                    // rather than awaited. Polled once first, so a container
-                    // id sent but not yet recorded is recorded for the
-                    // cleanup below.
-                    let _ = futures::FutureExt::now_or_never(readiness_future.as_mut());
+                    // rather than awaited.
                     (run_result, Ok(()))
                 }
                 readiness_result = &mut readiness_future => match readiness_result {
                     Ok(()) => (run_future.await, Ok(())),
                     Err(error) => {
-                        let container_id = task_container_id.lock().unwrap().clone();
-                        let main_command_exited = match container_id {
-                            Some(container_id) => matches!(
-                                self.docker.container_is_running(&container_id).await,
-                                Ok(false)
-                            ),
-                            // Unreachable in practice: the gate only runs
-                            // once the id is recorded.
-                            None => false,
-                        };
+                        let main_command_exited = matches!(
+                            self.docker.container_is_running(&container_id).await,
+                            Ok(false)
+                        );
                         if main_command_exited {
                             (run_future.await, Err(error))
                         } else {
@@ -2354,18 +2371,15 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // indistinguishable to the user, and completing is the more useful
         // reading of a tie.
         //
-        // The residual race is Ratect's own: a container created but not yet
-        // recorded is dropped before cleanup can see it, and survives.
+        // The residual race is Ratect's own: a container whose create
+        // request is already with the daemon when the run is dropped is
+        // created and never recorded, so cleanup can't see it, and it
+        // survives — its id is registered the moment the create call
+        // returns (`created_containers`), and a drop before that loses it.
         // Batect's `CreateContainerStepRunner` always posts the created
-        // event, so its cleanup sees every container. For a
-        // dependency that is only a create request already with the daemon
-        // when the run is dropped — its id is recorded the moment the create
-        // call returns (`created_dependencies`). The task's own container
-        // has a little more: its id is recorded when `readiness_future`
-        // next polls after the send (`task_container_id`), so a drop in
-        // between loses it too. The ownership labels are the answer to
-        // both — `ratect resources` finds exactly this — rather than an
-        // ordering that could avoid it.
+        // event, so its cleanup sees every container. The ownership labels
+        // are the answer — `ratect resources` finds exactly this — rather
+        // than an ordering that could avoid it.
         // Captured in the same expression that ends the run, not further
         // down: every interrupt after this instant is one the *cleanup*
         // should react to, and reading the count later would fold anything
@@ -2395,15 +2409,13 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             .err()
             .and_then(|error| error.downcast_ref::<crate::interrupt::TaskInterrupted>())
             .map(|interrupted| interrupted.signal);
-        let task_container_id = task_container_id.into_inner().unwrap();
-        // Every dependency Docker created, however its start ended — see
-        // `created_dependencies`.
-        let created_sidecars: HashMap<String, String> = created_dependencies
-            .into_inner()
-            .unwrap()
-            .into_iter()
-            .filter_map(|(name, mut created)| created.try_recv().ok().map(|id| (name, id)))
-            .collect();
+        // Everything Docker created, however far each got — see
+        // `CreatedContainers`. The task's own container is pulled out
+        // first: cleanup removes it before the dependencies it was using,
+        // matching Batect's own dependency-ordered cleanup.
+        let mut created = created_containers.into_inner().unwrap();
+        let task_container_id = created.remove(&run.container);
+        let created_sidecars = created;
         // Stop watching before cleanup below ever stops a container — see
         // `dependency_watchers`' own doc comment for why the ordering
         // matters, not just that it happens. `abort()` only takes effect at
@@ -2769,7 +2781,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             );
             if !left.is_empty() {
                 self.post_notice(format!(
-                    "Left running (--no-cleanup): {}. Remove with: {}",
+                    "Left in place (--no-cleanup): {}. Remove with: {}",
                     left.list(),
                     left.command()
                 ));
@@ -2822,70 +2834,236 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         result
     }
 
+    /// Ensures `name`'s container is *created* — Docker has it, user mapping
+    /// applied and network joined, ready to be started — memoized per this
+    /// one task execution via `context.created_cells`, and returns its id
+    /// and the spec it was created from. Waits for exactly what creation
+    /// needs and nothing else (decisions/0019, Batect's
+    /// `CreateContainerStepRule`): the container's own image
+    /// (`ensure_image_resolved`), the task network (already there — the
+    /// caller made it before any of this), and, for a `container:` network
+    /// mode, the *creation* of its target — Docker's create needs the
+    /// target's id, and no more; the target's readiness gates this
+    /// container's *start*, in `ensure_container_ready`, as for any other
+    /// dependency. Never a dependency's readiness: that is the whole point
+    /// of the split, so that a create-time failure (a bad mount, a log
+    /// driver the daemon doesn't have) ends the run as soon as it lands
+    /// rather than once every dependency is ready and its setup commands
+    /// have had their side effects.
+    ///
+    /// Reached twice per container: `run_task_internal` fans this out over
+    /// the whole graph the moment the network exists, and the ready stage
+    /// awaits the same cell when it is about to start the container — a hit
+    /// when the fan-out got there first, the same in-flight work otherwise.
+    /// The task's own container (`context.root`) comes through here too, with
+    /// its `run` overlay, `-- ADDITIONAL_ARGS` and interactive eligibility
+    /// where a dependency gets its `customise`.
+    ///
+    /// The id is registered in `context.created_containers` the instant
+    /// `create_container` hands it back — on success and inside a failure
+    /// alike (`CreateContainerError::created`) — before this returns and
+    /// before anything else can fail, so cleanup removes the container
+    /// however the run ends. Recursive only through the `container:` target,
+    /// which the config loader requires to be one of `name`'s own
+    /// dependencies, so the graph's proven acyclicity bounds it.
+    // `double_must_use`: see `run_task_scoped`.
+    #[allow(clippy::double_must_use)]
+    #[async_recursion]
+    async fn ensure_container_created(
+        &self,
+        name: &str,
+        context: &TaskRunContext<'_>,
+    ) -> Result<CreatedContainer> {
+        let cell = get_or_create_cell(context.created_cells, name);
+        let result = cell
+            .get_or_init(|| async {
+                let outcome: Result<CreatedContainer> = async {
+                    let container_config = context
+                        .containers
+                        .get(name)
+                        .with_context(|| undeclared_container_bug(name))?;
+                    let is_root = name == context.root;
+                    let image = self
+                        .ensure_image_resolved(name, context.containers, context.image_cells)
+                        .await?;
+                    // The one thing a container is created with that comes
+                    // from another container: the id a `container:` network
+                    // mode shares. Only the target's creation is awaited,
+                    // never its readiness (see above).
+                    let network_target_ids: HashMap<String, String> = match &container_config
+                        .network_mode
+                    {
+                        Some(crate::config::NetworkMode::Container(target)) => {
+                            let created = self.ensure_container_created(target, context).await?;
+                            HashMap::from([(target.clone(), created.id)])
+                        }
+                        _ => HashMap::new(),
+                    };
+                    let network = crate::container_spec::resolve_network(
+                        container_config.network_mode.as_ref(),
+                        context.network,
+                        &network_target_ids,
+                    )?;
+                    let user_mapping = self.resolve_user_mapping(container_config).await?;
+                    let proxy = self.proxy_environment(context.no_proxy_entries);
+                    // Everything that tells the task's own container from a
+                    // dependency, decided once: its `run` overlay where a
+                    // dependency gets its `customise` entry (applied on top
+                    // of its own base config, same precedence — see
+                    // `config::check_values` for the validation ensuring a
+                    // customisation can never target the main task
+                    // container, and
+                    // `config::reject_customisations_outside_the_task_graph`
+                    // — which runs after `extends` — for one outside this
+                    // task's own graph), the `-- ADDITIONAL_ARGS` only it
+                    // receives, its role, and its interactive eligibility —
+                    // a dependency is never interactive (see
+                    // `term_environment_variable`'s own docs for the
+                    // interleaved-policy override it still picks up).
+                    let (overlay, additional_args, role, interactive) = if is_root {
+                        (
+                            crate::container_spec::Overlay::Run(context.run),
+                            context.additional_args,
+                            crate::labels::ContainerRole::Task,
+                            context.interactive,
+                        )
+                    } else {
+                        (
+                            crate::container_spec::Overlay::Customise(
+                                context.customisations.and_then(|c| c.get(name)),
+                            ),
+                            &[][..],
+                            crate::labels::ContainerRole::Dependency,
+                            false,
+                        )
+                    };
+                    let term_var = self.term_environment_variable(interactive);
+                    let volumes = self
+                        .resolve_volumes(container_config.volumes.as_ref())
+                        .await?;
+                    let spec = crate::container_spec::derive_spec(
+                        crate::container_spec::ContainerSpecInputs {
+                            name,
+                            container_config,
+                            overlay,
+                            image: &image,
+                            network,
+                            interactive,
+                            additional_args,
+                            user_mapping: user_mapping.as_ref(),
+                            volumes: volumes.as_ref(),
+                            term_var: term_var.as_ref(),
+                            proxy: proxy.as_ref(),
+                            publish_ports: self.publish_ports,
+                            role,
+                            run_labels: context.run_labels,
+                        },
+                    );
+
+                    // Derived once, and consumed everywhere this container's
+                    // own lifecycle would otherwise be narrated: a
+                    // companion is an implementation detail of the
+                    // container it checks, so it contributes no lines of
+                    // its own (ratect#202).
+                    let narrated = container_config.reports_readiness_for.is_none();
+                    let created = {
+                        // Held only around the create call itself — see
+                        // `max_parallelism`'s own doc comment for why a
+                        // create and a start are separate permits, and why
+                        // none is held while waiting on a dependency. The
+                        // milestone is posted once the permit is held, so
+                        // it marks the create beginning rather than a wait
+                        // for the cap — as the "starting" one does.
+                        let _permit = self.acquire_parallelism_permit().await;
+                        if narrated {
+                            self.event_sink.post(TaskEvent::ContainerCreating {
+                                container: name.to_string(),
+                            });
+                        }
+                        self.docker.create_container(&spec).await
+                    };
+                    // Registered before anything else can happen to it, on
+                    // both arms: a container Docker created is removed
+                    // however the rest of the run goes — see
+                    // `CreatedContainers`.
+                    let id = match created {
+                        Ok(id) => id,
+                        Err(crate::docker::CreateContainerError { created, error }) => {
+                            if let Some(id) = created {
+                                context
+                                    .created_containers
+                                    .lock()
+                                    .unwrap()
+                                    .insert(name.to_string(), id);
+                            }
+                            return Err(error);
+                        }
+                    };
+                    context
+                        .created_containers
+                        .lock()
+                        .unwrap()
+                        .insert(name.to_string(), id.clone());
+                    // Posted from the same place the id is registered, so a
+                    // display's idea of what is outstanding can never
+                    // disagree with what cleanup will actually remove.
+                    if narrated {
+                        self.event_sink.post(TaskEvent::ContainerCreated {
+                            container: name.to_string(),
+                        });
+                    }
+                    Ok(CreatedContainer { id, spec })
+                }
+                .await;
+                outcome.map_err(Arc::new)
+            })
+            .await;
+
+        unshare(result)
+    }
+
     /// Ensures `name`'s container is started and *ready* (healthy, then every
     /// one of its `setup_commands` succeeded — or, with `run_to_completion`,
-    /// exited 0) on `network`, memoized per this
-    /// one task execution via `cells` — concurrent callers reaching the same
-    /// node (a diamond in the dependency graph) share one `ReadyCell`, so the
-    /// second awaits the first's in-flight work instead of starting it
-    /// twice. Fans out to `name`'s own dependencies (`graph[name]`)
-    /// concurrently, via `try_join_all`, before creating and starting its
-    /// own container — this and the memoization together are what let
-    /// independent branches of one task's dependency graph run at the same
-    /// time while a container with dependencies of its own still waits for
-    /// them first (see docs/dependency-readiness.md). Its image is the one
-    /// thing that doesn't wait: `run_task_internal` resolves every
-    /// container's up front, and the `ensure_image_resolved` call here
-    /// awaits that same work (decisions/0019). No cycle guard here any more (pre-0.15.0's
+    /// exited 0), memoized per this one task execution via
+    /// `context.ready_cells` — concurrent callers reaching the same node (a
+    /// diamond in the dependency graph) share one `ReadyCell`, so the second
+    /// awaits the first's in-flight work instead of starting it twice. Fans
+    /// out to `name`'s own dependencies (`graph[name]`) concurrently, via
+    /// `try_join_all`, before starting its own container — this and the
+    /// memoization together are what let independent branches of one task's
+    /// dependency graph run at the same time while a container with
+    /// dependencies of its own still waits for them first (see
+    /// docs/dependency-readiness.md). Only the *start* waits: the container
+    /// is created by `ensure_container_created`, which `run_task_internal`
+    /// fans out over the whole graph the moment the network exists and which
+    /// the call here awaits — a hit when the fan-out got there first
+    /// (decisions/0019). No cycle guard here any more (pre-0.15.0's
     /// `resolving`/`running` params): `graph` is already proven acyclic by
     /// `build_dependency_graph`, run once, synchronously, before this is
     /// ever called.
     // `double_must_use`: see `run_task_scoped`.
     #[allow(clippy::double_must_use)]
     #[async_recursion]
-    #[allow(clippy::too_many_arguments)]
     async fn ensure_container_ready(
         &self,
         name: &str,
-        graph: &HashMap<String, Vec<String>>,
-        containers: &HashMap<String, Container>,
-        network: &str,
-        cells: &Mutex<HashMap<String, ReadyCell>>,
-        image_cells: &Mutex<HashMap<String, ReadyCell>>,
-        created_dependencies: &CreatedDependencies,
-        no_proxy_entries: &std::collections::BTreeSet<String>,
-        customisations: Option<&IndexMap<String, TaskContainerCustomisation>>,
-        run_labels: &crate::labels::RunLabels,
-        dependency_watchers: &Mutex<Vec<tokio::task::JoinHandle<()>>>,
+        context: &TaskRunContext<'_>,
     ) -> Result<String> {
-        let cell = get_or_create_cell(cells, name);
+        let cell = get_or_create_cell(context.ready_cells, name);
         let result = cell
             .get_or_init(|| async {
                 let outcome: Result<String> = async {
                     let empty = Vec::new();
-                    let dependencies = graph.get(name).unwrap_or(&empty);
+                    let dependencies = context.graph.get(name).unwrap_or(&empty);
                     // Kept, rather than discarded: a `run_in` setup command
-                    // (ratect#111) and a `container:` network mode
-                    // (ratect#106) resolve their target through exactly this
-                    // set, which is why the config loader restricts both to
+                    // (ratect#111) resolves its target through exactly this
+                    // set, which is why the config loader restricts it to
                     // one of `name`'s own dependencies — every id here
                     // belongs to a container already through its own full
                     // readiness gate.
                     let dependency_ids: HashMap<String, String> =
                         futures::future::try_join_all(dependencies.iter().map(|dependency_name| {
-                            self.ensure_container_ready(
-                                dependency_name,
-                                graph,
-                                containers,
-                                network,
-                                cells,
-                                image_cells,
-                                created_dependencies,
-                                no_proxy_entries,
-                                customisations,
-                                run_labels,
-                                dependency_watchers,
-                            )
+                            self.ensure_container_ready(dependency_name, context)
                         }))
                         .await?
                         .into_iter()
@@ -2893,30 +3071,16 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         .map(|(id, dependency_name)| (dependency_name.clone(), id))
                         .collect();
 
-                    let dependency_config = containers
+                    let dependency_config = context
+                        .containers
                         .get(name)
                         .with_context(|| undeclared_container_bug(name))?;
-
-                    // A `customise` entry for this container specifically —
-                    // applied on top of its own base config, same precedence
-                    // as a task's `run` overriding its own main container
-                    // (see `config::check_values`
-                    // for the validation ensuring this can never target the
-                    // main task container, and
-                    // `config::reject_customisations_outside_the_task_graph`
-                    // — which runs after `extends` — for one outside this
-                    // task's own graph).
-                    let customisation = customisations.and_then(|c| c.get(name));
-
-                    let image = self
-                        .ensure_image_resolved(name, containers, image_cells)
-                        .await?;
-                    let user_mapping = self.resolve_user_mapping(dependency_config).await?;
-                    let proxy = self.proxy_environment(no_proxy_entries);
-                    // A dependency is never interactive — see
-                    // `term_environment_variable`'s own docs for the
-                    // interleaved-policy override this still picks up.
-                    let term_var = self.term_environment_variable(false);
+                    // Created the moment its image was ready, by the fan-out
+                    // in `run_task_internal`; this awaits that same cell.
+                    let CreatedContainer {
+                        id: container_id,
+                        spec,
+                    } = self.ensure_container_created(name, context).await?;
 
                     // Derived once, and consumed everywhere this container's
                     // own lifecycle would otherwise be narrated: a
@@ -2924,61 +3088,26 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     // container it checks, so it contributes no lines of
                     // its own (ratect#202).
                     let reports_readiness_for = dependency_config.reports_readiness_for.as_deref();
-                    if reports_readiness_for.is_none() {
-                        self.event_sink.post(TaskEvent::DependencyStarting {
-                            container: name.to_string(),
-                        });
-                    }
-                    let (container_id, spec) = {
-                        // Held only around the actual create+start call —
-                        // matching `resolve_image`'s own placement, not the
+                    {
+                        // Held only around the start call — matching
+                        // `resolve_image`'s own placement, not the
                         // health-check wait or the readiness bookkeeping
                         // either side of it. See `max_parallelism`'s own
                         // doc comment for why starting counts against the
-                        // cap but waiting for healthy doesn't.
+                        // cap but waiting for healthy doesn't. The
+                        // "starting" milestone is posted once the permit is
+                        // held, so it marks the start actually beginning
+                        // rather than a wait for the cap (ratect#505).
                         let _permit = self.acquire_parallelism_permit().await;
-                        let volumes = self
-                            .resolve_volumes(dependency_config.volumes.as_ref())
+                        if reports_readiness_for.is_none() {
+                            self.event_sink.post(TaskEvent::DependencyStarting {
+                                container: name.to_string(),
+                            });
+                        }
+                        self.docker
+                            .start_background_container(&container_id, &spec)
                             .await?;
-                        let spec = crate::container_spec::derive_spec(
-                            crate::container_spec::ContainerSpecInputs {
-                                name,
-                                container_config: dependency_config,
-                                overlay: crate::container_spec::Overlay::Customise(customisation),
-                                image: &image,
-                                network: crate::container_spec::resolve_network(
-                                    dependency_config.network_mode.as_ref(),
-                                    network,
-                                    &dependency_ids,
-                                )?,
-                                interactive: false,
-                                additional_args: &[],
-                                user_mapping: user_mapping.as_ref(),
-                                volumes: volumes.as_ref(),
-                                term_var: term_var.as_ref(),
-                                proxy: proxy.as_ref(),
-                                publish_ports: self.publish_ports,
-                                role: crate::labels::ContainerRole::Dependency,
-                                run_labels,
-                            },
-                        );
-                        // Registered for cleanup before the call, so a
-                        // container Docker creates is removed however the
-                        // start ends — see `created_dependencies`. Before
-                        // the readiness gate below too, so one that never
-                        // becomes healthy (or whose setup command fails) is
-                        // removed as well.
-                        let (created_tx, created_rx) = tokio::sync::oneshot::channel();
-                        created_dependencies
-                            .lock()
-                            .unwrap()
-                            .insert(name.to_string(), created_rx);
-                        let container_id = self
-                            .docker
-                            .start_background_container(&spec, created_tx)
-                            .await?;
-                        (container_id, spec)
-                    };
+                    }
                     if reports_readiness_for.is_none() {
                         self.event_sink.post(TaskEvent::DependencyStarted {
                             container: name.to_string(),
@@ -3090,7 +3219,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                             container_id: &container_id,
                             working_directory: spec.shared.options.working_directory.as_deref(),
                             environment: spec.shared.environment.as_ref(),
-                            user_mapping: user_mapping.as_ref(),
+                            user_mapping: spec.shared.user_mapping.as_ref(),
                             dependency_ids: &dependency_ids,
                         },
                     )
@@ -3134,7 +3263,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                             }
                         })
                     };
-                    dependency_watchers.lock().unwrap().push(watcher);
+                    context.dependency_watchers.lock().unwrap().push(watcher);
 
                     Ok(container_id)
                 }

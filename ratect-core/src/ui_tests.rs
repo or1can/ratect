@@ -126,7 +126,7 @@ fn the_quiet_logger_prints_the_stderr_classes_and_no_progress() {
         task: "build".into(),
     });
     logger.post(TaskEvent::Notice {
-        message: "Left running (--no-cleanup): app (abc)".into(),
+        message: "Left in place (--no-cleanup): app (abc)".into(),
     });
     logger.post(TaskEvent::TaskFinished {
         task: "build".into(),
@@ -135,7 +135,7 @@ fn the_quiet_logger_prints_the_stderr_classes_and_no_progress() {
     });
     assert_eq!(
         buffer.contents(),
-        "Left running (--no-cleanup): app (abc)\n"
+        "Left in place (--no-cleanup): app (abc)\n"
     );
 }
 

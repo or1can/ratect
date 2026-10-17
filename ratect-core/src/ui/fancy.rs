@@ -99,13 +99,13 @@ struct State {
     /// `false` once the block froze (task container running, cleanup
     /// started, or the task failed) — no more startup repaints after that.
     keep_updating_startup: bool,
-    /// Containers started and not yet removed — the cleanup countdown.
-    /// The task's own container counts (it is removed during the cleanup
-    /// stage like any other, since 0.25.0), matching Batect's own
-    /// `CleanupProgressDisplayLine`, which counts
-    /// `containersCreated - containersRemoved` with no special case for it.
-    /// `BTreeSet` so the rendered list is stable.
-    started_containers: BTreeSet<String>,
+    /// Containers created and not yet removed — the cleanup countdown.
+    /// Counted from `ContainerCreated`, the task's own container included
+    /// (it is removed during the cleanup stage like any other, since
+    /// 0.25.0), matching Batect's own `CleanupProgressDisplayLine`, which
+    /// counts `containersCreated - containersRemoved` with no special case
+    /// for it. `BTreeSet` so the rendered list is stable.
+    created_containers: BTreeSet<String>,
     /// The task's own network is being removed (the last cleanup step).
     removing_network: bool,
     /// The cleanup countdown is the line directly above the cursor, so the
@@ -461,9 +461,9 @@ impl FancyEventLogger {
     }
 
     fn cleanup_text(&self, state: &State) -> String {
-        if !state.started_containers.is_empty() {
+        if !state.created_containers.is_empty() {
             let names: Vec<&str> = state
-                .started_containers
+                .created_containers
                 .iter()
                 .map(String::as_str)
                 .collect();
@@ -723,7 +723,6 @@ impl EventSink for FancyEventLogger {
                 if !state.keep_updating_startup {
                     return;
                 }
-                state.started_containers.insert(container.clone());
                 if let Some(line) = Self::line_mut(&mut state, &container) {
                     line.stage = Stage::WaitingToBecomeHealthy;
                 }
@@ -831,16 +830,24 @@ impl EventSink for FancyEventLogger {
                     }
                 }
             }
-            TaskEvent::TaskContainerCreated { container } => {
-                // Counted from *created*, not from `RunningTaskContainer` —
-                // that is posted before the container exists, so counting it
-                // there left the countdown stuck on a container that was
-                // never created whenever creation failed. Outside the
+            // The creation step has no stage of its own here yet — Batect's
+            // `creating container...` and `image built, ready to create
+            // container` are ratect#500's — so the line stays at whatever it
+            // was showing.
+            TaskEvent::ContainerCreating { .. } => {}
+            TaskEvent::ContainerCreated { container } => {
+                // Counted from *created*, not from `RunningTaskContainer` or
+                // `DependencyStarted` — those are posted when a container's
+                // start begins, and a container that is created but never
+                // started (its start failed, or a sibling's failure dropped
+                // it) is still removed at cleanup, so it belongs in the
+                // countdown (ratect#499; Batect counts from its
+                // `ContainerCreatedEvent` too). Outside the
                 // `keep_updating_startup` guard deliberately: that guard is
                 // about whether the startup block may still be repainted, and
                 // this is cleanup bookkeeping, which has to be right either
                 // way.
-                state.started_containers.insert(container);
+                state.created_containers.insert(container);
             }
             TaskEvent::RunningTaskContainer { container, command } => {
                 if !state.keep_updating_startup {
@@ -870,7 +877,7 @@ impl EventSink for FancyEventLogger {
                 self.repaint_cleanup(&mut state);
             }
             TaskEvent::ContainerRemoved { container } => {
-                state.started_containers.remove(&container);
+                state.created_containers.remove(&container);
                 if state.cleanup_live {
                     self.repaint_cleanup(&mut state);
                 }

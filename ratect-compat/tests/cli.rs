@@ -1298,7 +1298,7 @@ fn ownership_labels_reach_real_containers_and_networks_via_docker() {
     // config name and id and the command that works when pasted.
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("Left running (--no-cleanup): app (")
+        stderr.contains("Left in place (--no-cleanup): app (")
             && stderr.contains(", database (")
             && stderr.contains(", network ratect-")
             && stderr.contains(". Remove with: docker rm -f -v ")
@@ -2061,6 +2061,103 @@ tasks:
             panic!(
                 "run {run}: the dependency's setup command should not have completed before \
                  the task image's pull failed\nstdout:\n{}\nstderr:\n{stderr}",
+                String::from_utf8_lossy(&output.stdout),
+            );
+        }
+    }
+
+    cleanup();
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Creation doesn't wait for a dependency's readiness either (ratect#603,
+/// decisions/0019): the task container is created alongside the
+/// dependency's startup, so a create the daemon refuses ends the run before
+/// the dependency's setup command has had its effect. Same shape as the
+/// pull test above — the setup command sleeps for two minutes and then
+/// drops a marker onto a bind-mounted scratch directory — with a task
+/// container whose `log_driver` names a plugin the daemon doesn't have,
+/// which Docker refuses at `create` ("error looking up logging plugin"),
+/// not at start. (A device that doesn't exist, the obvious alternative, is
+/// refused at *start*: `docker create --device /dev/nope` succeeds, checked
+/// against Docker 29.) Under the old order the create wasn't attempted
+/// until the marker existed.
+///
+/// Run twice in one test, since a scratch directory that starts empty
+/// passes the first run whatever the order (AGENTS.md guideline 15).
+#[test]
+#[ignore]
+fn a_refused_task_container_create_stops_a_dependency_before_its_setup_command_via_docker() {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let test_id = format!(
+        "{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let scratch_dir = std::env::temp_dir().join(format!("ratect-create-order-test-{test_id}"));
+    std::fs::create_dir_all(&scratch_dir).unwrap();
+    let config_path = std::env::temp_dir().join(format!("ratect-create-order-test-{test_id}.yml"));
+
+    let config = format!(
+        r#"
+project_name: ratect-create-order-test
+containers:
+  dep:
+    image: alpine:3.18.2
+    command: sh -c 'trap "exit 0" TERM; while :; do sleep 1; done'
+    setup_commands:
+      - command: sh -c "sleep 120 && touch /scratch/setup-ran"
+    volumes:
+      - {scratch}:/scratch
+  app:
+    image: alpine:3.18.2
+    log_driver: ratect-create-order-test-no-such-plugin
+    dependencies:
+      - dep
+tasks:
+  check:
+    run:
+      container: app
+      command: echo unreachable
+"#,
+        scratch = scratch_dir.display()
+    );
+    std::fs::write(&config_path, &config).expect("failed to write temp config");
+
+    let cleanup = || {
+        let _ = std::fs::remove_dir_all(&scratch_dir);
+        let _ = std::fs::remove_file(&config_path);
+    };
+
+    for run in 1..=2 {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(&config_path)
+            .arg("check")
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        if output.status.success() || !stderr.contains("Failed to create container 'app'") {
+            cleanup();
+            panic!(
+                "run {run} should have failed on the create: status {}\nstdout:\n{}\nstderr:\n{stderr}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+            );
+        }
+        let marker = scratch_dir.join("setup-ran");
+        if marker.exists() {
+            cleanup();
+            panic!(
+                "run {run}: the dependency's setup command should not have completed before \
+                 the task container's create was refused\nstdout:\n{}\nstderr:\n{stderr}",
                 String::from_utf8_lossy(&output.stdout),
             );
         }

@@ -185,8 +185,32 @@ pub enum TaskEvent {
     ImageResolved {
         container: String,
     },
-    /// A dependency/sidecar container is about to start. The task's own
-    /// container instead posts [`TaskEvent::RunningTaskContainer`].
+    /// `container` is about to be created — its image is resolved and the
+    /// task network exists, which is all creation waits for: it does not
+    /// wait for the containers it depends on to be ready (decisions/0019).
+    /// Posted for a dependency and for the task's own container alike, so
+    /// a per-container display can show Batect's `creating container...`;
+    /// `simple` and `all` print nothing for it, as Batect's own simple and
+    /// interleaved loggers don't.
+    ContainerCreating {
+        container: String,
+    },
+    /// Docker has created `container` — it exists, but is not started.
+    /// From here it is the engine's to remove, so this is the point a
+    /// display may start counting it as outstanding cleanup; Batect's
+    /// `ContainerCreatedEvent` is what its cleanup progress display counts
+    /// too. Posted for every narrated container, the task's own included.
+    ///
+    /// Distinct from [`TaskEvent::DependencyStarting`]/
+    /// [`TaskEvent::RunningTaskContainer`], which are posted when the
+    /// container's *start* begins — after every container it depends on is
+    /// ready, which may be long after this.
+    ContainerCreated {
+        container: String,
+    },
+    /// A dependency/sidecar container is about to start — every container
+    /// it depends on is ready. The task's own container instead posts
+    /// [`TaskEvent::RunningTaskContainer`].
     DependencyStarting {
         container: String,
     },
@@ -243,33 +267,15 @@ pub enum TaskEvent {
         container: String,
         exit_code: i64,
     },
-    /// The task's own container is about to run. `command` is the resolved
-    /// command (`run.command` falling back to the container's own), `None`
-    /// when no command is configured (the image's default `CMD`, or
-    /// additional args replacing it, runs instead).
+    /// The task's own container — already created, see
+    /// [`TaskEvent::ContainerCreated`] — is about to be started: every
+    /// container it depends on is ready. `command` is the resolved command
+    /// (`run.command` falling back to the container's own), `None` when no
+    /// command is configured (the image's default `CMD`, or additional args
+    /// replacing it, runs instead).
     RunningTaskContainer {
         container: String,
         command: Option<String>,
-    },
-    /// Docker has created the task's own container — it exists, but is not
-    /// necessarily started. From here it is the engine's to remove, so this
-    /// is the point a display may start counting it as outstanding cleanup.
-    ///
-    /// Distinct from [`TaskEvent::RunningTaskContainer`], which is posted
-    /// *before* the container is created (and before its volumes are even
-    /// resolved), so it cannot stand in for this: a run that fails to create
-    /// its container would leave a cleanup countdown waiting forever on
-    /// something that never existed. Batect draws the same distinction with
-    /// its own `ContainerCreatedEvent`, which is what its cleanup progress
-    /// display counts.
-    ///
-    /// Only posted for the task's own container; a dependency's
-    /// [`TaskEvent::DependencyStarted`] already serves this purpose. A
-    /// dependency created but never started — its start failed, or was
-    /// abandoned when a sibling failed — is still removed at cleanup, but was
-    /// never counted, so nothing is left waiting on it.
-    TaskContainerCreated {
-        container: String,
     },
     /// Teardown (stopping dependency containers, removing the task
     /// network) is about to begin. Not posted when there's nothing to tear

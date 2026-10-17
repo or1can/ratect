@@ -152,13 +152,18 @@ check configured to retry forever waits forever.
 Dependencies are resolved **concurrently, gated by readiness** — and the gate is
 on *starting*: a container with dependencies of its own never starts before
 every one of them is ready, but two containers with no dependency relationship
-to each other start at the same time rather than one after the other. Its image
-doesn't wait at all: every container's image in the task's graph, the task's
-own included, is pulled or built from the moment the task's network exists, so
-a pull or build that fails ends the task as soon as it fails — not once every
-dependency is ready and its setup commands have run — and the pulls along a
+to each other start at the same time rather than one after the other. Nothing
+before the start waits for it: every container's image in the task's graph, the
+task's own included, is pulled or built from the moment the task's network
+exists, and each container is created as soon as its own image is ready, so a
+pull, build or create that fails — an image that doesn't exist, a device or
+mount that doesn't — ends the task as soon as it fails, not once every
+dependency is ready and its setup commands have run, and the pulls along a
 chain overlap rather than each following the previous container's readiness.
-For example:
+A container sharing another's network (`network_mode = "container:<name>"`,
+`ratect.toml` only) is the one exception, and only partly: it is created once
+its target has been *created*, since Docker needs the target's id, and started
+once the target is ready, like anything else. For example:
 
 ```toml
 [containers.app]
@@ -179,11 +184,11 @@ graph TD
     database --> cache
 ```
 
-Running a task against `app` starts pulling all three images at once. `cache`
-starts as soon as its own image is ready (nothing else is holding it back),
-then `database` once `cache` is ready and its own image is, then `app` once
-`database` is ready — a straight chain, so each *start* is genuinely waiting
-on the last. All
+Running a task against `app` starts pulling all three images at once, and
+creates each container as its image lands. `cache` starts as soon as it is
+created (nothing else is holding it back), then `database` once `cache` is
+ready, then `app` once `database` is ready — a straight chain, so each *start*
+is genuinely waiting on the last. All
 three share one network and are reachable by their container-config name (e.g.
 `app`'s command can reach `database:5432` and `cache:6379`).
 
@@ -250,15 +255,17 @@ double-pulling its image. A circular container dependency (`a` depends on `b`
 depends on `a`) is detected up front, before any container starts, and reported
 as an error rather than hanging.
 
-This concurrency is unbounded by default — every container's pull/build, and
-every independent branch's create+start and setup commands, can all be in
+This concurrency is unbounded by default — every container's pull/build and
+create, every dependency's start, and every setup command can all be in
 flight at once, across the whole invocation, not just within one task.
 `--max-parallelism <N>`
 caps it: at most `N` of those specific operations run at a time,
-invocation-wide. The health-check wait itself is deliberately *not* capped (it's
-a polling wait, not real work), so two dependencies can still become healthy at
-the same time even under a low cap — only the pull/build/start/setup-command
-steps queue up behind it. See [CLI reference](ratect-compat-cli.md#task-execution) and
+invocation-wide. A create and a start are separate capped steps, and a
+container holds no slot while it waits for its dependencies to be ready, so a
+chain longer than `N` can't deadlock. The health-check wait itself is
+deliberately *not* capped (it's a polling wait, not real work), so two
+dependencies can still become healthy at the same time even under a low cap —
+only the pull/build/create/start/setup-command steps queue up behind it. See [CLI reference](ratect-compat-cli.md#task-execution) and
 [differences from Batect](differences-from-batect.md#cli-flags) for exactly
 what's covered.
 

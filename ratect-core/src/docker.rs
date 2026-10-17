@@ -165,6 +165,45 @@ impl fmt::Display for ContainerExitedNonZero {
 
 impl std::error::Error for ContainerExitedNonZero {}
 
+/// Why [`ContainerRuntime::create_container`] failed — and, when Docker's own
+/// create had already succeeded, the container it left behind.
+///
+/// Creation is more than Docker's `create` call: the user-mapping upload
+/// and the task-network join come after it and before the container counts
+/// as created (see `create_container`'s own docs), and either can fail with
+/// a container already in existence. That container is the caller's to
+/// remove — the engine registers every id it is handed for cleanup — so the
+/// id travels with the error rather than being lost to it. `None` when
+/// nothing was created: Docker refused the `create` itself, or the spec
+/// couldn't be turned into one.
+#[derive(Debug)]
+pub struct CreateContainerError {
+    pub created: Option<String>,
+    pub error: anyhow::Error,
+}
+
+impl CreateContainerError {
+    /// A failure with nothing to clean up after.
+    pub fn before_creation(error: anyhow::Error) -> Self {
+        Self {
+            created: None,
+            error,
+        }
+    }
+}
+
+impl fmt::Display for CreateContainerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.error, f)
+    }
+}
+
+impl std::error::Error for CreateContainerError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.error.source()
+    }
+}
+
 /// The states `tokenize_command_line`'s character-by-character scan moves
 /// through — outside any quote, inside a `'...'` (literal, no escapes), or
 /// inside a `"..."` (backslash escapes processed).
@@ -1415,30 +1454,55 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// join it.
     async fn network_exists(&self, name: &str) -> Result<bool>;
 
-    /// Starts a container in the background (does not wait for it to exit),
-    /// joined to `spec.shared.network` with a network alias of
-    /// `spec.shared.name` so other containers on the same network can reach
-    /// it by that name — or, when that is a Docker network mode instead
-    /// ([`ContainerNetwork`]), created in that mode and joined to nothing.
-    /// Returns the container id, used later to stop/remove it. Used for sidecar/dependency containers — see [`ContainerSpec`]'s
-    /// own field docs for what each part of the spec means; `spec.role` is
-    /// always [`crate::labels::ContainerRole::Dependency`] here,
-    /// `spec.interactive` always `false`, and `spec.additional_args` always
-    /// empty (only the top-level requested task's own container can receive
-    /// `-- ADDITIONAL_ARGS`, via [`run_container`](Self::run_container)
-    /// instead).
+    /// Creates a container per `spec`, ready to be started, and returns its
+    /// id — for a dependency and for the task's own container alike (see
+    /// [`ContainerSpec`]'s own field docs for what each part means, and
+    /// `spec.role` for which this is). Creation is its own step because it
+    /// doesn't wait for what starting waits for: the engine creates a
+    /// container as soon as its image and the task network are ready, and
+    /// starts it only once every container it depends on is
+    /// (decisions/0019, Batect's `CreateContainerStepRule`).
     ///
-    /// `created` is signaled with the container's id the moment Docker's
-    /// `create_container` returns — before user mapping, joining the network
-    /// or starting it, any of which can fail, and before the caller can
-    /// abandon this call. The same contract as `run_container`'s `created`:
-    /// past that point the caller owns removing the container, whether or
-    /// not this call ever returns its id (ratect#224).
-    async fn start_background_container(
+    /// "Created" means everything that makes the container startable:
+    /// Docker's own `create`, then the user-mapping upload
+    /// (`spec.shared.user_mapping`), then the join to `spec.shared.network`
+    /// with a network alias of `spec.shared.name` so other containers on the
+    /// same network can reach it by that name — or, when that is a Docker
+    /// network mode instead ([`ContainerNetwork`]), created in that mode and
+    /// joined to nothing.
+    /// [`start_background_container`](Self::start_background_container) and
+    /// [`run_container`](Self::run_container) then only start it.
+    ///
+    /// From the moment Docker's `create` returns, the container is the
+    /// caller's to remove: a success returns its id, and a failure after
+    /// that point carries it in [`CreateContainerError::created`], so the
+    /// caller can register it for cleanup either way and nothing this call
+    /// creates is ever stranded (ratect#224). The container's Docker
+    /// `hostname` is set to `spec.shared.name` (matching Batect),
+    /// independent of `spec.shared.network_options` — except under a
+    /// `container:` network mode, where Docker refuses one
+    /// (`build_hostname`).
+    async fn create_container(
         &self,
         spec: &ContainerSpec,
-        created: tokio::sync::oneshot::Sender<String>,
-    ) -> Result<String>;
+    ) -> std::result::Result<String, CreateContainerError>;
+
+    /// Starts `container_id` — created by
+    /// [`create_container`](Self::create_container) from `spec` — in the
+    /// background: does not wait for it to exit. Used for sidecar/dependency
+    /// containers; `spec.role` is always
+    /// [`crate::labels::ContainerRole::Dependency`] here, `spec.interactive`
+    /// always `false`, and `spec.additional_args` always empty (only the
+    /// top-level requested task's own container can receive
+    /// `-- ADDITIONAL_ARGS`, via [`run_container`](Self::run_container)
+    /// instead). Under the interleaved I/O policy (the `all` output mode)
+    /// this is also where the container's log follower is spawned — see
+    /// `LogFollowers`.
+    async fn start_background_container(
+        &self,
+        container_id: &str,
+        spec: &ContainerSpec,
+    ) -> Result<()>;
 
     /// Blocks until `container_id` — already started — reports healthy.
     /// Ported from Batect's `WaitForContainerToBecomeHealthyStepRunner`:
@@ -1521,19 +1585,22 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
         user_mapping: Option<&UserMapping>,
     ) -> Result<ExecResult>;
 
-    /// Runs a container to completion, streaming its logs to stdout, then
-    /// removes it — used for a task's own container. See [`ContainerSpec`]'s
-    /// own field docs for what each part of `spec` means; unlike
+    /// Starts `container_id` — created by
+    /// [`create_container`](Self::create_container) from `spec` — and runs
+    /// it to completion, streaming its logs to stdout: a task's own
+    /// container. Unlike
     /// [`start_background_container`](Self::start_background_container),
     /// `spec.role` is always [`crate::labels::ContainerRole::Task`], and
-    /// `spec.interactive`/`spec.additional_args` may be set. The container's
-    /// Docker `hostname` is set to `spec.shared.name` (matching Batect),
-    /// independent of `spec.shared.network_options` — except under a
-    /// `container:` network mode, where Docker refuses one
-    /// (`build_hostname`). Networking otherwise as for
-    /// [`start_background_container`](Self::start_background_container).
+    /// `spec.interactive`/`spec.additional_args` may be set. Three
+    /// attach-and-start paths sit behind it — fully non-interactive,
+    /// stdin-forwarding, and a real TTY — chosen from `spec.interactive`
+    /// and whether this process's own stdin and stdout are terminals
+    /// (`task_container_io`, the same decision creation baked into the
+    /// container's config); the two stdin paths attach *before* Docker's
+    /// `start`, so nothing typed early is lost, and the non-interactive one
+    /// starts and then follows the logs.
     ///
-    /// **This never removes the container it creates.** Everything Ratect
+    /// **This never removes the container.** Everything Ratect
     /// creates is removed by `engine.rs`'s own cleanup stage, under one
     /// reading of `--no-cleanup-after-success`/`--no-cleanup-after-failure`
     /// — the task's own container included, exactly like its sidecars and
@@ -1545,13 +1612,10 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// `CleanupStagePlanner` generates a `RemoveContainerStep` for every
     /// entry in `containersCreated`, with no special case for the task's.
     ///
-    /// `created`, given, is signaled with the container's own id the moment
-    /// Docker's `create_container` returns — before it is started, and
-    /// before anything else here can fail. That is what makes the paragraph
-    /// above safe: past that point the caller can always remove it, so a
-    /// failure here can propagate immediately instead of having to be
-    /// carried past a removal. `start_background_container` takes the same
-    /// channel, for the same reason.
+    /// The caller has owned the container since `create_container` handed
+    /// its id back, which is what makes the paragraph above safe: a failure
+    /// here can propagate immediately instead of having to be carried past
+    /// a removal.
     ///
     /// `started`, given, is signaled right after Docker's own `start` call
     /// succeeds — never sent at all if the container never gets that far.
@@ -1559,12 +1623,12 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// wait, then `setup_commands`, via `wait_for_container_healthy`/
     /// `exec_in_container`; Batect-compatible dialect only — a native
     /// project's task container has none, see decisions/0012) concurrently
-    /// with this call's own attach-and-wait-for-exit. Carries no id, unlike
-    /// `created`: by the time it fires the caller already has one.
+    /// with this call's own attach-and-wait-for-exit. Carries no id: the
+    /// caller has had one since creation.
     async fn run_container(
         &self,
+        container_id: &str,
         spec: &ContainerSpec,
-        created: Option<tokio::sync::oneshot::Sender<String>>,
         started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<()>;
 
@@ -2137,6 +2201,110 @@ impl DockerClient {
         }
     }
 
+    /// Whether the task's own container is interactive, and whether it gets
+    /// a real Docker TTY — `(interactive, use_tty)`. Decided from `spec` and
+    /// this process's own stdin/stdout, so the answer is the same at
+    /// creation (where `container_config` bakes it into the container's
+    /// stdin flags) and at `run_container` (where it picks the attach path):
+    /// one function, called from both, so the two can't disagree. For a
+    /// dependency `spec.interactive` is always `false`, so both are.
+    ///
+    /// `interactive` independently re-enforces the same policy `engine.rs`
+    /// already gated `spec.interactive` on — see
+    /// `ContainerIoStreaming::allows_interactive`'s own docs for why both
+    /// sites call the one method rather than each hand-rolling a comparison
+    /// against a specific variant.
+    fn task_container_io(&self, spec: &ContainerSpec) -> (bool, bool) {
+        let interactive = spec.interactive
+            && self
+                .event_sink
+                .container_io_streaming()
+                .allows_interactive();
+        let use_tty = should_use_tty(
+            interactive,
+            std::io::stdin().is_terminal(),
+            std::io::stdout().is_terminal(),
+        );
+        (interactive, use_tty)
+    }
+
+    /// `spec` as the Docker create request `create_container` sends — one
+    /// builder for a dependency and the task's own container, which differ
+    /// only in what the task container's attach-and-start paths need baked
+    /// in at creation: its stdout/stderr attached and its stdin flags
+    /// (`stdin_flags`), neither of which a dependency sets. Fails without
+    /// touching the daemon when the spec can't be turned into a request (an
+    /// untokenizable `command`/`entrypoint`), or when a host directory a
+    /// user-mapped bind mount needs can't be created
+    /// (`ensure_host_volume_directories_exist`).
+    fn container_config(&self, spec: &ContainerSpec) -> Result<Config> {
+        let shared = &spec.shared;
+        let options = &shared.options;
+        if shared.user_mapping.is_some() {
+            ensure_host_volume_directories_exist(shared.volumes.as_ref())?;
+        }
+        let cmd = build_cmd(shared.command.as_deref(), &spec.additional_args)?;
+        let entrypoint = options
+            .entrypoint
+            .as_deref()
+            .map(tokenize_command_line)
+            .transpose()?;
+        let port_config = build_port_config(shared.network_options.ports.as_ref());
+        let is_task_container = spec.role == crate::labels::ContainerRole::Task;
+        let (interactive, use_tty) = self.task_container_io(spec);
+        let stdin = stdin_flags(interactive, use_tty);
+
+        let host_config = HostConfig {
+            binds: shared.volumes.clone(),
+            extra_hosts: build_extra_hosts(
+                shared.network_options.additional_hosts.as_ref(),
+                shared.network_options.proxy_host_gateway,
+            ),
+            port_bindings: port_config.as_ref().map(|(_, bindings)| bindings.clone()),
+            cap_add: options.capabilities_to_add.clone(),
+            cap_drop: options.capabilities_to_drop.clone(),
+            privileged: options.privileged,
+            shm_size: options.shm_size,
+            devices: build_devices(options.devices.as_ref()),
+            init: options.enable_init_process,
+            log_config: build_log_config(
+                options.log_driver.as_deref(),
+                options.log_options.as_ref(),
+            ),
+            tmpfs: build_tmpfs_mounts(options.tmpfs.as_ref()),
+            ulimits: build_ulimits(options.ulimits.as_ref()),
+            dns: options.dns.clone(),
+            dns_search: options.dns_search.clone(),
+            dns_options: options.dns_options.clone(),
+            network_mode: build_network_mode(&shared.network),
+            ..Default::default()
+        };
+
+        Ok(Config {
+            hostname: build_hostname(&shared.name, &shared.network),
+            image: Some(shared.image.clone()),
+            cmd,
+            entrypoint,
+            env: build_env(shared.environment.as_ref()),
+            exposed_ports: port_config.as_ref().map(|(exposed, _)| exposed.clone()),
+            attach_stdout: is_task_container.then_some(true),
+            attach_stderr: is_task_container.then_some(true),
+            tty: stdin.tty,
+            open_stdin: stdin.open_stdin,
+            attach_stdin: stdin.attach_stdin,
+            stdin_once: stdin.stdin_once,
+            user: shared
+                .user_mapping
+                .as_ref()
+                .map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
+            healthcheck: build_health_config(shared.health_check.as_ref()),
+            working_dir: options.working_directory.clone(),
+            labels: Some(spec.labels.clone()),
+            host_config: Some(host_config),
+            ..Default::default()
+        })
+    }
+
     /// Attaches to `container_id`'s TTY, forwards the local terminal's
     /// stdin/stdout to it for the duration of the session, and returns its
     /// exit code once the session ends. Only called once `should_use_tty`
@@ -2562,98 +2730,64 @@ impl ContainerRuntime for DockerClient {
         }
     }
 
-    async fn start_background_container(
+    async fn create_container(
         &self,
         spec: &ContainerSpec,
-        created: tokio::sync::oneshot::Sender<String>,
-    ) -> Result<String> {
+    ) -> std::result::Result<String, CreateContainerError> {
         let shared = &spec.shared;
-        let options = &shared.options;
-        if shared.user_mapping.is_some() {
-            ensure_host_volume_directories_exist(shared.volumes.as_ref())?;
-        }
-        let entrypoint = options
-            .entrypoint
-            .as_deref()
-            .map(tokenize_command_line)
-            .transpose()?;
-        let cmd = build_cmd(shared.command.as_deref(), &[])?;
-        let port_config = build_port_config(shared.network_options.ports.as_ref());
-
-        let host_config = HostConfig {
-            binds: shared.volumes.clone(),
-            extra_hosts: build_extra_hosts(
-                shared.network_options.additional_hosts.as_ref(),
-                shared.network_options.proxy_host_gateway,
-            ),
-            port_bindings: port_config.as_ref().map(|(_, bindings)| bindings.clone()),
-            cap_add: options.capabilities_to_add.clone(),
-            cap_drop: options.capabilities_to_drop.clone(),
-            privileged: options.privileged,
-            shm_size: options.shm_size,
-            devices: build_devices(options.devices.as_ref()),
-            init: options.enable_init_process,
-            log_config: build_log_config(
-                options.log_driver.as_deref(),
-                options.log_options.as_ref(),
-            ),
-            tmpfs: build_tmpfs_mounts(options.tmpfs.as_ref()),
-            ulimits: build_ulimits(options.ulimits.as_ref()),
-            dns: options.dns.clone(),
-            dns_search: options.dns_search.clone(),
-            dns_options: options.dns_options.clone(),
-            network_mode: build_network_mode(&shared.network),
-            ..Default::default()
-        };
-
-        let config = Config {
-            hostname: build_hostname(&shared.name, &shared.network),
-            image: Some(shared.image.clone()),
-            cmd,
-            entrypoint,
-            env: build_env(shared.environment.as_ref()),
-            exposed_ports: port_config.as_ref().map(|(exposed, _)| exposed.clone()),
-            user: shared
-                .user_mapping
-                .as_ref()
-                .map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
-            healthcheck: build_health_config(shared.health_check.as_ref()),
-            working_dir: options.working_directory.clone(),
-            labels: Some(spec.labels.clone()),
-            host_config: Some(host_config),
-            ..Default::default()
-        };
-
+        let config = self
+            .container_config(spec)
+            .map_err(CreateContainerError::before_creation)?;
         let container = self
             .docker
             .create_container(None, config)
             .await
-            .with_context(|| format!("Failed to create sidecar container '{}'", shared.name))?;
-        tracing::debug!(container_id = %container.id, alias = shared.name.as_str(), image = shared.image.as_str(), "created sidecar container");
-        // Handed over the moment the container exists, as `run_container`
-        // does — from here the caller owns removing it, so every `?` below
-        // is safe.
-        let _ = created.send(container.id.clone());
+            .with_context(|| format!("Failed to create container '{}'", shared.name))
+            .map_err(CreateContainerError::before_creation)?;
+        tracing::debug!(container_id = %container.id, name = shared.name.as_str(), image = shared.image.as_str(), "created container");
 
-        if let Some(mapping) = &shared.user_mapping {
-            self.apply_user_mapping(&container.id, mapping).await?;
+        // From here the container exists, so a failure carries its id out
+        // for the caller to remove — see `CreateContainerError`.
+        let prepared: Result<()> = async {
+            if let Some(mapping) = &shared.user_mapping {
+                self.apply_user_mapping(&container.id, mapping).await?;
+            }
+            if let ContainerNetwork::Task(network) = &shared.network {
+                self.join_network(
+                    &container.id,
+                    network,
+                    &shared.name,
+                    shared.network_options.additional_hostnames.as_ref(),
+                )
+                .await?;
+            }
+            Ok(())
         }
-
-        if let ContainerNetwork::Task(network) = &shared.network {
-            self.join_network(
-                &container.id,
-                network,
-                &shared.name,
-                shared.network_options.additional_hostnames.as_ref(),
-            )
-            .await?;
+        .await;
+        match prepared {
+            Ok(()) => Ok(container.id),
+            Err(error) => Err(CreateContainerError {
+                created: Some(container.id),
+                error,
+            }),
         }
+    }
 
+    async fn start_background_container(
+        &self,
+        container_id: &str,
+        spec: &ContainerSpec,
+    ) -> Result<()> {
+        let shared = &spec.shared;
         self.docker
-            .start_container(&container.id, None)
+            .start_container(container_id, None)
             .await
-            .with_context(|| format!("Failed to start sidecar container '{}'", shared.name))?;
-        tracing::debug!(container_id = %container.id, alias = shared.name.as_str(), "started sidecar container");
+            .with_context(|| format!("Failed to start container '{}'", shared.name))?;
+        tracing::debug!(
+            container_id,
+            name = shared.name.as_str(),
+            "started container"
+        );
 
         // Under the interleaved policy (the `all` output mode — the only
         // mode that shows dependency output at all), follow this
@@ -2667,13 +2801,13 @@ impl ContainerRuntime for DockerClient {
             let docker = self.docker.clone();
             let event_sink = std::sync::Arc::clone(&self.event_sink);
             let container_name = shared.name.clone();
-            let container_id = container.id.clone();
+            let followed_id = container_id.to_string();
             let handle = tokio::spawn(async move {
                 if let Err(e) = stream_logs_as_interleaved_events(
                     &docker,
                     &event_sink,
                     &container_name,
-                    &container_id,
+                    &followed_id,
                 )
                 .await
                 {
@@ -2690,10 +2824,10 @@ impl ContainerRuntime for DockerClient {
                     );
                 }
             });
-            self.log_followers.insert(container.id.clone(), handle);
+            self.log_followers.insert(container_id.to_string(), handle);
         }
 
-        Ok(container.id)
+        Ok(())
     }
 
     async fn wait_for_container_healthy(&self, container_id: &str) -> Result<()> {
@@ -2848,127 +2982,26 @@ impl ContainerRuntime for DockerClient {
 
     async fn run_container(
         &self,
+        container_id: &str,
         spec: &ContainerSpec,
-        created: Option<tokio::sync::oneshot::Sender<String>>,
         started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<()> {
         let shared = &spec.shared;
-        let options = &shared.options;
-        // Independently re-enforces the same policy `engine.rs` already
-        // gated `spec.interactive` on before calling here — see
-        // `ContainerIoStreaming::allows_interactive`'s own docs for why
-        // both sites call the one method rather than each hand-rolling a
-        // comparison against a specific variant.
-        let interactive = spec.interactive
-            && self
-                .event_sink
-                .container_io_streaming()
-                .allows_interactive();
-        let use_tty = should_use_tty(
-            interactive,
-            std::io::stdin().is_terminal(),
-            std::io::stdout().is_terminal(),
-        );
-
-        if shared.user_mapping.is_some() {
-            ensure_host_volume_directories_exist(shared.volumes.as_ref())?;
-        }
-        let cmd = build_cmd(shared.command.as_deref(), &spec.additional_args)?;
-        let entrypoint = options
-            .entrypoint
-            .as_deref()
-            .map(tokenize_command_line)
-            .transpose()?;
-        let port_config = build_port_config(shared.network_options.ports.as_ref());
-        let stdin = stdin_flags(interactive, use_tty);
-
-        let host_config = HostConfig {
-            binds: shared.volumes.clone(),
-            extra_hosts: build_extra_hosts(
-                shared.network_options.additional_hosts.as_ref(),
-                shared.network_options.proxy_host_gateway,
-            ),
-            port_bindings: port_config.as_ref().map(|(_, bindings)| bindings.clone()),
-            cap_add: options.capabilities_to_add.clone(),
-            cap_drop: options.capabilities_to_drop.clone(),
-            privileged: options.privileged,
-            shm_size: options.shm_size,
-            devices: build_devices(options.devices.as_ref()),
-            init: options.enable_init_process,
-            log_config: build_log_config(
-                options.log_driver.as_deref(),
-                options.log_options.as_ref(),
-            ),
-            tmpfs: build_tmpfs_mounts(options.tmpfs.as_ref()),
-            ulimits: build_ulimits(options.ulimits.as_ref()),
-            dns: options.dns.clone(),
-            dns_search: options.dns_search.clone(),
-            dns_options: options.dns_options.clone(),
-            network_mode: build_network_mode(&shared.network),
-            ..Default::default()
-        };
-
-        let config = Config {
-            hostname: build_hostname(&shared.name, &shared.network),
-            image: Some(shared.image.clone()),
-            cmd,
-            entrypoint,
-            env: build_env(shared.environment.as_ref()),
-            exposed_ports: port_config.as_ref().map(|(exposed, _)| exposed.clone()),
-            attach_stdout: Some(true),
-            attach_stderr: Some(true),
-            tty: stdin.tty,
-            open_stdin: stdin.open_stdin,
-            attach_stdin: stdin.attach_stdin,
-            stdin_once: stdin.stdin_once,
-            user: shared
-                .user_mapping
-                .as_ref()
-                .map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
-            healthcheck: build_health_config(shared.health_check.as_ref()),
-            working_dir: options.working_directory.clone(),
-            labels: Some(spec.labels.clone()),
-            host_config: Some(host_config),
-            ..Default::default()
-        };
-
-        let container = self.docker.create_container(None, config).await?;
-        tracing::debug!(container_id = %container.id, image = shared.image.as_str(), "created container");
-        // Handed over the moment the container exists — before it is started,
-        // and before anything below can fail. From here the caller owns
-        // removing it, so every `?` in the rest of this function is safe: the
-        // container has an owner whatever happens next.
-        if let Some(created) = created {
-            let _ = created.send(container.id.clone());
-        }
-
-        if let Some(mapping) = &shared.user_mapping {
-            self.apply_user_mapping(&container.id, mapping).await?;
-        }
-
-        if let ContainerNetwork::Task(network) = &shared.network {
-            self.join_network(
-                &container.id,
-                network,
-                &shared.name,
-                shared.network_options.additional_hostnames.as_ref(),
-            )
-            .await?;
-        }
+        let (interactive, use_tty) = self.task_container_io(spec);
 
         let exit_code = if use_tty {
-            self.run_container_interactively(&container.id, started)
+            self.run_container_interactively(container_id, started)
                 .await
         } else if interactive {
-            self.run_container_forwarding_stdin(&shared.name, &container.id, started)
+            self.run_container_forwarding_stdin(&shared.name, container_id, started)
                 .await
         } else {
-            self.start_and_stream_logs(&shared.name, &container.id, started)
+            self.start_and_stream_logs(&shared.name, container_id, started)
                 .await
         };
 
         let exit_code = exit_code?;
-        tracing::debug!(container_id = %container.id, exit_code, "container exited");
+        tracing::debug!(container_id, exit_code, "container exited");
         if exit_code != 0 {
             return Err(ContainerExitedNonZero { exit_code }.into());
         }

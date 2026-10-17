@@ -36,10 +36,10 @@ type NetworkOptionsValue = (
     Option<HashMap<String, String>>,
     Option<Vec<(u16, u16, String)>>,
 );
-/// Every `run_container`/`start_background_container` call, in the order
-/// they happened — one [`crate::container_spec::ContainerSpec`] per call,
-/// rather than a `Captured*` map per field, so the fake captures whatever
-/// `ContainerSpec` grows without a matching new map each time. The `_for`
+/// Every `create_container` call, in the order they happened — one
+/// [`crate::container_spec::ContainerSpec`] per call, rather than a
+/// `Captured*` map per field, so the fake captures whatever `ContainerSpec`
+/// grows without a matching new map each time. The `_for`
 /// accessors below (`environment_for`/`command_for`/`network_options_for`/
 /// etc.) each project one part of the *last* entry for a given container
 /// name out of this, preserving every existing call site's shape —
@@ -65,8 +65,8 @@ struct FakeContainerRuntime {
     // Container name -> the exit code its `run_container` reports, overriding
     // `fail_run` for that container alone (see `with_run_exit`).
     run_exits: Arc<Mutex<HashMap<String, i64>>>,
-    // Every `run_container`/`start_background_container` call, in order —
-    // see `CapturedSpecs`'s own doc comment.
+    // Every `create_container` call, in order — see `CapturedSpecs`'s own
+    // doc comment.
     specs: CapturedSpecs,
     // Every `build_image` call, keyed by tag — see `CapturedBuildSpecs`'s
     // own doc comment.
@@ -90,9 +90,15 @@ struct FakeContainerRuntime {
     // Command whose `exec_in_container` reports a non-zero exit (see
     // `with_failing_setup_command`).
     failing_setup_command: Arc<Mutex<Option<String>>>,
-    // Makes `run_container` fail before it would have created anything
-    // (see `failing_container_creation`).
-    fail_container_creation: Arc<Mutex<bool>>,
+    // Container names whose `create_container` fails before Docker would
+    // have created anything — a spec the daemon refuses (see
+    // `failing_creation`).
+    failing_creations: Arc<Mutex<HashSet<String>>>,
+    // Container names whose `create_container` fails *after* Docker has
+    // created the container — the user-mapping upload or network join
+    // failing — so the error carries the id (see
+    // `failing_creation_after_docker_created`).
+    failing_creations_after_docker_created: Arc<Mutex<HashSet<String>>>,
     // Makes `build_image` fail, standing in for any Docker-layer build
     // failure (see `failing_image_build`).
     fail_image_build: Arc<Mutex<bool>>,
@@ -102,19 +108,20 @@ struct FakeContainerRuntime {
     // about `image_pull_policy` see the "always needs a pull" behavior
     // that matches an `IfNotPresent` container whose image is missing.
     locally_present_images: Arc<Mutex<HashSet<String>>>,
-    // Artificial `tokio::time::sleep` durations `start_background_container`/
-    // `pull_image` wait out before doing anything else (see
-    // `with_start_delay`/`with_pull_delay`) — lets a `#[tokio::test(start_paused
-    // = true)]` test prove two independent operations actually overlap in
-    // (virtual) time, rather than just asserting on event order/counts.
+    // Artificial `tokio::time::sleep` durations `create_container`/
+    // `start_background_container`/`pull_image` wait out before doing
+    // anything else (see `with_create_delay`/`with_start_delay`/
+    // `with_pull_delay`) — lets a `#[tokio::test(start_paused = true)]`
+    // test prove two independent operations actually overlap in (virtual)
+    // time, rather than just asserting on event order/counts. Creation and
+    // start are delayed separately so a test can hold a container in
+    // either state — created but not started is the window a sibling's
+    // failure lands in (ratect#224), and the state decisions/0019 adds.
+    create_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
     start_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
-    // The same, but waited out *after* the container is created and its id
-    // handed back — the window a start cut short by a sibling's failure
-    // lands in (see `with_start_delay_after_create`, ratect#224).
-    start_delays_after_create: Arc<Mutex<HashMap<String, std::time::Duration>>>,
-    // Container names whose `start_background_container` fails after the
-    // container is created (see `failing_start_after_create`).
-    failing_starts_after_create: Arc<Mutex<HashSet<String>>>,
+    // Container names whose `start_background_container` fails (see
+    // `failing_start`).
+    failing_starts: Arc<Mutex<HashSet<String>>>,
     pull_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
     // Images whose `pull_image` fails, after any `pull_delays` entry for
     // them has elapsed (see `with_failing_pull`).
@@ -207,13 +214,14 @@ impl Default for FakeContainerRuntime {
             stop_options: Default::default(),
             unhealthy_container: Default::default(),
             failing_setup_command: Default::default(),
-            fail_container_creation: Default::default(),
+            failing_creations: Default::default(),
+            failing_creations_after_docker_created: Default::default(),
             fail_image_build: Default::default(),
             rejected_tags: Default::default(),
             locally_present_images: Default::default(),
+            create_delays: Default::default(),
             start_delays: Default::default(),
-            start_delays_after_create: Default::default(),
-            failing_starts_after_create: Default::default(),
+            failing_starts: Default::default(),
             pull_delays: Default::default(),
             failing_pulls: Default::default(),
             build_delays: Default::default(),
@@ -313,15 +321,25 @@ impl FakeContainerRuntime {
         self
     }
 
-    /// Makes `run_container` fail *before* creating a container, so
-    /// neither the `created` nor the `started` channel is ever sent —
-    /// the one shape every other failure mode here can't produce, since
-    /// they all report after handing the id over. Exercises the
-    /// engine's concurrent readiness task giving up on a dropped
-    /// sender; if it ever waited on one instead, the run would hang
-    /// rather than fail.
-    fn failing_container_creation(self) -> Self {
-        *self.fail_container_creation.lock().unwrap() = true;
+    /// Makes `create_container` for container `name` fail before Docker
+    /// creates anything — a spec the daemon refuses (an invalid mount, a
+    /// log driver it doesn't have), so there is nothing to clean up.
+    fn failing_creation(self, name: &str) -> Self {
+        self.failing_creations
+            .lock()
+            .unwrap()
+            .insert(name.to_string());
+        self
+    }
+
+    /// Makes `create_container` for container `name` fail *after* Docker
+    /// has created the container — the user-mapping upload or the network
+    /// join failing — so the error carries the id the engine has to remove.
+    fn failing_creation_after_docker_created(self, name: &str) -> Self {
+        self.failing_creations_after_docker_created
+            .lock()
+            .unwrap()
+            .insert(name.to_string());
         self
     }
 
@@ -356,11 +374,27 @@ impl FakeContainerRuntime {
         self
     }
 
+    /// Makes `create_container` for container name `name` artificially
+    /// `tokio::time::sleep` for `delay` before creating it — used with
+    /// `#[tokio::test(start_paused = true)]` to hold a container
+    /// uncreated while something else happens, or to prove two creates
+    /// overlap (or don't, under `--max-parallelism`).
+    fn with_create_delay(self, name: &str, delay: std::time::Duration) -> Self {
+        self.create_delays
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), delay);
+        self
+    }
+
     /// Makes `start_background_container` for container name `name`
-    /// artificially `tokio::time::sleep` for `delay` before doing
-    /// anything else — used with `#[tokio::test(start_paused = true)]`
-    /// to prove two independent dependencies actually start
-    /// concurrently (overlapping in virtual time), not sequentially.
+    /// artificially `tokio::time::sleep` for `delay` before starting it —
+    /// used with `#[tokio::test(start_paused = true)]` to prove two
+    /// independent dependencies actually start concurrently (overlapping
+    /// in virtual time), not sequentially, or to hold a container in its
+    /// created-but-not-started state so a sibling dependency's failure
+    /// can cut the start short once Docker already has a container to
+    /// clean up.
     fn with_start_delay(self, name: &str, delay: std::time::Duration) -> Self {
         self.start_delays
             .lock()
@@ -369,27 +403,11 @@ impl FakeContainerRuntime {
         self
     }
 
-    /// Makes `start_background_container` for container name `name`
-    /// `tokio::time::sleep` for `delay` *after* the container is created and
-    /// its id handed back, before it would have started — so a sibling
-    /// dependency's failure can cut the start short once Docker already has
-    /// a container to clean up.
-    fn with_start_delay_after_create(self, name: &str, delay: std::time::Duration) -> Self {
-        self.start_delays_after_create
-            .lock()
-            .unwrap()
-            .insert(name.to_string(), delay);
-        self
-    }
-
-    /// Makes `start_background_container` for container name `name` fail
-    /// after the container is created and its id handed back — standing in
-    /// for user mapping, joining the network or the start itself failing.
-    fn failing_start_after_create(self, name: &str) -> Self {
-        self.failing_starts_after_create
-            .lock()
-            .unwrap()
-            .insert(name.to_string());
+    /// Makes `start_background_container` for container name `name` fail —
+    /// the start itself failing, a port already bound say — after the
+    /// container was created and its id handed back.
+    fn failing_start(self, name: &str) -> Self {
+        self.failing_starts.lock().unwrap().insert(name.to_string());
         self
     }
 
@@ -845,44 +863,74 @@ impl ContainerRuntime for FakeContainerRuntime {
         Ok(*self.network_exists_result.lock().unwrap())
     }
 
-    async fn start_background_container(
+    async fn create_container(
         &self,
         spec: &crate::container_spec::ContainerSpec,
-        created: tokio::sync::oneshot::Sender<String>,
-    ) -> Result<String> {
-        let alias = &spec.shared.name;
-        let delay = self.start_delays.lock().unwrap().get(alias).copied();
+    ) -> std::result::Result<String, crate::docker::CreateContainerError> {
+        let name = &spec.shared.name;
+        let delay = self.create_delays.lock().unwrap().get(name).copied();
         if let Some(delay) = delay {
             tokio::time::sleep(delay).await;
+        }
+        // Before anything is recorded: nothing was created (see
+        // `failing_creation`).
+        if self.failing_creations.lock().unwrap().contains(name) {
+            self.push(format!("create-failed:{name}"));
+            return Err(crate::docker::CreateContainerError::before_creation(
+                anyhow::anyhow!("Failed to create container '{name}'"),
+            ));
         }
         self.specs
             .lock()
             .unwrap()
-            .push((alias.clone(), spec.clone()));
+            .push((name.clone(), spec.clone()));
+        self.push(format!(
+            "create:{name}:{}",
+            network_label(&spec.shared.network)
+        ));
+        // One id convention for a dependency and the task's own container,
+        // so `with_unhealthy_container`/exec-based assertions work
+        // identically for either — and so the engine's cleanup of either
+        // shows up as the same `sidecar-stop:sidecar-id-{name}` event,
+        // which is what the cleanup-flag tests assert on.
+        let container_id = format!("sidecar-id-{name}");
+        if self
+            .failing_creations_after_docker_created
+            .lock()
+            .unwrap()
+            .contains(name)
+        {
+            return Err(crate::docker::CreateContainerError {
+                created: Some(container_id),
+                error: anyhow::anyhow!("Failed to connect '{name}' to network"),
+            });
+        }
+        Ok(container_id)
+    }
+
+    async fn start_background_container(
+        &self,
+        container_id: &str,
+        spec: &crate::container_spec::ContainerSpec,
+    ) -> Result<()> {
+        let alias = &spec.shared.name;
+        assert_eq!(
+            container_id,
+            format!("sidecar-id-{alias}"),
+            "a container is started by the id its own creation returned"
+        );
+        let delay = self.start_delays.lock().unwrap().get(alias).copied();
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
+        if self.failing_starts.lock().unwrap().contains(alias) {
+            anyhow::bail!("Failed to start container '{alias}'");
+        }
         self.push(format!(
             "sidecar-start:{alias}:{}",
             network_label(&spec.shared.network)
         ));
-        let container_id = format!("sidecar-id-{alias}");
-        let _ = created.send(container_id.clone());
-        let delay = self
-            .start_delays_after_create
-            .lock()
-            .unwrap()
-            .get(alias)
-            .copied();
-        if let Some(delay) = delay {
-            tokio::time::sleep(delay).await;
-        }
-        if self
-            .failing_starts_after_create
-            .lock()
-            .unwrap()
-            .contains(alias)
-        {
-            anyhow::bail!("Failed to connect '{alias}' to network");
-        }
-        Ok(container_id)
+        Ok(())
     }
 
     async fn wait_for_container_healthy(&self, container_id: &str) -> Result<()> {
@@ -988,40 +1036,26 @@ impl ContainerRuntime for FakeContainerRuntime {
 
     async fn run_container(
         &self,
+        container_id: &str,
         spec: &crate::container_spec::ContainerSpec,
-        created: Option<tokio::sync::oneshot::Sender<String>>,
         started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<()> {
         let name = &spec.shared.name;
-        // Before anything is recorded, and before either channel is
-        // sent — both senders drop here (see
-        // `failing_container_creation`).
-        if *self.fail_container_creation.lock().unwrap() {
-            self.push(format!("run-create-failed:{name}"));
-            anyhow::bail!("Failed to create container '{name}'");
-        }
-        self.specs
-            .lock()
-            .unwrap()
-            .push((name.clone(), spec.clone()));
+        assert_eq!(
+            container_id,
+            format!("sidecar-id-{name}"),
+            "the task container is run by the id its own creation returned"
+        );
         self.push(format!(
             "run:{name}:{}:args=[{}]:{}",
             spec.shared.command.as_deref().unwrap_or_default(),
             spec.additional_args.join(","),
             network_label(&spec.shared.network)
         ));
-        // Same id convention `start_background_container` uses, so
-        // `with_unhealthy_container`/exec-based assertions work
-        // identically whether `name` is a dependency or the task's own
-        // container — and so the engine's cleanup of it shows up as the
-        // same `sidecar-stop:sidecar-id-{name}` event, which is what the
-        // cleanup-flag tests assert on. Both fired before `run_delays`'
-        // own sleep (if any), so a concurrent readiness task genuinely
-        // overlaps with this call still being in flight, the same way it
-        // would against a real, still-running container.
-        if let Some(created) = created {
-            let _ = created.send(format!("sidecar-id-{name}"));
-        }
+        // Fired before `run_delays`' own sleep (if any), so a concurrent
+        // readiness task genuinely overlaps with this call still being in
+        // flight, the same way it would against a real, still-running
+        // container.
         if let Some(started) = started {
             let _ = started.send(());
         }
@@ -3413,6 +3447,18 @@ async fn dependency_starts_before_main_container_and_is_cleaned_up() {
         .expect("a network should have been created")
         .to_string();
 
+    let network_index = events
+        .iter()
+        .position(|e| *e == format!("network-create:{network}"))
+        .expect("the network is created");
+    let database_created_index = events
+        .iter()
+        .position(|e| *e == format!("create:database:{network}"))
+        .expect("dependency should have been created, joined to the network");
+    let app_created_index = events
+        .iter()
+        .position(|e| *e == format!("create:app:{network}"))
+        .expect("main container should have been created, joined to the network");
     let sidecar_index = events
         .iter()
         .position(|e| *e == format!("sidecar-start:database:{network}"))
@@ -3421,6 +3467,23 @@ async fn dependency_starts_before_main_container_and_is_cleaned_up() {
         .iter()
         .position(|e| *e == format!("run:app:echo hi:args=[]:{network}"))
         .expect("main container should have run, joined to the dependency's network");
+    // The total order a run has: network, then every create (each after
+    // the network, before its own start), then the dependency's start
+    // before the main container's. Where the main container's create
+    // falls against the dependency's start is the daemon's business
+    // (decisions/0019), so nothing here pins it.
+    assert!(
+        network_index < database_created_index && network_index < app_created_index,
+        "the network must exist before anything is created on it: {events:?}"
+    );
+    assert!(
+        database_created_index < sidecar_index,
+        "a container is created before it is started: {events:?}"
+    );
+    assert!(
+        app_created_index < run_index,
+        "the main container is created before it is run: {events:?}"
+    );
     assert!(
         sidecar_index < run_index,
         "dependency must start before the main container: {events:?}"
@@ -3887,7 +3950,7 @@ async fn a_failing_run_in_setup_command_names_both_containers() {
 /// The task's own container can use `run_in` too — its setup commands run
 /// through the same gate, and its dependencies are equally guaranteed ready
 /// by the time they do.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_task_containers_own_run_in_setup_command_execs_into_its_dependency() {
     let mut config = config_with_database_dependency(|_| {});
     config.containers.get_mut("app").unwrap().setup_commands =
@@ -3897,7 +3960,11 @@ async fn the_task_containers_own_run_in_setup_command_execs_into_its_dependency(
             run_in: Some("database".to_string()),
         }]);
 
-    let docker = FakeContainerRuntime::default();
+    // The gate runs alongside the main command and is dropped the moment
+    // the command exits (decisions/0012), so the command has to outlive it
+    // for the gate to do anything — as a real one does.
+    let docker =
+        FakeContainerRuntime::default().with_run_delay("app", std::time::Duration::from_secs(1));
     let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
@@ -3995,11 +4062,11 @@ fn assert_removed_before_network(events: &[String], container: &str) {
 /// A sibling whose start is abandoned because another dependency failed is
 /// still removed, as long as Docker had created it: `peer` is created at
 /// once, `fails` is reported unhealthy a second later, and `peer`'s start
-/// would only have returned its id after a minute.
+/// would only have returned after a minute.
 #[tokio::test(start_paused = true)]
 async fn a_dependency_created_before_a_sibling_fails_is_still_cleaned_up() {
     let docker = FakeContainerRuntime::default()
-        .with_start_delay_after_create("peer", std::time::Duration::from_secs(60))
+        .with_start_delay("peer", std::time::Duration::from_secs(60))
         .with_health_check_delay("fails", std::time::Duration::from_secs(1))
         .with_unhealthy_container("fails");
     let engine = engine(config_with_sibling_dependencies(), docker.clone());
@@ -4020,7 +4087,27 @@ async fn a_dependency_created_before_a_sibling_fails_is_still_cleaned_up() {
 /// and the start failure is what the run reports.
 #[tokio::test]
 async fn a_dependency_whose_start_fails_after_creation_is_still_cleaned_up() {
-    let docker = FakeContainerRuntime::default().failing_start_after_create("fails");
+    let docker = FakeContainerRuntime::default().failing_start("fails");
+    let engine = engine(config_with_sibling_dependencies(), docker.clone());
+
+    let result = engine.run_task("start", &[]).await;
+
+    let message = format!("{:#}", result.unwrap_err());
+    assert!(
+        message.contains("Failed to start container 'fails'"),
+        "the run must report the start failure: {message}"
+    );
+    assert_removed_before_network(&docker.events(), "fails");
+}
+
+/// Creation is more than Docker's `create`: the user-mapping upload and the
+/// network join come after it, and a failure there leaves a container
+/// behind. `CreateContainerError` carries its id out, and the engine
+/// registers it like any other, so it is removed — and the failure itself
+/// is what the run reports.
+#[tokio::test]
+async fn a_dependency_whose_creation_fails_after_docker_created_it_is_still_cleaned_up() {
+    let docker = FakeContainerRuntime::default().failing_creation_after_docker_created("fails");
     let engine = engine(config_with_sibling_dependencies(), docker.clone());
 
     let result = engine.run_task("start", &[]).await;
@@ -4028,9 +4115,227 @@ async fn a_dependency_whose_start_fails_after_creation_is_still_cleaned_up() {
     let message = format!("{:#}", result.unwrap_err());
     assert!(
         message.contains("Failed to connect 'fails' to network"),
-        "the run must report the start failure: {message}"
+        "the run must report the creation failure: {message}"
     );
     assert_removed_before_network(&docker.events(), "fails");
+}
+
+/// Creation doesn't wait for a dependency's readiness; only the start does
+/// (decisions/0019, rule 2). `a` takes a second to become healthy; `b`
+/// (which depends on it) and the task container are both *created* before
+/// that verdict and *started* only after it — one assertion per container
+/// per side, on the fake's own call order.
+#[tokio::test(start_paused = true)]
+async fn containers_are_created_before_their_dependencies_are_ready_and_started_after() {
+    let docker = FakeContainerRuntime::default()
+        .with_health_check_delay("a", std::time::Duration::from_secs(1));
+    let engine = engine(
+        config_with_a_dependency_chain_of_three_pulls(),
+        docker.clone(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let events = docker.events();
+    let position = |prefix: &str| {
+        events
+            .iter()
+            .position(|e| e.starts_with(prefix))
+            .unwrap_or_else(|| panic!("no '{prefix}' event: {events:?}"))
+    };
+    let a_healthy = position("wait-healthy:sidecar-id-a");
+    assert!(
+        position("create:b:") < a_healthy,
+        "'b' is created before 'a' is healthy: {events:?}"
+    );
+    assert!(
+        a_healthy < position("sidecar-start:b:"),
+        "'b' is started only once 'a' is healthy: {events:?}"
+    );
+    assert!(
+        position("create:app:") < a_healthy,
+        "the task container is created before 'a' is healthy: {events:?}"
+    );
+    assert!(
+        a_healthy < position("run:app:"),
+        "the task container is run only once 'a' is healthy: {events:?}"
+    );
+}
+
+/// A dependency whose create fails — a spec the daemon refuses — ends the
+/// run with that error the moment it lands: no dependency's setup command
+/// has run, and every container created so far is removed before the
+/// network. `peer` and the task container are created at once; `fails`'s
+/// create takes a second to be refused, while `peer` is still waiting to
+/// become healthy, so its setup command never runs. Nothing was created for
+/// `fails`, so nothing of its is removed.
+#[tokio::test(start_paused = true)]
+async fn a_dependency_whose_create_fails_stops_the_run_before_any_setup_command() {
+    let mut config = config_with_sibling_dependencies();
+    config.containers.get_mut("peer").unwrap().setup_commands =
+        Some(vec![crate::config::SetupCommand {
+            command: "./seed.sh".to_string(),
+            working_directory: None,
+            run_in: None,
+        }]);
+    let docker = FakeContainerRuntime::default()
+        .with_create_delay("fails", std::time::Duration::from_secs(1))
+        .failing_creation("fails")
+        .with_health_check_delay("peer", std::time::Duration::from_secs(2));
+    let engine = engine(config, docker.clone());
+
+    let result = engine.run_task("start", &[]).await;
+
+    let message = format!("{:#}", result.unwrap_err());
+    assert!(
+        message.contains("Failed to create container 'fails'"),
+        "the run must report the create failure: {message}"
+    );
+    let events = docker.events();
+    assert!(
+        !events.iter().any(|e| e.starts_with("exec:")),
+        "no setup command may have run: {events:?}"
+    );
+    assert_removed_before_network(&events, "peer");
+    assert_removed_before_network(&events, "app");
+    assert!(
+        !events.contains(&"sidecar-stop:sidecar-id-fails".to_string()),
+        "nothing was created for 'fails', so nothing of its is removed: {events:?}"
+    );
+}
+
+/// The task's own container is created before its dependencies are ready,
+/// and is removed like any other if a dependency then fails its readiness
+/// gate — it was never started, and never run.
+#[tokio::test(start_paused = true)]
+async fn the_task_container_is_created_before_its_dependencies_are_ready_and_removed_if_one_fails()
+{
+    let docker = FakeContainerRuntime::default()
+        .with_health_check_delay("database", std::time::Duration::from_secs(1))
+        .with_unhealthy_container("database");
+    let engine = engine(config_with_database_dependency(|_| {}), docker.clone());
+
+    let result = engine.run_task("start", &[]).await;
+
+    let message = format!("{:#}", result.unwrap_err());
+    assert!(
+        message.contains("'database' did not become healthy"),
+        "the run must report the dependency's gate failure: {message}"
+    );
+    let events = docker.events();
+    let app_created = events
+        .iter()
+        .position(|e| e.starts_with("create:app:"))
+        .unwrap_or_else(|| panic!("the task container is created: {events:?}"));
+    let database_verdict = events
+        .iter()
+        .position(|e| e == "wait-healthy:sidecar-id-database")
+        .unwrap_or_else(|| panic!("'database' reaches a verdict: {events:?}"));
+    assert!(
+        app_created < database_verdict,
+        "the task container is created before 'database' reaches its verdict: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|e| e.starts_with("run:app:")),
+        "the task container is never run: {events:?}"
+    );
+    assert_removed_before_network(&events, "app");
+    assert_removed_before_network(&events, "database");
+}
+
+/// A `network_mode = "container:<target>"` container needs the target's id
+/// to be created, and nothing more: it is created once the target is
+/// *created* — with that id in its spec — not once the target is ready, and
+/// started only once the target is ready, like any other dependency.
+#[tokio::test(start_paused = true)]
+async fn a_container_sharing_anothers_network_is_created_after_its_target_and_started_after_its_readiness(
+) {
+    let mut sharer = container("alpine:3.18", Some(vec!["db".to_string()]));
+    sharer.network_mode = Some(NetworkMode::Container("db".to_string()));
+    let containers = IndexMap::from([
+        ("db".to_string(), container("postgres:16", None)),
+        ("sharer".to_string(), sharer),
+        (
+            "app".to_string(),
+            container("alpine:3.18", Some(vec!["sharer".to_string()])),
+        ),
+    ]);
+    let tasks = IndexMap::from([("start".to_string(), task("app", "echo hi"))]);
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+    let docker = FakeContainerRuntime::default()
+        .with_health_check_delay("db", std::time::Duration::from_secs(1));
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let events = docker.events();
+    let position = |event: &str| {
+        events
+            .iter()
+            .position(|e| e == event || e.starts_with(event))
+            .unwrap_or_else(|| panic!("no '{event}' event: {events:?}"))
+    };
+    let db_created = position("create:db:");
+    let sharer_created = position("create:sharer:container:sidecar-id-db");
+    let db_healthy = position("wait-healthy:sidecar-id-db");
+    let sharer_started = position("sidecar-start:sharer:");
+    assert!(
+        db_created < sharer_created,
+        "the sharer is created with its target's id, so after the target: {events:?}"
+    );
+    assert!(
+        sharer_created < db_healthy,
+        "the sharer's creation does not wait for its target to be ready: {events:?}"
+    );
+    assert!(
+        db_healthy < sharer_started,
+        "the sharer's start does wait for its target to be ready: {events:?}"
+    );
+}
+
+/// Under `--max-parallelism 1` a chain of three completes — a create and a
+/// start are separate permits, and none is held while waiting for a
+/// dependency, so the chain can't deadlock on the cap — and no two creates
+/// or starts overlap: three creates and two dependency starts, each
+/// holding the one permit for `delay`, take at least five of them. The
+/// task container's own run is never capped.
+#[tokio::test(start_paused = true)]
+async fn max_parallelism_of_one_serializes_creates_and_starts_along_a_chain_without_deadlock() {
+    let delay = std::time::Duration::from_millis(100);
+    let docker = FakeContainerRuntime::default()
+        .with_create_delay("a", delay)
+        .with_create_delay("b", delay)
+        .with_create_delay("app", delay)
+        .with_start_delay("a", delay)
+        .with_start_delay("b", delay);
+    let engine = engine(config_with_a_dependency_chain_of_three_pulls(), docker)
+        .with_settings(TaskEngineSettings {
+            max_parallelism: Some(1),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let start = tokio::time::Instant::now();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        engine.run_task("start", &[]),
+    )
+    .await
+    .expect("a chain longer than the cap must not deadlock on it")
+    .unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed >= delay * 5,
+        "with --max-parallelism 1, three creates and two starts each hold the one permit \
+         in turn (elapsed: {elapsed:?})"
+    );
 }
 
 /// A `run_to_completion` dependency (ratect#97) is started like any other,
@@ -4190,7 +4495,9 @@ async fn an_external_health_checks_companion_reports_the_checked_containers_read
     );
     for event in &events {
         let named = match event {
-            TaskEvent::DependencyStarting { container }
+            TaskEvent::ContainerCreating { container }
+            | TaskEvent::ContainerCreated { container }
+            | TaskEvent::DependencyStarting { container }
             | TaskEvent::DependencyStarted { container }
             | TaskEvent::DependencyCompleted { container }
             | TaskEvent::ContainerRemoved { container }
@@ -4650,11 +4957,12 @@ async fn an_interrupt_leaves_everything_alone_with_cleanup_after_failure_disable
     );
 }
 
-/// The task's own container is removed by `run_container` itself on every
-/// path *except* an interrupt, where that future is dropped before it can
-/// — so the engine removes it, from an id recorded as it started. Without
-/// this, the whole `task_container_id` path could break with the
-/// non-Docker suite still green.
+/// The task's own container is removed by the engine's cleanup stage like
+/// any other, from the id registered at its creation — an interrupt drops
+/// the run's future before `run_container` returns, so that registration
+/// is the only thing cleanup has to go on. Without this, the whole
+/// `created_containers` path could break with the non-Docker suite still
+/// green.
 #[tokio::test]
 async fn an_interrupt_removes_the_tasks_own_container_too() {
     let (docker, engine, _interrupt) = interrupted_engine(1);
@@ -5207,7 +5515,7 @@ async fn failing_setup_command_fails_the_task_and_still_cleans_up() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn task_containers_own_health_check_reaches_docker_and_is_waited_on() {
     // 0.21.0 closed this gap: the task's own container now goes through
     // the same readiness gate a dependency always has (see
@@ -5233,7 +5541,11 @@ async fn task_containers_own_health_check_reaches_docker_and_is_waited_on() {
         forbid_telemetry: None,
     };
 
-    let docker = FakeContainerRuntime::default();
+    // The gate runs alongside the main command and is dropped the moment
+    // the command exits (decisions/0012), so the command has to outlive it
+    // for the gate to do anything — as a real one does.
+    let docker =
+        FakeContainerRuntime::default().with_run_delay("app", std::time::Duration::from_secs(1));
     let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
@@ -5292,7 +5604,7 @@ async fn unhealthy_task_container_fails_the_task() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn task_containers_own_setup_commands_run() {
     let mut containers = IndexMap::new();
     let mut app = container("alpine:3.18", None);
@@ -5312,7 +5624,11 @@ async fn task_containers_own_setup_commands_run() {
         forbid_telemetry: None,
     };
 
-    let docker = FakeContainerRuntime::default();
+    // The gate runs alongside the main command and is dropped the moment
+    // the command exits (decisions/0012), so the command has to outlive it
+    // for the gate to do anything — as a real one does.
+    let docker =
+        FakeContainerRuntime::default().with_run_delay("app", std::time::Duration::from_secs(1));
     let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
@@ -5356,10 +5672,11 @@ fn config_with_task_working_directory_and_setup_command(
 /// Batect's code, not its docs (which say the override is ignored): the
 /// task-specialised container carries `run.working_directory`, and that is
 /// what a setup command with none of its own falls back to (ratect#271).
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn task_containers_setup_command_falls_back_to_the_tasks_run_working_directory() {
     let config = config_with_task_working_directory_and_setup_command(None);
-    let docker = FakeContainerRuntime::default();
+    let docker =
+        FakeContainerRuntime::default().with_run_delay("app", std::time::Duration::from_secs(1));
     let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
@@ -5368,10 +5685,11 @@ async fn task_containers_setup_command_falls_back_to_the_tasks_run_working_direc
     assert_eq!(working_directory.as_deref(), Some("/from-task"));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn task_containers_setup_commands_own_working_directory_overrides_the_tasks() {
     let config = config_with_task_working_directory_and_setup_command(Some("/from-setup-command"));
-    let docker = FakeContainerRuntime::default();
+    let docker =
+        FakeContainerRuntime::default().with_run_delay("app", std::time::Duration::from_secs(1));
     let engine = engine(config, docker.clone());
 
     engine.run_task("start", &[]).await.unwrap();
@@ -5488,34 +5806,42 @@ async fn a_readiness_failure_is_unaffected_by_no_cleanup_after_success() {
     );
 }
 
-/// `run_container` can fail before it ever creates a container, in which
-/// case it drops both channels without sending. The concurrent readiness
-/// task has to treat that as "nothing to do" — if it awaited a sender
-/// that will never send, the whole run would hang instead of reporting
-/// the failure. Every other failure the fake can express sends `created`
-/// first, so this shape is unreachable without its own switch.
-///
-/// Wrapped in a timeout rather than left to hang: a deadlock here would
-/// otherwise stall the suite with no indication of which test did it.
-#[tokio::test]
-async fn a_run_container_failure_before_creation_reports_rather_than_hanging() {
+/// The task's own container's create can fail with nothing created — a spec
+/// the daemon refuses. The run fails with that error, there is nothing of
+/// the task container's to remove, and the rest of the run's cleanup still
+/// happens: `database`, created a second before `app`'s create is refused,
+/// is removed. Wrapped in a timeout rather than left to hang: a deadlock
+/// here would otherwise stall the suite with no indication of which test
+/// did it.
+#[tokio::test(start_paused = true)]
+async fn a_task_container_whose_create_fails_fails_the_run_and_still_cleans_up() {
     let config = config_with_database_dependency(|_| {});
-    let docker = FakeContainerRuntime::default().failing_container_creation();
+    let docker = FakeContainerRuntime::default()
+        .with_create_delay("app", std::time::Duration::from_secs(1))
+        .failing_creation("app");
     let engine = engine(config, docker.clone());
 
     let result = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(60),
         engine.run_task("start", &[]),
     )
     .await
-    .expect("the run must not hang waiting on a sender that will never send");
+    .expect("the run must not hang on a failed create");
 
-    assert!(result.is_err(), "the creation failure must be reported");
+    let message = format!("{:#}", result.unwrap_err());
+    assert!(
+        message.contains("Failed to create container 'app'"),
+        "the creation failure must be reported: {message}"
+    );
 
     let events = docker.events();
     assert!(
-        events.contains(&"run-create-failed:app".to_string()),
+        events.contains(&"create-failed:app".to_string()),
         "the run should have got as far as attempting the task container: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|e| e.starts_with("run:app:")),
+        "a container that was never created is never run: {events:?}"
     );
     // Nothing was created, so there is nothing of the task container's to
     // remove — but the rest of the run's cleanup still has to happen.
@@ -5523,14 +5849,7 @@ async fn a_run_container_failure_before_creation_reports_rather_than_hanging() {
         !events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
         "no task container was created, so none should be removed: {events:?}"
     );
-    assert!(
-        events.contains(&"sidecar-stop:sidecar-id-database".to_string()),
-        "the dependency should still be cleaned up: {events:?}"
-    );
-    assert!(
-        events.iter().any(|e| e.starts_with("network-remove:")),
-        "the network should still be removed: {events:?}"
-    );
+    assert_removed_before_network(&events, "database");
 }
 
 /// One task container whose own `setup_commands` entry fails — the
@@ -6129,9 +6448,9 @@ async fn native_task_containers_own_readiness_gate_does_not_run() {
         "no health event should post for the task container: {posted:?}"
     );
     assert!(
-        posted.iter().any(
-            |e| matches!(e, TaskEvent::TaskContainerCreated { container } if container == "app")
-        ),
+        posted
+            .iter()
+            .any(|e| matches!(e, TaskEvent::ContainerCreated { container } if container == "app")),
         "the task container's creation should still be announced: {posted:?}"
     );
 }
@@ -10180,7 +10499,7 @@ impl EventSink for RecordingEventSink {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
     let mut containers = IndexMap::new();
     containers.insert(
@@ -10205,7 +10524,11 @@ async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
     };
 
     let sink = RecordingEventSink::default();
-    let docker = FakeContainerRuntime::default();
+    // The task container's gate runs alongside its command and is dropped
+    // when the command exits (decisions/0012); `cargo test` runs for a
+    // moment, as a real one does, so its gate reports.
+    let docker = FakeContainerRuntime::default()
+        .with_run_delay("build-env", std::time::Duration::from_secs(1));
     let engine = TaskEngine::new(
         project(config),
         docker,
@@ -10241,12 +10564,15 @@ async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
         TaskEvent::TaskStarting {
             task: "test".into(),
         },
-        // Every container's image work starts before any dependency does
-        // (decisions/0019), in container-name order (`build-env` before
-        // `database`); the fake's pulls complete instantly, so here each
-        // image's milestones all land before the next one's start, and
-        // before `database` starts. Against a real daemon the pulls
-        // overlap, and only their starting order is fixed.
+        // Every container's image work and creation start before any
+        // dependency does (decisions/0019), in container-name order
+        // (`build-env` before `database`); the fake's pulls and creates
+        // complete instantly, so here each container's image milestones
+        // and creation all land before the next one's start, and before
+        // `database` starts. Against a real daemon they overlap, and only
+        // their starting order is fixed. The task's own container is
+        // created here too, long before it runs: creation waits for the
+        // image and the network, not for `database` to be ready.
         TaskEvent::ImagePullStarting {
             image: "alpine:3.18".into(),
         },
@@ -10254,6 +10580,12 @@ async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
             image: "alpine:3.18".into(),
         },
         TaskEvent::ImageResolved {
+            container: "build-env".into(),
+        },
+        TaskEvent::ContainerCreating {
+            container: "build-env".into(),
+        },
+        TaskEvent::ContainerCreated {
             container: "build-env".into(),
         },
         TaskEvent::ImagePullStarting {
@@ -10265,6 +10597,14 @@ async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
         TaskEvent::ImageResolved {
             container: "database".into(),
         },
+        TaskEvent::ContainerCreating {
+            container: "database".into(),
+        },
+        TaskEvent::ContainerCreated {
+            container: "database".into(),
+        },
+        // Only now, with `database` created, does its start begin — the
+        // readiness gate gates starting and nothing else.
         TaskEvent::DependencyStarting {
             container: "database".into(),
         },
@@ -10284,16 +10624,12 @@ async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
         TaskEvent::SetupCommandsCompleted {
             container: "database".into(),
         },
+        // Posted when the task container's *start* begins — once
+        // `database` is ready — not at its creation, which was announced
+        // above.
         TaskEvent::RunningTaskContainer {
             container: "build-env".into(),
             command: Some("cargo test".into()),
-        },
-        // After `RunningTaskContainer`, not before: that one announces
-        // the *stage*, this one reports Docker having actually created
-        // the container, which is when it becomes the engine's to clean
-        // up.
-        TaskEvent::TaskContainerCreated {
-            container: "build-env".into(),
         },
         // `build-env` has no `health_check` of its own, but the task's
         // own container now goes through the same readiness gate a
@@ -10789,7 +11125,7 @@ async fn disabled_cleanup_posts_a_notice_naming_what_it_kept() {
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert!(
         notices[0].starts_with(
-            "Left running (--no-cleanup): app (sidecar-id-a), database (sidecar-id-d), \
+            "Left in place (--no-cleanup): app (sidecar-id-a), database (sidecar-id-d), \
              network ratect-"
         ),
         "{}",
@@ -10831,9 +11167,13 @@ async fn disabled_cleanup_posts_a_notice_naming_what_it_kept() {
 
     let notices = messages(&sink.events(), notice);
     assert_eq!(notices.len(), 1, "{notices:?}");
+    // The task's own container is created before `database`'s gate fails
+    // (decisions/0019), so it was kept too — never started, but there.
     assert!(
-        notices[0]
-            .starts_with("Left running (--no-cleanup): database (sidecar-id-d), network ratect-"),
+        notices[0].starts_with(
+            "Left in place (--no-cleanup): app (sidecar-id-a), database (sidecar-id-d), \
+             network ratect-"
+        ),
         "{}",
         notices[0]
     );
@@ -10893,7 +11233,7 @@ async fn an_interrupted_run_with_cleanup_disabled_still_posts_a_notice() {
     let notices = messages(&sink.events(), notice);
     assert_eq!(notices[0], "Interrupted; not cleaning up.", "{notices:?}");
     assert!(
-        notices[1].starts_with("Left running (--no-cleanup): "),
+        notices[1].starts_with("Left in place (--no-cleanup): "),
         "{notices:?}"
     );
 }

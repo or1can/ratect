@@ -210,9 +210,10 @@ was reached, or `Error: Cleanup failed: <what the daemon said>; left behind:
 that works from that binary (`ratect resources clean` where it exists;
 `docker rm -f`/`docker network rm` with the names otherwise). The exit code
 is 0016's. A `--no-cleanup*` flag is not a failure, so its line is a notice,
-with the same tail and a reason in place of the marker: `Left running
-(--no-cleanup): <container>, <network>. Remove with: …`. One tail shape,
-so the eye learns it once.
+with the same tail and a reason in place of the marker: `Left in place
+(--no-cleanup): <container>, <network>. Remove with: …` — "in place", not
+"running", since a container created but never started is kept too. One
+tail shape, so the eye learns it once.
 
 ### Colour never carries information alone
 
