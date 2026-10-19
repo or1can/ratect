@@ -15,10 +15,9 @@
 use super::*;
 use crate::git_include::{FakeGitClient, GitIncludeCache, SystemGitClient};
 use crate::include_trust::Trust;
-use std::io::Cursor;
 
 fn parse(yaml: &str) -> Config {
-    noyalib::from_reader(Cursor::new(yaml.as_bytes())).expect("valid yaml")
+    crate::yaml::from_str(yaml).expect("valid yaml")
 }
 
 /// A loader-free path through the two real halves, for a config with no
@@ -131,35 +130,421 @@ fn base_path_for_a_dot_relative_config_file_is_dot() {
     assert_eq!(base_path_for(Path::new("./batect.yml")), Path::new("."));
 }
 
+/// Unquoted `environment` values, each paired with the text Batect passes
+/// to the container: the scalar exactly as written, since kaml's
+/// `decodeString` returns a scalar's source text whatever type it looks
+/// like (#378). Every number here is one that a parse-then-reformat
+/// would change, which `8080` or `1.5` would not.
+const UNQUOTED_ENVIRONMENT_VALUES: &[(&str, &str)] = &[
+    ("FLOAT", "12.6000"),
+    ("HEX", "0x10"),
+    ("OCTAL", "010"),
+    ("YAML_OCTAL", "0o17"),
+    ("EXPONENT", "1e3"),
+    ("PLUS", "+5"),
+    ("ONE_POINT_OH", "1.0"),
+    ("INFINITY", ".inf"),
+    ("BIG", "99999999999999999999"),
+    ("BOOLEAN", "true"),
+    ("TITLE_BOOLEAN", "True"),
+];
+
+/// `UNQUOTED_ENVIRONMENT_VALUES` as the body of an `environment` mapping,
+/// each line indented by `indent` spaces.
+fn unquoted_environment_lines(indent: usize) -> String {
+    UNQUOTED_ENVIRONMENT_VALUES
+        .iter()
+        .map(|(name, value)| format!("{:indent$}{name}: {value}\n", ""))
+        .collect()
+}
+
+fn assert_unquoted_environment_kept_as_written(env: &HashMap<String, String>) {
+    for (name, value) in UNQUOTED_ENVIRONMENT_VALUES {
+        assert_eq!(env[*name], *value, "{name}");
+    }
+}
+
 #[test]
-fn environment_values_accept_non_string_scalars() {
-    // Batect coerces a YAML scalar to its string form; Ratect matches,
-    // so `PORT: 8080` / `DEBUG: true` load rather than failing to parse
-    // with a type mismatch. Surfaced by the task-with-unhealthy-dependency
-    // conformance project (`NGINX_ENTRYPOINT_QUIET_LOGS: 1`).
-    let config = parse(
+fn a_containers_environment_keeps_an_unquoted_scalars_source_text() {
+    let config = parse(&format!(
         "project_name: p\n\
-             containers:\n  \
-               build-env:\n    \
-                 image: alpine\n    \
-                 environment:\n      \
-                   PORT: 8080\n      \
-                   RATIO: 1.5\n      \
-                   DEBUG: true\n      \
-                   NAME: already-a-string\n\
-             tasks:\n  \
-               the-task:\n    \
-                 run:\n      \
-                   container: build-env\n",
-    );
-    let env = config.containers["build-env"]
-        .environment
-        .as_ref()
-        .expect("environment should be present");
-    assert_eq!(env["PORT"], "8080");
-    assert_eq!(env["RATIO"], "1.5");
-    assert_eq!(env["DEBUG"], "true");
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   environment:\n\
+         {}\
+         \x20     NAME: already-a-string\n\
+         tasks: {{}}\n",
+        unquoted_environment_lines(6)
+    ));
+    let env = config.containers["app"].environment.as_ref().unwrap();
+    assert_unquoted_environment_kept_as_written(env);
     assert_eq!(env["NAME"], "already-a-string");
+}
+
+#[test]
+fn a_task_runs_environment_keeps_an_unquoted_scalars_source_text() {
+    let config = parse(&format!(
+        "project_name: p\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         tasks:\n\
+         \x20 the-task:\n\
+         \x20   run:\n\
+         \x20     container: app\n\
+         \x20     environment:\n\
+         {}",
+        unquoted_environment_lines(8)
+    ));
+    let run = config.tasks["the-task"].run.as_ref().unwrap();
+    assert_unquoted_environment_kept_as_written(run.environment.as_ref().unwrap());
+}
+
+#[test]
+fn a_customised_containers_environment_keeps_an_unquoted_scalars_source_text() {
+    let config = parse(&format!(
+        "project_name: p\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20 db:\n\
+         \x20   image: alpine\n\
+         tasks:\n\
+         \x20 the-task:\n\
+         \x20   run:\n\
+         \x20     container: app\n\
+         \x20   dependencies: [db]\n\
+         \x20   customise:\n\
+         \x20     db:\n\
+         \x20       environment:\n\
+         {}",
+        unquoted_environment_lines(10)
+    ));
+    let customise = config.tasks["the-task"].customise.as_ref().unwrap();
+    assert_unquoted_environment_kept_as_written(customise["db"].environment.as_ref().unwrap());
+}
+
+/// A null is no value at all, not the text `~` or `null`: each spelling is
+/// still refused at the entry, as kaml's non-null `decodeString` refuses it.
+#[test]
+fn every_spelling_of_a_null_environment_value_is_refused_at_its_entry() {
+    for null in ["", " ~", " null"] {
+        let message = yaml_config_file_error(&format!(
+            "project_name: demo\n\
+             containers:\n\
+             \x20 app:\n\
+             \x20   image: alpine\n\
+             \x20   environment:\n\
+             \x20     THING:{null}\n\
+             tasks: {{}}\n",
+        ));
+        assert!(
+            message.contains("line 6, column ")
+                && message.contains("containers.app.environment.THING: "),
+            "{null:?}: {message}"
+        );
+    }
+}
+
+/// `batect.yml` with `{v}` written, unquoted, as every plain-string field's
+/// value: each field Batect reads with kaml's `decodeString` (or as an
+/// expression, which starts as one), then Ratect's own additions. Fields
+/// with a dedicated scalar visitor are left out — `shm_size` (#375), ports
+/// (#414), volumes, devices and includes — as are the `environment` maps,
+/// which have their own tests above.
+fn every_plain_string_field(v: &str) -> String {
+    format!(
+        "project_name: {v}\n\
+         config_variables:\n\
+         \x20 var:\n\
+         \x20   description: {v}\n\
+         \x20   default: {v}\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: {v}\n\
+         \x20   build_directory: {v}\n\
+         \x20   build_args: {{ARG: {v}}}\n\
+         \x20   dockerfile: {v}\n\
+         \x20   build_target: {v}\n\
+         \x20   build_secrets:\n\
+         \x20     from_env: {{environment: {v}}}\n\
+         \x20     from_file: {{path: {v}}}\n\
+         \x20   build_ssh:\n\
+         \x20     - id: {v}\n\
+         \x20       paths: [{v}]\n\
+         \x20   dependencies: [{v}]\n\
+         \x20   run_as_current_user: {{enabled: true, home_directory: {v}}}\n\
+         \x20   additional_hostnames: [{v}]\n\
+         \x20   additional_hosts: {{host: {v}}}\n\
+         \x20   health_check: {{command: {v}}}\n\
+         \x20   setup_commands:\n\
+         \x20     - command: {v}\n\
+         \x20       working_directory: {v}\n\
+         \x20   working_directory: {v}\n\
+         \x20   command: {v}\n\
+         \x20   entrypoint: {v}\n\
+         \x20   labels: {{label: {v}}}\n\
+         \x20   log_driver: {v}\n\
+         \x20   log_options: {{option: {v}}}\n\
+         \x20   extends: {v}\n\
+         \x20   stop_signal: {v}\n\
+         \x20   dns: [{v}]\n\
+         \x20   dns_search: [{v}]\n\
+         \x20   dns_options: [{v}]\n\
+         tasks:\n\
+         \x20 task:\n\
+         \x20   description: {v}\n\
+         \x20   group: {v}\n\
+         \x20   dependencies: [{v}]\n\
+         \x20   prerequisites: [{v}]\n\
+         \x20   run:\n\
+         \x20     container: {v}\n\
+         \x20     command: {v}\n\
+         \x20     entrypoint: {v}\n\
+         \x20     working_directory: {v}\n\
+         \x20   customise:\n\
+         \x20     app:\n\
+         \x20       working_directory: {v}\n"
+    )
+}
+
+/// An unquoted number or boolean in any plain-string field is its text as
+/// written, as in Batect, whose `decodeString` returns a scalar's source
+/// text (#376): `3.10` stays `3.10` rather than failing to load — or, worse,
+/// loading as `3.1`. Each value is one a parse-then-reformat would change.
+#[test]
+fn every_plain_string_field_keeps_an_unquoted_scalars_source_text() {
+    for v in ["3.10", "12.6000", "0x10", "True"] {
+        let config = parse(&every_plain_string_field(v));
+        let variable = &config.config_variables.as_ref().unwrap()["var"];
+        let app = &config.containers["app"];
+        let secrets = app.build_secrets.as_ref().unwrap();
+        let ssh = &app.build_ssh.as_ref().unwrap()[0];
+        let setup = &app.setup_commands.as_ref().unwrap()[0];
+        let task = &config.tasks["task"];
+        let run = task.run.as_ref().unwrap();
+        let customised = &task.customise.as_ref().unwrap()["app"];
+        let fields: &[(&str, Option<&str>)] = &[
+            ("project_name", Some(&config.project_name)),
+            (
+                "config_variables.description",
+                variable.description.as_deref(),
+            ),
+            ("config_variables.default", variable.default.as_deref()),
+            ("image", app.image.as_deref()),
+            ("build_directory", app.build_directory.as_deref()),
+            (
+                "build_args",
+                app.build_args.as_ref().map(|a| a["ARG"].as_str()),
+            ),
+            ("dockerfile", app.dockerfile.as_deref()),
+            ("build_target", app.build_target.as_deref()),
+            (
+                "build_secrets environment",
+                match &secrets["from_env"] {
+                    BuildSecret::Environment(name) => Some(name),
+                    BuildSecret::Path(_) => None,
+                },
+            ),
+            (
+                "build_secrets path",
+                match &secrets["from_file"] {
+                    BuildSecret::Path(path) => Some(path),
+                    BuildSecret::Environment(_) => None,
+                },
+            ),
+            ("build_ssh id", Some(&ssh.id)),
+            ("build_ssh paths", Some(&ssh.paths[0])),
+            (
+                "dependencies",
+                app.dependencies.as_ref().map(|d| d[0].as_str()),
+            ),
+            (
+                "home_directory",
+                app.run_as_current_user
+                    .as_ref()
+                    .unwrap()
+                    .home_directory
+                    .as_deref(),
+            ),
+            (
+                "additional_hostnames",
+                app.additional_hostnames.as_ref().map(|h| h[0].as_str()),
+            ),
+            (
+                "additional_hosts",
+                app.additional_hosts.as_ref().map(|h| h["host"].as_str()),
+            ),
+            (
+                "health_check command",
+                app.health_check.as_ref().unwrap().command.as_deref(),
+            ),
+            ("setup_commands command", Some(&setup.command)),
+            (
+                "setup_commands working_directory",
+                setup.working_directory.as_deref(),
+            ),
+            ("working_directory", app.working_directory.as_deref()),
+            ("command", app.command.as_deref()),
+            ("entrypoint", app.entrypoint.as_deref()),
+            ("labels", app.labels.as_ref().map(|l| l["label"].as_str())),
+            ("log_driver", app.log_driver.as_deref()),
+            (
+                "log_options",
+                app.log_options.as_ref().map(|o| o["option"].as_str()),
+            ),
+            ("extends", app.extends.as_deref()),
+            ("stop_signal", app.stop_signal.as_deref()),
+            ("dns", app.dns.as_ref().map(|d| d[0].as_str())),
+            ("dns_search", app.dns_search.as_ref().map(|d| d[0].as_str())),
+            (
+                "dns_options",
+                app.dns_options.as_ref().map(|d| d[0].as_str()),
+            ),
+            ("task description", task.description.as_deref()),
+            ("task group", task.group.as_deref()),
+            (
+                "task dependencies",
+                task.dependencies.as_ref().map(|d| d[0].as_str()),
+            ),
+            (
+                "task prerequisites",
+                task.prerequisites.as_ref().map(|p| p[0].as_str()),
+            ),
+            ("run container", Some(&run.container)),
+            ("run command", run.command.as_deref()),
+            ("run entrypoint", run.entrypoint.as_deref()),
+            ("run working_directory", run.working_directory.as_deref()),
+            (
+                "customise working_directory",
+                customised.working_directory.as_deref(),
+            ),
+        ];
+        for (field, value) in fields {
+            assert_eq!(*value, Some(v), "{field}");
+        }
+    }
+}
+
+/// A null stays refused wherever it was refused before unquoted scalars were
+/// kept as text, and stays "left out" where it meant that: a `build_args`
+/// value must be a string, but an `Option` field such as a task's
+/// `description` reads a null as unset, as it always has.
+#[test]
+fn a_null_plain_string_value_is_refused_or_unset_as_before() {
+    let message = yaml_config_file_error(
+        "project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   build_directory: .\n\
+         \x20   build_args:\n\
+         \x20     ARG: ~\n\
+         tasks: {}\n",
+    );
+    assert!(
+        message.contains("line 6, column ") && message.contains("containers.app.build_args.ARG: "),
+        "{message}"
+    );
+    for (entry, path) in [
+        ("labels: {team: ~}", "containers.app.labels.team: "),
+        (
+            "additional_hosts: {db: ~}",
+            "containers.app.additional_hosts.db: ",
+        ),
+        ("dependencies: [~]", "containers.app.dependencies[0]: "),
+        ("dns: ['', ~]", "containers.app.dns[1]: "),
+    ] {
+        let message = yaml_config_file_error(&format!(
+            "project_name: demo\n\
+             containers:\n\
+             \x20 app:\n\
+             \x20   image: alpine\n\
+             \x20   {entry}\n\
+             tasks: {{}}\n"
+        ));
+        assert!(message.contains(path), "{entry}: {message}");
+    }
+
+    let config = parse(
+        "project_name: demo\n\
+         containers: {}\n\
+         tasks:\n\
+         \x20 task:\n\
+         \x20   description: ~\n\
+         \x20   group:\n",
+    );
+    assert_eq!(config.tasks["task"].description, None);
+    assert_eq!(config.tasks["task"].group, None);
+    let config = parse(
+        "project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   working_directory: null\n\
+         \x20   health_check: {interval: ~}\n\
+         tasks: {}\n",
+    );
+    let app = &config.containers["app"];
+    assert_eq!(app.working_directory, None);
+    assert_eq!(app.health_check.as_ref().unwrap().interval, None);
+}
+
+/// Batect reads a duration with `decodeString` too, so an unquoted `0`,
+/// `-0` or `+0` is a zero duration exactly as its quoted form is (#376).
+#[test]
+fn an_unquoted_zero_duration_is_zero() {
+    for zero in ["0", "-0", "+0"] {
+        let config = parse(&format!(
+            "project_name: demo\n\
+             containers:\n\
+             \x20 app:\n\
+             \x20   image: alpine\n\
+             \x20   health_check:\n\
+             \x20     interval: {zero}\n\
+             \x20     start_period: {zero}\n\
+             \x20     timeout: {zero}\n\
+             tasks: {{}}\n"
+        ));
+        let health_check = config.containers["app"].health_check.as_ref().unwrap();
+        assert_eq!(
+            health_check.interval,
+            Some(std::time::Duration::ZERO),
+            "{zero}"
+        );
+        assert_eq!(
+            health_check.start_period,
+            Some(std::time::Duration::ZERO),
+            "{zero}"
+        );
+        assert_eq!(
+            health_check.timeout,
+            Some(std::time::Duration::ZERO),
+            "{zero}"
+        );
+    }
+}
+
+/// An unquoted non-zero number is no duration: it has no unit, so Batect
+/// refuses `interval: 5` too. The refusal names the field and the missing
+/// unit, not a type mismatch.
+#[test]
+fn an_unquoted_duration_without_a_unit_is_refused_naming_the_field_and_the_unit() {
+    let message = yaml_config_file_error(
+        "project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   health_check:\n\
+         \x20     interval: 5\n\
+         tasks: {}\n",
+    );
+    assert!(
+        message.contains("containers.app.health_check.interval: ")
+            && message.contains("has no unit")
+            && !message.contains("type mismatch"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -1543,7 +1928,7 @@ tasks:
       container: build-env
       command: echo hi
 "#;
-    let result: Result<Config, _> = noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+    let result: Result<Config, _> = crate::yaml::from_str(yaml);
     assert!(result.is_err());
 }
 
@@ -1967,7 +2352,7 @@ tasks:
       container: build-env
       command: echo hi
 "#;
-    let result: Result<Config, _> = noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+    let result: Result<Config, _> = crate::yaml::from_str(yaml);
     assert!(result.is_err());
 }
 
@@ -1986,7 +2371,7 @@ tasks:
       container: build-env
       command: echo hi
 "#;
-    let result: Result<Config, _> = noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+    let result: Result<Config, _> = crate::yaml::from_str(yaml);
     assert!(result.is_err());
 }
 
@@ -2189,7 +2574,7 @@ tasks:
       container: build-env
       command: echo hi
 "#;
-    let result: std::result::Result<Config, _> = noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
     assert!(result.is_err());
 }
 
@@ -2211,7 +2596,7 @@ tasks:
       container: build-env
       command: echo hi
 "#;
-    let result: std::result::Result<Config, _> = noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
     assert!(result.is_err());
 }
 
@@ -2232,7 +2617,7 @@ tasks:
       container: build-env
       command: echo hi
 "#;
-    let result: std::result::Result<Config, _> = noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
     assert!(result.is_err());
 }
 
@@ -2310,7 +2695,7 @@ tasks:
       container: build-env
       command: echo hi
 "#;
-    let result: std::result::Result<Config, _> = noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
     assert!(result.is_err());
 }
 
@@ -2331,7 +2716,7 @@ tasks:
       container: build-env
       command: echo hi
 "#;
-    let result: std::result::Result<Config, _> = noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
     assert!(result.is_err());
 }
 
@@ -2352,7 +2737,7 @@ tasks:
       container: build-env
       command: echo hi
 "#;
-    let result: std::result::Result<Config, _> = noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
     assert!(result.is_err());
 }
 
@@ -2372,7 +2757,7 @@ tasks:
       container: build-env
       command: echo hi
 "#;
-    let result: std::result::Result<Config, _> = noyalib::from_reader(Cursor::new(yaml.as_bytes()));
+    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
     assert!(result.is_err());
 }
 
@@ -3980,7 +4365,7 @@ tasks: {}
 }
 
 fn try_parse(yaml: &str) -> Result<Config> {
-    noyalib::from_reader(Cursor::new(yaml.as_bytes())).context("failed to parse")
+    crate::yaml::from_str(yaml).context("failed to parse")
 }
 
 #[test]
@@ -4389,8 +4774,8 @@ fn port_mapping_serializes_to_its_string_form_and_round_trips() {
 
     for mapping in [single, ranged] {
         let yaml = noyalib::to_string(&mapping).expect("should serialize");
-        let reparsed: PortMapping = noyalib::from_reader(Cursor::new(yaml.as_bytes()))
-            .expect("the serialized form should re-parse");
+        let reparsed: PortMapping =
+            crate::yaml::from_str(&yaml).expect("the serialized form should re-parse");
         assert_eq!(reparsed, mapping, "round-trip through: {yaml}");
     }
 }
@@ -4922,6 +5307,36 @@ async fn load_native_toml(body: &str) -> Result<LoadedProject> {
     let result = load_project_native(&path).await;
     std::fs::remove_dir_all(&dir).ok();
     result
+}
+
+/// A `ratect.toml` `environment` value of any TOML type still loads as that
+/// value's string form: keeping a YAML scalar's source text (#378) changed
+/// nothing for the native format, whose parser hands the string read a
+/// typed value rather than text.
+#[tokio::test]
+async fn a_native_environment_value_of_any_toml_type_loads_as_its_string_form() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.app]
+image = "alpine:3.18"
+environment = { A = 1, B = 1.5, C = true }
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    let env = project.config.containers["app"]
+        .environment
+        .as_ref()
+        .unwrap();
+    assert_eq!(env["A"], "1");
+    assert_eq!(env["B"], "1.5");
+    assert_eq!(env["C"], "true");
 }
 
 /// The heart of `extends`: a child inherits every field it doesn't set,

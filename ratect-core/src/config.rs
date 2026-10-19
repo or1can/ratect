@@ -253,8 +253,9 @@ pub struct Container {
     /// task only.
     pub dependencies: Option<Vec<String>>,
     /// Environment variables to set inside the container. Values support
-    /// expressions, and a non-string scalar (`1`, `true`) is coerced to its
-    /// string form, matching Batect.
+    /// expressions, and a number or boolean is accepted: in a YAML file as
+    /// its text as written, as in Batect (`12.6000` stays `12.6000`) unless
+    /// the file contains a YAML tag, and in a TOML file as its string form.
     #[serde(default, deserialize_with = "deserialize_scalar_string_map")]
     pub environment: Option<HashMap<String, String>>,
     /// Runs the container as the host's own user rather than the image's
@@ -1270,28 +1271,16 @@ where
     deserializer.deserialize_any(ShmSizeVisitor)
 }
 
-/// One value in a config vars file: a scalar's text, refusing a null.
-/// `plain_scalar_strings` would read `~` or an empty value as `"~"`/`""`;
-/// `Option` sees the null first, and failing here rather than after the
-/// parse is what lets `noyalib` give the error its line and key.
-struct ConfigVarValue(String);
-
-impl<'de> serde::Deserialize<'de> for ConfigVarValue {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        Option::<String>::deserialize(deserializer)?
-            .map(ConfigVarValue)
-            .ok_or_else(|| serde::de::Error::custom("a config variable's value cannot be null"))
-    }
-}
-
-/// `serde` `deserialize_with` for the `environment` maps — accepts a YAML
-/// scalar of any type as a value and coerces it to its string form, the way
-/// Batect does, so `MY_VAR: 1` or `DEBUG: true` is read as `"1"`/`"true"`
-/// rather than rejected with a type-mismatch error. Only the *values* are
-/// coerced (keys are already strings), and only when the field is present;
+/// `serde` `deserialize_with` for the `environment` maps — accepts a scalar
+/// of any type as a value, so `MY_VAR: 1` or `DEBUG: true` loads rather than
+/// being rejected with a type-mismatch error. In a YAML file the value is
+/// the scalar's text as written, as in Batect — `12.6000` stays `"12.6000"`
+/// and `0x10` stays `"0x10"` — because it is read as a string and
+/// [`crate::yaml`] keeps a plain scalar's text for a string, except in a
+/// file with a tag in it. A null is still refused there. In a TOML file,
+/// whose parser hands the string read a typed value, the `visit_*` methods
+/// below re-render it (`1.50` is `"1.5"`). Only the *values* are read this
+/// way (keys are already strings), and only when the field is present;
 /// `#[serde(default)]` handles the absent case.
 fn deserialize_scalar_string_map<'de, D>(
     deserializer: D,
@@ -1299,7 +1288,7 @@ fn deserialize_scalar_string_map<'de, D>(
 where
     D: serde::Deserializer<'de>,
 {
-    /// A single YAML scalar read as its string form, whatever its type.
+    /// A single scalar read as a string, whatever its type.
     struct ScalarString(String);
 
     impl<'de> serde::Deserialize<'de> for ScalarString {
@@ -1352,7 +1341,7 @@ where
                 }
             }
 
-            deserializer.deserialize_any(ScalarStringVisitor)
+            deserializer.deserialize_str(ScalarStringVisitor)
         }
     }
 
@@ -2053,12 +2042,19 @@ pub fn parse_duration(text: &str) -> Result<std::time::Duration> {
     while !remaining.is_empty() {
         let number_len = remaining
             .find(|c: char| !c.is_ascii_digit() && c != '.')
-            .ok_or_else(invalid)?;
+            .unwrap_or(remaining.len());
         let number_str = &remaining[..number_len];
         // Batect's grammar: digits with at most one dot and at least one
         // digit somewhere (`2`, `2.`, `2.5`, `.5` — but never `.` alone).
         if !number_str.chars().any(|c| c.is_ascii_digit()) || number_str.matches('.').count() > 1 {
             return Err(invalid());
+        }
+        // Batect's message is the bare `invalid` one; this says why, since
+        // an unquoted `interval: 5` in a YAML file is an easy one to write.
+        if number_len == remaining.len() {
+            anyhow::bail!(
+                "The value '{text}' is not a valid duration: '{number_str}' has no unit, such as 's' or 'ms'."
+            );
         }
         let number: f64 = number_str.parse().map_err(|_| invalid())?;
 
@@ -2103,6 +2099,9 @@ mod duration_string {
         }
     }
 
+    /// In a YAML file an unquoted `interval: 0` reaches `parse_duration` as
+    /// the text `"0"` — `crate::yaml` reads a plain scalar as written when a
+    /// string is asked for.
     pub fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> std::result::Result<Option<std::time::Duration>, D::Error> {
@@ -3165,7 +3164,7 @@ const EXTENSION_KEY_PREFIX: char = '.';
 pub(crate) fn parse_yaml_config_file(path: &Path) -> Result<ConfigFile> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to open config file {:?}", path))?;
-    let ExtensibleConfigFile(file) = noyalib::from_str(&text)
+    let ExtensibleConfigFile(file) = crate::yaml::from_str(&text)
         .with_context(|| format!("Failed to parse config file {:?}", path))?;
     Ok(file)
 }
@@ -3784,24 +3783,14 @@ impl Config {
     /// Every value is a string, as in Batect (which decodes the file with
     /// `String.serializer()`): an unquoted number or boolean is read as the
     /// text written, so `3.10` stays `"3.10"` rather than being resolved to
-    /// a float and reformatted as `"3.1"` (#324). That is `noyalib`'s
-    /// `plain_scalar_strings`, not a reformatting visitor like
-    /// `deserialize_scalar_string_map`'s — except in a file with a tag in it,
-    /// which `noyalib` parses another way that does reformat (`TODO.md` 18).
-    /// A null is still refused, as Batect's non-null decode refuses it — see
-    /// `ConfigVarValue`.
+    /// a float and reformatted as `"3.1"` (#324) — except in a file with a
+    /// tag in it. A null is still refused, as Batect's non-null decode
+    /// refuses it. Both are the `yaml` module's, shared with `batect.yml`.
     pub fn load_config_vars_file(path: &Path) -> Result<HashMap<String, String>> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to open config vars file {:?}", path))?;
-        let values: HashMap<String, ConfigVarValue> = noyalib::from_str_with_config(
-            &text,
-            &noyalib::ParserConfig::new().plain_scalar_strings(true),
-        )
-        .with_context(|| format!("Failed to parse config vars file {:?}", path))?;
-        Ok(values
-            .into_iter()
-            .map(|(name, ConfigVarValue(value))| (name, value))
-            .collect())
+        crate::yaml::from_str(&text)
+            .with_context(|| format!("Failed to parse config vars file {:?}", path))
     }
 
     /// Like [`load_config_vars_file`](Self::load_config_vars_file), but for
@@ -4726,7 +4715,7 @@ pub fn project_name_of(config_file: &Path) -> Result<String> {
     let parsed: ProjectName = match config_file_format(config_file)? {
         FileFormat::Toml => toml::from_str(&text)
             .with_context(|| format!("Failed to parse config file {:?}", config_file))?,
-        FileFormat::Yaml => noyalib::from_str(&text)
+        FileFormat::Yaml => crate::yaml::from_str(&text)
             .with_context(|| format!("Failed to parse config file {:?}", config_file))?,
     };
     parsed.project_name.ok_or_else(|| {

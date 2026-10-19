@@ -243,7 +243,7 @@
             "type": "string"
           },
           "default": null,
-          "description": "Environment variables to set inside the container. Values support expressions, and a non-string scalar (`1`, `true`) is coerced to its string form, matching Batect.",
+          "description": "Environment variables to set inside the container. Values support expressions, and a number or boolean is accepted: in a YAML file as its text as written, as in Batect (`12.6000` stays `12.6000`) unless the file contains a YAML tag, and in a TOML file as its string form.",
           "type": [
             "object",
             "null"

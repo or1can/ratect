@@ -24,6 +24,13 @@ only says what's *different* and points there for the rest.
 
 ## Configuration format
 
+An unquoted number or boolean in a field that takes text is read as written,
+as in Batect — `3.10` stays `3.10` — except in a file containing a YAML tag
+(`!!int 7`, `!!str x`) anywhere in it. There, every such value in the file is
+re-formatted: `3.10` becomes `3.1`, `1e3` becomes `1000.0`, `True` becomes
+`true`. Batect keeps each as written. Quote a value whose spelling matters in
+a file that uses tags. The same holds for a config variables file.
+
 ### Top-level fields
 
 Every other top-level field is supported field-for-field — see [config

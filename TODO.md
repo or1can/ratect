@@ -94,15 +94,17 @@ Confirmed against GitHub's own `/markdown` API, not assumed.
   upstream, in `noyalib`'s `streaming.rs` `TypeMismatch` arms, which have
   consumed the event by the time they name what they found.
 
-- **18.** **A tag anywhere in a config vars file re-formats its unquoted
-  numbers** (#324): `Config::load_config_vars_file` keeps a plain scalar's
-  source text through `noyalib`'s `plain_scalar_strings`, which only does so
-  on its streaming path. A tag (`w: !!int 7`) sends the whole document down
-  the AST fallback, where the same option re-formats the resolved value, so
-  `v: 3.10` beside it loads as `3.1`. Raised upstream as
+- **18.** **A tag anywhere in a YAML file re-formats its unquoted
+  numbers** (#324, #378): every Batect-format read — a config file, a config
+  vars file — keeps a plain scalar's source text through `crate::yaml`, i.e.
+  `noyalib`'s `plain_scalar_strings`, which only does so on its streaming
+  path. A tag (`w: !!int 7`) sends the whole document down the AST fallback,
+  where the same option re-formats the resolved value, so `v: 3.10` beside
+  it loads as `3.1`. Raised upstream as
   [sebastienrousseau/noyalib#494](https://github.com/sebastienrousseau/noyalib/issues/494);
-  once a release fixes it, add a tagged case to
-  `load_config_vars_file_keeps_unquoted_scalars_as_written` and delete this.
+  `yaml::tests::a_document_with_a_tag_reformats_an_unquoted_number` pins
+  it, so a release that fixes it fails that test: then make it assert the
+  text as written, and delete this.
 
 ## Test coverage
 

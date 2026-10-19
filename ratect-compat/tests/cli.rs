@@ -172,6 +172,49 @@ fn run_loads_unquoted_numbers_from_a_config_variables_file() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// #376: Batect reads a task's `description` and `group` as the text written,
+/// so unquoted numbers in them load and are listed exactly as written —
+/// `12.6000`, not `12.6`.
+#[test]
+fn list_tasks_shows_an_unquoted_number_as_written() {
+    let dir = std::env::temp_dir().join(format!(
+        "ratect-compat-unquoted-description-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\n\
+         containers:\n  app:\n    image: alpine:3.18.2\n\
+         tasks:\n  build:\n    description: 12.6000\n    group: 1.0\n\
+         \x20   run:\n      container: app\n",
+    )
+    .unwrap();
+
+    let output = ratect_command()
+        .current_dir(&dir)
+        .arg("--list-tasks")
+        .output()
+        .expect("failed to run ratect");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        stdout.trim_end(),
+        "Tasks in demo:\n\n1.0:\n- build: 12.6000",
+        "stdout:\n{stdout}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 fn environment_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/environment.yml")
 }
