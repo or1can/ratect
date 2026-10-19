@@ -60,6 +60,7 @@ Ratect is a **Cargo workspace** with four crates (the
   | Module | Responsibility |
   | --- | --- |
   | `config.rs` | Two text formats, one model: `batect.yml` (YAML) and `ratect.toml` (TOML), includes, expression/path resolution, `extends` |
+  | `yaml.rs` | The one `noyalib` configuration every read of a `batect.yml`-format file into the config model goes through — an unquoted scalar read as a string keeps its text as written, and a null is still refused |
   | `git_include.rs` | `type: git` includes — the `~/.ratect/incl` clone cache and its staleness sweep |
   | `image_reference.rs` | Docker's image-reference grammar — what `docker tag` would refuse, and why — checked against every `--tag-image` value at argument parse and every tag before a build |
   | `include_trust.rs` | CONTEXT.md's whole **Boundary** — `Boundary` carries both the containment (which directory an include or a container's paths must stay inside) and the grants (`Bundle`'s `trust`) — plus the native-only nested-Git gate and the refusals that cite them. `check_may_declare_git`/`boundary_contains` are the two "may this be read at all" checks the loader and shell completion both call directly, so neither hand-combines the nested-Git and containment checks itself |

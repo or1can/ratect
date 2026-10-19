@@ -693,3 +693,62 @@ fn derive_spec_drops_the_proxy_host_gateway_only_when_sharing_a_namespace() {
         ContainerNetwork::Container("peer-id".to_string())
     );
 }
+
+/// An unquoted `environment` value in a `batect.yml` reaches the container
+/// as written, not as the number it looks like (#378): `3.10` is a Python
+/// version, and Batect passes it on as `3.10`, never `3.1`.
+#[test]
+fn derive_spec_passes_an_unquoted_yaml_environment_value_on_as_written() {
+    let config: crate::config::Config = crate::yaml::from_str(
+        "project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine:3.18\n\
+         \x20   environment:\n\
+         \x20     PYTHON_VERSION: 3.10\n\
+         tasks: {}\n",
+    )
+    .unwrap();
+    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+
+    let spec = derive_spec(ContainerSpecInputs {
+        name: "app",
+        container_config: &config.containers["app"],
+        overlay: Overlay::Run(&empty_run()),
+        image: "alpine:3.18",
+        network: ContainerNetwork::Task("ratect-run-id".to_string()),
+        interactive: false,
+        additional_args: &[],
+        user_mapping: None,
+        volumes: None,
+        term_var: None,
+        proxy: None,
+        publish_ports: true,
+        role: ContainerRole::Task,
+        run_labels: &run_labels,
+    });
+
+    assert_eq!(spec.shared.environment.unwrap()["PYTHON_VERSION"], "3.10");
+}
+
+/// An unquoted `build_args` value in a `batect.yml` reaches the build as
+/// written (#376): Batect passes `3.10` on as `3.10`, where Ratect used to
+/// refuse the file — and reformatting it would have built Python 3.1.
+#[test]
+fn derive_build_spec_passes_an_unquoted_yaml_build_arg_on_as_written() {
+    let config: crate::config::Config = crate::yaml::from_str(
+        "project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   build_directory: docker\n\
+         \x20   build_args:\n\
+         \x20     PYTHON_VERSION: 3.10\n\
+         tasks: {}\n",
+    )
+    .unwrap();
+
+    let spec =
+        derive_build_spec(&config.containers["app"], "/project/docker", "tag", None).unwrap();
+
+    assert_eq!(spec.build_args.unwrap()["PYTHON_VERSION"], "3.10");
+}

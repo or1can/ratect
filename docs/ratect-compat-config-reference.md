@@ -5,6 +5,13 @@ This documents the schema Ratect parses (`ratect-core/src/config.rs`) —
 every Batect configuration field is supported, field-for-field, unless listed in
 [differences from Batect](differences-from-batect.md).
 
+A field documented as a string also takes an unquoted number or boolean, read
+as the text written: `description: 12.6000` is `12.6000`, and `PYTHON_VERSION:
+3.10` in `build_args` is `3.10`, not `3.1`. An empty value, `~` or `null` is
+not read as text: as a map value such as a `build_args` entry, or as a list
+entry, it is refused. In a file containing a YAML tag, unquoted values are
+re-formatted instead — see [differences from Batect](differences-from-batect.md#configuration-format).
+
 Standard YAML features — anchors (`&name`), aliases (`*name`), and merge keys
 (`<<:`) — work throughout the file, not just in specific fields: they're core
 YAML syntax handled by the parser itself (`noyalib`) before any of the schema
@@ -165,7 +172,7 @@ containers:
 | `build_target` | string | no | The build stage to stop at (Docker's own `--target` mechanism), for a multi-stage `FROM ... AS <name>` Dockerfile. Only meaningful alongside `build_directory`. No expression support. |
 | `volumes` | list of strings/objects | no | Host bind mounts (`local`), named cache volumes (`cache`), and in-memory tmpfs mounts (`tmpfs`) — see [Volume path resolution](#volume-path-resolution), [Cache volumes](#cache-volumes), and [Tmpfs mounts](#tmpfs-mounts) below. |
 | `dependencies` | list of strings | no | Names of other containers to start (recursively, if they themselves have dependencies) before this one, reachable by name over a Docker network created for the duration of the task. Each must name a container declared under `containers`; one that doesn't is rejected when the file loads, naming the container that referred to it. Each dependency must become *ready* — healthy, with all its `setup_commands` completed — before its dependents start; see [Dependency Readiness](dependency-readiness.md) for the full model, and [Dependency readiness](#dependency-readiness) below for the two fields it rests on. |
-| `environment` | map of string → string | no | Environment variables to set in the container, e.g. `FOO: bar`. Values support [expressions](#expressions) (`$VAR`, `${VAR:-default}`, `<name`). A non-string scalar value (`PORT: 8080`, `DEBUG: true`) is accepted and coerced to its string form, matching Batect. For what overrides these, and what they override, see [Environment precedence](#environment-precedence). |
+| `environment` | map of string → string | no | Environment variables to set in the container, e.g. `FOO: bar`. Values support [expressions](#expressions) (`$VAR`, `${VAR:-default}`, `<name`). An unquoted number or boolean (`PORT: 8080`, `DEBUG: true`) is accepted and passed on as written — `VERSION: 3.10` is `3.10`, not `3.1`, and `MODE: 0x10` is `0x10`. An empty value, `~` or `null` is refused. For what overrides these, and what they override, see [Environment precedence](#environment-precedence). |
 | `run_as_current_user` | object (`enabled`, `home_directory`) | no | Runs this container as the host's own user/group instead of the image's default (see [User mapping](#user-mapping) below). |
 | `additional_hostnames` | list of strings | no | Extra network aliases this container is reachable by, beyond its own name. No [expression](#expressions) support. |
 | `additional_hosts` | map of string → string | no | Extra `/etc/hosts` entries in this container, `hostname: ip`, Docker's own `--add-host` mechanism. No expression support. |
@@ -626,7 +633,8 @@ replaces that one aspect, and any field left out inherits the image's own value:
 
 Durations are strings in Batect's (Go-style) format: one or more `<number><unit>`
 components — `ns`, `us`, `ms`, `s`, `m`, `h`, numbers optionally fractional — e.g.
-`2s`, `500ms`, `1m30s`, `1.5h`, or a bare `0`.
+`2s`, `500ms`, `1m30s`, `1.5h`, or a bare `0`, quoted or not. Any other number
+needs its unit: `interval: 5` is refused.
 
 Each `setup_commands` entry takes:
 
@@ -894,7 +902,7 @@ is a hard error — it isn't overridable.
 
 ## Editor autocompletion and validation
 
-Ratect ships a JSON schema describing exactly what this reference documents:
+Ratect ships a JSON schema describing what this reference documents:
 [`schema/batect-config.schema.json`](../schema/batect-config.schema.json). Pointing
 an editor at it gives autocompletion for field names, hover documentation, and a
 warning on a misspelled or unsupported field as you type — including the fields
@@ -902,6 +910,10 @@ Batect supports and Ratect doesn't, which is the whole reason this is a schema o
 Ratect's own rather than [Batect's published one](https://www.schemastore.org/api/json/catalog.json)
 (that one describes Batect's full field set, so an editor using it would quietly
 accept configuration Ratect then rejects at run time).
+
+One gap: the schema lists a text field's type as string only, so an editor may
+warn about an unquoted number or boolean there (`description: 12.6000`,
+`interval: 0`) that Ratect accepts as written. Quoting the value silences it.
 
 The simplest way to use it is a comment at the top of your config file, which the
 [YAML extension for VS Code](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml)

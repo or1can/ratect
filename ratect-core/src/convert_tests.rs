@@ -94,9 +94,9 @@ tasks:
       container: app
       command: echo hi
 "#;
-    let document: Document = noyalib::from_str(yaml).unwrap();
+    let document: Document = crate::yaml::from_str(yaml).unwrap();
     let rendered = render(&document, Some(version())).unwrap();
-    let config: Config = noyalib::from_str(yaml).unwrap();
+    let config: Config = crate::yaml::from_str(yaml).unwrap();
     let whole = toml::to_string_pretty(&sorted(toml::Value::try_from(&config).unwrap())).unwrap();
     assert_eq!(rendered, format!("ratect_version = \"{VERSION}\"\n{whole}"));
 
@@ -106,10 +106,10 @@ tasks:
     assert!(rendered.contains("\".:/code\""), "{rendered}");
 
     // Scalars only, and tables only, each still render as `toml` does.
-    let scalars: Document = noyalib::from_str("project_name: demo").unwrap();
+    let scalars: Document = crate::yaml::from_str("project_name: demo").unwrap();
     assert_eq!(render(&scalars, None).unwrap(), "project_name = \"demo\"\n");
     let tables: Document =
-        noyalib::from_str("containers:\n  app:\n    image: alpine:3.18").unwrap();
+        crate::yaml::from_str("containers:\n  app:\n    image: alpine:3.18").unwrap();
     assert_eq!(
         render(&tables, None).unwrap(),
         "[containers.app]\nimage = \"alpine:3.18\"\n"
@@ -121,7 +121,7 @@ tasks:
 /// rendered at all.
 #[test]
 fn the_include_list_renders_inline_after_the_scalars() {
-    let document: Document = noyalib::from_str(
+    let document: Document = crate::yaml::from_str(
         "project_name: demo\ninclude:\n  - a.yml\n  - type: git\n    repo: https://example.com/b.git\n    ref: v1\n    path: custom.yml\n    allow_host_paths: true\ncontainers:\n  app:\n    image: alpine:3.18\n",
     )
     .unwrap();
@@ -615,7 +615,7 @@ async fn two_sources_converting_to_one_target_is_an_error() {
 #[test]
 fn every_table_is_written_in_key_order() {
     let yaml = "project_name: demo\ncontainers:\n  zz:\n    image: alpine\n    volumes:\n      - {local: ., container: /code}\n    environment: {J: '10', I: '9', H: '8', G: '7', F: '6', E: '5', D: '4', C: '3', B: '2', A: '1'}\n  aa:\n    image: alpine\n";
-    let document: Document = noyalib::from_str(yaml).unwrap();
+    let document: Document = crate::yaml::from_str(yaml).unwrap();
     assert_eq!(
         render(&document, None).unwrap(),
         "project_name = \"demo\"\n\n[containers.aa]\nimage = \"alpine\"\n\n[containers.zz]\nimage = \"alpine\"\n\n[containers.zz.environment]\nA = \"1\"\nB = \"2\"\nC = \"3\"\nD = \"4\"\nE = \"5\"\nF = \"6\"\nG = \"7\"\nH = \"8\"\nI = \"9\"\nJ = \"10\"\n\n[[containers.zz.volumes]]\ncontainer = \"/code\"\nlocal = \".\"\n"
