@@ -501,7 +501,7 @@
         },
         "shm_size": {
           "default": null,
-          "description": "The size of `/dev/shm`, in bytes — Docker's `--shm-size`. Accepts Batect's own size-string format (`\"128\"`, `\"128b\"`, `\"128k\"`, `\"128m\"`, `\"128g\"` — a bare number means bytes; see `parse_byte_size`) or a plain YAML integer (also bytes), already converted to bytes here rather than deferred like `dockerfile`/ `build_target`'s plain strings, since Docker's own API wants a byte count, not a string. `None` inherits Docker's own default (64 MiB). Container level only, matching Batect (no task-level `run` override in either).",
+          "description": "The size of `/dev/shm`, in bytes — Docker's `--shm-size`. Accepts Batect's own size-string format (`\"128\"`, `\"128b\"`, `\"128k\"`, `\"128m\"`, `\"128g\"` — a bare number means bytes; see `parse_byte_size`) or a non-negative integer (also bytes), already converted to bytes here rather than deferred like `dockerfile`/ `build_target`'s plain strings, since Docker's own API wants a byte count, not a string. `None` inherits Docker's own default (64 MiB). Container level only, matching Batect (no task-level `run` override in either).",
           "oneOf": [
             {
               "description": "A size, as a number optionally suffixed with a unit: b (bytes, the default), k, m or g — for example \"128m\".",

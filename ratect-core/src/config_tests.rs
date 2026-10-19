@@ -1840,6 +1840,7 @@ fn parse_byte_size_handles_batects_own_format() {
     assert_eq!(parse_byte_size("128K"), Ok(128 * 1024));
     assert_eq!(parse_byte_size("128m"), Ok(128 * 1024 * 1024));
     assert_eq!(parse_byte_size("1g"), Ok(1024 * 1024 * 1024));
+    // Trimmed, though Batect isn't: a divergence kept under ADR 0013 rule 2.
     assert_eq!(parse_byte_size(" 128m "), Ok(128 * 1024 * 1024));
 }
 
@@ -1929,7 +1930,100 @@ tasks:
       command: echo hi
 "#;
     let result: Result<Config, _> = crate::yaml::from_str(yaml);
-    assert!(result.is_err());
+    let message = result.unwrap_err().to_string();
+    assert!(
+        message.contains(
+            "Invalid size 'not-a-size'. It must be in the format '123', '123b', '123k', '123m' \
+             or '123g'."
+        ),
+        "{message}"
+    );
+}
+
+/// `batect.yml` text with `value` written as a container's `shm_size`.
+fn yaml_with_shm_size(value: &str) -> String {
+    format!(
+        "project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   shm_size: {value}\n\
+         tasks: {{}}\n"
+    )
+}
+
+/// Docker refuses a negative `/dev/shm` size when it creates the container,
+/// so a YAML integer below zero is refused when the file loads, as Batect
+/// refuses one (its regex has no sign), in the words a malformed size
+/// string gets (#375).
+#[test]
+fn a_negative_shm_size_integer_is_refused_at_its_entry() {
+    let message = yaml_config_file_error(&yaml_with_shm_size("-2"));
+    assert!(
+        message.contains("Invalid size '-2'. It must be in the format")
+            && message.contains("containers.app.shm_size: "),
+        "{message}"
+    );
+}
+
+/// Zero isn't negative, however it's spelled.
+#[test]
+fn a_zero_shm_size_integer_is_accepted() {
+    for zero in ["0", "-0"] {
+        let config = parse(&yaml_with_shm_size(zero));
+        assert_eq!(config.containers["app"].shm_size, Some(0), "{zero}");
+    }
+}
+
+/// A divergence kept under ADR 0013 rule 2: a YAML integer is read as the
+/// number it denotes, whatever its spelling, though Batect's anchored regex
+/// sees the text and refuses each of these.
+#[test]
+fn a_shm_size_integer_is_read_as_the_number_it_denotes() {
+    for (written, bytes) in [("+5", 5), ("0x10", 16), ("0o17", 15)] {
+        let config = parse(&yaml_with_shm_size(written));
+        assert_eq!(config.containers["app"].shm_size, Some(bytes), "{written}");
+    }
+}
+
+/// A divergence kept under ADR 0013 rule 2: whitespace around a size string
+/// is trimmed, though Batect refuses leading whitespace and whitespace after
+/// a unit or `b`.
+#[test]
+fn a_shm_size_string_is_trimmed() {
+    let config = parse(&yaml_with_shm_size("' 128m '"));
+    assert_eq!(config.containers["app"].shm_size, Some(128 * 1024 * 1024));
+}
+
+/// An integer too big for a byte count is refused rather than wrapped to a
+/// negative one. Neither format hands one over today — `noyalib` reads it as
+/// a float and TOML's integers are 64-bit signed — so it's driven directly.
+#[test]
+fn a_shm_size_integer_beyond_i64_is_refused() {
+    let message = deserialize_shm_size(
+        serde::de::value::U64Deserializer::<serde::de::value::Error>::new(u64::MAX),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        message.contains("Invalid size '18446744073709551615'."),
+        "{message}"
+    );
+}
+
+/// `ratect.toml` shares the field's reader, so a negative integer is refused
+/// there too.
+#[test]
+fn a_negative_shm_size_integer_is_refused_in_toml() {
+    let message = toml::from_str::<ConfigFile>(
+        "project_name = \"demo\"\n\
+         [containers.app]\n\
+         image = \"alpine\"\n\
+         shm_size = -2\n",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(message.contains("Invalid size '-2'."), "{message}");
 }
 
 #[test]
