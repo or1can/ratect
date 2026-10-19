@@ -124,6 +124,54 @@ fn image_with_build_fields_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/image-with-build-fields.yml")
 }
 
+/// #324: Batect reads a config-variables file's values as strings, so an
+/// unquoted number in one — named by `--config-vars-file` or the default
+/// `batect.local.yml` — loads rather than failing the run. No daemon: the
+/// run is pointed at a socket that doesn't exist, so it fails *after* the
+/// file loads, on connecting, which is what proves the load succeeded.
+#[test]
+fn run_loads_unquoted_numbers_from_a_config_variables_file() {
+    let dir = std::env::temp_dir().join(format!(
+        "ratect-compat-unquoted-vars-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\nconfig_variables:\n  declared: {}\n\
+         containers:\n  app:\n    image: alpine:3.18.2\n\
+         tasks:\n  build:\n    run:\n      container: app\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("batect.local.yml"), "declared: 1\n").unwrap();
+    std::fs::write(dir.join("named.yml"), "declared: 3.10\n").unwrap();
+    let missing_socket = format!("unix://{}", dir.join("no-daemon.sock").display());
+
+    for args in [
+        &["build"][..],
+        &["--config-vars-file", "named.yml", "build"],
+    ] {
+        let output = ratect_command()
+            .current_dir(&dir)
+            .args(["--docker-host", &missing_socket, "-o", "quiet"])
+            .args(args)
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{args:?}: {stderr}");
+        assert!(
+            !stderr.contains("Failed to parse") && stderr.contains("no-daemon.sock"),
+            "{args:?}: {stderr}"
+        );
+    }
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 fn environment_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/environment.yml")
 }

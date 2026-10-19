@@ -10560,6 +10560,60 @@ region: eu
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Batect decodes a config vars file's values as strings (#324), so an
+/// unquoted number or boolean is read as the text written — never
+/// reformatted, which would silently change `3.10` into `3.1`.
+#[test]
+fn load_config_vars_file_keeps_unquoted_scalars_as_written() {
+    let dir = unique_temp_dir();
+    let vars_path = dir.join("vars.yml");
+    std::fs::write(
+        &vars_path,
+        "int: 1\nbool: true\ntrailing: 1.50\nwide: 12.6000\nhex: 0x1F\nzeros: 007\nversion: 3.10\nquoted: \"1\"\n",
+    )
+    .unwrap();
+
+    let vars = Config::load_config_vars_file(&vars_path).unwrap();
+    for (name, text) in [
+        ("int", "1"),
+        ("bool", "true"),
+        ("trailing", "1.50"),
+        ("wide", "12.6000"),
+        ("hex", "0x1F"),
+        ("zeros", "007"),
+        ("version", "3.10"),
+        ("quoted", "1"),
+    ] {
+        assert_eq!(vars.get(name).map(String::as_str), Some(text), "{name}");
+    }
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// What Batect still refuses: a value that isn't a scalar at all, and a
+/// null — each named, with the file it came from.
+#[test]
+fn load_config_vars_file_rejects_null_and_sequence_values() {
+    let dir = unique_temp_dir();
+    for (name, body) in [
+        ("tilde", "tilde: ~\n"),
+        ("word", "word: null\n"),
+        ("empty", "empty:\n"),
+        ("list", "list:\n  - a\n"),
+    ] {
+        let vars_path = dir.join("vars.yml");
+        std::fs::write(&vars_path, body).unwrap();
+        let error = format!(
+            "{:#}",
+            Config::load_config_vars_file(&vars_path).unwrap_err()
+        );
+        assert!(error.contains(&format!("{name}: ")), "{name}: {error}");
+        assert!(error.contains("vars.yml"), "{name}: {error}");
+    }
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn load_config_vars_file_missing_file_errors() {
     let result = Config::load_config_vars_file(Path::new("/nonexistent/vars.yml"));
@@ -10584,6 +10638,11 @@ fn load_config_vars_file_native_parses_toml_and_yaml_by_extension() {
     std::fs::write(&yaml_path, "env_name: staging\nregion: eu\n").unwrap();
     let from_yaml = Config::load_config_vars_file_native(&yaml_path).unwrap();
     assert_eq!(from_toml, from_yaml);
+
+    let unquoted_path = dir.join("unquoted.yml");
+    std::fs::write(&unquoted_path, "version: 3.10\n").unwrap();
+    let unquoted = Config::load_config_vars_file_native(&unquoted_path).unwrap();
+    assert_eq!(unquoted.get("version"), Some(&"3.10".to_string()));
 
     std::fs::remove_dir_all(&dir).unwrap();
 }

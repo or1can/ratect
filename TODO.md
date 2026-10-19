@@ -94,6 +94,16 @@ Confirmed against GitHub's own `/markdown` API, not assumed.
   upstream, in `noyalib`'s `streaming.rs` `TypeMismatch` arms, which have
   consumed the event by the time they name what they found.
 
+- **18.** **A tag anywhere in a config vars file re-formats its unquoted
+  numbers** (#324): `Config::load_config_vars_file` keeps a plain scalar's
+  source text through `noyalib`'s `plain_scalar_strings`, which only does so
+  on its streaming path. A tag (`w: !!int 7`) sends the whole document down
+  the AST fallback, where the same option re-formats the resolved value, so
+  `v: 3.10` beside it loads as `3.1`. Raised upstream as
+  [sebastienrousseau/noyalib#494](https://github.com/sebastienrousseau/noyalib/issues/494);
+  once a release fixes it, add a tagged case to
+  `load_config_vars_file_keeps_unquoted_scalars_as_written` and delete this.
+
 ## Test coverage
 
 - **4.** **`ratect-compat/tests/cli.rs`'s `task_output` helper weakens ~18 converted e2e
