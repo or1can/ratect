@@ -2133,16 +2133,57 @@ mod duration_string {
 /// when `enabled` is `true` (and rejected otherwise) — Ratect never guesses
 /// one, matching Batect.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
+// For the schema: the hand-written `Deserialize` below enforces it.
 #[serde(deny_unknown_fields)]
 pub struct RunAsCurrentUser {
-    /// Whether to run as the host's own user. Required — there's no
-    /// default.
+    /// Whether to run as the host's own user. Defaults to false, as in
+    /// Batect.
+    ///
+    /// Only in a Batect-format (YAML) file: `ratect.toml` requires it, since
+    /// its `run_as_current_user` is being redesigned (decisions/0011). The
+    /// `default` here is the Batect-format schema's; the native schema adds
+    /// `enabled` back to `required`, and the `Deserialize` impl decides by file
+    /// (#374).
+    #[serde(default)]
     pub enabled: bool,
     /// The home directory to create inside the container for that user.
     /// Must be an absolute path; it's a path inside the container, so it's
     /// never resolved against anything on the host.
     pub home_directory: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for RunAsCurrentUser {
+    /// `enabled` defaults to false in a YAML file and is required in a TOML
+    /// one — see `crate::yaml::batect_defaults_apply`.
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename = "RunAsCurrentUser", deny_unknown_fields)]
+        struct AsWritten {
+            // Read as a `bool` when present, so a null is still refused.
+            #[serde(default, deserialize_with = "some_bool")]
+            enabled: Option<bool>,
+            home_directory: Option<String>,
+        }
+        fn some_bool<'de, D: serde::Deserializer<'de>>(
+            deserializer: D,
+        ) -> std::result::Result<Option<bool>, D::Error> {
+            bool::deserialize(deserializer).map(Some)
+        }
+
+        let written = AsWritten::deserialize(deserializer)?;
+        let enabled = match written.enabled {
+            Some(enabled) => enabled,
+            None if crate::yaml::batect_defaults_apply() => false,
+            None => return Err(serde::de::Error::missing_field("enabled")),
+        };
+        Ok(RunAsCurrentUser {
+            enabled,
+            home_directory: written.home_directory,
+        })
+    }
 }
 
 /// A single port or a range of consecutive ports (`from..=to`; `from == to`

@@ -605,7 +605,8 @@
       "description": "Runs this container as the host's own user/group instead of whatever the image defaults to (see the load-time validation of `home_directory` and `TaskEngine::resolve_user_mapping`). `home_directory` is required when `enabled` is `true` (and rejected otherwise) — Ratect never guesses one, matching Batect.",
       "properties": {
         "enabled": {
-          "description": "Whether to run as the host's own user. Required — there's no default.",
+          "default": false,
+          "description": "Whether to run as the host's own user. Defaults to false, as in Batect.",
           "type": "boolean"
         },
         "home_directory": {
@@ -616,9 +617,6 @@
           ]
         }
       },
-      "required": [
-        "enabled"
-      ],
       "type": "object"
     },
     "SetupCommand": {

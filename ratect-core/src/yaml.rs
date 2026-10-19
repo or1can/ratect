@@ -57,21 +57,57 @@
 //! gets the resolved value, so `1.50` is refused as a float, as without the
 //! option. Adding one of those to the model loses the text as written.
 //!
+//! **A default only Batect has.** Where Batect's runtime defaults a field
+//! that `ratect.toml` requires, the field's own reader asks
+//! [`batect_defaults_apply`] — true only inside [`from_str`], so the YAML
+//! file being read decides, and a TOML file never gets the default.
+//! `run_as_current_user.enabled` is the one such field (#374).
+//!
 //! **Not on `noyalib`'s AST path.** A YAML tag (`!!int 7`, `!custom`)
 //! anywhere in a document sends the whole document through `noyalib`'s AST
 //! loader instead, where `plain_scalar_strings` re-formats the resolved
 //! value (`3.10` becomes `3.1`) — `TODO.md` 18.
 
 use serde::de::{self, DeserializeOwned, DeserializeSeed, Deserializer, Visitor};
+use std::cell::Cell;
 use std::fmt;
+
+thread_local! {
+    /// Whether a [`from_str`] is in progress on this thread.
+    static READING: Cell<bool> = const { Cell::new(false) };
+}
 
 /// Deserializes `text` as Batect-format YAML — see the module notes.
 pub(crate) fn from_str<T: DeserializeOwned + 'static>(text: &str) -> noyalib::Result<T> {
+    let _reading = Reading::start();
     let Document(value) = noyalib::from_str_with_config(
         text,
         &noyalib::ParserConfig::new().plain_scalar_strings(true),
     )?;
     Ok(value)
+}
+
+/// Whether a field Batect defaults and `ratect.toml` requires takes
+/// Batect's default — that is, whether the text being read is Batect-format
+/// YAML. See the module notes.
+pub(crate) fn batect_defaults_apply() -> bool {
+    READING.with(Cell::get)
+}
+
+/// Marks a [`from_str`] in progress until dropped, restoring what it found
+/// even if the read panics.
+struct Reading(bool);
+
+impl Reading {
+    fn start() -> Self {
+        Reading(READING.with(|reading| reading.replace(true)))
+    }
+}
+
+impl Drop for Reading {
+    fn drop(&mut self) {
+        READING.with(|reading| reading.set(self.0));
+    }
 }
 
 /// A whole document, read through [`Refusing`].

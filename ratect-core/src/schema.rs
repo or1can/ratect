@@ -314,6 +314,29 @@ fn make_native(json: &mut serde_json::Value) {
         );
     }
 
+    // `run_as_current_user.enabled` defaults to false only in a Batect-format
+    // file; `ratect.toml` requires it (`RunAsCurrentUser`'s `Deserialize`,
+    // #374). Its description is corrected for the same reason.
+    if let Some(run_as_current_user) = definitions
+        .get_mut("RunAsCurrentUser")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        run_as_current_user.insert("required".to_string(), serde_json::json!(["enabled"]));
+        if let Some(properties) = run_as_current_user
+            .get_mut("properties")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            properties.insert(
+                "enabled".to_string(),
+                serde_json::json!({
+                    "type": "boolean",
+                    "description": "Whether to run as the host's own user. Required — \
+                                    there's no default.",
+                }),
+            );
+        }
+    }
+
     // Add the native-only `extends` field to a container — skipped from the
     // compat schema (`Container::extends`'s `schemars(skip)`, since
     // `ratect-compat` rejects it), but valid and worth completing here.

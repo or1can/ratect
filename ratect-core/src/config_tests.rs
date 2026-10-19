@@ -5180,6 +5180,121 @@ fn load_leaves_disabled_run_as_current_user_unaffected() {
     assert_eq!(run_as_current_user.home_directory, None);
 }
 
+/// Loads `yaml` as a `batect.yml` through the compat loader.
+async fn load_compat_yaml(yaml: &str) -> Result<LoadedProject> {
+    let dir = unique_temp_dir();
+    let path = dir.join("batect.yml");
+    std::fs::write(&path, yaml).unwrap();
+    let result = load_project(&path).await;
+    std::fs::remove_dir_all(&dir).ok();
+    result
+}
+
+/// A container `app` whose `run_as_current_user` is `entry`, as YAML.
+fn yaml_with_run_as_current_user(entry: &str) -> String {
+    format!(
+        "project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine:3.18\n\
+         \x20   run_as_current_user: {entry}\n\
+         tasks:\n\
+         \x20 t:\n\
+         \x20   run:\n\
+         \x20     container: app\n"
+    )
+}
+
+/// Batect defaults `enabled` to false (#374), so an empty mapping is the
+/// same as `enabled: false`: the container runs as the image's own user.
+#[tokio::test]
+async fn an_empty_run_as_current_user_in_yaml_loads_as_disabled() {
+    let project = load_compat_yaml(&yaml_with_run_as_current_user("{}"))
+        .await
+        .expect("Batect accepts an empty mapping");
+    let run_as_current_user = project.config.containers["app"]
+        .run_as_current_user
+        .as_ref()
+        .unwrap();
+    assert!(!run_as_current_user.enabled);
+    assert_eq!(run_as_current_user.home_directory, None);
+}
+
+/// With `enabled` left out, a `home_directory` is refused by the pairing
+/// rule, as Batect refuses it — not as a missing field (#374).
+#[tokio::test]
+async fn a_yaml_home_directory_without_enabled_fails_the_pairing_rule() {
+    let error = load_compat_yaml(&yaml_with_run_as_current_user("{home_directory: /home/x}"))
+        .await
+        .expect_err("a home directory needs enabled: true");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains(
+            "Container 'app': has 'run_as_current_user.home_directory' set, but \
+             'run_as_current_user.enabled' is not true"
+        ),
+        "{message}"
+    );
+    assert!(!message.contains("missing field"), "{message}");
+}
+
+/// `ratect.toml` keeps `enabled` required (#374): its `run_as_current_user`
+/// is being redesigned (decisions/0011), so Batect's default isn't carried
+/// over to it.
+#[test]
+fn a_toml_run_as_current_user_without_enabled_is_refused() {
+    for table in ["", "home_directory = \"/home/x\"\n"] {
+        let message = toml::from_str::<ConfigFile>(&format!(
+            "project_name = \"demo\"\n\
+             [containers.app]\n\
+             image = \"alpine\"\n\
+             [containers.app.run_as_current_user]\n\
+             {table}"
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(message.contains("missing field `enabled`"), "{message}");
+    }
+}
+
+/// A container declared in a `.yml` gets Batect's default whichever project
+/// includes it (ratect#214).
+#[tokio::test]
+async fn an_empty_run_as_current_user_in_a_yaml_include_of_a_native_project_loads() {
+    let (_, result) = load_native_including(
+        "frag.yml",
+        "containers:\n  app:\n    image: alpine:3.18\n    run_as_current_user: {}\n",
+    )
+    .await;
+    let project = result.expect("a YAML-declared container gets Batect's default");
+    assert!(
+        !project.config.containers["app"]
+            .run_as_current_user
+            .as_ref()
+            .unwrap()
+            .enabled
+    );
+}
+
+/// Defaulting `enabled` doesn't loosen the mapping: an unknown key is still
+/// refused in either format.
+#[test]
+fn an_unknown_run_as_current_user_key_is_refused_in_both_formats() {
+    let yaml = yaml_config_file_error(&yaml_with_run_as_current_user("{foo: 1}"));
+    assert!(yaml.contains("unknown field"), "{yaml}");
+    let toml = toml::from_str::<ConfigFile>(
+        "project_name = \"demo\"\n\
+         [containers.app]\n\
+         image = \"alpine\"\n\
+         [containers.app.run_as_current_user]\n\
+         enabled = false\n\
+         foo = 1\n",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(toml.contains("unknown field `foo`"), "{toml}");
+}
+
 /// A fresh, unique scratch directory for tests that need to write real
 /// files to disk (e.g. to exercise `load_from_file`'s own file I/O,
 /// not just YAML parsing). Caller is responsible for cleanup via
