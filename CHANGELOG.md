@@ -44,6 +44,10 @@ history, from when it was the only binary.
 - When tags applied after a build fail, every failed tag is reported.
 - A Docker daemon advertising a `Builder-Version` other than empty, `1` or `2` is an error the first time a run builds an image, unless `DOCKER_BUILDKIT` or `--enable-buildkit` chooses the builder.
 
+### Removed
+
+- `ratect doctor` and `ratect config validate` (ratect only) no longer warn about a missing `ratect_version`, or a `batect.yml` root that can't declare one: a project that needs one is refused instead.
+
 ### Fixed
 
 - Files in an image's build context are sent owned by root, so a BuildKit `COPY` without `--chown` leaves them root-owned in the image.

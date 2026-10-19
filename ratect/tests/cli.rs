@@ -709,6 +709,25 @@ fn a_yaml_root_is_refused_only_when_it_includes_a_toml_file() {
     assert!(stderr.contains("ratect config convert"), "{stderr}");
 }
 
+/// A YAML root that loads has nothing a written-for version would protect —
+/// its files mean what they mean to Batect — so `config validate` says
+/// nothing about one.
+#[test]
+fn config_validate_says_nothing_about_a_yaml_roots_version() {
+    let dir = unique_project_dir();
+    std::fs::write(dir.join("batect.yml"), "project_name: demo\n").unwrap();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(dir.join("batect.yml"))
+        .args(["config", "validate"])
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&dir).ok();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    assert!(!stdout.contains("ratect_version"), "{stdout}");
+}
+
 /// `config convert` declares the converting binary's version — the rules the
 /// result was converted under.
 #[test]

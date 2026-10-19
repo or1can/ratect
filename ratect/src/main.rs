@@ -31,8 +31,7 @@ use ratect_core::config::{
     format_task_list, format_task_list_quiet, load_project_native, Config, Dialect,
 };
 use ratect_core::diagnostics::{
-    config_findings, leftover_finding, wrapper_script_findings, written_for_finding,
-    ConversionCheck, Finding,
+    config_findings, leftover_finding, wrapper_script_findings, ConversionCheck, Finding,
 };
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
@@ -909,16 +908,6 @@ async fn load_and_evaluate(
     Ok((project, evaluation))
 }
 
-/// `doctor`/`config validate`'s nudge to declare `ratect_version` — read
-/// again rather than threaded out of [`load`], which has already checked it,
-/// so nothing here can fail.
-fn written_for_finding_for(config_file: &Path) -> Option<Finding> {
-    ratect_core::written_for::read(config_file)
-        .ok()
-        .flatten()
-        .and_then(|written_for| written_for_finding(&written_for))
-}
-
 /// This binary's own version, as the written-for check and `config convert`
 /// compare and declare it — see `ratect_core::written_for`.
 fn running_version() -> ratect_core::written_for::Version {
@@ -1388,7 +1377,6 @@ async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> 
                 project.config.tasks.len()
             )));
             findings.extend(config_findings(&project.config, &evaluation));
-            findings.extend(written_for_finding_for(&global.config_file));
 
             // Now's the current time; leftover age isn't part of this
             // check, only whether any exist.
@@ -1469,7 +1457,6 @@ async fn validate_config(
                 project.config.tasks.len()
             )));
             findings.extend(config_findings(&project.config, &evaluation));
-            findings.extend(written_for_finding_for(&global.config_file));
         }
         Err(error) => findings.push(Finding::Problem(format!(
             "{} does not load: {error:#}",

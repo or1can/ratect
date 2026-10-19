@@ -66,7 +66,10 @@ exact version a project ran. Ratect ships no wrapper, deliberately
   with `ratect.toml`. While the table is empty that changes nothing; when the
   first row lands, every unmarked project refuses the same way.
   `ratect config validate` and `ratect doctor` suggest adding the field
-  meanwhile.
+  meanwhile. *(Retired with the first row,
+  [#382](https://github.com/or1can/ratect/issues/382): an unmarked TOML
+  project is refused before either could warn, and a YAML root that loads —
+  see the amendment below — has nothing a version would protect.)*
 - **A native project whose root file is YAML counts as unmarked.** `ratect`
   accepts a `batect.yml` root, as a step in migrating; that file stays exactly
   Batect's shape, so it can't declare `ratect_version`. Once a row lands, such a

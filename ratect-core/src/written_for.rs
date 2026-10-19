@@ -23,10 +23,10 @@
 //!   reads nothing but that one field. That ordering is the point: a project written for a
 //!   newer Ratect most likely uses a field this binary doesn't know, and the
 //!   full parse would reject that field first, with a message that says
-//!   nothing about versions. So [`read`] parses the root file as a bare TOML
+//!   nothing about versions. So `read` parses the root file as a bare TOML
 //!   table, never as a [`crate::config`] type.
 //! - **A file it can't read, or that isn't TOML at all, is not its problem.**
-//!   [`read`] answers `None` and the loader reports the file in its own
+//!   `read` answers `None` and the loader reports the file in its own
 //!   words — duplicating those messages here would only let them drift.
 //! - **Only major and minor are compared.** A pre-1.0 breaking change lands
 //!   on a minor version, so a patch number can't change what a project means.
@@ -40,7 +40,7 @@
 //!   refuse.
 //! - **Native dialect only.** `ratect-compat` never calls this, and a
 //!   `batect.yml` can't declare the field; a native project whose root file
-//!   is YAML is [`WrittenFor::YamlRoot`]. Its YAML files follow Batect's
+//!   is YAML is `WrittenFor::YamlRoot`. Its YAML files follow Batect's
 //!   rules, so it is refused only when it loads a TOML file — see
 //!   [`check_yaml_root`] — which converting the root fixes.
 
@@ -131,7 +131,7 @@ impl std::fmt::Display for Version {
 
 /// What a project's root file says about the version it was written for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WrittenFor {
+pub(crate) enum WrittenFor {
     /// It sets [`FIELD`].
     Declared(Version),
     /// It's TOML and doesn't — so it counts as written for 0.3.0.
@@ -146,7 +146,7 @@ pub enum WrittenFor {
 /// about its written-for version. `None` when it can't be read or isn't
 /// TOML, which the loader goes on to report; an error only when [`FIELD`]
 /// is present but isn't a version.
-pub fn read(root: &Path) -> Result<Option<WrittenFor>> {
+pub(crate) fn read(root: &Path) -> Result<Option<WrittenFor>> {
     let is_yaml = root
         .extension()
         .and_then(|ext| ext.to_str())
