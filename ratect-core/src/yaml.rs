@@ -37,6 +37,17 @@
 //! field is untouched: serde asks it for an option itself, and a null there
 //! still means left out.
 //!
+//! **A refused null says it is null** (#542). `Refusing` reads a flag, a
+//! number and an enum the same way as a string — without it `noyalib`
+//! reports a null flag as a mismatch with `other`, and reads a null enum as
+//! a variant named `~`. A visitor that doesn't read a null at all (a size, a
+//! volume entry) is refused by serde's default as an `Option value`;
+//! `Refusing` rewords exactly that default to `null`, and leaves a
+//! visitor's own refusal as it wrote it. `noyalib` adds the location and
+//! path, which name the field and what it belongs to. A struct is the
+//! exception: `noyalib` reads a null one as an empty mapping, so it loads if
+//! nothing in it is required and otherwise reports what is missing.
+//!
 //! What `Refusing` can't reach, none of it used by the config model today:
 //! a mapping key, which `noyalib` reads with its own key deserializer, so
 //! `~: a` is the key `"~"` (as it was before this module existed); a `char`,
@@ -73,19 +84,40 @@ impl<'de, T: de::Deserialize<'de>> de::Deserialize<'de> for Document<T> {
 }
 
 /// Wraps a deserializer — and every deserializer, visitor, seed and access
-/// reached through it — so that a string target refuses a null. Everything
-/// else is passed through untouched.
+/// reached through it — so that a [`NonNullRead`] target refuses a null,
+/// and a visitor's default refusal of one says it is null. Everything else
+/// is passed through untouched.
 struct Refusing<X>(X);
 
-/// The visitor a string target is read through: a `None` is refused, and
-/// anything else is read as the string it was asked for.
-struct NonNullString<V>(V);
+/// A value no null can stand for: a string, a scalar, or an enum.
+#[derive(Clone, Copy)]
+enum NonNullRead {
+    Str,
+    Bool,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    F32,
+    F64,
+    Enum(&'static str, &'static [&'static str]),
+}
 
-impl<'de, V: Visitor<'de>> Visitor<'de> for NonNullString<V> {
+/// The visitor a [`NonNullRead`] target is read through: a `None` is
+/// refused, and anything else is read as what was asked for.
+struct NonNull<V>(NonNullRead, V);
+
+impl<'de, V: Visitor<'de>> Visitor<'de> for NonNull<V> {
     type Value = V::Value;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        self.0.expecting(formatter)
+        self.1.expecting(formatter)
     }
 
     fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
@@ -93,8 +125,35 @@ impl<'de, V: Visitor<'de>> Visitor<'de> for NonNullString<V> {
     }
 
     fn visit_some<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
-        deserializer.deserialize_str(self.0)
+        let visitor = Refusing(self.1);
+        match self.0 {
+            NonNullRead::Str => deserializer.deserialize_str(visitor),
+            NonNullRead::Bool => deserializer.deserialize_bool(visitor),
+            NonNullRead::I8 => deserializer.deserialize_i8(visitor),
+            NonNullRead::I16 => deserializer.deserialize_i16(visitor),
+            NonNullRead::I32 => deserializer.deserialize_i32(visitor),
+            NonNullRead::I64 => deserializer.deserialize_i64(visitor),
+            NonNullRead::I128 => deserializer.deserialize_i128(visitor),
+            NonNullRead::U8 => deserializer.deserialize_u8(visitor),
+            NonNullRead::U16 => deserializer.deserialize_u16(visitor),
+            NonNullRead::U32 => deserializer.deserialize_u32(visitor),
+            NonNullRead::U64 => deserializer.deserialize_u64(visitor),
+            NonNullRead::U128 => deserializer.deserialize_u128(visitor),
+            NonNullRead::F32 => deserializer.deserialize_f32(visitor),
+            NonNullRead::F64 => deserializer.deserialize_f64(visitor),
+            NonNullRead::Enum(name, variants) => {
+                deserializer.deserialize_enum(name, variants, visitor)
+            }
+        }
     }
+}
+
+macro_rules! non_null_deserialize {
+    ($($method:ident => $read:ident),* $(,)?) => {$(
+        fn $method<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, D::Error> {
+            self.0.deserialize_option(NonNull(NonNullRead::$read, visitor))
+        }
+    )*};
 }
 
 macro_rules! forward_deserialize {
@@ -108,12 +167,22 @@ macro_rules! forward_deserialize {
 impl<'de, D: Deserializer<'de>> Deserializer<'de> for Refusing<D> {
     type Error = D::Error;
 
-    fn deserialize_str<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, D::Error> {
-        self.0.deserialize_option(NonNullString(visitor))
+    non_null_deserialize! {
+        deserialize_str => Str, deserialize_string => Str, deserialize_bool => Bool,
+        deserialize_i8 => I8, deserialize_i16 => I16, deserialize_i32 => I32,
+        deserialize_i64 => I64, deserialize_i128 => I128, deserialize_u8 => U8,
+        deserialize_u16 => U16, deserialize_u32 => U32, deserialize_u64 => U64,
+        deserialize_u128 => U128, deserialize_f32 => F32, deserialize_f64 => F64,
     }
 
-    fn deserialize_string<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, D::Error> {
-        self.deserialize_str(visitor)
+    fn deserialize_enum<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        variants: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, D::Error> {
+        self.0
+            .deserialize_option(NonNull(NonNullRead::Enum(name, variants), visitor))
     }
 
     fn is_human_readable(&self) -> bool {
@@ -121,17 +190,13 @@ impl<'de, D: Deserializer<'de>> Deserializer<'de> for Refusing<D> {
     }
 
     forward_deserialize! {
-        deserialize_any(), deserialize_bool(), deserialize_i8(), deserialize_i16(),
-        deserialize_i32(), deserialize_i64(), deserialize_i128(), deserialize_u8(),
-        deserialize_u16(), deserialize_u32(), deserialize_u64(), deserialize_u128(),
-        deserialize_f32(), deserialize_f64(), deserialize_char(), deserialize_bytes(),
+        deserialize_any(), deserialize_char(), deserialize_bytes(),
         deserialize_byte_buf(), deserialize_option(), deserialize_unit(),
         deserialize_unit_struct(name: &'static str),
         deserialize_newtype_struct(name: &'static str), deserialize_seq(),
         deserialize_tuple(len: usize),
         deserialize_tuple_struct(name: &'static str, len: usize), deserialize_map(),
         deserialize_struct(name: &'static str, fields: &'static [&'static str]),
-        deserialize_enum(name: &'static str, variants: &'static [&'static str]),
         deserialize_identifier(), deserialize_ignored_any(),
     }
 }
@@ -160,11 +225,13 @@ impl<'de, V: Visitor<'de>> Visitor<'de> for Refusing<V> {
     }
 
     fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
-        self.0.visit_none()
+        let refusal = DefaultRefusal::new(de::Unexpected::Option, &self);
+        refusal.reworded(self.0.visit_none())
     }
 
     fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
-        self.0.visit_unit()
+        let refusal = DefaultRefusal::new(de::Unexpected::Unit, &self);
+        refusal.reworded(self.0.visit_unit())
     }
 
     fn visit_some<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
@@ -188,6 +255,34 @@ impl<'de, V: Visitor<'de>> Visitor<'de> for Refusing<V> {
 
     fn visit_enum<A: de::EnumAccess<'de>>(self, data: A) -> Result<Self::Value, A::Error> {
         self.0.visit_enum(Refusing(data))
+    }
+}
+
+/// A visitor that doesn't read a null refuses it as serde's default does,
+/// calling it an `Option value` or a `unit value`. That refusal — and only
+/// that one, so a visitor's own message stands — is reworded to say it was
+/// a null.
+struct DefaultRefusal<E> {
+    default: String,
+    null: E,
+}
+
+impl<E: de::Error> DefaultRefusal<E> {
+    fn new(unexpected: de::Unexpected, expected: &dyn de::Expected) -> Self {
+        DefaultRefusal {
+            default: E::invalid_type(unexpected, expected).to_string(),
+            null: E::invalid_type(de::Unexpected::Other("null"), expected),
+        }
+    }
+
+    fn reworded<T>(self, result: Result<T, E>) -> Result<T, E> {
+        result.map_err(|e| {
+            if e.to_string() == self.default {
+                self.null
+            } else {
+                e
+            }
+        })
     }
 }
 
