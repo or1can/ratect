@@ -47,6 +47,7 @@ history, from when it was the only binary.
 
 - Files in an image's build context are sent owned by root, so a BuildKit `COPY` without `--chown` leaves them root-owned in the image.
 - A config load error for a malformed field in a YAML file — a bad port range, a value of the wrong type, an unknown or missing field — again gives the field's line, column and YAML path, in the root file or an include.
+- An unquoted number or boolean in a YAML config variables file (`--config-vars-file`, or `ratect-compat`'s default `batect.local.yml`) is accepted, and keeps its text as written — `3.10` is `3.10`, not `3.1`.
 
 ## [ratect-compat 0.32.0 · ratect 0.11.0] - 2026-10-13
 

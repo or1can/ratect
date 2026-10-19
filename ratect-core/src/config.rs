@@ -121,7 +121,6 @@ use indexmap::IndexMap;
 use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use crate::include_trust::{self, Boundary, Bundle, BundleId, EffectiveGrants, Grants};
@@ -1269,6 +1268,23 @@ where
     }
 
     deserializer.deserialize_any(ShmSizeVisitor)
+}
+
+/// One value in a config vars file: a scalar's text, refusing a null.
+/// `plain_scalar_strings` would read `~` or an empty value as `"~"`/`""`;
+/// `Option` sees the null first, and failing here rather than after the
+/// parse is what lets `noyalib` give the error its line and key.
+struct ConfigVarValue(String);
+
+impl<'de> serde::Deserialize<'de> for ConfigVarValue {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Option::<String>::deserialize(deserializer)?
+            .map(ConfigVarValue)
+            .ok_or_else(|| serde::de::Error::custom("a config variable's value cannot be null"))
+    }
 }
 
 /// `serde` `deserialize_with` for the `environment` maps — accepts a YAML
@@ -3764,11 +3780,28 @@ impl Config {
 
     /// Loads a `--config-vars-file`: a flat YAML map of config variable
     /// names to values, in the same format/parser as `batect.yml` itself.
+    ///
+    /// Every value is a string, as in Batect (which decodes the file with
+    /// `String.serializer()`): an unquoted number or boolean is read as the
+    /// text written, so `3.10` stays `"3.10"` rather than being resolved to
+    /// a float and reformatted as `"3.1"` (#324). That is `noyalib`'s
+    /// `plain_scalar_strings`, not a reformatting visitor like
+    /// `deserialize_scalar_string_map`'s — except in a file with a tag in it,
+    /// which `noyalib` parses another way that does reformat (`TODO.md` 18).
+    /// A null is still refused, as Batect's non-null decode refuses it — see
+    /// `ConfigVarValue`.
     pub fn load_config_vars_file(path: &Path) -> Result<HashMap<String, String>> {
-        let file = File::open(path)
+        let text = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to open config vars file {:?}", path))?;
-        noyalib::from_reader(file)
-            .with_context(|| format!("Failed to parse config vars file {:?}", path))
+        let values: HashMap<String, ConfigVarValue> = noyalib::from_str_with_config(
+            &text,
+            &noyalib::ParserConfig::new().plain_scalar_strings(true),
+        )
+        .with_context(|| format!("Failed to parse config vars file {:?}", path))?;
+        Ok(values
+            .into_iter()
+            .map(|(name, ConfigVarValue(value))| (name, value))
+            .collect())
     }
 
     /// Like [`load_config_vars_file`](Self::load_config_vars_file), but for
