@@ -50,6 +50,7 @@ history, from when it was the only binary.
 - An unquoted number or boolean in a YAML config variables file (`--config-vars-file`, or `ratect-compat`'s default `batect.local.yml`) is accepted, and keeps its text as written — `3.10` is `3.10`, not `3.1`.
 - An unquoted number or boolean `environment` value in a YAML config file — a container's, a task's `run`, or a `customise` entry's — keeps its text as written: `12.6000`, `0x10` and `1e3` are passed on as written, not as `12.6`, `16` and `1000`.
 - An unquoted number or boolean in any other YAML config field that takes text — `build_args` values, a config variable's `default` and `description`, a task's `description` and `group`, `working_directory`, `image`, `command`, and the rest — is accepted and kept as written. An unquoted `0`, `-0` or `+0` is accepted as a zero duration; a duration with no unit (`interval: 5`) is refused naming the missing unit.
+- A negative integer `shm_size` (`shm_size: -2`, or `shm_size = -2` in `ratect.toml`) is refused when the file loads, as `Invalid size '-2'`, instead of failing when Docker creates the container.
 
 ## [ratect-compat 0.32.0 · ratect 0.11.0] - 2026-10-13
 

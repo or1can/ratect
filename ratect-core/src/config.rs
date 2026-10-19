@@ -392,7 +392,7 @@ pub struct Container {
     /// The size of `/dev/shm`, in bytes — Docker's `--shm-size`. Accepts
     /// Batect's own size-string format (`"128"`, `"128b"`, `"128k"`,
     /// `"128m"`, `"128g"` — a bare number means bytes; see
-    /// `parse_byte_size`) or a plain YAML integer (also bytes), already
+    /// `parse_byte_size`) or a non-negative integer (also bytes), already
     /// converted to bytes here rather than deferred like `dockerfile`/
     /// `build_target`'s plain strings, since Docker's own API wants a byte
     /// count, not a string. `None` inherits Docker's own default (64 MiB).
@@ -1196,18 +1196,18 @@ impl Serialize for VolumeMount {
     }
 }
 
-/// Parses Batect's own size-string format (its `BinarySize` regex,
-/// `^(\d+)\s*([mkg]?)b?$`, case-insensitive): a non-negative integer,
-/// optionally followed by a unit (`k`/`m`/`g`, 1024-based) and/or a
-/// trailing literal `b` (bytes when there's no unit, e.g. `"128b"`) —
-/// `"128"`, `"128b"`, `"128k"`, `"128m"`, and `"128g"` are all valid.
+/// Parses a size string: a non-negative count of ASCII digits, optionally
+/// followed by a unit (`k`/`m`/`g`, 1024-based, any case) and/or a literal
+/// `b` (bytes when there's no unit, e.g. `"128b"`) — `"128"`, `"128b"`,
+/// `"128k"`, `"128m"`, and `"128g"` are all valid. Whitespace is allowed
+/// around the whole string and between the count and its unit.
+///
+/// That is Batect's own `BinarySize` format, `^(\d+)\s*([mkg]?)b?$`, plus
+/// the trimming, which Batect doesn't do — it refuses leading whitespace and
+/// whitespace after a unit or `b`. The trim is a divergence kept under ADR
+/// 0013 rule 2, recorded in `docs/differences-from-batect.md`.
 fn parse_byte_size(value: &str) -> std::result::Result<i64, String> {
-    let invalid = || {
-        format!(
-            "Invalid size '{value}'. It must be in the format '123', '123b', '123k', '123m' or \
-             '123g'."
-        )
-    };
+    let invalid = || invalid_size(value);
 
     let lower = value.trim().to_ascii_lowercase();
     let without_b = lower.strip_suffix('b').unwrap_or(&lower);
@@ -1229,8 +1229,16 @@ fn parse_byte_size(value: &str) -> std::result::Result<i64, String> {
     count.checked_mul(multiplier).ok_or_else(invalid)
 }
 
+/// The error for a `shm_size` that isn't a size. `value` is a string as
+/// written, or an integer as read — so `-0x10` is reported as `'-16'`.
+fn invalid_size(value: impl std::fmt::Display) -> String {
+    format!(
+        "Invalid size '{value}'. It must be in the format '123', '123b', '123k', '123m' or '123g'."
+    )
+}
+
 /// `serde` `deserialize_with` for [`Container::shm_size`] — accepts either
-/// a Batect-style size string (`parse_byte_size`) or a plain integer
+/// a Batect-style size string (`parse_byte_size`) or a non-negative integer
 /// (bytes). Only invoked when the field is actually present; `#[serde(default)]`
 /// handles the absent case.
 fn deserialize_shm_size<'de, D>(deserializer: D) -> std::result::Result<Option<i64>, D::Error>
@@ -1257,13 +1265,18 @@ where
         where
             E: serde::de::Error,
         {
-            Ok(Some(v as i64))
+            i64::try_from(v)
+                .map(Some)
+                .map_err(|_| E::custom(invalid_size(v)))
         }
 
         fn visit_i64<E>(self, v: i64) -> std::result::Result<Option<i64>, E>
         where
             E: serde::de::Error,
         {
+            if v < 0 {
+                return Err(E::custom(invalid_size(v)));
+            }
             Ok(Some(v))
         }
     }
