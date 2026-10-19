@@ -417,3 +417,21 @@ fn committed_native_schema_is_up_to_date() {
              test -p ratect-core --features schema schema::"
     );
 }
+
+/// `run_as_current_user.enabled` defaults to false in a `batect.yml` and is
+/// required in a `ratect.toml` (#374); each schema says what its own
+/// format accepts.
+#[test]
+fn only_the_native_schema_requires_run_as_current_user_enabled() {
+    let document = serde_json::json!({
+        "project_name": "demo",
+        "containers": {"app": {"image": "alpine", "run_as_current_user": {}}},
+        "tasks": {"t": {"run": {"container": "app"}}},
+    });
+    let compat = jsonschema::draft7::new(&config_file_schema())
+        .expect("the generated schema should itself be a valid draft-07 schema");
+    let native = jsonschema::draft7::new(&native_config_file_schema())
+        .expect("the generated native schema should itself be a valid draft-07 schema");
+    assert!(compat.validate(&document).is_ok());
+    assert!(native.validate(&document).is_err());
+}

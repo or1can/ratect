@@ -505,8 +505,12 @@ files a task writes to a bind-mounted volume come back host-root-owned. Setting
 `run_as_current_user.enabled: true` runs the container as the *host's own* user and
 group instead.
 
-> **Note:** `enabled` and `home_directory` are only ever valid *together* — this
-> matches Batect's own behavior exactly, not a Ratect-specific restriction. Setting
+`enabled` defaults to `false`, as in Batect, so `run_as_current_user: {}` loads and
+maps no user.
+
+> **Note:** `enabled: true` and `home_directory` are only ever valid *together* —
+> which configs this accepts and refuses matches Batect's own behavior exactly (the
+> error messages are Ratect's own), not a Ratect-specific restriction. Setting
 > `enabled: true` with no `home_directory` is an error (Ratect never guesses one,
 > since the container's own image has no home directory prepared for an arbitrary
 > host uid/gid). The reverse is *also* an error: `enabled: false` (or omitted) with
