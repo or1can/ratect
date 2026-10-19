@@ -396,6 +396,43 @@ fn list_tasks_accepts_a_config_using_yaml_extensions() {
     );
 }
 
+/// #542: a null `environment` value is refused when the file loads, so
+/// `--list-tasks` fails, and the error names the variable, the container
+/// and that the value is null. No daemon is needed: nothing gets that far.
+#[test]
+fn list_tasks_names_a_null_environment_value_and_its_container() {
+    let dir = std::env::temp_dir().join(format!(
+        "ratect-compat-null-environment-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\n\
+         containers:\n  app:\n    image: alpine:3.18.2\n    environment:\n      FOO: ~\n\
+         tasks: {}\n",
+    )
+    .unwrap();
+
+    let output = ratect_command()
+        .current_dir(&dir)
+        .arg("--list-tasks")
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&dir).ok();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("containers.app.environment.FOO: invalid type: null"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn list_tasks_groups_by_group_and_shows_descriptions() {
     let output = ratect_command()

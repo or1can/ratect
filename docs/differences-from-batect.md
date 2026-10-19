@@ -146,7 +146,12 @@ Ratect checks a config when the file loads, and the report is its own:
   below — where Batect prints `<file> (at <path> on line L, column C):
   <message>`. The wording is Ratect's too: `unknown field: X` with no list of
   the known ones, `missing field: X`, and for a value of the wrong type the
-  path and the mismatch, with no `Value for 'X' is invalid:` prefix. An
+  path and the mismatch, with no `Value for 'X' is invalid:` prefix — a
+  refused null is `invalid type: null, expected <what the field takes>`, as
+  in `containers.app.shm_size: invalid type: null, expected a size like
+  '128', ...`, where Batect says `Unexpected null or empty value for
+  non-null field.` A null where a mapping of fields is expected is read as
+  an empty one, so it reports any field that mapping must have as missing. An
   unknown field's column is its value's, not its key's.
 - **The full cause chain is printed**: `Error: <message>`, then a `Caused by:`
   list when there is a cause, where Batect prints one message. A parse error's

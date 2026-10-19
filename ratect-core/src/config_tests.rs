@@ -1299,6 +1299,187 @@ fn a_null_environment_value_is_located() {
     );
 }
 
+/// A null that is refused says so, whatever kind of value it stands in
+/// for: a string, a value only a hand-written visitor reads (a size, or a
+/// volume, port or device entry), a capability or a flag. Its path names
+/// the field and the container it belongs to (#542).
+#[test]
+fn a_refused_null_says_it_is_null_at_its_path() {
+    for (entry, path) in [
+        (
+            "environment: {THING: ~}",
+            "containers.app.environment.THING",
+        ),
+        ("shm_size: ~", "containers.app.shm_size"),
+        ("labels: {team: ~}", "containers.app.labels.team"),
+        ("dependencies: [~]", "containers.app.dependencies[0]"),
+        ("volumes: [~]", "containers.app.volumes[0]"),
+        ("ports: [~]", "containers.app.ports[0]"),
+        ("devices: [~]", "containers.app.devices[0]"),
+        (
+            "capabilities_to_add: [~]",
+            "containers.app.capabilities_to_add[0]",
+        ),
+        (
+            "capabilities_to_drop: [~]",
+            "containers.app.capabilities_to_drop[0]",
+        ),
+        (
+            "run_as_current_user: {enabled: ~}",
+            "containers.app.run_as_current_user.enabled",
+        ),
+    ] {
+        let message = yaml_config_file_error(&format!(
+            "project_name: demo\n\
+             containers:\n\
+             \x20 app:\n\
+             \x20   image: alpine\n\
+             \x20   {entry}\n\
+             tasks: {{}}\n"
+        ));
+        assert!(
+            message.contains(&format!("{path}: invalid type: null, expected ")),
+            "{entry}: {message}"
+        );
+    }
+}
+
+/// A refused null in a task names the task, and whether it sits under the
+/// task's `run` (#542).
+#[test]
+fn a_refused_null_in_a_task_says_it_is_null_at_its_path() {
+    for (entry, path) in [
+        (
+            "run: {container: app, environment: {THING: ~}}",
+            "tasks.build.run.environment.THING",
+        ),
+        ("prerequisites: [~]", "tasks.build.prerequisites[0]"),
+    ] {
+        let message = yaml_config_file_error(&format!(
+            "project_name: demo\n\
+             containers:\n\
+             \x20 app:\n\
+             \x20   image: alpine\n\
+             tasks:\n\
+             \x20 build:\n\
+             \x20   {entry}\n"
+        ));
+        assert!(
+            message.contains(&format!("{path}: invalid type: null, expected ")),
+            "{entry}: {message}"
+        );
+    }
+}
+
+/// A null rejected in an included YAML file is reported against that file,
+/// whichever format the project is — a native project can include a `.yml`
+/// (#542).
+#[tokio::test]
+async fn a_refused_null_in_an_included_file_names_the_file_and_its_path() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("containers.yml"),
+        "containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   shm_size: ~\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ninclude:\n  - containers.yml\ntasks: {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "project_name = \"demo\"\ninclude = [{ path = \"containers.yml\" }]\n",
+    )
+    .unwrap();
+
+    for message in [
+        format!(
+            "{:#}",
+            load_project(&dir.join("batect.yml")).await.unwrap_err()
+        ),
+        format!(
+            "{:#}",
+            load_project_native(&dir.join("ratect.toml"))
+                .await
+                .unwrap_err()
+        ),
+    ] {
+        assert!(
+            message.contains("Failed to parse config file")
+                && message.contains("containers.yml")
+                && message.contains("containers.app.shm_size: invalid type: null, expected "),
+            "{message}"
+        );
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Refusing a null where a string, flag, number or enum is read leaves
+/// every null that meant "left out" still meaning it (#397's recorded
+/// divergence), including on fields of those types.
+#[test]
+fn a_null_that_loaded_as_left_out_still_does() {
+    let config = parse(
+        "project_name: demo\n\
+         forbid_telemetry: ~\n\
+         config_variables:\n\
+         \x20 var:\n\
+         \x20   default: ~\n\
+         \x20   description: ~\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   volumes: ~\n\
+         \x20   ports: ~\n\
+         \x20   environment: ~\n\
+         \x20   health_check: ~\n\
+         \x20   run_as_current_user: ~\n\
+         \x20   privileged: ~\n\
+         \x20   image_pull_policy: ~\n\
+         \x20 db:\n\
+         \x20   image: alpine\n\
+         \x20   health_check: {retries: ~}\n\
+         tasks:\n\
+         \x20 build:\n\
+         \x20   prerequisites: ~\n\
+         \x20   dependencies: ~\n\
+         \x20   customise: ~\n\
+         \x20   run:\n\
+         \x20     container: app\n\
+         \x20     command: ~\n\
+         \x20     working_directory: ~\n",
+    );
+    let app = &config.containers["app"];
+    assert_eq!(app.volumes, None);
+    assert_eq!(app.ports, None);
+    assert_eq!(app.environment, None);
+    assert!(app.health_check.is_none());
+    assert!(app.run_as_current_user.is_none());
+    assert_eq!(app.privileged, None);
+    assert_eq!(app.image_pull_policy, None);
+    assert_eq!(
+        config.containers["db"]
+            .health_check
+            .as_ref()
+            .unwrap()
+            .retries,
+        None
+    );
+    assert_eq!(
+        config.config_variables.as_ref().unwrap()["var"].default,
+        None
+    );
+    let task = &config.tasks["build"];
+    assert!(task.customise.is_none());
+    let run = task.run.as_ref().unwrap();
+    assert_eq!(run.command, None);
+    assert_eq!(run.working_directory, None);
+}
+
 #[test]
 fn an_unknown_top_level_key_is_located() {
     let message = yaml_config_file_error(

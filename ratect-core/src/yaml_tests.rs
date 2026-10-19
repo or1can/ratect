@@ -126,6 +126,84 @@ fn a_null_is_refused_as_a_string_wherever_one_is_nested() {
     }
 }
 
+/// A flag, a number and an enum are no more nullable than a string: a null
+/// read as one is refused as a null, not as a mismatch or as a variant
+/// named `~` — on both of `noyalib`'s paths. An `Option` of one still reads
+/// a null as left out.
+#[test]
+fn a_null_is_refused_as_a_flag_number_or_enum() {
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    enum Unit {
+        A,
+    }
+    for message in [
+        error::<Vec<bool>>("[true, ~]"),
+        error::<Vec<u16>>("[1, ~]"),
+        error::<Vec<f64>>("[1.5, ~]"),
+        error::<Vec<Unit>>("[A, ~]"),
+        error::<Vec<Unit>>("[A, !!null ~]"),
+    ] {
+        assert!(
+            message.contains("[1]: invalid type: null, expected "),
+            "{message}"
+        );
+    }
+
+    let flags: Vec<Option<bool>> = from_str("[~, true]").unwrap();
+    assert_eq!(flags, [None, Some(true)]);
+    let numbers: Vec<Option<u16>> = from_str("[~, 0x50]").unwrap();
+    assert_eq!(numbers, [None, Some(80)]);
+    let units: Vec<Option<Unit>> = from_str("[~, A]").unwrap();
+    assert!(matches!(units[..], [None, Some(Unit::A)]));
+}
+
+/// A visitor that doesn't read a null is refused in the same words as a
+/// string target; one that refuses a null in its own words keeps them.
+#[test]
+fn a_null_refused_by_a_visitor_says_null_unless_the_visitor_said_otherwise() {
+    struct Silent;
+    impl<'de> Deserialize<'de> for Silent {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            struct V;
+            impl<'de> Visitor<'de> for V {
+                type Value = Silent;
+                fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                    f.write_str("a silent thing")
+                }
+            }
+            deserializer.deserialize_any(V)
+        }
+    }
+    struct Outspoken;
+    impl<'de> Deserialize<'de> for Outspoken {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            struct V;
+            impl<'de> Visitor<'de> for V {
+                type Value = Outspoken;
+                fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                    f.write_str("an outspoken thing")
+                }
+                fn visit_none<E: de::Error>(self) -> Result<Outspoken, E> {
+                    Err(E::custom("no null here, thank you"))
+                }
+            }
+            deserializer.deserialize_any(V)
+        }
+    }
+
+    let message = error::<Vec<Silent>>("[~]");
+    assert!(
+        message.contains("[0]: invalid type: null, expected a silent thing"),
+        "{message}"
+    );
+    let message = error::<Vec<Outspoken>>("[~]");
+    assert!(
+        message.contains("[0]: no null here, thank you"),
+        "{message}"
+    );
+}
+
 /// A null reached through an alias is refused too: `noyalib`'s streaming
 /// path resolves the alias before the string read sees it. It is located
 /// at the anchor, which is `noyalib`'s choice, not this module's.
