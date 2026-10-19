@@ -54,7 +54,7 @@ A top-level `ratect_version` records the Ratect version the project was
 written for:
 
 ```toml
-ratect_version = "0.11.0"
+ratect_version = "0.12.0"
 project_name = "my-app"
 ```
 
@@ -74,12 +74,19 @@ run the project in two cases:
 Only the major and minor numbers are compared, and only the root file may set
 it — an included file, or any YAML file, that does is rejected. A project
 without one counts as written for 0.3.0, the first release with `ratect.toml`,
-so it's refused the first time a release changes what a configuration means;
-`ratect config validate` and `ratect doctor` warn about the missing field
-until then, and `ratect config convert` writes it for you. A project whose
-root file is a `batect.yml` can't set it at all — it keeps Batect's own shape
-— so converting it is the way to declare one. `ratect-compat` rejects the
-field like any other it doesn't know.
+so since 0.12.0 changed what a configuration means it's refused until it sets
+one; `ratect config convert` writes it for you.
+
+A project whose root file is a `batect.yml` can't set it at all — it keeps
+Batect's own shape. Its YAML files mean what they mean to Batect, which
+nothing on the list changes, so it loads whatever the list says. A `.toml` file it includes
+doesn't, so a project that includes one counts as written for 0.3.0 too, and
+is refused naming that file — once it has loaded, so a `.toml` include that
+doesn't load gets its own error first. Making the root a `ratect.toml` is the way to
+declare a version for it: [`ratect config convert`](ratect-cli.md#config)
+converts its YAML files, but reads every file as YAML, so a local `.toml`
+include has to be carried over by hand. `ratect-compat` rejects the field like any other it doesn't
+know.
 
 ## `extends`: inheritance instead of YAML anchors
 
@@ -323,7 +330,10 @@ default, which is what this adds.
 
 The rejection is on what you wrote, not on what it would resolve to, and it
 knows the difference between an expression and a literal `$`: `alpine:3.18` and
-`repo/img:1.2.3` load exactly as before.
+`repo/img:1.2.3` load exactly as before. An [escaped](ratect-compat-config-reference.md#escaping-with-)
+`\$` is a literal `$` here, as in any expression. A `batect.yml`'s `image` is no
+expression at all, so a `\` in it is kept as written; the rejection reads an
+escape as the expression syntax does, so `repo/\$x` loads and `repo/\\$x` doesn't.
 
 ## Nested Git includes
 
@@ -819,7 +829,7 @@ container, and the third about how a task runs its own container.
 | A Git-included bundle declaring a **`type: git` include of its own** | Always allowed, matching Batect | Refused unless the bundle's own include entry sets [`allow_nested_git_includes`](#nested-git-includes) |
 | A **nested** Git include failing to clone | Reports `git`'s own error | Reports that it failed, with the transport detail behind `RUST_LOG=debug` — see [Nested Git includes](#nested-git-includes) |
 | A **task's own container**'s `health_check`/`setup_commands` | Run alongside the main command, matching Batect; a failure while the main command is still running fails the task unless the command exits 0 within the next two seconds, and cancels it if it hasn't exited by then; once it has exited 0, a failure is forgiven — the cost and the race that leaves are in [known limitations](task-lifecycle.md#known-limitations) | Inert: no health wait, no setup commands, and the task's result is the main command's alone — see [Dependency Readiness](dependency-readiness.md#the-tasks-own-container) |
-| An **expression in `image`** | Rejected when the file loads — Batect resolves nothing there | Resolved like any other expression — see [Expressions in `image`](#expressions-in-image) |
+| An **expression in `image`** | Rejected when the file loads — Batect resolves nothing there; anything else, a `\` included, is used as written | Resolved like any other expression, a `\` escaping the character after it — see [Expressions in `image`](#expressions-in-image) |
 | Leaving out **`run_as_current_user.enabled`** | Means `false`, matching Batect | Rejected when the file loads — `enabled` is required |
 | An **expression in `run_as_current_user.home_directory`** | Used as written, matching Batect — a `$` or `<` is part of the path | Resolved like any other expression |
 | An **expression in a string-form `volumes` entry's host path** (`"$HOME/.m2:/root/.m2"`) | Used as written, matching Batect — a `$` or `<` is part of a relative path; the object form's `local` is still resolved | Resolved in either form |

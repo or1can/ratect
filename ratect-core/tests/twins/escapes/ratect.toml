@@ -1,0 +1,22 @@
+# A `\` in an expression escapes the character after it, the same way in both
+# formats (#382). Twin of batect.yml. Literal ('…') strings, so TOML's own
+# escapes don't touch the backslash first.
+ratect_version = "0.12.0"
+project_name = "twins"
+
+[containers.app]
+image = "alpine:3.18"
+
+[containers.app.environment]
+ESCAPED_DOLLAR = '\$TWIN_HOST_VAR'
+ESCAPED_ANGLE = '\<undeclared'
+ESCAPED_LETTER = 'a\b'
+ESCAPED_BACKSLASH = 'C:\\Temp'
+THEN_A_REFERENCE = '\\$TWIN_HOST_VAR'
+DEFAULT_WITH_BRACE = '${TWIN_UNSET:-a\}b}'
+
+[containers.built]
+build_directory = "."
+
+[containers.built.build_args]
+ESCAPED = 'x\y'

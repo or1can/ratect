@@ -8,6 +8,7 @@
 # /etc/resolv.conf from the inside and exit non-zero if it isn't what their
 # own fields asked for, so a setting that never reached Docker fails the run
 # rather than needing output parsing. `peer` exists only to be resolved.
+ratect_version = "0.12.0"
 project_name = "ratect-dns-test"
 
 [containers.peer]

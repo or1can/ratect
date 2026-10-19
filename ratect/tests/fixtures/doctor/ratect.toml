@@ -12,10 +12,10 @@
 # - `deploy`, reading `$DEPLOY_TOKEN`, which no task here needs: the warning for
 #   a value this machine can't evaluate, as long as it isn't set.
 # - `batect`, beside this file: the wrapper-script warning.
-# - no `ratect_version`: the missing written-for-version warning.
 # - `build`, on the pinned `build-env`: the one task here that actually runs.
 #   A `--no-cleanup-after-success` run of it is what gives the docs capture
 #   its leftover-resources warning.
+ratect_version = "0.12.0"
 project_name = "ratect-doctor-fixture"
 
 [containers.build-env]

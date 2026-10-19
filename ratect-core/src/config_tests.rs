@@ -44,6 +44,7 @@ fn check_and_evaluate_in_place(
         // Unread by `evaluate`; Batect-shapedness comes from `provenance`.
         dialect: Dialect::BatectCompatible,
         provenance,
+        toml_files: Vec::new(),
     };
     let Evaluated { containers, tasks } = project.evaluate(
         project.config.containers.keys().map(String::as_str),
@@ -10685,6 +10686,7 @@ tasks: {}
         config: loaded.config,
         project_directory,
         dialect: Dialect::BatectCompatible,
+        toml_files: Vec::new(),
     };
     let root = |_: &str| Some("/".to_string());
     let err = project
@@ -10760,6 +10762,7 @@ extends = "base"
         project_directory,
         dialect: Dialect::Native,
         provenance,
+        toml_files: Vec::new(),
     };
 
     let root = |_: &str| Some("/".to_string());
@@ -13482,4 +13485,192 @@ async fn of_several_duplicate_tasks_the_first_declared_is_reported() {
             "{error}"
         );
     }
+}
+
+/// One project, written as a `batect.yml` and as a `ratect.toml`, each loaded
+/// through its own binary's loader — for #382's tests, which show both
+/// formats read `\` the same way by sharing their expected values.
+struct Twin {
+    yaml: &'static str,
+    toml: &'static str,
+}
+
+impl Twin {
+    async fn load_each(&self) -> [(&'static str, Result<LoadedProject>); 2] {
+        let dir = unique_temp_dir();
+        std::fs::write(dir.join("batect.yml"), self.yaml).unwrap();
+        std::fs::write(dir.join("ratect.toml"), self.toml).unwrap();
+        let yaml = load_project(&dir.join("batect.yml")).await;
+        let toml = load_project_native(&dir.join("ratect.toml")).await;
+        std::fs::remove_dir_all(&dir).unwrap();
+        [("batect.yml", yaml), ("ratect.toml", toml)]
+    }
+}
+
+/// #382: a trailing `\` escapes nothing, so the file is refused when it
+/// loads — in either format, naming the container and quoting the value,
+/// though no task uses that container.
+#[tokio::test]
+async fn a_trailing_backslash_in_an_expression_fails_the_load() {
+    let twin = Twin {
+        yaml: "project_name: demo\ncontainers:\n  unused:\n    image: alpine:3.18\n    \
+               environment:\n      X: 'a\\'\n",
+        toml: "project_name = \"demo\"\n\n[containers.unused]\nimage = \"alpine:3.18\"\n\
+               environment = { X = 'a\\' }\n",
+    };
+    for (format, loaded) in twin.load_each().await {
+        let error = format!(
+            "{:#}",
+            loaded.err().unwrap_or_else(|| panic!("{format} loaded"))
+        );
+        assert!(error.contains("Container 'unused'"), "{format}: {error}");
+        assert!(error.contains("'environment.X'"), "{format}: {error}");
+        assert!(error.contains(r"'a\'"), "{format}: {error}");
+        assert!(
+            error.contains("must be followed by a character to escape"),
+            "{format}: {error}"
+        );
+    }
+}
+
+/// #382: an escaped `$` is literal — in either format it loads with its
+/// variable unset, and evaluates to the `$` and name without the `\`. A
+/// second expression field, `build_args`, reads `\` the same way.
+#[tokio::test]
+async fn a_backslash_escapes_in_every_expression_field_of_either_format() {
+    let twin = Twin {
+        yaml: "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    \
+               environment:\n      X: '\\$RATECT_382_UNSET'\n  \
+               built:\n    build_directory: .\n    build_args:\n      A: 'a\\b'\n",
+        toml: "project_name = \"demo\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n\
+               environment = { X = '\\$RATECT_382_UNSET' }\n\n\
+               [containers.built]\nbuild_directory = \".\"\nbuild_args = { A = 'a\\b' }\n",
+    };
+    for (format, loaded) in twin.load_each().await {
+        let evaluated = loaded
+            .unwrap_or_else(|error| panic!("{format}: {error:#}"))
+            .evaluate(["app", "built"], [], &HashMap::new(), no_host_env)
+            .unwrap_or_else(|error| panic!("{format}: {error:#}"));
+        let app = &evaluated.containers["app"];
+        assert_eq!(
+            app.environment.as_ref().unwrap()["X"],
+            "$RATECT_382_UNSET",
+            "{format}"
+        );
+        let built = &evaluated.containers["built"];
+        assert_eq!(built.build_args.as_ref().unwrap()["A"], "ab", "{format}");
+    }
+}
+
+/// #382: Batect never reads `image` as an expression, so a `batect.yml`'s is
+/// used exactly as written, `\` and all; a `ratect.toml`'s is an expression,
+/// so its `\` escapes as in any other field.
+#[tokio::test]
+async fn a_backslash_in_image_is_literal_in_batect_format_and_escapes_in_native() {
+    let twin = Twin {
+        yaml: "project_name: demo\ncontainers:\n  app:\n    image: 'repo/img:a\\b'\n",
+        toml: "project_name = \"demo\"\n\n[containers.app]\nimage = 'repo/img:a\\b'\n",
+    };
+    let [(_, yaml), (_, toml)] = twin.load_each().await;
+    let image = |loaded: Result<LoadedProject>| {
+        loaded
+            .unwrap()
+            .evaluate(["app"], [], &HashMap::new(), no_host_env)
+            .unwrap()
+            .containers["app"]
+            .image
+            .clone()
+    };
+    assert_eq!(image(yaml).as_deref(), Some(r"repo/img:a\b"));
+    assert_eq!(image(toml).as_deref(), Some("repo/img:ab"));
+}
+
+/// The value travels with the file that wrote it, as for `home_directory`
+/// (#462): a native container inheriting a YAML-declared parent's `image`
+/// keeps it as written.
+#[tokio::test]
+async fn an_inherited_batect_format_image_stays_literal() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("extra.yml"),
+        "containers:\n  base:\n    image: 'repo/img:a\\b'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "project_name = \"demo\"\ninclude = [{ path = \"extra.yml\" }]\n\n\
+         [containers.child]\nextends = \"base\"\n",
+    )
+    .unwrap();
+    let project = load_project_native(&dir.join("ratect.toml")).await.unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let evaluated = project
+        .evaluate(["child"], [], &HashMap::new(), no_host_env)
+        .unwrap();
+    assert_eq!(
+        evaluated.containers["child"].image.as_deref(),
+        Some(r"repo/img:a\b")
+    );
+}
+
+/// #382: a task's own expression fields are checked at load too, naming the
+/// task, though nothing runs it.
+#[tokio::test]
+async fn a_trailing_backslash_in_a_task_environment_fails_the_load() {
+    let twin = Twin {
+        yaml: "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n\
+               tasks:\n  t:\n    run:\n      container: app\n      \
+               environment:\n        X: 'a\\'\n",
+        toml: "project_name = \"demo\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n\n\
+               [tasks.t.run]\ncontainer = \"app\"\nenvironment = { X = 'a\\' }\n",
+    };
+    for (format, loaded) in twin.load_each().await {
+        let error = format!(
+            "{:#}",
+            loaded.err().unwrap_or_else(|| panic!("{format} loaded"))
+        );
+        assert!(error.contains("Task 't'"), "{format}: {error}");
+        assert!(
+            error.contains(r"'run.environment.X' ('a\')"),
+            "{format}: {error}"
+        );
+    }
+}
+
+/// What `written_for::check_yaml_root` judges a YAML root by: every TOML
+/// file the load read, in the order it read them — none for a project of
+/// YAML alone.
+#[tokio::test]
+async fn a_loaded_project_lists_the_toml_files_it_read() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ninclude:\n  - extra.toml\n  - more.yml\n  - last.toml\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("extra.toml"),
+        "[containers.a]\nimage = \"alpine:3.18\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("more.yml"),
+        "containers:\n  b:\n    image: alpine:3.18\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("last.toml"),
+        "[containers.c]\nimage = \"alpine:3.18\"\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("alone.yml"), "project_name: demo\n").unwrap();
+    let with_toml = load_project_native(&dir.join("batect.yml")).await.unwrap();
+    let yaml_alone = load_project_native(&dir.join("alone.yml")).await.unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let [first, second] = with_toml.toml_files() else {
+        panic!("{:?}", with_toml.toml_files());
+    };
+    assert!(first.ends_with("extra.toml\""), "{first}");
+    assert!(second.ends_with("last.toml\""), "{second}");
+    assert!(yaml_alone.toml_files().is_empty());
 }

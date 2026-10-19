@@ -4,7 +4,7 @@
 # against a real Docker daemon.
 
 # ANCHOR: minimal
-ratect_version = "0.11.0"
+ratect_version = "0.12.0"
 project_name = "getting-started"
 
 [containers.build-env]

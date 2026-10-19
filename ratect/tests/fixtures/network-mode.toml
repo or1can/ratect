@@ -7,6 +7,7 @@
 # Each run-to-completion dependency checks its own network from the inside
 # and exits non-zero if it isn't the mode it asked for, so a mode that never
 # reached Docker fails the run rather than needing output parsing.
+ratect_version = "0.12.0"
 project_name = "ratect-network-mode-test"
 
 [containers.peer]

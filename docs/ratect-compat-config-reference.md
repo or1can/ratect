@@ -873,9 +873,10 @@ themselves get built, not automatically.
 > volume's host path, both of which a `batect.yml` uses as written.
 
 Literal
-text around an expression is left untouched (`"prefix-$VAR-suffix"` interpolates just
-`$VAR`), and a `$`/`<` not followed by a valid identifier (or an unterminated `${`/`<{`)
-is treated as a literal character rather than an error.
+text around an expression is kept (`"prefix-$VAR-suffix"` interpolates just
+`$VAR`), apart from [escapes](#escaping-with-), and a `$`/`<` not followed by a valid
+identifier (or an unterminated `${`/`<{`) is treated as a literal character rather
+than an error.
 
 | Form | Resolves against | Example |
 |---|---|---|
@@ -894,6 +895,32 @@ no value from any source (see [ConfigVariable](#configvariable)'s precedence ord
 Config variable values themselves come from, highest precedence first: `--config-var
 NAME=VALUE` (repeatable), `--config-vars-file` (a flat YAML map), then the variable's
 own `default` — see [CLI reference](ratect-compat-cli.md).
+
+### Escaping with `\`
+
+In any of those fields, a `\` makes the character after it literal and is itself
+dropped, as in Batect: `\$` and `\<` start no expression, and `\\` is one
+backslash. Inside a `${NAME:-default}`'s default, `\}` is a `}` that doesn't end
+it. Quote such a value with single quotes, which keep a backslash as written — in
+a double-quoted YAML string, `\` is YAML's own escape first.
+
+```yaml
+environment:
+  PRICE: '\$100'               # $100
+  DEFAULTED: '${UNSET:-a\}b}'  # a}b, when UNSET isn't set
+  WINDOWS_PATH: 'C:\\Temp'     # C:\Temp
+```
+
+(Illustrative; [`ratect-core/tests/twins/escapes`](https://github.com/or1can/ratect/tree/main/ratect-core/tests/twins/escapes)
+is a checked-in pair of files using each form.)
+
+A `\` at the very end of a value has nothing to escape, so the file fails to load
+— for every command, `--list-tasks` included, and whether or not a task uses that
+container. The error names the container or task, the field and the value.
+
+A `ratect.toml` reads `\` the same way; write such a value as a literal
+(single-quoted) TOML string, for the same reason. A field that isn't an
+expression, such as a `batect.yml`'s `image`, keeps a backslash as written.
 
 ### Built-in config variable: `batect.project_directory`
 

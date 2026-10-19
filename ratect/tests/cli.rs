@@ -135,6 +135,7 @@ fn ratect_local_toml_is_auto_discovered_for_config_variables() {
     std::fs::write(
         dir.join("ratect.toml"),
         r#"
+ratect_version = "0.12.0"
 project_name = "demo"
 
 [containers.app]
@@ -191,6 +192,7 @@ fn tasks_list_succeeds_when_an_unused_container_cannot_be_evaluated() {
     std::fs::write(
         dir.join("ratect.toml"),
         r#"
+ratect_version = "0.12.0"
 project_name = "demo"
 
 [config_variables.region]
@@ -226,6 +228,50 @@ run = { container = "app" }
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// #382: `\` escapes in an expression, as in a `batect.yml`. A trailing one
+/// escapes nothing, so `tasks list` refuses the file; an escaped `$` is
+/// literal, so the same file with its variable unset loads.
+#[test]
+fn tasks_list_reads_a_backslash_in_an_expression_as_an_escape() {
+    let dir = unique_project_dir();
+    let tasks_list = |value: &str| {
+        std::fs::write(
+            dir.join("ratect.toml"),
+            format!(
+                "ratect_version = \"0.12.0\"\nproject_name = \"demo\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n\
+                 environment = {{ X = '{value}' }}\n\n[tasks.build]\nrun = {{ container = \"app\" }}\n"
+            ),
+        )
+        .unwrap();
+        ratect_command()
+            .arg("-f")
+            .arg(dir.join("ratect.toml"))
+            .args(["tasks", "list", "-o", "quiet"])
+            .env_remove("RATECT_UNSET_FOR_TEST")
+            .output()
+            .expect("failed to run ratect")
+    };
+
+    let trailing = tasks_list(r"a\");
+    let escaped = tasks_list(r"\$RATECT_UNSET_FOR_TEST");
+    std::fs::remove_dir_all(&dir).ok();
+
+    let stderr = String::from_utf8_lossy(&trailing.stderr);
+    assert!(!trailing.status.success(), "{stderr}");
+    assert!(stderr.contains("Container 'app'"), "{stderr}");
+    assert!(stderr.contains(r"'environment.X' ('a\')"), "{stderr}");
+    assert!(
+        stderr.contains("must be followed by a character to escape"),
+        "{stderr}"
+    );
+    assert!(
+        escaped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&escaped.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&escaped.stdout), "build\n");
+}
+
 /// `tasks list` evaluates nothing, so its config-variable options are
 /// deprecated: still accepted, with a warning saying they do nothing — and
 /// the file one names, or an auto-discovered `ratect.local.toml`, is not
@@ -235,7 +281,7 @@ fn tasks_list_warns_that_its_config_variable_options_are_deprecated() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        "project_name = \"demo\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n\n\
+        "ratect_version = \"0.12.0\"\nproject_name = \"demo\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n\n\
          [tasks.build]\nrun = { container = \"app\" }\n",
     )
     .unwrap();
@@ -320,6 +366,7 @@ fn a_command_line_config_var_overrides_the_config_vars_file() {
     std::fs::write(
         dir.join("ratect.toml"),
         r#"
+ratect_version = "0.12.0"
 project_name = "demo"
 
 [containers.app]
@@ -393,6 +440,7 @@ fn config_validate_passes_a_good_config_and_fails_a_broken_one() {
     std::fs::write(
         dir.join("ratect.toml"),
         r#"
+ratect_version = "0.12.0"
 project_name = "demo"
 
 [containers.app]
@@ -429,6 +477,7 @@ fn config_validate_reports_a_reference_to_an_undeclared_container() {
     std::fs::write(
         dir.join("ratect.toml"),
         r#"
+ratect_version = "0.12.0"
 project_name = "demo"
 
 [containers.app]
@@ -468,6 +517,7 @@ fn config_validate_warns_about_each_value_this_machine_cannot_evaluate() {
         dir.join("ratect.toml"),
         format!(
             r#"
+ratect_version = "0.12.0"
 project_name = "demo"
 
 [containers.build-env]
@@ -577,42 +627,86 @@ fn a_project_written_for_a_newer_ratect_is_refused_before_it_is_parsed() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// `config validate` suggests declaring `ratect_version` when a project
-/// doesn't, as a warning — it changes nothing until a release changes what a
-/// configuration means.
+/// A project written before ratect 0.12.0 — or that doesn't say, and so
+/// counts as written for 0.3.0 — is refused until someone has reviewed the
+/// breaking change since and declared `ratect_version` (decisions/0015). One
+/// that has loads, with nothing said about it.
 #[test]
-fn config_validate_suggests_declaring_ratect_version_only_when_it_is_missing() {
+fn config_validate_refuses_a_project_written_before_a_breaking_change() {
     let dir = unique_project_dir();
     let validate = |body: &str| {
         std::fs::write(dir.join("ratect.toml"), body).unwrap();
-        let output = ratect_command()
+        ratect_command()
             .arg("-f")
             .arg(dir.join("ratect.toml"))
             .args(["config", "validate"])
             .output()
-            .expect("failed to run ratect");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8_lossy(&output.stdout).into_owned()
+            .expect("failed to run ratect")
     };
 
-    let unmarked = validate("project_name = \"demo\"\n");
-    assert!(
-        unmarked
-            .lines()
-            .any(|line| line.contains("warning") && line.contains("'ratect_version'")),
-        "{unmarked}"
-    );
+    for (body, written) in [
+        ("project_name = \"demo\"\n", "doesn't set 'ratect_version'"),
+        (
+            "ratect_version = \"0.11.0\"\nproject_name = \"demo\"\n",
+            "was written for ratect 0.11.0",
+        ),
+    ] {
+        let output = validate(body);
+        // Reported as one of `config validate`'s problems, on stdout.
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(!output.status.success(), "{stdout}");
+        assert!(stdout.contains(written), "{stdout}");
+        assert!(stdout.contains("ratect 0.12.0: a '\\'"), "{stdout}");
+    }
 
     let marked = validate(&format!(
         "ratect_version = \"{}\"\nproject_name = \"demo\"\n",
         written_for_version()
     ));
-    assert!(!marked.contains("ratect_version"), "{marked}");
+    let stdout = String::from_utf8_lossy(&marked.stdout);
+    assert!(
+        marked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&marked.stderr)
+    );
+    assert!(!stdout.contains("ratect_version"), "{stdout}");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A YAML root follows Batect's rules, so it loads whatever the breaking
+/// changes since — unless it includes a TOML file, whose meaning may have
+/// changed and which nothing in a YAML project can say was reviewed.
+#[test]
+fn a_yaml_root_is_refused_only_when_it_includes_a_toml_file() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("extra.toml"),
+        "[containers.app]\nimage = \"alpine:3.18\"\n",
+    )
+    .unwrap();
+    let tasks_list = |root: &str| {
+        std::fs::write(dir.join("batect.yml"), root).unwrap();
+        ratect_command()
+            .arg("-f")
+            .arg(dir.join("batect.yml"))
+            .args(["tasks", "list", "-o", "quiet"])
+            .output()
+            .expect("failed to run ratect")
+    };
+
+    let yaml_alone = tasks_list("project_name: demo\n");
+    let with_toml = tasks_list("project_name: demo\ninclude:\n  - extra.toml\n");
+    std::fs::remove_dir_all(&dir).ok();
+
+    assert!(
+        yaml_alone.status.success(),
+        "{}",
+        String::from_utf8_lossy(&yaml_alone.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&with_toml.stderr);
+    assert!(!with_toml.status.success(), "{stderr}");
+    assert!(stderr.contains("extra.toml"), "{stderr}");
+    assert!(stderr.contains("ratect config convert"), "{stderr}");
 }
 
 /// `config convert` declares the converting binary's version — the rules the
@@ -1317,6 +1411,7 @@ fn a_native_container_may_override_an_inherited_build_directory_with_an_image() 
     std::fs::write(
         dir.join("ratect.toml"),
         r#"
+ratect_version = "0.12.0"
 project_name = "demo"
 
 [containers.base]
@@ -1364,6 +1459,7 @@ fn a_base_only_container_needs_no_image_and_validates() {
     std::fs::write(
         dir.join("ratect.toml"),
         r#"
+ratect_version = "0.12.0"
 project_name = "demo"
 
 # No image and no build_directory: this exists only to be extended.
@@ -2685,10 +2781,6 @@ fn doctor_reports_each_kind_of_config_finding_from_the_doctor_fixture() {
             ]
         ),
         "the value this machine can't evaluate should be flagged:\n{stdout}"
-    );
-    assert!(
-        has_line("warning ", &["'ratect_version' isn't set"]),
-        "the missing written-for version should be flagged:\n{stdout}"
     );
     assert!(
         has_line(

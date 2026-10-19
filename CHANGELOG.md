@@ -23,6 +23,7 @@ history, from when it was the only binary.
 
 ### Breaking
 
+- **ratect.toml:** a `\` in an expression escapes the character after it and is dropped — `\$X` is the literal `$X`, `a\b` is `ab`, `\\` is `\`, and `${X:-a\}b}` defaults to `a}b` — and a trailing `\` fails the load. A project with a backslash in an expression may resolve differently or stop loading; one without a `ratect_version` of 0.12.0 or later is refused until it declares one. A project whose root is a `batect.yml` still loads, unless it includes a `.toml` file.
 - A run (`ratect run`, `ratect-compat <task>`) that fails without its task's command exiting — a config that doesn't load, an unknown task, an unreachable daemon, a failed image pull or build, a dependency that never becomes ready, or (`ratect-compat` only) a `--log-file` that can't be opened — exits `125` instead of `1`. Every other command still exits `1` on failure.
 - A run whose task's command exited `0` exits `0` even if a signal arrives during its cleanup, instead of 128 + the signal's number, unless that cleanup is then abandoned or fails.
 - A run whose every container exited `0` but whose cleanup fails — the daemon refusing to remove a container or the task network, or a cleanup abandoned with something left to remove — exits `125` instead of `0`, and a prerequisite whose cleanup fails stops the run before the tasks after it. A task's own non-zero exit code is kept.
@@ -52,6 +53,7 @@ history, from when it was the only binary.
 - An unquoted number or boolean `environment` value in a YAML config file — a container's, a task's `run`, or a `customise` entry's — keeps its text as written: `12.6000`, `0x10` and `1e3` are passed on as written, not as `12.6`, `16` and `1000`.
 - An unquoted number or boolean in any other YAML config field that takes text — `build_args` values, a config variable's `default` and `description`, a task's `description` and `group`, `working_directory`, `image`, `command`, and the rest — is accepted and kept as written. An unquoted `0`, `-0` or `+0` is accepted as a zero duration; a duration with no unit (`interval: 5`) is refused naming the missing unit.
 - A negative integer `shm_size` (`shm_size: -2`, or `shm_size = -2` in `ratect.toml`) is refused when the file loads, as `Invalid size '-2'`, instead of failing when Docker creates the container.
+- A `\` in an expression in a YAML config file escapes the character after it, as in Batect: `\$X` is the literal `$X` rather than a reference, `a\b` is `ab`, and `${X:-a\}b}` defaults to `a}b`. A trailing `\` fails the load. A YAML file's `image` is still used as written.
 - `run_as_current_user.enabled` defaults to `false` in a YAML config file, as in Batect, so `run_as_current_user: {}` loads and maps no user. A `ratect.toml` still requires it.
 
 ## [ratect-compat 0.32.0 · ratect 0.11.0] - 2026-10-13

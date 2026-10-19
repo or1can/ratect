@@ -5,6 +5,7 @@
 # `caches clean` removes what it lists, and the shared volume it creates,
 # `ratect-shared-cache-shared-tools`, is machine-wide: no other fixture or
 # example may declare a shared cache of that name.
+ratect_version = "0.12.0"
 project_name = "ratect-cli-shared-cache-test"
 
 [containers.build-env]

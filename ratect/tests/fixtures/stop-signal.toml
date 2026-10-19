@@ -9,6 +9,7 @@
 # installed a handler for, so each one only ever stops via Docker's own
 # forceful kill after the stop timeout elapses, unless the configured
 # `stop_signal` is something it *does* trap.
+ratect_version = "0.12.0"
 project_name = "ratect-stop-signal-test"
 
 [containers.traps-usr1]

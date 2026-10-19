@@ -209,7 +209,7 @@ fn an_unmarked_project_counts_as_written_for_the_first_native_release() {
 }
 
 #[test]
-fn a_yaml_root_is_told_to_convert_before_it_can_declare_a_version() {
+fn a_yaml_root_is_told_to_make_its_root_a_ratect_toml() {
     check_against(&WrittenFor::YamlRoot, version("0.11.0"), &[]).unwrap();
     let error = check_against(&WrittenFor::YamlRoot, version("0.12.0"), &[ROW_0_12])
         .unwrap_err()
@@ -223,4 +223,29 @@ fn every_row_in_the_real_table_names_a_version() {
     for row in BREAKING_CHANGES {
         row.version.parse::<Version>().unwrap();
     }
+}
+
+/// A YAML root follows Batect's rules, so before its includes are known
+/// there is nothing to refuse it for — however many rows the table has.
+#[test]
+fn a_yaml_root_alone_is_not_refused_before_the_load() {
+    let root = root_file("batect.yml", "project_name: p\n");
+    check(&root, version("99.0.0")).unwrap();
+}
+
+/// Its TOML includes are what can have changed meaning, so a YAML root is
+/// refused only once one is loaded — naming it, and saying to convert.
+#[test]
+fn a_yaml_root_is_refused_only_for_a_toml_file_it_loads() {
+    let root = Path::new("/p/batect.yml");
+    check_yaml_root_against(root, &[], version("0.12.0"), &[ROW_0_12]).unwrap();
+    let toml = "\"/p/extra.toml\"".to_string();
+    check_yaml_root_against(root, std::slice::from_ref(&toml), version("0.12.0"), &[]).unwrap();
+    let error = format!(
+        "{:#}",
+        check_yaml_root_against(root, &[toml], version("0.12.0"), &[ROW_0_12]).unwrap_err()
+    );
+    assert!(error.contains("/p/extra.toml"), "{error}");
+    assert!(error.contains(ROW_0_12.summary), "{error}");
+    assert!(error.contains("ratect config convert"), "{error}");
 }

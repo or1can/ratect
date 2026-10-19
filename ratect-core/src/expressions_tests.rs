@@ -176,15 +176,17 @@ fn dot_is_not_a_valid_host_var_identifier_character() {
 /// with `interpolate` about what counts as an expression rather than merely
 /// scanning for the sigils.
 ///
-/// Asserted as an equivalence against `interpolate` itself, with every
-/// variable resolvable, so the two cannot drift: if interpolation changes the
-/// string, detection must say so, and if it leaves it alone, detection must
-/// not.
+/// Asserted as an equivalence against `interpolate` itself, so the two cannot
+/// drift: a value is an expression exactly when what it interpolates to
+/// depends on its variables' values. Not "interpolation changed it" — an
+/// escape (#382) changes the output without being a reference, so `a\b` and
+/// `\$TAG` are literals that interpolate to something else.
 #[test]
 fn detection_agrees_with_interpolation_about_what_is_an_expression() {
-    let config_vars: HashMap<String, Option<String>> =
-        HashMap::from([("tag".to_string(), Some("1.2.3".to_string()))]);
-    let env = host_env(&[("TAG", "1.2.3"), ("REGISTRY", "example.com")]);
+    let interpolate_with = |input: &str, value: &str| {
+        let config_vars = HashMap::from([("tag".to_string(), Some(value.to_string()))]);
+        interpolate(input, |_: &str| Some(value.to_string()), &config_vars)
+    };
 
     for input in [
         // Expressions, in every form the syntax has.
@@ -195,6 +197,9 @@ fn detection_agrees_with_interpolation_about_what_is_an_expression() {
         "$REGISTRY/repo/img:${TAG}",
         "<tag",
         "<{tag}",
+        "<undeclared",
+        // An escaped backslash, then a real reference.
+        r"\\$TAG",
         // Literals — including the near-misses that make a naive
         // "contains a sigil" check wrong.
         "alpine:3.18",
@@ -206,18 +211,21 @@ fn detection_agrees_with_interpolation_about_what_is_an_expression() {
         "<",
         "<{unterminated",
         "price: $100",
+        // Escapes: literal, though interpolation drops the backslash.
+        r"\$TAG",
+        r"\<tag",
+        r"a\b",
     ] {
-        match interpolate(input, &env, &config_vars) {
-            // Substituted something, or deliberately left it alone.
-            Ok(interpolated) => assert_eq!(
+        match (interpolate_with(input, "1"), interpolate_with(input, "2")) {
+            (Ok(first), Ok(second)) => assert_eq!(
                 contains_expression(input),
-                interpolated != input,
+                first != second,
                 "detection and interpolation disagree on {input:?} (interpolated to \
-                 {interpolated:?})"
+                 {first:?} and {second:?})"
             ),
             // Well-formed but unresolvable is still an expression — see
             // `an_unresolvable_variable_still_counts_as_an_expression`.
-            Err(_) => assert!(
+            _ => assert!(
                 contains_expression(input),
                 "interpolation treated {input:?} as an expression; detection did not"
             ),
@@ -243,4 +251,93 @@ fn a_bare_angle_bracket_before_a_name_is_a_config_variable() {
 fn an_unresolvable_variable_still_counts_as_an_expression() {
     assert!(contains_expression("repo/img:$NOT_SET_ANYWHERE"));
     assert!(interpolate("repo/img:$NOT_SET_ANYWHERE", host_env(&[]), &HashMap::new()).is_err());
+}
+
+/// #382: `\` escapes the next character in literal text, as in Batect — the
+/// backslash is dropped and that character is taken literally, so an escaped
+/// `$` or `<` starts no reference whether or not its variable resolves.
+#[test]
+fn a_backslash_escapes_the_next_character_in_literal_text() {
+    let config_vars = HashMap::from([("name".to_string(), Some("value".to_string()))]);
+    let env = host_env(&[("X", "set")]);
+    for (input, expected) in [
+        (r"\$X", "$X"),
+        (r"\$UNSET", "$UNSET"),
+        (r"\<name", "<name"),
+        (r"\<undeclared", "<undeclared"),
+        (r"a\b", "ab"),
+        (r"\\", r"\"),
+        (r"\\$X", r"\set"),
+    ] {
+        assert_eq!(
+            interpolate(input, &env, &config_vars).unwrap(),
+            expected,
+            "interpolating {input:?}"
+        );
+    }
+}
+
+/// #382: a `\` with nothing after it escapes nothing, so Batect refuses the
+/// value rather than guessing; so does this, whatever its variables hold —
+/// so `check_syntax` refuses it too. The caller quotes the value, as it
+/// names the field.
+#[test]
+fn a_trailing_backslash_is_an_error() {
+    for input in [r"a\", r"\", r"$X\"] {
+        assert!(check_syntax(input).is_err(), "{input:?}");
+        let err = interpolate(input, host_env(&[("X", "set")]), &HashMap::new()).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("must be followed by a character to escape"),
+            "{message}"
+        );
+    }
+}
+
+/// #382: inside a `${NAME:-default}`, `\` escapes the next character into the
+/// default, so an escaped `}` does not close the reference.
+#[test]
+fn a_backslash_escapes_the_next_character_in_a_default() {
+    for (input, env, expected) in [
+        (r"${U:-a\}b}", host_env(&[]), "a}b"),
+        (r"${U:-x\y}", host_env(&[]), "xy"),
+        (r"${U:-a\\}b", host_env(&[]), r"a\b"),
+        (r"${U:-a\}b}", host_env(&[("U", "set")]), "set"),
+    ] {
+        assert_eq!(
+            interpolate(input, env, &HashMap::new()).unwrap(),
+            expected,
+            "interpolating {input:?}"
+        );
+    }
+}
+
+/// #382: escapes apply in literal text and defaults, never in a name, as in
+/// Batect. `A\B` is no identifier, so `${A\B}` is no reference — not `$AB`,
+/// though `AB` is set — and falls back to literal text, where the `\` then
+/// escapes like any other.
+#[test]
+fn a_backslash_in_a_variable_name_is_not_an_escape() {
+    let env = host_env(&[("AB", "wrong")]);
+    assert_eq!(
+        interpolate(r"${A\B}", env, &HashMap::new()).unwrap(),
+        "${AB}"
+    );
+}
+
+/// #382: an escaped sigil is no reference, so it is no expression either —
+/// but an escaped backslash leaves the sigil after it a real one.
+#[test]
+fn an_escaped_sigil_is_not_an_expression() {
+    assert!(!contains_expression(r"\$X"));
+    assert!(!contains_expression(r"\<x"));
+    assert!(!contains_expression(r"a\b"));
+    assert!(contains_expression(r"\\$X"));
+}
+
+/// `check_syntax` judges the value as written, so a reference it cannot
+/// resolve passes — that is evaluation's to judge.
+#[test]
+fn check_syntax_accepts_an_unresolvable_reference() {
+    check_syntax("$UNSET<undeclared${U:-a\\}b}").unwrap();
 }

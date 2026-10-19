@@ -1,0 +1,18 @@
+# A `\` in an expression escapes the character after it, the same way in both
+# formats (#382). Twin of ratect.toml.
+project_name: twins
+
+containers:
+  app:
+    image: alpine:3.18
+    environment:
+      ESCAPED_DOLLAR: '\$TWIN_HOST_VAR'
+      ESCAPED_ANGLE: '\<undeclared'
+      ESCAPED_LETTER: 'a\b'
+      ESCAPED_BACKSLASH: 'C:\\Temp'
+      THEN_A_REFERENCE: '\\$TWIN_HOST_VAR'
+      DEFAULT_WITH_BRACE: '${TWIN_UNSET:-a\}b}'
+  built:
+    build_directory: .
+    build_args:
+      ESCAPED: 'x\y'

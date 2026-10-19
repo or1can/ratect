@@ -96,7 +96,7 @@ and `ratect run build -f custom.yml` are the same invocation.
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `-f`, `--config-file <PATH>` | `ratect.toml` | The configuration file. Parsed by extension — `.toml` as the native format, `.yml`/`.yaml` as Batect-format YAML — so `-f batect.yml` keeps reading a Batect config while migrating. `caches` uses it only to locate the project *directory* — it never reads the contents. |
+| `-f`, `--config-file <PATH>` | `ratect.toml` | The configuration file. Parsed by extension — `.toml` as the native format, `.yml`/`.yaml` as Batect-format YAML — so `-f batect.yml` keeps reading a Batect config while migrating — until it includes a `.toml` file, which needs a [`ratect_version`](ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for) only a `ratect.toml` root can declare. `caches` uses it only to locate the project *directory* — it never reads the contents. |
 | `-o`, `--output <STYLE>` | auto | `fancy`, `simple`, `quiet` or `all`; unset auto-selects `fancy` when stderr is an interactive console, `simple` otherwise. `ratect`'s own progress is on stderr in every style; stdout is the task's own output — see [Output Styles](output-styles.md#streams). |
 | `--no-color` | — | No color in Ratect's own output (never affects a task's own output), and `simple` becomes the auto-selected style — see [Colour](output-styles.md#colour) for how it combines with `NO_COLOR`/`CLICOLOR_FORCE`. |
 

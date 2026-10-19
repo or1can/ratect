@@ -7,6 +7,7 @@
 # Every container checks its own limits from the inside and exits non-zero
 # if they aren't what its own `ulimits` asked for, so a limit that never
 # reached Docker fails the run rather than needing output parsing.
+ratect_version = "0.12.0"
 project_name = "ratect-ulimits-test"
 
 [containers.object-form]

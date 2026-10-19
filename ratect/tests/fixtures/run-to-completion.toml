@@ -4,6 +4,7 @@
 # has no `batect.yml`/`ratect-compat` equivalent, so this fixture, unlike most
 # of the engine/Docker behaviour proven under `ratect-compat/tests/fixtures/`,
 # can only be expressed here (see AGENTS.md's fixture-layer guideline).
+ratect_version = "0.12.0"
 project_name = "ratect-run-to-completion-test"
 
 [containers.init]

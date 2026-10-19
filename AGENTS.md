@@ -79,7 +79,7 @@ Ratect is a **Cargo workspace** with four crates (the
   | `resources.rs` | What previous runs left behind and how it's removed — `ratect resources list`/`clean`'s selection and removal, generic over its own `ResourceInventory` (the container/network inventory slice of `ContainerRuntime`, which requires it as a supertrait) |
   | `diagnostics.rs` | `Finding` and every producer of one that needs no daemon connection of its own — `ratect doctor`/`config validate`'s shared checks |
   | `convert.rs` | `ratect config convert`'s translation — one native file per source file, never one merged result (ratect#574): the `include` rewriting and Git-include pinning that implies, the per-document round-trip proof, and where each `ConversionCheck` goes |
-  | `written_for.rs` | A native project's written-for version (`ratect_version`) and the check `ratect` runs against it before loading — plus the table of breaking changes that check consults ([decisions/0015](decisions/0015-native-project-records-its-written-for-version.md)) |
+  | `written_for.rs` | A native project's written-for version (`ratect_version`) and the check `ratect` runs against it — before loading for a TOML root, after for a YAML one — plus the table of breaking changes that check consults ([decisions/0015](decisions/0015-native-project-records-its-written-for-version.md)) |
   | `ui.rs` (+ `ui/`) | The output layer: typed events in, four output styles out |
   | `schema.rs` | The two committed JSON schemas (non-default `schema` feature) |
 

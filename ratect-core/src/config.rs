@@ -3874,6 +3874,11 @@ impl Config {
 /// Batect-format file, #462) and a Git-included container's host paths
 /// staying inside its [`Boundary`].
 ///
+/// One check does apply to every expression: its syntax (a trailing `\`,
+/// #382), which no machine could read either. It visits the same fields
+/// [`evaluate_container`] and [`evaluate_task`] interpolate, so a field
+/// added to one belongs in the other.
+///
 /// Runs **before** [`resolve_extends`], on each container as declared, and
 /// may therefore only judge one field's own internal shape — that a
 /// `home_directory` is absolute, that `build_ssh` ids are unique. That is
@@ -3918,6 +3923,14 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
         // One attribution point for the whole block, as in
         // `evaluate_container`: nothing below knows which container asked.
         (|| -> Result<()> {
+            // A Batect-format file's `image` is a literal — see
+            // `evaluate_container`.
+            if let Some(image) = container.image.as_deref().filter(|_| !anchor.batect_shaped) {
+                check_expression("'image'", image)?;
+            }
+            for (key, value) in container.environment.iter().flatten() {
+                check_expression(&format!("'environment.{key}'"), value)?;
+            }
             for volume in container.volumes.iter().flatten() {
                 match volume {
                     // A cache `name` becomes a host directory under
@@ -3938,20 +3951,28 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
                             anchor_path(&local.local, &anchor)?;
                         }
                     }
-                    VolumeMount::Local(local) => check_literal_path(&local.local, &anchor)?,
+                    VolumeMount::Local(local) => {
+                        check_expression("'volumes'", &local.local)?;
+                        check_literal_path(&local.local, &anchor)?;
+                    }
                     // `container`/`options` are plain strings too, matching
                     // Batect's own `TmpfsMount` typing.
                     VolumeMount::Tmpfs(_) => {}
                 }
             }
             if let Some(build_directory) = &container.build_directory {
+                check_expression("'build_directory'", build_directory)?;
                 check_literal_path(build_directory, &anchor)?;
             }
-            for secret in container.build_secrets.iter().flat_map(HashMap::values) {
+            for (key, value) in container.build_args.iter().flatten() {
+                check_expression(&format!("'build_args.{key}'"), value)?;
+            }
+            for (key, secret) in container.build_secrets.iter().flatten() {
                 // `Environment` is a literal host env var *name*, not itself
                 // an expression — matches Batect's own `String` (not
                 // `Expression`) typing for that variant.
                 if let BuildSecret::Path(path) = secret {
+                    check_expression(&format!("'build_secrets.{key}'"), path)?;
                     check_literal_path(path, &anchor)?;
                 }
             }
@@ -3969,6 +3990,7 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
                     );
                 }
                 for path in &agent.paths {
+                    check_expression(&format!("'build_ssh' entry '{}'", agent.id), path)?;
                     check_literal_path(path, &anchor)?;
                 }
             }
@@ -3983,10 +4005,13 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
                         })?;
                     // Not an expression at all in a Batect-format file:
                     // Batect reads it as a plain string (#462).
-                    if anchor.batect_shaped
-                        || !crate::expressions::contains_expression(home_directory)
-                    {
+                    if anchor.batect_shaped {
                         check_home_directory(home_directory)?;
+                    } else {
+                        check_expression("'run_as_current_user.home_directory'", home_directory)?;
+                        if !crate::expressions::contains_expression(home_directory) {
+                            check_home_directory(home_directory)?;
+                        }
                     }
                 } else if run_as_current_user.home_directory.is_some() {
                     anyhow::bail!(
@@ -4040,9 +4065,33 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
             // `reject_customisations_outside_the_task_graph`, after
             // inheritance. See this function's own doc comment.
         }
+        (|| -> Result<()> {
+            let environment = task
+                .run
+                .iter()
+                .flat_map(|run| run.environment.iter().flatten());
+            for (key, value) in environment {
+                check_expression(&format!("'run.environment.{key}'"), value)?;
+            }
+            for (container, customisation) in task.customise.iter().flatten() {
+                for (key, value) in customisation.environment.iter().flatten() {
+                    check_expression(&format!("'customise.{container}.environment.{key}'"), value)?;
+                }
+            }
+            Ok(())
+        })()
+        .with_context(|| format!("Task '{task_name}'"))?;
     }
 
     Ok(())
+}
+
+/// Refuses an expression-bearing value no evaluation could read — a mistake
+/// in the file, judged at load whether or not anything uses it (#382),
+/// naming the field and the value as written as [`evaluate_value`] does.
+fn check_expression(field: &str, value: &str) -> Result<()> {
+    crate::expressions::check_syntax(value)
+        .with_context(|| format!("has an invalid {field} ('{}')", printable(value)))
 }
 
 /// Judges a host path at load when it is a literal and its container came
@@ -4159,12 +4208,14 @@ fn evaluate_value(
 }
 
 /// Evaluates every expression-bearing value of one container — `image`
-/// (native-only in effect: an expression there is refused in a `batect.yml`
-/// at load), `environment`, local `volumes` host paths, `build_directory`,
-/// `build_args`, `build_secrets` paths, `build_ssh` paths and (outside a
-/// Batect-format file, #462) `run_as_current_user.home_directory` — then
-/// resolves each host path against the file that declared it and judges
-/// what [`check_values`] could only judge on a literal.
+/// (except in a Batect-format file, which refuses an expression there at
+/// load and uses anything else as written), `environment`, local `volumes`
+/// host paths, `build_directory`, `build_args`, `build_secrets` paths,
+/// `build_ssh` paths and (outside a Batect-format file, #462)
+/// `run_as_current_user.home_directory` — then resolves each host path
+/// against the file that declared it and judges what [`check_values`] could
+/// only judge on a literal. `check_values` checks the same fields' syntax at
+/// load.
 ///
 /// Each path-bearing field is anchored on its **supplier**: the container in
 /// the `extends` chain whose value it is ([`Provenance::suppliers`]), so an
@@ -4193,12 +4244,17 @@ fn evaluate_container(
         Ok(resolved.display().to_string())
     };
 
+    // A Batect-format file's `image` is a literal, never unescaped: Batect
+    // reads no expression there, and one that looks like it was refused at
+    // load (#382).
     if let Some(image) = &mut container.image {
-        store_or_record(
-            image,
-            evaluate_value("'image'", image, host_env, config_vars),
-            &mut failures,
-        );
+        if !anchor(&suppliers.image).batect_shaped {
+            store_or_record(
+                image,
+                evaluate_value("'image'", image, host_env, config_vars),
+                &mut failures,
+            );
+        }
     }
     for (key, value) in container.environment.iter_mut().flatten() {
         let evaluated = evaluate_value(
@@ -4280,7 +4336,8 @@ fn evaluate_container(
 }
 
 /// Evaluates a task's own expression-bearing values: its `run.environment`
-/// and each `customise.<container>.environment` (#373). Returns every value
+/// and each `customise.<container>.environment` (#373). [`check_values`]
+/// checks the same fields' syntax at load. Returns every value
 /// that failed, as [`evaluate_container`] does.
 fn evaluate_task(
     task: &mut Task,
@@ -4388,11 +4445,13 @@ struct Provenance {
 /// For one container, which container's declaration each field that is
 /// anchored on its declaring file came from — itself, or an `extends`
 /// ancestor. `extends` takes a field whole from one container in the chain,
-/// so one name per field is enough. `run_as_current_user` is here for
-/// [`Provenance::batect_shaped`], not for a path: a YAML-declared parent's
-/// `home_directory` stays literal in a native child that inherits it.
+/// so one name per field is enough. `image` and `run_as_current_user` are
+/// here for [`Provenance::batect_shaped`], not for a path: a YAML-declared
+/// parent's `image` and `home_directory` stay literal in a native child that
+/// inherits them.
 #[derive(Debug, Clone)]
 struct Suppliers {
+    image: String,
     volumes: String,
     build_directory: String,
     build_secrets: String,
@@ -4404,6 +4463,7 @@ impl Suppliers {
     /// A container that supplied every field itself.
     fn own(name: &str) -> Self {
         Suppliers {
+            image: name.to_string(),
             volumes: name.to_string(),
             build_directory: name.to_string(),
             build_secrets: name.to_string(),
@@ -4587,6 +4647,8 @@ pub struct LoadedProject {
     /// Where each container came from, which evaluating it needs and its
     /// fields don't carry.
     provenance: Provenance,
+    /// See [`LoadedProject::toml_files`].
+    toml_files: Vec<String>,
 }
 
 /// Containers and tasks as [`LoadedProject::evaluate`] returns them: every
@@ -4612,6 +4674,14 @@ pub struct WholeProjectEvaluation {
 }
 
 impl LoadedProject {
+    /// Every file the load read as TOML — root, local include or Git bundle
+    /// — in the order it read them, each as an error names it: a path, or a
+    /// file within a bundle along with the bundle's remote and ref. What
+    /// [`crate::written_for::check_yaml_root`] judges a YAML root by.
+    pub fn toml_files(&self) -> &[String] {
+        &self.toml_files
+    }
+
     /// Evaluates the named containers and tasks against this machine — with
     /// [`evaluate_whole_project`](Self::evaluate_whole_project), the one way
     /// an expression is evaluated, and the second half of
@@ -4746,6 +4816,7 @@ impl LoadedProject {
             project_directory,
             dialect: Dialect::default(),
             provenance: Provenance::default(),
+            toml_files: Vec::new(),
         }
     }
 }
@@ -4974,6 +5045,17 @@ async fn load_project_impl(config_file: &Path, format: ConfigFormat) -> Result<L
     // Before `extends`, on each container as declared — see its own doc
     // comment for which rules that allows.
     check_values(&loaded.config, &provenance, &project_directory)?;
+    // Only the native loader reads a file as TOML — `Compat` parses every
+    // file as YAML, whatever its name.
+    let toml_files = match format {
+        ConfigFormat::Compat => Vec::new(),
+        ConfigFormat::Native => loaded
+            .files
+            .iter()
+            .filter(|file| matches!(config_file_format(&file.path), Ok(FileFormat::Toml)))
+            .map(|file| describe_origin(&file.path, file.boundary.as_ref()))
+            .collect(),
+    };
     let mut config = loaded.config;
     // Records which ancestor supplied each path-bearing field, so evaluation
     // anchors an inherited relative path on its parent's own file — see
@@ -5021,6 +5103,7 @@ async fn load_project_impl(config_file: &Path, format: ConfigFormat) -> Result<L
         project_directory,
         dialect: format.dialect(),
         provenance,
+        toml_files,
     })
 }
 
@@ -6024,6 +6107,9 @@ fn resolve_container_extends(
         ancestors.pop();
         // Before inheriting, while an unset field still means "the parent's".
         let inherited = &suppliers[&parent];
+        if merged.image.is_none() {
+            supplied.image = inherited.image.clone();
+        }
         if merged.volumes.is_none() {
             supplied.volumes = inherited.volumes.clone();
         }
