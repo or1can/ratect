@@ -1839,8 +1839,9 @@ dependencies = [
 
 [[package]]
 name = "noyalib"
-version = "0.0.57"
-source = "git+https://github.com/or1can/noyalib.git?branch=fix%2Flocate-unknown-and-missing-field#0c54c2c7fbe212e3dc662666f92f615105f8345d"
+version = "0.0.58"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fad8f1a552070f6ba5f60f25e880f7b6daeda8fe138f589345141d31a21a3bb"
 dependencies = [
  "hashbrown",
  "indexmap",
@@ -3950,3 +3951,8 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[patch.unused]]
+name = "noyalib"
+version = "0.0.57"
+source = "git+https://github.com/or1can/noyalib.git?branch=fix%2Flocate-unknown-and-missing-field#0c54c2c7fbe212e3dc662666f92f615105f8345d"
