@@ -32,23 +32,8 @@ resolver = "2"
 #
 # Cargo.lock pins the exact commit, so builds stay reproducible. Dropping this
 # patch entirely still needs a new crates.io release with today's `master`.
-#
-# `noyalib`: upstream's in-flight release branch (`feat/v0.0.58`, still versioned
-# 0.0.57 until it ships) plus one fix of ours: an unknown or missing field
-# rejected by `from_str` now carries its line, column and field path like every
-# other typed rejection, which is what lets a config load error name where the
-# bad entry is (ratect#415). Raised upstream as
-# https://github.com/sebastienrousseau/noyalib/pull/482; upstream releases
-# roughly daily, so drop this pin — and bump `ratect-core`'s `noyalib` version —
-# as soon as a crates.io release contains it. A Renovate bump past 0.0.57 makes
-# cargo ignore this patch (the fork stays versioned 0.0.57) with only a warning:
-# if that release lacks the fix, the error-location tests in `config_tests` and
-# `ratect-compat`'s `unsupported_config_key_reports_error` fail; if it has it,
-# delete this entry in that same PR. Same branch rules as `bollard`'s
-# above: cut from upstream's in-flight release branch, rebased never merged into.
 [patch.crates-io]
 bollard = { git = "https://github.com/or1can/bollard.git", branch = "fix/native-certs-partial-load" }
-noyalib = { git = "https://github.com/or1can/noyalib.git", branch = "fix/locate-unknown-and-missing-field" }
 
 # The profile that 'dist' will build with
 [profile.dist]

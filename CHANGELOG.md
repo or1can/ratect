@@ -59,6 +59,7 @@ history, from when it was the only binary.
 - A negative integer `shm_size` (`shm_size: -2`, or `shm_size = -2` in `ratect.toml`) is refused when the file loads, as `Invalid size '-2'`, instead of failing when Docker creates the container.
 - A `\` in an expression in a YAML config file escapes the character after it, as in Batect: `\$X` is the literal `$X` rather than a reference, `a\b` is `ab`, and `${X:-a\}b}` defaults to `a}b`. A trailing `\` fails the load. A YAML file's `image` is still used as written.
 - `run_as_current_user.enabled` defaults to `false` in a YAML config file, as in Batect, so `run_as_current_user: {}` loads and maps no user. A `ratect.toml` still requires it.
+- A task run from a terminal, whose container gets a TTY, no longer risks its output stalling with no error when that output begins with a `\x01` or `\x02` byte (bollard#816).
 
 ## [ratect-compat 0.32.0 · ratect 0.11.0] - 2026-10-13
 
