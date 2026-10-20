@@ -183,7 +183,7 @@ pub fn convert_project(
                 project_name: project_name.clone(),
                 containers: containers
                     .iter()
-                    .map(|(name, container)| (name.clone(), malformed_literals_escaped(container)))
+                    .map(|(name, container)| (name.clone(), literal_fields_escaped(container)))
                     .collect(),
                 tasks: tasks.clone(),
                 config_variables: config_variables.clone(),
@@ -209,21 +209,25 @@ pub fn convert_project(
 }
 
 /// `container` with each value `ratect.toml` reads as an expression and a
-/// Batect-format file doesn't — `image`, a compact volume's host path and
-/// `run_as_current_user.home_directory` — escaped when it is malformed
-/// (`img$`), so the converted file loads and means what the source did.
-/// It can't have been meant as a reference, unlike a well-formed one, which
-/// is carried across as written for its [`ConversionCheck`] to raise (#385).
-fn malformed_literals_escaped(container: &Container) -> Container {
+/// Batect-format file doesn't rewritten to mean what the source did. A
+/// compact volume's host path and `run_as_current_user.home_directory` are
+/// rewritten as
+/// [`literal_as_expression`](crate::expressions::literal_as_expression)
+/// says, the one rule [`conversion_checks`] also judges them by: so a
+/// reference the converted file holds is exactly one a check lists. An
+/// `image` is kept wholly literal instead: a Batect-format file refuses a
+/// reference there at load, so a `$` or `<` that loaded (`alpine\$HOME`)
+/// was never meant as one, and no check would list it.
+fn literal_fields_escaped(container: &Container) -> Container {
     let escaped = |value: &mut String| {
-        if crate::expressions::check_syntax(value).is_err() {
-            *value = crate::expressions::escape(value);
-        }
+        *value = crate::expressions::literal_as_expression(value);
     };
     let mut container = container.clone();
     // `true`: convert reads a Batect-format file.
     if !Container::image_is_expression(true) {
-        container.image.iter_mut().for_each(escaped);
+        for image in container.image.iter_mut() {
+            *image = crate::expressions::literal_kept(image);
+        }
     }
     for volume in container.volumes.iter_mut().flatten() {
         if let VolumeMount::Local(local) = volume {

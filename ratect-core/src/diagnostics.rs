@@ -352,7 +352,9 @@ fn home_directory_expression_checks(config: &Config) -> Vec<ConversionCheck> {
                 .as_ref()?
                 .home_directory
                 .as_deref()?;
-            crate::expressions::contains_expression(home).then_some((name, home))
+            // Judged as convert writes it — see `literal_as_expression`.
+            let converted = crate::expressions::literal_as_expression(home);
+            crate::expressions::contains_expression(&converted).then_some((name, home))
         })
         .collect();
     containers.sort_unstable();
@@ -389,7 +391,9 @@ fn compact_volume_expression_checks(config: &Config) -> Vec<ConversionCheck> {
                     // `true`: convert reads a Batect-format file.
                     VolumeMount::Local(local)
                         if !local.local_is_expression(true)
-                            && crate::expressions::contains_expression(&local.local) =>
+                            && crate::expressions::contains_expression(
+                                &crate::expressions::literal_as_expression(&local.local),
+                            ) =>
                     {
                         Some((name, local.local.as_str()))
                     }

@@ -101,12 +101,38 @@ pub(crate) fn check_syntax(input: &str) -> Result<()> {
     scan(input, |_| Ok(String::new())).map(drop)
 }
 
-/// `input` as an expression that evaluates to exactly `input`: every `\`,
-/// `$` and `<` escaped, so none starts a reference or an escape.
-pub(crate) fn escape(input: &str) -> String {
+/// What a value read as plain text — a Batect-format file's compact volume
+/// host path or `run_as_current_user.home_directory` — becomes as the
+/// expression a `ratect.toml` reads in its place (`config convert`).
+///
+/// Each `\` stays a backslash, since plain text has no escapes (#628), so
+/// it is escaped. Each `$`/`<` stays what it would be if the field were an
+/// expression: a reference, which is the point of reading it as one — so
+/// `a\$HOME` becomes `a\\$HOME`, a reference to `HOME`, and
+/// [`contains_expression`] on the result says so. Unless that leaves no
+/// valid expression (`img$`, `img\$`), when it can't have meant one and is
+/// kept wholly literal (#385). A `\` inside a braced name is doubled too,
+/// so it names a different variable; no variable name holds one.
+pub(crate) fn literal_as_expression(literal: &str) -> String {
+    let backslashes_kept = escape(literal, &['\\']);
+    if check_syntax(&backslashes_kept).is_ok() {
+        backslashes_kept
+    } else {
+        literal_kept(literal)
+    }
+}
+
+/// `literal` as an expression that evaluates to exactly `literal`, holding
+/// no reference: every `\`, `$` and `<` escaped.
+pub(crate) fn literal_kept(literal: &str) -> String {
+    escape(literal, &['\\', '$', '<'])
+}
+
+/// `input` with each of `special` escaped, so it evaluates to itself.
+fn escape(input: &str, special: &[char]) -> String {
     let mut escaped = String::with_capacity(input.len());
     for c in input.chars() {
-        if matches!(c, '\\' | '$' | '<') {
+        if special.contains(&c) {
             escaped.push('\\');
         }
         escaped.push(c);

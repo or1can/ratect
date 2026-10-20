@@ -475,24 +475,41 @@ fn check_syntax_accepts_an_unresolvable_reference() {
     check_syntax("$UNSET<undeclared${U:-a\\}b}").unwrap();
 }
 
-/// `escape` is the inverse of evaluation, whatever the text holds —
-/// malformed, a reference, or escapes of its own.
+/// A literal read as an expression (`config convert`, #385/#628) keeps
+/// every `\` as a backslash and every reference as one — `$`/`<` reading as
+/// they would if the field were an expression — unless that leaves no valid
+/// expression, when it is kept wholly literal. Either way, whether the
+/// result holds a reference is what `contains_expression` says of it.
 #[test]
-fn an_escaped_value_evaluates_to_itself() {
+fn a_literal_as_an_expression_keeps_its_backslashes_and_references() {
     let env = host_env(&[("X", "set")]);
-    let config_vars = HashMap::from([("x".to_string(), Some("set".to_string()))]);
-    for input in [
-        "img$",
-        "$X",
-        "<x",
-        "a < b",
-        r"a\b",
-        r"trailing\",
-        "${X:default}",
-        "plain",
+    let config_vars = HashMap::from([("x".to_string(), Some("cv".to_string()))]);
+    for (literal, expected, has_reference) in [
+        ("plain", "plain", false),
+        (r"foo\bar", r"foo\bar", false),
+        (r"\\", r"\\", false),
+        (r"trailing\", r"trailing\", false),
+        ("$X", "set", true),
+        (r"$X\y", r"set\y", true),
+        (r"a\$X", r"a\set", true),
+        (r"\<x/$X", r"\cv/set", true),
+        // No valid expression either way: kept as written.
+        ("img$", "img$", false),
+        (r"img\$", r"img\$", false),
+        ("a < b", "a < b", false),
+        ("$X$", "$X$", false),
+        ("${X:default}", "${X:default}", false),
     ] {
-        let escaped = escape(input);
-        assert!(!contains_expression(&escaped), "{escaped:?}");
-        assert_eq!(interpolate(&escaped, &env, &config_vars).unwrap(), input);
+        let converted = literal_as_expression(literal);
+        assert_eq!(
+            interpolate(&converted, &env, &config_vars).unwrap(),
+            expected,
+            "{literal:?} as {converted:?}"
+        );
+        assert_eq!(
+            contains_expression(&converted),
+            has_reference,
+            "{literal:?} as {converted:?}"
+        );
     }
 }
