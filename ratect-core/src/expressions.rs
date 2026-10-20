@@ -22,6 +22,13 @@
 //! expression the same way, escapes included, with no branch on which format a
 //! value came from (#382). Which fields are expressions at all is the config
 //! loader's business, not this module's.
+//!
+//! The grammar is Batect's `Expression.parse` (#383, #384): every `$` or `<`
+//! not escaped starts a reference, and one that is malformed — no name, an
+//! unclosed `{`, a `:` not followed by `-` — is an error naming the problem
+//! and its column, never literal text (#385). The loader runs
+//! `check_syntax` while it reads each expression field, so a malformed one
+//! fails the load, located in its file.
 
 use anyhow::{bail, Result};
 use std::collections::HashMap;
@@ -36,9 +43,9 @@ use std::collections::HashMap;
 /// so `${U:-a\}b}` defaults to `a}b`; in a variable's name it is no escape.
 /// A trailing `\`, with nothing to escape, is an error.
 ///
-/// Otherwise lenient: a malformed sigil — a `$`/`<` not followed by a valid
-/// identifier, or an unterminated `${`/`<{` — is passed through unchanged,
-/// as literal text.
+/// Every `$`/`<` not escaped starts a reference — see `parse_token` for
+/// how far its name runs — and a malformed one is an error, as
+/// `check_syntax` reports it, not literal text.
 ///
 /// `host_env` looks up a host environment variable by name — injected so
 /// callers/tests don't have to touch the real process environment.
@@ -64,23 +71,27 @@ pub fn interpolate(
 /// expression rather than as literal text.
 ///
 /// Shares [`scan`] with `interpolate` instead of scanning for `$`/`<`, so the
-/// two cannot disagree about what counts. `interpolate` is deliberately
-/// lenient — a `$` not followed by a valid identifier, or an unterminated
-/// `${`, is literal — and a detector written separately would drift from that
-/// on exactly the inputs where being wrong is a false rejection.
+/// two cannot disagree about what counts — a detector written separately
+/// would drift from where a name ends or what escapes a sigil, on exactly the
+/// inputs where being wrong is a false rejection.
+///
+/// A malformed value is no expression, whatever references come before its
+/// mistake: it fails the load wherever it is an expression, and where it is
+/// not — a `batect.yml`'s `image` — it is used as written, so `img$` and
+/// `$HOME/a$` are no expressions. So this is true only of a value
+/// [`check_syntax`] accepts, and the two never both flag one value.
 ///
 /// A well-formed token whose variable happens not to resolve here counts as
 /// present: it *is* an expression, it just cannot be evaluated without the
 /// caller's environment, which this deliberately does not take.
 pub(crate) fn contains_expression(input: &str) -> bool {
     let mut found = false;
-    // A syntax error (a trailing `\`) ends the walk; whatever was found by
-    // then still counts, and the error is `check_syntax`'s to report.
-    let _ = scan(input, |_| {
+    let well_formed = scan(input, |_| {
         found = true;
         Ok(String::new())
-    });
-    found
+    })
+    .is_ok();
+    found && well_formed
 }
 
 /// Refuses what [`interpolate`] would refuse whatever its variables held —
@@ -88,6 +99,19 @@ pub(crate) fn contains_expression(input: &str) -> bool {
 /// on — so a caller can judge it before any variable is known.
 pub(crate) fn check_syntax(input: &str) -> Result<()> {
     scan(input, |_| Ok(String::new())).map(drop)
+}
+
+/// `input` as an expression that evaluates to exactly `input`: every `\`,
+/// `$` and `<` escaped, so none starts a reference or an escape.
+pub(crate) fn escape(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for c in input.chars() {
+        if matches!(c, '\\' | '$' | '<') {
+            escaped.push('\\');
+        }
+        escaped.push(c);
+    }
+    escaped
 }
 
 /// One well-formed reference, as [`parse_token`] read it.
@@ -107,121 +131,164 @@ fn scan(input: &str, mut on_token: impl FnMut(&Token) -> Result<String>) -> Resu
     let mut i = 0;
 
     while i < chars.len() {
-        let c = chars[i];
-        if c == '\\' {
-            if let Some(&escaped) = chars.get(i + 1) {
+        match chars[i] {
+            '\\' => {
+                let Some(&escaped) = chars.get(i + 1) else {
+                    bail!(
+                        "invalid escape sequence: '\\' at column {} must be immediately \
+                         followed by a character to escape",
+                        i + 1
+                    );
+                };
                 result.push(escaped);
                 i += 2;
-                continue;
             }
-            bail!(
-                "invalid escape sequence: the '\\' at the end must be followed by a character \
-                 to escape"
-            );
-        }
-        if c == '$' || c == '<' {
-            if let Some(token) = parse_token(&chars[i..], c) {
+            '$' | '<' => {
+                let token = parse_token(&chars, i)?;
                 result.push_str(&on_token(&token)?);
                 i += token.len;
-                continue;
+            }
+            c => {
+                result.push(c);
+                i += 1;
             }
         }
-        result.push(c);
-        i += 1;
     }
 
     Ok(result)
 }
 
-fn is_ident_start(c: char) -> bool {
-    c.is_ascii_alphabetic() || c == '_'
+/// Whether `c` continues an unbraced name: Batect's `isLetterOrDigit() ||
+/// c == '_'`, for either sigil. Rust's `char::is_alphanumeric` is the
+/// nearest test — Unicode alphabetic or numeric — and is wider than
+/// Kotlin's at the margins: it also takes letter-like numbers (`Ⅻ`),
+/// other numerics (`½`, `²`) and the combining marks Unicode counts as
+/// alphabetic, all of which end a name in Batect. Pinned here rather than
+/// matched, since no name anyone writes is told apart by them.
+fn is_name_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
 
-/// Config variable names (`<name`, sigil `<`) may contain `.` — needed for
-/// Batect's one built-in, `batect.project_directory`. Host environment
-/// variable names (`$VAR`, sigil `$`) never do, so `.` isn't allowed there.
-fn is_ident_char(c: char, sigil: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_' || (sigil == '<' && c == '.')
-}
+/// Parses the reference whose sigil — `$` or `<` — is `chars[start]`, as
+/// Batect's `readVariable` does, or says what is wrong with it and at which
+/// column (1-based, in characters) of the value.
+///
+/// Unbraced, the name is the longest run of [`is_name_char`]. Braced, it is
+/// everything up to the closing `}` — or, for `$`, up to a `:`, which must
+/// be followed by `-` and then a default running to the first `}` not
+/// escaped by a `\`. No escape applies in a name, as in Batect.
+fn parse_token(chars: &[char], start: usize) -> Result<Token> {
+    let sigil = chars[start];
+    let kind = if sigil == '$' {
+        "environment"
+    } else {
+        "config"
+    };
+    let fail = |problem: String| anyhow::anyhow!("invalid {kind} variable reference: {problem}");
 
-fn is_valid_ident(name: &str, sigil: char) -> bool {
-    matches!(name.chars().next(), Some(c) if is_ident_start(c))
-        && name.chars().all(|c| is_ident_char(c, sigil))
-}
+    let Some(&after) = chars.get(start + 1) else {
+        return Err(fail(format!(
+            "'{sigil}' at column {} must be followed by a variable name",
+            start + 1
+        )));
+    };
 
-/// Tries to parse one expression token starting at `chars[0]` (which is `$`
-/// or `<`, matching `sigil`). Returns `None` when it isn't a valid, complete
-/// token — the sigil should then be treated as a literal character.
-fn parse_token(chars: &[char], sigil: char) -> Option<Token> {
-    if chars.len() < 2 {
-        return None;
+    if after != '{' {
+        let end = (start + 1..chars.len())
+            .find(|&i| !is_name_char(chars[i]))
+            .unwrap_or(chars.len());
+        if end == start + 1 {
+            return Err(fail(format!(
+                "'{sigil}' at column {} does not contain a variable name",
+                start + 1
+            )));
+        }
+        return Ok(Token {
+            len: end - start,
+            sigil,
+            name: chars[start + 1..end].iter().collect(),
+            default: None,
+        });
     }
 
-    if chars[1] == '{' {
-        // The name runs to the first `}` or, for a host variable, `:-`; no
-        // escape applies in it, as in Batect.
-        let mut end = 2;
-        let mut has_default = false;
-        loop {
-            match chars.get(end)? {
-                '}' => break,
-                ':' if sigil == '$' && chars.get(end + 1) == Some(&'-') => {
-                    has_default = true;
+    let mut i = start + 2;
+    let mut name = String::new();
+    let mut closed = false;
+    let mut has_default = false;
+    while let Some(&c) = chars.get(i) {
+        match c {
+            '}' => {
+                closed = true;
+                break;
+            }
+            ':' if sigil == '$' => {
+                has_default = true;
+                break;
+            }
+            c => {
+                name.push(c);
+                i += 1;
+            }
+        }
+    }
+
+    let default = if has_default {
+        if chars.get(i + 1) != Some(&'-') {
+            return Err(fail(format!(
+                "':' at column {} must be immediately followed by '-'",
+                i + 1
+            )));
+        }
+        i += 2;
+        let mut default = String::new();
+        while let Some(&c) = chars.get(i) {
+            match c {
+                '}' => {
+                    closed = true;
                     break;
                 }
-                _ => end += 1,
-            }
-        }
-        let name: String = chars[2..end].iter().collect();
-
-        // A default runs to the first `}` not escaped by a `\`, which is
-        // dropped and the character after it kept.
-        let default = if has_default {
-            end += 2;
-            let mut default = String::new();
-            loop {
-                match *chars.get(end)? {
-                    '}' => break,
-                    '\\' => {
-                        default.push(*chars.get(end + 1)?);
-                        end += 2;
-                    }
-                    c => {
-                        default.push(c);
-                        end += 1;
-                    }
+                '\\' => {
+                    let Some(&escaped) = chars.get(i + 1) else {
+                        return Err(fail(format!(
+                            "'\\' at column {} must be immediately followed by a character \
+                             to escape",
+                            i + 1
+                        )));
+                    };
+                    default.push(escaped);
+                    i += 2;
+                }
+                c => {
+                    default.push(c);
+                    i += 1;
                 }
             }
-            Some(default)
-        } else {
-            None
-        };
-
-        if !is_valid_ident(&name, sigil) {
-            return None;
         }
-
-        Some(Token {
-            len: end + 1,
-            sigil,
-            name,
-            default,
-        })
+        Some(default)
     } else {
-        if !is_ident_start(chars[1]) {
-            return None;
-        }
-        let mut end = 1;
-        while end < chars.len() && is_ident_char(chars[end], sigil) {
-            end += 1;
-        }
-        Some(Token {
-            len: end,
-            sigil,
-            name: chars[1..end].iter().collect(),
-            default: None,
-        })
+        None
+    };
+
+    if !closed {
+        return Err(fail(format!(
+            "'{{' at column {} must be followed by a closing '}}'",
+            start + 2
+        )));
     }
+    if name.is_empty() {
+        let written: String = chars[start..=i].iter().collect();
+        return Err(fail(format!(
+            "'{written}' at column {} does not contain a variable name",
+            start + 1
+        )));
+    }
+
+    Ok(Token {
+        len: i + 1 - start,
+        sigil,
+        name,
+        default,
+    })
 }
 
 fn resolve(

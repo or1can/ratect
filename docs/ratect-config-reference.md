@@ -318,7 +318,10 @@ whatever this machine supplies. Running a task evaluates only the containers
 that task uses, when the run reaches it — again like every other
 expression-bearing field. So an unset variable with no `:-default` fails only
 the tasks whose containers read it. The error names the container, the field
-and the expression, so you are not left hunting for which one.
+and the expression, so you are not left hunting for which one. A
+[malformed](ratect-compat-config-reference.md#variable-names) one, such as
+`img:${`, is the exception: it is a mistake in the file, so the file fails to
+load, located by its line and column.
 
 **Rejected in a `batect.yml`**, rather than resolved or ignored. Batect has no
 expression support in `image`, so a file using one would load here and fail
@@ -334,6 +337,9 @@ knows the difference between an expression and a literal `$`: `alpine:3.18` and
 `\$` is a literal `$` here, as in any expression. A `batect.yml`'s `image` is no
 expression at all, so a `\` in it is kept as written; the rejection reads an
 escape as the expression syntax does, so `repo/\$x` loads and `repo/\\$x` doesn't.
+Names follow the [expression syntax](ratect-compat-config-reference.md#variable-names)
+too, so `repo/img:$5` is rejected, while `repo/img$`, a `$` with no name after
+it, is no expression and is used as written.
 
 ## Nested Git includes
 

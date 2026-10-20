@@ -106,16 +106,125 @@ fn errors_on_declared_config_var_with_no_value() {
     assert!(err.to_string().contains("no value"));
 }
 
+/// #385: a `$` with no name after it is no literal but a mistake, as in
+/// Batect — `$5` is a name (#383), the other two are not.
 #[test]
-fn leaves_dollar_sign_not_followed_by_identifier_as_literal() {
-    let result = interpolate("$ $$ $5", host_env(&[]), &HashMap::new()).unwrap();
-    assert_eq!(result, "$ $$ $5");
+fn a_dollar_sign_not_followed_by_a_name_is_an_error() {
+    let result = interpolate("$5", host_env(&[("5", "five")]), &HashMap::new()).unwrap();
+    assert_eq!(result, "five");
+    for input in ["$ ", "$$"] {
+        let err = interpolate(input, host_env(&[]), &HashMap::new()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "invalid environment variable reference: '$' at column 1 does not contain a \
+             variable name",
+            "{input:?}"
+        );
+    }
 }
 
+/// #385: an unterminated `${` is a mistake, not literal text, as in Batect.
 #[test]
-fn leaves_unterminated_braced_expression_as_literal() {
-    let result = interpolate("${FOO", host_env(&[]), &HashMap::new()).unwrap();
-    assert_eq!(result, "${FOO");
+fn an_unterminated_braced_expression_is_an_error() {
+    let err = interpolate("${FOO", host_env(&[]), &HashMap::new()).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "invalid environment variable reference: '{' at column 2 must be followed by a \
+         closing '}'"
+    );
+}
+
+/// #383: names follow Batect's rules. Unbraced, a name is the longest run of
+/// letters, digits and `_` — a leading digit and a non-ASCII letter included,
+/// and `.` and `-` ending it for either sigil (#384). Braced, it is
+/// everything up to the `}` — or, for `$`, the `:` of a default.
+#[test]
+fn names_follow_batects_rules() {
+    let env = host_env(&[
+        ("5", "five"),
+        ("1abc", "one"),
+        ("é", "e-acute"),
+        ("a b", "spaced"),
+        ("FOO.BAR", "dotted"),
+        ("A", "x"),
+    ]);
+    let config_vars = HashMap::from([
+        ("my-var".to_string(), Some("dashed".to_string())),
+        ("SOME_VAR:".to_string(), Some("coloned".to_string())),
+        ("foo".to_string(), Some("x".to_string())),
+    ]);
+    for (input, expected) in [
+        ("$5", "five"),
+        ("$1abc", "one"),
+        ("$é", "e-acute"),
+        ("${a b}", "spaced"),
+        ("${FOO.BAR}", "dotted"),
+        ("$A-B", "x-B"),
+        ("<{my-var}", "dashed"),
+        ("<{SOME_VAR:}", "coloned"),
+        ("<foo.txt", "x.txt"),
+        ("<foo-bar", "x-bar"),
+    ] {
+        assert_eq!(
+            interpolate(input, &env, &config_vars).unwrap(),
+            expected,
+            "interpolating {input:?}"
+        );
+    }
+}
+
+/// #384: an unbraced config variable's name ends at a `.`, even when a
+/// longer dotted name is declared too — only braces reach that one.
+#[test]
+fn an_unbraced_config_variable_name_ends_at_a_dot() {
+    let config_vars = HashMap::from([
+        ("foo".to_string(), Some("A".to_string())),
+        ("foo.bar".to_string(), Some("B".to_string())),
+        ("dir".to_string(), Some("d".to_string())),
+    ]);
+    for (input, expected) in [
+        ("<foo.bar", "A.bar"),
+        ("<{foo.bar}", "B"),
+        ("see <dir.", "see d."),
+    ] {
+        assert_eq!(
+            interpolate(input, host_env(&[]), &config_vars).unwrap(),
+            expected,
+            "interpolating {input:?}"
+        );
+    }
+}
+
+/// #385: every malformed reference Batect refuses is refused, by
+/// `check_syntax` as well as `interpolate`, saying what is wrong and at
+/// which column of the value — Batect's own wording, from its
+/// `ExpressionSpec`, plus the cases its refuters added.
+#[test]
+fn a_malformed_reference_is_an_error_naming_its_column() {
+    for (input, expected) in [
+        ("$", "invalid environment variable reference: '$' at column 1 must be followed by a variable name"),
+        ("a $", "invalid environment variable reference: '$' at column 3 must be followed by a variable name"),
+        ("${", "invalid environment variable reference: '{' at column 2 must be followed by a closing '}'"),
+        ("${}", "invalid environment variable reference: '${}' at column 1 does not contain a variable name"),
+        ("${some", "invalid environment variable reference: '{' at column 2 must be followed by a closing '}'"),
+        ("${some:", "invalid environment variable reference: ':' at column 7 must be immediately followed by '-'"),
+        ("${some:}", "invalid environment variable reference: ':' at column 7 must be immediately followed by '-'"),
+        ("${X:default}", "invalid environment variable reference: ':' at column 4 must be immediately followed by '-'"),
+        ("${a:x:-y}", "invalid environment variable reference: ':' at column 4 must be immediately followed by '-'"),
+        (r"${some:-b\", r"invalid environment variable reference: '\' at column 10 must be immediately followed by a character to escape"),
+        ("${:-}", "invalid environment variable reference: '${:-}' at column 1 does not contain a variable name"),
+        ("${:-default}", "invalid environment variable reference: '${:-default}' at column 1 does not contain a variable name"),
+        ("<", "invalid config variable reference: '<' at column 1 must be followed by a variable name"),
+        ("a < b", "invalid config variable reference: '<' at column 3 does not contain a variable name"),
+        ("<{", "invalid config variable reference: '{' at column 2 must be followed by a closing '}'"),
+        ("<{some", "invalid config variable reference: '{' at column 2 must be followed by a closing '}'"),
+        ("<{}", "invalid config variable reference: '<{}' at column 1 does not contain a variable name"),
+    ] {
+        let err = check_syntax(input).unwrap_err();
+        assert_eq!(err.to_string(), expected, "checking {input:?}");
+        let err = interpolate(input, host_env(&[]), &HashMap::new()).unwrap_err();
+        assert_eq!(err.to_string(), expected, "interpolating {input:?}");
+    }
 }
 
 #[test]
@@ -133,15 +242,20 @@ fn mixes_host_and_config_var_expressions_in_one_string() {
     assert_eq!(result, "api-staging>-eu");
 }
 
+/// #384: the built-in is reachable braced only, as in Batect — unbraced, the
+/// name ends at the `.`, so it reads a variable named `batect`.
 #[test]
-fn expands_bare_config_var_with_dotted_name() {
+fn an_unbraced_built_in_reads_a_variable_named_batect() {
     let mut config_vars = HashMap::new();
     config_vars.insert(
         "batect.project_directory".to_string(),
         Some("/abs/project".to_string()),
     );
-    let result = interpolate("<batect.project_directory", host_env(&[]), &config_vars).unwrap();
-    assert_eq!(result, "/abs/project");
+    let err = interpolate("<batect.project_directory", host_env(&[]), &config_vars).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Config variable 'batect' is not declared in 'config_variables'"
+    );
 }
 
 #[test]
@@ -198,19 +312,18 @@ fn detection_agrees_with_interpolation_about_what_is_an_expression() {
         "<tag",
         "<{tag}",
         "<undeclared",
+        // Names under Batect's rules (#383), which an ASCII identifier
+        // would miss.
+        "$1nvalid",
+        "price: $100",
+        "${a b}",
+        "<{my-var}",
         // An escaped backslash, then a real reference.
         r"\\$TAG",
         // Literals — including the near-misses that make a naive
         // "contains a sigil" check wrong.
         "alpine:3.18",
         "repo/img:1.2.3",
-        "$",
-        "$ ",
-        "$1nvalid",
-        "${unterminated",
-        "<",
-        "<{unterminated",
-        "price: $100",
         // Escapes: literal, though interpolation drops the backslash.
         r"\$TAG",
         r"\<tag",
@@ -230,6 +343,27 @@ fn detection_agrees_with_interpolation_about_what_is_an_expression() {
                 "interpolation treated {input:?} as an expression; detection did not"
             ),
         }
+    }
+}
+
+/// A malformed value is no expression (#385), whatever references come
+/// before its mistake: it never loads as one, so nothing reads it as one — and `image` in a `batect.yml`, which is never parsed,
+/// is used as written rather than refused as an expression.
+#[test]
+fn a_malformed_value_is_not_an_expression() {
+    for input in [
+        "$",
+        "$ ",
+        "img$",
+        "${unterminated",
+        "<",
+        "<{unterminated",
+        // A reference before the mistake doesn't make it one.
+        "$HOME/a$",
+        "<x/$",
+    ] {
+        assert!(check_syntax(input).is_err(), "{input:?}");
+        assert!(!contains_expression(input), "{input:?}");
     }
 }
 
@@ -288,7 +422,7 @@ fn a_trailing_backslash_is_an_error() {
         let err = interpolate(input, host_env(&[("X", "set")]), &HashMap::new()).unwrap_err();
         let message = err.to_string();
         assert!(
-            message.contains("must be followed by a character to escape"),
+            message.contains("must be immediately followed by a character to escape"),
             "{message}"
         );
     }
@@ -313,15 +447,14 @@ fn a_backslash_escapes_the_next_character_in_a_default() {
 }
 
 /// #382: escapes apply in literal text and defaults, never in a name, as in
-/// Batect. `A\B` is no identifier, so `${A\B}` is no reference — not `$AB`,
-/// though `AB` is set — and falls back to literal text, where the `\` then
-/// escapes like any other.
+/// Batect. A braced name runs to its `}` whatever it holds (#383), so
+/// `${A\B}` names `A\B` — not `AB`, though `AB` is set.
 #[test]
 fn a_backslash_in_a_variable_name_is_not_an_escape() {
-    let env = host_env(&[("AB", "wrong")]);
+    let env = host_env(&[("AB", "wrong"), (r"A\B", "right")]);
     assert_eq!(
         interpolate(r"${A\B}", env, &HashMap::new()).unwrap(),
-        "${AB}"
+        "right"
     );
 }
 
@@ -340,4 +473,26 @@ fn an_escaped_sigil_is_not_an_expression() {
 #[test]
 fn check_syntax_accepts_an_unresolvable_reference() {
     check_syntax("$UNSET<undeclared${U:-a\\}b}").unwrap();
+}
+
+/// `escape` is the inverse of evaluation, whatever the text holds —
+/// malformed, a reference, or escapes of its own.
+#[test]
+fn an_escaped_value_evaluates_to_itself() {
+    let env = host_env(&[("X", "set")]);
+    let config_vars = HashMap::from([("x".to_string(), Some("set".to_string()))]);
+    for input in [
+        "img$",
+        "$X",
+        "<x",
+        "a < b",
+        r"a\b",
+        r"trailing\",
+        "${X:default}",
+        "plain",
+    ] {
+        let escaped = escape(input);
+        assert!(!contains_expression(&escaped), "{escaped:?}");
+        assert_eq!(interpolate(&escaped, &env, &config_vars).unwrap(), input);
+    }
 }

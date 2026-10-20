@@ -343,7 +343,10 @@ is used as written in a `batect.yml` but
 [evaluated](ratect-config-reference.md#where-the-semantics-differ) in a `ratect.toml`,
 so one containing a `$` or `<` expression changes value. Likewise, a string-form
 `volumes` entry's host path is used as written in a `batect.yml` but evaluated in a
-`ratect.toml`. Two more concern a Git include. A pathless entry whose bundle also offers
+`ratect.toml`. One of these, or an `image`, that is no well-formed expression —
+`img$`, a `$` with no name after it — can't have meant one, so convert
+[escapes](ratect-compat-config-reference.md#escaping-with-) it (`img\$`) and it
+keeps its value, unlisted. Two more concern a Git include. A pathless entry whose bundle also offers
 a `ratect-bundle.toml` would have `ratect` load that file instead of the
 `batect-bundle.yml` the `batect.yml` loaded, so convert sets its `path` to
 `batect-bundle.yml` and says so; remove `path` to switch to the native file. And a

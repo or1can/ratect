@@ -258,10 +258,10 @@ fn tasks_list_reads_a_backslash_in_an_expression_as_an_escape() {
 
     let stderr = String::from_utf8_lossy(&trailing.stderr);
     assert!(!trailing.status.success(), "{stderr}");
-    assert!(stderr.contains("Container 'app'"), "{stderr}");
-    assert!(stderr.contains(r"'environment.X' ('a\')"), "{stderr}");
+    assert!(stderr.contains("line 6"), "{stderr}");
+    assert!(stderr.contains(r"invalid expression 'a\'"), "{stderr}");
     assert!(
-        stderr.contains("must be followed by a character to escape"),
+        stderr.contains("must be immediately followed by a character to escape"),
         "{stderr}"
     );
     assert!(
@@ -270,6 +270,38 @@ fn tasks_list_reads_a_backslash_in_an_expression_as_an_escape() {
         String::from_utf8_lossy(&escaped.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&escaped.stdout), "build\n");
+}
+
+/// #385: a malformed expression fails `tasks list`, located in the file by
+/// its line and column.
+#[test]
+fn tasks_list_refuses_a_malformed_expression_located_in_the_file() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "ratect_version = \"0.12.0\"\nproject_name = \"demo\"\n\n[containers.app]\n\
+         image = \"alpine:3.18\"\nenvironment = { X = '${X:default}' }\n\n\
+         [tasks.build]\nrun = { container = \"app\" }\n",
+    )
+    .unwrap();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(dir.join("ratect.toml"))
+        .args(["tasks", "list", "-o", "quiet"])
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&dir).ok();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("line 6, column 21"), "{stderr}");
+    assert!(
+        stderr.contains(
+            "invalid expression '${X:default}': invalid environment variable reference: ':' \
+             at column 4 must be immediately followed by '-'"
+        ),
+        "{stderr}"
+    );
 }
 
 /// `tasks list` evaluates nothing, so its config-variable options are

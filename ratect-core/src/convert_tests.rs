@@ -621,3 +621,63 @@ fn every_table_is_written_in_key_order() {
         "project_name = \"demo\"\n\n[containers.aa]\nimage = \"alpine\"\n\n[containers.zz]\nimage = \"alpine\"\n\n[containers.zz.environment]\nA = \"1\"\nB = \"2\"\nC = \"3\"\nD = \"4\"\nE = \"5\"\nF = \"6\"\nG = \"7\"\nH = \"8\"\nI = \"9\"\nJ = \"10\"\n\n[[containers.zz.volumes]]\ncontainer = \"/code\"\nlocal = \".\"\n"
     );
 }
+
+/// #385: a Batect-format file uses its `image`, compact volume host paths
+/// and `home_directory` as written, so a malformed sigil there (`img$`) is
+/// valid; in `ratect.toml` those fields are expressions, where it would
+/// fail the load. It can't have meant a reference, so it converts escaped,
+/// and the converted project loads with the same values. A well-formed
+/// reference is carried across as before, with its check — and only it: a
+/// malformed value holding a reference before its mistake is escaped whole,
+/// with no check, since it no longer becomes an expression.
+#[tokio::test]
+async fn a_malformed_literal_converts_escaped_and_keeps_its_value() {
+    let scratch = scratch();
+    let dir = &scratch.0;
+    write_project(
+        dir,
+        &[(
+            "batect.yml",
+            "project_name: demo\ncontainers:\n  app:\n    image: 'img$'\n    volumes:\n      \
+             - 'a$:/x'\n      - '$HOME/b:/b'\n      - '$HOME/c$:/c'\n    run_as_current_user:\n      enabled: true\n      \
+             home_directory: '/home/a < b'\n",
+        )],
+    );
+    let converted = convert(&dir.join("batect.yml")).await.unwrap();
+    write_converted(&converted);
+    let checks: Vec<ConversionCheckKind> = converted.files[0]
+        .checks
+        .iter()
+        .map(|check| check.kind)
+        .collect();
+    assert_eq!(checks, vec![ConversionCheckKind::CompactVolumeExpression]);
+
+    let native = load_project_native(&dir.join("ratect.toml")).await.unwrap();
+    let evaluated = native
+        .evaluate(["app"], [], &HashMap::new(), |name: &str| {
+            (name == "HOME").then(|| "/h".to_string())
+        })
+        .unwrap();
+    let app = &evaluated.containers["app"];
+    assert_eq!(app.image.as_deref(), Some("img$"));
+    let locals: Vec<&str> = app
+        .volumes
+        .iter()
+        .flatten()
+        .map(|volume| match volume {
+            VolumeMount::Local(local) => local.local.as_str(),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert!(locals[0].ends_with("/a$"), "{locals:?}");
+    assert_eq!(locals[1], "/h/b");
+    assert!(locals[2].ends_with("/$HOME/c$"), "{locals:?}");
+    assert_eq!(
+        app.run_as_current_user
+            .as_ref()
+            .unwrap()
+            .home_directory
+            .as_deref(),
+        Some("/home/a < b")
+    );
+}

@@ -69,11 +69,19 @@ pub struct BreakingChange {
 
 /// Every breaking change to what a `ratect.toml` means or accepts, oldest
 /// first. See the module documentation before adding one.
-pub const BREAKING_CHANGES: &[BreakingChange] = &[BreakingChange {
-    version: "0.12.0",
-    summary: "a '\\' in an expression escapes the character after it and is dropped, and a \
-              trailing '\\' fails the load",
-}];
+pub const BREAKING_CHANGES: &[BreakingChange] = &[
+    BreakingChange {
+        version: "0.12.0",
+        summary: "a '\\' in an expression escapes the character after it and is dropped, and \
+                  a trailing '\\' fails the load",
+    },
+    BreakingChange {
+        version: "0.12.0",
+        summary: "every '$' or '<' in an expression starts a reference, so a malformed one \
+                  ('$$', 'a < b', '${X:default}') fails the load, and an unbraced name ends at \
+                  '.' or '-' (write '<{batect.project_directory}')",
+    },
+];
 
 /// A `major.minor.patch` version, optionally followed by a `-pre-release`
 /// suffix that is accepted and then ignored — a development build of 0.11.0
