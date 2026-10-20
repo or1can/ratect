@@ -381,6 +381,85 @@ async fn acquire_lock_times_out_if_the_lock_file_is_never_released() {
     tokio::fs::remove_dir_all(&root).await.ok();
 }
 
+const LOCK_CONTENT: &[u8] = b"left behind by a killed process";
+
+/// A cache whose entry `https://example.com/repo.git`@`v1.0.0` is already
+/// cloned, with a sidecar last used at 500, but has a leftover lock file
+/// beside it (holding `LOCK_CONTENT`) — as a process killed between the clone
+/// and `release_lock` leaves it. The lock timeout is short, so a wait on that
+/// lock fails fast instead of hanging. Returns the cache root and entry key.
+async fn cloned_entry_with_a_stale_lock(
+    git: FakeGitClient,
+) -> (PathBuf, String, GitIncludeCache<FakeGitClient>) {
+    let root = unique_temp_dir();
+    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    tokio::fs::create_dir_all(root.join(&key)).await.unwrap();
+    tokio::fs::write(root.join(format!("{key}.lock")), LOCK_CONTENT)
+        .await
+        .unwrap();
+    let info = CacheInfo {
+        kind: "git".to_string(),
+        repo: CacheInfoRepo {
+            remote: "https://example.com/repo.git".to_string(),
+            git_ref: "v1.0.0".to_string(),
+        },
+        cloned_with_version: "0.0.0-earlier".to_string(),
+        last_used: 500,
+    };
+    tokio::fs::write(
+        root.join(format!("{key}.toml")),
+        toml::to_string(&info).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let mut cache = GitIncludeCache::for_test(root.clone(), git, 1000);
+    cache.lock_timeout = Duration::from_millis(250);
+    (root, key, cache)
+}
+
+#[tokio::test]
+async fn ensure_cached_ignores_a_stale_lock_beside_an_already_cloned_working_copy() {
+    let git = FakeGitClient::new();
+    let (root, key, cache) = cloned_entry_with_a_stale_lock(git.clone()).await;
+
+    let working_copy = cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap();
+
+    assert_eq!(working_copy, root.join(&key));
+    assert_eq!(git.clone_count(), 0);
+    // Neither taken nor released: the lock guards the clone step only.
+    let lock = tokio::fs::read(root.join(format!("{key}.lock")))
+        .await
+        .unwrap();
+    assert_eq!(lock, LOCK_CONTENT);
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+#[tokio::test]
+async fn ensure_cached_bumps_last_used_for_an_already_cloned_working_copy_beside_a_stale_lock() {
+    let (root, key, cache) = cloned_entry_with_a_stale_lock(FakeGitClient::new()).await;
+
+    cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap();
+
+    let info: CacheInfo = toml::from_str(
+        &tokio::fs::read_to_string(root.join(format!("{key}.toml")))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(info.last_used, 1000);
+    assert_eq!(info.cloned_with_version, "0.0.0-earlier");
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
 /// Two entries with different last-used times, so ordering and the
 /// per-entry fields can both be checked at once.
 async fn cache_with_two_entries(root: &std::path::Path) -> GitIncludeCache<FakeGitClient> {

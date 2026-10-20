@@ -64,6 +64,7 @@ history, from when it was the only binary.
 - Variable names in an expression in a YAML config file follow Batect's rules: `$5`, `$é`, `${a b}` and `<{my-var}` are references rather than literal text, and `$A-B` is `A`'s value then `-B`. A malformed expression — `$$`, `a < b`, `${X`, `${X:default}` and the like — fails the load with its line, column and YAML path instead of being kept as literal text. A YAML file's `image` and string-form `volumes` entries are still used as written.
 - `run_as_current_user.enabled` defaults to `false` in a YAML config file, as in Batect, so `run_as_current_user: {}` loads and maps no user. A `ratect.toml` still requires it.
 - A task run from a terminal, whose container gets a TTY, no longer risks its output stalling with no error when that output begins with a `\x01` or `\x02` byte (bollard#816).
+- A lock file left beside an already-cloned Git include in `~/.ratect/incl` no longer makes every load of a config using that include wait 5 minutes and fail; only a load that still has to clone waits for the lock, as in Batect.
 
 ## [ratect-compat 0.32.0 · ratect 0.11.0] - 2026-10-13
 
