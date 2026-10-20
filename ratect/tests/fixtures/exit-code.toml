@@ -4,6 +4,7 @@
 # never an `Error:` line) and one whose image can't be pulled (Ratect's own
 # failure, always an `Error:` line). Its own project name, so no other test's
 # containers match a filter on it.
+ratect_version = "0.12.0"
 project_name = "ratect-exit-code-test"
 
 [containers.build-env]

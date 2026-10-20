@@ -13,6 +13,7 @@
 # `db-seed-client`'s value, so it exits non-zero — failing the whole run —
 # if it were exec'd into `db` instead, or if `db`'s own environment were
 # forwarded to the target. `app` echoing is what proves the gate passed.
+ratect_version = "0.12.0"
 project_name = "ratect-setup-command-run-in-test"
 
 [containers.db-seed-client]

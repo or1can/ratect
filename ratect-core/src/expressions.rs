@@ -14,9 +14,14 @@
 
 //! Batect's expression syntax (`$VAR`,
 //! `${VAR:-default}`, `<name`/`<{name}` for config variables, including the built-in
-//! `batect.project_directory`). Host environment and resolved config variable values
-//! are injected as parameters rather than read from the real process environment, so
-//! resolution stays deterministic and unit-testable.
+//! `batect.project_directory`), and its `\` escape. Host environment and resolved config
+//! variable values are injected as parameters rather than read from the real process
+//! environment, so resolution stays deterministic and unit-testable.
+//!
+//! One parser for both formats: a `batect.yml` and a `ratect.toml` read every
+//! expression the same way, escapes included, with no branch on which format a
+//! value came from (#382). Which fields are expressions at all is the config
+//! loader's business, not this module's.
 
 use anyhow::{bail, Result};
 use std::collections::HashMap;
@@ -24,8 +29,16 @@ use std::collections::HashMap;
 /// Scans `input` for Batect-style expressions — `$VAR`, `${VAR}`,
 /// `${VAR:-default}` for host environment variables, and `<name`, `<{name}`
 /// for config variables — and substitutes each with its resolved value.
-/// Literal text (including a `$`/`<` not followed by a valid identifier, or
-/// an unterminated `${`/`<{`) is passed through unchanged.
+///
+/// `\` escapes the character after it, as in Batect: the backslash is
+/// dropped and that character kept literally, so `\$X` is `$X`, `a\b` is
+/// `ab` and `\\` is `\`. In a `${VAR:-default}`'s default it does the same,
+/// so `${U:-a\}b}` defaults to `a}b`; in a variable's name it is no escape.
+/// A trailing `\`, with nothing to escape, is an error.
+///
+/// Otherwise lenient: a malformed sigil — a `$`/`<` not followed by a valid
+/// identifier, or an unterminated `${`/`<{` — is passed through unchanged,
+/// as literal text.
 ///
 /// `host_env` looks up a host environment variable by name — injected so
 /// callers/tests don't have to touch the real process environment.
@@ -36,33 +49,22 @@ pub fn interpolate(
     host_env: impl Fn(&str) -> Option<String>,
     config_vars: &HashMap<String, Option<String>>,
 ) -> Result<String> {
-    let chars: Vec<char> = input.chars().collect();
-    let mut result = String::new();
-    let mut i = 0;
-
-    while i < chars.len() {
-        let c = chars[i];
-        if c == '$' || c == '<' {
-            if let Some((token_len, resolved)) =
-                parse_token(&chars[i..], c, &host_env, config_vars)?
-            {
-                result.push_str(&resolved);
-                i += token_len;
-                continue;
-            }
-        }
-        result.push(c);
-        i += 1;
-    }
-
-    Ok(result)
+    scan(input, |token| {
+        resolve(
+            token.sigil,
+            &token.name,
+            token.default.as_deref(),
+            &host_env,
+            config_vars,
+        )
+    })
 }
 
 /// Whether `input` holds anything [`interpolate`] would treat as an
 /// expression rather than as literal text.
 ///
-/// Shares [`parse_token`] with `interpolate` instead of scanning for `$`/`<`,
-/// so the two cannot disagree about what counts. `interpolate` is deliberately
+/// Shares [`scan`] with `interpolate` instead of scanning for `$`/`<`, so the
+/// two cannot disagree about what counts. `interpolate` is deliberately
 /// lenient — a `$` not followed by a valid identifier, or an unterminated
 /// `${`, is literal — and a detector written separately would drift from that
 /// on exactly the inputs where being wrong is a false rejection.
@@ -71,23 +73,64 @@ pub fn interpolate(
 /// present: it *is* an expression, it just cannot be evaluated without the
 /// caller's environment, which this deliberately does not take.
 pub(crate) fn contains_expression(input: &str) -> bool {
+    let mut found = false;
+    // A syntax error (a trailing `\`) ends the walk; whatever was found by
+    // then still counts, and the error is `check_syntax`'s to report.
+    let _ = scan(input, |_| {
+        found = true;
+        Ok(String::new())
+    });
+    found
+}
+
+/// Refuses what [`interpolate`] would refuse whatever its variables held —
+/// a mistake in the value as written, not in the machine it is evaluated
+/// on — so a caller can judge it before any variable is known.
+pub(crate) fn check_syntax(input: &str) -> Result<()> {
+    scan(input, |_| Ok(String::new())).map(drop)
+}
+
+/// One well-formed reference, as [`parse_token`] read it.
+struct Token {
+    /// How many characters of the input it spans, sigil included.
+    len: usize,
+    sigil: char,
+    name: String,
+    default: Option<String>,
+}
+
+/// Walks `input` as [`interpolate`] does, replacing each reference with what
+/// `on_token` makes of it — the one walk every reader of the syntax shares.
+fn scan(input: &str, mut on_token: impl FnMut(&Token) -> Result<String>) -> Result<String> {
     let chars: Vec<char> = input.chars().collect();
-    let no_config_vars = HashMap::new();
-    let any_host_var = |_: &str| Some(String::new());
+    let mut result = String::new();
     let mut i = 0;
+
     while i < chars.len() {
         let c = chars[i];
-        if (c == '$' || c == '<')
-            && !matches!(
-                parse_token(&chars[i..], c, &any_host_var, &no_config_vars),
-                Ok(None)
-            )
-        {
-            return true;
+        if c == '\\' {
+            if let Some(&escaped) = chars.get(i + 1) {
+                result.push(escaped);
+                i += 2;
+                continue;
+            }
+            bail!(
+                "invalid escape sequence: the '\\' at the end must be followed by a character \
+                 to escape"
+            );
         }
+        if c == '$' || c == '<' {
+            if let Some(token) = parse_token(&chars[i..], c) {
+                result.push_str(&on_token(&token)?);
+                i += token.len;
+                continue;
+            }
+        }
+        result.push(c);
         i += 1;
     }
-    false
+
+    Ok(result)
 }
 
 fn is_ident_start(c: char) -> bool {
@@ -107,53 +150,77 @@ fn is_valid_ident(name: &str, sigil: char) -> bool {
 }
 
 /// Tries to parse one expression token starting at `chars[0]` (which is `$`
-/// or `<`, matching `sigil`). Returns `None` (not a valid/complete token —
-/// the sigil should be treated as a literal character) or `Some((length,
-/// resolved_value))` on success; errors if the token is well-formed but its
-/// variable can't be resolved.
-fn parse_token(
-    chars: &[char],
-    sigil: char,
-    host_env: &impl Fn(&str) -> Option<String>,
-    config_vars: &HashMap<String, Option<String>>,
-) -> Result<Option<(usize, String)>> {
+/// or `<`, matching `sigil`). Returns `None` when it isn't a valid, complete
+/// token — the sigil should then be treated as a literal character.
+fn parse_token(chars: &[char], sigil: char) -> Option<Token> {
     if chars.len() < 2 {
-        return Ok(None);
+        return None;
     }
 
     if chars[1] == '{' {
-        let close = match chars[2..].iter().position(|&c| c == '}') {
-            Some(pos) => pos + 2,
-            None => return Ok(None),
-        };
-        let inner: String = chars[2..close].iter().collect();
-
-        let (name, default) = if sigil == '$' {
-            match inner.split_once(":-") {
-                Some((name, default)) => (name.to_string(), Some(default.to_string())),
-                None => (inner, None),
+        // The name runs to the first `}` or, for a host variable, `:-`; no
+        // escape applies in it, as in Batect.
+        let mut end = 2;
+        let mut has_default = false;
+        loop {
+            match chars.get(end)? {
+                '}' => break,
+                ':' if sigil == '$' && chars.get(end + 1) == Some(&'-') => {
+                    has_default = true;
+                    break;
+                }
+                _ => end += 1,
             }
+        }
+        let name: String = chars[2..end].iter().collect();
+
+        // A default runs to the first `}` not escaped by a `\`, which is
+        // dropped and the character after it kept.
+        let default = if has_default {
+            end += 2;
+            let mut default = String::new();
+            loop {
+                match *chars.get(end)? {
+                    '}' => break,
+                    '\\' => {
+                        default.push(*chars.get(end + 1)?);
+                        end += 2;
+                    }
+                    c => {
+                        default.push(c);
+                        end += 1;
+                    }
+                }
+            }
+            Some(default)
         } else {
-            (inner, None)
+            None
         };
 
         if !is_valid_ident(&name, sigil) {
-            return Ok(None);
+            return None;
         }
 
-        let resolved = resolve(sigil, &name, default.as_deref(), host_env, config_vars)?;
-        Ok(Some((close + 1, resolved)))
+        Some(Token {
+            len: end + 1,
+            sigil,
+            name,
+            default,
+        })
     } else {
         if !is_ident_start(chars[1]) {
-            return Ok(None);
+            return None;
         }
         let mut end = 1;
         while end < chars.len() && is_ident_char(chars[end], sigil) {
             end += 1;
         }
-        let name: String = chars[1..end].iter().collect();
-        let resolved = resolve(sigil, &name, None, host_env, config_vars)?;
-        Ok(Some((end, resolved)))
+        Some(Token {
+            len: end,
+            sigil,
+            name: chars[1..end].iter().collect(),
+            default: None,
+        })
     }
 }
 
@@ -161,7 +228,7 @@ fn resolve(
     sigil: char,
     name: &str,
     default: Option<&str>,
-    host_env: &impl Fn(&str) -> Option<String>,
+    host_env: impl Fn(&str) -> Option<String>,
     config_vars: &HashMap<String, Option<String>>,
 ) -> Result<String> {
     if sigil == '$' {

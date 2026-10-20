@@ -31,8 +31,7 @@ use ratect_core::config::{
     format_task_list, format_task_list_quiet, load_project_native, Config, Dialect,
 };
 use ratect_core::diagnostics::{
-    config_findings, leftover_finding, wrapper_script_findings, written_for_finding,
-    ConversionCheck, Finding,
+    config_findings, leftover_finding, wrapper_script_findings, ConversionCheck, Finding,
 };
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
@@ -833,14 +832,28 @@ fn completion_config_file() -> PathBuf {
 /// Loads the configuration. Evaluates nothing (see
 /// `LoadedProject::evaluate`), so it needs no config-variable values.
 async fn load(global: &GlobalArgs) -> Result<ratect_core::config::LoadedProject> {
-    check_written_for(global)?;
-    load_project_native(&global.config_file).await
+    Ok(load_around(global, || Ok(())).await?.0)
 }
 
-/// Before the load, so a project written for a newer Ratect is refused for
-/// that rather than for whichever new field the parser trips on first.
-fn check_written_for(global: &GlobalArgs) -> Result<()> {
-    ratect_core::written_for::check(&global.config_file, running_version())
+/// The one way this binary loads a project: the written-for check's two
+/// halves either side of the load, so neither can be skipped. Before it, so
+/// a project written for a newer Ratect is refused for that rather than for
+/// whichever new field the parser trips on first; after it, for a YAML root,
+/// which is judged by the TOML files it turned out to include. `between`
+/// runs once the first half has passed, before the load.
+async fn load_around<T>(
+    global: &GlobalArgs,
+    between: impl FnOnce() -> Result<T>,
+) -> Result<(ratect_core::config::LoadedProject, T)> {
+    ratect_core::written_for::check(&global.config_file, running_version())?;
+    let between = between()?;
+    let project = load_project_native(&global.config_file).await?;
+    ratect_core::written_for::check_yaml_root(
+        &global.config_file,
+        project.toml_files(),
+        running_version(),
+    )?;
+    Ok((project, between))
 }
 
 /// The config-variable values evaluation uses — `--config-vars-file` merged
@@ -874,12 +887,9 @@ async fn load_with_overrides(
     global: &GlobalArgs,
     config_vars: &ConfigVarArgs,
 ) -> Result<(ratect_core::config::LoadedProject, HashMap<String, String>)> {
-    // The written-for check first (see there), then the config-vars file,
-    // so a malformed one is reported before anything the config holds.
-    check_written_for(global)?;
-    let overrides = config_var_overrides(global, config_vars)?;
-    let project = load_project_native(&global.config_file).await?;
-    Ok((project, overrides))
+    // The config-vars file between the written-for check and the load, so
+    // a malformed one is reported before anything the config holds.
+    load_around(global, || config_var_overrides(global, config_vars)).await
 }
 
 /// Loads as [`load_with_overrides`] does, then evaluates every container and
@@ -896,16 +906,6 @@ async fn load_and_evaluate(
     let (project, overrides) = load_with_overrides(global, config_vars).await?;
     let evaluation = project.evaluate_whole_project(&overrides, |name| std::env::var(name).ok())?;
     Ok((project, evaluation))
-}
-
-/// `doctor`/`config validate`'s nudge to declare `ratect_version` — read
-/// again rather than threaded out of [`load`], which has already checked it,
-/// so nothing here can fail.
-fn written_for_finding_for(config_file: &Path) -> Option<Finding> {
-    ratect_core::written_for::read(config_file)
-        .ok()
-        .flatten()
-        .and_then(|written_for| written_for_finding(&written_for))
 }
 
 /// This binary's own version, as the written-for check and `config convert`
@@ -1377,7 +1377,6 @@ async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> 
                 project.config.tasks.len()
             )));
             findings.extend(config_findings(&project.config, &evaluation));
-            findings.extend(written_for_finding_for(&global.config_file));
 
             // Now's the current time; leftover age isn't part of this
             // check, only whether any exist.
@@ -1458,7 +1457,6 @@ async fn validate_config(
                 project.config.tasks.len()
             )));
             findings.extend(config_findings(&project.config, &evaluation));
-            findings.extend(written_for_finding_for(&global.config_file));
         }
         Err(error) => findings.push(Finding::Problem(format!(
             "{} does not load: {error:#}",

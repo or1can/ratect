@@ -433,6 +433,58 @@ fn list_tasks_names_a_null_environment_value_and_its_container() {
     );
 }
 
+/// #382: `\` escapes in an expression, as in Batect. A trailing one escapes
+/// nothing, so `--list-tasks` refuses the file; an escaped `$` is literal, so
+/// the same file with its variable unset loads.
+#[test]
+fn list_tasks_reads_a_backslash_in_an_expression_as_an_escape() {
+    let dir = std::env::temp_dir().join(format!(
+        "ratect-compat-backslash-escape-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let list_tasks = |value: &str| {
+        std::fs::write(
+            dir.join("batect.yml"),
+            format!(
+                "project_name: demo\n\
+                 containers:\n  app:\n    image: alpine:3.18.2\n    environment:\n      \
+                 X: '{value}'\n\
+                 tasks: {{}}\n"
+            ),
+        )
+        .unwrap();
+        ratect_command()
+            .current_dir(&dir)
+            .arg("--list-tasks")
+            .env_remove("RATECT_UNSET_FOR_TEST")
+            .output()
+            .expect("failed to run ratect")
+    };
+
+    let trailing = list_tasks(r"a\");
+    let escaped = list_tasks(r"\$RATECT_UNSET_FOR_TEST");
+    std::fs::remove_dir_all(&dir).ok();
+
+    let stderr = String::from_utf8_lossy(&trailing.stderr);
+    assert_eq!(trailing.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("Container 'app'"), "{stderr}");
+    assert!(stderr.contains(r"'environment.X' ('a\')"), "{stderr}");
+    assert!(
+        stderr.contains("must be followed by a character to escape"),
+        "{stderr}"
+    );
+    assert!(
+        escaped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&escaped.stderr)
+    );
+}
+
 #[test]
 fn list_tasks_groups_by_group_and_shows_descriptions() {
     let output = ratect_command()

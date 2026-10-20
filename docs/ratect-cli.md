@@ -96,7 +96,7 @@ and `ratect run build -f custom.yml` are the same invocation.
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `-f`, `--config-file <PATH>` | `ratect.toml` | The configuration file. Parsed by extension — `.toml` as the native format, `.yml`/`.yaml` as Batect-format YAML — so `-f batect.yml` keeps reading a Batect config while migrating. `caches` uses it only to locate the project *directory* — it never reads the contents. |
+| `-f`, `--config-file <PATH>` | `ratect.toml` | The configuration file. Parsed by extension — `.toml` as the native format, `.yml`/`.yaml` as Batect-format YAML — so `-f batect.yml` keeps reading a Batect config while migrating — until it includes a `.toml` file, which needs a [`ratect_version`](ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for) only a `ratect.toml` root can declare. `caches` uses it only to locate the project *directory* — it never reads the contents. |
 | `-o`, `--output <STYLE>` | auto | `fancy`, `simple`, `quiet` or `all`; unset auto-selects `fancy` when stderr is an interactive console, `simple` otherwise. `ratect`'s own progress is on stderr in every style; stdout is the task's own output — see [Output Styles](output-styles.md#streams). |
 | `--no-color` | — | No color in Ratect's own output (never affects a task's own output), and `simple` becomes the auto-selected style — see [Colour](output-styles.md#colour) for how it combines with `NO_COLOR`/`CLICOLOR_FORCE`. |
 
@@ -299,8 +299,7 @@ and exec instances die with their container, so there's nothing left to find.
 config, evaluates every container and task against this machine, and runs the same
 config-only checks (values this machine can't evaluate, missing
 `build_directory`/Dockerfile, floating image tags, dependencies with no
-`health_check`, a missing [`ratect_version`](ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for)),
-exiting non-zero on a problem. It never touches Docker, so it's the
+`health_check`), exiting non-zero on a problem. It never touches Docker, so it's the
 gate to run in CI when all you want to know is "is the config valid?", without a
 daemon. It takes the same `--config-var`/`--config-vars-file` options as `run`, and
 reads `ratect.local.toml` the same way, since evaluating the config can need them.
@@ -393,10 +392,7 @@ load, a missing `build_directory` or Dockerfile. A **warning** works but is like
 bite: a floating image tag (`latest`, or no tag at all) means the same configuration
 runs a different image next week, and a dependency with no `health_check` counts as
 ready the moment it starts unless its image defines one, which is where "connection
-refused" on the first run comes from. A project with no
-[`ratect_version`](ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for)
-is a warning too: it changes nothing until a release changes what a configuration
-means, and then the project is refused until you've reviewed what changed.
+refused" on the first run comes from.
 
 So is each value this machine can't evaluate — an unset `$VAR`, a `<var` with no
 value — naming its container or task, its field and the expression, as `deploy`'s

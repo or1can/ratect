@@ -2,6 +2,7 @@
 # 0.3.0 (see decisions/0003). Deliberately exercises `extends`: `build-env`
 # carries no image of its own, inheriting it from `base`, so a task that runs
 # `build-env` only works if `extends` resolved to a runnable container.
+ratect_version = "0.12.0"
 project_name = "ratect-native-test"
 
 [containers.base]

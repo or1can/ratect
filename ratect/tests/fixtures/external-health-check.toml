@@ -11,6 +11,7 @@
 # here did so from outside, over the project's own network, with nothing at
 # all having run inside the checked container for it — the one image that
 # adds a `HEALTHCHECK` of its own is there to prove that isn't waited on.
+ratect_version = "0.12.0"
 project_name = "ratect-external-health-check-test"
 
 [containers.api]

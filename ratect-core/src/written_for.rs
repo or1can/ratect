@@ -14,18 +14,19 @@
 
 //! A native project's **written-for version** (`CONTEXT.md`) — the
 //! `ratect_version` its root `ratect.toml` declares — and the check `ratect`
-//! runs against it before loading anything else. See
+//! runs against it: before loading anything else for a TOML root, and after
+//! the load for a YAML root, which can't declare one. See
 //! [decisions/0015](../../decisions/0015-native-project-records-its-written-for-version.md)
 //! for the why; what follows is how, and what is easy to undo by accident.
 //!
-//! - **It runs before the configuration is parsed**, and reads nothing but
-//!   that one field. That ordering is the point: a project written for a
+//! - **For a TOML root it runs before the configuration is parsed**, and
+//!   reads nothing but that one field. That ordering is the point: a project written for a
 //!   newer Ratect most likely uses a field this binary doesn't know, and the
 //!   full parse would reject that field first, with a message that says
-//!   nothing about versions. So [`read`] parses the root file as a bare TOML
+//!   nothing about versions. So `read` parses the root file as a bare TOML
 //!   table, never as a [`crate::config`] type.
 //! - **A file it can't read, or that isn't TOML at all, is not its problem.**
-//!   [`read`] answers `None` and the loader reports the file in its own
+//!   `read` answers `None` and the loader reports the file in its own
 //!   words — duplicating those messages here would only let them drift.
 //! - **Only major and minor are compared.** A pre-1.0 breaking change lands
 //!   on a minor version, so a patch number can't change what a project means.
@@ -33,13 +34,15 @@
 //!   change to what a `ratect.toml` means or accepts. A row is added in the
 //!   same commit as its `CHANGELOG.md` entry, which is marked as one —
 //!   `ratect`'s own tests fail if a marked entry has no row (see AGENTS.md
-//!   guideline 7 for the marker). It starts empty: nothing released before
-//!   this mechanism existed is retrofitted, since every unmarked project would
-//!   then refuse on the spot.
+//!   guideline 7 for the marker). Nothing released before this mechanism
+//!   existed was retrofitted, since every unmarked project would then have
+//!   refused on the spot; the first row (0.12.0, #382) is what made them
+//!   refuse.
 //! - **Native dialect only.** `ratect-compat` never calls this, and a
 //!   `batect.yml` can't declare the field; a native project whose root file
-//!   is YAML is [`WrittenFor::YamlRoot`], which can only be fixed by
-//!   converting it.
+//!   is YAML is `WrittenFor::YamlRoot`. Its YAML files follow Batect's
+//!   rules, so it is refused only when it loads a TOML file — see
+//!   [`check_yaml_root`] — which converting the root fixes.
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -66,7 +69,11 @@ pub struct BreakingChange {
 
 /// Every breaking change to what a `ratect.toml` means or accepts, oldest
 /// first. See the module documentation before adding one.
-pub const BREAKING_CHANGES: &[BreakingChange] = &[];
+pub const BREAKING_CHANGES: &[BreakingChange] = &[BreakingChange {
+    version: "0.12.0",
+    summary: "a '\\' in an expression escapes the character after it and is dropped, and a \
+              trailing '\\' fails the load",
+}];
 
 /// A `major.minor.patch` version, optionally followed by a `-pre-release`
 /// suffix that is accepted and then ignored — a development build of 0.11.0
@@ -124,13 +131,14 @@ impl std::fmt::Display for Version {
 
 /// What a project's root file says about the version it was written for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WrittenFor {
+pub(crate) enum WrittenFor {
     /// It sets [`FIELD`].
     Declared(Version),
     /// It's TOML and doesn't — so it counts as written for 0.3.0.
     Unmarked,
     /// It's a Batect-format YAML file, which keeps Batect's own shape and so
-    /// can't say. Counts as unmarked; converting it is the way out.
+    /// can't say. Its own meaning is Batect's; a TOML file it includes counts
+    /// as unmarked — see [`check_yaml_root`].
     YamlRoot,
 }
 
@@ -138,7 +146,7 @@ pub enum WrittenFor {
 /// about its written-for version. `None` when it can't be read or isn't
 /// TOML, which the loader goes on to report; an error only when [`FIELD`]
 /// is present but isn't a version.
-pub fn read(root: &Path) -> Result<Option<WrittenFor>> {
+pub(crate) fn read(root: &Path) -> Result<Option<WrittenFor>> {
     let is_yaml = root
         .extension()
         .and_then(|ext| ext.to_str())
@@ -166,12 +174,56 @@ pub fn read(root: &Path) -> Result<Option<WrittenFor>> {
 /// Refuses to go on when `root` was written for a newer `ratect` than
 /// `running` (this binary's own version), or when a change in
 /// [`BREAKING_CHANGES`] has altered what it means since it was written.
+///
+/// A YAML root passes here: its own meaning is Batect's, so only a TOML file
+/// it includes can have changed — which [`check_yaml_root`] judges once the
+/// load has found them.
 pub fn check(root: &Path, running: Version) -> Result<()> {
     let Some(written_for) = read(root)? else {
         return Ok(());
     };
+    if written_for == WrittenFor::YamlRoot {
+        return Ok(());
+    }
     check_against(&written_for, running, BREAKING_CHANGES)
         .with_context(|| format!("Refusing to load {}", root.display()))
+}
+
+/// Refuses a project whose root is YAML when the load read any TOML file —
+/// a local include or a Git bundle — and [`BREAKING_CHANGES`] has altered
+/// what a TOML file means since 0.3.0: nothing in the project can say it
+/// was reviewed. `toml_files` are those files, in the order the load read
+/// them, as [`crate::config::LoadedProject::toml_files`] names them. A
+/// project of YAML files alone follows Batect's rules throughout, so it is
+/// never refused; nor is a TOML root, which [`check`] judged.
+///
+/// After the load, so it can't explain a load that fails: a TOML include
+/// using a field this binary doesn't know, or a value an escape now
+/// refuses, gets the loader's own error instead.
+pub fn check_yaml_root(root: &Path, toml_files: &[String], running: Version) -> Result<()> {
+    if read(root)? != Some(WrittenFor::YamlRoot) {
+        return Ok(());
+    }
+    check_yaml_root_against(root, toml_files, running, BREAKING_CHANGES)
+}
+
+/// [`check_yaml_root`]'s decision, over an explicit table.
+fn check_yaml_root_against(
+    root: &Path,
+    toml_files: &[String],
+    running: Version,
+    table: &[BreakingChange],
+) -> Result<()> {
+    let Some(first) = toml_files.first() else {
+        return Ok(());
+    };
+    check_against(&WrittenFor::YamlRoot, running, table).with_context(|| {
+        format!(
+            "Refusing to load {:?}, which includes {first}: a TOML file follows ratect's own \
+             rules",
+            root
+        )
+    })
 }
 
 /// [`check`]'s decision, over an explicit table so it can be tested with
@@ -210,15 +262,23 @@ fn check_against(
         .collect::<String>();
     let written = match written_for {
         WrittenFor::Declared(version) => format!("was written for ratect {version}"),
-        WrittenFor::Unmarked | WrittenFor::YamlRoot => {
+        WrittenFor::Unmarked => {
             format!("doesn't set '{FIELD}', so it counts as written for ratect {declared}")
         }
+        WrittenFor::YamlRoot => format!(
+            "can't set '{FIELD}' in its YAML root, so it counts as written for ratect \
+             {declared}"
+        ),
     };
     let next = match written_for {
+        // Only a YAML root that includes a TOML file gets here — see
+        // `check_yaml_root` — and `config convert` reads every file as YAML,
+        // so it can't carry a local one over.
         WrittenFor::YamlRoot => format!(
-            "Its root file is Batect-format YAML, which can't declare a version: convert it \
-             with `ratect config convert`, review the changes, then set '{FIELD}' to \
-             {running} in the result."
+            "Its root file is Batect-format YAML, which can't declare a version: make the \
+             root a ratect.toml — `ratect config convert` converts its YAML files, but a \
+             local .toml include has to be carried over by hand — review the changes, then \
+             set '{FIELD}' to {running} in it."
         ),
         _ => format!(
             "Review them (see CHANGELOG.md), then set '{FIELD}' to {running} to run it with \

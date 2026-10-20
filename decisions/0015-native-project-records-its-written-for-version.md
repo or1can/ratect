@@ -66,12 +66,25 @@ exact version a project ran. Ratect ships no wrapper, deliberately
   with `ratect.toml`. While the table is empty that changes nothing; when the
   first row lands, every unmarked project refuses the same way.
   `ratect config validate` and `ratect doctor` suggest adding the field
-  meanwhile.
+  meanwhile. *(Retired with the first row,
+  [#382](https://github.com/or1can/ratect/issues/382): an unmarked TOML
+  project is refused before either could warn, and a YAML root that loads —
+  see the amendment below — has nothing a version would protect.)*
 - **A native project whose root file is YAML counts as unmarked.** `ratect`
   accepts a `batect.yml` root, as a step in migrating; that file stays exactly
   Batect's shape, so it can't declare `ratect_version`. Once a row lands, such a
   project's refusal says to convert it with `ratect config convert` and declare
-  the field there.
+  the field there. *(Amended when the first row landed,
+  [#382](https://github.com/or1can/ratect/issues/382): by the table-follows-the-file
+  rule above, a YAML file's meaning is Batect's, so a project of YAML files
+  alone has nothing a row could have changed, and refusing it only cost the
+  `ratect -f batect.yml` step in migrating. Such a root now counts as unmarked
+  only when the load reads a TOML file — a local include or a Git bundle —
+  and is refused then, naming that file. That takes a check after the load,
+  since only the load finds the includes; a TOML root is still checked
+  before it. So for a YAML root, a TOML include that fails to load — a field
+  this binary doesn't know — gets the parse error this check exists to
+  explain, the one case the amendment gives back.)*
 - **A row's `CHANGELOG.md` entry is tagged** as a configuration change, and a
   test checks that every tagged entry has a row — so a missed row fails the
   build rather than shipping.
@@ -99,6 +112,9 @@ exact version a project ran. Ratect ships no wrapper, deliberately
   reason the marker is native-only.
 - **Exempting a YAML root from the check.** The projects part-way through
   migrating would be reinterpreted silently — the case this exists for.
+  *(Narrowed by the amendment above: the part-way case is a YAML root
+  including a TOML file, which is still refused; one with no TOML file has
+  nothing to reinterpret.)*
 - **A written-for version per Git bundle.** A bundle written for 0.10 and used
   under 0.13 is reinterpreted too, and the project owner updating their own
   `ratect_version` doesn't mean they reviewed the bundle. Deferred, not
