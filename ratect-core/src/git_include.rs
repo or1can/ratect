@@ -59,17 +59,23 @@ use tokio::time::Instant;
 /// `docker.rs`'s `ContainerRuntime`.
 #[async_trait::async_trait]
 pub trait GitClient: Send + Sync {
-    /// Clones `remote` at `ref`, checked out (including submodules) at
-    /// `destination`. `destination` is guaranteed not to exist yet — the
-    /// caller (`GitIncludeCache`) only calls this once, under its own lock,
-    /// after confirming that.
+    /// Clones `remote` at `ref`, checked out at `destination`.
+    /// `destination` is guaranteed not to exist yet — the caller
+    /// (`GitIncludeCache`) only calls this once, under its own lock, after
+    /// confirming that.
     async fn clone_repo(&self, remote: &str, git_ref: &str, destination: &Path) -> Result<()>;
 }
 
 /// The real `GitClient`: `git clone --quiet --no-checkout` into a sibling
 /// temporary directory, `git checkout --recurse-submodules <ref>`, then an
-/// atomic rename into `destination` — matching Batect's own `GitClient`
-/// exactly (no embedded Git library, kept dependency-light).
+/// atomic rename into `destination` — the same argv sequence as Batect's
+/// own `GitClient` (no embedded Git library, kept dependency-light), with
+/// no transport restriction of its own, so git's protocol defaults and the
+/// user's own Git configuration apply as they do under Batect. It differs
+/// in refusing a `remote` or `ref` that starts with `-`, and in capturing
+/// the clone's own output into its error rather than printing it.
+/// `--recurse-submodules` fetches nothing here, in either tool: it only
+/// updates *active* submodules, and a fresh `--no-checkout` clone has none.
 pub struct SystemGitClient;
 
 #[async_trait::async_trait]
@@ -109,19 +115,6 @@ impl GitClient for SystemGitClient {
         }
 
         let clone_output = Command::new("git")
-            // Restricts which transports git will honor for this remote —
-            // without this, a `repo` of the form `ext::sh -c ...` is (by
-            // default, since it's given directly on the command line
-            // rather than embedded in fetched content) trusted at git's
-            // "user" level and would execute arbitrary shell commands.
-            // `remote` ultimately comes from a config file, possibly
-            // itself from a git-included bundle, so it's not fully
-            // trusted input. `file` stays allowed here (unlike the
-            // checkout step below): a local-path `repo` is a documented,
-            // supported feature (see docs/ratect-compat-config-reference.md's `repo`
-            // field), and it's the caller's own config value, not
-            // third-party content the way a submodule URL is.
-            .env("GIT_ALLOW_PROTOCOL", "file:git:http:https:ssh")
             .args(["clone", "--quiet", "--no-checkout", "--", remote])
             .arg(&temp_dir)
             .output()
@@ -136,17 +129,6 @@ impl GitClient for SystemGitClient {
         }
 
         let checkout_output = Command::new("git")
-            // `file` is deliberately *not* in this list, unlike the clone
-            // step above: `--recurse-submodules` fetches whatever
-            // submodule URLs the checked-out ref's own `.gitmodules`
-            // declares, and that ref may itself have come from an
-            // untrusted git-included bundle — a `file://` submodule URL
-            // would otherwise let such a bundle pull an arbitrary sibling
-            // local repository on the host running `ratect` into its own
-            // clone. Unlike `remote` above, a submodule URL is never the
-            // caller's own config value, so there's no local-path use
-            // case to preserve here.
-            .env("GIT_ALLOW_PROTOCOL", "git:http:https:ssh")
             .args(["-c", "advice.detachedHead=false", "-C"])
             .arg(&temp_dir)
             // No `--` here: unlike `clone`, `checkout`'s `--` means "the

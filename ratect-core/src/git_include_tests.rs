@@ -148,9 +148,10 @@ async fn system_git_client_rejects_a_ref_starting_with_a_dash() {
 #[tokio::test]
 async fn system_git_client_refuses_the_ext_transport() {
     // `ext::` runs an arbitrary shell command as git's "remote helper" —
-    // GIT_ALLOW_PROTOCOL is what's supposed to block it. If this test
-    // ever fails because the marker file *was* created, that's a
-    // command-injection regression, not a flaky test.
+    // git's own default policy for `ext` is `never`, which is what refuses
+    // it (ratect sets no transport policy of its own, as Batect sets none).
+    // If this test ever fails because the marker file *was* created, that's
+    // a command-injection regression, not a flaky test.
     let marker = unique_temp_dir().join("pwned");
     let destination = unique_temp_dir().join("clone");
 
@@ -168,14 +169,49 @@ async fn system_git_client_refuses_the_ext_transport() {
 }
 
 #[tokio::test]
-async fn system_git_client_refuses_a_file_url_submodule() {
+async fn system_git_client_leaves_transport_policy_to_git_itself() {
+    // Batect's own `GitClient` sets no transport restriction, so git's
+    // default policy applies: a remote helper and `ftp` are both `user`,
+    // allowed on a directly invoked clone. Neither remote here can succeed
+    // (no `git-remote-foo` is installed, nothing listens on port 1), so
+    // what's asserted is *how* each fails — by git trying the transport,
+    // not by refusing it.
+    let destination = unique_temp_dir().join("clone");
+    let helper_error = SystemGitClient
+        .clone_repo("foo::bar", "v1.0.0", &destination)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        !helper_error.contains("transport 'foo' not allowed"),
+        "{helper_error}"
+    );
+    assert!(helper_error.contains("remote-foo"), "{helper_error}");
+    assert!(!destination.exists());
+
+    let ftp_error = SystemGitClient
+        .clone_repo("ftp://127.0.0.1:1/x", "v1.0.0", &destination)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        !ftp_error.contains("transport 'ftp' not allowed"),
+        "{ftp_error}"
+    );
+    assert!(ftp_error.contains("unable to access"), "{ftp_error}");
+    assert!(!destination.exists());
+
+    std::fs::remove_dir_all(destination.parent().unwrap()).ok();
+}
+
+#[tokio::test]
+async fn system_git_client_does_not_fetch_a_file_url_submodule() {
     // A malicious bundle's `.gitmodules` can point a submodule at an
-    // arbitrary local path via a `file://` URL — since
-    // `--recurse-submodules` fetches whatever the checked-out ref
-    // itself declares (untrusted content, unlike the top-level
-    // `repo` value), this must stay blocked even though a local-path
-    // top-level `repo` is itself fine (see `clone_repo`'s own
-    // GIT_ALLOW_PROTOCOL for that step).
+    // arbitrary local path via a `file://` URL. It is never fetched, over
+    // that or any transport: `checkout --recurse-submodules` only updates
+    // *active* submodules, and a fresh `--no-checkout` clone has none —
+    // true of Batect's identical sequence too. A local-path top-level
+    // `repo` is still cloned (the caller's own config value).
     let sibling = create_test_repo();
     let repo_dir = unique_temp_dir();
     std::fs::create_dir_all(&repo_dir).unwrap();
@@ -208,10 +244,8 @@ async fn system_git_client_refuses_a_file_url_submodule() {
     run(&["tag", "v1.0.0"]);
 
     let destination = unique_temp_dir().join("clone");
-    // Git doesn't fail the overall checkout when a submodule's
-    // transport is disallowed — it silently leaves that submodule's
-    // directory uninitialized instead — so `clone_repo` itself still
-    // succeeds here. The security property under test is that the
+    // `clone_repo` succeeds, leaving the submodule's directory
+    // uninitialized. The security property under test is that the
     // submodule's *content* was never fetched, checked below.
     SystemGitClient
         .clone_repo(&repo_dir.to_string_lossy(), "v1.0.0", &destination)
