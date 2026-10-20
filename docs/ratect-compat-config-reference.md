@@ -118,7 +118,7 @@ its own location.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `repo` | string | yes | A Git remote — anything `git clone` itself accepts (an HTTPS/SSH URL, or a local path). |
+| `repo` | string | yes | A Git remote — anything `git clone` itself accepts (an HTTPS/SSH URL, a local path, or a remote helper's `<helper>::<address>`). |
 | `ref` | string | yes | The tag, branch, or commit to check out. **Must be a value that never changes** (in practice, an immutable tag or a pinned commit SHA, not a branch) — see below. |
 | `path` | string | no, default `batect-bundle.yml` | The path, within the repository, of the file to include — resolved relative to the repository's own root, not the file that declared the `include`. |
 | `allow_host_paths` | boolean | no, default `false` | Vouches for this bundle: lets a container it defines mount a host path outside both the clone and your project directory. Honoured only on an entry in your own configuration — see [Vouching for a bundle](includes.md#vouching-for-a-bundle). |
@@ -148,9 +148,11 @@ do](includes.md#what-a-bundle-may-do).
 
 Cloning requires the system `git` binary to be installed and on `PATH` — Ratect shells
 out to it (`git clone --quiet --no-checkout` followed by
-`git checkout --recurse-submodules <ref>`) rather than embedding a Git library, so
-submodules and any Git configuration (credentials, `.gitconfig` rewrites, etc.) that
-your normal `git clone` already relies on work the same way here.
+`git checkout --recurse-submodules <ref>`, as Batect does) rather than embedding a Git
+library, so any Git configuration (credentials, `.gitconfig` rewrites, protocol
+policy, etc.) that your normal `git clone` already relies on works the same way here.
+An included repository's submodules are never checked out, here or under Batect: a
+fresh clone has no active submodules for `--recurse-submodules` to update.
 
 ## Container
 

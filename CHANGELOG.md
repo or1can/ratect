@@ -65,6 +65,7 @@ history, from when it was the only binary.
 - `run_as_current_user.enabled` defaults to `false` in a YAML config file, as in Batect, so `run_as_current_user: {}` loads and maps no user. A `ratect.toml` still requires it.
 - A task run from a terminal, whose container gets a TTY, no longer risks its output stalling with no error when that output begins with a `\x01` or `\x02` byte (bollard#816).
 - A lock file left beside an already-cloned Git include in `~/.ratect/incl` no longer makes every load of a config using that include wait 5 minutes and fail; only a load that still has to clone waits for the lock, as in Batect.
+- A Git include's `repo` may use any transport `git` itself allows — a remote helper (`codecommit::…`, `gcrypt::…`) or `ftp`/`ftps` — and cloning it honours your own Git protocol settings, as in Batect.
 
 ### Security
 
