@@ -328,15 +328,6 @@ pub(crate) fn cached_working_copy(
     working_copy.is_dir().then_some(working_copy)
 }
 
-/// Clones-once-and-reuses-forever cache for Git includes, rooted at
-/// `~/.ratect/incl` in production (`GitIncludeCache::new`) — see
-/// ROADMAP.md's 0.8.0 entry. A repo/ref already present on disk (by cache
-/// key) is never re-fetched; this is why users are expected to pin
-/// immutable tags/refs, not a corner being cut here.
-///
-/// Guards the clone step with a per-cache-entry lock file (create-exclusive,
-/// polled, with a timeout), so concurrent `ratect` invocations targeting the
-/// same repo/ref are safe — matching Batect's own `LockingRepositoryCloner`.
 /// Where a `GitIncludeCache`'s cache directory lives. `Home` defers the
 /// actual `~` lookup to first use (`ensure_cached`) rather than resolving it
 /// in `GitIncludeCache::new` — so constructing a `GitIncludeCache` up front
@@ -361,6 +352,15 @@ impl CacheRoot {
     }
 }
 
+/// Clones-once-and-reuses-forever cache for Git includes, rooted at
+/// `~/.ratect/incl` in production (`GitIncludeCache::new`) — see
+/// ROADMAP.md's 0.8.0 entry. A repo/ref already present on disk (by cache
+/// key) is never re-fetched; this is why users are expected to pin
+/// immutable tags/refs, not a corner being cut here.
+///
+/// Guards the clone step with a per-cache-entry lock file (create-exclusive,
+/// polled, with a timeout), so concurrent `ratect` invocations targeting the
+/// same repo/ref are safe — matching Batect's own `LockingRepositoryCloner`.
 pub struct GitIncludeCache<G: GitClient> {
     root: CacheRoot,
     git: G,
