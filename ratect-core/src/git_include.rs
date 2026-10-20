@@ -416,10 +416,17 @@ impl<G: GitClient> GitIncludeCache<G> {
         let info_path = root.join(format!("{key}.toml"));
         let lock_path = root.join(format!("{key}.lock"));
 
-        self.acquire_lock(&lock_path).await?;
-        let clone_result = self.clone_if_missing(remote, git_ref, &working_copy).await;
-        self.release_lock(&lock_path).await;
-        clone_result?;
+        // Batect's ordering (`GitRepositoryCache.cloneRepoIfMissing`): only a
+        // caller that still needs to clone takes the lock, so a lock file left
+        // beside a complete working copy can't block every later load.
+        // `clone_if_missing` re-checks under the lock, for two callers racing
+        // to clone the same entry.
+        if !working_copy.exists() {
+            self.acquire_lock(&lock_path).await?;
+            let clone_result = self.clone_if_missing(remote, git_ref, &working_copy).await;
+            self.release_lock(&lock_path).await;
+            clone_result?;
+        }
 
         self.update_info_file(remote, git_ref, &info_path).await?;
 
@@ -467,8 +474,10 @@ impl<G: GitClient> GitIncludeCache<G> {
         }
     }
 
-    /// Best-effort: a failure here just leaves a stale lock file behind,
-    /// which only affects the next caller's own timeout, not correctness.
+    /// Best-effort: a failure here just leaves a stale lock file behind. A
+    /// load doesn't take the lock once the working copy exists, so that only
+    /// times out a caller that still needs to clone (as Batect's would) and
+    /// `remove_entry`, which takes the same lock.
     async fn release_lock(&self, lock_path: &Path) {
         if let Err(e) = tokio::fs::remove_file(lock_path).await {
             tracing::warn!("Failed to remove Git include lock file {lock_path:?}: {e}");
@@ -676,8 +685,8 @@ impl<G: GitClient> GitIncludeCache<G> {
     }
 
     /// Removes one entry's working copy and sidecar, under the same
-    /// per-entry lock `ensure_cached` takes — without it, this can delete a
-    /// directory another `ratect` process is cloning into or reading from.
+    /// per-entry lock `ensure_cached` takes to clone — without it, this can
+    /// delete a directory another `ratect` process is cloning into.
     /// `false` if anything went wrong, already logged; a single unremovable
     /// entry shouldn't abandon the rest.
     async fn remove_entry(&self, root: &Path, key: &str) -> bool {
