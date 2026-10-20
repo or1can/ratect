@@ -559,9 +559,9 @@ async fn gated_or_empty_readiness_fields_are_not_warned_about() {
 }
 
 /// #462: a Batect-format `home_directory` is literal, but `ratect.toml`
-/// evaluates the same text — and has no way to escape it — so `config
-/// convert` can't carry a `$`/`<` across unchanged. One warning per such
-/// container, naming the value.
+/// evaluates the same text, so a `$`/`<` that `config convert` carries across
+/// unchanged changes meaning. One warning per such container, naming the
+/// value.
 #[tokio::test]
 async fn a_home_directory_that_would_become_an_expression_is_warned_about() {
     let config = config_with(
