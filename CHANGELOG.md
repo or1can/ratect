@@ -66,6 +66,10 @@ history, from when it was the only binary.
 - A task run from a terminal, whose container gets a TTY, no longer risks its output stalling with no error when that output begins with a `\x01` or `\x02` byte (bollard#816).
 - A lock file left beside an already-cloned Git include in `~/.ratect/incl` no longer makes every load of a config using that include wait 5 minutes and fail; only a load that still has to clone waits for the lock, as in Batect.
 
+### Security
+
+- Upgraded `rustls-webpki` to 0.103.16, fixing [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382) (certificate verification may accept distrusted intermediates).
+
 ## [ratect-compat 0.32.0 · ratect 0.11.0] - 2026-10-13
 
 ### Breaking
