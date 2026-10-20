@@ -681,3 +681,83 @@ async fn a_malformed_literal_converts_escaped_and_keeps_its_value() {
         Some("/home/a < b")
     );
 }
+
+/// #628: a Batect-format file uses its `image`, compact volume host paths and
+/// `home_directory` as written, so a `\` there is a backslash; in
+/// `ratect.toml` it would escape the character after it. It converts
+/// escaped, so the converted project loads with the same values — and a
+/// `$`/`<` after one becomes a reference, as the source's would read if its
+/// field were an expression, and is listed (`a\$HOME`); unless the result is
+/// no expression (`img\$`), when the whole value is kept literal.
+#[tokio::test]
+async fn a_backslash_in_a_literal_field_converts_escaped_and_keeps_its_value() {
+    let scratch = scratch();
+    let dir = &scratch.0;
+    write_project(
+        dir,
+        &[(
+            "batect.yml",
+            "project_name: demo\ncontainers:\n  app:\n    image: 'img:a\\b'\n    volumes:\n      \
+             - 'foo\\bar:/x'\n      - '$HOME\\x:/y'\n      - 'a\\$HOME:/z'\n    \
+             run_as_current_user:\n      enabled: true\n      home_directory: '/home/a\\b'\n  \
+             tagged:\n    image: 'img\\$'\n  escaped:\n    image: 'alpine\\$HOME'\n",
+        )],
+    );
+    let converted = convert(&dir.join("batect.yml")).await.unwrap();
+    write_converted(&converted);
+    let checks: Vec<ConversionCheckKind> = converted.files[0]
+        .checks
+        .iter()
+        .map(|check| check.kind)
+        .collect();
+    assert_eq!(
+        checks,
+        vec![
+            ConversionCheckKind::CompactVolumeExpression,
+            ConversionCheckKind::CompactVolumeExpression
+        ]
+    );
+
+    let native = load_project_native(&dir.join("ratect.toml")).await.unwrap();
+    let evaluated = native
+        .evaluate(
+            ["app", "tagged", "escaped"],
+            [],
+            &HashMap::new(),
+            |name: &str| (name == "HOME").then(|| "/h".to_string()),
+        )
+        .unwrap();
+    assert_eq!(
+        evaluated.containers["tagged"].image.as_deref(),
+        Some(r"img\$")
+    );
+    // An `image` is kept wholly literal: a `batect.yml` refuses a reference
+    // there, so a `$` that loaded was never meant as one, and no check would
+    // list it.
+    assert_eq!(
+        evaluated.containers["escaped"].image.as_deref(),
+        Some(r"alpine\$HOME")
+    );
+    let app = &evaluated.containers["app"];
+    assert_eq!(app.image.as_deref(), Some(r"img:a\b"));
+    let locals: Vec<&str> = app
+        .volumes
+        .iter()
+        .flatten()
+        .map(|volume| match volume {
+            VolumeMount::Local(local) => local.local.as_str(),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert!(locals[0].ends_with(r"/foo\bar"), "{locals:?}");
+    assert_eq!(locals[1], r"/h\x");
+    assert!(locals[2].ends_with(r"/a\/h"), "{locals:?}");
+    assert_eq!(
+        app.run_as_current_user
+            .as_ref()
+            .unwrap()
+            .home_directory
+            .as_deref(),
+        Some(r"/home/a\b")
+    );
+}
