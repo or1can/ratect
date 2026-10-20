@@ -484,9 +484,9 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// into all the same, not refused or filled in — though `list` and the
     /// sweep, which need those fields, still skip it with a warning. Written
     /// via write-to-temp-then-atomic-rename, so a concurrent reader
-    /// (`listAll`-style tooling, not implemented yet — see ROADMAP.md) can
-    /// never observe a torn file; a concurrent `last_used` bump can still be
-    /// lost to a last-write-wins race, same as Batect accepts.
+    /// (`list`, or the sweep) can never observe a torn file; a concurrent
+    /// `last_used` bump can still be lost to a last-write-wins race, same as
+    /// Batect accepts.
     async fn update_info_file(&self, remote: &str, git_ref: &str, info_path: &Path) -> Result<()> {
         let mut info: toml::Table = match tokio::fs::read_to_string(info_path).await {
             Ok(content) => toml::from_str(&content).with_context(|| {
