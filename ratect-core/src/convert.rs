@@ -55,7 +55,7 @@
 
 use crate::config::{
     absolute_path, ConfigFile, ConfigVariable, Container, IncludeEntry, LoadedConfig, LoadedFile,
-    Task,
+    RunAsCurrentUser, Task, VolumeMount,
 };
 use crate::diagnostics::{conversion_checks, ConversionCheck, ConversionCheckKind};
 use crate::include_trust::BundleId;
@@ -181,7 +181,10 @@ pub fn convert_project(
             checks.extend(container_checks.remove(&file.path).unwrap_or_default());
             let document = Document {
                 project_name: project_name.clone(),
-                containers: containers.clone(),
+                containers: containers
+                    .iter()
+                    .map(|(name, container)| (name.clone(), malformed_literals_escaped(container)))
+                    .collect(),
                 tasks: tasks.clone(),
                 config_variables: config_variables.clone(),
                 include,
@@ -203,6 +206,40 @@ pub fn convert_project(
          bug; please report it"
     );
     Ok(ConvertedProject { files })
+}
+
+/// `container` with each value `ratect.toml` reads as an expression and a
+/// Batect-format file doesn't — `image`, a compact volume's host path and
+/// `run_as_current_user.home_directory` — escaped when it is malformed
+/// (`img$`), so the converted file loads and means what the source did.
+/// It can't have been meant as a reference, unlike a well-formed one, which
+/// is carried across as written for its [`ConversionCheck`] to raise (#385).
+fn malformed_literals_escaped(container: &Container) -> Container {
+    let escaped = |value: &mut String| {
+        if crate::expressions::check_syntax(value).is_err() {
+            *value = crate::expressions::escape(value);
+        }
+    };
+    let mut container = container.clone();
+    // `true`: convert reads a Batect-format file.
+    if !Container::image_is_expression(true) {
+        container.image.iter_mut().for_each(escaped);
+    }
+    for volume in container.volumes.iter_mut().flatten() {
+        if let VolumeMount::Local(local) = volume {
+            if !local.local_is_expression(true) {
+                escaped(&mut local.local);
+            }
+        }
+    }
+    if !RunAsCurrentUser::home_directory_is_expression(true) {
+        let home = container
+            .run_as_current_user
+            .iter_mut()
+            .flat_map(|user| user.home_directory.as_mut());
+        home.for_each(escaped);
+    }
+    container
 }
 
 /// [`conversion_checks`]' items, each under the file whose header it belongs

@@ -125,9 +125,11 @@ use std::path::{Path, PathBuf};
 
 use crate::include_trust::{self, Boundary, Bundle, BundleId, EffectiveGrants, Grants};
 
-/// Batect's one built-in config variable, resolvable via `<batect.project_directory`/
+/// Batect's one built-in config variable, resolvable via
 /// `<{batect.project_directory}` without being declared in `config_variables` — always
-/// the absolute path of the directory containing the config file. See
+/// the absolute path of the directory containing the config file. Braced
+/// only, as in Batect: an unbraced name ends at its first `.`, so
+/// `<batect.project_directory` reads a variable named `batect` (#384). See
 /// [`config_variable_values`].
 const PROJECT_DIRECTORY_VAR: &str = "batect.project_directory";
 
@@ -181,6 +183,7 @@ pub struct Container {
     /// resolve expressions in this field, and `make_native` overrides the
     /// text to say so; the rejection itself is
     /// `reject_image_expressions_in_compat`.
+    #[serde(default, deserialize_with = "deserialize_image")]
     pub image: Option<String>,
     /// Controls whether an `image` container's image is pulled fresh or
     /// only when missing locally — Docker's own pull semantics
@@ -198,11 +201,13 @@ pub struct Container {
     /// resolved relative to the directory of the file declaring it.
     /// Supports expressions. Exactly one of `image` or `build_directory` is
     /// required.
+    #[serde(default, deserialize_with = "deserialize_optional_expression")]
     pub build_directory: Option<String>,
     /// Build arguments (Docker's own `--build-arg`) for a
     /// `build_directory` build, matched to the Dockerfile's own `ARG`
     /// instructions. Values support expressions. Ignored for an `image`
     /// container.
+    #[serde(default, deserialize_with = "deserialize_expression_map")]
     pub build_args: Option<HashMap<String, String>>,
     /// The Dockerfile to build, as a path relative to `build_directory`'s
     /// own root — Batect's `dockerfile` field. Defaults to `"Dockerfile"`
@@ -503,6 +508,17 @@ pub struct Container {
     /// `dns` above. `ratect`-native only, like `ulimits` above (ratect#106).
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub network_mode: Option<NetworkMode>,
+}
+
+impl Container {
+    /// Whether `image` is an expression, given whether the file that
+    /// declared it is Batect-format (see `ConfigFormat::batect_shaped_containers`).
+    /// Batect reads `image` as a plain string, so a Batect-format file's is
+    /// used as written — and refused if it *holds* a reference
+    /// (`reject_image_expressions_in_compat`); `ratect.toml` evaluates it.
+    pub fn image_is_expression(batect_shaped: bool) -> bool {
+        !batect_shaped
+    }
 }
 
 /// A container's [`Container::network_mode`] — written as the one string
@@ -1040,7 +1056,13 @@ impl<'de> Deserialize<'de> for VolumeMount {
             where
                 E: serde::de::Error,
             {
-                VolumeMount::parse_string(v).map_err(serde::de::Error::custom)
+                let mount = VolumeMount::parse_string(v).map_err(serde::de::Error::custom)?;
+                if let VolumeMount::Local(local) = &mount {
+                    if local.local_is_expression(reading_batect_format()) {
+                        checked_expression(local.local.clone())?;
+                    }
+                }
+                Ok(mount)
             }
 
             fn visit_map<A>(self, map: A) -> std::result::Result<VolumeMount, A::Error>
@@ -1085,12 +1107,16 @@ impl<'de> Deserialize<'de> for VolumeMount {
                         }
                         let local =
                             local.ok_or_else(|| serde::de::Error::missing_field("local"))?;
-                        Ok(VolumeMount::Local(LocalVolumeMount {
+                        let mut mount = LocalVolumeMount {
                             local,
                             container,
                             options,
                             compact: false,
-                        }))
+                        };
+                        if mount.local_is_expression(reading_batect_format()) {
+                            mount.local = checked_expression(mount.local)?;
+                        }
+                        Ok(VolumeMount::Local(mount))
                     }
                     "cache" => {
                         if local.is_some() {
@@ -1294,7 +1320,8 @@ where
 /// whose parser hands the string read a typed value, the `visit_*` methods
 /// below re-render it (`1.50` is `"1.5"`). Only the *values* are read this
 /// way (keys are already strings), and only when the field is present;
-/// `#[serde(default)]` handles the absent case.
+/// `#[serde(default)]` handles the absent case. Each value is an
+/// expression, checked as it is read — see [`checked_expression`].
 fn deserialize_scalar_string_map<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Option<HashMap<String, String>>, D::Error>
@@ -1354,7 +1381,8 @@ where
                 }
             }
 
-            deserializer.deserialize_str(ScalarStringVisitor)
+            let ScalarString(value) = deserializer.deserialize_str(ScalarStringVisitor)?;
+            checked_expression(value).map(ScalarString)
         }
     }
 
@@ -1365,6 +1393,85 @@ where
             .map(|(key, value)| (key, value.0))
             .collect()
     }))
+}
+
+/// Refuses a malformed expression while its field is read (#385), so the
+/// deserializer — `noyalib` or `toml` — locates the mistake in its file, as
+/// Batect's `Expression.deserialize` does with its YAML node. Called by
+/// every expression field's reader, and by no other: which fields those are
+/// in a given file is [`reading_batect_format`]'s and the fields' own
+/// `*_is_expression` rules'.
+fn checked_expression<E: serde::de::Error>(value: String) -> std::result::Result<String, E> {
+    match crate::expressions::check_syntax(&value) {
+        Ok(()) => Ok(value),
+        Err(error) => Err(E::custom(format!(
+            "invalid expression '{}': {error}",
+            printable(&value)
+        ))),
+    }
+}
+
+/// Whether the file being read is Batect-format, while it is read — the
+/// same answer [`ConfigFormat::batect_shaped_containers`] gives, after
+/// load, for every container that file declares: a file is Batect-format
+/// exactly when [`crate::yaml`] reads it, which is every file of a `Compat`
+/// project and each `.yml` of a `Native` one. A field whose being an
+/// expression depends on the format asks this while it is read, and that
+/// function after load, and both feed the field's own rule.
+fn reading_batect_format() -> bool {
+    crate::yaml::batect_defaults_apply()
+}
+
+/// One expression field's value, checked as it is read — for a map's values
+/// or a list's entries, where `deserialize_with` can't reach each one.
+struct Checked(String);
+
+impl<'de> Deserialize<'de> for Checked {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        checked_expression(String::deserialize(deserializer)?).map(Checked)
+    }
+}
+
+/// `serde` `deserialize_with` for an optional expression field.
+fn deserialize_optional_expression<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    Ok(Option::<Checked>::deserialize(deserializer)?.map(|Checked(value)| value))
+}
+
+/// `serde` `deserialize_with` for [`Container::image`], an expression
+/// except where [`Container::image_is_expression`] says it isn't.
+fn deserialize_image<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    if Container::image_is_expression(reading_batect_format()) {
+        deserialize_optional_expression(deserializer)
+    } else {
+        Option::deserialize(deserializer)
+    }
+}
+
+/// `serde` `deserialize_with` for a map whose values are expressions.
+fn deserialize_expression_map<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<HashMap<String, String>>, D::Error> {
+    let map: Option<HashMap<String, Checked>> = Option::deserialize(deserializer)?;
+    Ok(map.map(|entries| {
+        entries
+            .into_iter()
+            .map(|(key, Checked(value))| (key, value))
+            .collect()
+    }))
+}
+
+/// `serde` `deserialize_with` for a list whose entries are expressions.
+fn deserialize_expression_list<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Vec<String>, D::Error> {
+    let entries: Vec<Checked> = Vec::deserialize(deserializer)?;
+    Ok(entries.into_iter().map(|Checked(value)| value).collect())
 }
 
 /// Controls whether `TaskEngine::resolve_image` pulls an `image` container's
@@ -1551,7 +1658,7 @@ impl<'de> Deserialize<'de> for BuildSecret {
                          provided.",
                     )),
                     (Some(environment), None) => Ok(BuildSecret::Environment(environment)),
-                    (None, Some(path)) => Ok(BuildSecret::Path(path)),
+                    (None, Some(path)) => Ok(BuildSecret::Path(checked_expression(path)?)),
                     (None, None) => Err(serde::de::Error::custom(
                         "A secret must have either 'environment' or 'path', but neither has \
                          been provided.",
@@ -1604,7 +1711,7 @@ pub struct SshAgent {
     /// Values support [expressions](#expressions) and are resolved the same
     /// way as `build_directory`. Leave empty to forward the host's own
     /// running agent via `SSH_AUTH_SOCK`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_expression_list")]
     pub paths: Vec<String>,
 }
 
@@ -2153,6 +2260,16 @@ pub struct RunAsCurrentUser {
     pub home_directory: Option<String>,
 }
 
+impl RunAsCurrentUser {
+    /// Whether `home_directory` is an expression, given whether the file
+    /// that declared it is Batect-format (see
+    /// `ConfigFormat::batect_shaped_containers`): Batect reads it as a plain
+    /// string (#462), and `ratect.toml` evaluates it.
+    pub fn home_directory_is_expression(batect_shaped: bool) -> bool {
+        !batect_shaped
+    }
+}
+
 impl<'de> Deserialize<'de> for RunAsCurrentUser {
     /// `enabled` defaults to false in a YAML file and is required in a TOML
     /// one — see `crate::yaml::batect_defaults_apply`.
@@ -2179,9 +2296,17 @@ impl<'de> Deserialize<'de> for RunAsCurrentUser {
             None if crate::yaml::batect_defaults_apply() => false,
             None => return Err(serde::de::Error::missing_field("enabled")),
         };
+        let home_directory = match written.home_directory {
+            Some(home)
+                if RunAsCurrentUser::home_directory_is_expression(reading_batect_format()) =>
+            {
+                Some(checked_expression(home)?)
+            }
+            home => home,
+        };
         Ok(RunAsCurrentUser {
             enabled,
-            home_directory: written.home_directory,
+            home_directory,
         })
     }
 }
@@ -3874,10 +3999,9 @@ impl Config {
 /// Batect-format file, #462) and a Git-included container's host paths
 /// staying inside its [`Boundary`].
 ///
-/// One check does apply to every expression: its syntax (a trailing `\`,
-/// #382), which no machine could read either. It visits the same fields
-/// [`evaluate_container`] and [`evaluate_task`] interpolate, so a field
-/// added to one belongs in the other.
+/// An expression's syntax, which no machine could read either, is judged
+/// earlier still, while the file is read ([`checked_expression`], #385), so
+/// the error is located in the file.
 ///
 /// Runs **before** [`resolve_extends`], on each container as declared, and
 /// may therefore only judge one field's own internal shape — that a
@@ -3923,14 +4047,6 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
         // One attribution point for the whole block, as in
         // `evaluate_container`: nothing below knows which container asked.
         (|| -> Result<()> {
-            // A Batect-format file's `image` is a literal — see
-            // `evaluate_container`.
-            if let Some(image) = container.image.as_deref().filter(|_| !anchor.batect_shaped) {
-                check_expression("'image'", image)?;
-            }
-            for (key, value) in container.environment.iter().flatten() {
-                check_expression(&format!("'environment.{key}'"), value)?;
-            }
             for volume in container.volumes.iter().flatten() {
                 match volume {
                     // A cache `name` becomes a host directory under
@@ -3951,28 +4067,20 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
                             anchor_path(&local.local, &anchor)?;
                         }
                     }
-                    VolumeMount::Local(local) => {
-                        check_expression("'volumes'", &local.local)?;
-                        check_literal_path(&local.local, &anchor)?;
-                    }
+                    VolumeMount::Local(local) => check_literal_path(&local.local, &anchor)?,
                     // `container`/`options` are plain strings too, matching
                     // Batect's own `TmpfsMount` typing.
                     VolumeMount::Tmpfs(_) => {}
                 }
             }
             if let Some(build_directory) = &container.build_directory {
-                check_expression("'build_directory'", build_directory)?;
                 check_literal_path(build_directory, &anchor)?;
             }
-            for (key, value) in container.build_args.iter().flatten() {
-                check_expression(&format!("'build_args.{key}'"), value)?;
-            }
-            for (key, secret) in container.build_secrets.iter().flatten() {
+            for secret in container.build_secrets.iter().flat_map(HashMap::values) {
                 // `Environment` is a literal host env var *name*, not itself
                 // an expression — matches Batect's own `String` (not
                 // `Expression`) typing for that variant.
                 if let BuildSecret::Path(path) = secret {
-                    check_expression(&format!("'build_secrets.{key}'"), path)?;
                     check_literal_path(path, &anchor)?;
                 }
             }
@@ -3990,7 +4098,6 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
                     );
                 }
                 for path in &agent.paths {
-                    check_expression(&format!("'build_ssh' entry '{}'", agent.id), path)?;
                     check_literal_path(path, &anchor)?;
                 }
             }
@@ -4005,13 +4112,10 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
                         })?;
                     // Not an expression at all in a Batect-format file:
                     // Batect reads it as a plain string (#462).
-                    if anchor.batect_shaped {
+                    if !RunAsCurrentUser::home_directory_is_expression(anchor.batect_shaped)
+                        || !crate::expressions::contains_expression(home_directory)
+                    {
                         check_home_directory(home_directory)?;
-                    } else {
-                        check_expression("'run_as_current_user.home_directory'", home_directory)?;
-                        if !crate::expressions::contains_expression(home_directory) {
-                            check_home_directory(home_directory)?;
-                        }
                     }
                 } else if run_as_current_user.home_directory.is_some() {
                     anyhow::bail!(
@@ -4065,33 +4169,9 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
             // `reject_customisations_outside_the_task_graph`, after
             // inheritance. See this function's own doc comment.
         }
-        (|| -> Result<()> {
-            let environment = task
-                .run
-                .iter()
-                .flat_map(|run| run.environment.iter().flatten());
-            for (key, value) in environment {
-                check_expression(&format!("'run.environment.{key}'"), value)?;
-            }
-            for (container, customisation) in task.customise.iter().flatten() {
-                for (key, value) in customisation.environment.iter().flatten() {
-                    check_expression(&format!("'customise.{container}.environment.{key}'"), value)?;
-                }
-            }
-            Ok(())
-        })()
-        .with_context(|| format!("Task '{task_name}'"))?;
     }
 
     Ok(())
-}
-
-/// Refuses an expression-bearing value no evaluation could read — a mistake
-/// in the file, judged at load whether or not anything uses it (#382),
-/// naming the field and the value as written as [`evaluate_value`] does.
-fn check_expression(field: &str, value: &str) -> Result<()> {
-    crate::expressions::check_syntax(value)
-        .with_context(|| format!("has an invalid {field} ('{}')", printable(value)))
 }
 
 /// Judges a host path at load when it is a literal and its container came
@@ -4214,8 +4294,9 @@ fn evaluate_value(
 /// `build_ssh` paths and (outside a Batect-format file, #462)
 /// `run_as_current_user.home_directory` — then resolves each host path
 /// against the file that declared it and judges what [`check_values`] could
-/// only judge on a literal. `check_values` checks the same fields' syntax at
-/// load.
+/// only judge on a literal. Each of these fields' readers checks its syntax
+/// as the file is read ([`checked_expression`]), so a field added here needs
+/// one too.
 ///
 /// Each path-bearing field is anchored on its **supplier**: the container in
 /// the `extends` chain whose value it is ([`Provenance::suppliers`]), so an
@@ -4248,7 +4329,7 @@ fn evaluate_container(
     // reads no expression there, and one that looks like it was refused at
     // load (#382).
     if let Some(image) = &mut container.image {
-        if !anchor(&suppliers.image).batect_shaped {
+        if Container::image_is_expression(anchor(&suppliers.image).batect_shaped) {
             store_or_record(
                 image,
                 evaluate_value("'image'", image, host_env, config_vars),
@@ -4320,7 +4401,9 @@ fn evaluate_container(
         // Presence was judged at load; a Batect-format file's value is a
         // literal, judged there too (#462).
         if let Some(home_directory) = &mut run_as_current_user.home_directory {
-            if !anchor(&suppliers.run_as_current_user).batect_shaped {
+            if RunAsCurrentUser::home_directory_is_expression(
+                anchor(&suppliers.run_as_current_user).batect_shaped,
+            ) {
                 let field = "'run_as_current_user.home_directory'";
                 let checked = evaluate_value(field, home_directory, host_env, config_vars)
                     .and_then(|value| {
@@ -4336,8 +4419,8 @@ fn evaluate_container(
 }
 
 /// Evaluates a task's own expression-bearing values: its `run.environment`
-/// and each `customise.<container>.environment` (#373). [`check_values`]
-/// checks the same fields' syntax at load. Returns every value
+/// and each `customise.<container>.environment` (#373), whose syntax is
+/// checked as the file is read ([`checked_expression`]). Returns every value
 /// that failed, as [`evaluate_container`] does.
 fn evaluate_task(
     task: &mut Task,

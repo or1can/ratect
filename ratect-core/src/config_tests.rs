@@ -9558,7 +9558,7 @@ containers:
   build-env:
     image: alpine:3.18
     environment:
-      PROJECT_DIR: <batect.project_directory
+      PROJECT_DIR: <{batect.project_directory}
 "#,
     )
     .unwrap();
@@ -11858,7 +11858,7 @@ fn evaluate_leaves_literal_values_unchanged() {
 #[test]
 fn evaluate_resolves_built_in_project_directory_var_in_environment() {
     let mut environment = HashMap::new();
-    environment.insert("FOO".to_string(), "<batect.project_directory".to_string());
+    environment.insert("FOO".to_string(), "<{batect.project_directory}".to_string());
     let mut config = Config {
         project_name: "demo".to_string(),
         containers: IndexMap::from([(
@@ -11917,7 +11917,7 @@ fn evaluate_cleans_project_directory_var_when_base_path_is_empty() {
     // returns `Some("")`, not `None`. Without cleaning, joining an empty
     // path leaves a trailing slash on every value derived from it.
     let mut environment = HashMap::new();
-    environment.insert("FOO".to_string(), "<batect.project_directory".to_string());
+    environment.insert("FOO".to_string(), "<{batect.project_directory}".to_string());
     let mut config = Config {
         project_name: "demo".to_string(),
         containers: IndexMap::from([(
@@ -13508,7 +13508,7 @@ impl Twin {
 }
 
 /// #382: a trailing `\` escapes nothing, so the file is refused when it
-/// loads — in either format, naming the container and quoting the value,
+/// loads — in either format, located in the file and quoting the value,
 /// though no task uses that container.
 #[tokio::test]
 async fn a_trailing_backslash_in_an_expression_fails_the_load() {
@@ -13523,12 +13523,173 @@ async fn a_trailing_backslash_in_an_expression_fails_the_load() {
             "{:#}",
             loaded.err().unwrap_or_else(|| panic!("{format} loaded"))
         );
-        assert!(error.contains("Container 'unused'"), "{format}: {error}");
-        assert!(error.contains("'environment.X'"), "{format}: {error}");
-        assert!(error.contains(r"'a\'"), "{format}: {error}");
+        let line = if format == "batect.yml" { 6 } else { 5 };
+        assert!(error.contains(&format!("line {line}")), "{format}: {error}");
         assert!(
-            error.contains("must be followed by a character to escape"),
+            error.contains(r"invalid expression 'a\'"),
             "{format}: {error}"
+        );
+        assert!(
+            error
+                .contains("'\\' at column 2 must be immediately followed by a character to escape"),
+            "{format}: {error}"
+        );
+        if format == "batect.yml" {
+            assert!(error.contains("containers.unused.environment.X"), "{error}");
+        }
+    }
+}
+
+/// #385: a malformed expression fails the load while the file is read, so
+/// it is located like any other mistake in the file — line and column in
+/// either format, and the YAML path too — and names the problem, though no
+/// task uses its container. A second expression field, a long-form volume's
+/// `local`, is checked the same way.
+#[tokio::test]
+async fn a_malformed_expression_fails_the_load_located_in_its_file() {
+    let twin = Twin {
+        yaml: "project_name: demo\ncontainers:\n  unused:\n    image: alpine:3.18\n    \
+               environment:\n      X: '${X:default}'\n",
+        toml: "project_name = \"demo\"\n\n[containers.unused]\nimage = \"alpine:3.18\"\n\
+               environment = { X = '${X:default}' }\n",
+    };
+    for (format, loaded) in twin.load_each().await {
+        let error = format!(
+            "{:#}",
+            loaded.err().unwrap_or_else(|| panic!("{format} loaded"))
+        );
+        let line = if format == "batect.yml" { 6 } else { 5 };
+        assert!(error.contains(&format!("line {line}")), "{format}: {error}");
+        assert!(
+            error.contains("':' at column 4 must be immediately followed by '-'"),
+            "{format}: {error}"
+        );
+        assert!(error.contains("'${X:default}'"), "{format}: {error}");
+        if format == "batect.yml" {
+            assert!(error.contains("containers.unused.environment.X"), "{error}");
+        }
+    }
+
+    let twin = Twin {
+        yaml: "project_name: demo\ncontainers:\n  unused:\n    image: alpine:3.18\n    \
+               volumes:\n      - local: 'a < b'\n        container: /x\n",
+        toml: "project_name = \"demo\"\n\n[containers.unused]\nimage = \"alpine:3.18\"\n\
+               volumes = [{ local = 'a < b', container = '/x' }]\n",
+    };
+    for (format, loaded) in twin.load_each().await {
+        let error = format!(
+            "{:#}",
+            loaded.err().unwrap_or_else(|| panic!("{format} loaded"))
+        );
+        let line = if format == "batect.yml" { 6 } else { 5 };
+        assert!(error.contains(&format!("line {line}")), "{format}: {error}");
+        assert!(
+            error.contains("'<' at column 3 does not contain a variable name"),
+            "{format}: {error}"
+        );
+    }
+}
+
+/// #385: only a field that is an expression in its own file is checked.
+/// A YAML file's `image` and compact volume entry are literals, as in
+/// Batect, so a stray `$` in either loads — including in a YAML file a
+/// native project includes. In a `ratect.toml` both are expressions, so the
+/// same values fail.
+#[tokio::test]
+async fn a_malformed_value_in_a_literal_field_loads() {
+    let yaml = "containers:\n  app:\n    image: 'img$'\n    volumes:\n      - 'a$:/x'\n";
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        format!("project_name: demo\n{yaml}"),
+    )
+    .unwrap();
+    std::fs::write(dir.join("included.yml"), yaml).unwrap();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "project_name = \"demo\"\ninclude = ['included.yml']\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("image.toml"),
+        "project_name = \"demo\"\n\n[containers.app]\nimage = 'img:${'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("volume.toml"),
+        "project_name = \"demo\"\n\n[containers.app]\nimage = 'img'\nvolumes = ['a$:/x']\n",
+    )
+    .unwrap();
+    let compat = load_project(&dir.join("batect.yml")).await;
+    let native = load_project_native(&dir.join("ratect.toml")).await;
+    let image = load_project_native(&dir.join("image.toml")).await;
+    let volume = load_project_native(&dir.join("volume.toml")).await;
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    for (format, loaded) in [("batect.yml", compat), ("included .yml", native)] {
+        let project = loaded.unwrap_or_else(|error| panic!("{format}: {error:#}"));
+        let app = &project.config.containers["app"];
+        assert_eq!(app.image.as_deref(), Some("img$"), "{format}");
+        let volume = expect_local(&app.volumes.as_ref().unwrap()[0]);
+        assert_eq!(volume.local, "a$", "{format}");
+    }
+    let error = format!("{:#}", image.expect_err("image.toml loaded"));
+    assert!(error.contains("line 4"), "{error}");
+    assert!(
+        error.contains("'{' at column 6 must be followed by a closing '}'"),
+        "{error}"
+    );
+    let error = format!("{:#}", volume.expect_err("volume.toml loaded"));
+    assert!(error.contains("line 5"), "{error}");
+    assert!(
+        error.contains("'$' at column 2 must be followed by a variable name"),
+        "{error}"
+    );
+}
+
+/// #383/#384: names follow Batect's rules when a file is evaluated, in
+/// either format — a braced config variable may hold a `-`, and an unbraced
+/// one ends at a `.`, so `<foo.bar` is `foo` then `.bar`, in an environment
+/// value and a compact volume alike, and an unbraced
+/// `<batect.project_directory` reads an undeclared `batect`.
+#[tokio::test]
+async fn variable_names_follow_batects_rules_in_either_format() {
+    let twin = Twin {
+        yaml: "project_name: demo\nconfig_variables:\n  my-var:\n    default: dashed\n  \
+               foo:\n    default: hello\ncontainers:\n  app:\n    image: alpine:3.18\n    \
+               environment:\n      A: '<{my-var}'\n      B: '<foo.bar'\n    \
+               volumes:\n      - local: '<foo.bar'\n        container: /x\n  \
+               built-in:\n    image: alpine:3.18\n    \
+               environment:\n      P: '<batect.project_directory'\n",
+        toml: "project_name = \"demo\"\n\n[config_variables.my-var]\ndefault = \"dashed\"\n\n\
+               [config_variables.foo]\ndefault = \"hello\"\n\n[containers.app]\n\
+               image = \"alpine:3.18\"\nenvironment = { A = '<{my-var}', B = '<foo.bar' }\n\
+               volumes = ['<foo.bar:/x']\n\n[containers.built-in]\nimage = \"alpine:3.18\"\n\
+               environment = { P = '<batect.project_directory' }\n",
+    };
+    for (format, loaded) in twin.load_each().await {
+        let project = loaded.unwrap_or_else(|error| panic!("{format}: {error:#}"));
+        let evaluated = project
+            .evaluate(["app"], [], &HashMap::new(), no_host_env)
+            .unwrap_or_else(|error| panic!("{format}: {error:#}"));
+        let app = &evaluated.containers["app"];
+        let environment = app.environment.as_ref().unwrap();
+        assert_eq!(environment["A"], "dashed", "{format}");
+        assert_eq!(environment["B"], "hello.bar", "{format}");
+        let volume = expect_local(&app.volumes.as_ref().unwrap()[0]);
+        assert!(
+            volume.local.ends_with("/hello.bar"),
+            "{format}: {}",
+            volume.local
+        );
+
+        let error = project
+            .evaluate(["built-in"], [], &HashMap::new(), no_host_env)
+            .err()
+            .unwrap_or_else(|| panic!("{format}: the built-in resolved unbraced"));
+        assert!(
+            format!("{error:#}").contains("Config variable 'batect' is not declared"),
+            "{format}: {error:#}"
         );
     }
 }
@@ -13613,8 +13774,8 @@ async fn an_inherited_batect_format_image_stays_literal() {
     );
 }
 
-/// #382: a task's own expression fields are checked at load too, naming the
-/// task, though nothing runs it.
+/// #382: a task's own expression fields are checked at load too, located
+/// in the file, though nothing runs it.
 #[tokio::test]
 async fn a_trailing_backslash_in_a_task_environment_fails_the_load() {
     let twin = Twin {
@@ -13629,11 +13790,15 @@ async fn a_trailing_backslash_in_a_task_environment_fails_the_load() {
             "{:#}",
             loaded.err().unwrap_or_else(|| panic!("{format} loaded"))
         );
-        assert!(error.contains("Task 't'"), "{format}: {error}");
+        let line = if format == "batect.yml" { 10 } else { 8 };
+        assert!(error.contains(&format!("line {line}")), "{format}: {error}");
         assert!(
-            error.contains(r"'run.environment.X' ('a\')"),
+            error.contains(r"invalid expression 'a\'"),
             "{format}: {error}"
         );
+        if format == "batect.yml" {
+            assert!(error.contains("tasks.t.run.environment.X"), "{error}");
+        }
     }
 }
 

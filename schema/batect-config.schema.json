@@ -128,6 +128,7 @@
           "additionalProperties": {
             "type": "string"
           },
+          "default": null,
           "description": "Build arguments (Docker's own `--build-arg`) for a `build_directory` build, matched to the Dockerfile's own `ARG` instructions. Values support expressions. Ignored for an `image` container.",
           "type": [
             "object",
@@ -135,6 +136,7 @@
           ]
         },
         "build_directory": {
+          "default": null,
           "description": "The directory containing the `Dockerfile` to build an image from, resolved relative to the directory of the file declaring it. Supports expressions. Exactly one of `image` or `build_directory` is required.",
           "type": [
             "string",
@@ -261,6 +263,7 @@
           "description": "Overrides the health check configuration baked into the image — see `HealthCheckConfig`. Applied at container creation; a dependency container with a health check (from here or from its image) must report healthy before its dependents start."
         },
         "image": {
+          "default": null,
           "description": "The image to run, in Docker's own `name:tag` form. Exactly one of `image` or `build_directory` is required. No expression support here: Batect resolves none, so one is rejected when the file loads rather than resolved.",
           "type": [
             "string",

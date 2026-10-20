@@ -334,9 +334,10 @@ pub fn conversion_checks(config: &Config) -> Vec<ConversionCheck> {
 /// `config convert`'s check for each container whose
 /// `run_as_current_user.home_directory` holds what `ratect.toml` would read as
 /// an expression (#462). A Batect-format file uses the value as written; the
-/// converted file evaluates the same text, and has no escape that would keep
-/// it literal — so a conversion can't carry it across unchanged, and the
-/// reader has to decide what they meant. Sorted by container name.
+/// converted file evaluates the same text. Escaping it would keep it literal,
+/// but a reference there was most likely meant to be one, so it is carried
+/// across unchanged and the reader decides what they meant. Sorted by
+/// container name.
 ///
 /// Not one of [`config_findings`] for the same reason as
 /// [`ungated_task_container_checks`]: it's only news to someone moving a

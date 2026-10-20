@@ -874,9 +874,8 @@ themselves get built, not automatically.
 
 Literal
 text around an expression is kept (`"prefix-$VAR-suffix"` interpolates just
-`$VAR`), apart from [escapes](#escaping-with-), and a `$`/`<` not followed by a valid
-identifier (or an unterminated `${`/`<{`) is treated as a literal character rather
-than an error.
+`$VAR`), apart from [escapes](#escaping-with-). Every other `$` and `<` starts an
+expression, so write a literal one as `\$` or `\<`.
 
 | Form | Resolves against | Example |
 |---|---|---|
@@ -895,6 +894,33 @@ no value from any source (see [ConfigVariable](#configvariable)'s precedence ord
 Config variable values themselves come from, highest precedence first: `--config-var
 NAME=VALUE` (repeatable), `--config-vars-file` (a flat YAML map), then the variable's
 own `default` — see [CLI reference](ratect-compat-cli.md).
+
+### Variable names
+
+How far a name runs, as in Batect:
+
+- **Unbraced** (`$NAME`, `<name`): the longest run of letters, digits and `_`,
+  so a leading digit or a non-ASCII letter is part of it — `$5` is a variable
+  named `5`. Anything else ends it: `<foo.txt` is `foo`'s value followed by
+  `.txt`, and `$A-B` is `A`'s value followed by `-B`. A name holding a `.` or a
+  `-` — a config variable such as `my-var`, or the
+  [built-in](#built-in-config-variable-batectproject_directory) — needs braces.
+- **Braced `${…}`**: everything up to the `}`, or up to the `:` that starts a
+  default, which must be `:-`. `${a b}` is a variable named `a b`.
+- **Braced `<{…}`**: everything up to the `}`, `:` included, since a config
+  variable has no default.
+
+A malformed expression fails the file's load, for every command, `--list-tasks`
+included, and whether or not a task uses that container. It is malformed when:
+
+- a `$` or `<` has no name after it: `$`, `$$`, `a < b`, `${}`, `${:-x}`, `<{}`;
+- a `{` is never closed: `${`, `${HOME`, `<{name`;
+- a `:` in `${…}` isn't followed by `-`: `${LOG_LEVEL:info}`;
+- a default ends in a `\` with nothing to escape: `${X:-a\`.
+
+The error gives the value's line and column in the file and its path
+(`containers.app.environment.LOG_LEVEL`), quotes the value, and says what is
+wrong at which column of the value.
 
 ### Escaping with `\`
 
@@ -916,7 +942,7 @@ is a checked-in pair of files using each form.)
 
 A `\` at the very end of a value has nothing to escape, so the file fails to load
 — for every command, `--list-tasks` included, and whether or not a task uses that
-container. The error names the container or task, the field and the value.
+container. The error is located like a [malformed expression](#variable-names)'s.
 
 A `ratect.toml` reads `\` the same way; write such a value as a literal
 (single-quoted) TOML string, for the same reason. A field that isn't an
@@ -924,12 +950,17 @@ expression, such as a `batect.yml`'s `image`, keeps a backslash as written.
 
 ### Built-in config variable: `batect.project_directory`
 
-`<batect.project_directory`/`<{batect.project_directory}` always resolves to the
+`<{batect.project_directory}` always resolves to the
 absolute path of the directory containing the config file — Batect's one built-in
 config variable, so Ratect supports it without requiring (or allowing) it to be
 declared under `config_variables`. Declaring a `config_variables` entry named
 `batect.project_directory`, or supplying one via `--config-var`/`--config-vars-file`,
 is a hard error — it isn't overridable.
+
+Only the braced form reaches it, as in Batect: an [unbraced
+name](#variable-names) ends at its first `.`, so `<batect.project_directory` is a
+reference to a config variable named `batect`, followed by the literal
+`.project_directory`.
 
 ## Editor autocompletion and validation
 

@@ -1,13 +1,15 @@
 # Exercises Batect's one built-in config variable, batect.project_directory
 # (the absolute path of the directory containing this file) - used both in
-# `environment` (bare form) and a volume host path (braced form), without
-# being declared under config_variables.
+# `environment` and a volume host path, without being declared under
+# config_variables. Braced in both, as Batect requires: unbraced, a name ends
+# at its first '.', so `<batect.project_directory` reads a variable named
+# `batect`.
 project_name: ratect-project-directory-test
 containers:
   build-env:
     image: alpine:3.18.2
     environment:
-      PROJECT_DIR: <batect.project_directory
+      PROJECT_DIR: <{batect.project_directory}
     volumes:
       - local: <{batect.project_directory}
         container: /mnt
