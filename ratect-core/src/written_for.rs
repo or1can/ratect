@@ -109,6 +109,12 @@ pub const BREAKING_CHANGES: &[BreakingChange] = &[
         summary: "a local include's 'path' whose first component is '~' is looked for in the \
                   home directory, not in a '~' directory beside the file declaring it",
     },
+    BreakingChange {
+        version: "0.12.0",
+        summary: "a 'command', 'entrypoint', 'run.command', 'run.entrypoint' or setup command \
+                  that can't be split into arguments (an unbalanced quote, a trailing '\\') \
+                  fails the load, even where no task runs it",
+    },
 ];
 
 /// A `major.minor.patch` version, optionally followed by a `-pre-release`

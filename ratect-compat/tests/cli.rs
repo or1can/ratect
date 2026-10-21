@@ -472,6 +472,46 @@ fn list_tasks_refuses_a_task_given_twice() {
     assert!(stderr.contains("duplicate key \"t\""), "{stderr}");
 }
 
+/// #377: a command line that cannot be split into argv is refused when the
+/// file loads, so `--list-tasks` fails naming the task and the field, rather
+/// than the task failing once its dependencies have started.
+#[test]
+fn list_tasks_refuses_an_unparseable_run_command() {
+    let dir = std::env::temp_dir().join(format!(
+        "ratect-compat-unparseable-command-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\n\
+         containers:\n  app:\n    image: alpine:3.18.2\n\
+         tasks:\n  the-task:\n    run:\n      container: app\n      command: \"'\"\n",
+    )
+    .unwrap();
+
+    let output = ratect_command()
+        .current_dir(&dir)
+        .arg("--list-tasks")
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&dir).ok();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(!stdout.contains("Tasks in"), "{stdout}");
+    assert!(
+        stderr.contains("Task 'the-task' has an invalid 'run.command'")
+            && stderr.contains("Command `'` is invalid: it contains an unbalanced single quote"),
+        "{stderr}"
+    );
+}
+
 /// #382: `\` escapes in an expression, as in Batect. A trailing one escapes
 /// nothing, so `--list-tasks` refuses the file; an escaped `$` is literal, so
 /// the same file with its variable unset loads.

@@ -227,9 +227,12 @@ enum TokenizerState {
 /// `isNotBlank()` check — except at the very end of the string, where
 /// even whitespace-only trailing content (only reachable via an escaped
 /// space) is kept, matching Batect's asymmetric `isNotEmpty()` there.
-/// Errors (unbalanced quote, trailing backslash) match Batect's own
-/// messages.
-fn tokenize_command_line(input: &str) -> Result<Vec<String>> {
+/// Errors (unbalanced quote, trailing backslash) carry Batect's own message
+/// text. `config.rs`'s `check_values` runs every command-line field through
+/// this when the file loads, as Batect parses them while decoding (#377), and
+/// names the container or task and field where Batect gives the file, line
+/// and path.
+pub(crate) fn tokenize_command_line(input: &str) -> Result<Vec<String>> {
     let chars: Vec<char> = input.chars().collect();
     let mut arguments = Vec::new();
     let mut current = String::new();
