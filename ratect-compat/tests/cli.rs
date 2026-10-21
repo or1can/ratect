@@ -2842,6 +2842,50 @@ fn additional_args_are_forwarded_to_the_task_command() {
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
 /// Run explicitly with `cargo test -- --ignored`.
 ///
+/// #399: with no `command`, `-- ADDITIONAL_ARGS` replace the image's default
+/// `CMD`, and `RUST_LOG=debug` names the one replaced. Logged only then:
+/// not when a `command` is set, and not at the default log level.
+#[test]
+#[ignore]
+fn additional_args_replacing_the_image_cmd_are_logged_at_debug_level() {
+    const LOGGED: &str = "additional arguments replace the image's default CMD";
+    let run = |task: &str, rust_log: Option<&str>| {
+        let mut command = ratect_command();
+        command.env_remove("RUST_LOG");
+        if let Some(rust_log) = rust_log {
+            command.env("RUST_LOG", rust_log);
+        }
+        let output = command
+            .arg("-f")
+            .arg(additional_args_config_path())
+            .args(["-o", "simple", task, "--", "echo", "replaced"])
+            .output()
+            .expect("failed to run ratect");
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(output.status.success(), "stderr:\n{stderr}");
+        (task_output(&stdout, "build-env"), stderr)
+    };
+
+    let (output, stderr) = run("no-command", Some("debug"));
+    assert_eq!(output, "replaced");
+    assert!(
+        stderr.contains(LOGGED) && stderr.contains(r#"replaced_cmd=["/bin/sh"]"#),
+        "{stderr}"
+    );
+
+    let (output, stderr) = run("no-command", None);
+    assert_eq!(output, "replaced");
+    assert!(!stderr.contains(LOGGED), "{stderr}");
+
+    let (output, stderr) = run("echo-args", Some("debug"));
+    assert_eq!(output, "args: echo replaced");
+    assert!(!stderr.contains(LOGGED), "{stderr}");
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
 /// Proves environment values actually reach the real container (not just
 /// that the right bollard calls were made): a container-level
 /// `${HOST_VAR:-fallback}` expression (its default, since `HOST_VAR` is

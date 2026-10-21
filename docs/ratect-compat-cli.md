@@ -172,7 +172,8 @@ If neither the task's `run` nor its container has a `command`, `ADDITIONAL_ARGS`
 (when given) **replace** the image's default `CMD`, as plain `docker run <image>
 <args>` does; the image's `ENTRYPOINT` is kept. So for an image built with
 `ENTRYPOINT ["server"]` and `CMD ["--port", "80"]`, `ratect-compat <task> --
---debug` runs `server --debug`, not `server --port 80 --debug`.
+--debug` runs `server --debug`, not `server --port 80 --debug`. With
+`RUST_LOG=debug`, the run logs the `CMD` the arguments replaced.
 
 ## Exit codes and error reporting
 

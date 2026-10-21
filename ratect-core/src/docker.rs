@@ -329,6 +329,24 @@ fn build_cmd(command: Option<&str>, additional_args: &[String]) -> Result<Option
     }
 }
 
+/// Whether `additional_args` stand in for the image's default `CMD` — with no
+/// `command`, [`build_cmd`] makes them the whole `Cmd`.
+fn additional_args_replace_image_cmd(command: Option<&str>, additional_args: &[String]) -> bool {
+    command.is_none() && !additional_args.is_empty()
+}
+
+/// The image's default `CMD` that `additional_args` replace, when there is
+/// one to report (#399).
+fn replaced_image_cmd<'a>(
+    command: Option<&str>,
+    additional_args: &[String],
+    image_cmd: Option<&'a [String]>,
+) -> Option<&'a [String]> {
+    image_cmd.filter(|cmd| {
+        additional_args_replace_image_cmd(command, additional_args) && !cmd.is_empty()
+    })
+}
+
 /// Builds Docker's `KEY=VALUE` environment variable list from a config
 /// `environment` map. Sorted by key so callers (e.g. tests) see a
 /// deterministic order despite `HashMap`'s unspecified iteration order.
@@ -2234,6 +2252,37 @@ impl DockerClient {
         (interactive, use_tty)
     }
 
+    /// Logs, at debug level, the image's default `CMD` that `spec`'s
+    /// additional arguments replace — see [`replaced_image_cmd`]. Not a
+    /// warning: a CLI-tool image's default `CMD` (often `--help`) is usually
+    /// replaced on purpose. Best effort: a failed inspect is logged too, and
+    /// changes nothing about the run.
+    async fn log_replaced_image_cmd(&self, spec: &ContainerSpec) {
+        let shared = &spec.shared;
+        match self.docker.inspect_image(&shared.image).await {
+            Ok(image) => {
+                let image_cmd = image.config.and_then(|config| config.cmd);
+                if let Some(cmd) = replaced_image_cmd(
+                    shared.command.as_deref(),
+                    &spec.additional_args,
+                    image_cmd.as_deref(),
+                ) {
+                    tracing::debug!(
+                        container = shared.name.as_str(),
+                        image = shared.image.as_str(),
+                        replaced_cmd = ?cmd,
+                        additional_args = ?spec.additional_args,
+                        "additional arguments replace the image's default CMD"
+                    );
+                }
+            }
+            Err(e) => tracing::debug!(
+                image = shared.image.as_str(),
+                "could not inspect image for its default CMD: {e}"
+            ),
+        }
+    }
+
     /// `spec` as the Docker create request `create_container` sends — one
     /// builder for a dependency and the task's own container, which differ
     /// only in what the task container's attach-and-start paths need baked
@@ -2751,6 +2800,13 @@ impl ContainerRuntime for DockerClient {
             .with_context(|| format!("Failed to create container '{}'", shared.name))
             .map_err(CreateContainerError::before_creation)?;
         tracing::debug!(container_id = %container.id, name = shared.name.as_str(), image = shared.image.as_str(), "created container");
+        // The inspect only feeds the log line, so it is skipped unless the
+        // line would be printed.
+        if tracing::enabled!(tracing::Level::DEBUG)
+            && additional_args_replace_image_cmd(shared.command.as_deref(), &spec.additional_args)
+        {
+            self.log_replaced_image_cmd(spec).await;
+        }
 
         // From here the container exists, so a failure carries its id out
         // for the caller to remove — see `CreateContainerError`.
