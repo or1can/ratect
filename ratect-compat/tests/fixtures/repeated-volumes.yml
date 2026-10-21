@@ -1,0 +1,18 @@
+# Exercises a mount listed more than once (ratect#390): Batect holds a
+# container's volumes as a set, so the two spellings of one host directory
+# below are one mount. Passed on as two binds, the daemon refuses the create
+# with `Duplicate mount point: /data`; reading the marker proves the task ran
+# with the directory mounted.
+project_name: ratect-repeated-volumes-test
+containers:
+  build-env:
+    image: alpine:3.18.2
+    volumes:
+      - ./repeated-volumes:/data
+      - repeated-volumes:/data
+      - ./repeated-volumes:/data
+tasks:
+  read-marker:
+    run:
+      container: build-env
+      command: cat /data/marker.txt

@@ -2785,9 +2785,10 @@ pub struct TaskRun {
     pub environment: Option<HashMap<String, String>>,
     /// Additional port mappings for this task's run specifically —
     /// *added* to the container's own `ports` (a union, not an override:
-    /// matching Batect, which combines these as a `Set`, so there's no
-    /// concept of one replacing an entry from the other by container
-    /// port). See [`Container::ports`].
+    /// there's no concept of one replacing an entry from the other by
+    /// container port, and a mapping identical to one already given is
+    /// published once, matching Batect, which combines these as a `Set`).
+    /// See [`Container::ports`].
     pub ports: Option<Vec<PortMapping>>,
     /// Overrides the container's own `working_directory` for this task's
     /// run specifically — see [`Container::working_directory`].

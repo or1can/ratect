@@ -620,25 +620,37 @@ pub(crate) fn merged_environment(
     Some(merged)
 }
 
-/// Expands and concatenates a container's own `ports` with an overlay's
-/// *additional* `ports` — a union, not an override (matching Batect, which
-/// combines these as a `Set`, so there's no concept of one entry replacing
-/// another by container port; `overlay_ports` is `None` for a dependency
-/// with no `customise` entry of its own). Each `PortMapping` is expanded (a
-/// range becomes more than one triple — see `PortMapping::expand`) before
-/// `docker.rs` ever sees it, so `NetworkOptions::ports` only ever carries
-/// already-resolved `(local_port, container_port, protocol)` triples, never
-/// a `PortMapping` needing further interpretation.
+/// Expands and unions a container's own `ports` with an overlay's
+/// *additional* `ports` — a union, not an override, so there's no concept of
+/// one entry replacing another by container port (`overlay_ports` is `None`
+/// for a dependency with no `customise` entry of its own). Each
+/// `PortMapping` is expanded (a range becomes more than one triple — see
+/// `PortMapping::expand`) before `docker.rs` ever sees it, so
+/// `NetworkOptions::ports` only ever carries already-resolved
+/// `(local_port, container_port, protocol)` triples, never a `PortMapping`
+/// needing further interpretation.
+///
+/// A triple identical to an earlier one is dropped, keeping first-seen
+/// order — matching Batect, which holds both sides as a `Set` and unions
+/// them (ratect#390). Compared after expansion, so `8080:80` alongside
+/// `8080-8081:80-81` publishes `8080:80` once. The same container port on
+/// two different host ports is two triples, and both are kept.
 fn merged_ports(
     container_ports: Option<&Vec<crate::config::PortMapping>>,
     overlay_ports: Option<&Vec<crate::config::PortMapping>>,
 ) -> Vec<(u16, u16, String)> {
-    container_ports
+    let mut merged = Vec::new();
+    for triple in container_ports
         .into_iter()
         .flatten()
         .chain(overlay_ports.into_iter().flatten())
         .flat_map(crate::config::PortMapping::expand)
-        .collect()
+    {
+        if !merged.contains(&triple) {
+            merged.push(triple);
+        }
+    }
+    merged
 }
 
 /// Converts a container's parsed `health_check` config into

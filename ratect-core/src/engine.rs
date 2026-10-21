@@ -1038,6 +1038,13 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// a bind string at all, and need no async resolution, so they're pulled
     /// out separately (and synchronously) by `container_spec::tmpfs_mounts`
     /// instead.
+    ///
+    /// A bind identical to an earlier one is dropped, keeping first-seen
+    /// order: Batect holds a container's mounts as a set, and the daemon
+    /// refuses a create naming one mount point twice (ratect#390). Compared
+    /// after resolution, so `./a:/a` and `a:/a` collapse too; the same paths
+    /// with different options don't, and the daemon refuses those as it does
+    /// under Batect.
     async fn resolve_volumes(
         &self,
         volumes: Option<&Vec<crate::config::VolumeMount>>,
@@ -1048,15 +1055,13 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
 
         let mut resolved = Vec::with_capacity(volumes.len());
         for volume in volumes {
-            match volume {
-                crate::config::VolumeMount::Local(local) => {
-                    resolved.push(match &local.options {
-                        Some(options) => {
-                            format!("{}:{}:{}", local.local, local.container, options)
-                        }
-                        None => format!("{}:{}", local.local, local.container),
-                    });
-                }
+            let bind = match volume {
+                crate::config::VolumeMount::Local(local) => match &local.options {
+                    Some(options) => {
+                        format!("{}:{}:{}", local.local, local.container, options)
+                    }
+                    None => format!("{}:{}", local.local, local.container),
+                },
                 crate::config::VolumeMount::Cache(cache) => {
                     let cache_options = self.cache_options.as_ref().expect(
                         "a config with a 'cache' volume mount requires with_settings to have \
@@ -1068,13 +1073,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                             crate::cache::project_cache_key(&cache_options.project_directory)
                         })
                         .await?;
-                    resolved.push(crate::cache::resolve_cache_mount(
-                        cache_options,
-                        cache_key,
-                        cache,
-                    )?);
+                    crate::cache::resolve_cache_mount(cache_options, cache_key, cache)?
                 }
-                crate::config::VolumeMount::Tmpfs(_) => {}
+                crate::config::VolumeMount::Tmpfs(_) => continue,
+            };
+            if !resolved.contains(&bind) {
+                resolved.push(bind);
             }
         }
 

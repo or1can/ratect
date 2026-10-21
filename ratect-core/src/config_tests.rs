@@ -3463,6 +3463,39 @@ fn evaluate_makes_relative_local_volume_host_path_absolute() {
     assert_eq!(resolved.local, "/base/code");
 }
 
+/// Two spellings of one host path evaluate to the same string, which is what
+/// lets the engine collapse them into one bind (ratect#390).
+#[test]
+fn evaluate_resolves_dot_relative_and_bare_relative_host_paths_alike() {
+    let mount = |local: &str| {
+        VolumeMount::Local(LocalVolumeMount {
+            local: local.to_string(),
+            container: "/a".to_string(),
+            options: None,
+            compact: false,
+        })
+    };
+    let mut container = container_with_environment(HashMap::new());
+    container.volumes = Some(vec![mount("./a"), mount("a")]);
+    let mut config = Config {
+        project_name: "demo".to_string(),
+        containers: IndexMap::from([("build-env".to_string(), container)]),
+        tasks: IndexMap::new(),
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    config
+        .check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+            None
+        })
+        .unwrap();
+
+    let volumes = config.containers["build-env"].volumes.as_ref().unwrap();
+    assert_eq!(expect_local(&volumes[0]).local, "/base/a");
+    assert_eq!(expect_local(&volumes[1]).local, "/base/a");
+}
+
 #[test]
 fn evaluate_leaves_absolute_local_volume_host_path_unchanged() {
     let mut container = container_with_environment(HashMap::new());

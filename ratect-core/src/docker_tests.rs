@@ -595,6 +595,31 @@ fn an_ssh_agent_naming_two_sockets_is_rejected() {
     );
 }
 
+/// Batect holds an agent's paths as a set, so a socket listed twice is one
+/// socket, not two agents under one id (ratect#390).
+#[test]
+fn an_ssh_agent_listing_the_same_socket_twice_forwards_that_socket() {
+    let mut scratch = ScratchPaths::new();
+    let socket = scratch.socket("agent.sock");
+
+    assert_eq!(
+        classify_ssh_agent_paths("default", &[socket.clone(), socket.clone()]).unwrap(),
+        SshAgentSource::Socket(socket.clone())
+    );
+}
+
+#[test]
+fn an_ssh_agent_listing_the_same_key_file_twice_serves_it_once() {
+    let scratch = ScratchPaths::new();
+    let key = scratch.file("id_ed25519");
+    let other = scratch.file("id_rsa");
+
+    assert_eq!(
+        classify_ssh_agent_paths("default", &[key.clone(), other.clone(), key.clone()]).unwrap(),
+        SshAgentSource::Keys(vec![key.clone(), other.clone()])
+    );
+}
+
 #[test]
 fn build_port_config_is_none_when_ports_is_absent() {
     assert!(build_port_config(None).is_none());

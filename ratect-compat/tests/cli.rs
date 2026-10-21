@@ -255,6 +255,10 @@ fn tmpfs_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tmpfs.yml")
 }
 
+fn repeated_volumes_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/repeated-volumes.yml")
+}
+
 fn enable_init_process_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/enable-init-process.yml")
 }
@@ -3236,6 +3240,32 @@ fn devices_reaches_the_real_container() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(task_output(&stdout, "build-env"), "device-mapped");
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves a mount listed more than once, under two spellings of one host
+/// path, reaches the daemon as one bind: two would fail the create with
+/// `Duplicate mount point` (ratect#390).
+#[test]
+#[ignore]
+fn a_repeated_volume_is_mounted_once() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(repeated_volumes_config_path())
+        .arg("read-marker")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(task_output(&stdout, "build-env"), "mounted-once");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.

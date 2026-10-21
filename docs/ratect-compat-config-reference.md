@@ -309,6 +309,9 @@ task's own container, as a dependency, or by more than one task) — but never r
                                   # only path
   ```
 
+  A path listed more than once in one entry's `paths` counts once, as in
+  Batect, so the same socket twice is still that entry's only path.
+
   `paths` values support [expressions](#expressions) and are resolved relative to
   the config file, the same way `build_directory` and `build_secrets`' `path` are.
   Key files are served by an ssh-agent Ratect runs in-process for the duration of
@@ -440,6 +443,11 @@ For a `local` mount, `local` (the host path) is resolved:
   (`--config-var`/`--config-vars-file`) applied — not when the file loads.
 - `build_directory` is resolved the same way (it has no `:container_path` part to split
   off, obviously, but otherwise follows identical rules).
+
+A mount identical to an earlier one once resolved — `./a:/a` and `a:/a`, or a
+`cache` mount listed twice — is mounted once, as in Batect. The same paths with
+different options (`./a:/a` and `./a:/a:ro`) are two mounts, which Docker refuses
+as a `Duplicate mount point`, as it does under Batect.
 
 `container`/`options` are always used as literal strings — no expression support. A
 `cache` mount's `name`/`container` are also plain strings, matching Batect — no
@@ -630,7 +638,9 @@ all rejected before anything runs. No [expression](#expressions) support.
 
 `TaskRun.ports` (see [TaskRun](#taskrun)) adds *additional* port mappings for a
 specific task's run — combined with the container's own `ports` as a union, not an
-override; there's no concept of one replacing an entry from the other.
+override; there's no concept of one replacing an entry from the other. A mapping
+given more than once, on either side or both, is published once — compared port by
+port, so `"8080:80"` alongside `"8080-8081:80-81"` publishes `8080` → `80` once.
 
 `--disable-ports` suppresses publishing of every container's `ports` — from both
 `Container.ports` and any `TaskRun.ports` — regardless of what's configured. See

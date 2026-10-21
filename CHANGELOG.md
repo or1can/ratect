@@ -92,6 +92,9 @@ history, from when it was the only binary.
 - The JSON schemas no longer flag `health_check` durations such as `2.s` and `-0s`, or `shm_size` strings such as `128mb` and `128 m`, that Ratect and Batect accept.
 - A YAML container with neither `image` nor `build_directory` is refused with a full stop before the sentence naming its file.
 - A YAML container with `image`, `build_ssh` and `build_secrets` is refused naming `build_ssh`, as in Batect.
+- A container listing the same volume more than once — including two spellings of one host path, such as `./a:/a` and `a:/a`, or a `cache` mount repeated — mounts it once, as in Batect, instead of failing with `Duplicate mount point`. The same paths with different options are still two mounts.
+- A `build_ssh` agent listing the same path more than once uses it once, as in Batect, so a socket listed twice no longer fails the build as two agent sockets.
+- A port mapping given more than once — in a container's `ports`, or in both the container's and a task's `run` or a `customise` entry's — is published once, as in Batect, including where a range also covers it.
 
 ### Security
 
