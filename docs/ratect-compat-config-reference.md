@@ -671,9 +671,10 @@ replaces that one aspect, and any field left out inherits the image's own value:
 | `timeout` | duration | Time a single check may run before it's considered failed. |
 
 Durations are strings in Batect's (Go-style) format: one or more `<number><unit>`
-components — `ns`, `us`, `ms`, `s`, `m`, `h`, numbers optionally fractional — e.g.
-`2s`, `500ms`, `1m30s`, `1.5h`, or a bare `0`, quoted or not. Any other number
-needs its unit: `interval: 5` is refused.
+components, in any order — `ns`, `us` (or `µs`/`μs`), `ms`, `s`, `m`, `h`,
+numbers optionally fractional — e.g. `2s`, `500ms`, `1m30s`, `1.5h`, or a bare
+`0`, quoted or not. Any other number needs its unit: `interval: 5` is refused.
+A negative duration is refused too, except a zero (`-0s`).
 
 Each `setup_commands` entry takes:
 

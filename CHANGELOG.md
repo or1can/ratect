@@ -80,6 +80,8 @@ history, from when it was the only binary.
 - Using a cached Git include keeps every field in its `~/.ratect/incl` sidecar file, including ones written by another ratect version that this one doesn't recognise, and a sidecar missing one of its usual fields no longer fails the config load, as in Batect.
 - A Git include whose clone fails names the file it would have loaded — its `path`, or for a pathless entry the default bundle file names — as well as its `repo` and `ref`.
 - A `ports` entry whose two ranges differ in size is refused saying `1 port` or `N ports`, not `N port(s)`.
+- A zero duration written with a `-` (`-0s`, `-0.0ms`) loads as zero, as in Batect.
+- A value starting with `-` that isn't a duration (`-`, `-.`, `-foo`) is refused as not a valid duration, rather than as a negative one.
 - A `health_check` duration longer than about 292 years is sent to Docker as the longest one it accepts, as in Batect, instead of as a negative one that fails container creation.
 
 ### Security

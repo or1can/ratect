@@ -5129,6 +5129,69 @@ fn parse_duration_handles_batect_formats() {
         parse_duration("1h2m3s4ms").unwrap(),
         Duration::from_millis(3_723_004)
     );
+    assert_eq!(parse_duration("+5s").unwrap(), Duration::from_secs(5));
+    // #431: the Greek small letter mu (U+03BC), not only the micro sign
+    // (U+00B5) above — the two glyphs look identical — and components in
+    // any order.
+    assert_eq!(
+        parse_duration("2\u{3bc}s").unwrap(),
+        Duration::from_micros(2)
+    );
+    assert_eq!(
+        parse_duration("10.5s4m").unwrap(),
+        Duration::from_millis(250_500)
+    );
+    assert_eq!(
+        parse_duration("1h2m3s4ms5us6ns").unwrap(),
+        Duration::from_nanos(3_723_004_005_006)
+    );
+}
+
+/// #401: a sign in front of a value that is zero anyway is no reason to
+/// refuse it — Batect loads these as zero, and Docker accepts a zero.
+#[test]
+fn parse_duration_accepts_a_negative_zero_however_it_is_spelled() {
+    for zero in ["-0", "-0s", "-0ms", "-0.0s", "-.0s", "-0s0ms", "-00h"] {
+        assert_eq!(
+            parse_duration(zero).unwrap(),
+            std::time::Duration::ZERO,
+            "expected '{zero}' to load as zero"
+        );
+    }
+}
+
+/// #401: a non-zero negative is still refused at load, unlike Batect —
+/// see `docs/differences-from-batect.md` — including one too small to
+/// survive rounding to whole nanoseconds.
+#[test]
+fn parse_duration_refuses_a_non_zero_negative() {
+    for negative in ["-2s", "-2m3.4s", "-0s1ns", "-0.0001ns"] {
+        assert_eq!(
+            parse_duration(negative).unwrap_err().to_string(),
+            format!("The duration '{negative}' is negative. Durations must be positive."),
+        );
+    }
+}
+
+/// #430: Batect's own wording for each of its `DurationSerializerSpec`'s
+/// invalid inputs — including `-` and `-.`, which aren't durations at all,
+/// so aren't negative ones either.
+#[test]
+fn parse_duration_reports_an_invalid_duration_in_batects_words() {
+    for invalid in [
+        "", "+", "-", "s", ".", "-.", ".s", "+.s", "-s", "-foo", "-2s-1s",
+    ] {
+        assert_eq!(
+            parse_duration(invalid).unwrap_err().to_string(),
+            format!("The value '{invalid}' is not a valid duration."),
+        );
+    }
+    // A number with no unit says why, past Batect's own sentence — kept
+    // from before #430, for an unquoted `interval: 5`.
+    assert_eq!(
+        parse_duration("3").unwrap_err().to_string(),
+        "The value '3' is not a valid duration: '3' has no unit, such as 's' or 'ms'."
+    );
 }
 
 #[test]

@@ -130,6 +130,7 @@ Ratect checks a config when the file loads, and the report is its own:
   runs — where Batect fails once the task using it has finished.
 - **A negative `health_check` duration, such as `-2s`, is rejected when the
   file loads.** Batect loads one, and the run fails only once Docker refuses it.
+  A negative zero, such as `-0s`, is zero, and loads in both.
 - **The wording** is Ratect's, not Batect's — `Configuration file "batect.yml"
   not found.` rather than `The file '<absolute path>' does not exist.`, and
   likewise for malformed volumes, ports, devices and includes, expressions,
