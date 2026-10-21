@@ -8210,11 +8210,13 @@ run = { container = "app" }
     );
 }
 
-/// The checked container's own name reaches the companion's `sh -c` script,
-/// and nothing else in this file constrains what a container may be called.
+/// The checked container's own name reaches the companion's `sh -c` script
+/// and is the host it reaches, which is safe only because every container
+/// name is an image-name component (#290): nothing a shell reads specially,
+/// and no leading `-` (read by `nc` as an option) or `.` (resolves nowhere).
 #[tokio::test]
-async fn external_health_check_rejects_a_shell_unsafe_container_name() {
-    for name in ["api$(id)", "api'x", "api space"] {
+async fn an_externally_checked_container_name_holds_nothing_a_shell_or_host_lookup_misreads() {
+    for name in ["api$(id)", "api'x", "api space", "-api", ".api", ""] {
         let err = load_native_toml(&format!(
             r#"
 project_name = "demo"
@@ -8224,19 +8226,12 @@ image = "my-org/api:1.0.0"
 [containers."{name}".external_health_check]
 type = "tcp"
 port = 8080
-
-[containers.app]
-image = "alpine:3.18"
-dependencies = ["{name}"]
-
-[tasks.t]
-run = {{ container = "app" }}
 "#
         ))
         .await
         .unwrap_err();
         assert!(
-            format!("{err:#}").contains("must hold only letters"),
+            format!("{err:#}").contains(&format!("Invalid container name '{name}'.")),
             "expected {name:?} to be rejected, got: {err:#}"
         );
     }
@@ -8539,107 +8534,6 @@ run = {{ container = "app" }}
             "the child's empty list must win over the inherited one"
         );
     }
-}
-
-/// '-' earns its own test separately from the unreachable names above,
-/// because it fails in a worse way than not resolving: the name is a bare
-/// argument to `nc -z -w 5 <name> <port>`, where it parses as an option, so
-/// the check would fail reporting a host it never contacted.
-#[tokio::test]
-async fn external_health_check_rejects_a_container_name_starting_with_a_dash() {
-    let err = load_native_toml(
-        r#"
-project_name = "demo"
-
-[containers."-api"]
-image = "my-org/api:1.0.0"
-[containers."-api".external_health_check]
-type = "tcp"
-port = 8080
-
-[containers.app]
-image = "alpine:3.18"
-dependencies = ["-api"]
-
-[tasks.t]
-run = { container = "app" }
-"#,
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        format!("{err:#}").contains("starts with '-' or '.'"),
-        "got: {err:#}"
-    );
-}
-
-/// Only the names the real tools actually choke on. Measured, not assumed:
-/// Docker resolves a `_api` alias and both `curl` and `nc` reach it, so
-/// `_api` must *load* — the sibling test below. `.api` resolves nowhere
-/// (`curl` reports `000`, `nc` says "bad address") and `-api` is read by
-/// `nc` as an option; an empty name has no host at all.
-#[tokio::test]
-async fn external_health_check_rejects_only_unreachable_leading_characters() {
-    for name in [".api", ""] {
-        let err = load_native_toml(&format!(
-            r#"
-project_name = "demo"
-
-[containers."{name}"]
-image = "my-org/api:1.0.0"
-[containers."{name}".external_health_check]
-type = "tcp"
-port = 8080
-
-[tasks.t]
-run = {{ container = "{name}" }}
-"#
-        ))
-        .await
-        .unwrap_err();
-        let message = format!("{err:#}");
-        assert!(
-            message.contains("starts with '-' or '.'"),
-            "expected {name:?} to be rejected, got: {message}"
-        );
-        // An empty name has no first character to quote; interpolating one
-        // previously put a raw NUL byte in the message.
-        assert!(
-            !message.contains('\0'),
-            "an empty name has no character to quote: {message:?}"
-        );
-    }
-}
-
-/// The half that stops the rule drifting back to "must start alphanumeric":
-/// a leading '_' is reachable in practice, so rejecting it would refuse a
-/// configuration that works.
-#[tokio::test]
-async fn an_underscore_leading_container_name_may_be_externally_checked() {
-    let project = load_native_toml(
-        r#"
-project_name = "demo"
-
-[containers._api]
-image = "my-org/api:1.0.0"
-[containers._api.external_health_check]
-type = "tcp"
-port = 8080
-
-[containers.app]
-image = "alpine:3.18"
-dependencies = ["_api"]
-
-[tasks.t]
-run = { container = "app" }
-"#,
-    )
-    .await
-    .expect("a leading underscore resolves for both curl and nc");
-    assert!(project
-        .config
-        .containers
-        .contains_key(&external_health_check_container_name("_api")));
 }
 
 /// The same "can never pass" class as a zero port: curl's `%{http_code}` is
@@ -14519,5 +14413,245 @@ async fn a_bundle_file_declaring_ratect_version_is_named_within_the_bundle() {
              Batect-format (YAML) file keeps Batect's own fields.",
             in_bundle("1.yml")
         )
+    );
+}
+
+/// Batect's own `ImageNameValidatorSpec` invalid names, plus the two that
+/// would silently change what a `<project>-<container>` tag means (#290).
+const INVALID_IMAGE_NAME_COMPONENTS: &[&str] = &[
+    "", "A", ".a", "a.", "a..a", "_a", "a_", "a___a", "-a", "a-", "a#b", "a!b", "a:b", "org/app",
+];
+
+/// The rule both of Batect's image-name messages end with.
+const IMAGE_NAME_RULE: &str = "must contain only lowercase letters, digits, dashes (-), single \
+     consecutive periods (.) or one or two consecutive underscores (_), and must not start or \
+     end with dashes, periods or underscores.";
+
+/// A project whose one container, `name`, is pull-only, as a `batect.yml`
+/// and a `ratect.toml`.
+fn container_named(name: &str) -> (String, String) {
+    (
+        format!("project_name: demo\ncontainers:\n  '{name}':\n    image: alpine\n"),
+        format!("project_name = \"demo\"\n\n[containers.'{name}']\nimage = \"alpine\"\n"),
+    )
+}
+
+/// #290: a container name that isn't an image-name component is refused in
+/// either format, with Batect's message — a pull-only container's too.
+#[tokio::test]
+async fn a_container_name_that_isnt_an_image_name_component_fails_the_load_in_either_format() {
+    for name in INVALID_IMAGE_NAME_COMPONENTS {
+        let (yaml, toml) = container_named(name);
+        let expected = format!(
+            "Invalid container name '{name}'. Container names must be valid Docker \
+             references: they {IMAGE_NAME_RULE}"
+        );
+        for (format, loaded) in [
+            ("batect.yml", load_compat_yaml(&yaml).await),
+            ("ratect.toml", load_native_toml(&toml).await),
+        ] {
+            let error = format!(
+                "{:#}",
+                loaded
+                    .err()
+                    .unwrap_or_else(|| panic!("{format}: '{name}' loaded"))
+            );
+            assert!(error.contains(&expected), "{format}: {error}");
+        }
+    }
+}
+
+/// #290: a `project_name` that isn't an image-name component is refused in
+/// either format, with Batect's message.
+#[tokio::test]
+async fn a_project_name_that_isnt_an_image_name_component_fails_the_load_in_either_format() {
+    for name in INVALID_IMAGE_NAME_COMPONENTS {
+        let expected = format!(
+            "Invalid project name '{name}'. The project name must be a valid Docker \
+             reference: it {IMAGE_NAME_RULE}"
+        );
+        for (format, loaded) in [
+            (
+                "batect.yml",
+                load_compat_yaml(&format!("project_name: '{name}'\n")).await,
+            ),
+            (
+                "ratect.toml",
+                load_native_toml(&format!("project_name = '{name}'\n")).await,
+            ),
+        ] {
+            let error = format!(
+                "{:#}",
+                loaded
+                    .err()
+                    .unwrap_or_else(|| panic!("{format}: '{name}' loaded"))
+            );
+            assert!(error.contains(&expected), "{format}: {error}");
+        }
+    }
+}
+
+/// #290: the names Batect's `ImageNameValidatorSpec` accepts load as a
+/// `project_name` and as a container name, in either format.
+#[tokio::test]
+async fn project_and_container_names_that_are_image_name_components_load() {
+    for name in [
+        "a", "aa", "1", "a1", "a.b", "a_b", "a__b", "a-b", "a--b", "a---b",
+    ] {
+        let (yaml, toml) = container_named(name);
+        load_compat_yaml(&yaml.replacen("demo", name, 1))
+            .await
+            .unwrap_or_else(|e| panic!("batect.yml: '{name}': {e:#}"));
+        load_native_toml(&toml.replacen("demo", name, 1))
+            .await
+            .unwrap_or_else(|e| panic!("ratect.toml: '{name}': {e:#}"));
+    }
+}
+
+/// #290: a container name is checked in an included file too, in either
+/// format.
+#[tokio::test]
+async fn a_container_name_that_isnt_an_image_name_component_in_an_included_file_fails_the_load() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ninclude: [1.yml]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("1.yml"),
+        "containers:\n  Bad_Name:\n    image: alpine\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "project_name = \"demo\"\ninclude = [\"1.toml\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("1.toml"),
+        "[containers.'a:b']\nimage = \"alpine\"\n",
+    )
+    .unwrap();
+    let yaml = load_project(&dir.join("batect.yml")).await;
+    let toml = load_project_native(&dir.join("ratect.toml")).await;
+    std::fs::remove_dir_all(&dir).ok();
+
+    let yaml = format!("{:#}", yaml.expect_err("batect.yml loaded"));
+    assert!(
+        yaml.contains("1.yml") && yaml.contains("Invalid container name 'Bad_Name'."),
+        "{yaml}"
+    );
+    let toml = format!("{:#}", toml.expect_err("ratect.toml loaded"));
+    assert!(
+        toml.contains("1.toml") && toml.contains("Invalid container name 'a:b'."),
+        "{toml}"
+    );
+}
+
+/// #290: a refused name in a `batect.yml` is located like any other parse
+/// error. A container name, like a task name (#392), is located at its
+/// entry's value — line 5, column 5 here, where Batect gives the key's,
+/// line 4, column 3 — and a `project_name` at its value, as in Batect.
+#[test]
+fn a_refused_project_or_container_name_in_a_batect_yml_is_located_at_its_value() {
+    let container = yaml_config_file_error(
+        "project_name: demo\n\
+         containers:\n\
+         \x20 ok: {}\n\
+         \x20 Bad:\n\
+         \x20   image: alpine\n",
+    );
+    assert!(
+        container.contains("line 5, column 5")
+            && container.contains("containers.Bad: Invalid container name 'Bad'."),
+        "{container}"
+    );
+    let project = yaml_config_file_error("containers: {}\nproject_name: My_Proj!\n");
+    assert!(
+        project.contains("line 2, column 15")
+            && project.contains("project_name: Invalid project name 'My_Proj!'."),
+        "{project}"
+    );
+}
+
+/// #290: in a `ratect.toml`, `toml` locates a refused container name at its
+/// key, and a refused `project_name` at its value.
+#[test]
+fn a_refused_project_or_container_name_in_a_ratect_toml_is_located() {
+    let container = toml::from_str::<ConfigFile>(
+        "project_name = \"demo\"\n\n[containers.ok]\n\n[containers.Bad]\n",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        container.contains("line 5, column 13")
+            && container.contains("Invalid container name 'Bad'."),
+        "{container}"
+    );
+    let project = toml::from_str::<ConfigFile>("\nproject_name = \"Demo\"\n")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        project.contains("line 2, column 16") && project.contains("Invalid project name 'Demo'."),
+        "{project}"
+    );
+}
+
+/// #290: a null `project_name` is still left out, not refused as a name —
+/// an included file's loads, as in Batect, and a root file's is reported
+/// missing.
+#[tokio::test]
+async fn a_null_project_name_is_left_out_rather_than_checked() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ninclude: [1.yml]\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("1.yml"), "project_name:\n").unwrap();
+    let included = load_project(&dir.join("batect.yml")).await;
+    std::fs::remove_dir_all(&dir).ok();
+    included.unwrap_or_else(|e| panic!("a null project_name in an include: {e:#}"));
+
+    let root = format!(
+        "{:#}",
+        load_compat_yaml("project_name: ~\n")
+            .await
+            .expect_err("a null root project_name loaded")
+    );
+    assert!(
+        root.contains("missing the required 'project_name' field"),
+        "{root}"
+    );
+}
+
+/// #290: a `Config` that never went through `ConfigFile` — built in code,
+/// or deserialized directly — still can't put a shell-unsafe name into an
+/// external check's `sh -c` script: the check refuses it where the name is
+/// used, as its companion is generated.
+#[test]
+fn an_externally_checked_container_name_is_checked_without_the_parser() {
+    let mut config = parse(
+        r#"
+project_name: demo
+containers:
+  api$(id):
+    image: my-org/api:1.0.0
+    external_health_check:
+      type: tcp
+      port: 8080
+tasks: {}
+"#,
+    );
+
+    let message = format!(
+        "{:#}",
+        expand_external_health_checks(&mut config).unwrap_err()
+    );
+
+    assert!(
+        message.contains("Invalid container name 'api$(id)'."),
+        "{message}"
     );
 }

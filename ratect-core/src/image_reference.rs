@@ -45,13 +45,22 @@ const DEFAULT_DOMAIN: &str = "docker.io";
 const LEGACY_DEFAULT_DOMAIN: &str = "index.docker.io";
 const OFFICIAL_REPO_PREFIX: &str = "library/";
 
+/// One `/`-separated component of a repository path: lowercase alphanumeric
+/// runs joined by a `.`, one or two `_`, or any number of `-`. A macro so
+/// [`NAME_COMPONENT_PATTERN`] can `concat!` it.
+macro_rules! path_component {
+    () => {
+        r"[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*"
+    };
+}
+
 /// The package's reference pattern, assembled from the same pieces: an
 /// optional registry host (group 1) and `/`, the repository path (group 2),
 /// an optional `:tag` (group 3) and an optional `@digest` (group 4). Go's
 /// `\w` is ASCII-only, so it's spelled out; Rust's would also match
 /// non-ASCII letters.
 static REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
-    let path_component = r"[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*";
+    let path_component = path_component!();
     let domain_component = r"(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])";
     let host = format!(r"(?:{domain_component}(?:\.{domain_component})*|\[(?:[a-fA-F0-9:]+)\])");
     let domain = format!(r"{host}(?::[0-9]+)?");
@@ -63,6 +72,13 @@ static REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
     ))
     .unwrap()
 });
+
+/// [`is_name_component`]'s rule as one anchored pattern, which the config
+/// schemas state too.
+pub const NAME_COMPONENT_PATTERN: &str = concat!("^", path_component!(), "$");
+
+static NAME_COMPONENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(NAME_COMPONENT_PATTERN).unwrap());
 
 static IMAGE_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-f0-9]{64}$").unwrap());
 
@@ -90,6 +106,14 @@ pub fn check(value: &str) -> Result<(), String> {
 /// Docker refuses it.
 pub fn check_tag(tag: &str) -> Result<(), String> {
     check(tag).map_err(|reason| format!("'{tag}' is not a valid image tag: {reason}"))
+}
+
+/// Whether `name` is one component of a repository path — Batect's
+/// `ImageNameValidator` rule, which a `project_name` and every container
+/// name must satisfy, since a built image is tagged `<project>-<container>`.
+/// Two components joined by `-` are one, so each can be checked on its own.
+pub fn is_name_component(name: &str) -> bool {
+    NAME_COMPONENT.is_match(name)
 }
 
 /// The package's `splitDockerDomain`: the part before the first `/` is a

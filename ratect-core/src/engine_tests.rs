@@ -8902,23 +8902,29 @@ async fn every_tag_the_daemon_refuses_is_reported_and_the_rest_applied() {
     }
 }
 
-/// Until project and container names are checked at load (#290), a name
-/// that makes the automatic tag unparseable is caught here, before the
-/// build, naming the fields the tag is made from.
+/// Project and container names are checked at load (#290), but two valid
+/// ones can still make an automatic tag Docker refuses — one too long — so
+/// the tag is checked here, before the build, naming the fields it is made
+/// from.
 #[tokio::test]
 async fn an_invalid_automatic_tag_fails_before_the_image_is_built() {
+    let project_name = "a".repeat(200);
+    let container_name = "b".repeat(60);
     let docker = FakeContainerRuntime::default();
-    let engine = engine(config_building("S4-i290", "build-env"), docker.clone());
+    let engine = engine(
+        config_building(&project_name, &container_name),
+        docker.clone(),
+    );
 
     let error = engine.run_task("test", &[]).await.unwrap_err();
 
     let message = format!("{error:#}");
     assert!(
-        message.contains(
-            "'S4-i290-build-env', the tag made from project_name 'S4-i290' and container \
-             name 'build-env', is not a valid image tag: invalid reference format: repository \
-             name (library/S4-i290-build-env) must be lowercase"
-        ),
+        message.contains(&format!(
+            "'{project_name}-{container_name}', the tag made from project_name \
+             '{project_name}' and container name '{container_name}', is not a valid image \
+             tag: repository name must not be more than 255 characters"
+        )),
         "{message}"
     );
     let events = docker.events();

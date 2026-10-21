@@ -88,6 +88,12 @@ pub const BREAKING_CHANGES: &[BreakingChange] = &[
                   or digit; a config variable name is letters, digits, '-', '.' and '_', \
                   starting with a letter and not with 'batect'",
     },
+    BreakingChange {
+        version: "0.12.0",
+        summary: "'project_name' and every container name must be a Docker image-name \
+                  component, or the load fails: lowercase letters and digits, joined by a \
+                  single '.', one or two '_', or any number of '-'",
+    },
 ];
 
 /// A `major.minor.patch` version, optionally followed by a `-pre-release`

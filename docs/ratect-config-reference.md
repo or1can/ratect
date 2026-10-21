@@ -43,11 +43,14 @@ only, and names the images and cache volumes the project creates — see
 `ratect.toml`; point it at a differently-named file, or a `batect.yml`, with
 `-f`.
 
-A task's or config variable's name follows the same rules as in a `batect.yml`
-— see [Task names](ratect-compat-config-reference.md#task-names) and [Config
-variable names](ratect-compat-config-reference.md#config-variable-names) — and
-the error for one that breaks them gives the line and column of the name itself
-in a `.toml` file, and of the entry's value in an included `.yml` one.
+`project_name`, a container's name, a task's and a config variable's follow the
+same rules as in a `batect.yml` — see [Project and container
+names](ratect-compat-config-reference.md#project-and-container-names), [Task
+names](ratect-compat-config-reference.md#task-names) and [Config variable
+names](ratect-compat-config-reference.md#config-variable-names) — and the error
+for one that breaks them gives the line and column of the name itself in a
+`.toml` file (of its value, for `project_name`), and of the entry's value in an
+included `.yml` one.
 
 This closely mirrors [`examples/rust/ratect.toml`](https://github.com/or1can/ratect/blob/main/examples/rust/ratect.toml)'s
 own real `build-env` container and `build` task — same image, same command, same
@@ -550,10 +553,6 @@ zero is rejected when the file loads rather than taken literally — nothing
 listens on port 0, zero attempts would never check at all, and the tools the
 check is made with read a zero timeout as *no* timeout. So is an
 `expected_status` that isn't three digits, which no HTTP response can carry.
-A checked container's own name has to be reachable as a hostname, since the
-check reaches it by that name: letters, digits, `-`, `_` and `.`, not
-starting with a `-` or a `.`. (A leading `_` is fine — Docker resolves it and
-both tools the check uses reach it.)
 
 - **Over the project's own network, never a published port.** The check
   reaches the container by its container-config name — the same network alias
