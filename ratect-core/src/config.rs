@@ -3219,13 +3219,16 @@ impl ConfigFormat {
     /// include resolution, path resolution, or expression interpolation.
     /// `Compat` is always YAML; `Native` picks TOML or YAML by extension.
     /// Both feed the same [`ConfigFile`], so nothing downstream depends on
-    /// which format a file was written in.
-    fn parse(&self, path: &Path) -> Result<ConfigFile> {
+    /// which format a file was written in. `boundary` is the bundle the file
+    /// was reached through, if any, so an error names it within that bundle
+    /// (see [`describe_origin`]).
+    fn parse(&self, path: &Path, boundary: Option<&Boundary>) -> Result<ConfigFile> {
+        let name = describe_origin(path, boundary);
         match self {
-            ConfigFormat::Compat => parse_yaml_config_file(path),
-            ConfigFormat::Native => match config_file_format(path)? {
-                FileFormat::Toml => parse_toml_config_file(path),
-                FileFormat::Yaml => parse_yaml_config_file(path),
+            ConfigFormat::Compat => parse_yaml_config_file(path, &name),
+            ConfigFormat::Native => match named_config_file_format(path, &name)? {
+                FileFormat::Toml => parse_toml_config_file(path, &name),
+                FileFormat::Yaml => parse_yaml_config_file(path, &name),
             },
         }
     }
@@ -3347,27 +3350,26 @@ struct BatectShaped<'a> {
     origin: Option<String>,
 }
 
-/// How to name the file a container was declared in, for a message the
-/// reader has to act on. A local file is its own path. A **Git-included**
-/// one is named by the bundle that carries it — its remote and ref, plus
-/// the path within it — because the path Ratect actually read is inside the
-/// `~/.ratect/incl` clone cache, which is neither where the file is
-/// maintained nor anywhere worth editing. Same identity, and the same
-/// reasoning, as [`crate::include_trust::hide_clone_detail`]'s own
-/// refusals.
+/// How to name a loaded file, for a message the reader has to act on. A
+/// local file is its own path, debug-quoted. A **bundle file** — reached
+/// through a Git include, `boundary` its bundle — is named by
+/// [`Boundary::describe`], since the path Ratect actually read is inside the
+/// `~/.ratect/incl` clone cache. See [`describe_file`] for the
+/// single-quoted sibling.
 fn describe_origin(origin: &Path, boundary: Option<&Boundary>) -> String {
     match boundary {
-        Some(boundary) => {
-            let within = origin
-                .strip_prefix(&boundary.repo_dir)
-                .unwrap_or(origin)
-                .display();
-            format!(
-                "'{within}', from the bundle '{}' at '{}'",
-                boundary.bundle.id.remote, boundary.bundle.id.git_ref
-            )
-        }
+        Some(boundary) => boundary.describe(origin),
         None => format!("{origin:?}"),
+    }
+}
+
+/// [`describe_origin`] for the messages that have always single-quoted a
+/// local file's path rather than debug-quoting it — kept as they were, so
+/// only a bundle file's naming changes.
+fn describe_file(path: &Path, boundary: Option<&Boundary>) -> String {
+    match boundary {
+        Some(boundary) => boundary.describe(path),
+        None => format!("'{}'", path.display()),
     }
 }
 
@@ -3390,6 +3392,7 @@ fn native_field_rejection(entry: &BatectShaped<'_>, message: String) -> anyhow::
 /// includes it, and the version is the project's, not one file's.
 fn reject_misplaced_ratect_version(
     path: &Path,
+    boundary: Option<&Boundary>,
     file: &ConfigFile,
     format: ConfigFormat,
     is_root: bool,
@@ -3403,16 +3406,16 @@ fn reject_misplaced_ratect_version(
     };
     if yaml {
         anyhow::bail!(
-            "'{}' declares 'ratect_version', which only a native ratect.toml can do: a \
+            "{} declares 'ratect_version', which only a native ratect.toml can do: a \
              Batect-format (YAML) file keeps Batect's own fields.",
-            path.display()
+            describe_file(path, boundary)
         );
     }
     if !is_root {
         anyhow::bail!(
-            "Included file '{}' declares 'ratect_version', but only the root configuration \
+            "Included file {} declares 'ratect_version', but only the root configuration \
              file can do so.",
-            path.display()
+            describe_file(path, boundary)
         );
     }
     Ok(())
@@ -3428,14 +3431,18 @@ enum FileFormat {
 /// strict — an unrecognized extension errors rather than being content-sniffed,
 /// since TOML and YAML are too easy to confuse for a simple document.
 fn config_file_format(path: &Path) -> Result<FileFormat> {
+    named_config_file_format(path, &describe_origin(path, None))
+}
+
+/// [`config_file_format`], with the file named as `name` in its error.
+fn named_config_file_format(path: &Path, name: &str) -> Result<FileFormat> {
     match path.extension().and_then(|ext| ext.to_str()) {
         Some(ext) if ext.eq_ignore_ascii_case("toml") => Ok(FileFormat::Toml),
         Some(ext) if ext.eq_ignore_ascii_case("yml") || ext.eq_ignore_ascii_case("yaml") => {
             Ok(FileFormat::Yaml)
         }
         _ => anyhow::bail!(
-            "Unrecognized config file extension for {:?}; expected .toml, .yml, or .yaml",
-            path
+            "Unrecognized config file extension for {name}; expected .toml, .yml, or .yaml"
         ),
     }
 }
@@ -3474,11 +3481,13 @@ const EXTENSION_KEY_PREFIX: char = '.';
 /// safe. Only *top-level* keys are considered, matching kaml, so a
 /// `.`-prefixed key nested anywhere else still reaches the schema (and is
 /// still rejected if it isn't a real field).
-pub(crate) fn parse_yaml_config_file(path: &Path) -> Result<ConfigFile> {
+///
+/// `name` is how its errors name the file — see [`describe_origin`].
+pub(crate) fn parse_yaml_config_file(path: &Path, name: &str) -> Result<ConfigFile> {
     let text = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to open config file {:?}", path))?;
+        .with_context(|| format!("Failed to open config file {name}"))?;
     let ExtensibleConfigFile(file) = crate::yaml::from_str(&text)
-        .with_context(|| format!("Failed to parse config file {:?}", path))?;
+        .with_context(|| format!("Failed to parse config file {name}"))?;
     Ok(file)
 }
 
@@ -3582,10 +3591,10 @@ impl<'de, K: serde::de::DeserializeSeed<'de>> serde::de::DeserializeSeed<'de>
     }
 }
 
-fn parse_toml_config_file(path: &Path) -> Result<ConfigFile> {
+fn parse_toml_config_file(path: &Path, name: &str) -> Result<ConfigFile> {
     let text = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to open config file {:?}", path))?;
-    toml::from_str(&text).with_context(|| format!("Failed to parse config file {:?}", path))
+        .with_context(|| format!("Failed to open config file {name}"))?;
+    toml::from_str(&text).with_context(|| format!("Failed to parse config file {name}"))
 }
 
 /// Resolves `path` to an absolute, lexically-cleaned path, anchored at the
@@ -3624,10 +3633,16 @@ fn resolve_include_target(
             boundary.check_contains(&resolved)?;
         }
         if !resolved.is_file() {
+            // A bundle file is named as written, and where that landed
+            // within the bundle — never by its clone-cache path.
+            let named = match boundary {
+                Some(boundary) => format!("'{only}' ({})", boundary.describe(&resolved)),
+                None => format!("'{}'", resolved.display()),
+            };
             if resolved.exists() {
-                anyhow::bail!("Included file '{}' is not a file.", resolved.display());
+                anyhow::bail!("Included file {named} is not a file.");
             }
-            anyhow::bail!("Included file '{}' does not exist.", resolved.display());
+            anyhow::bail!("Included file {named} does not exist.");
         }
         return Ok(resolved);
     }
@@ -3850,8 +3865,8 @@ impl Config {
         format: ConfigFormat,
     ) -> Result<LoadedConfig> {
         let root_path = absolute_path(path)?;
-        let root_file = format.parse(path)?;
-        reject_misplaced_ratect_version(path, &root_file, format, true)?;
+        let root_file = format.parse(path, None)?;
+        reject_misplaced_ratect_version(path, None, &root_file, format, true)?;
         let root_dir = root_path.parent().unwrap_or(Path::new("")).to_path_buf();
 
         let mut seen: HashSet<PathBuf> = HashSet::new();
@@ -3973,13 +3988,13 @@ impl Config {
             }
             effective_grants.record(resolved.clone(), effective);
 
-            let file = format.parse(&resolved)?;
-            reject_misplaced_ratect_version(&resolved, &file, format, false)?;
+            let file = format.parse(&resolved, boundary.as_ref())?;
+            reject_misplaced_ratect_version(&resolved, boundary.as_ref(), &file, format, false)?;
             if file.project_name.is_some() {
                 anyhow::bail!(
-                    "Included file '{}' declares 'project_name', but only the root \
+                    "Included file {} declares 'project_name', but only the root \
                      configuration file can do so.",
-                    resolved.display()
+                    describe_file(&resolved, boundary.as_ref())
                 );
             }
 
@@ -4010,9 +4025,10 @@ impl Config {
         let mut config_variables = IndexMap::new();
         // Every file each name is defined in, in load order — judged once
         // every file has loaded, so a duplicate's error can name them all.
-        let mut container_files: IndexMap<&str, Vec<&Path>> = IndexMap::new();
-        let mut task_files: IndexMap<&str, Vec<&Path>> = IndexMap::new();
-        let mut config_variable_files: IndexMap<&str, Vec<&Path>> = IndexMap::new();
+        let mut container_files: IndexMap<&str, Vec<(&Path, Option<&Boundary>)>> = IndexMap::new();
+        let mut task_files: IndexMap<&str, Vec<(&Path, Option<&Boundary>)>> = IndexMap::new();
+        let mut config_variable_files: IndexMap<&str, Vec<(&Path, Option<&Boundary>)>> =
+            IndexMap::new();
 
         // Borrowed, not consumed: each file is kept whole in `files` for
         // `crate::convert`, which needs it as parsed rather than merged.
@@ -4025,7 +4041,7 @@ impl Config {
             let file_dir = file_path.parent().unwrap_or(Path::new("")).to_path_buf();
             for (name, container) in &file.containers {
                 let files = container_files.entry(name).or_default();
-                files.push(file_path);
+                files.push((file_path, boundary.as_ref()));
                 if files.len() == 1 {
                     container_origins.insert(name.clone(), file_path.clone());
                     container_base_paths.insert(name.clone(), file_dir.clone());
@@ -4037,14 +4053,14 @@ impl Config {
             }
             for (name, task) in &file.tasks {
                 let files = task_files.entry(name).or_default();
-                files.push(file_path);
+                files.push((file_path, boundary.as_ref()));
                 if files.len() == 1 {
                     tasks.insert(name.clone(), task.clone());
                 }
             }
             for (name, var) in file.config_variables.iter().flatten() {
                 let files = config_variable_files.entry(name).or_default();
-                files.push(file_path);
+                files.push((file_path, boundary.as_ref()));
                 if files.len() == 1 {
                     config_variables.insert(name.clone(), var.clone());
                 }
@@ -4060,7 +4076,7 @@ impl Config {
             if let Some((name, files)) = defined_in.iter().find(|(_, files)| files.len() > 1) {
                 let files: Vec<String> = files
                     .iter()
-                    .map(|file| format!("'{}'", file.display()))
+                    .map(|(file, boundary)| describe_file(file, *boundary))
                     .collect();
                 anyhow::bail!(
                     "The {kind} '{name}' is defined in multiple files: {}",
@@ -5112,7 +5128,7 @@ fn collect_completion_task_names(
     if !visited.insert(absolute.clone()) {
         return;
     }
-    let Ok(file) = ConfigFormat::Native.parse(&absolute) else {
+    let Ok(file) = ConfigFormat::Native.parse(&absolute, None) else {
         return;
     };
     names.extend(file.tasks.into_keys());

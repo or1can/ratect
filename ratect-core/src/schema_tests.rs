@@ -132,7 +132,7 @@ fn every_config_ratect_accepts_validates_against_the_schema() {
         // config file (which decides whether this fixture is one Ratect
         // accepts at all), and once into plain JSON (which is what the
         // schema describes — the same document an editor sees).
-        if crate::config::parse_yaml_config_file(&path).is_err() {
+        if crate::config::parse_yaml_config_file(&path, &format!("{path:?}")).is_err() {
             continue;
         }
         let document: serde_json::Value =

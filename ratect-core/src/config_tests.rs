@@ -1195,7 +1195,8 @@ tasks: {}
     )
     .unwrap();
 
-    let file = parse_yaml_config_file(&path).expect("extensions should be ignored, not rejected");
+    let file = parse_yaml_config_file(&path, &format!("{path:?}"))
+        .expect("extensions should be ignored, not rejected");
     let environment = file.containers["terraform"].environment.as_ref().unwrap();
     assert_eq!(environment.get("AWS_REGION").unwrap(), "eu-west-2");
     assert_eq!(environment.get("COMPONENT").unwrap(), "infra");
@@ -1216,7 +1217,10 @@ fn a_dot_prefixed_key_below_the_top_level_is_still_rejected() {
         "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    .oops: x\ntasks: {}\n",
     )
     .unwrap();
-    let message = format!("{:#}", parse_yaml_config_file(&path).unwrap_err());
+    let message = format!(
+        "{:#}",
+        parse_yaml_config_file(&path, &format!("{path:?}")).unwrap_err()
+    );
     assert!(
         message.contains("unknown field: .oops") && message.contains("line 5, column"),
         "{message}"
@@ -1232,7 +1236,10 @@ fn yaml_config_file_error(yaml: &str) -> String {
     let dir = unique_temp_dir();
     let path = dir.join("batect.yml");
     std::fs::write(&path, yaml).unwrap();
-    let message = format!("{:#}", parse_yaml_config_file(&path).unwrap_err());
+    let message = format!(
+        "{:#}",
+        parse_yaml_config_file(&path, &format!("{path:?}")).unwrap_err()
+    );
     std::fs::remove_dir_all(&dir).ok();
     message
 }
@@ -1662,7 +1669,7 @@ fn an_object_form_entry_keeps_a_repeated_keys_last_value_and_rejects_a_null() {
          tasks: {}\n",
     )
     .unwrap();
-    let file = parse_yaml_config_file(&path).unwrap();
+    let file = parse_yaml_config_file(&path, &format!("{path:?}")).unwrap();
     let volumes = file.containers["app"].volumes.as_ref().unwrap();
     assert_eq!(expect_local(&volumes[0]).container, "/second");
     std::fs::remove_dir_all(&dir).ok();
@@ -5998,7 +6005,7 @@ fn a_git_included_file_is_named_by_its_bundle_not_the_clone_cache() {
 
     assert_eq!(
         described,
-        "'containers/base.yml', from the bundle 'https://example.com/bundle.git' at 'v1.0.0'"
+        "'containers/base.yml' from the bundle 'https://example.com/bundle.git' at 'v1.0.0'"
     );
     assert!(
         !described.contains("/cache/abc123"),
@@ -14045,5 +14052,392 @@ async fn a_refused_name_in_a_native_projects_yaml_include_is_located_at_its_valu
             && error.contains("line 3, column 5")
             && error.contains("tasks.a*: Invalid task name 'a*'."),
         "{error}"
+    );
+}
+
+// A file inside a Git include is named in a load error by its bundle — the
+// path within the repository, plus the remote and ref — never by the
+// `~/.ratect/incl` clone-cache path Ratect actually read (#419). A test
+// mirroring a Batect spec carries that rule's ID from #419's rule list —
+// `CL…` for `ConfigurationLoaderSpec`, `IRS…` for `IncludeResolverSpec`.
+
+const BUNDLE_REMOTE: &str = "https://example.com/bundle.git";
+const BUNDLE_REF: &str = "v1.0.0";
+
+/// `rel` as a load error names a file inside the test bundle.
+fn in_bundle(rel: &str) -> String {
+    format!("'{rel}' from the bundle '{BUNDLE_REMOTE}' at '{BUNDLE_REF}'")
+}
+
+/// A root `batect.yml` whose only include is the test bundle's `path`.
+fn root_including_bundle_path(path: &str, rest: &str) -> String {
+    format!(
+        "project_name: demo\ninclude:\n  - type: git\n    repo: {BUNDLE_REMOTE}\n    \
+         ref: {BUNDLE_REF}\n    path: {path}\n{rest}"
+    )
+}
+
+/// Loads `root` over a fake bundle holding `bundle`, and returns the whole
+/// error chain plus the project directory — after asserting the chain
+/// names nothing under the clone-cache root.
+async fn bundle_load_error(root: &str, bundle: &[(&str, &str)]) -> (String, PathBuf) {
+    let dir = unique_temp_dir();
+    std::fs::write(dir.join("batect.yml"), root).unwrap();
+    let files = bundle
+        .iter()
+        .map(|(path, body)| (path.to_string(), body.to_string()))
+        .collect();
+    let git = FakeGitClient::new().with_files(BUNDLE_REMOTE, BUNDLE_REF, files);
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+    let error = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+        .await
+        .expect_err("the project should fail to load");
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&cache_root).ok();
+    let error = format!("{error:#}");
+    assert!(
+        !error.contains(&cache_root.display().to_string()),
+        "a load error must not name the clone cache: {error}"
+    );
+    (error, dir)
+}
+
+// CL5-1
+#[tokio::test]
+async fn a_git_include_path_missing_from_the_bundle_is_named_as_written() {
+    let (error, _) = bundle_load_error(
+        &root_including_bundle_path("something.yml", ""),
+        &[("other.yml", "{}\n")],
+    )
+    .await;
+    assert_eq!(
+        error,
+        format!(
+            "Included file 'something.yml' ({}) does not exist.",
+            in_bundle("something.yml")
+        )
+    );
+}
+
+// CL5-2
+#[tokio::test]
+async fn a_missing_file_included_by_a_bundle_file_is_named_within_the_bundle() {
+    let (error, _) = bundle_load_error(
+        &root_including_bundle_path("1.yml", ""),
+        &[("1.yml", "include:\n  - 2.yml\n")],
+    )
+    .await;
+    assert_eq!(
+        error,
+        format!(
+            "Included file '2.yml' ({}) does not exist.",
+            in_bundle("2.yml")
+        )
+    );
+}
+
+// CL5-3
+#[tokio::test]
+async fn a_missing_include_reached_through_dot_dot_keeps_the_path_as_written() {
+    let (error, _) = bundle_load_error(
+        &root_including_bundle_path("things/1.yml", ""),
+        &[("things/1.yml", "include:\n  - ../2.yml\n")],
+    )
+    .await;
+    assert_eq!(
+        error,
+        format!(
+            "Included file '../2.yml' ({}) does not exist.",
+            in_bundle("2.yml")
+        )
+    );
+}
+
+#[tokio::test]
+async fn an_include_of_a_directory_inside_a_bundle_is_named_within_the_bundle() {
+    let (error, _) = bundle_load_error(
+        &root_including_bundle_path("1.yml", ""),
+        &[
+            ("1.yml", "include:\n  - things\n"),
+            ("things/2.yml", "{}\n"),
+        ],
+    )
+    .await;
+    assert_eq!(
+        error,
+        format!(
+            "Included file 'things' ({}) is not a file.",
+            in_bundle("things")
+        )
+    );
+}
+
+// CL4-14, CL4-15, CL4-16 and CL4-17
+#[tokio::test]
+async fn a_bundle_file_that_fails_to_parse_is_named_within_the_bundle() {
+    for (path, bundle, named) in [
+        ("1.yml", vec![("1.yml", "blah: 1\n")], "1.yml"),
+        (
+            "1.yml",
+            vec![("1.yml", "include:\n  - 2.yml\n"), ("2.yml", "blah: 1\n")],
+            "2.yml",
+        ),
+        (
+            "1.yml",
+            vec![
+                ("1.yml", "include:\n  - thing/2.yml\n"),
+                ("thing/2.yml", "blah: 1\n"),
+            ],
+            "thing/2.yml",
+        ),
+        (
+            "things/1.yml",
+            vec![
+                ("things/1.yml", "include:\n  - ../otherthings/2.yml\n"),
+                ("otherthings/2.yml", "blah: 1\n"),
+            ],
+            "otherthings/2.yml",
+        ),
+    ] {
+        let (error, _) = bundle_load_error(&root_including_bundle_path(path, ""), &bundle).await;
+        assert!(
+            error.starts_with(&format!(
+                "Failed to parse config file {}: ",
+                in_bundle(named)
+            )),
+            "{error}"
+        );
+    }
+}
+
+// CL4-18 and CL4-19
+#[tokio::test]
+async fn a_bundle_file_declaring_project_name_is_named_within_the_bundle() {
+    for (bundle, named) in [
+        (vec![("1.yml", "project_name: other\n")], "1.yml"),
+        (
+            vec![
+                ("1.yml", "include:\n  - 2.yml\n"),
+                ("2.yml", "project_name: other\n"),
+            ],
+            "2.yml",
+        ),
+    ] {
+        let (error, _) = bundle_load_error(&root_including_bundle_path("1.yml", ""), &bundle).await;
+        assert_eq!(
+            error,
+            format!(
+                "Included file {} declares 'project_name', but only the root configuration file \
+                 can do so.",
+                in_bundle(named)
+            )
+        );
+    }
+}
+
+// CL5-4, CL5-5 and CL5-6
+#[tokio::test]
+async fn a_name_defined_in_the_root_and_a_bundle_file_names_the_bundle_file_within_it() {
+    for (kind, root, bundle_file) in [
+        (
+            "container 'c1'",
+            "containers:\n  c1: {image: alpine}\n",
+            "containers:\n  c1: {image: alpine}\n",
+        ),
+        (
+            "task 't1'",
+            "containers:\n  c: {image: alpine}\ntasks:\n  t1: {run: {container: c}}\n",
+            "tasks:\n  t1: {run: {container: c}}\n",
+        ),
+        (
+            "config variable 'v'",
+            "config_variables:\n  v: {}\n",
+            "config_variables:\n  v: {}\n",
+        ),
+    ] {
+        let (error, dir) = bundle_load_error(
+            &root_including_bundle_path("1.yml", root),
+            &[("1.yml", bundle_file)],
+        )
+        .await;
+        assert_eq!(
+            error,
+            format!(
+                "The {kind} is defined in multiple files: '{}/batect.yml' and {}",
+                dir.display(),
+                in_bundle("1.yml")
+            )
+        );
+    }
+}
+
+// CL4-3
+#[tokio::test]
+async fn a_container_defined_in_two_local_files_names_both() {
+    let (error, dir) = duplicate_definition_error(&[
+        (
+            "batect.yml",
+            "project_name: demo\ninclude: [1.yml]\ncontainers:\n  c1: {image: alpine}\n",
+        ),
+        ("1.yml", "containers:\n  c1: {image: alpine}\n"),
+    ])
+    .await;
+    let d = dir.display();
+    assert_eq!(
+        error,
+        format!(
+            "The container 'c1' is defined in multiple files: '{d}/batect.yml' and '{d}/1.yml'"
+        )
+    );
+}
+
+// CL4-5
+#[tokio::test]
+async fn a_config_variable_defined_in_two_local_files_names_both() {
+    let (error, dir) = duplicate_definition_error(&[
+        (
+            "batect.yml",
+            "project_name: demo\ninclude: [1.yml]\nconfig_variables:\n  v: {}\n",
+        ),
+        ("1.yml", "config_variables:\n  v: {}\n"),
+    ])
+    .await;
+    let d = dir.display();
+    assert_eq!(
+        error,
+        format!(
+            "The config variable 'v' is defined in multiple files: '{d}/batect.yml' and \
+             '{d}/1.yml'"
+        )
+    );
+}
+
+#[tokio::test]
+async fn an_include_escaping_the_bundle_is_named_relative_to_it() {
+    let (error, _) = bundle_load_error(
+        &root_including_bundle_path("1.yml", ""),
+        &[("1.yml", "include:\n  - ../../x.yml\n")],
+    )
+    .await;
+    assert_eq!(
+        error,
+        format!(
+            "Included file {} escapes the Git repository it was included from — includes \
+             reached through a Git include must resolve within that repository.",
+            in_bundle("../../x.yml")
+        )
+    );
+}
+
+// IRS-5
+#[tokio::test]
+async fn a_git_include_path_in_a_subdirectory_loads() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        root_including_bundle_path(
+            "sub/inner.yml",
+            "containers:\n  build-env: {image: alpine}\n",
+        ),
+    )
+    .unwrap();
+    let files = HashMap::from([(
+        "sub/inner.yml".to_string(),
+        "tasks:\n  inner-task: {run: {container: build-env}}\n".to_string(),
+    )]);
+    let git = FakeGitClient::new().with_files(BUNDLE_REMOTE, BUNDLE_REF, files);
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+    let loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache).await;
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).ok();
+    assert!(loaded.unwrap().config.tasks.contains_key("inner-task"));
+}
+
+// IRS-1
+#[tokio::test]
+async fn a_project_using_only_file_includes_never_consults_git() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ninclude: [1.yml]\ncontainers:\n  c: {image: alpine}\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("1.yml"), "tasks:\n  t: {run: {container: c}}\n").unwrap();
+    let git = FakeGitClient::new();
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), git.clone(), 1000);
+
+    let loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache).await;
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).ok();
+    assert!(loaded.unwrap().config.tasks.contains_key("t"));
+    assert_eq!(git.clone_count(), 0);
+}
+
+/// The native-field rejection already named a Git-included container's
+/// file by its bundle; it shares the load errors' describer now, so the two
+/// cannot drift apart.
+#[tokio::test]
+async fn a_native_only_field_in_a_bundle_file_names_it_within_the_bundle() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        root_including_bundle_path("sig.yml", ""),
+    )
+    .unwrap();
+    let files = HashMap::from([(
+        "sig.yml".to_string(),
+        "containers:\n  app:\n    image: alpine\n    stop_signal: SIGINT\n".to_string(),
+    )]);
+    let git = FakeGitClient::new().with_files(BUNDLE_REMOTE, BUNDLE_REF, files);
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+    let loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+        .await
+        .unwrap();
+    let error = ConfigFormat::Compat
+        .reject_incompatible_fields(
+            &loaded.config,
+            &loaded.container_origins,
+            &loaded.container_boundaries,
+        )
+        .unwrap_err()
+        .to_string();
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).ok();
+    assert!(
+        error.contains(&format!(
+            "It is declared in {}, and a container declared in a Batect-format (YAML) file \
+             follows Batect's rules wherever it is included.",
+            in_bundle("sig.yml")
+        )),
+        "{error}"
+    );
+    assert!(
+        !error.contains(&cache_root.display().to_string()),
+        "{error}"
+    );
+}
+
+/// The same describer reaches `ratect_version`'s refusal, a sibling of the
+/// `project_name` check the issue names.
+#[tokio::test]
+async fn a_bundle_file_declaring_ratect_version_is_named_within_the_bundle() {
+    let (error, _) = bundle_load_error(
+        &root_including_bundle_path("1.yml", ""),
+        &[("1.yml", "ratect_version: 0.12.0\n")],
+    )
+    .await;
+    assert_eq!(
+        error,
+        format!(
+            "{} declares 'ratect_version', which only a native ratect.toml can do: a \
+             Batect-format (YAML) file keeps Batect's own fields.",
+            in_bundle("1.yml")
+        )
     );
 }
