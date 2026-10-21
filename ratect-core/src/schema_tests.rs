@@ -99,8 +99,9 @@ fn rendered() -> String {
 }
 
 /// The whole point of the schema: a config Ratect accepts must not be
-/// flagged in the editor. Every fixture in the repository that parses
-/// as a config file is validated against the generated schema — the
+/// flagged in the editor — save the `shm_size` whitespace Batect refuses,
+/// see `both_schemas_accept_the_durations_and_sizes_the_loader_does`.
+/// Every fixture in the repository that parses as a config file is validated against the generated schema — the
 /// direction that matters, since a schema that's merely too permissive
 /// costs a missed warning, while one that's too strict puts a red
 /// squiggle under working configuration.
@@ -535,6 +536,115 @@ fn both_schemas_check_project_and_container_names() {
         }
         for name in valid {
             check(name, true);
+        }
+    }
+}
+
+/// #396: both schemas accept the durations and `shm_size` strings
+/// Batect's grammar does — its `DurationSerializerSpec`'s and
+/// `BinarySizeSpec`'s cases, not the parser's own test table — and so does
+/// the loader, which this checks too, so the hand-written patterns can't
+/// drift from the parser unnoticed. Since #401 a negative zero (`-0s`)
+/// loads, as in Batect, so the schema accepts it too.
+///
+/// Of these cases, the ones the two disagree on are sizes with whitespace
+/// Batect refuses — around the string (`" 128m "`), which the loader trims,
+/// or non-ASCII before the unit — so the schema flags them.
+#[test]
+fn both_schemas_accept_the_durations_and_sizes_the_loader_does() {
+    let durations = [
+        ("2.s", true),
+        ("5.s", true),
+        ("-0", true),
+        ("+0", true),
+        ("0", true),
+        (".5s", true),
+        ("2.5s", true),
+        ("1m30s", true),
+        ("2m3.4s", true),
+        ("10.5s4m", true),
+        ("500ms", true),
+        ("10us", true),
+        ("10\u{b5}s", true),
+        ("10\u{3bc}s", true),
+        ("+5s", true),
+        ("-0s", true),
+        ("-0.0ms", true),
+        ("-.0s", true),
+        ("-0s0ms", true),
+        ("-5s", false),
+        ("-2m3.4s", false),
+        ("-0s1ns", false),
+        (".s", false),
+        ("2..5s", false),
+        ("5x", false),
+        ("", false),
+        ("-", false),
+        ("3", false),
+        ("+-0s", false),
+    ];
+    let sizes = [
+        ("128mb", true),
+        ("128 m", true),
+        ("128 MB", true),
+        ("128 b", true),
+        ("3kb", true),
+        ("5 GB", true),
+        ("128m", true),
+        ("128", true),
+        ("", false),
+        ("128 k b", false),
+        ("-5", false),
+        ("128t", false),
+        ("128m b", false),
+    ];
+    for (format, schema) in [
+        ("batect.yml", config_file_schema()),
+        ("ratect.toml", native_config_file_schema()),
+    ] {
+        let validator = jsonschema::draft7::new(&schema).expect("the schema compiles");
+        let check = |field: &str, container: serde_json::Value, value: &str, valid: bool| {
+            let instance = serde_json::json!({
+                "project_name": "demo",
+                "containers": { "app": container },
+            });
+            assert_eq!(
+                validator.is_valid(&instance),
+                valid,
+                "{format}: {field} '{value}' should be {}",
+                if valid { "accepted" } else { "refused" }
+            );
+        };
+        for (duration, valid) in durations {
+            assert_eq!(
+                crate::config::parse_duration(duration).is_ok(),
+                valid,
+                "the loader should agree on '{duration}'"
+            );
+            let container = serde_json::json!({
+                "image": "alpine",
+                "health_check": { "interval": duration },
+            });
+            check("health_check.interval", container, duration, valid);
+            if format == "ratect.toml" {
+                let container =
+                    serde_json::json!({ "image": "alpine", "stop_grace_period": duration });
+                check("stop_grace_period", container, duration, valid);
+            }
+        }
+        let size = |value: &str| serde_json::json!({ "image": "alpine", "shm_size": value });
+        for (value, valid) in sizes {
+            assert_eq!(
+                crate::config::parse_byte_size(value).is_ok(),
+                valid,
+                "the loader should agree on '{value}'"
+            );
+            check("shm_size", size(value), value, valid);
+        }
+        // Batect's `\s` is ASCII only, so is the pattern's.
+        for padded in [" 128m ", "128m ", "128\u{2003}m", "128\u{85}m"] {
+            assert!(crate::config::parse_byte_size(padded).is_ok());
+            check("shm_size", size(padded), padded, false);
         }
     }
 }

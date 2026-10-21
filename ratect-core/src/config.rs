@@ -1237,7 +1237,7 @@ impl Serialize for VolumeMount {
 /// the trimming, which Batect doesn't do — it refuses leading whitespace and
 /// whitespace after a unit or `b`. The trim is a divergence kept under ADR
 /// 0013 rule 2, recorded in `docs/differences-from-batect.md`.
-fn parse_byte_size(value: &str) -> std::result::Result<i64, String> {
+pub(crate) fn parse_byte_size(value: &str) -> std::result::Result<i64, String> {
     let invalid = || invalid_size(value);
 
     let lower = value.trim().to_ascii_lowercase();
@@ -2139,22 +2139,31 @@ pub struct SetupCommand {
 /// `<number><unit>` components (`ns`, `us`/`µs`/`μs`, `ms`, `s`, `m`, `h`),
 /// numbers optionally fractional, or a bare `0` — e.g. `"2s"`, `"1m30s"`,
 /// `"1.5h"`, `"500ms"`, `"0"`. Ported from Batect's `DurationSerializer`,
-/// except that its (accidental) acceptance of negative durations is
+/// except that a non-zero negative duration, which Batect loads, is
 /// rejected here — Docker's API can't take one anyway, and rejecting it at
-/// config-load time gives a far clearer error.
+/// config-load time gives a far clearer error. A negative zero (`"-0s"`)
+/// is still zero, and loads as Batect's does.
 pub fn parse_duration(text: &str) -> Result<std::time::Duration> {
+    let (negative, unsigned) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let total_nanos = parse_unsigned_duration_nanos(text, unsigned)?;
+    // Checked before rounding, so a negative that rounds to zero
+    // nanoseconds is still refused rather than loading as zero.
+    if negative && total_nanos > 0.0 {
+        anyhow::bail!("The duration '{text}' is negative. Durations must be positive.")
+    }
+    Ok(std::time::Duration::from_nanos(total_nanos.round() as u64))
+}
+
+/// [`parse_duration`]'s grammar, past any sign: `unsigned`'s total in
+/// nanoseconds, with errors naming `text`, the value as written.
+fn parse_unsigned_duration_nanos(text: &str, unsigned: &str) -> Result<f64> {
     let invalid = || anyhow::anyhow!("The value '{text}' is not a valid duration.");
 
-    let unsigned = match text.strip_prefix(['+', '-']) {
-        Some(rest) if text.starts_with('-') && rest != "0" => {
-            anyhow::bail!("The duration '{text}' is negative. Durations must be positive.")
-        }
-        Some(rest) => rest,
-        None => text,
-    };
-
     if unsigned == "0" {
-        return Ok(std::time::Duration::ZERO);
+        return Ok(0.0);
     }
 
     let mut remaining = unsigned;
@@ -2205,7 +2214,7 @@ pub fn parse_duration(text: &str) -> Result<std::time::Duration> {
         remaining = &unit_str[unit.len()..];
     }
 
-    Ok(std::time::Duration::from_nanos(total_nanos.round() as u64))
+    Ok(total_nanos)
 }
 
 /// Serde adapter for `Option<Duration>` fields holding Batect duration

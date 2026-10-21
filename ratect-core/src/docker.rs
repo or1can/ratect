@@ -654,18 +654,21 @@ pub struct ExecResult {
 /// container's `health_check` config — `None` when the container declares no
 /// override at all, leaving the image's own `HEALTHCHECK` untouched. Pure,
 /// unit-testable without a daemon. Durations become the nanosecond counts
-/// Docker's API expects.
+/// Docker's API expects, clamped to the `i64` it takes them in — as Batect's
+/// own Docker client does — so a duration over about 292 years is sent as
+/// the longest one Docker can hold rather than wrapping to a negative.
 fn build_health_config(health_check: Option<&HealthCheckOptions>) -> Option<HealthConfig> {
     let health_check = health_check?;
+    let nanos = |d: std::time::Duration| i64::try_from(d.as_nanos()).unwrap_or(i64::MAX);
     Some(HealthConfig {
         test: health_check
             .command
             .as_ref()
             .map(|command| vec!["CMD-SHELL".to_string(), command.clone()]),
-        interval: health_check.interval.map(|d| d.as_nanos() as i64),
-        timeout: health_check.timeout.map(|d| d.as_nanos() as i64),
+        interval: health_check.interval.map(nanos),
+        timeout: health_check.timeout.map(nanos),
         retries: health_check.retries.map(i64::from),
-        start_period: health_check.start_period.map(|d| d.as_nanos() as i64),
+        start_period: health_check.start_period.map(nanos),
         start_interval: None,
     })
 }

@@ -174,6 +174,53 @@ fn build_health_config_leaves_omitted_fields_unset_to_inherit_from_the_image() {
     );
 }
 
+/// #391: a duration past `i64::MAX` nanoseconds (about 292 years) is
+/// clamped to it, as Batect's Docker client does, rather than wrapping to
+/// a negative count Docker would refuse.
+#[test]
+fn build_health_config_clamps_a_duration_too_long_for_docker() {
+    for too_long in [
+        Duration::from_nanos(i64::MAX as u64 + 1),
+        Duration::from_nanos(u64::MAX),
+    ] {
+        let options = HealthCheckOptions {
+            command: None,
+            interval: Some(too_long),
+            retries: None,
+            start_period: Some(too_long),
+            timeout: Some(too_long),
+        };
+
+        let config = build_health_config(Some(&options)).unwrap();
+        assert_eq!(config.interval, Some(i64::MAX));
+        assert_eq!(config.timeout, Some(i64::MAX));
+        assert_eq!(config.start_period, Some(i64::MAX));
+    }
+}
+
+/// #391: the clamp starts past `i64::MAX` nanoseconds, not at it.
+#[test]
+fn build_health_config_passes_a_duration_docker_can_hold_through() {
+    for duration in [
+        Duration::from_nanos(i64::MAX as u64),
+        Duration::from_millis(1),
+    ] {
+        let options = HealthCheckOptions {
+            command: None,
+            interval: Some(duration),
+            retries: None,
+            start_period: Some(duration),
+            timeout: Some(duration),
+        };
+
+        let expected = Some(duration.as_nanos() as i64);
+        let config = build_health_config(Some(&options)).unwrap();
+        assert_eq!(config.interval, expected);
+        assert_eq!(config.timeout, expected);
+        assert_eq!(config.start_period, expected);
+    }
+}
+
 #[test]
 fn build_extra_hosts_formats_and_sorts_name_ip_pairs() {
     let mut hosts = HashMap::new();
