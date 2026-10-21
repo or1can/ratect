@@ -99,6 +99,11 @@ pub const BREAKING_CHANGES: &[BreakingChange] = &[
         summary: "an included file that sets 'forbid_telemetry' to true fails the load; only \
                   the root file may",
     },
+    BreakingChange {
+        version: "0.12.0",
+        summary: "a string 'devices' entry with an empty options segment ('a:b:') fails the \
+                  load",
+    },
 ];
 
 /// A `major.minor.patch` version, optionally followed by a `-pre-release`

@@ -605,7 +605,9 @@ impl DeviceMapping {
             // too.
             return Err(invalid());
         }
-        if local.is_empty() || container.is_empty() {
+        // An empty segment anywhere — including a present-but-empty
+        // options segment (`dev:dev:`), which Batect's `[^:]+` rejects too.
+        if local.is_empty() || container.is_empty() || options == Some("") {
             return Err(invalid());
         }
 

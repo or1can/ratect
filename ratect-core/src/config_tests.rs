@@ -2235,13 +2235,93 @@ fn device_mapping_parse_string_handles_batects_own_format() {
     );
 }
 
+/// The message a malformed `volumes` or `devices` string is refused with —
+/// `kind` is `"Volume"` or `"Device"`.
+fn invalid_mount_message(kind: &str, value: &str) -> String {
+    format!(
+        "{kind} mount definition '{value}' is invalid. It must be in the form \
+         'local_path:container_path' or 'local_path:container_path:options'."
+    )
+}
+
 #[test]
 fn device_mapping_parse_string_rejects_invalid_input() {
-    assert!(DeviceMapping::parse_string("").is_err());
-    assert!(DeviceMapping::parse_string("/dev/sda").is_err());
-    assert!(DeviceMapping::parse_string("/dev/sda:/dev/xvda:rwm:extra").is_err());
-    assert!(DeviceMapping::parse_string(":/dev/xvda").is_err());
-    assert!(DeviceMapping::parse_string("/dev/sda:").is_err());
+    assert_eq!(
+        DeviceMapping::parse_string("").unwrap_err().to_string(),
+        "Device mount definition cannot be empty."
+    );
+    for value in [
+        // Batect's own invalid inputs, from its `DeviceMountSpec`.
+        "thing:",
+        ":thing",
+        "thing",
+        " ",
+        ":",
+        "thing:thing:",
+        "thing:thing:options:",
+        // An options segment that's present but empty — Batect's regex
+        // requires at least one character after the second colon (#381).
+        "/dev/null:/dev/xnull:",
+        "/dev/sda",
+        "/dev/sda:/dev/xvda:rwm:extra",
+        ":/dev/xvda",
+        "/dev/sda:",
+    ] {
+        assert_eq!(
+            DeviceMapping::parse_string(value).unwrap_err().to_string(),
+            invalid_mount_message("Device", value),
+            "{value}"
+        );
+    }
+}
+
+/// The empty-options refusal happens at load. The value has to be quoted:
+/// unquoted, `thing:thing:` is a YAML mapping and never reaches the string
+/// parser.
+#[tokio::test]
+async fn a_string_device_with_an_empty_options_segment_fails_to_load() {
+    let dir = unique_temp_dir();
+    let config_path = dir.join("batect.yml");
+    std::fs::write(
+        &config_path,
+        "project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   devices:\n\
+         \x20     - 'thing:thing:'\n\
+         tasks: {}\n",
+    )
+    .unwrap();
+
+    let message = format!("{:#}", load_project(&config_path).await.unwrap_err());
+    assert!(
+        message.contains(&invalid_mount_message("Device", "thing:thing:")),
+        "{message}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `ratect.toml` shares the string form's parser, so it refuses an empty
+/// options segment too, and the error gives the entry's line and column.
+#[tokio::test]
+async fn a_string_device_with_an_empty_options_segment_fails_to_load_in_toml() {
+    let message = format!(
+        "{:#}",
+        load_native_toml(
+            "project_name = \"demo\"\n\
+             [containers.app]\n\
+             image = \"alpine\"\n\
+             devices = [\"thing:thing:\"]\n"
+        )
+        .await
+        .unwrap_err()
+    );
+    assert!(
+        message.contains("line 4, column")
+            && message.contains(&invalid_mount_message("Device", "thing:thing:")),
+        "{message}"
+    );
 }
 
 #[test]
