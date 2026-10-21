@@ -5407,8 +5407,8 @@ tasks: {}
 }
 
 #[test]
-fn parsing_ports_object_form_rejects_a_missing_local_or_container() {
-    for object in ["local: 8080", "container: 80"] {
+fn parsing_ports_object_form_names_a_missing_local_or_container() {
+    for (object, missing) in [("local: 8080", "container"), ("container: 80", "local")] {
         let result = try_parse(&format!(
             r#"
 project_name: demo
@@ -5420,8 +5420,33 @@ containers:
 tasks: {{}}
 "#,
         ));
-        assert!(result.is_err(), "'{object}' alone should be rejected");
+        let message = format!("{:#}", result.unwrap_err());
+        assert!(
+            message.contains(&format!("missing field: {missing}")),
+            "'{object}' alone: {message}"
+        );
     }
+}
+
+#[test]
+fn parses_ports_object_form_range_with_the_default_protocol() {
+    let config = parse(
+        r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    ports:
+      - local: 123-126
+        container: 456-459
+tasks: {}
+"#,
+    );
+
+    assert_eq!(
+        config.containers["build-env"].ports,
+        Some(vec![port_mapping((123, 126), (456, 459), "tcp")])
+    );
 }
 
 #[test]
