@@ -1111,7 +1111,14 @@
       "additionalProperties": {
         "$ref": "#/definitions/ConfigVariable"
       },
+      "default": null,
       "description": "Variables tasks and containers can refer to as `<name` or `<{name}`, overridable per-invocation with `--config-var`.",
+      "propertyNames": {
+        "not": {
+          "pattern": "^[bB][aA][tT][eE][cC][tT]"
+        },
+        "pattern": "^[a-zA-Z][a-zA-Z0-9._-]*$"
+      },
       "type": [
         "object",
         "null"
@@ -1159,6 +1166,9 @@
       },
       "default": {},
       "description": "The tasks this project defines, keyed by the name used to run them.",
+      "propertyNames": {
+        "pattern": "^[a-zA-Z0-9]([a-zA-Z0-9._:-]*[a-zA-Z0-9])*$"
+      },
       "type": "object"
     }
   },

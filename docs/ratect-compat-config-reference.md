@@ -70,8 +70,8 @@ config_variables:
 |---|---|---|---|
 | `project_name` | string | yes | Used only for display (e.g. in `--list-tasks` output). |
 | `containers` | map of name → [Container](#container) | yes | Container definitions, keyed by name. Referenced from tasks via `run.container`. |
-| `tasks` | map of name → [Task](#task) | yes | Task definitions, keyed by name. Run by name via `ratect-compat <task-name>`. |
-| `config_variables` | map of name → [ConfigVariable](#configvariable) | no | Declares the config variables usable via `<name`/`<{name}` [expressions](#expressions). A name must be declared here before it can be referenced — see [Expressions](#expressions). |
+| `tasks` | map of name → [Task](#task) | yes | Task definitions, keyed by name. Run by name via `ratect-compat <task-name>`. See [Task names](#task-names) for what a name may contain. |
+| `config_variables` | map of name → [ConfigVariable](#configvariable) | no | Declares the config variables usable via `<name`/`<{name}` [expressions](#expressions). A name must be declared here before it can be referenced — see [Expressions](#expressions) — and follows [Config variable names](#config-variable-names). |
 | `include` | list of string or [Include](#includes) | no | Splits configuration across multiple files — see [Includes](#includes) below. |
 | `forbid_telemetry` | boolean | no | Recognized but inert — Ratect collects no telemetry, so there's nothing to forbid. |
 
@@ -674,6 +674,21 @@ tasks:
 
 \*\* `dependencies` here is distinct from a [container](#container)'s own `dependencies` field: this one is scoped to *this task specifically*, rather than to every task that uses the container. It's unioned with the task's own container's `dependencies` — both start together — and can't name `run.container` itself.
 
+#### Task names
+
+A task's name contains only letters, digits, colons, dashes, periods and
+underscores, and starts and ends with a letter or digit — `build`, `lint:go` and
+`test.unit` are names, `-a`, `a:` and `a*` are not. The rule is Batect's, and so
+is the message a name that breaks it fails the load with, for every command,
+`--list-tasks` included:
+
+```text
+Invalid task name 'a*'. Task names must contain only letters, digits, colons, dashes, periods and underscores, and must start and end with a letter or digit.
+```
+
+Like any error raised while the file is parsed, it gives a line, column and
+path — `tasks.a*` — which for this error are the entry's value's, not its key's.
+
 #### Wildcard prerequisites
 
 A `prerequisites` entry containing `*` is expanded against every task name in the
@@ -695,8 +710,9 @@ tasks:
 ```
 
 Running `ratect-compat ci` here runs both `lint:go` and `lint:markdown` (in alphabetical
-order) before `ci` itself. A single `*` matches zero or more characters — `"lint:*"`
-would also match a task literally named `lint:` — and a wildcard matching multiple
+order) before `ci` itself. A single `*` matches zero or more characters, and a
+`*` can't be part of a [task's name](#task-names), so a wildcard never names one
+task literally. A wildcard matching multiple
 tasks always runs them in alphabetical order, regardless of the project's own
 `tasks` declaration order. **A wildcard matching zero tasks is not an error** — it
 simply contributes nothing. If a task is named both explicitly and by a wildcard in
@@ -846,6 +862,19 @@ config_variables:
 | `default` | string | no | The value used when nothing else provides one — see [Expressions](#expressions) for the full precedence order (CLI `--config-var` > `--config-vars-file` > this `default`). Referencing a declared variable that has no `default` and no override from either CLI source is an error. |
 | `description` | string | no | Recognized but inert — Batect surfaces this in its own generated docs/help output; Ratect has no such output to show one in. |
 
+### Config variable names
+
+A config variable's name starts with a letter, contains only letters, digits,
+dashes, periods and underscores, and doesn't start with `batect`, in any mix of
+case — that prefix is kept for built-ins such as
+[`batect.project_directory`](#built-in-config-variable-batectproject_directory).
+The rule is Batect's, and so is the message a name that breaks it fails the
+load with, located like a [task name's](#task-names):
+
+```text
+Invalid config variable name '1a'. Config variable names must start with a letter, contain only letters, digits, dashes, periods and underscores, and must not start with 'batect'.
+```
+
 ## Expressions
 
 `environment` values (on [Container](#container), [TaskRun](#taskrun) and a task's
@@ -956,8 +985,9 @@ expression, such as a `batect.yml`'s `image`, keeps a backslash as written.
 absolute path of the directory containing the config file — Batect's one built-in
 config variable, so Ratect supports it without requiring (or allowing) it to be
 declared under `config_variables`. Declaring a `config_variables` entry named
-`batect.project_directory`, or supplying one via `--config-var`/`--config-vars-file`,
-is a hard error — it isn't overridable.
+`batect.project_directory` fails the load, as any [name starting
+`batect`](#config-variable-names) does, and supplying one via
+`--config-var`/`--config-vars-file` is a hard error — it isn't overridable.
 
 Only the braced form reaches it, as in Batect: an [unbraced
 name](#variable-names) ends at its first `.`, so `<batect.project_directory` is a

@@ -435,3 +435,61 @@ fn only_the_native_schema_requires_run_as_current_user_enabled() {
     assert!(compat.validate(&document).is_ok());
     assert!(native.validate(&document).is_err());
 }
+
+/// #392: both schemas refuse the task and config variable names the loader
+/// does, and accept the ones it accepts — the cases from Batect's own
+/// `TaskMapSpec` and `ConfigVariableMapSpec`.
+#[test]
+fn both_schemas_check_task_and_config_variable_names() {
+    let invalid_tasks = [
+        "", ".", "-", "_", ":", ".a", "-a", "_a", ":a", "a.", "a-", "a_", "a:", "a!a", "a\\a", "a*",
+    ];
+    let valid_tasks = ["a", "A", "1", "a.a", "a-a", "a1", "1a", "a_a", "a:a"];
+    let invalid_variables = [
+        "",
+        ".",
+        "-",
+        "1",
+        "_",
+        "batect",
+        "batecta",
+        "batect.blah",
+        "BATECT",
+        "BATECTa",
+        "BATECT.blah",
+        "bAtEcT_x",
+        ".a",
+        "-a",
+        "1a",
+        "_a",
+        "a\\a",
+    ];
+    let valid_variables = ["a", "A", "a.a", "a-a", "a1", "a_a", "bat", "batec"];
+    for (format, schema) in [
+        ("batect.yml", config_file_schema()),
+        ("ratect.toml", native_config_file_schema()),
+    ] {
+        let validator = jsonschema::draft7::new(&schema).expect("the schema compiles");
+        let check = |field: &str, name: &str, valid: bool| {
+            let instance = serde_json::json!({ "project_name": "demo", field: { name: {} } });
+            assert_eq!(
+                validator.is_valid(&instance),
+                valid,
+                "{format}: {field} '{name}' should be {}",
+                if valid { "accepted" } else { "refused" }
+            );
+        };
+        for name in invalid_tasks {
+            check("tasks", name, false);
+        }
+        for name in valid_tasks {
+            check("tasks", name, true);
+        }
+        for name in invalid_variables {
+            check("config_variables", name, false);
+        }
+        for name in valid_variables {
+            check("config_variables", name, true);
+        }
+    }
+}

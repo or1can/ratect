@@ -676,7 +676,8 @@ fn declaring_batect_project_directory_in_config_variables_reports_error() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("batect.project_directory") && stderr.contains("built-in"),
+        stderr.contains("line 7, column 5")
+            && stderr.contains("Invalid config variable name 'batect.project_directory'."),
         "stderr:\n{}",
         stderr
     );

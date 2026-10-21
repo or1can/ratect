@@ -1,6 +1,6 @@
-# batect.project_directory is a reserved, built-in name - declaring it under
-# config_variables should be rejected rather than silently shadowing the
-# built-in.
+# batect.project_directory is a built-in name - declaring it under
+# config_variables is rejected, as every name starting 'batect' is, rather
+# than silently shadowing the built-in.
 project_name: ratect-project-directory-declared-test
 config_variables:
   batect.project_directory:
