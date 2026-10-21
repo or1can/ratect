@@ -57,6 +57,14 @@
 //! gets the resolved value, so `1.50` is refused as a float, as without the
 //! option. Adding one of those to the model loses the text as written.
 //!
+//! **A key given twice in one mapping is refused** (#372), at any depth,
+//! as kaml refuses it — `noyalib`'s default keeps the last value, which
+//! silently changed which task or container definition ran. The refusal
+//! names the key, its path and its second occurrence's line. A key set
+//! beside a merge key (`<<: *base`) overrides the merged one rather than
+//! repeating it, also as in kaml, and the same key in two mappings is two
+//! keys.
+//!
 //! **A default only Batect has.** Where Batect's runtime defaults a field
 //! that `ratect.toml` requires, the field's own reader asks
 //! [`batect_defaults_apply`] — true only inside [`from_str`], so the YAML
@@ -82,7 +90,9 @@ pub(crate) fn from_str<T: DeserializeOwned + 'static>(text: &str) -> noyalib::Re
     let _reading = Reading::start();
     let Document(value) = noyalib::from_str_with_config(
         text,
-        &noyalib::ParserConfig::new().plain_scalar_strings(true),
+        &noyalib::ParserConfig::new()
+            .plain_scalar_strings(true)
+            .duplicate_key_policy(noyalib::DuplicateKeyPolicy::Error),
     )?;
     Ok(value)
 }

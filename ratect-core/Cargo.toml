@@ -21,7 +21,10 @@ serde_json = "1.0"
 # to `serde_yaml`). 0.0.58 is the floor: it is the first release whose
 # `from_str` gives an unknown or missing field its line, column and field path
 # (noyalib#482), which config load errors rely on to name where the bad entry
-# is (ratect#415).
+# is (ratect#415). Every read goes through `ratect-core/src/yaml.rs`'s one
+# `ParserConfig`, whose module notes say why each setting is on — including
+# `DuplicateKeyPolicy::Error`, since the default keeps a repeated key's last
+# value where Batect refuses it (ratect#372).
 noyalib = { version = "0.0.58", features = ["compat-serde-yaml"] }
 # **`bollard`** (`features = ["buildkit_providerless", "chrono", "ssl"]`,
 # **consumed via a `[patch.crates-io]` fork** — see the root `Cargo.toml`):

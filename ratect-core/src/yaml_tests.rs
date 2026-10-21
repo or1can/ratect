@@ -255,3 +255,55 @@ fn a_document_with_a_tag_reformats_an_unquoted_number() {
     let Tagged { value, .. } = from_str("tagged: !!str a\nvalue: 3.10\n").unwrap();
     assert_eq!(value, "3.1");
 }
+
+/// A key given twice in one mapping is refused, at any depth, naming the
+/// key and where its second occurrence is — as kaml refuses it — rather
+/// than the last value silently winning (#372).
+#[test]
+fn a_repeated_key_is_refused_naming_it_and_its_line() {
+    let message = error::<HashMap<String, String>>("v: a\nv: b\n");
+    assert!(
+        message.contains("duplicate key \"v\"") && message.contains("line 2"),
+        "{message}"
+    );
+
+    let message = error::<HashMap<String, HashMap<String, String>>>(
+        "outer:\n  a: 1\n  inner: x\n  inner: y\n",
+    );
+    assert!(
+        message.contains("duplicate key \"inner\"") && message.contains("line 4"),
+        "{message}"
+    );
+}
+
+/// The same key in two different mappings, and keys differing only in
+/// case, are not repeats.
+#[test]
+fn a_key_is_repeated_only_within_one_mapping_and_spelling() {
+    let read: HashMap<String, HashMap<String, String>> =
+        from_str("one:\n  k: a\ntwo:\n  k: b\nOne:\n  k: c\n").unwrap();
+    assert_eq!(read.len(), 3);
+    assert_eq!(read["two"]["k"], "b");
+}
+
+/// A key set locally beside a merge key (`<<: *base`) overrides the merged
+/// one rather than repeating it, as in kaml, and the local value is kept.
+#[test]
+fn a_key_overriding_a_merged_one_is_not_a_repeat() {
+    let read: HashMap<String, HashMap<String, String>> =
+        from_str("base: &base\n  k: merged\n  m: kept\nchild:\n  <<: *base\n  k: local\n").unwrap();
+    assert_eq!(read["child"]["k"], "local");
+    assert_eq!(read["child"]["m"], "kept");
+
+    let read: HashMap<String, HashMap<String, String>> =
+        from_str("base: &base\n  k: merged\nchild:\n  k: local\n  <<: *base\n").unwrap();
+    assert_eq!(read["child"]["k"], "local");
+}
+
+/// A tag sends the document down `noyalib`'s AST path; a repeat is still
+/// refused there.
+#[test]
+fn a_repeated_key_is_refused_in_a_document_with_a_tag() {
+    let message = error::<HashMap<String, String>>("t: !!str a\nv: a\nv: b\n");
+    assert!(message.contains("duplicate key \"v\""), "{message}");
+}

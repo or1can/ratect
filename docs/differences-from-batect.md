@@ -161,7 +161,11 @@ Ratect checks a config when the file loads, and the report is its own:
   [task](ratect-compat-config-reference.md#task-names), [config
   variable](ratect-compat-config-reference.md#config-variable-names) or
   [container](ratect-compat-config-reference.md#project-and-container-names)
-  name Batect refuses — though the message for one is Batect's, verbatim.
+  name Batect refuses — though the message for one is Batect's, verbatim. A
+  key given twice in one mapping is `tasks.t: duplicate key "t" at line 9,
+  column 3`, giving only the second occurrence's line, where Batect's
+  `Duplicate key 't'. It was previously given at line L, column C.` also gives
+  the first's.
 - **The full cause chain is printed**: `Error: <message>`, then a `Caused by:`
   list when there is a cause, where Batect prints one message. A parse error's
   own reason is in that list, under `Failed to parse config file "<path>"`. The
