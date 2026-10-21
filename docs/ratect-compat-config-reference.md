@@ -120,12 +120,18 @@ Each entry is either a bare string path (a local file include), or an object for
 Git include (a "bundle": shared tasks/containers imported from a separate Git
 repository). Any other `type` is rejected with a clear error.
 
-An included file uses the same schema as the root file, with two differences:
+An included file uses the same schema as the root file, with three differences:
 
 - It must not declare `project_name` — that's root-only.
+- It must not set `forbid_telemetry` to `true` — only the root file can forbid
+  telemetry. Setting it to `false` is allowed.
 - `containers`, `tasks`, and `config_variables` may each be omitted entirely (they
   default to empty) — a file that exists only to `include` further files, or only to
   add one task, doesn't need to restate the others.
+
+Every file, root or included, must hold some configuration: one that is empty,
+or holds only whitespace, comments or a null document (`---`, `~`), fails to
+load, naming the file. A file holding just `{}` loads.
 
 How every loaded file's `containers`, `tasks`, and `config_variables` merge into
 one set, and where an included file's relative paths resolve, are on

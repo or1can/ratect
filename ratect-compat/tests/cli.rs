@@ -331,6 +331,10 @@ fn include_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/include.yml")
 }
 
+fn include_forbids_telemetry_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/include-forbids-telemetry.yml")
+}
+
 /// Polls `127.0.0.1:<port>` until a TCP connection succeeds or `timeout`
 /// elapses. Just proves the port is reachable — no HTTP semantics needed,
 /// a bare TCP connect is already proof `ports` actually published it.
@@ -644,6 +648,24 @@ fn missing_config_file_reports_error_when_running_a_task() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("not found"), "stderr:\n{}", stderr);
+}
+
+#[test]
+fn an_include_forbidding_telemetry_reports_error() {
+    let output = ratect_command()
+        .args(["--list-tasks", "-f"])
+        .arg(include_forbids_telemetry_config_path())
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("include-forbids-telemetry/extra.yml")
+            && stderr.contains("only the root configuration file can forbid telemetry"),
+        "{stderr}"
+    );
 }
 
 #[test]

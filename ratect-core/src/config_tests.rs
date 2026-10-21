@@ -9302,6 +9302,140 @@ project_name: not-allowed
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Loads a compat project whose root is `root` beside `files`, and returns
+/// the result plus the project directory, which the caller removes.
+async fn load_compat_with(
+    root: &str,
+    files: &[(&str, &str)],
+) -> (Result<LoadedProject>, std::path::PathBuf) {
+    let dir = unique_temp_dir();
+    std::fs::write(dir.join("batect.yml"), root).unwrap();
+    for (name, body) in files {
+        std::fs::write(dir.join(name), body).unwrap();
+    }
+    (load_project(&dir.join("batect.yml")).await, dir)
+}
+
+/// Batect's `checkForConfigurationOnlyAllowedInRootFile`, run on every
+/// include but never the root (ratect#394).
+#[tokio::test]
+async fn an_included_file_forbidding_telemetry_is_an_error() {
+    for (files, named) in [
+        (vec![("1.yml", "forbid_telemetry: true\n")], "1.yml"),
+        (
+            vec![
+                ("1.yml", "include:\n  - 2.yml\n"),
+                ("2.yml", "forbid_telemetry: true\n"),
+            ],
+            "2.yml",
+        ),
+    ] {
+        let (result, dir) =
+            load_compat_with("project_name: demo\ninclude:\n  - 1.yml\n", &files).await;
+        assert_eq!(
+            format!("{:#}", result.unwrap_err()),
+            format!(
+                "Included file '{}' sets 'forbid_telemetry' to true, but only the root \
+                 configuration file can forbid telemetry.",
+                dir.join(named).display()
+            )
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+/// Only `true` is refused: Batect's field is a non-null `Boolean = false`.
+#[tokio::test]
+async fn an_included_file_allowing_telemetry_loads() {
+    let (result, dir) = load_compat_with(
+        "project_name: demo\ninclude:\n  - 1.yml\n",
+        &[("1.yml", "forbid_telemetry: false\n")],
+    )
+    .await;
+    assert_eq!(result.unwrap().config.forbid_telemetry, None);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// CL1-10
+#[tokio::test]
+async fn the_root_file_may_forbid_telemetry() {
+    let (result, dir) = load_compat_with("project_name: demo\nforbid_telemetry: true\n", &[]).await;
+    assert_eq!(result.unwrap().config.forbid_telemetry, Some(true));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Batect's `File contains no configuration.`, for an include (ratect#394).
+#[tokio::test]
+async fn an_included_file_with_no_document_is_an_error() {
+    for body in ["", "  \n\n", "# nothing\n", "---\n"] {
+        let (result, dir) = load_compat_with(
+            "project_name: demo\ninclude:\n  - 1.yml\n",
+            &[("1.yml", body)],
+        )
+        .await;
+        assert_eq!(
+            format!("{:#}", result.unwrap_err()),
+            format!(
+                "Configuration file {:?} contains no configuration.",
+                dir.join("1.yml")
+            ),
+            "{body:?}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+/// A document that sets nothing is still a document.
+#[tokio::test]
+async fn an_included_file_holding_an_empty_mapping_loads() {
+    let (result, dir) = load_compat_with(
+        "project_name: demo\ninclude:\n  - 1.yml\n",
+        &[("1.yml", "{}\n")],
+    )
+    .await;
+    result.unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Both checks apply in `ratect` too: the telemetry one to any include, the
+/// empty-document one to any YAML file — TOML has no such case.
+#[tokio::test]
+async fn native_includes_follow_the_same_rules() {
+    let (fragment, result) = load_native_including(
+        "extra.yml",
+        "forbid_telemetry: true\ncontainers:\n  app:\n    image: alpine:3.18\n",
+    )
+    .await;
+    let error = format!("{:#}", result.unwrap_err());
+    assert!(error.contains("can forbid telemetry"), "{error}");
+    assert!(error.contains(&fragment.display().to_string()), "{error}");
+
+    let (fragment, result) = load_native_including(
+        "extra.toml",
+        "forbid_telemetry = true\n\n[containers.app]\nimage = \"alpine:3.18\"\n",
+    )
+    .await;
+    let error = format!("{:#}", result.unwrap_err());
+    assert!(error.contains("can forbid telemetry"), "{error}");
+    assert!(error.contains(&fragment.display().to_string()), "{error}");
+
+    let (fragment, result) = load_native_including("extra.yml", "# nothing\n").await;
+    assert_eq!(
+        format!("{:#}", result.unwrap_err()),
+        format!("Configuration file {fragment:?} contains no configuration.")
+    );
+
+    let dir = unique_temp_dir();
+    std::fs::write(dir.join("extra.toml"), "# nothing\n").unwrap();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "project_name = \"demo\"\ninclude = [{ path = \"extra.toml\" }]\n",
+    )
+    .unwrap();
+    load_project_native(&dir.join("ratect.toml")).await.unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// `ratect_version` — decisions/0015. The root `ratect.toml` may set it; the
 /// check against it runs before loading, in `crate::written_for`, so loading
 /// only has to accept it there and refuse it everywhere else.
@@ -14208,6 +14342,43 @@ async fn a_bundle_file_declaring_project_name_is_named_within_the_bundle() {
             )
         );
     }
+}
+
+#[tokio::test]
+async fn a_bundle_file_forbidding_telemetry_is_named_within_the_bundle() {
+    for (bundle, named) in [
+        (vec![("1.yml", "forbid_telemetry: true\n")], "1.yml"),
+        (
+            vec![
+                ("1.yml", "include:\n  - 2.yml\n"),
+                ("2.yml", "forbid_telemetry: true\n"),
+            ],
+            "2.yml",
+        ),
+    ] {
+        let (error, _) = bundle_load_error(&root_including_bundle_path("1.yml", ""), &bundle).await;
+        assert_eq!(
+            error,
+            format!(
+                "Included file {} sets 'forbid_telemetry' to true, but only the root \
+                 configuration file can forbid telemetry.",
+                in_bundle(named)
+            )
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_empty_bundle_file_is_named_within_the_bundle() {
+    let (error, _) =
+        bundle_load_error(&root_including_bundle_path("1.yml", ""), &[("1.yml", "")]).await;
+    assert_eq!(
+        error,
+        format!(
+            "Configuration file {} contains no configuration.",
+            in_bundle("1.yml")
+        )
+    );
 }
 
 // CL5-4, CL5-5 and CL5-6

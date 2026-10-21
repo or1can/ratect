@@ -113,8 +113,9 @@
 //! (`ConfigVariable`) are recognized but inert (0.19.0), the same "no
 //! effect" treatment already given `--upgrade`/`--no-update-notification`/
 //! `--no-wrapper-cache-cleanup` (0.17.0, `main.rs`) — parsed and, for
-//! `forbid_telemetry`, carried onto the merged `Config` (root file only,
-//! same precedent as `project_name`), but never read anywhere else.
+//! `forbid_telemetry`, carried onto the merged `Config` from the root file
+//! (an included file setting it to `true` is refused, as Batect refuses it;
+//! `false` is allowed), but never read anywhere else.
 
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
@@ -3274,33 +3275,14 @@ impl ConfigFormat {
     /// The project's name: the one the root file at `root_path` declares, or
     /// where it declares none, Batect's — inferred from the directory holding
     /// it ([`infer_project_name`]) — in a Batect-format project, and an error
-    /// in a native one, which requires the field.
-    ///
-    /// An undeclared name is also where an empty root file is refused: Batect
-    /// refuses a file holding no YAML document, or only a null one (`---`,
-    /// `~`), but `noyalib` reads either as an empty mapping, which every
-    /// field defaults from — so without the required field, nothing else
-    /// would refuse it. A file that declares a name holds a document, so
-    /// checking here misses none.
+    /// in a native one, which requires the field. An empty root file never
+    /// gets this far: [`parse_yaml_config_file`] refuses it first.
     fn project_name(&self, root_path: &Path, declared: Option<&str>) -> Result<String> {
         if let Some(name) = declared {
             return Ok(name.to_owned());
         }
         match self {
-            ConfigFormat::Compat => {
-                let text = std::fs::read_to_string(root_path)
-                    .with_context(|| format!("Failed to open config file {:?}", root_path))?;
-                let no_configuration = noyalib::load_all(&text).is_ok_and(|mut documents| {
-                    documents.all(|document| document.is_ok_and(|value| value.is_null()))
-                });
-                if no_configuration {
-                    anyhow::bail!(
-                        "Configuration file {:?} contains no configuration.",
-                        root_path
-                    );
-                }
-                infer_project_name(root_path)
-            }
+            ConfigFormat::Compat => infer_project_name(root_path),
             ConfigFormat::Native => {
                 anyhow::bail!(
                     "Configuration file {:?} is missing the required 'project_name' field",
@@ -3577,10 +3559,23 @@ const EXTENSION_KEY_PREFIX: char = '.';
 /// `.`-prefixed key nested anywhere else still reaches the schema (and is
 /// still rejected if it isn't a real field).
 ///
+/// A file holding no YAML document, or only null ones (`---`, `~`) — empty,
+/// whitespace or comments — is refused, as Batect refuses it, root or
+/// include and whichever project reads it (ratect#394). `noyalib` reads
+/// either as an empty mapping, which every field defaults from, so the
+/// deserialized `ConfigFile` can't tell; the text has to be asked. A
+/// document that sets nothing, such as `{}`, still loads.
+///
 /// `name` is how its errors name the file — see [`describe_origin`].
 pub(crate) fn parse_yaml_config_file(path: &Path, name: &str) -> Result<ConfigFile> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to open config file {name}"))?;
+    let no_configuration = noyalib::load_all(&text).is_ok_and(|mut documents| {
+        documents.all(|document| document.is_ok_and(|value| value.is_null()))
+    });
+    if no_configuration {
+        anyhow::bail!("Configuration file {name} contains no configuration.");
+    }
     let ExtensibleConfigFile(file) = crate::yaml::from_str(&text)
         .with_context(|| format!("Failed to parse config file {name}"))?;
     Ok(file)
@@ -3939,7 +3934,9 @@ impl Config {
     /// repo/ref. Both kinds are traversed breadth-first; an already-loaded
     /// file (by cleaned absolute path) is skipped rather than reloaded,
     /// which also makes an include cycle harmless rather than infinite. Only
-    /// the root file may declare `project_name`; `containers`/`tasks`/
+    /// the root file may declare `project_name` or set `forbid_telemetry` to
+    /// `true`, and no YAML file, root or included, may hold no configuration
+    /// (`parse_yaml_config_file`); `containers`/`tasks`/
     /// `config_variables` are merged across every loaded file, and a name
     /// defined in more than one file is a hard error naming both files —
     /// matching Batect's own `include` semantics.
@@ -4120,6 +4117,13 @@ impl Config {
                 anyhow::bail!(
                     "Included file {} declares 'project_name', but only the root \
                      configuration file can do so.",
+                    describe_file(&resolved, boundary.as_ref())
+                );
+            }
+            if file.forbid_telemetry == Some(true) {
+                anyhow::bail!(
+                    "Included file {} sets 'forbid_telemetry' to true, but only the root \
+                     configuration file can forbid telemetry.",
                     describe_file(&resolved, boundary.as_ref())
                 );
             }
