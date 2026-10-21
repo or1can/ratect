@@ -4825,7 +4825,10 @@ containers:
 tasks: {}
 "#,
     );
-    assert!(result.is_err());
+    assert!(format!("{:#}", result.unwrap_err()).contains(
+        "Port mapping definition is invalid. The local port range has 3 ports and the \
+             container port range has 2 ports, but the ranges must be the same size."
+    ));
 }
 
 #[test]
@@ -4842,7 +4845,28 @@ containers:
 tasks: {}
 "#,
     );
-    assert!(result.is_err());
+    assert!(format!("{:#}", result.unwrap_err()).contains(
+        "Port mapping definition is invalid. The local port range has 3 ports and the \
+             container port range has 2 ports, but the ranges must be the same size."
+    ));
+}
+
+#[test]
+fn a_mismatched_port_range_size_of_one_is_a_single_port() {
+    for (value, local, container) in [
+        ("10:20-23", "1 port", "4 ports"),
+        ("10-13:20", "4 ports", "1 port"),
+    ] {
+        let message = PortMapping::parse_string(value).unwrap_err().to_string();
+        assert_eq!(
+            message,
+            format!(
+                "Port mapping definition is invalid. The local port range has {local} and the \
+                 container port range has {container}, but the ranges must be the same size."
+            ),
+            "{value}"
+        );
+    }
 }
 
 #[test]

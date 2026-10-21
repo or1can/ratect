@@ -2434,11 +2434,15 @@ pub struct PortMapping {
 impl PortMapping {
     fn new(local: PortRange, container: PortRange, protocol: String) -> Result<Self> {
         if local.size() != container.size() {
+            let ports = |range: PortRange| match range.size() {
+                1 => "1 port".to_string(),
+                size => format!("{size} ports"),
+            };
             anyhow::bail!(
-                "Port mapping definition is invalid. The local port range has {} port(s) and \
-                 the container port range has {} port(s), but the ranges must be the same size.",
-                local.size(),
-                container.size()
+                "Port mapping definition is invalid. The local port range has {} and the \
+                 container port range has {}, but the ranges must be the same size.",
+                ports(local),
+                ports(container)
             );
         }
         Ok(Self {

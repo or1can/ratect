@@ -79,6 +79,7 @@ history, from when it was the only binary.
 - A Git include's `repo` may use any transport `git` itself allows — a remote helper (`codecommit::…`, `gcrypt::…`) or `ftp`/`ftps` — and cloning it honours your own Git protocol settings, as in Batect.
 - Using a cached Git include keeps every field in its `~/.ratect/incl` sidecar file, including ones written by another ratect version that this one doesn't recognise, and a sidecar missing one of its usual fields no longer fails the config load, as in Batect.
 - A Git include whose clone fails names the file it would have loaded — its `path`, or for a pathless entry the default bundle file names — as well as its `repo` and `ref`.
+- A `ports` entry whose two ranges differ in size is refused saying `1 port` or `N ports`, not `N port(s)`.
 
 ### Security
 
