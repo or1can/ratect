@@ -25,7 +25,9 @@ use ratect_core::ui::{
     TerminalFacts,
 };
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::EnvFilter;
@@ -433,7 +435,7 @@ async fn main() {
         std::process::exit(failed(&err).into());
     }
 
-    let exit_code = match run(args, color_mode, &stderr).await {
+    let exit_code = match run(args, color_mode, &stderr, sweep_git_include_cache).await {
         Ok(()) => ratect_core::exit_code::SUCCESS,
         Err(err) => {
             // Printed directly to stderr, not through `tracing::error!` —
@@ -513,8 +515,16 @@ const PROGRESS: ProgressStream = ProgressStream::Stdout;
 /// `CLICOLOR_FORCE` verdict; `args.no_color` is already folded too.
 /// `stderr` is `main`'s own stderr console, for the notices and warnings
 /// this function prints itself — the run's own go through the event sink
-/// (decisions/0017).
-async fn run(args: Args, color_mode: ColorMode, stderr: &Console) -> Result<()> {
+/// (decisions/0017). `sweep` makes the background Git include cache sweep:
+/// always [`sweep_git_include_cache`] outside this binary's tests, which pass
+/// a recording fake so they can see whether and when it starts without
+/// touching the real `~/.ratect/incl`.
+async fn run(
+    args: Args,
+    color_mode: ColorMode,
+    stderr: &Console,
+    sweep: impl FnOnce() -> Sweep,
+) -> Result<()> {
     // Batect's option parser checks only that a named config-variables file
     // is a file, for every command. Its contents, like `--config-var`'s
     // names, are read only when a task runs, so nothing in either stops
@@ -564,13 +574,15 @@ async fn run(args: Args, color_mode: ColorMode, stderr: &Console) -> Result<()> 
             // Unconditional, fire-and-forget — matching Batect's own
             // `GitRepositoryCacheCleanupTask`, an unconditional daemon
             // thread started on every "run a task" invocation regardless of
-            // whether this particular config uses a Git include. Never
-            // awaited: a failure (or simply not finishing before the
-            // process exits — see `main`'s own comment on
-            // `std::process::exit`) is inherently best-effort, same as a
-            // JVM daemon thread not blocking process exit either.
+            // whether this particular config uses a Git include, after the
+            // config loads and before Docker is reached. Never awaited: a
+            // failure (or simply not finishing before the process exits —
+            // see `main`'s own comment on `std::process::exit`) is
+            // inherently best-effort, same as a JVM daemon thread not
+            // blocking process exit either.
+            let sweep = sweep();
             tokio::spawn(async {
-                if let Err(e) = GitIncludeCache::new().cleanup_stale().await {
+                if let Err(e) = sweep.await {
                     tracing::warn!("Failed to sweep stale Git include cache entries: {e}");
                 }
             });
@@ -630,6 +642,14 @@ async fn run(args: Args, color_mode: ColorMode, stderr: &Console) -> Result<()> 
     }
 
     Ok(())
+}
+
+/// The background work [`run`] starts on a task run and never awaits.
+type Sweep = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+
+/// The real sweep: removes every `~/.ratect/incl` entry unused for 30 days.
+fn sweep_git_include_cache() -> Sweep {
+    Box::pin(async { GitIncludeCache::new().cleanup_stale().await })
 }
 
 /// `--clean`/`--clean-cache`: removes this project's own cache

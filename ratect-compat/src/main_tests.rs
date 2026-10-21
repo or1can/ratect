@@ -708,6 +708,7 @@ async fn clean_cache_type_directory_short_circuits_before_touching_the_config_fi
         args,
         ColorMode::Off,
         &Console::new(Box::new(std::io::sink()), false),
+        unreachable_sweep,
     )
     .await
     .expect("--clean should return Ok without touching the config file");
@@ -764,6 +765,7 @@ async fn upgrade_flag_short_circuits_before_touching_the_config_file() {
         args,
         ColorMode::Off,
         &Console::new(Box::new(std::io::sink()), false),
+        unreachable_sweep,
     )
     .await
     .expect("--upgrade should return Ok without touching the config file");
@@ -873,4 +875,217 @@ fn only_a_named_task_with_nothing_handled_first_is_a_run() {
     assert!(!args(&["ratect", "--clean", "build"]).runs_a_task());
     assert!(!args(&["ratect", "--clean-cache", "cargo", "build"]).runs_a_task());
     assert!(!args(&["ratect", "--upgrade", "build"]).runs_a_task());
+}
+
+/// A `sweep` for a `run` that must return before making one.
+fn unreachable_sweep() -> Sweep {
+    panic!("this invocation should never start the Git include cache sweep")
+}
+
+/// What a fake sweep does once `run` has started it.
+#[derive(Clone, Copy)]
+enum FakeSweep {
+    Succeeds,
+    Fails,
+    NeverFinishes,
+}
+
+/// What `run` did, given a fake sweep.
+struct Swept {
+    result: Result<()>,
+    /// How many sweeps `run` made.
+    made: usize,
+    /// Whether the sweep it made was then run, not only made.
+    ran: bool,
+}
+
+/// Runs `run` on `arguments` with a fake sweep that reports both its
+/// making and its running, so no test here touches the real
+/// `~/.ratect/incl`. Bounded: a `run` that waited on a sweep that never
+/// finishes fails the test rather than hanging it.
+async fn run_with_fake_sweep(arguments: &[&str], fake: FakeSweep) -> Swept {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    let made = Arc::new(AtomicUsize::new(0));
+    let (running, mut ran) = tokio::sync::oneshot::channel::<()>();
+    let sweep = {
+        let made = Arc::clone(&made);
+        move || -> Sweep {
+            made.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                let _ = running.send(());
+                match fake {
+                    FakeSweep::Succeeds => Ok(()),
+                    FakeSweep::Fails => Err(anyhow::anyhow!("the fake sweep failed")),
+                    FakeSweep::NeverFinishes => std::future::pending().await,
+                }
+            })
+        }
+    };
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        run(
+            args(arguments),
+            ColorMode::Off,
+            &Console::new(Box::new(std::io::sink()), false),
+            sweep,
+        ),
+    )
+    .await
+    .expect("run should not wait for the sweep");
+    let made = made.load(Ordering::SeqCst);
+    // Only a sweep `run` made can have been spawned; once it has, give the
+    // detached task its turn on this test's runtime.
+    let ran = made > 0
+        && tokio::time::timeout(Duration::from_secs(5), &mut ran)
+            .await
+            .is_ok_and(|sent| sent.is_ok());
+    Swept { result, made, ran }
+}
+
+/// A project with one task, `build`, in a directory of its own, so `run`
+/// gets past `load_project`. Returns the config file's path.
+fn project_with_one_task() -> String {
+    let dir = unique_temp_dir();
+    let config = dir.join("batect.yml");
+    std::fs::write(
+        &config,
+        "project_name: sweep-wiring\n\
+         containers:\n  box:\n    image: alpine:3.20\n\
+         tasks:\n  build:\n    run:\n      container: box\n",
+    )
+    .unwrap();
+    config.to_str().unwrap().to_owned()
+}
+
+/// A `--docker-host` no daemon listens on, so a task run fails at the
+/// connection — the first thing it does that needs Docker — without one.
+/// A run gets that far only after arming `Interrupt`, whose signal handlers
+/// then stay installed for the rest of this test binary.
+fn unreachable_docker_host(config: &str) -> String {
+    let dir = Path::new(config).parent().unwrap();
+    format!("unix://{}", dir.join("no-such-docker.sock").display())
+}
+
+/// Batect's `RunTaskCommand` starts its background tasks after loading
+/// the config and before checking Docker connectivity, so a run that fails
+/// at the connection has already started the sweep — once.
+#[tokio::test]
+async fn naming_a_task_starts_the_sweep_once_after_load_and_before_docker() {
+    let config = project_with_one_task();
+    let host = unreachable_docker_host(&config);
+    let swept = run_with_fake_sweep(
+        &[
+            "ratect",
+            "-f",
+            &config,
+            "-o",
+            "quiet",
+            "--docker-host",
+            &host,
+            "build",
+        ],
+        FakeSweep::Succeeds,
+    )
+    .await;
+
+    let error = swept.result.expect_err("no daemon listens on the socket");
+    assert!(
+        format!("{error:?}").contains("Failed to connect to Docker"),
+        "run should fail at the Docker connection: {error:?}"
+    );
+    assert_eq!(swept.made, 1, "a task run starts the sweep exactly once");
+    assert!(
+        swept.ran,
+        "the sweep a task run makes is spawned, not dropped"
+    );
+}
+
+/// Batect starts its background tasks only from `RunTaskCommand`, so
+/// nothing `run` handles instead of running a task starts the sweep.
+#[tokio::test]
+async fn only_a_task_run_starts_the_sweep() {
+    let config = project_with_one_task();
+    for arguments in [
+        &["ratect", "-f", &config, "--list-tasks", "build"][..],
+        &[
+            "ratect",
+            "-f",
+            &config,
+            "--clean",
+            "--cache-type",
+            "directory",
+            "build",
+        ],
+        &[
+            "ratect",
+            "-f",
+            &config,
+            "--clean-cache",
+            "x",
+            "--cache-type",
+            "directory",
+            "build",
+        ],
+        &["ratect", "-f", &config, "--upgrade", "build"],
+    ] {
+        let swept = run_with_fake_sweep(arguments, FakeSweep::Succeeds).await;
+        swept
+            .result
+            .unwrap_or_else(|e| panic!("{arguments:?} should succeed: {e:?}"));
+        assert_eq!(swept.made, 0, "{arguments:?} should not start the sweep");
+    }
+
+    // No task name: today a warning, under Batect a parse error (#434).
+    // Either way, no sweep.
+    let no_task = ["ratect", "-f", &config];
+    if Args::try_parse_from(no_task).is_ok() {
+        let swept = run_with_fake_sweep(&no_task, FakeSweep::Succeeds).await;
+        assert_eq!(swept.made, 0, "no task name should not start the sweep");
+    }
+}
+
+/// The sweep starts only once the config has loaded.
+#[tokio::test]
+async fn a_config_that_fails_to_load_does_not_start_the_sweep() {
+    let swept = run_with_fake_sweep(
+        &["ratect", "-f", "/no/such/batect.yml", "build"],
+        FakeSweep::Succeeds,
+    )
+    .await;
+
+    swept.result.expect_err("the config file does not exist");
+    assert_eq!(swept.made, 0);
+}
+
+/// Like Batect's daemon thread, the sweep is never waited for: one that
+/// never finishes, or fails, leaves `run`'s own result as it would be.
+#[tokio::test]
+async fn run_neither_waits_for_the_sweep_nor_takes_its_result() {
+    let config = project_with_one_task();
+    let host = unreachable_docker_host(&config);
+    let arguments = [
+        "ratect",
+        "-f",
+        &config,
+        "-o",
+        "quiet",
+        "--docker-host",
+        &host,
+        "build",
+    ];
+    let error = |fake| async move {
+        let swept = run_with_fake_sweep(&arguments, fake).await;
+        assert_eq!(swept.made, 1);
+        assert!(swept.ran);
+        format!(
+            "{:?}",
+            swept.result.expect_err("no daemon listens on the socket")
+        )
+    };
+
+    let expected = error(FakeSweep::Succeeds).await;
+    assert_eq!(error(FakeSweep::NeverFinishes).await, expected);
+    assert_eq!(error(FakeSweep::Fails).await, expected);
 }
