@@ -5506,9 +5506,11 @@ async fn load_project_impl(config_file: &Path, format: ConfigFormat) -> Result<L
 /// Since ratect#214 the *file* decides, so this runs over a native project's
 /// YAML-declared containers too.
 ///
-/// Errors name the container, where Batect names a line and column instead
-/// — it keeps positions on its parsed nodes and Ratect doesn't, and the
-/// container name is what the rest of Ratect's config errors identify.
+/// Errors name the container and its file, where Batect gives the YAML
+/// path, line and column instead — it keeps positions on its parsed nodes
+/// and Ratect doesn't, and the container name is what the rest of Ratect's
+/// config errors identify. Of several build-only fields alongside `image`,
+/// the first in `resolveImageSource`'s order is the one reported.
 fn validate_image_sources_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
     // Already in declaration order, so of several offending containers the
     // first declared is reported — see `ConfigFormat::batect_shaped_containers`.
@@ -5525,17 +5527,16 @@ fn validate_image_sources_in_compat(containers: &[BatectShaped<'_>]) -> Result<(
                     ),
                 ))
             }
-            // Deliberately the same wording as `engine.rs`'s own lazy check,
-            // which still fires for the native format (and for a `Config`
-            // built without going through `load_project`). One condition
-            // should read the same however it was reached.
+            // The leading sentence is deliberately `engine.rs`'s own lazy
+            // check word for word — it still fires for the native format (and
+            // for a `Config` built without going through `load_project`), and
+            // one condition should read the same however it was reached. The
+            // full stop is this one's own: a loaded file's container gets a
+            // sentence naming that file appended.
             (None, None) => {
                 return Err(native_field_rejection(
                     entry,
-                    // The leading sentence is deliberately `engine.rs`'s own
-                    // lazy check word for word — one condition should read
-                    // the same however it was reached.
-                    format!("Container '{name}' has neither 'image' nor 'build_directory' set"),
+                    format!("Container '{name}' has neither 'image' nor 'build_directory' set."),
                 ));
             }
             _ => {}
@@ -5548,8 +5549,8 @@ fn validate_image_sources_in_compat(containers: &[BatectShaped<'_>]) -> Result<(
             ("build_args", container.build_args.is_some()),
             ("build_target", container.build_target.is_some()),
             ("dockerfile", container.dockerfile.is_some()),
-            ("build_secrets", container.build_secrets.is_some()),
             ("build_ssh", container.build_ssh.is_some()),
+            ("build_secrets", container.build_secrets.is_some()),
         ];
         if let Some((field, _)) = build_only.iter().find(|(_, present)| *present) {
             return Err(native_field_rejection(
