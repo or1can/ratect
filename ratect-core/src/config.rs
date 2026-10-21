@@ -3155,9 +3155,10 @@ fn include_repo(include: &IncludeEntry) -> Option<&str> {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ConfigFile {
     /// The project's name, used to name the images this project builds and
-    /// (with `--cache-type=volume`) its cache volumes. Taken from the root
-    /// config file only; ignored in an included file. Defaults to the
-    /// project directory's own name.
+    /// its `eu.orican.ratect.project` label. Only the root config file may
+    /// set it; an included file that does is rejected. In a `batect.yml`
+    /// project loaded by `ratect-compat`, it defaults to the lowercased name
+    /// of the root file's directory; `ratect` requires it.
     #[serde(default, deserialize_with = "deserialize_project_name")]
     // The image-name-component rule, stated for an editor.
     #[cfg_attr(
@@ -3267,6 +3268,45 @@ impl ConfigFormat {
         match self {
             ConfigFormat::Compat => &["batect-bundle.yml"],
             ConfigFormat::Native => &["ratect-bundle.toml", "batect-bundle.yml"],
+        }
+    }
+
+    /// The project's name: the one the root file at `root_path` declares, or
+    /// where it declares none, Batect's — inferred from the directory holding
+    /// it ([`infer_project_name`]) — in a Batect-format project, and an error
+    /// in a native one, which requires the field.
+    ///
+    /// An undeclared name is also where an empty root file is refused: Batect
+    /// refuses a file holding no YAML document, or only a null one (`---`,
+    /// `~`), but `noyalib` reads either as an empty mapping, which every
+    /// field defaults from — so without the required field, nothing else
+    /// would refuse it. A file that declares a name holds a document, so
+    /// checking here misses none.
+    fn project_name(&self, root_path: &Path, declared: Option<&str>) -> Result<String> {
+        if let Some(name) = declared {
+            return Ok(name.to_owned());
+        }
+        match self {
+            ConfigFormat::Compat => {
+                let text = std::fs::read_to_string(root_path)
+                    .with_context(|| format!("Failed to open config file {:?}", root_path))?;
+                let no_configuration = noyalib::load_all(&text).is_ok_and(|mut documents| {
+                    documents.all(|document| document.is_ok_and(|value| value.is_null()))
+                });
+                if no_configuration {
+                    anyhow::bail!(
+                        "Configuration file {:?} contains no configuration.",
+                        root_path
+                    );
+                }
+                infer_project_name(root_path)
+            }
+            ConfigFormat::Native => {
+                anyhow::bail!(
+                    "Configuration file {:?} is missing the required 'project_name' field",
+                    root_path
+                )
+            }
         }
     }
 
@@ -3661,6 +3701,32 @@ fn parse_toml_config_file(path: &Path, name: &str) -> Result<ConfigFile> {
 /// paths (`volumes`, `build_directory`) are resolved against.
 pub(crate) fn absolute_path(path: &Path) -> Result<PathBuf> {
     Ok(std::env::current_dir()?.join(path).clean())
+}
+
+/// Batect's name for a project whose root file declares none: the lowercased
+/// name of the directory holding `root_path`, which must be absolute and
+/// cleaned ([`absolute_path`]) so a `.` or `..` never names itself. Refused,
+/// with Batect's messages, where that isn't an image-name component or the
+/// file is in the filesystem root, which has no name.
+pub(crate) fn infer_project_name(root_path: &Path) -> Result<String> {
+    let Some(directory) = root_path.parent().and_then(Path::file_name) else {
+        anyhow::bail!(
+            "No project name has been given explicitly, but the configuration file {:?} is in \
+             the root directory and so a project name cannot be inferred. Set 'project_name' \
+             to name the project.",
+            root_path
+        );
+    };
+    let name = directory.to_string_lossy().to_lowercase();
+    if !crate::image_reference::is_name_component(&name) {
+        anyhow::bail!(
+            "The inferred project name '{name}', from the directory holding {:?}, is invalid. \
+             The project name must be a valid Docker reference: it {IMAGE_NAME_RULE} Set \
+             'project_name' to name the project explicitly.",
+            root_path
+        );
+    }
+    Ok(name)
 }
 
 /// Resolves an include entry to its actual file. A single candidate — a local
@@ -4072,9 +4138,8 @@ impl Config {
             });
         }
 
-        let project_name = loaded[0].file.project_name.clone().ok_or_else(|| {
-            anyhow::anyhow!("Configuration file is missing the required 'project_name' field")
-        })?;
+        let project_name =
+            format.project_name(&loaded[0].path, loaded[0].file.project_name.as_deref())?;
         let forbid_telemetry = loaded[0].file.forbid_telemetry;
 
         let mut containers = IndexMap::new();

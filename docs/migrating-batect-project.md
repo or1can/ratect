@@ -130,10 +130,11 @@ two differences worth knowing:
 From here, migration is as granular as you want it to be. Split `legacy.yml`
 into smaller files along whatever lines make sense (one per container group,
 one per pipeline stage — Batect's own `include` already supports this), then
-convert each piece in turn: since `config convert` only accepts a full root
-project (a file with its own `project_name`), converting one piece means
-pointing it at a throwaway root — a `batect.yml` in a scratch directory, with
-a temporary `project_name` line and an `include` entry naming the piece — which
+convert each piece in turn: since `config convert` treats the file it's
+pointed at as a root, and gives a root's conversion a `project_name` (which an
+included file can't declare), converting one piece means pointing it at a
+throwaway root — a `batect.yml` in a scratch directory, with an `include`
+entry naming the piece — which
 writes the piece's own `.toml` beside it, and one beside each file the piece
 itself includes, their `include` entries pointing at each other (plus a
 `ratect.toml` beside the throwaway root, to delete with it). Swap that one

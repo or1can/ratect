@@ -322,6 +322,9 @@ written — so a relative path in `more/c.toml` <!-- example --> resolves agains
 did in `more/c.yml` <!-- example --> (see [Where relative paths resolve](includes.md#where-relative-paths-resolve)).
 A Git include stays a Git include, its `repo`, `ref`, `path` and `allow_host_paths`
 carried across: nothing from a bundle is copied out, and no file in one is converted.
+A root `batect.yml` with no `project_name` converts to a `ratect.toml` naming the
+project as `ratect-compat` does — after the root file's directory — since `ratect.toml`
+requires one.
 Nothing is written if any converted file already exists — the error lists them all;
 pass `--force` to overwrite them, or `--stdout` to print instead. With more than one
 file, `--stdout` prints each document in order, the root first, each under a

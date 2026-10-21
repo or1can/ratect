@@ -957,7 +957,7 @@
     },
     "project_name": {
       "default": null,
-      "description": "The project's name, used to name the images this project builds and (with `--cache-type=volume`) its cache volumes. Taken from the root config file only; ignored in an included file. Defaults to the project directory's own name.",
+      "description": "The project's name, used to name the images this project builds and its `eu.orican.ratect.project` label. Only the root config file may set it; an included file that does is rejected. In a `batect.yml` project loaded by `ratect-compat`, it defaults to the lowercased name of the root file's directory; `ratect` requires it.",
       "pattern": "^[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*$",
       "type": [
         "string",
