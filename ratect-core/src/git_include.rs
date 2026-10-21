@@ -30,8 +30,9 @@
 //! same cache: any entry whose `last_used` is more than 30 days old gets
 //! both its working copy and its `.toml` sidecar removed, matching
 //! Batect's own `GitRepositoryCacheCleanupTask` except in how it handles a
-//! bad sidecar (below) and in being a `tokio::spawn`ed async task, not a
-//! literal OS thread (Batect's own JVM
+//! bad sidecar (below), in counting those 30 days as a fixed number of
+//! seconds rather than calendar days (see `STALE_AFTER`), and in being a
+//! `tokio::spawn`ed async task, not a literal OS thread (Batect's own JVM
 //! daemon thread is the equivalent to port the *behavior* of — unconditional,
 //! fire-and-forget, never awaited — not literally a `std::thread::spawn`).
 //! Started unconditionally from `main.rs`'s "run a task" branch (not
@@ -242,8 +243,13 @@ fn directory_size(path: &Path) -> u64 {
 type Clock = Box<dyn Fn() -> u64 + Send + Sync>;
 
 /// How long an entry may go unused before [`GitIncludeCache::cleanup_stale`]
-/// removes it — matches Batect's own `GitRepositoryCacheCleanupTask`
-/// exactly (a fixed 30 days, not configurable in Batect either).
+/// removes it: 30 days of 24 hours, compared against `last_used` in whole
+/// seconds, and not configurable — nor is Batect's. Batect's
+/// `GitRepositoryCacheCleanupTask` instead counts back 30 calendar days in
+/// the system time zone, at sub-second precision, so across a daylight-saving
+/// change its window is up to an hour longer or shorter than this one. Kept
+/// fixed deliberately: when a clone is evicted changes nothing a config
+/// loads, only when it's cloned again.
 const STALE_AFTER: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 fn real_now() -> u64 {
@@ -709,7 +715,8 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// Removes any cached repo whose `last_used` is more than
     /// `STALE_AFTER` old — matching Batect's own
     /// `GitRepositoryCacheCleanupTask`/`GitRepositoryCache.delete`, except
-    /// for a bad sidecar (below).
+    /// for a bad sidecar (below) and in how the window is measured (see
+    /// `STALE_AFTER`).
     /// Meant to be started unconditionally, once per invocation, as a
     /// detached background task (see `main.rs`) — never awaited, so a
     /// failure here is only ever logged. Each stale entry is removed
