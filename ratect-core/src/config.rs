@@ -3914,6 +3914,17 @@ impl Config {
                     // resolved — in particular, before any clone — so a
                     // refused bundle's remote is never even reached.
                     include_trust::check_may_declare_git(restricted, repo)?;
+                    // An explicit `path` is the single candidate; a pathless
+                    // bundle probes the format's default names in order.
+                    // Known before the clone, so a failed one can name them.
+                    let candidates = match path {
+                        Some(path) => vec![path.clone()],
+                        None => format
+                            .bundle_candidates()
+                            .iter()
+                            .map(|name| name.to_string())
+                            .collect(),
+                    };
                     let key = (repo.clone(), git_ref.clone());
                     let repo_dir =
                         match git_repo_paths.get(&key) {
@@ -3922,7 +3933,11 @@ impl Config {
                                 let dir = git_cache.ensure_cached(repo, git_ref).await.map_err(
                                     |error| {
                                         include_trust::hide_clone_detail(
-                                            error, repo, git_ref, restricted,
+                                            error,
+                                            repo,
+                                            git_ref,
+                                            &candidates,
+                                            restricted,
                                         )
                                     },
                                 )?;
@@ -3940,16 +3955,6 @@ impl Config {
                             },
                             asked,
                         ),
-                    };
-                    // An explicit `path` is the single candidate; a pathless
-                    // bundle probes the format's default names in order.
-                    let candidates = match path {
-                        Some(path) => vec![path.clone()],
-                        None => format
-                            .bundle_candidates()
-                            .iter()
-                            .map(|name| name.to_string())
-                            .collect(),
                     };
                     (repo_dir, candidates, Some(boundary))
                 }

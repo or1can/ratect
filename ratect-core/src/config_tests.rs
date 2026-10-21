@@ -11349,7 +11349,87 @@ include:
     let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
 
     let result = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache).await;
-    assert!(format!("{:?}", result.unwrap_err()).contains("simulated network failure"));
+    let error = format!("{:?}", result.unwrap_err());
+    assert!(error.contains("simulated network failure"));
+    // A pathless entry names the file it would have loaded, as Batect's
+    // own `path` default does.
+    assert!(
+        error.contains(
+            "Failed to resolve Git include 'batect-bundle.yml' from \
+             'https://example.com/bundle.git' at 'v1.0.0'"
+        ),
+        "got: {error}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).unwrap();
+}
+
+/// What the user wrote in the entry is its `path` as well as its repository
+/// and ref, so a failed clone's headline names all three — Batect's does.
+#[tokio::test]
+async fn a_git_clone_failure_names_the_include_path() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.2.3
+    path: 1.yml
+"#,
+    )
+    .unwrap();
+
+    let git = FakeGitClient::new().failing("simulated network failure");
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+    let error = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+        .await
+        .expect_err("the clone cannot succeed");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains(
+            "Failed to resolve Git include '1.yml' from 'https://example.com/bundle.git' at 'v1.2.3'"
+        ),
+        "got: {error}"
+    );
+    assert!(error.contains("simulated network failure"), "got: {error}");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).unwrap();
+}
+
+/// A pathless `ratect.toml` entry probes more than one name, so the headline
+/// names every candidate rather than claiming one of them.
+#[tokio::test]
+async fn a_native_pathless_clone_failure_names_every_candidate() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "project_name = \"demo\"\n\n[[include]]\ntype = \"git\"\n\
+         repo = \"https://example.com/bundle.git\"\nref = \"v1\"\n",
+    )
+    .unwrap();
+
+    let git = FakeGitClient::new().failing("simulated network failure");
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+    let error = Config::load_from_file_native_with_git_cache(&dir.join("ratect.toml"), &git_cache)
+        .await
+        .expect_err("the clone cannot succeed");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains(
+            "Failed to resolve Git include 'ratect-bundle.toml' or 'batect-bundle.yml' from \
+             'https://example.com/bundle.git' at 'v1'"
+        ),
+        "got: {error}"
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
     std::fs::remove_dir_all(&cache_root).unwrap();
