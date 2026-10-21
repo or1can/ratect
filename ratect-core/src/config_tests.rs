@@ -3002,67 +3002,42 @@ tasks:
     );
 }
 
+/// The rendered cause chain of a config whose one container has the single
+/// `volumes` entry `entry` (a YAML flow value), which must fail to parse.
+fn volume_entry_error(entry: &str) -> String {
+    let yaml = format!(
+        "project_name: demo\n\
+         containers:\n  build-env:\n    image: alpine:3.18\n    volumes:\n      - {entry}\n\
+         tasks: {{}}\n"
+    );
+    format!("{:#}", try_parse(&yaml).unwrap_err())
+}
+
 #[test]
 fn volume_mount_cache_object_form_requires_name() {
-    let yaml = r#"
-project_name: demo
-containers:
-  build-env:
-    image: alpine:3.18
-    volumes:
-      - type: cache
-        container: /root/.gradle
-tasks:
-  test:
-    run:
-      container: build-env
-      command: echo hi
-"#;
-    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
-    assert!(result.is_err());
+    let message = volume_entry_error("{type: cache, container: /root/.gradle}");
+    assert!(message.contains("missing field: name"), "{message}");
 }
 
 #[test]
 fn volume_mount_cache_object_form_forbids_local() {
-    let yaml = r#"
-project_name: demo
-containers:
-  build-env:
-    image: alpine:3.18
-    volumes:
-      - type: cache
-        name: gradle-cache
-        local: /host/path
-        container: /root/.gradle
-tasks:
-  test:
-    run:
-      container: build-env
-      command: echo hi
-"#;
-    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
-    assert!(result.is_err());
+    let message = volume_entry_error(
+        "{type: cache, name: gradle-cache, local: /host/path, container: /root/.gradle}",
+    );
+    assert!(
+        message.contains("Field 'local' is not permitted for cache mounts."),
+        "{message}"
+    );
 }
 
 #[test]
 fn volume_mount_local_object_form_forbids_name() {
-    let yaml = r#"
-project_name: demo
-containers:
-  build-env:
-    image: alpine:3.18
-    volumes:
-      - local: /host/path
-        name: not-allowed-here
-        container: /code
-tasks:
-  test:
-    run:
-      container: build-env
-      command: echo hi
-"#;
-    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
-    assert!(result.is_err());
+    let message =
+        volume_entry_error("{local: /host/path, name: not-allowed-here, container: /code}");
+    assert!(
+        message.contains("Field 'name' is not permitted for local path mounts."),
+        "{message}"
+    );
 }
 
 #[test]
@@ -3126,83 +3101,143 @@ tasks:
 
 #[test]
 fn volume_mount_tmpfs_object_form_requires_container() {
-    let yaml = r#"
-project_name: demo
-containers:
-  build-env:
-    image: alpine:3.18
-    volumes:
-      - type: tmpfs
-tasks:
-  test:
-    run:
-      container: build-env
-      command: echo hi
-"#;
-    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
-    assert!(result.is_err());
+    let message = volume_entry_error("{type: tmpfs}");
+    assert!(message.contains("missing field: container"), "{message}");
 }
 
 #[test]
 fn volume_mount_tmpfs_object_form_forbids_local() {
-    let yaml = r#"
-project_name: demo
-containers:
-  build-env:
-    image: alpine:3.18
-    volumes:
-      - type: tmpfs
-        local: /host/path
-        container: /code/tmp
-tasks:
-  test:
-    run:
-      container: build-env
-      command: echo hi
-"#;
-    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
-    assert!(result.is_err());
+    let message = volume_entry_error("{type: tmpfs, local: /host/path, container: /code/tmp}");
+    assert!(
+        message.contains("Field 'local' is not permitted for tmpfs mounts."),
+        "{message}"
+    );
 }
 
 #[test]
 fn volume_mount_tmpfs_object_form_forbids_name() {
-    let yaml = r#"
-project_name: demo
-containers:
-  build-env:
-    image: alpine:3.18
-    volumes:
-      - type: tmpfs
-        name: not-allowed-here
-        container: /code/tmp
-tasks:
-  test:
-    run:
-      container: build-env
-      command: echo hi
-"#;
-    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
-    assert!(result.is_err());
+    let message = volume_entry_error("{type: tmpfs, name: not-allowed-here, container: /code/tmp}");
+    assert!(
+        message.contains("Field 'name' is not permitted for tmpfs mounts."),
+        "{message}"
+    );
 }
 
 #[test]
 fn volume_mount_rejects_unknown_type() {
-    let yaml = r#"
+    let message = volume_entry_error("{type: bogus, container: /code/tmp}");
+    assert!(
+        message.contains(
+            "Unknown volume mount type 'bogus'. It must be 'local', 'cache', or 'tmpfs'."
+        ),
+        "{message}"
+    );
+}
+
+#[test]
+fn volume_mount_local_object_form_requires_local() {
+    let message = volume_entry_error("{container: /code}");
+    assert!(message.contains("missing field: local"), "{message}");
+}
+
+#[test]
+fn volume_mount_parses_local_object_form_with_options() {
+    let config = parse(
+        r#"
 project_name: demo
 containers:
   build-env:
     image: alpine:3.18
     volumes:
-      - type: bogus
-        container: /code/tmp
-tasks:
-  test:
-    run:
-      container: build-env
-      command: echo hi
-"#;
-    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
-    assert!(result.is_err());
+      - local: /host/path
+        container: /code
+        options: ro
+      - type: local
+        local: /host/path
+        container: /code
+        options: ro
+tasks: {}
+"#,
+    );
+
+    let mount = VolumeMount::Local(LocalVolumeMount {
+        local: "/host/path".to_string(),
+        container: "/code".to_string(),
+        options: Some("ro".to_string()),
+        compact: false,
+    });
+    assert_eq!(
+        config.containers["build-env"].volumes,
+        Some(vec![mount.clone(), mount])
+    );
+}
+
+#[test]
+fn volume_mount_object_form_reports_a_missing_container_before_its_type_rules() {
+    // Ratect's own order, a recorded divergence ("Load errors"): don't fix it towards Batect.
+    for entry in ["{type: cache}", "{type: blah}"] {
+        let message = volume_entry_error(entry);
+        assert!(
+            message.contains("missing field: container"),
+            "{entry}: {message}"
+        );
+    }
+}
+
+#[test]
+fn volume_mount_local_object_form_reports_name_before_a_missing_local() {
+    // Ratect's own order, a recorded divergence ("Load errors"): don't fix it towards Batect.
+    let message = volume_entry_error("{name: n, container: /code}");
+    assert!(
+        message.contains("Field 'name' is not permitted for local path mounts."),
+        "{message}"
+    );
+}
+
+#[test]
+fn volume_mount_cache_object_form_reports_local_before_a_missing_name() {
+    // Ratect's own order, a recorded divergence ("Load errors"): don't fix it towards Batect.
+    let message = volume_entry_error("{type: cache, local: /host/path, container: /code}");
+    assert!(
+        message.contains("Field 'local' is not permitted for cache mounts."),
+        "{message}"
+    );
+}
+
+#[test]
+fn volume_mount_tmpfs_object_form_reports_local_before_name() {
+    // Ratect's own order, a recorded divergence ("Load errors"): don't fix it towards Batect.
+    let message = volume_entry_error("{type: tmpfs, local: /host/path, name: n, container: /code}");
+    assert!(
+        message.contains("Field 'local' is not permitted for tmpfs mounts."),
+        "{message}"
+    );
+}
+
+#[test]
+fn volume_mount_object_form_reports_an_unknown_field_before_an_unknown_type() {
+    // Ratect's own order, a recorded divergence ("Load errors"): don't fix it towards Batect.
+    let message = volume_entry_error("{type: blah, container: /code, thing: z}");
+    assert!(message.contains("unknown field: thing"), "{message}");
+}
+
+#[test]
+fn volume_mount_object_form_rejects_an_unknown_field() {
+    let message = volume_entry_error("{local: /host/path, container: /code, thing: z}");
+    assert!(message.contains("unknown field: thing"), "{message}");
+}
+
+#[test]
+fn volume_mount_rejects_an_entry_that_is_neither_string_nor_object() {
+    let expected = "a volume mount string ('local_path:container_path[:options]') or an object \
+                    with 'local'/'container'/'options'/'name'/'type' fields";
+    for (entry, found) in [("[a, b]", "sequence"), ("5", "integer `5`")] {
+        let message = volume_entry_error(entry);
+        assert!(
+            message.contains(&format!("invalid type: {found}, expected {expected}")),
+            "{entry}: {message}"
+        );
+    }
 }
 
 #[test]
