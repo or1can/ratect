@@ -136,7 +136,10 @@ Ratect checks a config when the file loads, and the report is its own:
   durations, duplicate `build_ssh` ids, an undeclared config variable given a
   value — which names the variable but neither which of `--config-var` and
   `--config-vars-file` gave it nor, for the file, its line — and a name defined
-  in more than one file.
+  in more than one file. A file inside a Git include is named by its path within
+  the repository plus the remote and ref, `'1.yml' from the bundle '<repo>' at
+  '<ref>'`, where Batect writes `<repo>@<ref>: 1.yml` or `1.yml from
+  <repo>@<ref>`.
 - **A check made once the file has parsed names what it's about** — the
   container or task — rather than giving Batect's YAML path, line and column.
 - **An error raised while the file is parsed gives its line, column and YAML

@@ -223,12 +223,29 @@ impl Boundary {
             return Ok(());
         }
         anyhow::bail!(
-            "Included file '{}' escapes the Git repository '{}' at '{}' it was included from \
-             — includes reached through a Git include must resolve within that repository.",
-            resolved.display(),
+            "Included file {} escapes the Git repository it was included from — includes \
+             reached through a Git include must resolve within that repository.",
+            self.describe(resolved)
+        );
+    }
+
+    /// How a message names `path`, a file reached through this bundle —
+    /// CONTEXT.md's **bundle file**: its path relative to the root of the
+    /// bundle's checkout, plus the remote and ref. Never the `~/.ratect/incl`
+    /// clone-cache path Ratect actually read, which is neither where the file
+    /// is maintained nor anywhere worth editing (#419). The one describer
+    /// every such message uses, so no two of them can drift apart.
+    ///
+    /// A path outside the checkout — only [`check_contains`](Self::check_contains)'s
+    /// refusal names one — keeps its leading `..`, as Batect's own
+    /// `relativize` does.
+    pub(crate) fn describe(&self, path: &Path) -> String {
+        format!(
+            "'{}' from the bundle '{}' at '{}'",
+            relative_to(&self.repo_dir, &path.clean()).display(),
             self.bundle.id.remote,
             self.bundle.id.git_ref
-        );
+        )
     }
 
     /// A second check against the *canonicalized* (symlink-resolved) form
@@ -237,23 +254,25 @@ impl Boundary {
     /// symlink inside its own clone that itself points back outside it
     /// would still lexically "start with" `repo_dir`.
     fn check_contains_canonical(&self, resolved: &Path) -> Result<()> {
-        let canonical_resolved = resolved
-            .canonicalize()
-            .with_context(|| format!("Failed to resolve {resolved:?}"))?;
-        let canonical_root = self
-            .repo_dir
-            .canonicalize()
-            .with_context(|| format!("Failed to resolve {:?}", self.repo_dir))?;
+        let canonical_resolved = resolved.canonicalize().with_context(|| {
+            format!(
+                "Failed to resolve included file {}",
+                self.describe(resolved)
+            )
+        })?;
+        let canonical_root = self.repo_dir.canonicalize().with_context(|| {
+            format!(
+                "Failed to resolve the checkout of the bundle '{}' at '{}'",
+                self.bundle.id.remote, self.bundle.id.git_ref
+            )
+        })?;
         if canonical_resolved.starts_with(&canonical_root) {
             return Ok(());
         }
         anyhow::bail!(
-            "Included file '{}' escapes the Git repository '{}' at '{}' it was included from \
-             (via a symlink) — includes reached through a Git include must resolve within that \
-             repository.",
-            resolved.display(),
-            self.bundle.id.remote,
-            self.bundle.id.git_ref
+            "Included file {} escapes the Git repository it was included from (via a symlink) \
+             — includes reached through a Git include must resolve within that repository.",
+            self.describe(resolved)
         );
     }
 
@@ -360,6 +379,25 @@ pub(crate) fn boundary_contains(boundary: Option<&Boundary>, resolved: &Path) ->
     };
     boundary.check_contains(resolved)?;
     boundary.check_contains_canonical(resolved)
+}
+
+/// `path` relative to `root`, lexically: the components they share dropped,
+/// and a `..` for each of `root`'s that remain. Both are absolute and
+/// normalized, so no component needs interpreting.
+fn relative_to(root: &Path, path: &Path) -> PathBuf {
+    let mut root_parts = root.components().peekable();
+    let mut path_parts = path.components().peekable();
+    while let (Some(root_part), Some(path_part)) = (root_parts.peek(), path_parts.peek()) {
+        if root_part != path_part {
+            break;
+        }
+        root_parts.next();
+        path_parts.next();
+    }
+    root_parts
+        .map(|_| std::path::Component::ParentDir)
+        .chain(path_parts)
+        .collect()
 }
 
 /// `path` with every symlink in it resolved, as far as it exists: the longest
