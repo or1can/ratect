@@ -145,7 +145,9 @@ Blocks](reusable-building-blocks.md).
 A local include's path is resolved relative to the directory of the file that
 declares the `include` — *not* the root project directory — so an included file
 further down a subdirectory can itself `include` more files using paths relative to
-its own location.
+its own location. A leading `~` is expanded to the host user's home directory, by
+the same rule as a [volume's host path](#volume-path-resolution); a Git include's
+`path` is never expanded.
 
 ### Git includes
 

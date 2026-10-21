@@ -25,13 +25,17 @@ with the `batect.yml` spelling shown where the syntax differs.
 A **file include** names another configuration file in your own tree, by a path
 relative to the directory of the file that declares it — not the root project
 directory — so a file in a subdirectory can include more files relative to its
-own location. A **Git include** names a repository and a ref, and Ratect clones
-it into `~/.ratect/incl` and includes one file from the clone — the bundle's
+own location. A path whose first component is `~` means your home directory
+instead, by the same rule as a [volume's host
+path](ratect-compat-config-reference.md#volume-path-resolution). A **Git
+include** names a repository and a ref, and Ratect clones it into
+`~/.ratect/incl` and includes one file from the clone — the bundle's
 `batect-bundle.yml` unless the entry's `path` says otherwise, with a
 `ratect.toml` project looking for `ratect-bundle.toml` first (the [`ratect.toml`
-reference](ratect-config-reference.md#includes) has the lookup). In a
-`ratect.toml` project both kinds may mix, and each included file is parsed by
-its own extension, so a native project can pull in an existing `batect.yml`
+reference](ratect-config-reference.md#includes) has the lookup). A Git
+include's `path` is taken as written within the clone, a leading `~` included.
+In a `ratect.toml` project both kinds may mix, and each included file is parsed
+by its own extension, so a native project can pull in an existing `batect.yml`
 fragment or bundle unchanged:
 
 ```toml

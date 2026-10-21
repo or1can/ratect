@@ -104,6 +104,11 @@ pub const BREAKING_CHANGES: &[BreakingChange] = &[
         summary: "a string 'volumes' or 'devices' entry with an empty options segment \
                   ('a:b:') fails the load",
     },
+    BreakingChange {
+        version: "0.12.0",
+        summary: "a local include's 'path' whose first component is '~' is looked for in the \
+                  home directory, not in a '~' directory beside the file declaring it",
+    },
 ];
 
 /// A `major.minor.patch` version, optionally followed by a `-pre-release`

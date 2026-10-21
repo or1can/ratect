@@ -29,6 +29,7 @@ history, from when it was the only binary.
 - **ratect.toml:** `project_name` and every container name must be a Docker image-name component — lowercase letters and digits, joined by a single `.`, one or two `_`, or any number of `-` — and one that isn't fails the load, giving its line and column. That includes a container with an `external_health_check`, so one named `_api` no longer loads.
 - **ratect.toml:** an included file that sets `forbid_telemetry` to `true` fails the load; only the root file may.
 - **ratect.toml:** a string `volumes` or `devices` entry with an empty options segment (`"a:b:"`) fails the load, giving its line and column.
+- **ratect.toml:** a local include's `path` whose first component is `~` (`"~/shared.toml"`) is looked for in the home directory, not in a `~` directory beside the file declaring it. A Git include's `path` is unchanged.
 - A YAML config file or config vars file that gives a key twice in one mapping — a task, a container, a config variable, an `environment` variable, or any field — fails the load, naming the key and its line, instead of the last one being used. A key set beside a merge key (`<<: *base`) still overrides the merged one.
 - In a YAML config file, a string `volumes` or `devices` entry with an empty options segment (`'a:b:'`) fails the load with Batect's message.
 - An included YAML file that sets `forbid_telemetry` to `true`, or that is empty or holds only whitespace, comments or a null document (`---`, `~`), fails the load. A file holding `{}` still loads.
@@ -63,6 +64,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- In a YAML config file, a local include whose path starts with `~` (`~/shared.yml`) loads that file from the home directory, as in Batect, instead of looking for a `~` directory beside the file declaring it. A Git include's `path` is still taken as written within the clone.
 - `ratect-compat` loads a `batect.yml` with no `project_name`, as Batect does: the project is named after the root file's directory, lowercased, and one whose name isn't a Docker image-name component fails the load. A root `batect.yml` holding no configuration — empty, only comments, or only a null document such as `---` — fails the load saying so.
 - `ratect config convert` (ratect only) writes a `project_name` into `ratect.toml` when the root `batect.yml` has none — the one `ratect-compat` infers for it.
 - Files in an image's build context are sent owned by root, so a BuildKit `COPY` without `--chown` leaves them root-owned in the image.
