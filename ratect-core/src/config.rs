@@ -2454,8 +2454,12 @@ impl PortMapping {
 
     /// Parses `"local:container"`, `"local:container/protocol"`,
     /// `"from-to:from-to"`, or `"from-to:from-to/protocol"` (protocol
-    /// defaults to `tcp`). Ported from Batect's
-    /// `PortMappingConfigSerializer.deserializeFromString`.
+    /// defaults to `tcp`). Parses as Batect's
+    /// `PortMappingConfigSerializer.deserializeFromString` does, but a side
+    /// [`PortRange::parse`] refuses reports that range's own error, where
+    /// Batect rewraps it in this function's mapping-level message — a
+    /// wording divergence recorded under "Load errors" in
+    /// `docs/differences-from-batect.md`.
     fn parse_string(value: &str) -> Result<Self> {
         let invalid = || {
             anyhow::anyhow!(
