@@ -29,6 +29,7 @@ history, from when it was the only binary.
 - **ratect.toml:** `project_name` and every container name must be a Docker image-name component — lowercase letters and digits, joined by a single `.`, one or two `_`, or any number of `-` — and one that isn't fails the load, giving its line and column. That includes a container with an `external_health_check`, so one named `_api` no longer loads.
 - **ratect.toml:** an included file that sets `forbid_telemetry` to `true` fails the load; only the root file may.
 - **ratect.toml:** a string `volumes` or `devices` entry with an empty options segment (`"a:b:"`) fails the load, giving its line and column.
+- A YAML config file or config vars file that gives a key twice in one mapping — a task, a container, a config variable, an `environment` variable, or any field — fails the load, naming the key and its line, instead of the last one being used. A key set beside a merge key (`<<: *base`) still overrides the merged one.
 - In a YAML config file, a string `volumes` or `devices` entry with an empty options segment (`'a:b:'`) fails the load with Batect's message.
 - An included YAML file that sets `forbid_telemetry` to `true`, or that is empty or holds only whitespace, comments or a null document (`---`, `~`), fails the load. A file holding `{}` still loads.
 - In a YAML config file, an unbraced config variable name ends at its first `.`, as in Batect: `<batect.project_directory` reads a variable named `batect` rather than the built-in — write `<{batect.project_directory}` — and `<foo.bar` is `foo`'s value then `.bar`.

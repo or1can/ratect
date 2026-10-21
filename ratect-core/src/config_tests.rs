@@ -1645,35 +1645,11 @@ fn keys_colliding_after_string_conversion_are_still_rejected() {
     );
 }
 
-/// An object-form entry naming the same key twice keeps the last value,
-/// as it always has, and a key that is present must hold a value: a null
-/// `options` isn't read as leaving it out. Pinned when the visitors that
-/// read these entries moved to derived structs for #415. The first half is
-/// noyalib's doing, not the visitors': it keeps the last of a repeated key
-/// while parsing, so a derived struct — which would reject the repeat as a
-/// duplicate field — never sees it.
+/// An object-form entry's present key must hold a value: a null `options`
+/// isn't read as leaving it out. Pinned when the visitors that read these
+/// entries moved to derived structs for #415.
 #[test]
-fn an_object_form_entry_keeps_a_repeated_keys_last_value_and_rejects_a_null() {
-    let dir = unique_temp_dir();
-    let path = dir.join("batect.yml");
-    std::fs::write(
-        &path,
-        "project_name: demo\n\
-         containers:\n\
-         \x20 app:\n\
-         \x20   image: alpine\n\
-         \x20   volumes:\n\
-         \x20     - local: .\n\
-         \x20       container: /first\n\
-         \x20       container: /second\n\
-         tasks: {}\n",
-    )
-    .unwrap();
-    let file = parse_yaml_config_file(&path, &format!("{path:?}")).unwrap();
-    let volumes = file.containers["app"].volumes.as_ref().unwrap();
-    assert_eq!(expect_local(&volumes[0]).container, "/second");
-    std::fs::remove_dir_all(&dir).ok();
-
+fn an_object_form_entry_rejects_a_null() {
     let message = yaml_config_file_error(
         "project_name: demo\n\
          containers:\n\
@@ -1743,6 +1719,153 @@ async fn an_error_in_an_included_file_is_located_in_the_include() {
         "{message}"
     );
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A key given twice in one mapping of a config file is refused, naming
+/// the key and its line, wherever it sits — rather than the last value
+/// silently winning, which changed which definition ran (#372).
+#[test]
+fn a_repeated_key_in_a_config_file_is_refused_naming_it() {
+    let container = "containers:\n  app:\n    image: alpine\n";
+    let task = "tasks:\n  t:\n    run:\n      container: app\n";
+    for (key, line, yaml) in [
+        (
+            "project_name",
+            "line 2",
+            format!("project_name: first\nproject_name: demo\n{container}tasks: {{}}\n"),
+        ),
+        (
+            "t",
+            "line 8",
+            format!(
+                "project_name: demo\n{container}tasks:\n  t:\n    description: first\n  t:\n    description: second\n"
+            ),
+        ),
+        (
+            "app",
+            "line 5",
+            "project_name: demo\ncontainers:\n  app:\n    image: busybox\n  app:\n    image: alpine\ntasks: {}\n"
+                .to_string(),
+        ),
+        (
+            "v",
+            "line 5",
+            "project_name: demo\nconfig_variables:\n  v:\n    default: one\n  v:\n    default: two\ntasks: {}\n"
+                .to_string(),
+        ),
+        (
+            "THING",
+            "line 7",
+            "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    environment:\n      THING: first\n      THING: second\ntasks: {}\n"
+                .to_string(),
+        ),
+        (
+            "RT",
+            "line 11",
+            format!(
+                "project_name: demo\n{container}{task}      environment:\n        RT: first\n        RT: second\n"
+            ),
+        ),
+        (
+            "image",
+            "line 5",
+            "project_name: demo\ncontainers:\n  app:\n    image: busybox\n    image: alpine\ntasks: {}\n"
+                .to_string(),
+        ),
+        (
+            "container",
+            "line 8",
+            "project_name: demo\n\
+             containers:\n\
+             \x20 app:\n\
+             \x20   image: alpine\n\
+             \x20   volumes:\n\
+             \x20     - local: .\n\
+             \x20       container: /first\n\
+             \x20       container: /second\n\
+             tasks: {}\n"
+                .to_string(),
+        ),
+    ] {
+        let message = yaml_config_file_error(&yaml);
+        assert!(
+            message.contains("Failed to parse config file")
+                && message.contains(&format!("duplicate key \"{key}\""))
+                && message.contains(&format!("{line}, column")),
+            "{key}: {message}"
+        );
+    }
+}
+
+/// A repeat inside an included file fails the whole project, naming that
+/// file.
+#[tokio::test]
+async fn a_repeated_key_in_an_included_file_fails_the_project() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("containers.yml"),
+        "containers:\n  app:\n    image: busybox\n  app:\n    image: alpine\n",
+    )
+    .unwrap();
+    let config_path = dir.join("batect.yml");
+    std::fs::write(
+        &config_path,
+        "project_name: demo\ninclude:\n  - containers.yml\ntasks: {}\n",
+    )
+    .unwrap();
+
+    let message = format!("{:#}", load_project(&config_path).await.unwrap_err());
+    assert!(
+        message.contains("containers.yml") && message.contains("duplicate key \"app\""),
+        "{message}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// What a repeat is not: a container key set beside `<<: *base` overrides
+/// the merged one (the local value kept, as in kaml), the same key in two
+/// mappings is two keys, so are `t` and `T`, and an end-of-line comment is
+/// no part of a value.
+#[test]
+fn a_merged_override_two_mappings_and_two_cases_are_not_repeats() {
+    let config = parse(
+        "project_name: p # eol\n\
+         containers:\n\
+         \x20 base: &base\n\
+         \x20   image: alpine:3.18\n\
+         \x20   environment:\n\
+         \x20     THING: base\n\
+         \x20 other:\n\
+         \x20   <<: *base\n\
+         \x20   image: alpine:3.20\n\
+         \x20   environment:\n\
+         \x20     THING: other\n\
+         tasks:\n\
+         \x20 t:\n\
+         \x20   run:\n\
+         \x20     container: base\n\
+         \x20 T:\n\
+         \x20   run:\n\
+         \x20     container: other\n",
+    );
+    assert_eq!(config.project_name, "p");
+    assert_eq!(
+        config.containers["other"].image.as_deref(),
+        Some("alpine:3.20")
+    );
+    assert_eq!(
+        config.containers["base"].image.as_deref(),
+        Some("alpine:3.18")
+    );
+    assert_eq!(
+        config.containers["other"].environment.as_ref().unwrap()["THING"],
+        "other"
+    );
+    assert_eq!(
+        config.containers["base"].environment.as_ref().unwrap()["THING"],
+        "base"
+    );
+    assert!(config.tasks.contains_key("t") && config.tasks.contains_key("T"));
 }
 
 #[test]
@@ -12027,6 +12150,27 @@ fn load_config_vars_file_rejects_null_and_sequence_values() {
         );
         assert!(error.contains(&format!("{name}: ")), "{name}: {error}");
         assert!(error.contains("vars.yml"), "{name}: {error}");
+    }
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A config vars file naming a variable twice is refused, naming it — by
+/// the native loader too, which reads a `.yml` file the same way (#372).
+#[test]
+fn load_config_vars_file_rejects_a_repeated_variable() {
+    let dir = unique_temp_dir();
+    let vars_path = dir.join("vars.yml");
+    std::fs::write(&vars_path, "v: a\nv: b\n").unwrap();
+    for error in [
+        Config::load_config_vars_file(&vars_path).unwrap_err(),
+        Config::load_config_vars_file_native(&vars_path).unwrap_err(),
+    ] {
+        let error = format!("{error:#}");
+        assert!(
+            error.contains("vars.yml") && error.contains("duplicate key \"v\""),
+            "{error}"
+        );
     }
 
     std::fs::remove_dir_all(&dir).unwrap();
