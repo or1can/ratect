@@ -2364,6 +2364,59 @@ tasks:
 }
 
 #[test]
+fn devices_object_form_without_options_keeps_its_paths_as_written() {
+    let mut config = parse(
+        r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    devices:
+      - local: ./dev/a
+        container: $VAR/b
+tasks: {}
+"#,
+    );
+
+    // Neither path is resolved or evaluated, as in Batect: a relative
+    // `local` stays relative and `$VAR` stays literal.
+    config
+        .check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+            Some("value".to_string())
+        })
+        .unwrap();
+
+    assert_eq!(
+        config.containers["build-env"].devices,
+        Some(vec![DeviceMapping {
+            local: "./dev/a".to_string(),
+            container: "$VAR/b".to_string(),
+            options: None,
+        }])
+    );
+}
+
+#[test]
+fn devices_object_form_names_a_missing_local_or_container() {
+    // `{}` lacks both and names `local`, Batect's order too.
+    for (entry, field) in [
+        ("{container: /dev/b}", "local"),
+        ("{local: /dev/a}", "container"),
+        ("{}", "local"),
+    ] {
+        let yaml = format!(
+            "project_name: demo\ncontainers:\n  build-env:\n    image: alpine:3.18\n    \
+             devices:\n      - {entry}\ntasks: {{}}\n"
+        );
+        let message = format!("{:#}", try_parse(&yaml).unwrap_err());
+        assert!(
+            message.contains(&format!("missing field: {field}")),
+            "{entry}: {message}"
+        );
+    }
+}
+
+#[test]
 fn devices_defaults_to_none() {
     let config = parse(
         r#"
@@ -3002,67 +3055,42 @@ tasks:
     );
 }
 
+/// The rendered cause chain of a config whose one container has the single
+/// `volumes` entry `entry` (a YAML flow value), which must fail to parse.
+fn volume_entry_error(entry: &str) -> String {
+    let yaml = format!(
+        "project_name: demo\n\
+         containers:\n  build-env:\n    image: alpine:3.18\n    volumes:\n      - {entry}\n\
+         tasks: {{}}\n"
+    );
+    format!("{:#}", try_parse(&yaml).unwrap_err())
+}
+
 #[test]
 fn volume_mount_cache_object_form_requires_name() {
-    let yaml = r#"
-project_name: demo
-containers:
-  build-env:
-    image: alpine:3.18
-    volumes:
-      - type: cache
-        container: /root/.gradle
-tasks:
-  test:
-    run:
-      container: build-env
-      command: echo hi
-"#;
-    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
-    assert!(result.is_err());
+    let message = volume_entry_error("{type: cache, container: /root/.gradle}");
+    assert!(message.contains("missing field: name"), "{message}");
 }
 
 #[test]
 fn volume_mount_cache_object_form_forbids_local() {
-    let yaml = r#"
-project_name: demo
-containers:
-  build-env:
-    image: alpine:3.18
-    volumes:
-      - type: cache
-        name: gradle-cache
-        local: /host/path
-        container: /root/.gradle
-tasks:
-  test:
-    run:
-      container: build-env
-      command: echo hi
-"#;
-    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
-    assert!(result.is_err());
+    let message = volume_entry_error(
+        "{type: cache, name: gradle-cache, local: /host/path, container: /root/.gradle}",
+    );
+    assert!(
+        message.contains("Field 'local' is not permitted for cache mounts."),
+        "{message}"
+    );
 }
 
 #[test]
 fn volume_mount_local_object_form_forbids_name() {
-    let yaml = r#"
-project_name: demo
-containers:
-  build-env:
-    image: alpine:3.18
-    volumes:
-      - local: /host/path
-        name: not-allowed-here
-        container: /code
-tasks:
-  test:
-    run:
-      container: build-env
-      command: echo hi
-"#;
-    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
-    assert!(result.is_err());
+    let message =
+        volume_entry_error("{local: /host/path, name: not-allowed-here, container: /code}");
+    assert!(
+        message.contains("Field 'name' is not permitted for local path mounts."),
+        "{message}"
+    );
 }
 
 #[test]
@@ -3126,83 +3154,143 @@ tasks:
 
 #[test]
 fn volume_mount_tmpfs_object_form_requires_container() {
-    let yaml = r#"
-project_name: demo
-containers:
-  build-env:
-    image: alpine:3.18
-    volumes:
-      - type: tmpfs
-tasks:
-  test:
-    run:
-      container: build-env
-      command: echo hi
-"#;
-    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
-    assert!(result.is_err());
+    let message = volume_entry_error("{type: tmpfs}");
+    assert!(message.contains("missing field: container"), "{message}");
 }
 
 #[test]
 fn volume_mount_tmpfs_object_form_forbids_local() {
-    let yaml = r#"
-project_name: demo
-containers:
-  build-env:
-    image: alpine:3.18
-    volumes:
-      - type: tmpfs
-        local: /host/path
-        container: /code/tmp
-tasks:
-  test:
-    run:
-      container: build-env
-      command: echo hi
-"#;
-    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
-    assert!(result.is_err());
+    let message = volume_entry_error("{type: tmpfs, local: /host/path, container: /code/tmp}");
+    assert!(
+        message.contains("Field 'local' is not permitted for tmpfs mounts."),
+        "{message}"
+    );
 }
 
 #[test]
 fn volume_mount_tmpfs_object_form_forbids_name() {
-    let yaml = r#"
-project_name: demo
-containers:
-  build-env:
-    image: alpine:3.18
-    volumes:
-      - type: tmpfs
-        name: not-allowed-here
-        container: /code/tmp
-tasks:
-  test:
-    run:
-      container: build-env
-      command: echo hi
-"#;
-    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
-    assert!(result.is_err());
+    let message = volume_entry_error("{type: tmpfs, name: not-allowed-here, container: /code/tmp}");
+    assert!(
+        message.contains("Field 'name' is not permitted for tmpfs mounts."),
+        "{message}"
+    );
 }
 
 #[test]
 fn volume_mount_rejects_unknown_type() {
-    let yaml = r#"
+    let message = volume_entry_error("{type: bogus, container: /code/tmp}");
+    assert!(
+        message.contains(
+            "Unknown volume mount type 'bogus'. It must be 'local', 'cache', or 'tmpfs'."
+        ),
+        "{message}"
+    );
+}
+
+#[test]
+fn volume_mount_local_object_form_requires_local() {
+    let message = volume_entry_error("{container: /code}");
+    assert!(message.contains("missing field: local"), "{message}");
+}
+
+#[test]
+fn volume_mount_parses_local_object_form_with_options() {
+    let config = parse(
+        r#"
 project_name: demo
 containers:
   build-env:
     image: alpine:3.18
     volumes:
-      - type: bogus
-        container: /code/tmp
-tasks:
-  test:
-    run:
-      container: build-env
-      command: echo hi
-"#;
-    let result: std::result::Result<Config, _> = crate::yaml::from_str(yaml);
-    assert!(result.is_err());
+      - local: /host/path
+        container: /code
+        options: ro
+      - type: local
+        local: /host/path
+        container: /code
+        options: ro
+tasks: {}
+"#,
+    );
+
+    let mount = VolumeMount::Local(LocalVolumeMount {
+        local: "/host/path".to_string(),
+        container: "/code".to_string(),
+        options: Some("ro".to_string()),
+        compact: false,
+    });
+    assert_eq!(
+        config.containers["build-env"].volumes,
+        Some(vec![mount.clone(), mount])
+    );
+}
+
+#[test]
+fn volume_mount_object_form_reports_a_missing_container_before_its_type_rules() {
+    // Ratect's own order, a recorded divergence ("Load errors"): don't fix it towards Batect.
+    for entry in ["{type: cache}", "{type: blah}"] {
+        let message = volume_entry_error(entry);
+        assert!(
+            message.contains("missing field: container"),
+            "{entry}: {message}"
+        );
+    }
+}
+
+#[test]
+fn volume_mount_local_object_form_reports_name_before_a_missing_local() {
+    // Ratect's own order, a recorded divergence ("Load errors"): don't fix it towards Batect.
+    let message = volume_entry_error("{name: n, container: /code}");
+    assert!(
+        message.contains("Field 'name' is not permitted for local path mounts."),
+        "{message}"
+    );
+}
+
+#[test]
+fn volume_mount_cache_object_form_reports_local_before_a_missing_name() {
+    // Ratect's own order, a recorded divergence ("Load errors"): don't fix it towards Batect.
+    let message = volume_entry_error("{type: cache, local: /host/path, container: /code}");
+    assert!(
+        message.contains("Field 'local' is not permitted for cache mounts."),
+        "{message}"
+    );
+}
+
+#[test]
+fn volume_mount_tmpfs_object_form_reports_local_before_name() {
+    // Ratect's own order, a recorded divergence ("Load errors"): don't fix it towards Batect.
+    let message = volume_entry_error("{type: tmpfs, local: /host/path, name: n, container: /code}");
+    assert!(
+        message.contains("Field 'local' is not permitted for tmpfs mounts."),
+        "{message}"
+    );
+}
+
+#[test]
+fn volume_mount_object_form_reports_an_unknown_field_before_an_unknown_type() {
+    // Ratect's own order, a recorded divergence ("Load errors"): don't fix it towards Batect.
+    let message = volume_entry_error("{type: blah, container: /code, thing: z}");
+    assert!(message.contains("unknown field: thing"), "{message}");
+}
+
+#[test]
+fn volume_mount_object_form_rejects_an_unknown_field() {
+    let message = volume_entry_error("{local: /host/path, container: /code, thing: z}");
+    assert!(message.contains("unknown field: thing"), "{message}");
+}
+
+#[test]
+fn volume_mount_rejects_an_entry_that_is_neither_string_nor_object() {
+    let expected = "a volume mount string ('local_path:container_path[:options]') or an object \
+                    with 'local'/'container'/'options'/'name'/'type' fields";
+    for (entry, found) in [("[a, b]", "sequence"), ("5", "integer `5`")] {
+        let message = volume_entry_error(entry);
+        assert!(
+            message.contains(&format!("invalid type: {found}, expected {expected}")),
+            "{entry}: {message}"
+        );
+    }
 }
 
 #[test]
@@ -4825,7 +4913,10 @@ containers:
 tasks: {}
 "#,
     );
-    assert!(result.is_err());
+    assert!(format!("{:#}", result.unwrap_err()).contains(
+        "Port mapping definition is invalid. The local port range has 3 ports and the \
+             container port range has 2 ports, but the ranges must be the same size."
+    ));
 }
 
 #[test]
@@ -4842,7 +4933,28 @@ containers:
 tasks: {}
 "#,
     );
-    assert!(result.is_err());
+    assert!(format!("{:#}", result.unwrap_err()).contains(
+        "Port mapping definition is invalid. The local port range has 3 ports and the \
+             container port range has 2 ports, but the ranges must be the same size."
+    ));
+}
+
+#[test]
+fn a_mismatched_port_range_size_of_one_is_a_single_port() {
+    for (value, local, container) in [
+        ("10:20-23", "1 port", "4 ports"),
+        ("10-13:20", "4 ports", "1 port"),
+    ] {
+        let message = PortMapping::parse_string(value).unwrap_err().to_string();
+        assert_eq!(
+            message,
+            format!(
+                "Port mapping definition is invalid. The local port range has {local} and the \
+                 container port range has {container}, but the ranges must be the same size."
+            ),
+            "{value}"
+        );
+    }
 }
 
 #[test]
@@ -5088,17 +5200,27 @@ fn port_range_parses_a_range() {
 
 #[test]
 fn port_range_rejects_zero() {
-    assert!(PortRange::parse("0").is_err());
+    assert_eq!(
+        PortRange::parse("0").unwrap_err().to_string(),
+        "Port range '0' is invalid. Ports must be positive integers."
+    );
 }
 
 #[test]
 fn port_range_rejects_descending_bounds() {
-    assert!(PortRange::parse("8002-8000").is_err());
+    assert_eq!(
+        PortRange::parse("8002-8000").unwrap_err().to_string(),
+        "Port range '8002-8000' is invalid. Port range limits must be given in ascending order."
+    );
 }
 
 #[test]
 fn port_range_rejects_non_numeric_input() {
-    assert!(PortRange::parse("abc").is_err());
+    assert_eq!(
+        PortRange::parse("abc").unwrap_err().to_string(),
+        "Port range 'abc' is invalid. It must be in the form 'port' or 'from-to' and each port \
+         must be a positive integer."
+    );
 }
 
 #[test]
@@ -5122,22 +5244,146 @@ fn port_mapping_expand_zips_a_range_by_position() {
 
 #[test]
 fn port_mapping_parse_string_rejects_an_empty_definition() {
-    assert!(PortMapping::parse_string("")
-        .unwrap_err()
-        .to_string()
-        .contains("cannot be empty"));
+    assert_eq!(
+        PortMapping::parse_string("").unwrap_err().to_string(),
+        "Port mapping definition cannot be empty."
+    );
+}
+
+/// `PortMapping::parse_string`'s own message for `value`.
+fn invalid_port_mapping_message(value: &str) -> String {
+    format!(
+        "Port mapping definition '{value}' is invalid. It must be in the form 'local:container', \
+         'local:container/protocol', 'from-to:from-to' or 'from-to:from-to/protocol' and each \
+         port must be a positive integer."
+    )
 }
 
 #[test]
 fn port_mapping_parse_string_rejects_a_definition_without_a_colon() {
-    assert!(PortMapping::parse_string("8080").is_err());
+    for value in ["8080", "thing"] {
+        assert_eq!(
+            PortMapping::parse_string(value).unwrap_err().to_string(),
+            invalid_port_mapping_message(value)
+        );
+    }
 }
 
 #[test]
 fn port_mapping_parse_string_rejects_an_empty_component() {
-    assert!(PortMapping::parse_string("8080:80/").is_err());
-    assert!(PortMapping::parse_string(":80").is_err());
-    assert!(PortMapping::parse_string("8080:").is_err());
+    for value in [":12", "12:", "1:2/", "/thing"] {
+        assert_eq!(
+            PortMapping::parse_string(value).unwrap_err().to_string(),
+            invalid_port_mapping_message(value),
+        );
+    }
+}
+
+/// A side `PortRange::parse` refuses reports the range's own error, where
+/// Batect rewraps it in the mapping-level message — a wording divergence
+/// recorded under "Load errors" in docs/differences-from-batect.md.
+#[test]
+fn port_mapping_parse_string_reports_a_refused_side_with_its_port_range_error() {
+    for (value, message) in [
+        (
+            "abc123:1000",
+            "Port range 'abc123' is invalid. It must be in the form 'port' or 'from-to' and \
+             each port must be a positive integer.",
+        ),
+        (
+            "1/2:thing",
+            "Port range '1/2' is invalid. It must be in the form 'port' or 'from-to' and each \
+             port must be a positive integer.",
+        ),
+        (
+            "0:12",
+            "Port range '0' is invalid. Ports must be positive integers.",
+        ),
+        (
+            "12:0",
+            "Port range '0' is invalid. Ports must be positive integers.",
+        ),
+        (
+            "5-3:1-3",
+            "Port range '5-3' is invalid. Port range limits must be given in ascending order.",
+        ),
+    ] {
+        assert_eq!(
+            PortMapping::parse_string(value).unwrap_err().to_string(),
+            message,
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn port_mapping_parse_string_keeps_any_protocol_as_written() {
+    assert_eq!(
+        PortMapping::parse_string("123:456/abc").unwrap(),
+        port_mapping((123, 123), (456, 456), "abc")
+    );
+}
+
+#[test]
+fn port_mapping_parse_string_defaults_a_range_mapping_to_tcp() {
+    assert_eq!(
+        PortMapping::parse_string("123-126:456-459").unwrap(),
+        port_mapping((123, 126), (456, 459), "tcp")
+    );
+}
+
+/// Every site a `ports` list appears at — a container's, a task's `run`, and
+/// a dependency's `customise` — reports a refused entry at that entry.
+#[test]
+fn a_refused_port_mapping_is_reported_at_its_own_entry_on_every_site() {
+    let abc123 = "Port range 'abc123' is invalid. It must be in the form 'port' or 'from-to' \
+                  and each port must be a positive integer.";
+    let in_container = |entry: &str| {
+        format!(
+            "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    ports:\n      \
+             - {entry}\ntasks: {{}}\n"
+        )
+    };
+    let in_run = |entry: &str| {
+        format!(
+            "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\ntasks:\n  t:\n    \
+             run:\n      container: app\n      ports:\n        - {entry}\n"
+        )
+    };
+    let in_customise = |entry: &str| {
+        format!(
+            "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n  db:\n    \
+             image: alpine:3.18\ntasks:\n  t:\n    dependencies: [db]\n    customise:\n      \
+             db:\n        ports:\n          - {entry}\n    run:\n      container: app\n"
+        )
+    };
+    for (yaml, at) in [
+        (in_container("'abc123:1000'"), "containers.app.ports[0]"),
+        (
+            in_container("{local: abc123, container: 1000}"),
+            "containers.app.ports[0].local",
+        ),
+        (
+            in_container("{local: 1000, container: abc123}"),
+            "containers.app.ports[0].container",
+        ),
+        (in_run("'abc123:1000'"), "tasks.t.run.ports[0]"),
+        (
+            in_run("{local: abc123, container: 1000}"),
+            "tasks.t.run.ports[0].local",
+        ),
+        (
+            in_run("{local: 1000, container: abc123}"),
+            "tasks.t.run.ports[0].container",
+        ),
+        (
+            in_customise("'abc123:1000'"),
+            "tasks.t.customise.db.ports[0]",
+        ),
+    ] {
+        let message = format!("{:#}", try_parse(&yaml).unwrap_err());
+        assert!(message.contains(&format!("{at}: {abc123}")), "{message}");
+    }
 }
 
 #[test]
@@ -5161,8 +5407,8 @@ tasks: {}
 }
 
 #[test]
-fn parsing_ports_object_form_rejects_a_missing_local_or_container() {
-    for object in ["local: 8080", "container: 80"] {
+fn parsing_ports_object_form_names_a_missing_local_or_container() {
+    for (object, missing) in [("local: 8080", "container"), ("container: 80", "local")] {
         let result = try_parse(&format!(
             r#"
 project_name: demo
@@ -5174,8 +5420,33 @@ containers:
 tasks: {{}}
 "#,
         ));
-        assert!(result.is_err(), "'{object}' alone should be rejected");
+        let message = format!("{:#}", result.unwrap_err());
+        assert!(
+            message.contains(&format!("missing field: {missing}")),
+            "'{object}' alone: {message}"
+        );
     }
+}
+
+#[test]
+fn parses_ports_object_form_range_with_the_default_protocol() {
+    let config = parse(
+        r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    ports:
+      - local: 123-126
+        container: 456-459
+tasks: {}
+"#,
+    );
+
+    assert_eq!(
+        config.containers["build-env"].ports,
+        Some(vec![port_mapping((123, 126), (456, 459), "tcp")])
+    );
 }
 
 #[test]

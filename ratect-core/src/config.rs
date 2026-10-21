@@ -2434,11 +2434,15 @@ pub struct PortMapping {
 impl PortMapping {
     fn new(local: PortRange, container: PortRange, protocol: String) -> Result<Self> {
         if local.size() != container.size() {
+            let ports = |range: PortRange| match range.size() {
+                1 => "1 port".to_string(),
+                size => format!("{size} ports"),
+            };
             anyhow::bail!(
-                "Port mapping definition is invalid. The local port range has {} port(s) and \
-                 the container port range has {} port(s), but the ranges must be the same size.",
-                local.size(),
-                container.size()
+                "Port mapping definition is invalid. The local port range has {} and the \
+                 container port range has {}, but the ranges must be the same size.",
+                ports(local),
+                ports(container)
             );
         }
         Ok(Self {
@@ -2450,8 +2454,12 @@ impl PortMapping {
 
     /// Parses `"local:container"`, `"local:container/protocol"`,
     /// `"from-to:from-to"`, or `"from-to:from-to/protocol"` (protocol
-    /// defaults to `tcp`). Ported from Batect's
-    /// `PortMappingConfigSerializer.deserializeFromString`.
+    /// defaults to `tcp`). Parses as Batect's
+    /// `PortMappingConfigSerializer.deserializeFromString` does, but a side
+    /// [`PortRange::parse`] refuses reports that range's own error, where
+    /// Batect rewraps it in this function's mapping-level message — a
+    /// wording divergence recorded under "Load errors" in
+    /// `docs/differences-from-batect.md`.
     fn parse_string(value: &str) -> Result<Self> {
         let invalid = || {
             anyhow::anyhow!(
