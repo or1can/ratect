@@ -152,7 +152,10 @@ Ratect checks a config when the file loads, and the report is its own:
   '128', ...`, where Batect says `Unexpected null or empty value for
   non-null field.` A null where a mapping of fields is expected is read as
   an empty one, so it reports any field that mapping must have as missing. An
-  unknown field's column is its value's, not its key's.
+  unknown field's column is its value's, not its key's, and so is that of a
+  [task](ratect-compat-config-reference.md#task-names) or [config
+  variable](ratect-compat-config-reference.md#config-variable-names) name
+  Batect refuses — though the message for one is Batect's, verbatim.
 - **The full cause chain is printed**: `Error: <message>`, then a `Caused by:`
   list when there is a cause, where Batect prints one message. A parse error's
   own reason is in that list, under `Failed to parse config file "<path>"`. The

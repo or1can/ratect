@@ -43,6 +43,12 @@ only, and names the images and cache volumes the project creates — see
 `ratect.toml`; point it at a differently-named file, or a `batect.yml`, with
 `-f`.
 
+A task's or config variable's name follows the same rules as in a `batect.yml`
+— see [Task names](ratect-compat-config-reference.md#task-names) and [Config
+variable names](ratect-compat-config-reference.md#config-variable-names) — and
+the error for one that breaks them gives the line and column of the name itself
+in a `.toml` file, and of the entry's value in an included `.yml` one.
+
 This closely mirrors [`examples/rust/ratect.toml`](https://github.com/or1can/ratect/blob/main/examples/rust/ratect.toml)'s
 own real `build-env` container and `build` task — same image, same command, same
 task `description`/`group` — with an `environment` entry added here purely to

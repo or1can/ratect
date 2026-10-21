@@ -2974,6 +2974,121 @@ impl<'de> Deserialize<'de> for IncludeEntry {
     }
 }
 
+/// A map key with rules of its own, checked as the key is read — as
+/// Batect's `NamedObjectMap.readSingle` does — so the parser locates a
+/// refused name in its file (#392): at the key in a TOML file, at the
+/// entry's value in a YAML one, where Batect gives the key. The same rules
+/// in both formats: a task name reaches the command line and prerequisite
+/// wildcards, and a config variable's name has to be referable from an
+/// expression.
+trait CheckedName: Sized {
+    /// `Ok` if `name` is allowed, else Batect's own message refusing it.
+    fn check(name: &str) -> std::result::Result<(), String>;
+}
+
+/// A task's name: Batect's `TaskMap` rule and message. Ruling out `*` is
+/// also what keeps a prerequisite's wildcard from ever meaning a task's
+/// literal name.
+struct TaskName;
+
+impl CheckedName for TaskName {
+    fn check(name: &str) -> std::result::Result<(), String> {
+        let edge = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric());
+        if edge(name.chars().next())
+            && edge(name.chars().last())
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'))
+        {
+            return Ok(());
+        }
+        Err(format!(
+            "Invalid task name '{name}'. Task names must contain only letters, digits, colons, \
+             dashes, periods and underscores, and must start and end with a letter or digit."
+        ))
+    }
+}
+
+/// A config variable's name: Batect's `ConfigVariableMap` rule and message.
+/// The `batect` prefix is reserved, ignoring case, which is what refuses
+/// declaring the built-in `batect.project_directory`.
+struct ConfigVariableName;
+
+impl CheckedName for ConfigVariableName {
+    fn check(name: &str) -> std::result::Result<(), String> {
+        let reserved = name
+            .as_bytes()
+            .get(..6)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"batect"));
+        if !reserved
+            && name.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        {
+            return Ok(());
+        }
+        Err(format!(
+            "Invalid config variable name '{name}'. Config variable names must start with a \
+             letter, contain only letters, digits, dashes, periods and underscores, and must \
+             not start with 'batect'."
+        ))
+    }
+}
+
+/// One key of a map whose keys `N` checks, refused as it is read.
+struct NamedKey<N>(String, std::marker::PhantomData<N>);
+
+impl<N> PartialEq for NamedKey<N> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<N> Eq for NamedKey<N> {}
+
+impl<N> std::hash::Hash for NamedKey<N> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl<'de, N: CheckedName> Deserialize<'de> for NamedKey<N> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        N::check(&name).map_err(serde::de::Error::custom)?;
+        Ok(NamedKey(name, std::marker::PhantomData))
+    }
+}
+
+/// `serde` `deserialize_with` for a map whose keys `N` checks.
+fn deserialize_named<'de, N: CheckedName, V: Deserialize<'de>, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<IndexMap<String, V>, D::Error> {
+    Ok(unwrap_names(IndexMap::<NamedKey<N>, V>::deserialize(
+        deserializer,
+    )?))
+}
+
+/// A map read with checked keys, with plain ones.
+fn unwrap_names<N, V>(map: IndexMap<NamedKey<N>, V>) -> IndexMap<String, V> {
+    map.into_iter().map(|(key, value)| (key.0, value)).collect()
+}
+
+/// [`deserialize_named`] for an optional map.
+fn deserialize_optional_named<
+    'de,
+    N: CheckedName,
+    V: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+>(
+    deserializer: D,
+) -> std::result::Result<Option<IndexMap<String, V>>, D::Error> {
+    Ok(Option::<IndexMap<NamedKey<N>, V>>::deserialize(deserializer)?.map(unwrap_names))
+}
+
 /// The repository an include entry names, or `None` for a local file include.
 fn include_repo(include: &IncludeEntry) -> Option<&str> {
     match include {
@@ -3006,10 +3121,29 @@ pub(crate) struct ConfigFile {
     #[serde(default)]
     pub(crate) containers: IndexMap<String, Container>,
     /// The tasks this project defines, keyed by the name used to run them.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_named::<TaskName, _, _>")]
+    // `TaskName`'s rule, stated for an editor.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("propertyNames" = {
+            "pattern": "^[a-zA-Z0-9]([a-zA-Z0-9._:-]*[a-zA-Z0-9])*$",
+        }))
+    )]
     pub(crate) tasks: IndexMap<String, Task>,
     /// Variables tasks and containers can refer to as `<name` or
     /// `<{name}`, overridable per-invocation with `--config-var`.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_named::<ConfigVariableName, _, _>"
+    )]
+    // `ConfigVariableName`'s rule, stated for an editor.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("propertyNames" = {
+            "pattern": "^[a-zA-Z][a-zA-Z0-9._-]*$",
+            "not": { "pattern": "^[bB][aA][tT][eE][cC][tT]" },
+        }))
+    )]
     pub(crate) config_variables: Option<IndexMap<String, ConfigVariable>>,
     /// Other configuration files to merge into this one — local files
     /// (relative to this file's own directory) or Git bundles.
@@ -4031,17 +4165,6 @@ impl Config {
 /// them, so of several offenders the first declared is reported
 /// (decisions/0014).
 fn check_values(config: &Config, provenance: &Provenance, project_directory: &Path) -> Result<()> {
-    if config
-        .config_variables
-        .as_ref()
-        .is_some_and(|vars| vars.contains_key(PROJECT_DIRECTORY_VAR))
-    {
-        anyhow::bail!(
-            "'{PROJECT_DIRECTORY_VAR}' is a built-in config variable and can't be declared \
-             in 'config_variables'"
-        );
-    }
-
     for (container_name, container) in &config.containers {
         let anchor = provenance.anchor(container_name, project_directory);
         // One attribution point for the whole block, as in
@@ -4262,7 +4385,7 @@ fn config_variable_values(
     }
     // Batect's one built-in config variable: the absolute path of the
     // directory containing the config file. Not user-declarable
-    // (`check_values` refuses it) or overridable via --config-var — the
+    // (its `batect` prefix is reserved) or overridable via --config-var — the
     // guard above already stops that, since only *declared* names can be
     // overridden.
     config_vars.insert(

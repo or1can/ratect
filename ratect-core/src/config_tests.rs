@@ -11941,28 +11941,6 @@ fn evaluate_cleans_project_directory_var_when_base_path_is_empty() {
 }
 
 #[test]
-fn load_errors_if_project_directory_is_declared_in_config_variables() {
-    let mut config_variables = IndexMap::new();
-    config_variables.insert(
-        "batect.project_directory".to_string(),
-        ConfigVariable {
-            default: Some("/somewhere".to_string()),
-            description: None,
-        },
-    );
-    let config = Config {
-        project_name: "demo".to_string(),
-        containers: IndexMap::new(),
-        tasks: IndexMap::new(),
-        config_variables: Some(config_variables),
-        forbid_telemetry: None,
-    };
-
-    let result = config.check_with(Path::new("/base"), &HashMap::new());
-    assert!(result.is_err());
-}
-
-#[test]
 fn evaluate_errors_if_project_directory_is_given_as_a_cli_override() {
     let mut config = Config {
         project_name: "demo".to_string(),
@@ -13838,4 +13816,234 @@ async fn a_loaded_project_lists_the_toml_files_it_read() {
     assert!(first.ends_with("extra.toml\""), "{first}");
     assert!(second.ends_with("last.toml\""), "{second}");
     assert!(yaml_alone.toml_files().is_empty());
+}
+
+/// Batect's own `TaskMapSpec` invalid names (#392).
+const INVALID_TASK_NAMES: &[&str] = &[
+    "", ".", "-", "_", ":", ".a", "-a", "_a", ":a", "a.", "a-", "a_", "a:", "a!a", "a\\a",
+];
+
+/// Batect's `TaskMap` message, verbatim.
+fn invalid_task_name_message(name: &str) -> String {
+    format!(
+        "Invalid task name '{name}'. Task names must contain only letters, digits, colons, \
+         dashes, periods and underscores, and must start and end with a letter or digit."
+    )
+}
+
+/// A project declaring one task, `name`, as a `batect.yml` and a `ratect.toml`.
+/// Single-quoted in both, so a `\` is literal.
+fn task_named(name: &str) -> (String, String) {
+    (
+        format!(
+            "project_name: demo\ncontainers:\n  c:\n    image: alpine\ntasks:\n  '{name}':\n    \
+             run:\n      container: c\n"
+        ),
+        format!(
+            "project_name = \"demo\"\n\n[containers.c]\nimage = \"alpine\"\n\n\
+             [tasks.'{name}']\nrun = {{ container = \"c\" }}\n"
+        ),
+    )
+}
+
+/// #392: a task name Batect refuses is refused in either format, with
+/// Batect's message.
+#[tokio::test]
+async fn a_task_name_batect_refuses_fails_the_load_in_either_format() {
+    for name in INVALID_TASK_NAMES {
+        let (yaml, toml) = task_named(name);
+        let expected = invalid_task_name_message(name);
+        for (format, loaded) in [
+            ("batect.yml", load_compat_yaml(&yaml).await),
+            ("ratect.toml", load_native_toml(&toml).await),
+        ] {
+            let error = format!(
+                "{:#}",
+                loaded
+                    .err()
+                    .unwrap_or_else(|| panic!("{format}: '{name}' loaded"))
+            );
+            assert!(error.contains(&expected), "{format}: {error}");
+        }
+    }
+}
+
+/// Batect's own `ConfigVariableMapSpec` invalid names (#392), the reserved
+/// `batect` prefix among them — which is also what refuses declaring the
+/// built-in `batect.project_directory`.
+const INVALID_CONFIG_VARIABLE_NAMES: &[&str] = &[
+    "",
+    ".",
+    "-",
+    "1",
+    "_",
+    "batect",
+    "batecta",
+    "batect.blah",
+    "BATECT",
+    "BATECTa",
+    "BATECT.blah",
+    ".a",
+    "-a",
+    "1a",
+    "_a",
+    "a\\a",
+    "batect.project_directory",
+];
+
+/// Batect's `ConfigVariableMap` message, verbatim.
+fn invalid_config_variable_name_message(name: &str) -> String {
+    format!(
+        "Invalid config variable name '{name}'. Config variable names must start with a \
+         letter, contain only letters, digits, dashes, periods and underscores, and must \
+         not start with 'batect'."
+    )
+}
+
+/// A project declaring one config variable, `name`, as a `batect.yml` and a
+/// `ratect.toml`.
+fn config_variable_named(name: &str) -> (String, String) {
+    (
+        format!("project_name: demo\nconfig_variables:\n  '{name}': {{}}\n"),
+        format!("project_name = \"demo\"\n\n[config_variables.'{name}']\n"),
+    )
+}
+
+/// #392: a config variable name Batect refuses is refused in either format,
+/// with Batect's message.
+#[tokio::test]
+async fn a_config_variable_name_batect_refuses_fails_the_load_in_either_format() {
+    for name in INVALID_CONFIG_VARIABLE_NAMES {
+        let (yaml, toml) = config_variable_named(name);
+        let expected = invalid_config_variable_name_message(name);
+        for (format, loaded) in [
+            ("batect.yml", load_compat_yaml(&yaml).await),
+            ("ratect.toml", load_native_toml(&toml).await),
+        ] {
+            let error = format!(
+                "{:#}",
+                loaded
+                    .err()
+                    .unwrap_or_else(|| panic!("{format}: '{name}' loaded"))
+            );
+            assert!(error.contains(&expected), "{format}: {error}");
+        }
+    }
+}
+
+/// #392: the names Batect's two specs accept still load, in either format.
+#[tokio::test]
+async fn task_and_config_variable_names_batect_accepts_still_load() {
+    for name in ["a", "A", "1", "a.a", "a-a", "a1", "1a", "a_a", "a:a"] {
+        let (yaml, toml) = task_named(name);
+        load_compat_yaml(&yaml)
+            .await
+            .unwrap_or_else(|e| panic!("batect.yml: task '{name}': {e:#}"));
+        load_native_toml(&toml)
+            .await
+            .unwrap_or_else(|e| panic!("ratect.toml: task '{name}': {e:#}"));
+    }
+    for name in ["a", "A", "a.a", "a-a", "a1", "a_a"] {
+        let (yaml, toml) = config_variable_named(name);
+        load_compat_yaml(&yaml)
+            .await
+            .unwrap_or_else(|e| panic!("batect.yml: config variable '{name}': {e:#}"));
+        load_native_toml(&toml)
+            .await
+            .unwrap_or_else(|e| panic!("ratect.toml: config variable '{name}': {e:#}"));
+    }
+}
+
+/// #392: a name is checked in an included file too, in either format.
+#[tokio::test]
+async fn a_name_batect_refuses_in_an_included_file_fails_the_load() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ninclude: [1.yml]\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("1.yml"), "config_variables:\n  1a: {}\n").unwrap();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "project_name = \"demo\"\ninclude = [\"1.toml\"]\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("1.toml"), "[tasks.'a!a']\n").unwrap();
+    let yaml = load_project(&dir.join("batect.yml")).await;
+    let toml = load_project_native(&dir.join("ratect.toml")).await;
+    std::fs::remove_dir_all(&dir).ok();
+
+    let yaml = format!("{:#}", yaml.expect_err("batect.yml loaded"));
+    assert!(
+        yaml.contains("1.yml") && yaml.contains("Invalid config variable name '1a'."),
+        "{yaml}"
+    );
+    let toml = format!("{:#}", toml.expect_err("ratect.toml loaded"));
+    assert!(
+        toml.contains("1.toml") && toml.contains("Invalid task name 'a!a'."),
+        "{toml}"
+    );
+}
+
+/// #392: a refused name in a `batect.yml` is located like any other parse
+/// error. As for an unknown field (#415), the line and column are the
+/// entry's value's — line 5, column 5 here, where Batect gives the key's,
+/// line 4, column 3 — and the path names the key.
+#[test]
+fn a_refused_name_in_a_batect_yml_is_located_at_its_entrys_value() {
+    let message = yaml_config_file_error(
+        "project_name: demo\n\
+         tasks:\n\
+         \x20 ok: {}\n\
+         \x20 'a*':\n\
+         \x20   description: x\n",
+    );
+    assert!(
+        message.contains("line 5, column 5")
+            && message.contains("tasks.a*: Invalid task name 'a*'."),
+        "{message}"
+    );
+}
+
+/// #392: in a `ratect.toml`, `toml` locates a refused name at the key itself.
+#[test]
+fn a_refused_name_in_a_ratect_toml_is_located_at_its_key() {
+    let message = toml::from_str::<ConfigFile>(
+        "project_name = \"demo\"\n\n[tasks.ok]\n\n[config_variables.batect_x]\n",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        message.contains("line 5, column 19")
+            && message.contains("Invalid config variable name 'batect_x'."),
+        "{message}"
+    );
+}
+
+/// #392: a native project's included `.yml` is checked too, and located as
+/// any YAML file's name is: at the entry's value.
+#[tokio::test]
+async fn a_refused_name_in_a_native_projects_yaml_include_is_located_at_its_value() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "project_name = \"demo\"\ninclude = [\"extra.yml\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("extra.yml"),
+        "tasks:\n  'a*':\n    description: x\n",
+    )
+    .unwrap();
+    let error = load_project_native(&dir.join("ratect.toml")).await;
+    std::fs::remove_dir_all(&dir).ok();
+
+    let error = format!("{:#}", error.expect_err("ratect.toml loaded"));
+    assert!(
+        error.contains("extra.yml")
+            && error.contains("line 3, column 5")
+            && error.contains("tasks.a*: Invalid task name 'a*'."),
+        "{error}"
+    );
 }

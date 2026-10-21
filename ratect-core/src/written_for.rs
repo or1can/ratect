@@ -81,6 +81,13 @@ pub const BREAKING_CHANGES: &[BreakingChange] = &[
                   ('$$', 'a < b', '${X:default}') fails the load, and an unbraced name ends at \
                   '.' or '-' (write '<{batect.project_directory}')",
     },
+    BreakingChange {
+        version: "0.12.0",
+        summary: "a task or config variable name Batect refuses fails the load: a task name \
+                  is letters, digits, ':', '-', '.' and '_', starting and ending with a letter \
+                  or digit; a config variable name is letters, digits, '-', '.' and '_', \
+                  starting with a letter and not with 'batect'",
+    },
 ];
 
 /// A `major.minor.patch` version, optionally followed by a `-pre-release`
