@@ -54,8 +54,8 @@
 //! still a starting point to review.
 
 use crate::config::{
-    absolute_path, ConfigFile, ConfigVariable, Container, IncludeEntry, LoadedConfig, LoadedFile,
-    RunAsCurrentUser, Task, VolumeMount,
+    absolute_path, local_include_target, ConfigFile, ConfigVariable, Container, IncludeEntry,
+    LoadedConfig, LoadedFile, RunAsCurrentUser, Task, VolumeMount,
 };
 use crate::diagnostics::{conversion_checks, ConversionCheck, ConversionCheckKind};
 use crate::include_trust::BundleId;
@@ -335,7 +335,7 @@ fn convert_include(
     let declaring_dir = declaring.parent().unwrap_or(Path::new(""));
     match entry {
         IncludeEntry::File { path } => {
-            let resolved = absolute_path(&declaring_dir.join(path))?;
+            let resolved = absolute_path(&local_include_target(declaring_dir, path)?)?;
             let target = target_of.get(resolved.as_path()).with_context(|| {
                 format!(
                     "the load didn't reach '{}' from '{}' — this is a bug; please report it",
@@ -438,9 +438,10 @@ fn bundle_declares_git_includes(
             match nested {
                 IncludeEntry::Git { .. } => return Ok(true),
                 IncludeEntry::File { path } => {
-                    queue.push(absolute_path(
-                        &file_path.parent().unwrap_or(Path::new("")).join(path),
-                    )?);
+                    queue.push(absolute_path(&local_include_target(
+                        file_path.parent().unwrap_or(Path::new("")),
+                        path,
+                    )?)?);
                 }
             }
         }

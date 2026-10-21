@@ -3745,43 +3745,25 @@ pub(crate) fn infer_project_name(root_path: &Path) -> Result<String> {
     Ok(name)
 }
 
-/// Resolves an include entry to its actual file. A single candidate — a local
-/// file, or a Git bundle with an explicit `path` — keeps the precise
-/// exists/not-a-file messages the loop has always given. Multiple candidates —
-/// a pathless Git bundle probing [`ConfigFormat::bundle_candidates`] — are tried in
+/// Resolves a Git include to its file within the clone at `base_dir`. A
+/// single candidate — an explicit `path` — keeps the precise
+/// exists/not-a-file messages of [`include_file_at`]. Multiple candidates —
+/// a pathless bundle probing [`ConfigFormat::bundle_candidates`] — are tried in
 /// order, and the first that exists wins, since a bundle may ship only one of
 /// them. Each candidate's *lexical* containment within a Git boundary is
 /// checked before it's touched; the caller re-checks the chosen one
 /// canonically.
 ///
-/// A candidate holding a NUL is refused before any of that, as Batect does —
-/// otherwise it reads as a file that doesn't exist (#365).
+/// A candidate is taken as written, `~` included: Batect's Git include `path`
+/// is a plain string its `PathResolver` never sees. A local include goes
+/// through [`resolve_file_include`] instead.
 fn resolve_include_target(
     base_dir: &Path,
     candidates: &[String],
     boundary: Option<&Boundary>,
 ) -> Result<PathBuf> {
-    if let Some(invalid) = candidates.iter().find(|c| c.contains('\0')) {
-        anyhow::bail!("Include path '{}' is not a valid path.", printable(invalid));
-    }
     if let [only] = candidates {
-        let resolved = absolute_path(&base_dir.join(only))?;
-        if let Some(boundary) = boundary {
-            boundary.check_contains(&resolved)?;
-        }
-        if !resolved.is_file() {
-            // A bundle file is named as written, and where that landed
-            // within the bundle — never by its clone-cache path.
-            let named = match boundary {
-                Some(boundary) => format!("'{only}' ({})", boundary.describe(&resolved)),
-                None => format!("'{}'", resolved.display()),
-            };
-            if resolved.exists() {
-                anyhow::bail!("Included file {named} is not a file.");
-            }
-            anyhow::bail!("Included file {named} does not exist.");
-        }
-        return Ok(resolved);
+        return include_file_at(&base_dir.join(only), only, boundary);
     }
 
     for candidate in candidates {
@@ -3797,6 +3779,62 @@ fn resolve_include_target(
         "No bundle file found in the Git include (looked for {}).",
         candidates.join(", ")
     );
+}
+
+/// Resolves a local (`type: file`) include's `path` to its file: against
+/// `base_dir`, the declaring file's directory, unless its first component is
+/// `~`, which means the home directory ([`expand_home_directory`]) — Batect
+/// resolves this path through the same `PathResolver` as a volume's (#386).
+/// Inside a Git bundle the expanded path lies outside the clone, so
+/// `boundary` refuses it.
+fn resolve_file_include(
+    base_dir: &Path,
+    path: &str,
+    boundary: Option<&Boundary>,
+) -> Result<PathBuf> {
+    include_file_at(&local_include_target(base_dir, path)?, path, boundary)
+}
+
+/// Where a local include's `path` points, before anything checks it — the
+/// one rule [`resolve_file_include`], the completion walk and
+/// `crate::convert` share, so neither of the others can look for a file
+/// somewhere the loader didn't.
+pub(crate) fn local_include_target(base_dir: &Path, path: &str) -> Result<PathBuf> {
+    Ok(expand_home_directory(path)?.unwrap_or_else(|| base_dir.join(path)))
+}
+
+/// Checks that `target`, an include written as `as_written`, is a file the
+/// include may read, and returns it absolute and cleaned. A path holding a
+/// NUL is refused first, as Batect does — otherwise it reads as a file that
+/// doesn't exist (#365).
+fn include_file_at(
+    target: &Path,
+    as_written: &str,
+    boundary: Option<&Boundary>,
+) -> Result<PathBuf> {
+    if as_written.contains('\0') {
+        anyhow::bail!(
+            "Include path '{}' is not a valid path.",
+            printable(as_written)
+        );
+    }
+    let resolved = absolute_path(target)?;
+    if let Some(boundary) = boundary {
+        boundary.check_contains(&resolved)?;
+    }
+    if !resolved.is_file() {
+        // A bundle file is named as written, and where that landed
+        // within the bundle — never by its clone-cache path.
+        let named = match boundary {
+            Some(boundary) => format!("'{as_written}' ({})", boundary.describe(&resolved)),
+            None => format!("'{}'", resolved.display()),
+        };
+        if resolved.exists() {
+            anyhow::bail!("Included file {named} is not a file.");
+        }
+        anyhow::bail!("Included file {named} does not exist.");
+    }
+    Ok(resolved)
 }
 
 /// The result of [`Config::load_from_file`]: the merged, unevaluated
@@ -4029,8 +4067,11 @@ impl Config {
         }];
 
         while let Some((containing_dir, boundary, include)) = queue.pop_front() {
-            let (base_dir, candidates, boundary) = match &include {
-                IncludeEntry::File { path } => (containing_dir, vec![path.clone()], boundary),
+            let (resolved, boundary) = match &include {
+                IncludeEntry::File { path } => (
+                    resolve_file_include(&containing_dir, path, boundary.as_ref())?,
+                    boundary,
+                ),
                 IncludeEntry::Git {
                     repo,
                     git_ref,
@@ -4095,10 +4136,12 @@ impl Config {
                             asked,
                         ),
                     };
-                    (repo_dir, candidates, Some(boundary))
+                    (
+                        resolve_include_target(&repo_dir, &candidates, Some(&boundary))?,
+                        Some(boundary),
+                    )
                 }
             };
-            let resolved = resolve_include_target(&base_dir, &candidates, boundary.as_ref())?;
 
             // The nested-Git question was already answered above (for a
             // `type: git` include) or does not apply at all (a local one) —
@@ -5287,10 +5330,13 @@ fn collect_completion_task_names(
     for include in file.include {
         let bundle = declaring.as_ref().map(|boundary| &boundary.bundle);
         let (next_file, declaring) = match include {
-            // A local include is the declaring file's own tree, so it carries
-            // that file's boundary unchanged — exactly as the loader propagates
-            // one through `type: file`.
-            IncludeEntry::File { path } => (base_dir.join(path), declaring.clone()),
+            // A local include carries the declaring file's boundary unchanged —
+            // exactly as the loader propagates one through `type: file` — so a
+            // `~/...` one in a bundle is declined by containment below.
+            IncludeEntry::File { path } => match local_include_target(base_dir, &path) {
+                Ok(target) => (target, declaring.clone()),
+                Err(_) => continue,
+            },
             IncludeEntry::Git {
                 repo,
                 git_ref,
@@ -5355,7 +5401,7 @@ fn collect_completion_task_names(
             }
         };
         // Absolute and normalized before anything looks at it — what the
-        // loader's `resolve_include_target` does, and what makes `visited`
+        // loader's `include_file_at` does, and what makes `visited`
         // dedup two spellings of one file.
         let Ok(next_file) = absolute_path(&next_file) else {
             continue;

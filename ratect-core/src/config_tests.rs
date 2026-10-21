@@ -6279,6 +6279,35 @@ fn task_names_for_completion_follows_local_includes_without_looping() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Completion resolves a `~/...` local include where the loader does — the
+/// home directory — so a project directory that happens to be named `~` is
+/// not where it reads tasks from.
+#[test]
+fn task_names_for_completion_resolves_a_tilde_include_to_the_home_directory() {
+    let dir = unique_temp_dir();
+    let (name, _) = absent_from_home(&dir, "toml");
+    std::fs::create_dir_all(dir.join("~")).unwrap();
+    std::fs::write(
+        dir.join("~").join(&name),
+        "[tasks.shadow-task]\nrun = { container = \"a\" }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        format!(
+            "project_name = \"demo\"\ninclude = [{{ path = \"~/{name}\" }}]\n\
+             [tasks.build]\nrun = {{ container = \"a\" }}\n"
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        task_names_for_completion(&dir.join("ratect.toml")),
+        vec!["build".to_string()]
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// Completion is confined to a bundle's clone exactly as loading is: a
 /// `<TAB>` must not read a file the bundle picked from anywhere on the host,
 /// which is what pulling only the *grants* half of a boundary through this
@@ -10219,6 +10248,222 @@ include:
     assert!(format!("{:?}", result.unwrap_err()).contains("is not a file"));
 
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A file name no home directory holds — the scratch directory's own unique
+/// name — so the `~` tests below can assert where an include was looked for
+/// without writing anything into the real home. Ratect, like Batect, takes `~`
+/// from the passwd entry, never `$HOME`, so the home directory can't be
+/// steered.
+fn absent_from_home(dir: &Path, extension: &str) -> (String, PathBuf) {
+    let name = format!("{}.{extension}", dir.file_name().unwrap().to_string_lossy());
+    let in_home = crate::user::home_directory().unwrap().join(&name);
+    assert!(!in_home.exists(), "{} must not exist", in_home.display());
+    (name, in_home)
+}
+
+/// A leading `~` in a local include's path means the home directory, in
+/// both the bare-string and `type: file` forms — Batect resolves the path
+/// through the same `PathResolver` it uses for a volume (#386).
+#[tokio::test]
+async fn a_leading_tilde_in_a_local_include_means_the_home_directory() {
+    let dir = unique_temp_dir();
+    let (name, in_home) = absent_from_home(&dir, "yml");
+    for include in [
+        format!("  - ~/{name}"),
+        format!("  - type: file\n    path: ~/{name}"),
+    ] {
+        std::fs::write(
+            dir.join("batect.yml"),
+            format!("project_name: demo\ninclude:\n{include}\n"),
+        )
+        .unwrap();
+
+        let error = format!(
+            "{:#}",
+            Config::load_from_file(&dir.join("batect.yml"))
+                .await
+                .unwrap_err()
+        );
+        assert_eq!(
+            error,
+            format!("Included file '{}' does not exist.", in_home.display()),
+            "{include}"
+        );
+    }
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The same holds for a `ratect.toml` project: the loader is shared.
+#[tokio::test]
+async fn a_leading_tilde_in_a_native_local_include_means_the_home_directory() {
+    let dir = unique_temp_dir();
+    let (name, in_home) = absent_from_home(&dir, "toml");
+    std::fs::write(
+        dir.join("ratect.toml"),
+        format!("project_name = \"demo\"\ninclude = [{{ path = \"~/{name}\" }}]\n"),
+    )
+    .unwrap();
+
+    let error = format!(
+        "{:#}",
+        Config::load_from_file_native(&dir.join("ratect.toml"))
+            .await
+            .unwrap_err()
+    );
+    assert_eq!(
+        error,
+        format!("Included file '{}' does not exist.", in_home.display())
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A directory the project happens to have named `~` is not where a
+/// `~/...` include is looked for, so its file is never loaded in place of
+/// the home directory's.
+#[tokio::test]
+async fn a_project_directory_named_tilde_does_not_shadow_the_home_directory() {
+    let dir = unique_temp_dir();
+    let (name, in_home) = absent_from_home(&dir, "yml");
+    std::fs::create_dir_all(dir.join("~")).unwrap();
+    std::fs::write(
+        dir.join("~").join(&name),
+        "tasks:\n  shadow-task:\n    run:\n      container: a\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("batect.yml"),
+        format!("project_name: demo\ninclude:\n  - ~/{name}\n"),
+    )
+    .unwrap();
+
+    let error = format!(
+        "{:#}",
+        Config::load_from_file(&dir.join("batect.yml"))
+            .await
+            .unwrap_err()
+    );
+    assert_eq!(
+        error,
+        format!("Included file '{}' does not exist.", in_home.display())
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Only a first component that is exactly `~` expands: `~` later in the
+/// path, or as part of a longer first component, is an ordinary name.
+#[tokio::test]
+async fn a_tilde_that_is_not_the_whole_first_component_is_an_ordinary_name() {
+    let dir = unique_temp_dir();
+    std::fs::create_dir_all(dir.join("sub/~")).unwrap();
+    std::fs::write(
+        dir.join("sub/~/nested.yml"),
+        "tasks:\n  nested-task:\n    run:\n      container: a\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("~named.yml"),
+        "tasks:\n  named-task:\n    run:\n      container: a\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  a:\n    image: alpine\n\
+         include:\n  - sub/~/nested.yml\n  - ~named.yml\n",
+    )
+    .unwrap();
+
+    let loaded = Config::load_from_file(&dir.join("batect.yml"))
+        .await
+        .unwrap();
+    assert!(loaded.config.tasks.contains_key("nested-task"));
+    assert!(loaded.config.tasks.contains_key("named-task"));
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A Git include's own `path` is never expanded: Batect's is a plain string
+/// that doesn't pass through its `PathResolver`, so `~/...` names a `~`
+/// directory inside the clone.
+#[tokio::test]
+async fn a_git_includes_own_path_is_not_tilde_expanded() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        r#"
+project_name: demo
+containers:
+  a:
+    image: alpine
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+    path: ~/bundle.yml
+"#,
+    )
+    .unwrap();
+
+    let mut files = HashMap::new();
+    files.insert(
+        "~/bundle.yml".to_string(),
+        "tasks:\n  bundle-task:\n    run:\n      container: a\n".to_string(),
+    );
+    let git = FakeGitClient::new().with_files("https://example.com/bundle.git", "v1.0.0", files);
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+    let loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+        .await
+        .unwrap();
+    assert!(loaded.config.tasks.contains_key("bundle-task"));
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).unwrap();
+}
+
+/// A local `~/...` include declared inside a Git bundle expands like any
+/// other, and so points outside the clone — refused by the bundle's
+/// containment, never read from the home directory.
+#[tokio::test]
+async fn a_tilde_local_include_inside_a_git_bundle_is_refused_by_containment() {
+    let dir = unique_temp_dir();
+    let (name, _) = absent_from_home(&dir, "yml");
+    std::fs::write(
+        dir.join("batect.yml"),
+        r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+"#,
+    )
+    .unwrap();
+
+    let mut files = HashMap::new();
+    files.insert(
+        "batect-bundle.yml".to_string(),
+        format!("include:\n  - ~/{name}\n"),
+    );
+    // A literal `~` directory in the clone holding that name — what the
+    // path would have meant before it expanded.
+    files.insert(format!("~/{name}"), "tasks: {}\n".to_string());
+    let git = FakeGitClient::new().with_files("https://example.com/bundle.git", "v1.0.0", files);
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+    let result = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache).await;
+    assert!(
+        format!("{:#}", result.unwrap_err()).contains("escapes the Git repository"),
+        "a `~` include in a bundle points outside its clone"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).unwrap();
 }
 
 #[tokio::test]
