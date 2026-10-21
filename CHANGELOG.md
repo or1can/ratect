@@ -83,6 +83,7 @@ history, from when it was the only binary.
 - A zero duration written with a `-` (`-0s`, `-0.0ms`) loads as zero, as in Batect.
 - A value starting with `-` that isn't a duration (`-`, `-.`, `-foo`) is refused as not a valid duration, rather than as a negative one.
 - A `health_check` duration longer than about 292 years is sent to Docker as the longest one it accepts, as in Batect, instead of as a negative one that fails container creation.
+- The JSON schemas no longer flag `health_check` durations such as `2.s` and `-0s`, or `shm_size` strings such as `128mb` and `128 m`, that Ratect and Batect accept.
 
 ### Security
 

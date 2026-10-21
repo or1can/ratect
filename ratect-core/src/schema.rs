@@ -15,8 +15,10 @@
 //! The JSON schemas for `batect.yml` ([`config_file_schema`]) and its native
 //! counterpart `ratect.toml` ([`native_config_file_schema`]), for editor
 //! autocompletion/validation — both generated from [`crate::config`]'s own
-//! types (via `schemars`) rather than hand-maintained, so they can't drift
-//! from what Ratect actually accepts. The native one is the compat schema
+//! types (via `schemars`) rather than hand-maintained, so their fields can't
+//! drift from what Ratect actually accepts. The value patterns written by
+//! hand here (durations, sizes) can, so tests check them against the
+//! parser. The native one is the compat schema
 //! transformed for the native format's shape (object-only, plus `extends`);
 //! everything below applies to both.
 //!
@@ -785,16 +787,19 @@ fn strip_intra_doc_links(text: &str) -> String {
 /// schemars-derived path every field but `stop_grace_period` reaches) and
 /// `make_native`'s own hand-added `stop_grace_period` entry (native-only,
 /// so `schemars` never sees it), so the two can't drift apart if the
-/// grammar ever changes.
-const DURATION_PATTERN: &str = r"^\+?(0|([0-9]*\.?[0-9]+(ns|us|µs|μs|ms|s|m|h))+)$";
+/// grammar ever changes. A `-` gets its own alternative, whose numbers are
+/// all zeros: the parser refuses a negative duration unless it's zero.
+/// Spelled without a lookahead, since not every editor's regex engine has
+/// one.
+const DURATION_PATTERN: &str = r"^(\+?(0|(([0-9]+\.?[0-9]*|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+\.?0*|\.0+)(ns|us|µs|μs|ms|s|m|h))+))$";
 
 /// Batect's Go-style duration strings (`health_check`'s `interval`/
 /// `start_period`/`timeout`) — see [`crate::config::parse_duration`], which
-/// is what actually enforces this. The `pattern` here is the same grammar
-/// stated declaratively, so an editor can flag a typo without running
-/// Ratect; it's deliberately no stricter than the parser (a schema that
-/// rejected something Ratect accepts would be worse than one that didn't
-/// check at all).
+/// is what actually enforces this. The `pattern` here is Batect's grammar
+/// stated declaratively, less the non-zero negatives the parser refuses, so
+/// an editor can flag a typo without running Ratect. It's written by hand,
+/// so it can drift from the parser; `schema::tests` checks the two agree
+/// on Batect's own cases.
 pub(crate) fn duration_schema(_: &mut SchemaGenerator) -> Schema {
     json_schema!({
         "type": "string",
@@ -802,23 +807,31 @@ pub(crate) fn duration_schema(_: &mut SchemaGenerator) -> Schema {
         "description": "A duration, in Batect's Go-style format: one or more \
                         <number><unit> components, where a unit is one of ns, us (or µs/μs), \
                         ms, s, m, h — for example \"500ms\", \"2s\", \"1m30s\", \"1.5h\". A \
-                        bare \"0\" is also accepted. Must not be negative.",
+                        bare \"0\" is also accepted. Must not be negative, though a zero may carry a sign \
+                        (\"-0s\").",
         "examples": ["2s", "1m30s", "500ms", "0"],
     })
 }
 
 /// `shm_size`: Batect's own size-string format, or a plain integer number of
 /// bytes — see `config::parse_byte_size`, the actual enforcement (named
-/// rather than linked: it is private to that module, so rustdoc cannot
-/// resolve a path to it from here).
+/// rather than linked: it isn't public, so rustdoc cannot resolve a path
+/// to it from here). The string `pattern` is Batect's `BinarySize`
+/// grammar, its whitespace spelled out as the ASCII set Batect's Java `\s`
+/// means, since an editor's own `\s` is wider. `parse_byte_size` is more
+/// lenient about whitespace: it trims it around the whole string, and
+/// takes any Unicode whitespace before the unit, both of which Batect
+/// refuses, so the schema flags `" 128m "` though Ratect loads it. A count
+/// too large to hold is the other way round: the schema can't see it.
 pub(crate) fn byte_size_schema(_: &mut SchemaGenerator) -> Schema {
     json_schema!({
         "oneOf": [
             {
                 "type": "string",
-                "pattern": "^[0-9]+[bkmgBKMG]?$",
+                "pattern": "^[0-9]+[ \\t\\n\\v\\f\\r]*[kmgKMG]?[bB]?$",
                 "description": "A size, as a number optionally suffixed with a unit: b (bytes, \
-                                the default), k, m or g — for example \"128m\".",
+                                the default), or k, m or g, optionally followed by a b — \
+                                for example \"128m\" or \"128mb\".",
                 "examples": ["128m", "1g", "512k"],
             },
             {

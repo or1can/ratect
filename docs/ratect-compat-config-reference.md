@@ -221,7 +221,7 @@ containers:
 | `capabilities_to_add` | list of strings | no | Linux capabilities to add beyond Docker's own default set (Docker's `--cap-add`), e.g. `NET_ADMIN`. Validated at config-load time against a fixed list based on Batect's own `Capability` enum plus `BPF`/`CHECKPOINT_RESTORE`/`PERFMON` (added to Docker after Batect's last release) — an unknown name is rejected with a clear error. Container level only. No expression support. |
 | `capabilities_to_drop` | list of strings | no | Linux capabilities to drop from Docker's own default set (Docker's `--cap-drop`), e.g. `CHOWN`. Same validation/scope as `capabilities_to_add`. |
 | `privileged` | boolean | no | Runs the container with extended (nearly all host) privileges — Docker's `--privileged`. Defaults to `false`. Container level only. No [expression](#expressions) support. |
-| `shm_size` | string or integer | no | The size of `/dev/shm` — Docker's `--shm-size`. Accepts Batect's own size-string format (`"128"`, `"128b"`, `"128k"`, `"128m"`, `"128g"` — a bare number means bytes) or a plain YAML integer (also bytes), which must not be negative. Defaults to Docker's own default (64 MiB). Container level only. No expression support. |
+| `shm_size` | string or integer | no | The size of `/dev/shm` — Docker's `--shm-size`. Accepts Batect's own size-string format (`"128"`, `"128b"`, `"128k"`, `"128m"`, `"128mb"`, `"128g"` — a bare number means bytes) or a plain YAML integer (also bytes), which must not be negative. Defaults to Docker's own default (64 MiB). Container level only. No expression support. |
 | `devices` | list of strings/objects | no | Host devices to make available inside the container — Docker's `--device` (see [Volume path resolution](#volume-path-resolution) for the similar `volumes` string form; devices use the same `local:container[:options]` shape and object form, but with no path resolution — no [expression](#expressions) support either). `options` (cgroup permissions, e.g. `"rwm"`) defaults to `"rwm"` when omitted, matching the `docker` CLI's own default. Container level only. |
 | `enable_init_process` | boolean | no | Runs Docker's own init process as PID 1 ahead of the actual command (reaping zombie processes, forwarding signals) — Docker's `--init`. Defaults to `false`. Container level only. No [expression](#expressions) support. |
 | `log_driver` | string | no | Docker's logging driver (Docker's `--log-driver`), e.g. `"json-file"`, `"syslog"`, `"none"`. Defaults to leaving Docker's own daemon-configured default alone. Container level only. No [expression](#expressions) support. |
@@ -1059,8 +1059,11 @@ doesn't yet.
 
 The schema describes a single *file*, `include` and all — not the merged result of
 following those includes — so it applies equally to a root `batect.yml` and to any
-file it includes. It's generated from Ratect's own configuration types, so it can't
-drift from what Ratect accepts; the checks it can't express are the cross-field ones
+file it includes. Its fields are generated from Ratect's own configuration types, and
+its patterns for durations and sizes are checked against Ratect's parser, on Batect's
+own cases, by its tests. A `shm_size` with whitespace Batect refuses, such as
+`" 128m "`, loads in Ratect but is flagged by the schema. The checks it can't express
+are the cross-field ones
 (a task needing `run` or `prerequisites`, port ranges on both sides of a mapping
 covering the same number of ports, `customise` naming a container that's actually in
 the task's graph). Those are still reported by Ratect itself, when it loads the file —

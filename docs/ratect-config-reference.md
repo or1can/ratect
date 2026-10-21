@@ -887,7 +887,8 @@ DATABASE_URL = "postgres://db/test"
 
 Ratect ships a JSON schema for the native format,
 [`schema/ratect-config.schema.json`](../schema/ratect-config.schema.json)
-(generated from the config types, so it can't drift). Pointing a TOML-aware
+(its fields generated from the config types, its value patterns checked against
+the parser by tests). Pointing a TOML-aware
 editor extension at it — [taplo](https://taplo.tamasfe.dev) / "Even Better TOML"
 for VS Code, or JetBrains' TOML support — gives field-name autocompletion, hover
 documentation, and a red squiggle under a misspelled or unsupported field. It's

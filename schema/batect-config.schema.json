@@ -351,13 +351,13 @@
           "description": "The size of `/dev/shm`, in bytes — Docker's `--shm-size`. Accepts Batect's own size-string format (`\"128\"`, `\"128b\"`, `\"128k\"`, `\"128m\"`, `\"128g\"` — a bare number means bytes; see `parse_byte_size`) or a non-negative integer (also bytes), already converted to bytes here rather than deferred like `dockerfile`/ `build_target`'s plain strings, since Docker's own API wants a byte count, not a string. `None` inherits Docker's own default (64 MiB). Container level only, matching Batect (no task-level `run` override in either).",
           "oneOf": [
             {
-              "description": "A size, as a number optionally suffixed with a unit: b (bytes, the default), k, m or g — for example \"128m\".",
+              "description": "A size, as a number optionally suffixed with a unit: b (bytes, the default), or k, m or g, optionally followed by a b — for example \"128m\" or \"128mb\".",
               "examples": [
                 "128m",
                 "1g",
                 "512k"
               ],
-              "pattern": "^[0-9]+[bkmgBKMG]?$",
+              "pattern": "^[0-9]+[ \\t\\n\\v\\f\\r]*[kmgKMG]?[bB]?$",
               "type": "string"
             },
             {
@@ -441,7 +441,7 @@
             "500ms",
             "0"
           ],
-          "pattern": "^\\+?(0|([0-9]*\\.?[0-9]+(ns|us|µs|μs|ms|s|m|h))+)$",
+          "pattern": "^(\\+?(0|(([0-9]+\\.?[0-9]*|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+\\.?0*|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
           "type": "string"
         },
         "retries": {
@@ -462,7 +462,7 @@
             "500ms",
             "0"
           ],
-          "pattern": "^\\+?(0|([0-9]*\\.?[0-9]+(ns|us|µs|μs|ms|s|m|h))+)$",
+          "pattern": "^(\\+?(0|(([0-9]+\\.?[0-9]*|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+\\.?0*|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
           "type": "string"
         },
         "timeout": {
@@ -474,7 +474,7 @@
             "500ms",
             "0"
           ],
-          "pattern": "^\\+?(0|([0-9]*\\.?[0-9]+(ns|us|µs|μs|ms|s|m|h))+)$",
+          "pattern": "^(\\+?(0|(([0-9]+\\.?[0-9]*|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+\\.?0*|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
           "type": "string"
         }
       },

@@ -1237,7 +1237,7 @@ impl Serialize for VolumeMount {
 /// the trimming, which Batect doesn't do — it refuses leading whitespace and
 /// whitespace after a unit or `b`. The trim is a divergence kept under ADR
 /// 0013 rule 2, recorded in `docs/differences-from-batect.md`.
-fn parse_byte_size(value: &str) -> std::result::Result<i64, String> {
+pub(crate) fn parse_byte_size(value: &str) -> std::result::Result<i64, String> {
     let invalid = || invalid_size(value);
 
     let lower = value.trim().to_ascii_lowercase();
