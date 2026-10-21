@@ -926,3 +926,150 @@ async fn cleanup_stale_skips_an_unparsable_info_file_and_removes_other_stale_ent
 
     tokio::fs::remove_dir_all(&root).await.ok();
 }
+
+/// Caches `remote`@`v1.0.0` in `root` as last used at `last_used`, returning
+/// its key, working copy and sidecar paths.
+async fn cached_entry_used_at(
+    root: &Path,
+    remote: &str,
+    last_used: u64,
+) -> (String, PathBuf, PathBuf) {
+    let git = FakeGitClient::new().with_files(remote, "v1.0.0", HashMap::new());
+    let cache = GitIncludeCache::for_test(root.to_path_buf(), git, last_used);
+    let working_copy = cache.ensure_cached(remote, "v1.0.0").await.unwrap();
+    let key = cache_key(remote, "v1.0.0");
+    let info_path = root.join(format!("{key}.toml"));
+    (key, working_copy, info_path)
+}
+
+#[tokio::test]
+async fn cleanup_stale_removes_only_the_stale_entries_among_several() {
+    let root = unique_temp_dir();
+    let now = 10_000 + STALE_AFTER.as_secs();
+    let stale = [
+        cached_entry_used_at(&root, "https://example.com/stale-a.git", 1_000).await,
+        cached_entry_used_at(&root, "https://example.com/stale-b.git", 9_999).await,
+    ];
+    // Exactly `STALE_AFTER` old is still fresh: only older than it is stale.
+    let fresh = [
+        cached_entry_used_at(&root, "https://example.com/fresh-a.git", 10_000).await,
+        cached_entry_used_at(&root, "https://example.com/fresh-b.git", now).await,
+    ];
+
+    let sweeper = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), now);
+    sweeper.cleanup_stale().await.unwrap();
+
+    for (_, working_copy, info_path) in &stale {
+        assert!(!working_copy.exists(), "{working_copy:?} should be removed");
+        assert!(!info_path.exists(), "{info_path:?} should be removed");
+    }
+    for (_, working_copy, info_path) in &fresh {
+        assert!(working_copy.exists(), "{working_copy:?} should be kept");
+        assert!(info_path.exists(), "{info_path:?} should be kept");
+    }
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// A held lock is the forced failure: unlike an unwritable directory, it
+/// still fails when the tests run as root. The sweep visits entries in
+/// `read_dir` order, which the test can't choose, so each entry takes a turn as
+/// the failing one: unless that order differs between the two runs, one of
+/// them puts the failure first, which is the order that matters.
+#[tokio::test]
+async fn cleanup_stale_still_removes_other_stale_entries_when_one_removal_fails() {
+    let remotes = ["https://example.com/a.git", "https://example.com/b.git"];
+    for (locked, other) in [(remotes[0], remotes[1]), (remotes[1], remotes[0])] {
+        let root = unique_temp_dir();
+        let (locked_key, locked_copy, locked_info) =
+            cached_entry_used_at(&root, locked, 1_000).await;
+        let (other_key, other_copy, other_info) = cached_entry_used_at(&root, other, 1_000).await;
+        tokio::fs::write(root.join(format!("{locked_key}.lock")), b"")
+            .await
+            .unwrap();
+
+        let now = 1_000 + STALE_AFTER.as_secs() + 1;
+        let mut sweeper = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), now);
+        sweeper.lock_timeout = Duration::from_millis(250);
+        sweeper.cleanup_stale().await.unwrap();
+
+        assert!(locked_copy.exists(), "{locked} should be left in place");
+        assert!(locked_info.exists(), "{locked} should be left in place");
+        assert!(!other_copy.exists(), "{other} should be removed");
+        assert!(!other_info.exists(), "{other} should be removed");
+
+        // The per-entry results the sweep ignores.
+        cached_entry_used_at(&root, other, 1_000).await;
+        assert!(!sweeper.remove_entry(&root, &locked_key).await);
+        assert!(sweeper.remove_entry(&root, &other_key).await);
+
+        tokio::fs::remove_dir_all(&root).await.ok();
+    }
+}
+
+#[tokio::test]
+async fn remove_entry_files_succeeds_when_neither_file_exists() {
+    let root = unique_temp_dir();
+
+    assert!(remove_entry_files(&root.join("absent"), &root.join("absent.toml")).await);
+}
+
+#[tokio::test]
+async fn remove_entry_files_removes_a_sidecar_with_no_working_copy() {
+    let root = unique_temp_dir();
+    tokio::fs::create_dir_all(&root).await.unwrap();
+    let info_path = root.join("orphan.toml");
+    tokio::fs::write(&info_path, b"").await.unwrap();
+
+    assert!(remove_entry_files(&root.join("orphan"), &info_path).await);
+    assert!(!info_path.exists());
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+#[tokio::test]
+async fn a_stray_file_in_the_cache_root_is_neither_listed_nor_swept() {
+    let root = unique_temp_dir();
+    let (_, working_copy, _) =
+        cached_entry_used_at(&root, "https://example.com/repo.git", 1_000).await;
+    let stray = root.join("something-else.txt");
+    tokio::fs::write(&stray, b"not an entry").await.unwrap();
+
+    let now = 1_000 + STALE_AFTER.as_secs() + 1;
+    let sweeper = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), now);
+    let listed = sweeper.list().await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].path, working_copy);
+
+    sweeper.cleanup_stale().await.unwrap();
+    assert!(!working_copy.exists());
+    assert!(stray.exists());
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// An in-progress clone, or a leftover temporary directory, has no sidecar
+/// yet — so it isn't an entry, and the sweep has no business removing it.
+#[tokio::test]
+async fn a_directory_without_a_sidecar_is_neither_listed_nor_swept() {
+    let root = unique_temp_dir();
+    let (_, working_copy, _) =
+        cached_entry_used_at(&root, "https://example.com/repo.git", 1_000).await;
+    let in_progress = root.join(format!(
+        "{}.tmp",
+        cache_key("https://example.com/other.git", "v1.0.0")
+    ));
+    tokio::fs::create_dir_all(&in_progress).await.unwrap();
+
+    let now = 1_000 + STALE_AFTER.as_secs() + 1;
+    let sweeper = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), now);
+    let listed = sweeper.list().await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].path, working_copy);
+
+    sweeper.cleanup_stale().await.unwrap();
+    assert!(!working_copy.exists());
+    assert!(in_progress.exists());
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
