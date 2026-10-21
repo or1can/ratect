@@ -1,7 +1,8 @@
 # Exercises `-- ADDITIONAL_ARGS` forwarding: whatever args are passed after
 # `--` on the command line are appended as literal argv after `echo-args`'s
 # own tokenized `command` — matching Batect's own mechanism exactly, no
-# shell involved.
+# shell involved. `no-command` sets no `command`, so the args replace the
+# image's own default `CMD` (`alpine`'s `/bin/sh`) instead.
 project_name: ratect-additional-args-test
 containers:
   build-env:
@@ -11,3 +12,6 @@ tasks:
     run:
       container: build-env
       command: "echo args:"
+  no-command:
+    run:
+      container: build-env

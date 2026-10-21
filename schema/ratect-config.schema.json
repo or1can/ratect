@@ -193,7 +193,7 @@
           "uniqueItems": true
         },
         "command": {
-          "description": "The command to run inside the container, in place of the image's own default `CMD`. Tokenized into literal argv the same way `entrypoint` is (`docker.rs`'s `tokenize_command_line`) — not an expression, and not run via a shell, matching Batect's own `Command`-typed `command` field exactly. Applies as-is to a dependency/sidecar container; for a task's own container, overridden by the task-level `run.command`, when set — see `TaskRun::command`. Symmetric with `entrypoint` below, and added alongside it in spirit — this field was missed when `entrypoint` and the rest of 0.13.0's container runtime options landed, since `run.command` already covered the task's own container and the gap (no way to set a dependency's own command at all) wasn't noticed until later.",
+          "description": "The command to run inside the container, in place of the image's own default `CMD`. Tokenized into literal argv the same way `entrypoint` is (`docker.rs`'s `tokenize_command_line`) — not an expression, and not run via a shell, matching Batect's own `Command`-typed `command` field. One that can't be tokenized fails the load, as in Batect, even on a container no task uses. Applies as-is to a dependency/sidecar container; for a task's own container, overridden by the task-level `run.command`, when set — see `TaskRun::command`. Symmetric with `entrypoint` below, and added alongside it in spirit — this field was missed when `entrypoint` and the rest of 0.13.0's container runtime options landed, since `run.command` already covered the task's own container and the gap (no way to set a dependency's own command at all) wasn't noticed until later.",
           "type": [
             "string",
             "null"
@@ -289,7 +289,7 @@
           ]
         },
         "entrypoint": {
-          "description": "Overrides the image's own `ENTRYPOINT`. Tokenized into literal argv the same way `command` is (`docker.rs`'s `tokenize_command_line`) — not an expression, and not run via a shell, matching Batect's own `Command`-typed `entrypoint` field exactly. Overridden by the task-level `run.entrypoint`, when set — see `TaskRun::entrypoint`.",
+          "description": "Overrides the image's own `ENTRYPOINT`. Tokenized into literal argv the same way `command` is (`docker.rs`'s `tokenize_command_line`) — not an expression, and not run via a shell, matching Batect's own `Command`-typed `entrypoint` field, and checked when the file loads the same way. Overridden by the task-level `run.entrypoint`, when set — see `TaskRun::entrypoint`.",
           "type": [
             "string",
             "null"

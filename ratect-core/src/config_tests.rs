@@ -16077,3 +16077,273 @@ tasks: {}
         "{message}"
     );
 }
+
+/// #377: a container's `command` that cannot be split into argv fails the
+/// load, as Batect's does, rather than the run that reaches it — even on a
+/// container no task uses.
+#[tokio::test]
+async fn an_unparseable_container_command_fails_the_load() {
+    let message = format!(
+        "{:#}",
+        load_project_in(
+            "p",
+            r#"
+containers:
+  unused:
+    image: alpine:3.18
+    command: "'"
+  app:
+    image: alpine:3.18
+tasks:
+  t:
+    run:
+      container: app
+"#,
+        )
+        .await
+        .unwrap_err()
+    );
+
+    assert!(
+        message.contains("Container 'unused'")
+            && message.contains("has an invalid 'command'")
+            && message.contains("Command `'` is invalid: it contains an unbalanced single quote"),
+        "{message}"
+    );
+}
+
+/// #377: likewise a container's `entrypoint`.
+#[tokio::test]
+async fn an_unparseable_container_entrypoint_fails_the_load() {
+    let message = format!(
+        "{:#}",
+        load_project_in(
+            "p",
+            r#"
+containers:
+  app:
+    image: alpine:3.18
+    entrypoint: 'echo "x'
+tasks:
+  t:
+    run:
+      container: app
+"#,
+        )
+        .await
+        .unwrap_err()
+    );
+
+    assert!(
+        message.contains("Container 'app'")
+            && message.contains("has an invalid 'entrypoint'")
+            && message
+                .contains("Command `echo \"x` is invalid: it contains an unbalanced double quote"),
+        "{message}"
+    );
+}
+
+/// #377: likewise a setup command, which used to fail only once its
+/// container had started and become healthy.
+#[tokio::test]
+async fn an_unparseable_setup_command_fails_the_load() {
+    let message = format!(
+        "{:#}",
+        load_project_in(
+            "p",
+            r#"
+containers:
+  app:
+    image: alpine:3.18
+    setup_commands:
+      - command: echo hi
+      - command: 'a\'
+tasks:
+  t:
+    run:
+      container: app
+"#,
+        )
+        .await
+        .unwrap_err()
+    );
+
+    assert!(
+        message.contains("Container 'app'")
+            && message.contains("has an invalid setup command")
+            && message.contains("Command `a\\` is invalid: it ends with a backslash"),
+        "{message}"
+    );
+}
+
+/// #377: likewise a task's `run.command` and `run.entrypoint`, which used to
+/// fail only after the task's dependencies had started.
+#[tokio::test]
+async fn an_unparseable_task_command_or_entrypoint_fails_the_load() {
+    for (field, value, cause) in [
+        (
+            "command",
+            r#""'""#,
+            "Command `'` is invalid: it contains an unbalanced single quote",
+        ),
+        (
+            "entrypoint",
+            r#""echo 'x""#,
+            "Command `echo 'x` is invalid: it contains an unbalanced single quote",
+        ),
+    ] {
+        let message = format!(
+            "{:#}",
+            load_project_in(
+                "p",
+                &format!(
+                    "
+containers:
+  app:
+    image: alpine:3.18
+tasks:
+  the-task:
+    run:
+      container: app
+      {field}: {value}
+"
+                ),
+            )
+            .await
+            .unwrap_err()
+        );
+
+        assert!(
+            message.contains(&format!("Task 'the-task' has an invalid 'run.{field}'"))
+                && message.contains(cause),
+            "{message}"
+        );
+    }
+}
+
+/// #377: an included file's commands are checked too, as Batect decodes
+/// every file it loads.
+#[tokio::test]
+async fn an_unparseable_command_in_an_included_file_fails_the_load() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: p\ninclude: [more.yml]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("more.yml"),
+        "containers:\n  extra:\n    image: alpine:3.18\n    command: \"'\"\n",
+    )
+    .unwrap();
+    let result = load_project(&dir.join("batect.yml")).await;
+    std::fs::remove_dir_all(&dir).ok();
+
+    let message = format!("{:#}", result.unwrap_err());
+    assert!(
+        message.contains("Container 'extra'") && message.contains("has an invalid 'command'"),
+        "{message}"
+    );
+}
+
+/// #377: the native loader shares the check.
+#[tokio::test]
+async fn an_unparseable_command_fails_a_native_load() {
+    let message = format!(
+        "{:#}",
+        load_native_toml(
+            r#"
+project_name = "p"
+
+[containers.app]
+image = "alpine:3.18"
+
+[tasks.t]
+run = { container = "app", command = "echo 'x" }
+"#,
+        )
+        .await
+        .unwrap_err()
+    );
+
+    assert!(
+        message.contains("Task 't' has an invalid 'run.command'")
+            && message.contains("Command `echo 'x` is invalid"),
+        "{message}"
+    );
+}
+
+/// #377: the command a native `external_health_check` generates for its
+/// companion is one the tokenizer accepts, so a project using either kind
+/// still loads and its companion can still be created.
+#[tokio::test]
+async fn a_generated_external_health_check_command_tokenizes() {
+    let project = load_native_toml(
+        r#"
+project_name = "p"
+
+[containers.api]
+image = "my-org/api:1.0.0"
+[containers.api.external_health_check]
+type = "http"
+port = 8080
+path = "/healthz"
+
+[containers.db]
+image = "postgres:16"
+[containers.db.external_health_check]
+type = "tcp"
+port = 5432
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["api", "db"]
+
+[tasks.t]
+run = { container = "app" }
+"#,
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{e:#}"));
+
+    for checked in ["api", "db"] {
+        let command = project.config.containers[&external_health_check_container_name(checked)]
+            .command
+            .clone()
+            .unwrap();
+        let argv =
+            crate::docker::tokenize_command_line(&command).unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(argv[0], "-c", "{argv:?}");
+        assert_eq!(argv.len(), 2, "{argv:?}");
+    }
+}
+
+/// #417 (Batect's TSF-15): a `customise` entry with nothing in it loads, as
+/// a customisation that overrides nothing.
+#[tokio::test]
+async fn an_empty_customise_entry_loads_as_a_customisation_of_nothing() {
+    let project = load_project_in(
+        "p",
+        "
+containers:
+  app:
+    image: alpine:3.18
+  db:
+    image: postgres:16
+tasks:
+  t:
+    run:
+      container: app
+    dependencies: [db]
+    customise:
+      db: {}
+",
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{e:#}"));
+
+    let customisation = &project.config.tasks["t"].customise.as_ref().unwrap()["db"];
+    assert!(customisation.environment.is_none());
+    assert!(customisation.ports.is_none());
+    assert!(customisation.working_directory.is_none());
+}

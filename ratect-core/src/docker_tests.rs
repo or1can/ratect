@@ -678,6 +678,30 @@ fn build_cmd_with_an_invalid_command_and_no_additional_args_fails() {
     assert!(build_cmd(Some("echo 'unbalanced"), &[]).is_err());
 }
 
+/// #399: with no `command`, additional arguments become the whole `Cmd`, so
+/// the image's own default `CMD` is the one replaced — reported only when
+/// there is one.
+#[test]
+fn replaced_image_cmd_is_the_images_default_cmd_when_args_stand_in_for_it() {
+    let args = vec!["--debug".to_string()];
+    let image_cmd = vec!["--port".to_string(), "80".to_string()];
+
+    assert_eq!(
+        replaced_image_cmd(None, &args, Some(&image_cmd)),
+        Some(image_cmd.as_slice())
+    );
+    // No arguments: the image's `CMD` runs.
+    assert_eq!(replaced_image_cmd(None, &[], Some(&image_cmd)), None);
+    // A `command` replaces the `CMD` itself, arguments or not.
+    assert_eq!(
+        replaced_image_cmd(Some("server"), &args, Some(&image_cmd)),
+        None
+    );
+    // Nothing to replace.
+    assert_eq!(replaced_image_cmd(None, &args, Some(&[])), None);
+    assert_eq!(replaced_image_cmd(None, &args, None), None);
+}
+
 #[test]
 fn tokenize_command_line_splits_on_whitespace() {
     assert_eq!(

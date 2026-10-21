@@ -359,7 +359,9 @@ pub struct Container {
     /// default `CMD`. Tokenized into literal argv the same way `entrypoint`
     /// is (`docker.rs`'s `tokenize_command_line`) — not an
     /// [expression](#expressions), and not run via a shell, matching
-    /// Batect's own `Command`-typed `command` field exactly. Applies as-is
+    /// Batect's own `Command`-typed `command` field. One that can't be
+    /// tokenized fails the load, as in Batect, even on a container no task
+    /// uses. Applies as-is
     /// to a dependency/sidecar container; for a task's own container,
     /// overridden by the task-level `run.command`, when set — see
     /// [`TaskRun::command`]. Symmetric with `entrypoint` below, and added
@@ -372,7 +374,8 @@ pub struct Container {
     /// Overrides the image's own `ENTRYPOINT`. Tokenized into literal argv
     /// the same way `command` is (`docker.rs`'s `tokenize_command_line`) —
     /// not an [expression](#expressions), and not run via a shell, matching
-    /// Batect's own `Command`-typed `entrypoint` field exactly. Overridden
+    /// Batect's own `Command`-typed `entrypoint` field, and checked when the
+    /// file loads the same way. Overridden
     /// by the task-level `run.entrypoint`, when set — see
     /// [`TaskRun::entrypoint`].
     pub entrypoint: Option<String>,
@@ -2064,8 +2067,9 @@ impl From<ExternalHealthCheck> for ExternalHealthCheckFields {
 /// the started container after it becomes healthy but before its dependents
 /// start. Runs with the container's own environment and user/group.
 /// Tokenized into literal argv the same way `command`/`entrypoint` are (see
-/// `tokenize_command_line` in `docker.rs`) — no shell involved, matching
-/// Batect's own `SetupCommand.command` exactly (typed `Command`, the same
+/// `tokenize_command_line` in `docker.rs`), and checked when the file loads
+/// the same way — no shell involved, matching Batect's own
+/// `SetupCommand.command` (typed `Command`, the same
 /// type as `Container.command`/`entrypoint`, and passed to Docker's exec API
 /// as already-parsed argv — confirmed by reading
 /// `RunContainerSetupCommandsStepRunner.runSetupCommand`, not assumed from
@@ -4416,6 +4420,22 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
                     check_literal_path(path, &anchor)?;
                 }
             }
+            // Batect parses every command line while decoding the file
+            // (#377), so a bad one fails every command that loads it, not
+            // only the task that reaches it after its dependencies started.
+            for (field, command) in [
+                ("command", &container.command),
+                ("entrypoint", &container.entrypoint),
+            ] {
+                if let Some(command) = command {
+                    crate::docker::tokenize_command_line(command)
+                        .with_context(|| format!("has an invalid '{field}'"))?;
+                }
+            }
+            for setup_command in container.setup_commands.iter().flatten() {
+                crate::docker::tokenize_command_line(&setup_command.command)
+                    .context("has an invalid setup command")?;
+            }
             let mut ids_seen = HashSet::new();
             for agent in container.build_ssh.iter().flatten() {
                 if !ids_seen.insert(agent.id.as_str()) {
@@ -4485,6 +4505,15 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
                 );
             }
             _ => {}
+        }
+        if let Some(run) = &task.run {
+            for (field, command) in [("command", &run.command), ("entrypoint", &run.entrypoint)] {
+                if let Some(command) = command {
+                    crate::docker::tokenize_command_line(command).with_context(|| {
+                        format!("Task '{task_name}' has an invalid 'run.{field}'")
+                    })?;
+                }
+            }
         }
         if let (Some(run), Some(customise)) = (&task.run, &task.customise) {
             if let Some(customisation_name) = customise.keys().find(|n| *n == &run.container) {

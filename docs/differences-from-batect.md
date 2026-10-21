@@ -179,7 +179,13 @@ Ratect checks a config when the file loads, and the report is its own:
   `build_ssh` id is checked after a container's image source, a volume's
   fields are checked in a different order, and of several undeclared config
   variables given values, the first by name is reported, where Batect reports
-  the file's first, in file order, before any `--config-var`.
+  the file's first, in file order, before any `--config-var`. A `command`,
+  `entrypoint` or setup command that can't be tokenized is reported after
+  every error raised while the files are parsed, after every container's
+  image source, `image` expressions, `dns` entries and fields its file's
+  format doesn't allow are checked, and after the same container's
+  `volumes`, `build_directory` and `build_secrets`, where Batect reports
+  whichever the file gives first.
 
 ## CLI flags
 
