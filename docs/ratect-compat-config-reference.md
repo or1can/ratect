@@ -68,9 +68,9 @@ config_variables:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `project_name` | string | yes | Used only for display (e.g. in `--list-tasks` output). See [Project and container names](#project-and-container-names) for what it may contain. |
-| `containers` | map of name → [Container](#container) | yes | Container definitions, keyed by name. Referenced from tasks via `run.container`. See [Project and container names](#project-and-container-names) for what a name may contain. |
-| `tasks` | map of name → [Task](#task) | yes | Task definitions, keyed by name. Run by name via `ratect-compat <task-name>`. See [Task names](#task-names) for what a name may contain. |
+| `project_name` | string | no | Names the images the project builds (`<project_name>-<container name>`) and its `eu.orican.ratect.project` ownership label. Defaults to the lowercased name of the directory holding the root file. Root file only. See [Project and container names](#project-and-container-names) for what it may contain. |
+| `containers` | map of name → [Container](#container) | no | Container definitions, keyed by name. Referenced from tasks via `run.container`. See [Project and container names](#project-and-container-names) for what a name may contain. |
+| `tasks` | map of name → [Task](#task) | no | Task definitions, keyed by name. Run by name via `ratect-compat <task-name>`. See [Task names](#task-names) for what a name may contain. |
 | `config_variables` | map of name → [ConfigVariable](#configvariable) | no | Declares the config variables usable via `<name`/`<{name}` [expressions](#expressions). A name must be declared here before it can be referenced — see [Expressions](#expressions) — and follows [Config variable names](#config-variable-names). |
 | `include` | list of string or [Include](#includes) | no | Splits configuration across multiple files — see [Includes](#includes) below. |
 | `forbid_telemetry` | boolean | no | Recognized but inert — Ratect collects no telemetry, so there's nothing to forbid. |
@@ -94,6 +94,13 @@ Invalid container name '-api'. Container names must be valid Docker references: 
 Like any error raised while the file is parsed, each gives a line, column and
 path — for a container name, the entry's value's, as for a [task
 name](#task-names).
+
+A root file with no `project_name` is named after the directory holding it,
+lowercased as Batect lowercases it: a `batect.yml` in `My-App/` <!-- example -->
+names the project `my-app`. A directory whose lowercased name still breaks the
+rule (`-app/` <!-- example -->) fails the load, naming the inferred name and the
+file and saying to set `project_name`, as does a root file directly in the
+filesystem root, whose directory has no name.
 
 ## Includes
 

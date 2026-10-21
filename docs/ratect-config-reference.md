@@ -37,9 +37,11 @@ group = "Development"
 run = { container = "build-env", command = "cargo build" }
 ```
 
-`project_name` is the only required top-level key (it's taken from the root file
-only, and names the images and cache volumes the project creates — see
-[Top level](ratect-compat-config-reference.md#top-level)). `ratect` defaults `-f` to
+`project_name` is the only required top-level key: unlike in a `batect.yml`
+loaded by `ratect-compat`, it's never inferred from the directory name. It's
+taken from the root file only, and names the images the project builds and its
+`eu.orican.ratect.project` label — see
+[Top level](ratect-compat-config-reference.md#top-level). `ratect` defaults `-f` to
 `ratect.toml`; point it at a differently-named file, or a `batect.yml`, with
 `-f`.
 

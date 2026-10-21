@@ -58,6 +58,8 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- `ratect-compat` loads a `batect.yml` with no `project_name`, as Batect does: the project is named after the root file's directory, lowercased, and one whose name isn't a Docker image-name component fails the load. A root `batect.yml` holding no configuration — empty, only comments, or only a null document such as `---` — fails the load saying so.
+- `ratect config convert` (ratect only) writes a `project_name` into `ratect.toml` when the root `batect.yml` has none — the one `ratect-compat` infers for it.
 - Files in an image's build context are sent owned by root, so a BuildKit `COPY` without `--chown` leaves them root-owned in the image.
 - A config load error for a malformed field in a YAML file — a bad port range, a value of the wrong type, an unknown or missing field — again gives the field's line, column and YAML path, in the root file or an include.
 - A null refused in a YAML config file says the value is null — for `shm_size`, a `volumes`, `ports`, `devices`, `capabilities_to_add` or `capabilities_to_drop` entry, and `run_as_current_user`'s `enabled` included.

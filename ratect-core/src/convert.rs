@@ -163,7 +163,8 @@ pub fn convert_project(
             // Exhaustive, so a field added to `ConfigFile` is a compile error
             // here rather than a setting every converted file silently drops.
             let ConfigFile {
-                project_name,
+                // Root-only: the merged `Config`'s, below.
+                project_name: _,
                 containers,
                 tasks,
                 config_variables,
@@ -180,7 +181,10 @@ pub fn convert_project(
                 .collect::<Result<Vec<IncludeEntry>>>()?;
             checks.extend(container_checks.remove(&file.path).unwrap_or_default());
             let document = Document {
-                project_name: project_name.clone(),
+                // The root's own, or the one `ratect-compat` infers for it,
+                // since `ratect.toml` requires the field; an include's is
+                // refused at load.
+                project_name: (index == 0).then(|| loaded.config.project_name.clone()),
                 containers: containers
                     .iter()
                     .map(|(name, container)| (name.clone(), literal_fields_escaped(container)))

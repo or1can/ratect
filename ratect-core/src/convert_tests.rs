@@ -761,3 +761,32 @@ async fn a_backslash_in_a_literal_field_converts_escaped_and_keeps_its_value() {
         Some(r"/home/a\b")
     );
 }
+
+/// #395: a root with no `project_name` converts to one naming the project
+/// as `ratect-compat` names it, since `ratect.toml` requires the field — so
+/// the converted project keeps its name wherever it is later moved.
+#[tokio::test]
+async fn an_inferred_project_name_is_written_into_the_root() {
+    let scratch = scratch();
+    let dir = scratch.0.join("MyProj");
+    write_project(
+        &dir,
+        &[
+            ("batect.yml", "include: [x.yml]\n"),
+            ("x.yml", "tasks:\n  t:\n    run:\n      container: c\n"),
+        ],
+    );
+    let converted = convert(&dir.join("batect.yml")).await.unwrap();
+    assert!(
+        converted.files[0]
+            .toml
+            .contains("project_name = \"myproj\"\n"),
+        "{}",
+        converted.files[0].toml
+    );
+    assert!(
+        !converted.files[1].toml.contains("project_name"),
+        "{}",
+        converted.files[1].toml
+    );
+}

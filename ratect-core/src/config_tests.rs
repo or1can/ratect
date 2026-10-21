@@ -14599,8 +14599,8 @@ fn a_refused_project_or_container_name_in_a_ratect_toml_is_located() {
 }
 
 /// #290: a null `project_name` is still left out, not refused as a name —
-/// an included file's loads, as in Batect, and a root file's is reported
-/// missing.
+/// an included file's loads, as in Batect, and a root file's is inferred
+/// (#395).
 #[tokio::test]
 async fn a_null_project_name_is_left_out_rather_than_checked() {
     let dir = unique_temp_dir();
@@ -14614,16 +14614,186 @@ async fn a_null_project_name_is_left_out_rather_than_checked() {
     std::fs::remove_dir_all(&dir).ok();
     included.unwrap_or_else(|e| panic!("a null project_name in an include: {e:#}"));
 
-    let root = format!(
+    let root = load_project_in("myproj", "project_name: ~\n")
+        .await
+        .unwrap_or_else(|e| panic!("a null root project_name: {e:#}"));
+    assert_eq!(root.config.project_name, "myproj");
+}
+
+/// Loads `yaml` as the `batect.yml` of a fresh directory named `dir_name`,
+/// through [`load_project`].
+async fn load_project_in(dir_name: &str, yaml: &str) -> Result<LoadedProject> {
+    let scratch = unique_temp_dir();
+    let dir = scratch.join(dir_name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("batect.yml"), yaml).unwrap();
+    let result = load_project(&dir.join("batect.yml")).await;
+    std::fs::remove_dir_all(&scratch).ok();
+    result
+}
+
+const NAMELESS_PROJECT: &str = "\
+containers:
+  app:
+    image: alpine:3.18
+tasks:
+  t:
+    run:
+      container: app
+";
+
+/// #395: a `batect.yml` with no `project_name` is named after the directory
+/// holding it, as Batect names it.
+#[tokio::test]
+async fn a_nameless_batect_yml_is_named_after_its_directory() {
+    let project = load_project_in("myproj", NAMELESS_PROJECT)
+        .await
+        .unwrap_or_else(|e| panic!("{e:#}"));
+    assert_eq!(project.config.project_name, "myproj");
+    assert!(project.config.tasks.contains_key("t"));
+    assert!(project.config.containers.contains_key("app"));
+}
+
+/// #395: lowercased, as Batect lowercases it.
+#[tokio::test]
+async fn an_inferred_project_name_is_lowercased() {
+    let project = load_project_in("PROject", NAMELESS_PROJECT)
+        .await
+        .unwrap_or_else(|e| panic!("{e:#}"));
+    assert_eq!(project.config.project_name, "project");
+}
+
+/// #395: the immediate parent names it, not an ancestor.
+#[tokio::test]
+async fn an_inferred_project_name_is_the_immediate_parents() {
+    let project = load_project_in("code/project", NAMELESS_PROJECT)
+        .await
+        .unwrap_or_else(|e| panic!("{e:#}"));
+    assert_eq!(project.config.project_name, "project");
+}
+
+/// #395: inferred from the cleaned path, so a `.` or `..` in the path given
+/// names the real directory rather than itself.
+#[tokio::test]
+async fn an_inferred_project_name_comes_from_the_cleaned_path() {
+    let scratch = unique_temp_dir();
+    let dir = scratch.join("myproj");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("batect.yml"), NAMELESS_PROJECT).unwrap();
+    let dotted = load_project(&dir.join("sub").join("..").join(".").join("batect.yml")).await;
+    std::fs::remove_dir_all(&scratch).ok();
+    let project = dotted.unwrap_or_else(|e| panic!("{e:#}"));
+    assert_eq!(project.config.project_name, "myproj");
+}
+
+/// #395: an inferred name that isn't an image-name component fails the
+/// load, naming the name and the file and saying to set `project_name`.
+#[tokio::test]
+async fn an_invalid_inferred_project_name_fails_the_load() {
+    let error = format!(
         "{:#}",
-        load_compat_yaml("project_name: ~\n")
+        load_project_in("-project", NAMELESS_PROJECT)
             .await
-            .expect_err("a null root project_name loaded")
+            .expect_err("an invalid inferred name loaded")
     );
     assert!(
-        root.contains("missing the required 'project_name' field"),
-        "{root}"
+        error.contains("The inferred project name '-project'")
+            && error.contains("-project/batect.yml\"")
+            && error.contains(IMAGE_NAME_RULE)
+            && error.contains("Set 'project_name'"),
+        "{error}"
     );
+}
+
+/// #395: a root file directly in the filesystem root has no directory name
+/// to infer one from.
+#[test]
+fn no_project_name_is_inferred_for_a_file_in_the_filesystem_root() {
+    let error = format!(
+        "{:#}",
+        infer_project_name(Path::new("/batect.yml"))
+            .expect_err("a name was inferred in the filesystem root")
+    );
+    assert!(
+        error.contains("\"/batect.yml\"")
+            && error.contains("in the root directory")
+            && error.contains("cannot be inferred"),
+        "{error}"
+    );
+}
+
+/// #395: an explicit `project_name` wins over the directory's name, including
+/// when the root includes another file.
+#[tokio::test]
+async fn an_explicit_project_name_wins_over_the_directory_name() {
+    let scratch = unique_temp_dir();
+    let dir = scratch.join("myproj");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: declared\ninclude: [extra.yml]\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("extra.yml"), NAMELESS_PROJECT).unwrap();
+    let loaded = load_project(&dir.join("batect.yml")).await;
+    std::fs::remove_dir_all(&scratch).ok();
+    assert_eq!(
+        loaded
+            .unwrap_or_else(|e| panic!("{e:#}"))
+            .config
+            .project_name,
+        "declared"
+    );
+}
+
+/// #395: `ratect.toml` still requires `project_name`; nothing is inferred.
+#[tokio::test]
+async fn a_nameless_ratect_toml_is_still_an_error() {
+    let error = format!(
+        "{:#}",
+        load_native_toml("[containers.app]\nimage = \"alpine:3.18\"\n")
+            .await
+            .expect_err("a nameless ratect.toml loaded")
+    );
+    assert!(
+        error.contains("missing the required 'project_name' field"),
+        "{error}"
+    );
+}
+
+/// #395: an empty or comment-only root `batect.yml` is still refused, as
+/// Batect refuses it, rather than loading as an empty project named after
+/// its directory. A document that sets nothing still loads.
+#[tokio::test]
+async fn a_root_batect_yml_with_no_document_is_refused() {
+    for text in ["", "\n  \n", "# nothing here\n", "---\n", "~\n"] {
+        let error = format!(
+            "{:#}",
+            load_project_in("myproj", text)
+                .await
+                .expect_err(&format!("{text:?} loaded"))
+        );
+        assert!(
+            error.contains("batect.yml") && error.contains("contains no configuration"),
+            "{text:?}: {error}"
+        );
+    }
+    let project = load_project_in("myproj", "{}\n")
+        .await
+        .unwrap_or_else(|e| panic!("{e:#}"));
+    assert_eq!(project.config.project_name, "myproj");
+}
+
+/// Batect's CL1-9: a root file holding only a `project_name` loads, with no
+/// containers and no tasks.
+#[tokio::test]
+async fn a_root_with_only_a_project_name_loads_empty() {
+    let project = load_compat_yaml("project_name: p\n")
+        .await
+        .unwrap_or_else(|e| panic!("{e:#}"));
+    assert_eq!(project.config.project_name, "p");
+    assert!(project.config.containers.is_empty());
+    assert!(project.config.tasks.is_empty());
 }
 
 /// #290: a `Config` that never went through `ConfigFile` — built in code,
