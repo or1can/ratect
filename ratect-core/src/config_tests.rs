@@ -9959,6 +9959,98 @@ tasks:
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Batect's include cycle (`ConfigurationLoaderSpec`, CL4-1): `1.yml` and
+/// `2.yml` include each other, and loading merges both, once each (#429).
+/// The root declares `project_name`, so it being parsed a second time — as
+/// `2.yml`'s include — would fail the load rather than merge.
+#[tokio::test]
+async fn an_include_cycle_loads_each_file_once() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("1.yml"),
+        r#"
+project_name: demo
+config_variables:
+  config-var-1: {}
+tasks:
+  task-1:
+    run:
+      container: build-env
+include:
+  - 2.yml
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("2.yml"),
+        r#"
+config_variables:
+  config-var-2: {}
+tasks:
+  task-2:
+    run:
+      container: build-env
+include:
+  - 1.yml
+"#,
+    )
+    .unwrap();
+
+    let loaded = Config::load_from_file(&dir.join("1.yml")).await.unwrap();
+    let config_variables: Vec<&str> = loaded
+        .config
+        .config_variables
+        .as_ref()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(config_variables, ["config-var-1", "config-var-2"]);
+    assert!(loaded.config.tasks.contains_key("task-1"));
+    assert!(loaded.config.tasks.contains_key("task-2"));
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A root that includes itself, by its own name or another spelling of it,
+/// is loaded once — even when the root path itself holds a `..`, since the
+/// root and its includes are compared after the same cleaning (#429). A `.`
+/// would prove nothing here: `Path` equality already ignores one.
+#[tokio::test]
+async fn a_root_that_includes_itself_is_loaded_once() {
+    let dir = unique_temp_dir();
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(
+        dir.join("batect.yml"),
+        r#"
+project_name: demo
+tasks:
+  the-task:
+    run:
+      container: build-env
+include:
+  - batect.yml
+  - ./sub/../batect.yml
+"#,
+    )
+    .unwrap();
+
+    for root in [
+        dir.join("batect.yml"),
+        dir.join("sub").join("..").join("batect.yml"),
+    ] {
+        let loaded = Config::load_from_file(&root).await.unwrap();
+        assert_eq!(
+            loaded.config.tasks.keys().collect::<Vec<_>>(),
+            ["the-task"],
+            "{}",
+            root.display()
+        );
+    }
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[tokio::test]
 async fn a_task_defined_in_two_different_files_is_an_error() {
     let dir = unique_temp_dir();
