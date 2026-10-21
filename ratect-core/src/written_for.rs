@@ -94,6 +94,11 @@ pub const BREAKING_CHANGES: &[BreakingChange] = &[
                   component, or the load fails: lowercase letters and digits, joined by a \
                   single '.', one or two '_', or any number of '-'",
     },
+    BreakingChange {
+        version: "0.12.0",
+        summary: "an included file that sets 'forbid_telemetry' to true fails the load; only \
+                  the root file may",
+    },
 ];
 
 /// A `major.minor.patch` version, optionally followed by a `-pre-release`

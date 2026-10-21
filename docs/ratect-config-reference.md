@@ -253,6 +253,13 @@ An `extends` in a native file may inherit from a container defined in *any*
 included file, including a YAML bundle — the container namespace is flat once
 includes are merged.
 
+Some top-level keys are root-only. An included file, in either format, fails
+the load naming that file if it declares `project_name` or
+[`ratect_version`](#ratect_version-the-version-a-project-was-written-for), or
+sets `forbid_telemetry` to `true` — a key with no effect, accepted so a file
+written for Batect still loads, as in a [`batect.yml`](ratect-compat-config-reference.md#top-level).
+Setting `forbid_telemetry` to `false` in an included file is allowed.
+
 ## Shared caches
 
 A `cache` mount is private to the project by default: the storage carries the

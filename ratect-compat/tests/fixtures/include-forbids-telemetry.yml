@@ -1,0 +1,14 @@
+# Exercises Batect's root-only `forbid_telemetry` rule (ratect#394): the root
+# file may set it, but tests/fixtures/include-forbids-telemetry/extra.yml,
+# which sets it to true, must fail config loading.
+project_name: ratect-include-forbids-telemetry-test
+containers:
+  build-env:
+    image: alpine:3.18.2
+tasks:
+  test-task:
+    run:
+      container: build-env
+      command: echo hi
+include:
+  - include-forbids-telemetry/extra.yml
