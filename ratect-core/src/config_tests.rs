@@ -16317,3 +16317,33 @@ run = { container = "app" }
         assert_eq!(argv.len(), 2, "{argv:?}");
     }
 }
+
+/// #417 (Batect's TSF-15): a `customise` entry with nothing in it loads, as
+/// a customisation that overrides nothing.
+#[tokio::test]
+async fn an_empty_customise_entry_loads_as_a_customisation_of_nothing() {
+    let project = load_project_in(
+        "p",
+        "
+containers:
+  app:
+    image: alpine:3.18
+  db:
+    image: postgres:16
+tasks:
+  t:
+    run:
+      container: app
+    dependencies: [db]
+    customise:
+      db: {}
+",
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{e:#}"));
+
+    let customisation = &project.config.tasks["t"].customise.as_ref().unwrap()["db"];
+    assert!(customisation.environment.is_none());
+    assert!(customisation.ports.is_none());
+    assert!(customisation.working_directory.is_none());
+}

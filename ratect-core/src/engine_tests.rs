@@ -7995,6 +7995,83 @@ async fn container_command_reaches_the_container_when_run_command_is_unset() {
     );
 }
 
+/// #417 (Batect's TSF-10): with no `run.command`, additional arguments are
+/// appended to the task container's own `command`, each kept whole — and,
+/// as for a `run.command`, only the named task's own container gets them,
+/// not a dependency or a prerequisite task's container.
+#[tokio::test]
+async fn additional_args_follow_the_containers_own_command_when_run_command_is_unset() {
+    let with_command = |command: &str| {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.command = Some(command.to_string());
+        container_config
+    };
+    let run_without_command = |container: &str| TaskRun {
+        container: container.to_string(),
+        command: None,
+        environment: None,
+        ports: None,
+        working_directory: None,
+        entrypoint: None,
+    };
+    let mut containers = IndexMap::new();
+    containers.insert("tool".to_string(), with_command("echo from-container"));
+    containers.insert("db".to_string(), with_command("db-server"));
+    containers.insert("prep".to_string(), with_command("prepare"));
+
+    let mut tasks = IndexMap::new();
+    tasks.insert(
+        "setup".to_string(),
+        Task {
+            run: Some(run_without_command("prep")),
+            dependencies: None,
+            prerequisites: None,
+            description: None,
+            group: None,
+            customise: None,
+        },
+    );
+    tasks.insert(
+        "main".to_string(),
+        Task {
+            run: Some(run_without_command("tool")),
+            dependencies: Some(vec!["db".to_string()]),
+            prerequisites: Some(vec!["setup".to_string()]),
+            description: None,
+            group: None,
+            customise: None,
+        },
+    );
+
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    let args = vec!["extra1".to_string(), "two words".to_string()];
+    engine.run_task("main", &args).await.unwrap();
+
+    let tool = docker.spec_for("tool").unwrap();
+    assert_eq!(tool.shared.command.as_deref(), Some("echo from-container"));
+    assert_eq!(tool.additional_args, args);
+    let db = docker.spec_for("db").unwrap();
+    assert_eq!(db.shared.command.as_deref(), Some("db-server"));
+    assert!(db.additional_args.is_empty(), "{:?}", db.additional_args);
+    let prep = docker.spec_for("prep").unwrap();
+    assert_eq!(prep.shared.command.as_deref(), Some("prepare"));
+    assert!(
+        prep.additional_args.is_empty(),
+        "{:?}",
+        prep.additional_args
+    );
+}
+
 #[tokio::test]
 async fn container_entrypoint_reaches_the_container() {
     let mut container_config = container("alpine:3.18", None);

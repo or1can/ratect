@@ -752,3 +752,49 @@ fn derive_build_spec_passes_an_unquoted_yaml_build_arg_on_as_written() {
 
     assert_eq!(spec.build_args.unwrap()["PYTHON_VERSION"], "3.10");
 }
+
+/// #417 (Batect's TSF-15): a `customise` entry that sets nothing leaves its
+/// container exactly as no entry would — the equivalence [`Overlay`]'s own
+/// doc comment promises. The container sets every field a customisation
+/// could override, so a fallback that went wrong would show.
+#[test]
+fn an_empty_customisation_derives_the_same_spec_as_none() {
+    let mut container_config = sample_container();
+    container_config.ports = Some(vec![crate::config::PortMapping {
+        local: crate::config::PortRange {
+            from: 8080,
+            to: 8080,
+        },
+        container: crate::config::PortRange { from: 80, to: 80 },
+        protocol: "tcp".to_string(),
+    }]);
+    let run_labels = RunLabels::new("demo", "task", "run-id", Some("0.6.0"));
+    let empty = TaskContainerCustomisation {
+        environment: None,
+        ports: None,
+        working_directory: None,
+    };
+    let spec = |overlay| {
+        derive_spec(ContainerSpecInputs {
+            name: "db",
+            container_config: &container_config,
+            overlay,
+            image: "alpine:3.18",
+            network: ContainerNetwork::Task("ratect-run-id".to_string()),
+            interactive: false,
+            additional_args: &[],
+            user_mapping: None,
+            volumes: None,
+            term_var: None,
+            proxy: None,
+            publish_ports: true,
+            role: ContainerRole::Dependency,
+            run_labels: &run_labels,
+        })
+    };
+
+    assert_eq!(
+        spec(Overlay::Customise(Some(&empty))),
+        spec(Overlay::Customise(None))
+    );
+}

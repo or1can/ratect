@@ -373,8 +373,10 @@ pub enum Overlay<'a> {
     Run(&'a TaskRun),
     /// `None` when this dependency has no `customise` entry of its own —
     /// distinct from `Some` of an all-`None`-fields entry only in name, not
-    /// in effect (both override nothing), so callers don't need to
-    /// synthesize a placeholder value just to call [`derive_spec`].
+    /// in effect (both override nothing, which
+    /// `an_empty_customisation_derives_the_same_spec_as_none` pins), so
+    /// callers don't need to synthesize a placeholder value just to call
+    /// [`derive_spec`].
     Customise(Option<&'a TaskContainerCustomisation>),
 }
 
