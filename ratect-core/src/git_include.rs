@@ -383,6 +383,14 @@ impl<G: GitClient> GitIncludeCache<G> {
         }
     }
 
+    /// Stands in for a different ratect version sharing the same cache, so a
+    /// test can tell a sidecar's `cloned_with_version` kept from rewritten.
+    #[cfg(test)]
+    pub(crate) fn with_version(mut self, version: &str) -> Self {
+        self.version = version.to_string();
+        self
+    }
+
     /// Ensures `remote` at `ref` is cloned into this cache, returning the
     /// clone's directory. Safe to call repeatedly (across processes, or
     /// concurrently) for the same `(remote, ref)` — later calls are no-ops
@@ -466,35 +474,48 @@ impl<G: GitClient> GitIncludeCache<G> {
         }
     }
 
-    /// Writes/updates the `<hash>.toml` sidecar — `type`/`repo`/
-    /// `cloned_with_version` are preserved from any existing file (so a
-    /// later `ratect` version reusing an old clone doesn't overwrite the
-    /// version it was actually cloned with), only `last_used` is bumped.
-    /// Written via write-to-temp-then-atomic-rename, so a concurrent reader
-    /// (`listAll`-style tooling, not implemented yet — see ROADMAP.md) can
-    /// never observe a torn file; a concurrent `last_used` bump can still be
-    /// lost to a last-write-wins race, same as Batect accepts.
+    /// Writes/updates the `<hash>.toml` sidecar. An existing file is
+    /// merged into, as Batect's `GitRepositoryCache.updateInfoFile` does:
+    /// only `last_used` changes, and every other key keeps its value —
+    /// `cloned_with_version` (so a later `ratect` version reusing an old
+    /// clone doesn't overwrite the version it was actually cloned with), and
+    /// any key this version doesn't know, at any depth, that another version
+    /// sharing `~/.ratect/incl` wrote. A file missing a known field is merged
+    /// into all the same, not refused or filled in — though `list` and the
+    /// sweep, which need those fields, still skip it with a warning. Written
+    /// via write-to-temp-then-atomic-rename, so a concurrent reader
+    /// (`list`, or the sweep) can never observe a torn file; a concurrent
+    /// `last_used` bump can still be lost to a last-write-wins race, same as
+    /// Batect accepts.
     async fn update_info_file(&self, remote: &str, git_ref: &str, info_path: &Path) -> Result<()> {
-        let mut info = match tokio::fs::read_to_string(info_path).await {
+        let mut info: toml::Table = match tokio::fs::read_to_string(info_path).await {
             Ok(content) => toml::from_str(&content).with_context(|| {
                 format!("Failed to parse Git include cache info file {info_path:?}")
             })?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => CacheInfo {
-                kind: "git".to_string(),
-                repo: CacheInfoRepo {
-                    remote: remote.to_string(),
-                    git_ref: git_ref.to_string(),
-                },
-                cloned_with_version: self.version.clone(),
-                last_used: 0,
-            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                toml::Table::try_from(CacheInfo {
+                    kind: "git".to_string(),
+                    repo: CacheInfoRepo {
+                        remote: remote.to_string(),
+                        git_ref: git_ref.to_string(),
+                    },
+                    cloned_with_version: self.version.clone(),
+                    last_used: 0,
+                })
+                .context("Failed to serialize Git include cache info")?
+            }
             Err(e) => {
                 return Err(e).with_context(|| {
                     format!("Failed to read Git include cache info file {info_path:?}")
                 })
             }
         };
-        info.last_used = (self.clock)();
+        let last_used = i64::try_from((self.clock)()).with_context(|| {
+            format!(
+                "Failed to record the current time in Git include cache info file {info_path:?}"
+            )
+        })?;
+        info.insert("last_used".to_string(), toml::Value::Integer(last_used));
 
         let content =
             toml::to_string_pretty(&info).context("Failed to serialize Git include cache info")?;

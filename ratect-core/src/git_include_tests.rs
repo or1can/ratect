@@ -334,7 +334,7 @@ async fn ensure_cached_writes_an_info_sidecar_preserving_repo_and_bumping_last_u
     let root = unique_temp_dir();
     let git =
         FakeGitClient::new().with_files("https://example.com/repo.git", "v1.0.0", HashMap::new());
-    let cache = GitIncludeCache::for_test(root.clone(), git, 1000);
+    let cache = GitIncludeCache::for_test(root.clone(), git, 1000).with_version("4.5.6");
 
     let working_copy = cache
         .ensure_cached("https://example.com/repo.git", "v1.0.0")
@@ -343,29 +343,181 @@ async fn ensure_cached_writes_an_info_sidecar_preserving_repo_and_bumping_last_u
     let key = cache_key("https://example.com/repo.git", "v1.0.0");
     assert_eq!(working_copy, root.join(&key));
 
-    let info_content = tokio::fs::read_to_string(root.join(format!("{key}.toml")))
-        .await
-        .unwrap();
-    let info: CacheInfo = toml::from_str(&info_content).unwrap();
-    assert_eq!(info.kind, "git");
-    assert_eq!(info.repo.remote, "https://example.com/repo.git");
-    assert_eq!(info.repo.git_ref, "v1.0.0");
-    assert_eq!(info.last_used, 1000);
+    let info = read_sidecar(&root, &key).await;
+    assert_eq!(info["type"].as_str(), Some("git"));
+    assert_eq!(
+        info["repo"]["remote"].as_str(),
+        Some("https://example.com/repo.git")
+    );
+    assert_eq!(info["repo"]["ref"].as_str(), Some("v1.0.0"));
+    assert_eq!(info["cloned_with_version"].as_str(), Some("4.5.6"));
+    assert_eq!(info["last_used"].as_integer(), Some(1000));
 
-    // A second ensure_cached (with a different clock) bumps last_used
-    // but keeps everything else, in particular cloned_with_version.
-    let git2 = FakeGitClient::new();
-    let cache2 = GitIncludeCache::for_test(root.clone(), git2, 2000);
+    // A different version reusing the clone bumps last_used but keeps
+    // everything else, in particular the version that actually cloned it.
+    let cache2 =
+        GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), 2000).with_version("1.2.3");
     cache2
         .ensure_cached("https://example.com/repo.git", "v1.0.0")
         .await
         .unwrap();
-    let info_content = tokio::fs::read_to_string(root.join(format!("{key}.toml")))
+    let info2 = read_sidecar(&root, &key).await;
+    assert_eq!(info2["type"].as_str(), Some("git"));
+    assert_eq!(
+        info2["repo"]["remote"].as_str(),
+        Some("https://example.com/repo.git")
+    );
+    assert_eq!(info2["repo"]["ref"].as_str(), Some("v1.0.0"));
+    assert_eq!(info2["cloned_with_version"].as_str(), Some("4.5.6"));
+    assert_eq!(info2["last_used"].as_integer(), Some(2000));
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+async fn read_sidecar(root: &Path, key: &str) -> toml::Table {
+    let content = tokio::fs::read_to_string(root.join(format!("{key}.toml")))
         .await
         .unwrap();
-    let info2: CacheInfo = toml::from_str(&info_content).unwrap();
-    assert_eq!(info2.last_used, 2000);
-    assert_eq!(info2.cloned_with_version, info.cloned_with_version);
+    toml::from_str(&content).unwrap()
+}
+
+/// A sidecar written by some other ratect version, carrying a key this one
+/// doesn't know at the top level and another under `repo`.
+const SIDECAR_WITH_UNKNOWN_KEYS: &str = r#"type = "git"
+cloned_with_version = "4.5.6"
+last_used = 1
+future_top_level = "kept"
+
+[repo]
+remote = "https://example.com/repo.git"
+ref = "v1.0.0"
+future_nested = 42
+"#;
+
+/// Lays out one cache entry's files by hand: a working copy (if asked for)
+/// and a sidecar (if given), returning the entry's key.
+async fn prepare_entry(root: &Path, working_copy: bool, sidecar: Option<&str>) -> String {
+    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    tokio::fs::create_dir_all(root).await.unwrap();
+    if working_copy {
+        tokio::fs::create_dir_all(root.join(&key)).await.unwrap();
+    }
+    if let Some(sidecar) = sidecar {
+        tokio::fs::write(root.join(format!("{key}.toml")), sidecar)
+            .await
+            .unwrap();
+    }
+    key
+}
+
+fn assert_unknown_keys_kept(info: &toml::Table) {
+    assert_eq!(info["future_top_level"].as_str(), Some("kept"));
+    assert_eq!(info["repo"]["future_nested"].as_integer(), Some(42));
+    assert_eq!(info["cloned_with_version"].as_str(), Some("4.5.6"));
+}
+
+#[tokio::test]
+async fn ensure_cached_keeps_sidecar_keys_it_does_not_recognise() {
+    let root = unique_temp_dir();
+    let key = prepare_entry(&root, true, Some(SIDECAR_WITH_UNKNOWN_KEYS)).await;
+    let cache =
+        GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), 2000).with_version("1.2.3");
+
+    cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap();
+
+    let info = read_sidecar(&root, &key).await;
+    assert_unknown_keys_kept(&info);
+    assert_eq!(info["last_used"].as_integer(), Some(2000));
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// The working copy's existence alone decides whether to clone.
+#[tokio::test]
+async fn ensure_cached_writes_a_fresh_sidecar_beside_a_working_copy_that_has_none() {
+    let root = unique_temp_dir();
+    let key = prepare_entry(&root, true, None).await;
+    let git = FakeGitClient::new();
+    let cache = GitIncludeCache::for_test(root.clone(), git.clone(), 2000).with_version("1.2.3");
+
+    cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap();
+
+    assert_eq!(git.clone_count(), 0);
+    let info = read_sidecar(&root, &key).await;
+    assert_eq!(info["type"].as_str(), Some("git"));
+    assert_eq!(
+        info["repo"]["remote"].as_str(),
+        Some("https://example.com/repo.git")
+    );
+    assert_eq!(info["repo"]["ref"].as_str(), Some("v1.0.0"));
+    assert_eq!(info["cloned_with_version"].as_str(), Some("1.2.3"));
+    assert_eq!(info["last_used"].as_integer(), Some(2000));
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// A sidecar with no working copy is re-cloned, and the sidecar is
+/// updated rather than replaced.
+#[tokio::test]
+async fn ensure_cached_re_clones_a_missing_working_copy_and_keeps_its_sidecar() {
+    let root = unique_temp_dir();
+    let key = prepare_entry(&root, false, Some(SIDECAR_WITH_UNKNOWN_KEYS)).await;
+    let git =
+        FakeGitClient::new().with_files("https://example.com/repo.git", "v1.0.0", HashMap::new());
+    let cache = GitIncludeCache::for_test(root.clone(), git.clone(), 2000).with_version("1.2.3");
+
+    cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap();
+
+    assert_eq!(git.clone_count(), 1);
+    let info = read_sidecar(&root, &key).await;
+    assert_unknown_keys_kept(&info);
+    assert_eq!(info["last_used"].as_integer(), Some(2000));
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// Batect merges `lastUsed` into whatever the file holds; so does this.
+#[tokio::test]
+async fn ensure_cached_merges_last_used_into_a_sidecar_missing_a_known_field() {
+    let root = unique_temp_dir();
+    let key = prepare_entry(&root, true, Some("type = \"git\"\nlast_used = 1\n")).await;
+    let cache = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), 2000);
+
+    cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap();
+
+    let info = read_sidecar(&root, &key).await;
+    assert_eq!(info.len(), 2, "nothing should be added: {info:?}");
+    assert_eq!(info["type"].as_str(), Some("git"));
+    assert_eq!(info["last_used"].as_integer(), Some(2000));
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+#[tokio::test]
+async fn list_reads_a_sidecar_carrying_keys_it_does_not_recognise() {
+    let root = unique_temp_dir();
+    let key = prepare_entry(&root, true, Some(SIDECAR_WITH_UNKNOWN_KEYS)).await;
+    let cache = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), 2000);
+
+    let listed = cache.list().await.unwrap();
+
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].key, key);
+    assert_eq!(listed[0].remote, "https://example.com/repo.git");
+    assert_eq!(listed[0].git_ref, "v1.0.0");
+    assert_eq!(listed[0].last_used, 1);
 
     tokio::fs::remove_dir_all(&root).await.ok();
 }
