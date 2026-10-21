@@ -493,3 +493,48 @@ fn both_schemas_check_task_and_config_variable_names() {
         }
     }
 }
+
+/// #290: both schemas refuse the project and container names the loader
+/// does, and accept the ones it accepts — the cases from Batect's own
+/// `ImageNameValidatorSpec`, plus the `:` and `/` that would change what a
+/// tag means.
+#[test]
+fn both_schemas_check_project_and_container_names() {
+    let invalid = [
+        "", "A", ".a", "a.", "a..a", "_a", "a_", "a___a", "-a", "a-", "a#b", "a!b", "a:b",
+        "org/app",
+    ];
+    let valid = [
+        "a", "aa", "1", "a1", "a.b", "a_b", "a__b", "a-b", "a--b", "a---b",
+    ];
+    for (format, schema) in [
+        ("batect.yml", config_file_schema()),
+        ("ratect.toml", native_config_file_schema()),
+    ] {
+        let validator = jsonschema::draft7::new(&schema).expect("the schema compiles");
+        let check = |name: &str, valid: bool| {
+            let expected = if valid { "accepted" } else { "refused" };
+            let project = serde_json::json!({ "project_name": name });
+            assert_eq!(
+                validator.is_valid(&project),
+                valid,
+                "{format}: project_name '{name}' should be {expected}"
+            );
+            let container = serde_json::json!({
+                "project_name": "demo",
+                "containers": { name: { "image": "alpine" } },
+            });
+            assert_eq!(
+                validator.is_valid(&container),
+                valid,
+                "{format}: container '{name}' should be {expected}"
+            );
+        };
+        for name in invalid {
+            check(name, false);
+        }
+        for name in valid {
+            check(name, true);
+        }
+    }
+}

@@ -934,6 +934,9 @@
       },
       "default": {},
       "description": "The containers tasks can run in, keyed by name.",
+      "propertyNames": {
+        "pattern": "^[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*$"
+      },
       "type": "object"
     },
     "forbid_telemetry": {
@@ -953,7 +956,9 @@
       "type": "array"
     },
     "project_name": {
+      "default": null,
       "description": "The project's name, used to name the images this project builds and (with `--cache-type=volume`) its cache volumes. Taken from the root config file only; ignored in an included file. Defaults to the project directory's own name.",
+      "pattern": "^[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*$",
       "type": [
         "string",
         "null"

@@ -3036,6 +3036,48 @@ impl CheckedName for ConfigVariableName {
     }
 }
 
+/// A container's name: Batect's `ContainerMap` rule and message. Every
+/// container's, not only one with a `build_directory`, since a container can
+/// gain one later without anyone revisiting its name (decisions/0018).
+struct ContainerName;
+
+impl CheckedName for ContainerName {
+    fn check(name: &str) -> std::result::Result<(), String> {
+        if crate::image_reference::is_name_component(name) {
+            return Ok(());
+        }
+        Err(format!(
+            "Invalid container name '{name}'. Container names must be valid Docker \
+             references: they {IMAGE_NAME_RULE}"
+        ))
+    }
+}
+
+/// `serde` `deserialize_with` for `project_name`: Batect's
+/// `ProjectNameSerializer` rule and message, checked as the value is read so
+/// the parser locates it, as a [`CheckedName`] is.
+fn deserialize_project_name<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    // A null still means left out, as for any `Option` field.
+    let Some(name) = Option::<String>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    if !crate::image_reference::is_name_component(&name) {
+        return Err(serde::de::Error::custom(format!(
+            "Invalid project name '{name}'. The project name must be a valid Docker \
+             reference: it {IMAGE_NAME_RULE}"
+        )));
+    }
+    Ok(Some(name))
+}
+
+/// How Batect's messages refusing a project or container name state the
+/// image-name-component rule.
+const IMAGE_NAME_RULE: &str = "must contain only lowercase letters, digits, dashes (-), \
+     single consecutive periods (.) or one or two consecutive underscores (_), and must not \
+     start or end with dashes, periods or underscores.";
+
 /// One key of a map whose keys `N` checks, refused as it is read.
 struct NamedKey<N>(String, std::marker::PhantomData<N>);
 
@@ -3116,9 +3158,22 @@ pub(crate) struct ConfigFile {
     /// (with `--cache-type=volume`) its cache volumes. Taken from the root
     /// config file only; ignored in an included file. Defaults to the
     /// project directory's own name.
+    #[serde(default, deserialize_with = "deserialize_project_name")]
+    // The image-name-component rule, stated for an editor.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("pattern" = crate::image_reference::NAME_COMPONENT_PATTERN))
+    )]
     pub(crate) project_name: Option<String>,
     /// The containers tasks can run in, keyed by name.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_named::<ContainerName, _, _>")]
+    // `ContainerName`'s rule, stated for an editor.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("propertyNames" = {
+            "pattern": crate::image_reference::NAME_COMPONENT_PATTERN,
+        }))
+    )]
     pub(crate) containers: IndexMap<String, Container>,
     /// The tasks this project defines, keyed by the name used to run them.
     #[serde(default, deserialize_with = "deserialize_named::<TaskName, _, _>")]
@@ -6459,38 +6514,15 @@ fn expand_external_health_checks(config: &mut Config) -> Result<()> {
                  against a container that isn't ready yet"
             );
         }
-        // The name is interpolated into the companion's `sh -c` script, and
-        // nothing else in this file constrains what a container may be
-        // called — so a `'` would end the script's own quoting and a `$(…)`
-        // would be run by that shell. Only imposed on a container that is
-        // actually checked; the same characters remain legal (if unwise)
-        // elsewhere, where nothing interpolates them into a shell.
-        if let Some(bad) = name
-            .chars()
-            .find(|c| !c.is_ascii_alphanumeric() && !"-_.".contains(*c))
-        {
-            anyhow::bail!(
-                "Container '{name}' has an 'external_health_check', but its own name \
-                 contains {bad:?} — a checked container's name is used as a hostname and \
-                 must hold only letters, digits, '-', '_' and '.'"
-            );
-        }
-        // And must not *start* with a '-' or a '.'. Deliberately narrower
-        // than "must start with a letter or digit", because that was tried
-        // and was wrong: measured against the real tools, Docker accepts and
-        // resolves a `_api` network alias, and both `curl` and `nc` reach it
-        // — so a leading '_' has nothing wrong with it. The two that do:
-        // `.api` is not a resolvable host at all (`curl` reports `000`, `nc`
-        // "bad address"), and `-api` is read by `nc` as an option rather
-        // than a host, so the check fails naming somewhere it never
-        // contacted. An empty name has no host to reach at all.
-        if name.is_empty() || name.starts_with(['-', '.']) {
-            anyhow::bail!(
-                "Container '{name}' has an 'external_health_check', but its own name is \
-                 empty or starts with '-' or '.' — the check reaches it by that name, and \
-                 such a name is either unresolvable or read as an option instead of a host"
-            );
-        }
+        // The name is interpolated into the companion's `sh -c` script and
+        // is the host the check reaches. An image-name component holds
+        // nothing a shell reads specially and starts with a letter or
+        // digit: no `'` or `$(…)` to escape the script's quoting, and no
+        // leading `-` that `nc` would read as an option or `.` that
+        // resolves nowhere. Parsing already refused any other name
+        // (`ContainerName`); checked again here, where it matters, for a
+        // `Config` that was never parsed.
+        ContainerName::check(name).map_err(anyhow::Error::msg)?;
         if let ExternalHealthCheckKind::Http { path, .. } = &check.kind {
             validate_external_health_check_path(name, path)?;
         }

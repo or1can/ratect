@@ -68,12 +68,32 @@ config_variables:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `project_name` | string | yes | Used only for display (e.g. in `--list-tasks` output). |
-| `containers` | map of name → [Container](#container) | yes | Container definitions, keyed by name. Referenced from tasks via `run.container`. |
+| `project_name` | string | yes | Used only for display (e.g. in `--list-tasks` output). See [Project and container names](#project-and-container-names) for what it may contain. |
+| `containers` | map of name → [Container](#container) | yes | Container definitions, keyed by name. Referenced from tasks via `run.container`. See [Project and container names](#project-and-container-names) for what a name may contain. |
 | `tasks` | map of name → [Task](#task) | yes | Task definitions, keyed by name. Run by name via `ratect-compat <task-name>`. See [Task names](#task-names) for what a name may contain. |
 | `config_variables` | map of name → [ConfigVariable](#configvariable) | no | Declares the config variables usable via `<name`/`<{name}` [expressions](#expressions). A name must be declared here before it can be referenced — see [Expressions](#expressions) — and follows [Config variable names](#config-variable-names). |
 | `include` | list of string or [Include](#includes) | no | Splits configuration across multiple files — see [Includes](#includes) below. |
 | `forbid_telemetry` | boolean | no | Recognized but inert — Ratect collects no telemetry, so there's nothing to forbid. |
+
+### Project and container names
+
+A built image is tagged `<project_name>-<container name>`, so `project_name` and
+every container's name — a pull-only container's too — must be a Docker
+image-name component: lowercase letters and digits, joined by a single period,
+one or two underscores, or any number of dashes. `my-app`, `api.v2` and
+`build_env` are names; `My-App`, `-api`, `a..b`, `a:b` and `org/app` are not.
+A name that breaks the rule is refused, never changed to fit it. The rule is
+Batect's, and so are the messages such a name fails the load with, for every
+command, `--list-tasks` included:
+
+```text
+Invalid project name 'My-App'. The project name must be a valid Docker reference: it must contain only lowercase letters, digits, dashes (-), single consecutive periods (.) or one or two consecutive underscores (_), and must not start or end with dashes, periods or underscores.
+Invalid container name '-api'. Container names must be valid Docker references: they must contain only lowercase letters, digits, dashes (-), single consecutive periods (.) or one or two consecutive underscores (_), and must not start or end with dashes, periods or underscores.
+```
+
+Like any error raised while the file is parsed, each gives a line, column and
+path — for a container name, the entry's value's, as for a [task
+name](#task-names).
 
 ## Includes
 
