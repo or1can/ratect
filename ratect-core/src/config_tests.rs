@@ -2364,6 +2364,59 @@ tasks:
 }
 
 #[test]
+fn devices_object_form_without_options_keeps_its_paths_as_written() {
+    let mut config = parse(
+        r#"
+project_name: demo
+containers:
+  build-env:
+    image: alpine:3.18
+    devices:
+      - local: ./dev/a
+        container: $VAR/b
+tasks: {}
+"#,
+    );
+
+    // Neither path is resolved or evaluated, as in Batect: a relative
+    // `local` stays relative and `$VAR` stays literal.
+    config
+        .check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+            Some("value".to_string())
+        })
+        .unwrap();
+
+    assert_eq!(
+        config.containers["build-env"].devices,
+        Some(vec![DeviceMapping {
+            local: "./dev/a".to_string(),
+            container: "$VAR/b".to_string(),
+            options: None,
+        }])
+    );
+}
+
+#[test]
+fn devices_object_form_names_a_missing_local_or_container() {
+    // `{}` lacks both and names `local`, Batect's order too.
+    for (entry, field) in [
+        ("{container: /dev/b}", "local"),
+        ("{local: /dev/a}", "container"),
+        ("{}", "local"),
+    ] {
+        let yaml = format!(
+            "project_name: demo\ncontainers:\n  build-env:\n    image: alpine:3.18\n    \
+             devices:\n      - {entry}\ntasks: {{}}\n"
+        );
+        let message = format!("{:#}", try_parse(&yaml).unwrap_err());
+        assert!(
+            message.contains(&format!("missing field: {field}")),
+            "{entry}: {message}"
+        );
+    }
+}
+
+#[test]
 fn devices_defaults_to_none() {
     let config = parse(
         r#"
