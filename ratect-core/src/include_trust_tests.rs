@@ -176,10 +176,11 @@ fn an_unrestricted_clone_failure_keeps_gits_own_error() {
         anyhow::anyhow!("fatal: could not read from remote"),
         "r",
         "v1",
+        &["1.yml".to_string()],
         None,
     );
     let message = format!("{error:#}");
-    assert!(message.contains("Failed to resolve Git include 'r' at 'v1'"));
+    assert!(message.contains("Failed to resolve Git include '1.yml' from 'r' at 'v1'"));
     assert!(
         message.contains("fatal: could not read from remote"),
         "the owner named this remote themselves, so the detail is theirs: {message}"
@@ -193,6 +194,7 @@ fn a_restricted_clone_failure_withholds_gits_error() {
         anyhow::anyhow!("fatal: could not read from remote"),
         "internal.example",
         "v1",
+        &["1.yml".to_string()],
         Some(&declaring),
     );
     let message = format!("{error:#}");

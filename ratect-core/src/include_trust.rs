@@ -550,15 +550,27 @@ pub(crate) fn refuse_read(check: Result<()>) -> bool {
 /// that bundle. The detail goes to `RUST_LOG=debug` instead, which is a
 /// deliberate trade: the person who can read the debug log is the person
 /// running the build, not the person who wrote the bundle.
+///
+/// `candidates` are the files the entry would have loaded — its `path`, or
+/// the default bundle names standing in for a pathless one — named in the
+/// unrestricted headline alongside the repository and ref, so it says which
+/// entry the owner wrote. The restricted message leaves them out: there the
+/// entry is the bundle's, and the bundle it names is what the owner chose.
 pub(crate) fn hide_clone_detail(
     error: anyhow::Error,
     repo: &str,
     git_ref: &str,
+    candidates: &[String],
     restricted: Option<&Bundle>,
 ) -> anyhow::Error {
     let Some(declaring) = restricted else {
+        let files = candidates
+            .iter()
+            .map(|candidate| format!("'{candidate}'"))
+            .collect::<Vec<_>>()
+            .join(" or ");
         return error.context(format!(
-            "Failed to resolve Git include '{repo}' at '{git_ref}'"
+            "Failed to resolve Git include {files} from '{repo}' at '{git_ref}'"
         ));
     };
     tracing::debug!(

@@ -70,6 +70,7 @@ history, from when it was the only binary.
 - A lock file left beside an already-cloned Git include in `~/.ratect/incl` no longer makes every load of a config using that include wait 5 minutes and fail; only a load that still has to clone waits for the lock, as in Batect.
 - A Git include's `repo` may use any transport `git` itself allows — a remote helper (`codecommit::…`, `gcrypt::…`) or `ftp`/`ftps` — and cloning it honours your own Git protocol settings, as in Batect.
 - Using a cached Git include keeps every field in its `~/.ratect/incl` sidecar file, including ones written by another ratect version that this one doesn't recognise, and a sidecar missing one of its usual fields no longer fails the config load, as in Batect.
+- A Git include whose clone fails names the file it would have loaded — its `path`, or for a pathless entry the default bundle file names — as well as its `repo` and `ref`.
 
 ### Security
 
