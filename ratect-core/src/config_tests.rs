@@ -4221,6 +4221,81 @@ fn compat_rejects_build_only_fields_alongside_an_image() {
     }
 }
 
+/// Batect's `resolveImageSource` checks `build_ssh` before
+/// `build_secrets`, so a container with both reports `build_ssh` (#406).
+#[test]
+fn compat_reports_build_ssh_before_build_secrets_alongside_an_image() {
+    let mut container = image_container();
+    container.build_ssh = Some(Vec::new());
+    container.build_secrets = Some(HashMap::new());
+    let containers = IndexMap::from([("app".to_string(), container)]);
+
+    let err = validate_image_sources_in_compat(&batect_shaped_for_test(&containers))
+        .expect_err("build fields alongside 'image' should be rejected");
+
+    assert!(
+        format!("{err:#}").contains("'build_ssh', which cannot be used with 'image'"),
+        "unexpected error: {err:#}"
+    );
+}
+
+/// Of two build-only fields alongside `image`, the one Batect's
+/// `resolveImageSource` checks first is the one reported (#406).
+#[test]
+fn compat_reports_build_only_fields_in_batects_order() {
+    type SetField = fn(&mut Container);
+    let set: [(&str, SetField); 5] = [
+        ("build_args", |c| c.build_args = Some(HashMap::new())),
+        ("build_target", |c| {
+            c.build_target = Some("stage".to_string())
+        }),
+        ("dockerfile", |c| {
+            c.dockerfile = Some("Dockerfile".to_string())
+        }),
+        ("build_ssh", |c| c.build_ssh = Some(Vec::new())),
+        ("build_secrets", |c| c.build_secrets = Some(HashMap::new())),
+    ];
+    for pair in set.windows(2) {
+        let [(earlier, set_earlier), (later, set_later)] = pair else {
+            unreachable!()
+        };
+        let mut container = image_container();
+        set_earlier(&mut container);
+        set_later(&mut container);
+        let containers = IndexMap::from([("app".to_string(), container)]);
+
+        let err = validate_image_sources_in_compat(&batect_shaped_for_test(&containers))
+            .expect_err("build fields alongside 'image' should be rejected");
+
+        assert!(
+            format!("{err:#}").contains(&format!("'{earlier}', which cannot be used with 'image'")),
+            "{earlier} with {later} should report {earlier}: {err:#}"
+        );
+    }
+}
+
+/// Batect checks the image source before any build-only field, so a
+/// build field never displaces the both/neither message.
+#[test]
+fn compat_reports_the_image_source_before_a_build_only_field() {
+    let mut both = image_container();
+    both.build_directory = Some("./docker".to_string());
+    both.build_ssh = Some(Vec::new());
+    let mut neither = image_container();
+    neither.image = None;
+    neither.build_ssh = Some(Vec::new());
+
+    for (container, expected) in [
+        (both, "has both 'image' and 'build_directory'"),
+        (neither, "has neither 'image' nor 'build_directory' set."),
+    ] {
+        let containers = IndexMap::from([("app".to_string(), container)]);
+        let err = validate_image_sources_in_compat(&batect_shaped_for_test(&containers))
+            .expect_err("an invalid image source should be rejected");
+        assert!(format!("{err:#}").contains(expected), "{err:#}");
+    }
+}
+
 /// `resolve_image` prefers `image`, so a container with both silently
 /// never built — the configuration said to build and Ratect pulled.
 #[test]
@@ -14026,6 +14101,36 @@ async fn several_containers_without_an_image_source_report_the_first_declared() 
         error.starts_with("Container 'zz' has neither 'image' nor 'build_directory' set"),
         "{error}"
     );
+}
+
+/// The loader appends the declaring file as a second sentence, so the
+/// neither message has to end its own (#406).
+#[tokio::test]
+async fn a_container_without_an_image_source_is_one_sentence_before_its_origin() {
+    for (case, yaml) in [
+        (
+            "no image source",
+            "project_name: demo\ncontainers:\n  app: {command: x}\n",
+        ),
+        ("body-less key", "project_name: demo\ncontainers:\n  app:\n"),
+    ] {
+        let dir = unique_temp_dir();
+        let path = dir.join("batect.yml");
+        std::fs::write(&path, yaml).unwrap();
+
+        let error = format!("{:#}", load_project(&path).await.unwrap_err());
+
+        assert_eq!(
+            error,
+            format!(
+                "Container 'app' has neither 'image' nor 'build_directory' set. It is \
+                 declared in {path:?}, and a container declared in a Batect-format (YAML) \
+                 file follows Batect's rules wherever it is included."
+            ),
+            "{case}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
 
 #[tokio::test]
