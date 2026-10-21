@@ -2874,18 +2874,99 @@ fn volume_mount_parses_three_part_string_with_options_as_local() {
 
 #[test]
 fn volume_mount_rejects_an_empty_string() {
-    assert!(VolumeMount::parse_string("").is_err());
+    assert_eq!(
+        VolumeMount::parse_string("").unwrap_err().to_string(),
+        "Volume mount definition cannot be empty."
+    );
 }
 
 #[test]
 fn volume_mount_rejects_a_string_with_too_many_colon_separated_parts() {
-    let result = VolumeMount::parse_string("C:/data:/code:ro");
-    assert!(result.is_err());
+    assert_eq!(
+        VolumeMount::parse_string("C:/data:/code:ro")
+            .unwrap_err()
+            .to_string(),
+        invalid_mount_message("Volume", "C:/data:/code:ro")
+    );
 }
 
 #[test]
 fn volume_mount_rejects_a_string_missing_a_container_path() {
-    assert!(VolumeMount::parse_string("code").is_err());
+    for value in ["code", "code:"] {
+        assert_eq!(
+            VolumeMount::parse_string(value).unwrap_err().to_string(),
+            invalid_mount_message("Volume", value)
+        );
+    }
+}
+
+#[test]
+fn volume_mount_rejects_a_string_missing_a_local_path() {
+    assert_eq!(
+        VolumeMount::parse_string(":/code").unwrap_err().to_string(),
+        invalid_mount_message("Volume", ":/code")
+    );
+}
+
+/// Batect's regex requires at least one character after the second colon,
+/// and its own `VolumeMountSpec` lists `'thing:thing:'` as invalid (#380).
+#[test]
+fn volume_mount_rejects_a_string_with_an_empty_options_segment() {
+    assert_eq!(
+        VolumeMount::parse_string("thing:thing:")
+            .unwrap_err()
+            .to_string(),
+        invalid_mount_message("Volume", "thing:thing:")
+    );
+}
+
+/// The empty-options refusal happens at load. The value has to be quoted:
+/// unquoted, `thing:thing:` is a YAML mapping and never reaches the string
+/// parser.
+#[tokio::test]
+async fn a_string_volume_with_an_empty_options_segment_fails_to_load() {
+    let dir = unique_temp_dir();
+    let config_path = dir.join("batect.yml");
+    std::fs::write(
+        &config_path,
+        "project_name: demo\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   volumes:\n\
+         \x20     - 'thing:thing:'\n\
+         tasks: {}\n",
+    )
+    .unwrap();
+
+    let message = format!("{:#}", load_project(&config_path).await.unwrap_err());
+    assert!(
+        message.contains(&invalid_mount_message("Volume", "thing:thing:")),
+        "{message}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `ratect.toml` shares the string form's parser, so it refuses an empty
+/// options segment too, and the error gives the entry's line and column.
+#[tokio::test]
+async fn a_string_volume_with_an_empty_options_segment_fails_to_load_in_toml() {
+    let message = format!(
+        "{:#}",
+        load_native_toml(
+            "project_name = \"demo\"\n\
+             [containers.app]\n\
+             image = \"alpine\"\n\
+             volumes = [\"thing:thing:\"]\n"
+        )
+        .await
+        .unwrap_err()
+    );
+    assert!(
+        message.contains("line 4, column")
+            && message.contains(&invalid_mount_message("Volume", "thing:thing:")),
+        "{message}"
+    );
 }
 
 #[test]

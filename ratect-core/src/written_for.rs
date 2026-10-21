@@ -101,8 +101,8 @@ pub const BREAKING_CHANGES: &[BreakingChange] = &[
     },
     BreakingChange {
         version: "0.12.0",
-        summary: "a string 'devices' entry with an empty options segment ('a:b:') fails the \
-                  load",
+        summary: "a string 'volumes' or 'devices' entry with an empty options segment \
+                  ('a:b:') fails the load",
     },
 ];
 
