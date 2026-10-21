@@ -871,3 +871,13 @@ fn distinct_ports_keep_the_order_they_were_listed_in() {
         vec![tcp(9000, 90), tcp(8000, 80), tcp(7000, 70)]
     );
 }
+
+/// ratect#291: one container port on two host ports is two mappings, not a
+/// duplicate — both reach `docker.rs`, whichever side each came from.
+#[test]
+fn one_container_port_on_two_host_ports_from_the_container_and_the_run_keeps_both() {
+    assert_eq!(
+        published_ports(&["9000:80"], &["9001:80"]),
+        vec![tcp(9000, 80), tcp(9001, 80)]
+    );
+}

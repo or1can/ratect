@@ -641,6 +641,9 @@ specific task's run — combined with the container's own `ports` as a union, no
 override; there's no concept of one replacing an entry from the other. A mapping
 given more than once, on either side or both, is published once — compared port by
 port, so `"8080:80"` alongside `"8080-8081:80-81"` publishes `8080` → `80` once.
+One container port may be published on several host ports (`"9000:80"` and
+`"9001:80"`, whether both on the container or one in `TaskRun.ports`), and each
+host port is bound.
 
 `--disable-ports` suppresses publishing of every container's `ports` — from both
 `Container.ports` and any `TaskRun.ports` — regardless of what's configured. See

@@ -5040,6 +5040,30 @@ fn ports_publishes_a_container_port_to_the_host() {
     assert!(status.success(), "ratect should exit successfully");
 }
 
+/// Same real-Docker requirements as `ports_publishes_a_container_port_to_the_host`,
+/// on host ports 18082/18083. One container port published on two host
+/// ports reaches the container through both, as in Batect — not only
+/// through the last one listed (ratect#291).
+#[test]
+#[ignore]
+fn ports_publishes_one_container_port_on_every_host_port_given() {
+    let mut child = ratect_command()
+        .arg("-f")
+        .arg(ports_config_path())
+        .arg("serve-on-two-host-ports")
+        .spawn()
+        .expect("failed to spawn ratect");
+
+    let first = wait_for_port(18082, Duration::from_secs(15));
+    let second = wait_for_port(18083, Duration::from_secs(15));
+
+    let status = child.wait().expect("failed to wait for ratect");
+
+    assert!(first, "host port 18082 should have been reachable");
+    assert!(second, "host port 18083 should have been reachable");
+    assert!(status.success(), "ratect should exit successfully");
+}
+
 /// Same real-Docker requirements as `ports_publishes_a_container_port_to_the_host`.
 /// Uses a separate container/port (18081) from that test so the two can run
 /// concurrently without colliding.

@@ -95,6 +95,7 @@ history, from when it was the only binary.
 - A container listing the same volume more than once — including two spellings of one host path, such as `./a:/a` and `a:/a`, or a `cache` mount repeated — mounts it once, as in Batect, instead of failing with `Duplicate mount point`. The same paths with different options are still two mounts.
 - A `build_ssh` agent listing the same path more than once uses it once, as in Batect, so a socket listed twice no longer fails the build as two agent sockets.
 - A port mapping given more than once — in a container's `ports`, or in both the container's and a task's `run` or a `customise` entry's — is published once, as in Batect, including where a range also covers it.
+- A container port mapped to several host ports — `9000:80` and `9001:80`, in a container's `ports`, a task's `run` or a `customise` entry — is published on all of them, as in Batect, instead of only the last.
 
 ### Security
 

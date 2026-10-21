@@ -1,7 +1,9 @@
 # Exercises `ports` (publishing a container port to the host) and
-# `--disable-ports`. `server`/`server-disabled-check` are separate
-# containers on separate host ports so the two real-Docker tests that use
-# this fixture can run concurrently without colliding.
+# `--disable-ports`. `server`/`server-disabled-check`/`server-two-host-ports`
+# are separate containers on separate host ports so the real-Docker tests
+# that use this fixture can run concurrently without colliding.
+# `server-two-host-ports` publishes its one container port on two host
+# ports, which must both be bound (ratect#291).
 #
 # nginx:alpine's default command serves on port 80 with no configuration
 # needed — Container has no `command` field for dependencies, so a
@@ -24,6 +26,15 @@ containers:
     image: alpine:3.18.2
     dependencies:
       - server-disabled-check
+  server-two-host-ports:
+    image: nginx:alpine
+    ports:
+      - "18082:80"
+      - "18083:80"
+  app-two-host-ports:
+    image: alpine:3.18.2
+    dependencies:
+      - server-two-host-ports
 tasks:
   serve:
     run:
@@ -34,4 +45,8 @@ tasks:
   serve-for-disabled-check:
     run:
       container: app-disabled-check
+      command: sleep 5
+  serve-on-two-host-ports:
+    run:
+      container: app-two-host-ports
       command: sleep 5
