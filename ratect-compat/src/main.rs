@@ -566,7 +566,7 @@ async fn run(args: Args, color_mode: ColorMode, stderr: &Console) -> Result<()> 
             // thread started on every "run a task" invocation regardless of
             // whether this particular config uses a Git include. Never
             // awaited: a failure (or simply not finishing before the
-            // process exits — see `run` below's own doc comment on
+            // process exits — see `main`'s own comment on
             // `std::process::exit`) is inherently best-effort, same as a
             // JVM daemon thread not blocking process exit either.
             tokio::spawn(async {
