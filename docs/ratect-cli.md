@@ -494,49 +494,59 @@ until the first real run caches it.
 
 ## Exit codes and diagnostics
 
-Identical to `ratect-compat`, and decided by which of two paths an invocation is on.
-`--help` and `--version` exit `0` on either, once the arguments reach them.
+Identical to `ratect-compat`'s: both binaries share one mapping, whose design is
+[decisions/0016](../decisions/0016-exit-codes.md). An invocation is on one of two paths,
+and its exit code depends on which. `ratect run` is a **run**, even when its arguments
+don't parse; every other verb isn't. For a line that doesn't parse, the subcommand
+counts where it would be read as one — not after `--`, and not as another option's
+value — so `ratect --bogus run test` is a run. `--help` and `--version` exit `0` on
+either path, once the arguments reach them.
 
-A run — `ratect run`, even when its arguments don't parse — exits with the task's own
-container's exit code, `0` included; with 128 + the signal's number if a signal ended it
-(`130` for Ctrl+C, `143` for `SIGTERM`, `129` for `SIGHUP`); and with `125` if the task's
-command never ran or never finished for any other reason — an unknown or misused flag
-(`ratect run --bogus`, `ratect -o bogus run test`), a config file that isn't there, a
-config that doesn't load, an unknown task, an unreachable daemon, a failed pull or build,
-a dependency that never became ready. A run whose every container exited `0` but whose
-cleanup then failed — a removal the daemon refused, or a cleanup stopped with Ctrl+C —
-exits `125` too, and a prerequisite whose cleanup fails stops the chain there; a task's
-own non-zero code is never overridden.
+A run exits with one of three things, answering one question: did the task's own
+container run to an exit code of its own?
 
-Every other verb runs nothing, and exits `0` when it succeeds; `1` when it fails
+1. **It did: that exit code, `0` included.** A task's own `125`, `126` or `127` passes
+   through the same way, and a prerequisite that fails this way stops the chain. One
+   exception: if every container exited `0` but Ratect then **fails to clean up** — a
+   removal the daemon refused, or a cleanup stopped with Ctrl+C with something still to
+   remove — the run exits `125` instead, and a prerequisite whose cleanup fails stops
+   the chain there. A task's own non-zero code is never overridden.
+2. **A termination signal ended it: 128 + that signal's own number** — `130` for Ctrl+C
+   (`SIGINT`), `143` for `SIGTERM`, `129` for `SIGHUP`. Any of the three abandons the run
+   and then cleans up after it; a second one *during* that cleanup force-removes
+   whatever is left, a Ctrl+C after that stops the cleanup, and `ratect resources list`
+   finds whatever that leaves. A signal that arrives only during the cleanup of a run
+   that had already finished doesn't change its exit code; one during a prerequisite's
+   cleanup ends the run before the next task starts.
+3. **It never ran, or never finished, for any other reason: `125`** — an unknown or
+   misused flag (`ratect run --bogus`, `ratect -o bogus run test`), a config file that
+   isn't there, a config that doesn't load, an unknown task, an unreachable daemon, a
+   failed pull or build, a dependency that never became ready.
+
+Every other verb runs nothing, so it exits `0` when it succeeds; `1` when it fails
 (`config validate` on a file that doesn't parse, `caches list` with the daemon down,
-`doctor` finding a problem); and `2` when it was invoked wrong — a flag `clap` rejects
+`doctor` finding a problem); and `2` when it was invoked wrong — a flag that's rejected
 (`ratect --bogus`, `ratect tasks list --bogus`, a missing subcommand), or an option value
 that fails its own check, such as a `-f` naming no file (`ratect tasks list` where there
 is no `ratect.toml`). `doctor` and `config validate` report a `-f` naming no file as a
 problem they found instead, and exit `1`; a flag rejected in their own arguments is still
-`2`. Which path a line that doesn't parse is on is decided by its subcommand as `clap`
-would read it: `ratect --bogus run test` is a run, and so exits `125`.
+`2`.
 
-A task's own exit code is reported by the code itself and, outside `quiet`, by the
-`finished with exit code N` summary line — never by an `Error:` line; a run a signal
-ended is reported by the interrupt notice and its code, with no `Error: Interrupted`
-after it; every other failure's reason always reaches stderr as `Error: <message>`, in
-every output style including `quiet`, whatever `RUST_LOG` says. [`ratect-compat`'s
-section](ratect-compat-cli.md#exit-codes-and-error-reporting) has each rule in full, and
-[decisions/0016](../decisions/0016-exit-codes.md) why. Any of the three signals abandons
-the run and then cleans up after it; a second one *during* that cleanup force-removes
-whatever is left, a Ctrl+C after that stops the cleanup, and `ratect resources list`
-finds whatever that leaves. A signal that arrives only during the cleanup of a run that
-had already finished doesn't change its exit code; one during a prerequisite's cleanup
-ends the run before the next task starts. `RUST_LOG` controls Ratect's own internal
-logging (default `info`, on stderr — see [Filtering
-`RUST_LOG`](troubleshooting.md#filtering-rust_log)). Unlike `ratect-compat` there's no `--log-file`;
-redirect stderr if you want one. A crash (a genuine bug) exits `101` and prints where to
-report it, `ratect`'s version and platform, and a reminder to re-run with
-`RUST_BACKTRACE=1` if it isn't already set — see
-[`ratect-compat`'s own note on this](ratect-compat-cli.md#exit-codes-and-error-reporting),
-which applies identically here.
+Every failure of Ratect's own reaches stderr as `Error: <message>`, in every output style
+including `quiet`, whatever `RUST_LOG` says. Two kinds of failed run print no `Error:`
+line, because something else already reported them: a task's own non-zero exit (rule 1 —
+the code itself and, outside `quiet`, the `finished with exit code N` summary line), and
+a run ended by a signal (rule 2 — the interrupt notice). [`ratect-compat`'s
+section](ratect-compat-cli.md#exit-codes-and-error-reporting) has each rule in full.
+
+- `RUST_LOG` controls Ratect's own internal logging (default `info`, on stderr — see
+  [Filtering `RUST_LOG`](troubleshooting.md#filtering-rust_log)). Unlike `ratect-compat`
+  there's no `--log-file`; redirect stderr if you want one.
+- **A crash (a genuine bug) exits `101`** and prints where to report it, `ratect`'s
+  version and platform, and a reminder to re-run with `RUST_BACKTRACE=1` if it isn't
+  already set — see
+  [`ratect-compat`'s own note on this](ratect-compat-cli.md#exit-codes-and-error-reporting),
+  which applies identically here.
 
 ## Differences from `ratect-compat`
 
