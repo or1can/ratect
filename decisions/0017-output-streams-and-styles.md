@@ -132,7 +132,7 @@ is shaped by `-o`.
 
 | Class | Marker | What it is |
 | --- | --- | --- |
-| Error | `Error: ` in bold red, message in the default colour; unprefixed under `all` ([#367](https://github.com/or1can/ratect/issues/367)) | Ratect failed to do what was asked: for a run, to run the task or to clean up after it ([0016](0016-exit-codes.md)'s rule 3 and rule 1's cleanup failure, exit `125`); for any other verb, that verb's own failure (exit `1`). |
+| Error | `Error: ` in bold red, message in the default colour; unprefixed under `all` ([#367](https://github.com/or1can/ratect/issues/367)) | Ratect failed to do what was asked: for a run, to run the task or to clean up after it ([0016](0016-exit-codes.md)'s rule 3 and rule 1's cleanup failure, exit `125`); for any other verb, that verb's own failure (exit `1`) or an invocation error (exit `2`). |
 | Warning | `Warning: ` in bold yellow, message in the default colour | Something the user should change, though the run proceeds: a deprecated flag, a proxy bound to loopback. |
 | Notice | none | Something about the run the user reads but need not act on: the interrupt notice, a completed cleanup after an interrupt, what `--no-cleanup*` left in place. |
 | Progress | none | Milestones, status, the summary line; the only class `-o` shapes. |
@@ -158,7 +158,8 @@ it is fixed by the event, not by the style:
   Interrupted`.
 - `Error:` is reserved for Ratect's own failures — for a run, the ones 0016
   gives `125` (it could not run the task, or could not clean up after it);
-  for any other verb, the verb's failure.
+  for any other verb, the verb's failure or an invocation error (0016's `1`
+  and `2`).
 
 ### The interrupt sequence
 
