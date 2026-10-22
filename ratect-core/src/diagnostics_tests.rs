@@ -397,6 +397,159 @@ tasks:
     assert_eq!(dependency_names(&config), vec!["queue"]);
 }
 
+/// ratect#393: Batect refuses a list naming one entry twice; Ratect loads it
+/// and starts or runs the entry once, so the slip is reported here instead.
+/// One warning per list and entry, naming the container or task, the field
+/// and the entry — containers before tasks, each sorted by name.
+#[tokio::test]
+async fn an_entry_given_twice_in_dependencies_or_prerequisites_is_warned_about() {
+    let project = project_from(
+        "ratect.toml",
+        r#"
+project_name = "demo"
+
+[containers.db]
+image = "postgres:16"
+health_check = { command = "pg_isready" }
+
+[containers.app]
+image = "alpine:3.18.2"
+dependencies = ["db", "db"]
+
+[tasks.lint]
+run = { container = "app", command = "echo lint" }
+
+[tasks.test]
+run = { container = "app", command = "echo test" }
+dependencies = ["db", "db"]
+prerequisites = ["lint", "lint"]
+"#,
+    )
+    .await;
+
+    assert_eq!(
+        repeated_entries(&project.config),
+        vec![
+            "container 'app' gives 'db' more than once in its 'dependencies' — it starts only once"
+                .to_string(),
+            "task 'test' gives 'db' more than once in its 'dependencies' — it starts only once"
+                .to_string(),
+            "task 'test' gives 'lint' more than once in its 'prerequisites' — it runs only once"
+                .to_string(),
+        ]
+    );
+    let findings = findings_for(&project, no_host_env);
+    for message in repeated_entries(&project.config) {
+        assert!(
+            findings.contains(&Finding::Warning(message.clone())),
+            "'{message}' should be a doctor warning: {findings:?}"
+        );
+    }
+    assert!(
+        findings.iter().all(|f| !matches!(f, Finding::Problem(_))),
+        "a repeated entry doesn't stop a run: {findings:?}"
+    );
+}
+
+/// Batect compares the strings as written, before any wildcard is expanded:
+/// the same pattern twice is a repeat, but a pattern and a name it matches
+/// are not — that overlap is legal, and runs the match once.
+#[tokio::test]
+async fn a_repeated_prerequisite_is_compared_before_wildcard_expansion() {
+    let tasks = r#"
+project_name = "demo"
+
+[containers.app]
+image = "alpine:3.18.2"
+
+[tasks.lint-a]
+run = { container = "app", command = "echo a" }
+
+[tasks.lint-b]
+run = { container = "app", command = "echo b" }
+"#;
+
+    let repeated = project_from(
+        "ratect.toml",
+        &format!("{tasks}\n[tasks.all]\nprerequisites = [\"lint-*\", \"lint-*\"]\n"),
+    )
+    .await;
+    assert_eq!(
+        repeated_entries(&repeated.config),
+        vec![
+            "task 'all' gives 'lint-*' more than once in its 'prerequisites' — it runs only once"
+                .to_string()
+        ]
+    );
+
+    let overlapping = project_from(
+        "ratect.toml",
+        &format!("{tasks}\n[tasks.all]\nprerequisites = [\"lint-*\", \"lint-a\"]\n"),
+    )
+    .await;
+    assert_eq!(repeated_entries(&overlapping.config), Vec::<String>::new());
+}
+
+/// Three of one entry is still one slip in one list: one warning.
+#[tokio::test]
+async fn an_entry_given_three_times_is_warned_about_once() {
+    let project = project_from(
+        "batect.yml",
+        r#"
+project_name: demo
+containers:
+  db:
+    image: postgres:16
+  app:
+    image: alpine:3.18.2
+    dependencies: [db, db, db]
+"#,
+    )
+    .await;
+
+    assert_eq!(repeated_entries(&project.config).len(), 1);
+}
+
+/// No list repeats anything — including the ones load extends itself: each
+/// dependent of a container with an `external_health_check` gains its
+/// companion, which must never read as something the user repeated.
+#[tokio::test]
+async fn lists_without_a_repeat_are_not_warned_about() {
+    let project = project_from(
+        "ratect.toml",
+        r#"
+project_name = "demo"
+
+[containers.api]
+image = "alpine:3.18.2"
+external_health_check = { type = "tcp", port = 8080 }
+
+[containers.app]
+image = "alpine:3.18.2"
+dependencies = ["api"]
+
+[tasks.lint]
+run = { container = "app", command = "echo lint" }
+
+[tasks.test]
+run = { container = "app", command = "echo test" }
+dependencies = ["api"]
+prerequisites = ["lint"]
+"#,
+    )
+    .await;
+
+    assert!(
+        project.config.containers["app"]
+            .dependencies
+            .as_ref()
+            .is_some_and(|dependencies| dependencies.len() == 2),
+        "load should have added the companion: {:?}",
+        project.config.containers["app"].dependencies
+    );
+    assert_eq!(repeated_entries(&project.config), Vec::<String>::new());
+}
+
 /// Implements only what `leftover_finding` reaches through
 /// `resources::find` — a fake scoped to this module, not shared with
 /// `resources_tests.rs`'s: each test module's fake answers only what that

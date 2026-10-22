@@ -299,7 +299,8 @@ and exec instances die with their container, so there's nothing left to find.
 config, evaluates every container and task against this machine, and runs the same
 config-only checks (values this machine can't evaluate, missing
 `build_directory`/Dockerfile, floating image tags, dependencies with no
-`health_check`), exiting non-zero on a problem. It never touches Docker, so it's the
+`health_check`, an entry given more than once in one `dependencies` or
+`prerequisites` list), exiting non-zero on a problem. It never touches Docker, so it's the
 gate to run in CI when all you want to know is "is the config valid?", without a
 daemon. It takes the same `--config-var`/`--config-vars-file` options as `run`, and
 reads `ratect.local.toml` the same way, since evaluating the config can need them.
@@ -416,6 +417,12 @@ Git-included container's host path that evaluates to somewhere outside its
 boundary. A container with such a value is left out of the checks that read its
 values, so its image tag and `build_directory` aren't judged until it evaluates.
 When everything evaluates, `doctor` says so on its own `ok` line.
+
+A `dependencies` or `prerequisites` list that gives the same entry twice is a warning,
+as `app`'s `cache` above. Batect refuses such a file; Ratect loads it and starts
+or runs the entry once, so the repeat is reported rather than refused. Entries are
+compared as written: a wildcard prerequisite given twice is a repeat, but a wildcard
+beside a task it matches is not.
 
 If you're **migrating from Batect**, `doctor` also flags a leftover `batect`/`batect.cmd`
 wrapper script. Those aren't harmless: `./batect` still downloads and runs the

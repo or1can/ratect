@@ -43,6 +43,10 @@ history, from when it was the only binary.
 - A run whose every container exited `0` but whose cleanup fails — the daemon refusing to remove a container or the task network, or a cleanup abandoned with something left to remove — exits `125` instead of `0`, and a prerequisite whose cleanup fails stops the run before the tasks after it. A task's own non-zero exit code is kept.
 - `ratect run` (ratect only) writes its progress — milestones, the summary line, and under `-o all` every container's prefixed lines except the task container's own — to stderr instead of stdout. Stdout is the task container's own output alone, in every style — prefixed with its container's name under `-o all` — and `fancy` is auto-selected when stderr is an interactive console, so a run with stdout redirected gets it. `ratect-compat` is unchanged.
 
+### Added
+
+- `ratect doctor` and `ratect config validate` (ratect only) warn when a container's `dependencies`, a task's `dependencies` or a task's `prerequisites` gives the same entry more than once, naming the container or task, the field and the entry. The project still loads, and the entry still starts or runs once.
+
 ### Changed
 
 - With `RUST_LOG=debug`, a run whose `-- ADDITIONAL_ARGS` replace the image's default `CMD`, because neither the task nor its container sets a `command`, logs the `CMD` replaced.
