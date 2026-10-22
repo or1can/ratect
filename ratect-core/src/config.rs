@@ -5273,13 +5273,15 @@ impl LoadedProject {
 /// the configuration says now, nothing else in the file — its written-for
 /// version, a field this binary doesn't know, an expression this machine
 /// can't evaluate, an include — may stop it being read. TOML or YAML by
-/// extension, as the native loader chooses.
+/// extension, as the native loader chooses. A `config_file` that isn't
+/// there, or isn't a file, fails [`check_config_file`] first.
 pub fn project_name_of(config_file: &Path) -> Result<String> {
     /// Just the one field, with no `deny_unknown_fields`.
     #[derive(Deserialize)]
     struct ProjectName {
         project_name: Option<String>,
     }
+    check_config_file(config_file)?;
     let text = std::fs::read_to_string(config_file)
         .with_context(|| format!("Failed to open config file {:?}", config_file))?;
     let parsed: ProjectName = match config_file_format(config_file)? {
@@ -5470,10 +5472,30 @@ pub async fn load_project_native(config_file: &Path) -> Result<LoadedProject> {
     load_project_impl(config_file, ConfigFormat::Native).await
 }
 
-async fn load_project_impl(config_file: &Path, format: ConfigFormat) -> Result<LoadedProject> {
+/// `-f`'s own check: the config file it names, given or defaulted, exists
+/// and is a file. Either failure is an
+/// [`InvalidOptionValue`](crate::exit_code::InvalidOptionValue) rather than
+/// a plain error, so a verb that isn't a run exits `2` for it
+/// (decisions/0016); a file that exists but doesn't load is the command's
+/// own failure, and is left to the loader.
+pub fn check_config_file(config_file: &Path) -> Result<()> {
+    let invalid = |problem: &str| {
+        Err(crate::exit_code::InvalidOptionValue::new(format!(
+            "Configuration file {config_file:?} {problem}."
+        ))
+        .into())
+    };
     if !config_file.exists() {
-        anyhow::bail!("Configuration file {:?} not found.", config_file);
+        return invalid("not found");
     }
+    if !config_file.is_file() {
+        return invalid("is not a file");
+    }
+    Ok(())
+}
+
+async fn load_project_impl(config_file: &Path, format: ConfigFormat) -> Result<LoadedProject> {
+    check_config_file(config_file)?;
     let loaded = match format {
         ConfigFormat::Compat => Config::load_from_file(config_file).await?,
         ConfigFormat::Native => Config::load_from_file_native(config_file).await?,

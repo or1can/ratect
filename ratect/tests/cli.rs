@@ -1667,23 +1667,76 @@ fn an_unknown_subcommand_is_rejected_with_the_usage_message() {
     );
 }
 
-/// `--help` exits `0` and a usage error exits `2` — `clap`'s conventions,
-/// and both divergences from Batect (`1` and `255`) that
-/// `decisions/0016-exit-codes.md` keeps. Pinned so a `clap` upgrade can't
-/// move either unnoticed.
+fn exit_code_in(directory: &Path, args: &[&str]) -> Option<i32> {
+    ratect_command()
+        .current_dir(directory)
+        .args(args)
+        .output()
+        .expect("failed to run ratect")
+        .status
+        .code()
+}
+
+/// `--help` and `--version` exit `0` once `clap` reaches them. An argument
+/// `clap` rejects takes its path's code (decisions/0016): `125` under
+/// `run`, where `2` would collide with a task's own code, and `2` anywhere
+/// else — `clap`'s convention, kept off the run path. Both divergences from
+/// Batect (`1` for `--help`, `255` for a usage error).
 #[test]
 fn help_exits_zero_and_a_usage_error_exits_two() {
-    let help = ratect_command()
-        .arg("--help")
-        .output()
-        .expect("failed to run ratect");
-    assert_eq!(help.status.code(), Some(0));
+    let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+    assert_eq!(exit_code_in(here, &["--help"]), Some(0));
+    assert_eq!(exit_code_in(here, &["--version"]), Some(0));
 
-    let usage_error = ratect_command()
-        .arg("--bogus")
-        .output()
-        .expect("failed to run ratect");
-    assert_eq!(usage_error.status.code(), Some(2));
+    assert_eq!(exit_code_in(here, &["--bogus"]), Some(2));
+    assert_eq!(exit_code_in(here, &["tasks", "list", "--bogus"]), Some(2));
+    assert_eq!(exit_code_in(here, &["--bogus", "--help"]), Some(2));
+    assert_eq!(exit_code_in(here, &["doctor", "--bogus"]), Some(2));
+
+    assert_eq!(exit_code_in(here, &["run", "--bogus"]), Some(125));
+    assert_eq!(
+        exit_code_in(here, &["-o", "bogus", "run", "test"]),
+        Some(125)
+    );
+    assert_eq!(exit_code_in(here, &["--bogus", "run", "test"]), Some(125));
+}
+
+/// A `-f` naming no file — given, or defaulted to a `ratect.toml` that isn't
+/// there — is an invalid option value: `2` for `tasks list`, `125` for a
+/// run. `doctor` and `config validate` report it as a finding instead, and
+/// exit `1` for a problem found (decisions/0016). Needs no daemon for any
+/// verb but `doctor`, whose daemon check doesn't change its code here.
+#[test]
+fn a_config_file_that_is_not_there_exits_by_path() {
+    let directory = unique_project_dir();
+    std::fs::create_dir_all(directory.join("dir")).unwrap();
+
+    assert_eq!(exit_code_in(&directory, &["tasks", "list"]), Some(2));
+    assert_eq!(
+        exit_code_in(&directory, &["tasks", "list", "-f", "dir"]),
+        Some(2)
+    );
+    assert_eq!(exit_code_in(&directory, &["config", "convert"]), Some(2));
+    assert_eq!(exit_code_in(&directory, &["resources", "list"]), Some(2));
+    assert_eq!(
+        exit_code_in(&directory, &["resources", "list", "-f", "dir"]),
+        Some(2)
+    );
+    assert_eq!(exit_code_in(&directory, &["run", "build"]), Some(125));
+    assert_eq!(
+        exit_code_in(&directory, &["run", "build", "-f", "dir"]),
+        Some(125)
+    );
+    assert_eq!(
+        exit_code_in(&directory, &["config", "validate", "-f", "nope.toml"]),
+        Some(1)
+    );
+    assert_eq!(
+        exit_code_in(&directory, &["doctor", "-f", "nope.toml"]),
+        Some(1)
+    );
+
+    std::fs::remove_dir_all(&directory).unwrap();
 }
 
 /// `doctor` is meant to be usable as a CI step, which means its exit code

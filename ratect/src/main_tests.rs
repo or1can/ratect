@@ -41,6 +41,51 @@ fn a_bare_task_name_is_not_accepted_as_a_shorthand_for_run() {
     assert!(Cli::try_parse_from(["ratect", "build"]).is_err());
 }
 
+fn raw(line: &[&str]) -> Vec<String> {
+    line.iter().map(|word| word.to_string()).collect()
+}
+
+/// A line `clap` rejects is a run when the subcommand `clap` would read is
+/// `run`: a global option's value is skipped, an unknown option takes no
+/// value, and nothing after `--` counts (decisions/0016).
+#[test]
+fn a_line_that_does_not_parse_is_a_run_only_under_the_run_subcommand() {
+    assert!(is_a_run(&raw(&["run", "--bogus"])));
+    assert!(is_a_run(&raw(&["-o", "bogus", "run", "test"])));
+    assert!(is_a_run(&raw(&["--bogus", "run", "test"])));
+    assert!(is_a_run(&raw(&["-f", "tasks", "run", "--bogus"])));
+
+    assert!(!is_a_run(&raw(&["--bogus"])));
+    assert!(!is_a_run(&raw(&["--bogus", "--help"])));
+    assert!(!is_a_run(&raw(&[])));
+    assert!(!is_a_run(&raw(&["tasks", "list", "--bogus"])));
+    assert!(!is_a_run(&raw(&["-f", "run", "tasks", "list", "--bogus"])));
+    assert!(!is_a_run(&raw(&["--", "run"])));
+    assert!(!is_a_run(&raw(&["bogus"])));
+}
+
+/// On a line that parses, the raw reading agrees with the parsed one.
+#[test]
+fn the_raw_reading_agrees_with_the_parsed_one() {
+    for line in [
+        &["run", "build"][..],
+        &["-f", "run", "tasks", "list"],
+        &["--output=quiet", "run", "build", "--", "tasks"],
+        &["tasks", "list"],
+        &["doctor"],
+        &["--no-color", "config", "validate"],
+    ] {
+        let mut parsed = vec!["ratect"];
+        parsed.extend_from_slice(line);
+        let cli = Cli::try_parse_from(&parsed).unwrap();
+        assert_eq!(
+            is_a_run(&raw(line)),
+            matches!(cli.command, Command::Run(_)),
+            "{line:?}"
+        );
+    }
+}
+
 #[test]
 fn arguments_after_a_double_dash_go_to_the_task_command() {
     let cli = Cli::try_parse_from(["ratect", "run", "build", "--", "--verbose", "extra"]).unwrap();

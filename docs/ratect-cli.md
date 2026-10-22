@@ -494,18 +494,31 @@ until the first real run caches it.
 
 ## Exit codes and diagnostics
 
-Identical to `ratect-compat`. A run — `ratect run` — exits with the task's own container's
-exit code, `0` included; with 128 + the signal's number if a signal ended it (`130` for
-Ctrl+C, `143` for `SIGTERM`, `129` for `SIGHUP`); and with `125` if the task's command
-never ran or never finished for any other reason — a config that doesn't load, an
-unknown task, an unreachable daemon, a failed pull or build, a dependency that never
-became ready. A run whose every container exited `0` but whose cleanup then failed — a
-removal the daemon refused, or a cleanup stopped with Ctrl+C — exits `125` too, and a
-prerequisite whose cleanup fails stops the chain there; a task's own non-zero code is
-never overridden. Every other verb runs nothing, and exits `1` on
-its own failure (`doctor` finding a problem, `config validate` on a bad file, `caches
-list` with the daemon down) and `0` otherwise. A usage error exits `2`, `--help` `0`. A
-task's own exit code is reported by the code itself and, outside `quiet`, by the
+Identical to `ratect-compat`, and decided by which of two paths an invocation is on.
+`--help` and `--version` exit `0` on either, once the arguments reach them.
+
+A run — `ratect run`, even when its arguments don't parse — exits with the task's own
+container's exit code, `0` included; with 128 + the signal's number if a signal ended it
+(`130` for Ctrl+C, `143` for `SIGTERM`, `129` for `SIGHUP`); and with `125` if the task's
+command never ran or never finished for any other reason — an unknown or misused flag
+(`ratect run --bogus`, `ratect -o bogus run test`), a config file that isn't there, a
+config that doesn't load, an unknown task, an unreachable daemon, a failed pull or build,
+a dependency that never became ready. A run whose every container exited `0` but whose
+cleanup then failed — a removal the daemon refused, or a cleanup stopped with Ctrl+C —
+exits `125` too, and a prerequisite whose cleanup fails stops the chain there; a task's
+own non-zero code is never overridden.
+
+Every other verb runs nothing, and exits `0` when it succeeds; `1` when it fails
+(`config validate` on a file that doesn't parse, `caches list` with the daemon down,
+`doctor` finding a problem); and `2` when it was invoked wrong — a flag `clap` rejects
+(`ratect --bogus`, `ratect tasks list --bogus`, a missing subcommand), or an option value
+that fails its own check, such as a `-f` naming no file (`ratect tasks list` where there
+is no `ratect.toml`). `doctor` and `config validate` report a `-f` naming no file as a
+problem they found instead, and exit `1`; a flag rejected in their own arguments is still
+`2`. Which path a line that doesn't parse is on is decided by its subcommand as `clap`
+would read it: `ratect --bogus run test` is a run, and so exits `125`.
+
+A task's own exit code is reported by the code itself and, outside `quiet`, by the
 `finished with exit code N` summary line — never by an `Error:` line; a run a signal
 ended is reported by the interrupt notice and its code, with no `Error: Interrupted`
 after it; every other failure's reason always reaches stderr as `Error: <message>`, in

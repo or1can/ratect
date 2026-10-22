@@ -1044,23 +1044,87 @@ fn unknown_task_fails_with_nonzero_exit_and_logged_error() {
     );
 }
 
-/// `--help` exits `0` and a usage error exits `2` — `clap`'s conventions,
-/// and both divergences from Batect (`1` and `255`) that
-/// `decisions/0016-exit-codes.md` keeps. Pinned so a `clap` upgrade can't
-/// move either unnoticed.
-#[test]
-fn help_exits_zero_and_a_usage_error_exits_two() {
-    let help = ratect_command()
-        .arg("--help")
+fn exit_code_of(args: &[&str]) -> Option<i32> {
+    ratect_command()
+        .args(args)
         .output()
-        .expect("failed to run ratect");
-    assert_eq!(help.status.code(), Some(0));
+        .expect("failed to run ratect")
+        .status
+        .code()
+}
 
-    let usage_error = ratect_command()
-        .arg("--bogus")
-        .output()
-        .expect("failed to run ratect");
-    assert_eq!(usage_error.status.code(), Some(2));
+/// `--help` and `--version` exit `0` once `clap` reaches them. An argument
+/// `clap` rejects takes its path's code (decisions/0016): `125` on a line
+/// meant to run a task — named or not, and even with `--help` after the
+/// rejection — and `2` on one that replaces the task with a flag. Both
+/// divergences from Batect (`1` for `--help`, `255` for a usage error).
+#[test]
+fn help_exits_zero_and_a_usage_error_takes_its_paths_code() {
+    assert_eq!(exit_code_of(&["--help"]), Some(0));
+    assert_eq!(exit_code_of(&["--version"]), Some(0));
+
+    assert_eq!(exit_code_of(&["--bogus", "build"]), Some(125));
+    assert_eq!(exit_code_of(&["--bogus"]), Some(125));
+    assert_eq!(exit_code_of(&["--bogus", "--help"]), Some(125));
+    assert_eq!(
+        exit_code_of(&["build", "--bogus", "--", "--clean"]),
+        Some(125)
+    );
+
+    assert_eq!(exit_code_of(&["--bogus", "--clean"]), Some(2));
+    assert_eq!(exit_code_of(&["--bogus", "--list-tasks"]), Some(2));
+}
+
+/// A unique, empty temp directory holding a directory `dir` and a
+/// config file `broken.yml` that exists but doesn't parse.
+fn invalid_values_directory() -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "ratect-compat-invalid-values-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(directory.join("dir")).unwrap();
+    std::fs::write(directory.join("broken.yml"), "project_name: [").unwrap();
+    directory
+}
+
+/// An invalid option value — a path that doesn't exist or is the wrong kind,
+/// or a log file whose directory doesn't exist — exits `2` under
+/// `--list-tasks` and `125` on a run, while a config file that exists but
+/// doesn't parse is `--list-tasks`'s own failure, `1` (decisions/0016).
+/// Needs no daemon: each fails before anything connects.
+#[test]
+fn an_invalid_option_value_exits_2_or_125_by_path() {
+    let directory = invalid_values_directory();
+    let exit_code = |args: &[&str]| {
+        ratect_command()
+            .current_dir(&directory)
+            .args(args)
+            .output()
+            .expect("failed to run ratect")
+            .status
+            .code()
+    };
+
+    for invalid in [
+        &["--config-vars-file", "dir"][..],
+        &["--config-vars-file", "nope.yml"],
+        &["-f", "nope.yml"],
+        &["-f", "dir"],
+        &["--log-file", "nodir/ratect.log"],
+    ] {
+        let mut list = invalid.to_vec();
+        list.push("--list-tasks");
+        assert_eq!(exit_code(&list), Some(2), "{list:?}");
+        let mut run = invalid.to_vec();
+        run.push("build");
+        assert_eq!(exit_code(&run), Some(125), "{run:?}");
+    }
+    assert_eq!(exit_code(&["-f", "broken.yml", "--list-tasks"]), Some(1));
+    assert_eq!(exit_code(&["-f", "broken.yml", "build"]), Some(125));
+
+    std::fs::remove_dir_all(&directory).unwrap();
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -5480,8 +5544,11 @@ tasks:
 }
 
 /// Only a run's failure exits `125`; `--list-tasks`'s exits `1` — the same
-/// unloadable config, and the same unopenable `--log-file`, either way
-/// (decisions/0016). Needs no daemon: both fail before anything connects.
+/// unloadable config, and the same `--log-file` that exists but can't be
+/// opened (a directory), either way (decisions/0016). A `--log-file` whose
+/// directory is missing is an invalid option value instead — see
+/// `an_invalid_option_value_exits_2_or_125_by_path`. Needs no daemon: both
+/// fail before anything connects.
 #[test]
 fn a_run_that_fails_exits_125_and_list_tasks_1() {
     let directory =
@@ -5502,8 +5569,9 @@ fn a_run_that_fails_exits_125_and_list_tasks_1() {
 
     let run = exit_code(&["build"]);
     let list = exit_code(&["--list-tasks"]);
-    let log_file_run = exit_code(&["--log-file", "/nonexistent/dir/x", "build"]);
-    let log_file_list = exit_code(&["--log-file", "/nonexistent/dir/x", "--list-tasks"]);
+    let unopenable = directory.to_str().unwrap();
+    let log_file_run = exit_code(&["--log-file", unopenable, "build"]);
+    let log_file_list = exit_code(&["--log-file", unopenable, "--list-tasks"]);
     std::fs::remove_dir_all(&directory).unwrap();
 
     assert_eq!(run, Some(125));

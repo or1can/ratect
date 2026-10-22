@@ -35,6 +35,7 @@ use ratect_core::diagnostics::{
 };
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
+use ratect_core::exit_code::Word;
 use ratect_core::resources::Leftover;
 use ratect_core::ui::{
     create_event_sink, resolve_color_mode, resolve_no_color, select_output_style, ColorMode,
@@ -636,6 +637,54 @@ fn init_tracing(color: bool) {
         .init();
 }
 
+/// Whether arguments that didn't parse were a run: whether the first
+/// positional `clap` would read — the subcommand — is `run`, skipping every
+/// global option's value and stopping at `--` (decisions/0016). `args`
+/// excludes the program name.
+fn is_a_run(args: &[String]) -> bool {
+    let command = Cli::command();
+    let words =
+        ratect_core::exit_code::command_line_words(args, |word| takes_value(&command, word));
+    let subcommand = words.iter().find_map(|word| match word {
+        Word::Positional(name) => Some(*name),
+        _ => None,
+    });
+    subcommand
+        .and_then(|name| command.find_subcommand(name))
+        .is_some_and(|subcommand| subcommand.get_name() == "run")
+}
+
+/// Whether `word` is one of `command`'s own options and takes a value —
+/// `false` for one it doesn't recognise, as `command_line_words` requires.
+fn takes_value(command: &clap::Command, word: Word<'_>) -> bool {
+    command
+        .get_arguments()
+        .find(|arg| match word {
+            Word::Long(name) => arg.get_long() == Some(name),
+            Word::Short(short) => arg.get_short() == Some(short),
+            Word::Positional(_) => false,
+        })
+        .is_some_and(|arg| arg.get_action().takes_values())
+}
+
+/// Parses the command line, exiting as decisions/0016 says when `clap`
+/// rejects it rather than with `clap`'s own `2` on either path: `125` on a
+/// run, `2` otherwise. A `--help` or `--version` `clap` reached still prints
+/// and exits `0`.
+fn parse_cli() -> Cli {
+    Cli::try_parse().unwrap_or_else(|error| {
+        if !error.use_stderr() {
+            error.exit();
+        }
+        let _ = error.print();
+        let args: Vec<String> = std::env::args_os()
+            .skip(1)
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        std::process::exit(ratect_core::exit_code::for_invocation_error(is_a_run(&args)).into());
+    })
+}
+
 #[tokio::main]
 async fn main() {
     ratect_core::panic_hook::install(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
@@ -648,7 +697,7 @@ async fn main() {
     // normal invocation it's a cheap no-op and returns.
     clap_complete::CompleteEnv::with_factory(Cli::command).complete();
 
-    let mut cli = Cli::parse();
+    let mut cli = parse_cli();
     // Folded in once, here, rather than at each of `global.no_color`'s own
     // call sites below — see `resolve_no_color`'s own doc comment for what
     // NO_COLOR does and why it's not narrowed to "color only".
@@ -1503,6 +1552,7 @@ async fn convert_config(
     } else {
         global.config_file.as_path()
     };
+    ratect_core::config::check_config_file(source)?;
     let loaded = Config::load_from_file(source)
         .await
         .with_context(|| format!("Failed to load {} for conversion", source.display()))?;

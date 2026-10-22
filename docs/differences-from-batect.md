@@ -224,9 +224,17 @@ Beyond any one flag:
   `error: …` line in its own words, sometimes followed by a tip or a usage
   line, then `For more information, try '--help'.` Batect prints a single message of its
   own instead, such as `Invalid option '--bogus'. Run './batect --help' for a
-  list of valid options.` The exit code is `2`, the usage-error convention
-  `clap` and the POSIX utilities share; Batect's is `-1` (255), the same as for
-  any other failure ([decisions/0016](../decisions/0016-exit-codes.md)).
+  list of valid options.` The exit code is `125` on a line meant to run a task,
+  `docker run`'s code for its own failure, and `2` on one that replaces the task
+  with `--list-tasks`, `--clean`, `--clean-cache` or `--upgrade`, the usage-error
+  convention `clap` and the POSIX utilities share. So is an option value that
+  fails its own check, such as a `-f` or `--config-vars-file` naming no file.
+  Batect's is `-1` (255) for both, the same as for any other failure
+  ([decisions/0016](../decisions/0016-exit-codes.md)).
+- **`--help` and `--version` exit `0` even when an option's default is
+  invalid**: they act before any value they don't need is checked. Batect
+  checks its options' defaults first, so an invalid one makes `--help` exit
+  `-1` (255) instead ([decisions/0016](../decisions/0016-exit-codes.md)).
 - **Short options combine, and take an attached value**: `-Tf batect.yml`,
   `-fbatect.yml` and `-oquiet` are accepted. Batect looks an option up by its
   exact text up to any `=`, and rejects each of those as an invalid option.
@@ -279,8 +287,9 @@ tables above:
   build, a dependency that never becomes ready, a setup command that fails. `125` is
   `docker run`'s own code for its own failure. Batect returns `-1` (255) for all of
   these, as for every failure other than the task's own command exiting non-zero.
-  Every other command — `--list-tasks`, `--clean`, `--clean-cache` — still exits `1`
-  on failure; Batect's is `-1` there too. See
+  Every other command — `--list-tasks`, `--clean`, `--clean-cache` — exits `1` on
+  failure, or `2` for a usage error or an invalid option value; Batect's is `-1`
+  there too. See
   [Exit codes and error reporting](ratect-compat-cli.md#exit-codes-and-error-reporting)
   and [decisions/0016](../decisions/0016-exit-codes.md).
 - **A cleanup that fails after a passing run exits `125`; after a failing one, the

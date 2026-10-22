@@ -861,20 +861,70 @@ fn config_vars_file_default_is_absent_when_batect_local_yml_is_missing() {
     assert_eq!(resolve_config_vars_file(None, &dir), None);
 }
 
-/// Only naming a task makes an invocation a run, and every flag `run`
-/// handles instead of running one makes it not — so a broken config under
-/// `--list-tasks` still exits `1`, and under a task name `125`
-/// (decisions/0016).
+/// A line is a run unless a flag `run` handles instead of a task appears,
+/// whether or not a task is named — so a broken config under `--list-tasks`
+/// still exits `1`, and under a task name, or none, `125` (decisions/0016).
 #[test]
-fn only_a_named_task_with_nothing_handled_first_is_a_run() {
+fn every_line_but_a_flag_that_replaces_a_task_is_a_run() {
     assert!(args(&["ratect", "build"]).runs_a_task());
     assert!(args(&["ratect", "--log-file", "x", "build"]).runs_a_task());
+    assert!(args(&["ratect"]).runs_a_task());
 
-    assert!(!args(&["ratect"]).runs_a_task());
     assert!(!args(&["ratect", "--list-tasks", "build"]).runs_a_task());
     assert!(!args(&["ratect", "--clean", "build"]).runs_a_task());
     assert!(!args(&["ratect", "--clean-cache", "cargo", "build"]).runs_a_task());
     assert!(!args(&["ratect", "--upgrade", "build"]).runs_a_task());
+}
+
+fn raw(line: &[&str]) -> Vec<String> {
+    line.iter().map(|word| word.to_string()).collect()
+}
+
+/// The raw-argument reading, for a line `clap` rejects: a flag that replaces
+/// a task counts only where `clap` would read it as one — not after `--`,
+/// not as another option's value — and an unknown option takes no value
+/// (decisions/0016).
+#[test]
+fn a_line_that_does_not_parse_is_a_run_unless_a_flag_replaces_the_task() {
+    assert!(is_a_run(&raw(&["--bogus", "build"])));
+    assert!(is_a_run(&raw(&["--bogus"])));
+    assert!(is_a_run(&raw(&["--bogus", "--help"])));
+    assert!(is_a_run(&raw(&["build", "--bogus", "--", "--clean"])));
+    assert!(is_a_run(&raw(&["-f", "--clean", "--bogus"])));
+    assert!(is_a_run(&raw(&["--config-file=--clean", "--bogus"])));
+
+    assert!(!is_a_run(&raw(&["--bogus", "--clean"])));
+    assert!(!is_a_run(&raw(&["--bogus", "-T"])));
+    assert!(!is_a_run(&raw(&["--bogus", "--list-tasks"])));
+    assert!(!is_a_run(&raw(&["--bogus", "--clean-cache=cargo"])));
+    assert!(!is_a_run(&raw(&["--bogus", "--upgrade"])));
+    assert!(!is_a_run(&raw(&["--no-color", "-T", "--bogus"])));
+}
+
+/// On a line that parses, the raw reading agrees with the parsed one, so a
+/// line's path never depends on whether `clap` accepted it.
+#[test]
+fn the_raw_reading_agrees_with_the_parsed_one() {
+    for line in [
+        &["build"][..],
+        &[],
+        &["build", "--", "--clean"],
+        &["-f", "x.yml", "--list-tasks"],
+        &["-T"],
+        &["--clean"],
+        &["--clean-cache", "cargo"],
+        &["--clean-cache=cargo", "build"],
+        &["--upgrade"],
+        &["-o", "quiet", "build"],
+    ] {
+        let mut parsed = vec!["ratect"];
+        parsed.extend_from_slice(line);
+        assert_eq!(
+            is_a_run(&raw(line)),
+            args(&parsed).runs_a_task(),
+            "{line:?}"
+        );
+    }
 }
 
 /// A `sweep` for a `run` that must return before making one.
