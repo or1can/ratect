@@ -23,7 +23,7 @@ use ratect_core::exit_code::{InvalidOptionValue, Word};
 use ratect_core::git_include::GitIncludeCache;
 use ratect_core::ui::{
     create_event_sink, select_output_style, ColorMode, Console, OutputStyle, ProgressStream,
-    TerminalFacts,
+    TaskEvent, TerminalFacts,
 };
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -630,7 +630,7 @@ async fn run(
     }
 
     if args.clean || !args.clean_cache.is_empty() {
-        return clean_caches(&args).await;
+        return clean_caches(&args, stderr).await;
     }
 
     let project = load_project(&args.config_file).await?;
@@ -698,10 +698,12 @@ async fn run(
             // and cleans up instead of killing the process where it stands.
             let interrupt = ratect_core::interrupt::Interrupt::new();
             interrupt.listen();
-            let docker = DockerClient::new(&args.docker_connection())
-                .await?
-                .with_event_sink(Arc::clone(&event_sink))
-                .with_enable_buildkit(args.enable_buildkit);
+            let docker = DockerClient::new(&args.docker_connection(), |message| {
+                event_sink.post(TaskEvent::Warning { message })
+            })
+            .await?
+            .with_event_sink(Arc::clone(&event_sink))
+            .with_enable_buildkit(args.enable_buildkit);
             let engine =
                 TaskEngine::new(project, docker, event_sink, interrupt).with_settings(settings)?;
             engine.run_task(task_name, &args.additional_args).await?;
@@ -739,7 +741,7 @@ fn sweep_git_include_cache() -> Sweep {
 /// `CleanupCachesCommand` exactly: the explicit `cleanCaches` list (if
 /// non-empty) always wins over `--clean`'s "everything" default, regardless
 /// of whether `--clean` was also given.
-async fn clean_caches(args: &Args) -> Result<()> {
+async fn clean_caches(args: &Args, stderr: &Console) -> Result<()> {
     let base_path = ratect_core::config::base_path_for(&args.config_file);
     let project_directory = ratect_core::config::project_directory_path(base_path)?;
     let only: HashSet<String> = args.clean_cache.iter().cloned().collect();
@@ -748,7 +750,12 @@ async fn clean_caches(args: &Args) -> Result<()> {
     let docker = match cache_type {
         ratect_core::cache::CacheType::Volume => {
             println!("Checking for cache volumes...");
-            Some(DockerClient::new(&args.docker_connection()).await?)
+            Some(
+                DockerClient::new(&args.docker_connection(), |message| {
+                    stderr.warning(&message)
+                })
+                .await?,
+            )
         }
         ratect_core::cache::CacheType::Directory => {
             println!(

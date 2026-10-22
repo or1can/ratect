@@ -83,6 +83,11 @@ three sources — means "no context", as in the Docker CLI: Ratect connects to
 empty `DOCKER_HOST` or `DOCKER_CONTEXT` counts as unset, also as in the Docker
 CLI.
 
+The active context is the `currentContext` in the Docker config directory's
+`config.json`, read only when step 3 gets that far. A `config.json` that can't
+be read, or isn't valid JSON, has none to give: Ratect warns, naming the file,
+and goes on to step 4, as the current Docker CLI does.
+
 A connection through a context uses the endpoint that context stores; the TLS
 options only apply to a host connection. Naming one alongside
 `--docker-context` is an error; when step 3 picks the context instead, the TLS

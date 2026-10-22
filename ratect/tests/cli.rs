@@ -3343,3 +3343,33 @@ fn caches_refuses_a_docker_config_directory_that_does_not_exist_without_connecti
         "{stderr}"
     );
 }
+
+/// #304: a Docker CLI `config.json` that isn't valid JSON is reported,
+/// naming it, rather than silently meaning the default context.
+#[test]
+fn doctor_warns_about_a_docker_config_json_it_cannot_use() {
+    let config_directory = unique_project_dir();
+    std::fs::write(config_directory.join("config.json"), "{not json").unwrap();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(native_fixture_path())
+        .arg("doctor")
+        .arg("--docker-config")
+        .arg(&config_directory)
+        .env_remove("DOCKER_HOST")
+        .env_remove("DOCKER_CONTEXT")
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&config_directory).ok();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let path = config_directory.join("config.json").display().to_string();
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("warning ")
+                && line.contains(&path)
+                && line.contains("default context")),
+        "{stdout}"
+    );
+}

@@ -220,7 +220,7 @@ fn active_docker_context_reads_current_context_from_config_json() {
     .unwrap();
 
     assert_eq!(
-        active_docker_context(&config_directory),
+        active_docker_context(&config_directory).unwrap(),
         Some("orbstack".to_string())
     );
 }
@@ -228,21 +228,57 @@ fn active_docker_context_reads_current_context_from_config_json() {
 #[test]
 fn active_docker_context_is_none_when_config_json_is_missing() {
     let config_directory = unique_temp_dir();
-    assert_eq!(active_docker_context(&config_directory), None);
+    assert_eq!(active_docker_context(&config_directory).unwrap(), None);
 }
 
 #[test]
 fn active_docker_context_is_none_when_current_context_is_unset_or_empty() {
     let config_directory = unique_temp_dir();
     fs::write(config_directory.join("config.json"), r#"{}"#).unwrap();
-    assert_eq!(active_docker_context(&config_directory), None);
+    assert_eq!(active_docker_context(&config_directory).unwrap(), None);
 
     fs::write(
         config_directory.join("config.json"),
         r#"{"currentContext":""}"#,
     )
     .unwrap();
-    assert_eq!(active_docker_context(&config_directory), None);
+    assert_eq!(active_docker_context(&config_directory).unwrap(), None);
+}
+
+/// #304: a `config.json` that isn't valid JSON, or can't be read, is an
+/// error naming the file — `connect` warns with it — not a silent `None`.
+#[test]
+fn active_docker_context_reports_a_config_json_it_cannot_use() {
+    let malformed = unique_temp_dir();
+    fs::write(malformed.join("config.json"), "{not json").unwrap();
+    let unreadable = unique_temp_dir();
+    fs::create_dir(unreadable.join("config.json")).unwrap();
+    for config_directory in [malformed, unreadable] {
+        let error = active_docker_context(&config_directory).unwrap_err();
+        let message = format!("{error:#}");
+        let path = config_directory.join("config.json");
+        assert!(message.contains(&path.display().to_string()), "{message}");
+    }
+}
+
+/// #304: connecting with such a file goes on with the default context, as
+/// the Docker CLI does, and says why.
+#[test]
+fn connect_warns_about_a_config_json_it_cannot_use_and_uses_the_default_context() {
+    let config_directory = unique_temp_dir();
+    fs::write(config_directory.join("config.json"), "{not json").unwrap();
+    let options = DockerConnectionOptions {
+        config_directory: Some(config_directory.clone()),
+        ..Default::default()
+    };
+
+    let connection = connect(&options).unwrap();
+    let [warning] = connection.warnings.as_slice() else {
+        panic!("expected one warning: {:?}", connection.warnings);
+    };
+    let path = config_directory.join("config.json");
+    assert!(warning.contains(&path.display().to_string()), "{warning}");
+    assert!(warning.contains("default context"), "{warning}");
 }
 
 /// Runs `body` in a child copy of this test binary with `vars` set in its
@@ -287,7 +323,7 @@ fn active_docker_context_ignores_docker_host() {
             )
             .unwrap();
             assert_eq!(
-                active_docker_context(&config_directory),
+                active_docker_context(&config_directory).unwrap(),
                 Some("from-file".to_string())
             );
         },
@@ -308,7 +344,7 @@ fn active_docker_context_ignores_docker_context() {
             )
             .unwrap();
             assert_eq!(
-                active_docker_context(&config_directory),
+                active_docker_context(&config_directory).unwrap(),
                 Some("from-file".to_string())
             );
         },
@@ -339,6 +375,31 @@ fn docker_config_directory_falls_back_to_docker_config_then_home() {
     );
 }
 
+/// The active context, for `resolve_context_name` — `"active"`.
+fn active() -> Option<String> {
+    Some("active".to_string())
+}
+
+/// No active context, for `resolve_context_name`.
+fn no_active() -> Option<String> {
+    None
+}
+
+/// Reading the active context is the last resort: when something before it
+/// decides, `config.json` is never read — so a broken one is never reported.
+#[test]
+fn resolve_context_name_reads_the_active_context_only_when_nothing_else_decides() {
+    let unread = || -> Option<String> { panic!("the active context was read") };
+    let explicit = DockerConnectionOptions {
+        context: Some("explicit".to_string()),
+        ..Default::default()
+    };
+    resolve_context_name(&explicit, None, None, unread);
+    let options = DockerConnectionOptions::default();
+    resolve_context_name(&options, Some("tcp://host:2375"), None, unread);
+    resolve_context_name(&options, None, Some("env-context"), unread);
+}
+
 #[test]
 fn resolve_context_name_prefers_an_explicit_context_over_everything_else() {
     let options = DockerConnectionOptions {
@@ -350,7 +411,7 @@ fn resolve_context_name_prefers_an_explicit_context_over_everything_else() {
             &options,
             Some("tcp://from-env:2375"),
             Some("env-context"),
-            Some("active".to_string())
+            active
         ),
         Some("explicit".to_string())
     );
@@ -364,12 +425,7 @@ fn resolve_context_name_an_explicit_host_skips_context_resolution_entirely() {
     };
     let host = resolve_host(&options, None);
     assert_eq!(
-        resolve_context_name(
-            &options,
-            host.as_deref(),
-            Some("env-context"),
-            Some("active".to_string())
-        ),
+        resolve_context_name(&options, host.as_deref(), Some("env-context"), active),
         None
     );
 }
@@ -379,16 +435,11 @@ fn resolve_context_name_a_host_from_the_environment_skips_context_resolution_too
     let options = DockerConnectionOptions::default();
     let host = resolve_host(&options, Some("tcp://from-env:2375"));
     assert_eq!(
-        resolve_context_name(
-            &options,
-            host.as_deref(),
-            Some("env-context"),
-            Some("active".to_string())
-        ),
+        resolve_context_name(&options, host.as_deref(), Some("env-context"), active),
         None
     );
     assert_eq!(
-        resolve_context_name(&options, host.as_deref(), None, Some("active".to_string())),
+        resolve_context_name(&options, host.as_deref(), None, active),
         None
     );
 }
@@ -397,26 +448,21 @@ fn resolve_context_name_a_host_from_the_environment_skips_context_resolution_too
 fn resolve_context_name_falls_back_to_the_env_var_then_the_active_context() {
     let options = DockerConnectionOptions::default();
     assert_eq!(
-        resolve_context_name(
-            &options,
-            None,
-            Some("env-context"),
-            Some("active".to_string())
-        ),
+        resolve_context_name(&options, None, Some("env-context"), active),
         Some("env-context".to_string())
     );
     assert_eq!(
-        resolve_context_name(&options, None, None, Some("active".to_string())),
+        resolve_context_name(&options, None, None, active),
         Some("active".to_string())
     );
-    assert_eq!(resolve_context_name(&options, None, None, None), None);
+    assert_eq!(resolve_context_name(&options, None, None, no_active), None);
 }
 
 #[test]
 fn resolve_context_name_treats_an_empty_docker_context_as_unset() {
     let options = DockerConnectionOptions::default();
     assert_eq!(
-        resolve_context_name(&options, None, Some(""), Some("active".to_string())),
+        resolve_context_name(&options, None, Some(""), active),
         Some("active".to_string())
     );
 }
@@ -427,7 +473,7 @@ fn resolve_context_name_treats_the_default_context_name_as_no_context() {
         context: Some("default".to_string()),
         ..Default::default()
     };
-    assert_eq!(resolve_context_name(&options, None, None, None), None);
+    assert_eq!(resolve_context_name(&options, None, None, no_active), None);
 }
 
 #[test]
@@ -1597,7 +1643,7 @@ async fn docker_client_new_explains_a_verification_failure_for_a_context_asking_
         None,
     ));
 
-    let result = crate::docker::DockerClient::new(&options).await;
+    let result = crate::docker::DockerClient::new(&options, |_| {}).await;
     server.await.expect("server task should not panic");
 
     let Err(err) = result else {

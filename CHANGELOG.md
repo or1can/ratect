@@ -104,6 +104,7 @@ history, from when it was the only binary.
 - A port mapping given more than once — in a container's `ports`, or in both the container's and a task's `run` or a `customise` entry's — is published once, as in Batect, including where a range also covers it.
 - A container port mapped to several host ports — `9000:80` and `9001:80`, in a container's `ports`, a task's `run` or a `customise` entry — is published on all of them, as in Batect, instead of only the last.
 - With TLS on and no `--docker-cert-path` or `DOCKER_CERT_PATH`, `ca.pem`, `cert.pem` and `key.pem` are looked for in the Docker config directory given by `--docker-config` or `DOCKER_CONFIG`, as in Batect and the Docker CLI, before `~/.docker`.
+- A Docker CLI `config.json` that can't be read or isn't valid JSON, when the active Docker context would be read from it, is a warning naming the file before the default context is used, instead of being silently ignored.
 
 ### Security
 

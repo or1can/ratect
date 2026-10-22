@@ -2015,8 +2015,15 @@ impl DockerClient {
             .unwrap_or_else(|| "unknown version".to_string()))
     }
 
-    pub async fn new(connection: &DockerConnectionOptions) -> Result<Self> {
+    /// Connects as `connection` says. `warn` is given each warning choosing
+    /// the daemon raised — a Docker CLI `config.json` that can't be used,
+    /// say — before the daemon is first contacted, so it is said even when
+    /// that fails. Required rather than collected afterwards because only
+    /// the caller knows where a warning goes: a run's event sink, a verb's
+    /// stderr, a `doctor` finding.
+    pub async fn new(connection: &DockerConnectionOptions, warn: impl Fn(String)) -> Result<Self> {
         let connected = connection::connect(connection)?;
+        connected.warnings.iter().cloned().for_each(warn);
         let docker = connected
             .docker
             .clone()

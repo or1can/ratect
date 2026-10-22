@@ -294,10 +294,22 @@ struct DockerCliConfig {
 /// `DOCKER_CONTEXT` says otherwise. `None` (not an error) when the file
 /// doesn't exist or sets no `currentContext` — both mean the same thing as
 /// the Docker CLI's own fallback: use the `default` context.
-fn active_docker_context(config_directory: &Path) -> Option<String> {
-    let contents = fs::read_to_string(config_directory.join("config.json")).ok()?;
-    let config: DockerCliConfig = serde_json::from_str(&contents).ok()?;
-    config.current_context.filter(|name| !name.is_empty())
+///
+/// A file that exists but can't be read, or isn't valid JSON, is an error
+/// naming it. [`connect`] turns that into a warning and uses the `default`
+/// context, as the current Docker CLI does; Batect fails instead.
+fn active_docker_context(config_directory: &Path) -> Result<Option<String>> {
+    let path = config_directory.join("config.json");
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to read {}", path.display()))
+        }
+    };
+    let config: DockerCliConfig = serde_json::from_str(&contents)
+        .with_context(|| format!("{} is not a valid Docker CLI config file", path.display()))?;
+    Ok(config.current_context.filter(|name| !name.is_empty()))
 }
 
 /// `--docker-config`, else `DOCKER_CONFIG` — the Docker config directory
@@ -605,14 +617,15 @@ fn require_host_for_tls(host: Option<String>) -> Result<String> {
 /// Docker CLI.
 ///
 /// `active_context` is step 4's fallback — reading the store's own "active
-/// context" needs real file I/O, so it's computed by the caller and passed
-/// in already-resolved, keeping this function itself pure (and so
-/// unit-testable without a filesystem) like `select_builder_version`.
+/// context" needs real file I/O, so the caller passes in how to read it,
+/// keeping this function itself pure (and so unit-testable without a
+/// filesystem) like `select_builder_version`. It's called only when steps
+/// 1–3 decide nothing, so `config.json` isn't read when it wouldn't be used.
 fn resolve_context_name(
     options: &DockerConnectionOptions,
     host: Option<&str>,
     docker_context_env: Option<&str>,
-    active_context: Option<String>,
+    active_context: impl FnOnce() -> Option<String>,
 ) -> Option<String> {
     let context_name = if let Some(context) = &options.context {
         Some(context.clone())
@@ -621,7 +634,7 @@ fn resolve_context_name(
     } else if let Some(context) = docker_context_env.filter(|context| !context.is_empty()) {
         Some(context.to_string())
     } else {
-        active_context
+        active_context()
     };
 
     context_name.filter(|name| name != "default")
@@ -873,20 +886,23 @@ enum VerificationNote {
 }
 
 /// A connected client, the Docker config directory it was resolved from
-/// (see [`docker_config_directory`]), and what's needed to explain its first
-/// failure.
+/// (see [`docker_config_directory`]), what's needed to explain its first
+/// failure, and the warnings choosing it raised — for `DockerClient::new`
+/// to hand to its caller, which alone knows where a warning is printed.
 #[derive(Debug)]
 pub(super) struct Connection {
     pub(super) docker: Docker,
     pub(super) config_directory: PathBuf,
+    pub(super) warnings: Vec<String>,
     verification_note: Option<VerificationNote>,
 }
 
 impl Connection {
-    fn without_note(docker: Docker, config_directory: PathBuf) -> Self {
+    fn without_note(docker: Docker, config_directory: PathBuf, warnings: Vec<String>) -> Self {
         Self {
             docker,
             config_directory,
+            warnings,
             verification_note: None,
         }
     }
@@ -993,11 +1009,20 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
     let docker_host_env = std::env::var("DOCKER_HOST").ok();
     let host = resolve_host(options, docker_host_env.as_deref());
     let docker_context_env = std::env::var("DOCKER_CONTEXT").ok();
+    let mut warnings = Vec::new();
     let context_name = resolve_context_name(
         options,
         host.as_deref(),
         docker_context_env.as_deref(),
-        active_docker_context(&config_directory),
+        || {
+            active_docker_context(&config_directory).unwrap_or_else(|error| {
+                warnings.push(format!(
+                    "{error:#}, so the Docker CLI's active context can't be read from it; \
+                     using the default context."
+                ));
+                None
+            })
+        },
     );
 
     if let Some(context_name) = context_name {
@@ -1012,7 +1037,7 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
         });
         let Some(tls) = tls else {
             return connect_plain(&host)
-                .map(|docker| Connection::without_note(docker, config_directory))
+                .map(|docker| Connection::without_note(docker, config_directory, warnings))
                 .with_context(|| {
                     format!("Failed to connect to Docker context '{context_name}' (host '{host}')")
                 });
@@ -1023,6 +1048,7 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
         return Ok(Connection {
             docker,
             config_directory,
+            warnings,
             verification_note: tls
                 .skip_verify_requested
                 .then_some(VerificationNote::ContextAskedToSkip(context_name)),
@@ -1038,7 +1064,7 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
                 .with_context(|| format!("Failed to connect to Docker host '{host}'"))?,
             None => Docker::connect_with_local_defaults().context("Failed to connect to Docker")?,
         };
-        return Ok(Connection::without_note(docker, config_directory));
+        return Ok(Connection::without_note(docker, config_directory, warnings));
     }
 
     let host = require_host_for_tls(host)?;
@@ -1056,6 +1082,7 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
     Ok(Connection {
         docker,
         config_directory,
+        warnings,
         verification_note: tls
             .ca
             .is_none()

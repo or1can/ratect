@@ -39,7 +39,7 @@ use ratect_core::exit_code::Word;
 use ratect_core::resources::Leftover;
 use ratect_core::ui::{
     create_event_sink, resolve_color_mode, resolve_no_color, select_output_style, ColorMode,
-    Console, OutputStyle, ProgressStream, TerminalFacts,
+    Console, OutputStyle, ProgressStream, TaskEvent, TerminalFacts,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -796,7 +796,7 @@ async fn run(cli: Cli, color_mode: ColorMode, stderr: &Console) -> Result<()> {
         // Deliberately no `load` call: see `CachesArgs`.
         Command::Caches { command } => manage_caches(command, &global, style, stderr).await,
         Command::Includes { command } => manage_includes(command, style).await,
-        Command::Resources { command } => manage_resources(command, &global, style).await,
+        Command::Resources { command } => manage_resources(command, &global, style, stderr).await,
         Command::Config { command } => match command {
             ConfigCommand::Validate(args) => validate_config(args, &global, style).await,
             ConfigCommand::Convert(args) => convert_config(args, &global, style).await,
@@ -1007,10 +1007,12 @@ async fn run_task(
     // process where it stands.
     let interrupt = ratect_core::interrupt::Interrupt::new();
     interrupt.listen();
-    let docker = DockerClient::new(&args.docker.into())
-        .await?
-        .with_event_sink(Arc::clone(&event_sink))
-        .with_enable_buildkit(args.enable_buildkit);
+    let docker = DockerClient::new(&args.docker.into(), |message| {
+        event_sink.post(TaskEvent::Warning { message })
+    })
+    .await?
+    .with_event_sink(Arc::clone(&event_sink))
+    .with_enable_buildkit(args.enable_buildkit);
 
     let engine = TaskEngine::new(project, docker, event_sink, interrupt).with_settings(settings)?;
     engine.run_task(&args.task, &args.args).await
@@ -1099,7 +1101,9 @@ async fn manage_caches(
     // removal after it need the same daemon, and each `DockerClient::new`
     // opens its own.
     let docker = match cache_type {
-        ratect_core::cache::CacheType::Volume => Some(DockerClient::new(&connection).await?),
+        ratect_core::cache::CacheType::Volume => {
+            Some(DockerClient::new(&connection, |message| stderr.warning(&message)).await?)
+        }
         ratect_core::cache::CacheType::Directory => None,
     };
     let store = ratect_core::cache::CacheStore::new(
@@ -1231,6 +1235,7 @@ async fn manage_resources(
     command: ResourcesCommand,
     global: &GlobalArgs,
     style: OutputStyle,
+    stderr: &Console,
 ) -> Result<()> {
     let (args, removing) = match command {
         ResourcesCommand::List(args) => (args, false),
@@ -1258,7 +1263,7 @@ async fn manage_resources(
             )?,
         )
     };
-    let docker = DockerClient::new(&args.docker.into()).await?;
+    let docker = DockerClient::new(&args.docker.into(), |message| stderr.warning(&message)).await?;
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1390,7 +1395,13 @@ async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> 
 
     // Docker first: nothing else about a task can work without it, so it's
     // the most likely single answer to "why did that fail?".
-    let docker = DockerClient::new(&args.docker.into()).await;
+    // A warning connecting raises is one of doctor's own findings.
+    let warnings = std::sync::Mutex::new(Vec::new());
+    let docker = DockerClient::new(&args.docker.into(), |message| {
+        warnings.lock().unwrap().push(Finding::Warning(message))
+    })
+    .await;
+    findings.extend(warnings.into_inner().unwrap());
     let docker = match docker {
         Ok(docker) => match docker.server_version().await {
             Ok(version) => {
