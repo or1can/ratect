@@ -104,6 +104,7 @@ history, from when it was the only binary.
 ### Security
 
 - Upgraded `rustls-webpki` to 0.103.16, fixing [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382) (certificate verification may accept distrusted intermediates).
+- Upgraded `tokio` to 1.54.1, fixing [RUSTSEC-2026-0384](https://rustsec.org/advisories/RUSTSEC-2026-0384) (a race condition in `tokio::time::Interval`). Ratect's own code doesn't use `Interval`; lockfile only.
 
 ## [ratect-compat 0.32.0 · ratect 0.11.0] - 2026-10-13
 
