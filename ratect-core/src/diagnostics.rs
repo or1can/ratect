@@ -191,6 +191,25 @@ pub fn wrapper_script_findings(project_directory: &Path) -> Vec<Finding> {
         .collect()
 }
 
+/// A problem for each of `DOCKER_TLS_VERIFY` and `DOCKER_BUILDKIT` (their
+/// values injected) that is set to neither true nor false — the error a run
+/// would stop on, raised here because `doctor` never builds and needn't get
+/// as far as a TLS connection to say so. Nothing for a valid, empty or
+/// unset value. The reading is `docker::boolean_variable`'s, a run's own.
+pub fn docker_environment_findings(
+    docker_tls_verify: Option<&str>,
+    docker_buildkit: Option<&str>,
+) -> Vec<Finding> {
+    [
+        ("DOCKER_TLS_VERIFY", docker_tls_verify),
+        ("DOCKER_BUILDKIT", docker_buildkit),
+    ]
+    .into_iter()
+    .filter_map(|(name, value)| crate::docker::boolean_variable::parse(name, value).err())
+    .map(|error| Finding::Problem(error.to_string()))
+    .collect()
+}
+
 /// Whether `content` is one of Batect's own wrapper scripts, by the notice
 /// line its authors put near the top of both the Unix and Windows forms —
 /// a deliberate, stable marker (`# This file is part of Batect.` /

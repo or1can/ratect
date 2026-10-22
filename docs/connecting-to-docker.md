@@ -123,7 +123,7 @@ for making the certificate verifiable instead.
 | `DOCKER_CONTEXT` | Docker CLI context to connect through — the default for `--docker-context`. Ignored when a host is set. Empty counts as unset. |
 | `DOCKER_CONFIG` | Directory containing the Docker CLI's own configuration files — the default for `--docker-config`, and for `--docker-cert-path` when `DOCKER_CERT_PATH` is unset. Must exist and be a directory when set and not empty. |
 | `DOCKER_CERT_PATH` | Directory containing any of `ca.pem`/`cert.pem`/`key.pem` for TLS — the default for `--docker-cert-path`. Empty counts as unset; otherwise it must exist and be a directory. |
-| `DOCKER_TLS_VERIFY` | `1` or `true` (any case) enables TLS, fully verified — the default for `--docker-tls-verify`. Any other value leaves it off. |
+| `DOCKER_TLS_VERIFY` | `1`, `yes` or `true` enables TLS, fully verified, and `0`, `no` or `false` leaves it off, in any case — the default for `--docker-tls-verify`. Empty counts as unset. Any other value is an error when connecting to a host, unless `--docker-tls` or `--docker-tls-verify` is given; a command that doesn't connect, or connects through a context, never reads it. |
 
 ## TLS with a private certificate authority
 

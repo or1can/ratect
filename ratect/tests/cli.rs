@@ -3373,3 +3373,37 @@ fn doctor_warns_about_a_docker_config_json_it_cannot_use() {
         "{stdout}"
     );
 }
+
+/// #461: `doctor` reports a `DOCKER_TLS_VERIFY` or `DOCKER_BUILDKIT` that is
+/// neither true nor false, once, naming it and its value, and fails; an
+/// empty one is nothing to report.
+#[test]
+fn doctor_reports_an_invalid_docker_boolean_variable_once() {
+    for name in ["DOCKER_TLS_VERIFY", "DOCKER_BUILDKIT"] {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(native_fixture_path())
+            .arg("doctor")
+            .env(name, "bogus")
+            .output()
+            .expect("failed to run ratect");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(output.status.code(), Some(1), "{name}: {stdout}");
+        let mentions = stdout
+            .lines()
+            .filter(|line| line.trim_start().starts_with("problem ") && line.contains(name))
+            .count();
+        assert_eq!(mentions, 1, "{name}: {stdout}");
+        assert!(stdout.contains(&format!("{name} is 'bogus'")), "{stdout}");
+
+        let output = ratect_command()
+            .arg("-f")
+            .arg(native_fixture_path())
+            .arg("doctor")
+            .env(name, "")
+            .output()
+            .expect("failed to run ratect");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(!stdout.contains(name), "{name}: {stdout}");
+    }
+}

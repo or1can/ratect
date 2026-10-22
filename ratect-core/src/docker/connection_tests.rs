@@ -604,26 +604,49 @@ fn connect_rejects_docker_tls_flags_combined_with_docker_context() {
 #[test]
 fn tls_enabled_is_true_for_either_flag_or_the_real_env_var() {
     let base = DockerConnectionOptions::default();
-    assert!(!tls_enabled(&base, None));
-    assert!(tls_enabled(
-        &DockerConnectionOptions {
+    assert!(!tls_enabled(&base, None).unwrap());
+    let tls = DockerConnectionOptions {
+        tls: true,
+        ..base.clone()
+    };
+    let tls_verify = DockerConnectionOptions {
+        tls_verify: true,
+        ..base.clone()
+    };
+    assert!(tls_enabled(&tls, None).unwrap());
+    assert!(tls_enabled(&tls_verify, None).unwrap());
+    for value in ["1", "true", "TRUE", "yes", "YES"] {
+        assert!(tls_enabled(&base, Some(value)).unwrap(), "{value}");
+    }
+    for value in ["0", "false", "no", ""] {
+        assert!(!tls_enabled(&base, Some(value)).unwrap(), "{value:?}");
+    }
+}
+
+/// #305: a value that is neither true nor false is an error rather than a
+/// silent plaintext connection — unless a flag already turned TLS on, which
+/// makes the variable irrelevant.
+#[test]
+fn tls_enabled_refuses_an_invalid_docker_tls_verify_unless_a_flag_decides() {
+    let base = DockerConnectionOptions::default();
+    let error = tls_enabled(&base, Some("Maybe")).unwrap_err();
+    let message = format!("{error:#}");
+    assert!(message.contains("DOCKER_TLS_VERIFY"), "{message}");
+    assert!(message.contains("'Maybe'"), "{message}");
+    assert!(error.is::<crate::exit_code::InvalidOptionValue>());
+
+    for options in [
+        DockerConnectionOptions {
             tls: true,
             ..base.clone()
         },
-        None
-    ));
-    assert!(tls_enabled(
-        &DockerConnectionOptions {
+        DockerConnectionOptions {
             tls_verify: true,
             ..base.clone()
         },
-        None
-    ));
-    assert!(tls_enabled(&base, Some("1")));
-    assert!(tls_enabled(&base, Some("true")));
-    assert!(tls_enabled(&base, Some("TRUE")));
-    assert!(!tls_enabled(&base, Some("0")));
-    assert!(!tls_enabled(&base, Some("false")));
+    ] {
+        assert!(tls_enabled(&options, Some("maybe")).unwrap());
+    }
 }
 
 #[test]

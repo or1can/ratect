@@ -544,17 +544,24 @@ fn flag_tls_settings(
 /// Whether this invocation should connect over TLS at all: `--docker-tls`
 /// and `--docker-tls-verify` both enable it (Ratect always verifies
 /// regardless of which — see `DockerConnectionOptions`'s own doc comment),
-/// same as the real `DOCKER_TLS_VERIFY` environment variable (the only one
-/// of the two flags Batect gives an environment variable default at all).
-fn tls_enabled(options: &DockerConnectionOptions, docker_tls_verify_env: Option<&str>) -> bool {
-    options.tls
-        || options.tls_verify
-        || matches!(
-            docker_tls_verify_env
-                .map(str::to_ascii_lowercase)
-                .as_deref(),
-            Some("1") | Some("true")
-        )
+/// and so does a true `DOCKER_TLS_VERIFY` environment variable (the only one
+/// of the two flags Batect gives an environment variable default at all) —
+/// read by [`boolean_variable::parse`](super::boolean_variable::parse), so
+/// an empty one is unset and one that is neither true nor false is an
+/// error, never a silent plaintext connection. A flag makes the variable
+/// irrelevant, so it isn't read then: an invalid value beside a flag is no
+/// error, as a flag overrides its default in Batect.
+fn tls_enabled(
+    options: &DockerConnectionOptions,
+    docker_tls_verify_env: Option<&str>,
+) -> Result<bool> {
+    if options.tls || options.tls_verify {
+        return Ok(true);
+    }
+    Ok(
+        super::boolean_variable::parse("DOCKER_TLS_VERIFY", docker_tls_verify_env)?
+            .unwrap_or(false),
+    )
 }
 
 /// Installs `rustls`'s `ring` cryptographic provider as the process-wide
@@ -1056,7 +1063,7 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
     }
 
     let docker_tls_verify_env = std::env::var("DOCKER_TLS_VERIFY").ok();
-    let tls = tls_enabled(options, docker_tls_verify_env.as_deref())
+    let tls = tls_enabled(options, docker_tls_verify_env.as_deref())?
         || host.as_deref().is_some_and(is_https);
     if !tls {
         let docker = match host {

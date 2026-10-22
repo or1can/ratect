@@ -5829,3 +5829,72 @@ fn help_and_version_ignore_a_docker_config_directory_that_does_not_exist() {
         assert_eq!(output.status.code(), Some(0), "{flag}");
     }
 }
+
+/// #305: a `DOCKER_TLS_VERIFY` that is neither true nor false stops a run
+/// before it connects — the listener standing in for the daemon receives
+/// nothing, not a plaintext request — naming the variable and the value.
+#[test]
+fn a_run_refuses_an_invalid_docker_tls_verify_before_connecting() {
+    let project = one_task_project("tls-verify-invalid");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    let output = isolated_docker_command(&project)
+        .env("DOCKER_HOST", format!("tcp://127.0.0.1:{port}"))
+        .env("DOCKER_TLS_VERIFY", "maybe")
+        .arg("t")
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&project).ok();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(125), "{stderr}");
+    assert!(stderr.contains("DOCKER_TLS_VERIFY is 'maybe'"), "{stderr}");
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+        "something connected to the stand-in daemon"
+    );
+}
+
+/// #305: it is read only on connecting, so `--list-tasks` never sees it —
+/// a recorded divergence from Batect, which refuses it on every command.
+#[test]
+fn list_tasks_ignores_an_invalid_docker_tls_verify() {
+    let project = one_task_project("tls-verify-list");
+    let output = isolated_docker_command(&project)
+        .env("DOCKER_TLS_VERIFY", "maybe")
+        .arg("--list-tasks")
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&project).ok();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("- t"));
+}
+
+/// #305: only the flags conflict with `--docker-context`; the variable,
+/// which a context connection never reads, doesn't.
+#[test]
+fn docker_tls_verify_from_the_environment_does_not_conflict_with_a_context() {
+    let project = one_task_project("tls-verify-context");
+    let config_directory = project.join("cfg");
+    std::fs::create_dir_all(&config_directory).unwrap();
+    let output = isolated_docker_command(&project)
+        .env("DOCKER_TLS_VERIFY", "1")
+        .arg("--docker-context")
+        .arg("nope")
+        .arg("--docker-config")
+        .arg(&config_directory)
+        .arg("t")
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&project).ok();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("Cannot use both"), "{stderr}");
+    assert!(
+        stderr.contains("Docker context 'nope' does not exist"),
+        "{stderr}"
+    );
+}

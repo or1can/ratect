@@ -31,7 +31,8 @@ use ratect_core::config::{
     format_task_list, format_task_list_quiet, load_project_native, Config, Dialect,
 };
 use ratect_core::diagnostics::{
-    config_findings, leftover_finding, wrapper_script_findings, ConversionCheck, Finding,
+    config_findings, docker_environment_findings, leftover_finding, wrapper_script_findings,
+    ConversionCheck, Finding,
 };
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
@@ -1394,7 +1395,13 @@ async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> 
     let mut findings = Vec::new();
 
     // Docker first: nothing else about a task can work without it, so it's
-    // the most likely single answer to "why did that fail?".
+    // the most likely single answer to "why did that fail?". The variables
+    // a run reads as true or false come before the connection, which may
+    // stop on one of them — said once, below, not twice.
+    findings.extend(docker_environment_findings(
+        std::env::var("DOCKER_TLS_VERIFY").ok().as_deref(),
+        std::env::var("DOCKER_BUILDKIT").ok().as_deref(),
+    ));
     // A warning connecting raises is one of doctor's own findings.
     let warnings = std::sync::Mutex::new(Vec::new());
     let docker = DockerClient::new(&args.docker.into(), |message| {
@@ -1418,9 +1425,12 @@ async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> 
             }
         },
         Err(error) => {
-            findings.push(Finding::Problem(format!(
-                "Docker connection options are unusable: {error:#}"
-            )));
+            let already_found = Finding::Problem(format!("{error:#}"));
+            if !findings.contains(&already_found) {
+                findings.push(Finding::Problem(format!(
+                    "Docker connection options are unusable: {error:#}"
+                )));
+            }
             None
         }
     };

@@ -249,12 +249,14 @@ task's own container, as a dependency, or by more than one task) — but never r
 
 - **Builder selection**: builds use the builder the Docker daemon itself advertises
   as its default — BuildKit on any modern daemon — exactly matching Batect. The
-  `DOCKER_BUILDKIT` environment variable overrides this either way (`1`/`true`
-  forces BuildKit, `0`/`false` forces the classic builder; any other value is an
-  error), the same variable the docker CLI honors. `--enable-buildkit`
+  `DOCKER_BUILDKIT` environment variable overrides this either way (`1`, `yes`
+  or `true` forces BuildKit, `0`, `no` or `false` the classic builder, in any
+  case; empty counts as unset; any other value is an error) — the same
+  variable the docker CLI honors, read with Batect's vocabulary, since the
+  docker CLI accepts no `yes`/`no`. `--enable-buildkit`
   (see [CLI reference](ratect-compat-cli.md)) forces BuildKit on, taking precedence
   over `DOCKER_BUILDKIT` too — there's no `--disable-buildkit` counterpart;
-  force the classic builder via `DOCKER_BUILDKIT=0`/`false` instead. A daemon old
+  force the classic builder via `DOCKER_BUILDKIT=0` instead. A daemon old
   enough not to advertise a default builder at all falls back to the classic
   builder; one advertising a builder Ratect doesn't know is an error unless
   `DOCKER_BUILDKIT` or `--enable-buildkit` chooses the builder. Note that `build_secrets` and `build_ssh` *require* BuildKit —
