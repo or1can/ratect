@@ -583,16 +583,30 @@ async fn main() {
 
 /// Resolves which config-variables file to load. An explicit
 /// `--config-vars-file` always wins; otherwise Batect's default of
-/// `batect.local.yml` applies, but *only when that file exists* — an absent
-/// default file is simply "no overrides", not an error. This mirrors
-/// Batect's `FileDefaultValueProvider("batect.local.yml")`, which resolves
-/// the default against the current directory (`dir` here), not against the
-/// `-f` config file's own directory.
-fn resolve_config_vars_file(explicit: Option<PathBuf>, dir: &Path) -> Option<PathBuf> {
-    explicit.or_else(|| {
-        let default = dir.join("batect.local.yml");
-        default.is_file().then_some(default)
-    })
+/// `batect.local.yml` in the current directory (`dir` here, not the `-f`
+/// config file's own directory) applies when it is a file. An absent one is
+/// "no overrides", not an error; one that exists but isn't a file is an
+/// invalid default, as Batect's `FileDefaultValueProvider` makes it — even
+/// for a command that never reads it, since this is a check on the
+/// default, not on reading it.
+fn resolve_config_vars_file(explicit: Option<PathBuf>, dir: &Path) -> Result<Option<PathBuf>> {
+    if explicit.is_some() {
+        return Ok(explicit);
+    }
+    let default = dir.join("batect.local.yml");
+    match std::fs::metadata(&default) {
+        Ok(metadata) if metadata.is_file() => Ok(Some(default)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Ok(_) => Err(InvalidOptionValue::new(format!(
+            "{default:?}, --config-vars-file's default in the current directory, is not a file."
+        ))
+        .into()),
+        Err(error) => Err(InvalidOptionValue::new(format!(
+            "{default:?}, --config-vars-file's default in the current directory, can't be \
+             read: {error}."
+        ))
+        .into()),
+    }
 }
 
 /// This binary's progress console is stdout — Batect's placement, kept
@@ -626,7 +640,7 @@ async fn run(
     // names, are read only when a task runs, so nothing in either stops
     // `--list-tasks` (#355).
     let config_vars_file =
-        resolve_config_vars_file(args.config_vars_file.clone(), &std::env::current_dir()?);
+        resolve_config_vars_file(args.config_vars_file.clone(), &std::env::current_dir()?)?;
     if let Some(path) = &config_vars_file {
         if !path.is_file() {
             return Err(InvalidOptionValue::new(format!(

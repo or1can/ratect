@@ -31,7 +31,7 @@ listed under.
 | Flag | Short | Default | Description |
 |---|---|---|---|
 | `--config-var <NAME=VALUE>` | — | — | Sets a [config variable](ratect-compat-config-reference.md#configvariable)'s value; repeatable. Takes precedence over `--config-vars-file` and the variable's `default`. |
-| `--config-vars-file <PATH>` | — | `batect.local.yml` if it exists | A flat YAML file of config variable `name: value` pairs, in the same format as `batect.yml` itself. Every value is a string, as in Batect: an unquoted number or boolean is read as written (`3.10` is `3.10`, not `3.1`) unless the file also contains a YAML tag, and a null or empty value is refused. Lower precedence than `--config-var`. When not given, defaults to `batect.local.yml` in the current directory *if that file exists* (an absent default file just means no overrides from a file, not an error) — matching Batect. Read only when a task runs, as in Batect: every command checks only that a named file is a file, so nothing in it, nor a `--config-var` naming an undeclared variable, stops `--list-tasks`. |
+| `--config-vars-file <PATH>` | — | `batect.local.yml` if it exists | A flat YAML file of config variable `name: value` pairs, in the same format as `batect.yml` itself. Every value is a string, as in Batect: an unquoted number or boolean is read as written (`3.10` is `3.10`, not `3.1`) unless the file also contains a YAML tag, and a null or empty value is refused. Lower precedence than `--config-var`. When not given, defaults to `batect.local.yml` in the current directory *if that file exists* (an absent default file just means no overrides from a file, not an error); one that exists but isn't a file fails every command, as in Batect. Read only when a task runs, as in Batect: every command checks only that a named file is a file, so nothing in it, nor a `--config-var` naming an undeclared variable, stops `--list-tasks`. |
 
 ### Task execution
 
@@ -228,7 +228,7 @@ runs nothing, so it exits `0` when it succeeds, `1` when it fails (a config that
 parse under `--list-tasks`, a `--log-file` that exists but can't be opened), and `2` when
 it was invoked wrong: a flag that's rejected (`ratect-compat --bogus --clean`), or an
 option value that fails its own check — a `-f` or `--config-vars-file` naming something
-that doesn't exist or isn't a file, a `BATECT_CACHE_TYPE` that is no cache type, a `--docker-config`, `--docker-cert-path`,
+that doesn't exist or isn't a file, a `batect.local.yml` that isn't a file, a `BATECT_CACHE_TYPE` that is no cache type, a `--docker-config`, `--docker-cert-path`,
 `DOCKER_CONFIG` or `DOCKER_CERT_PATH` naming something that doesn't exist or isn't a
 directory, or a `--log-file` in a directory that doesn't exist.
 

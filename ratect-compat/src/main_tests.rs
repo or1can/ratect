@@ -888,7 +888,7 @@ fn explicit_config_vars_file_wins_over_the_default() {
     std::fs::write(dir.join("batect.local.yml"), "IGNORED: true").unwrap();
     let explicit = PathBuf::from("chosen.yml");
     assert_eq!(
-        resolve_config_vars_file(Some(explicit.clone()), &dir),
+        resolve_config_vars_file(Some(explicit.clone()), &dir).unwrap(),
         Some(explicit),
         "an explicit --config-vars-file must win even when batect.local.yml exists",
     );
@@ -901,14 +901,56 @@ fn config_vars_file_defaults_to_batect_local_yml_when_present() {
     let dir = unique_temp_dir();
     let default = dir.join("batect.local.yml");
     std::fs::write(&default, "FROM_FILE: value").unwrap();
-    assert_eq!(resolve_config_vars_file(None, &dir), Some(default));
+    assert_eq!(resolve_config_vars_file(None, &dir).unwrap(), Some(default));
 }
 
 #[test]
 fn config_vars_file_default_is_absent_when_batect_local_yml_is_missing() {
     // An absent default file is "no overrides", not an error.
     let dir = unique_temp_dir();
-    assert_eq!(resolve_config_vars_file(None, &dir), None);
+    assert_eq!(resolve_config_vars_file(None, &dir).unwrap(), None);
+}
+
+/// #450: a `batect.local.yml` that exists but isn't a file is an invalid
+/// default, refused naming it and saying it is `--config-vars-file`'s
+/// default — unless an explicit `--config-vars-file` makes it moot.
+#[test]
+fn a_batect_local_yml_that_is_not_a_file_is_an_invalid_default() {
+    let dir = unique_temp_dir();
+    std::fs::create_dir(dir.join("batect.local.yml")).unwrap();
+
+    let error = resolve_config_vars_file(None, &dir).unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains(&format!("{:?}", dir.join("batect.local.yml"))),
+        "{message}"
+    );
+    assert!(message.contains("--config-vars-file"), "{message}");
+    assert!(message.contains("not a file"), "{message}");
+    assert!(error.is::<InvalidOptionValue>());
+
+    let explicit = PathBuf::from("chosen.yml");
+    assert_eq!(
+        resolve_config_vars_file(Some(explicit.clone()), &dir).unwrap(),
+        Some(explicit)
+    );
+}
+
+/// #450: one whose metadata can't be read says so, rather than calling it
+/// not a file.
+#[test]
+fn a_batect_local_yml_that_cannot_be_read_says_so() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = unique_temp_dir();
+    let sealed = dir.join("sealed");
+    std::fs::create_dir(&sealed).unwrap();
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let result = resolve_config_vars_file(None, &sealed);
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains("can't be read: "), "{message}");
+    assert!(!message.contains("not a file"), "{message}");
 }
 
 /// A line is a run unless a flag `run` handles instead of a task appears,

@@ -231,12 +231,14 @@ Beyond any one flag:
   `docker run`'s code for its own failure, and `2` on one that replaces the task
   with `--list-tasks`, `--clean`, `--clean-cache` or `--upgrade`, the usage-error
   convention `clap` and the POSIX utilities share. So is an option value that
-  fails its own check, such as a `-f` or `--config-vars-file` naming no file, or a
-  `BATECT_CACHE_TYPE` that is no cache type.
+  fails its own check, such as a `-f` or `--config-vars-file` naming no file, a
+  `batect.local.yml` that isn't a file, or a `BATECT_CACHE_TYPE` that is no
+  cache type.
   Batect's is `-1` (255) for both, the same as for any other failure
   ([decisions/0016](../decisions/0016-exit-codes.md)).
 - **`--help` and `--version` exit `0` even when an option's value or
-  default is invalid** — a `--docker-config` naming no directory, say: they
+  default is invalid** — a `--docker-config` naming no directory, a
+  `batect.local.yml` that isn't a file, or a bad `BATECT_CACHE_TYPE`, say: they
   act before any value they don't need is checked. Batect checks its
   options and their defaults first, so an invalid one makes `--help` exit
   `-1` (255) instead ([decisions/0016](../decisions/0016-exit-codes.md)).

@@ -5990,3 +5990,74 @@ fn an_invalid_batect_cache_type_is_moot_beside_the_flag_and_for_help() {
     }
     std::fs::remove_dir_all(&project).ok();
 }
+
+/// #450: a `batect.local.yml` that exists but isn't a file fails every
+/// command before it does anything — before `--clean` removes a cache,
+/// before `-f`'s file is looked for — in every output style, naming it as
+/// `--config-vars-file`'s default; `--help` and `--version` don't check it,
+/// and an unknown flag is still reported first.
+#[test]
+fn a_batect_local_yml_that_is_not_a_file_fails_every_command_before_it_runs() {
+    let (project, cache) = project_with_a_cache_directory("local-yml-dir", "deps");
+    std::fs::create_dir(project.join("batect.local.yml")).unwrap();
+    let message = "--config-vars-file's default in the current directory, is not a file.";
+    for arguments in [
+        &["--list-tasks"][..],
+        &["-o", "quiet", "--list-tasks"][..],
+        &["--clean", "--cache-type", "directory"][..],
+        &["-f", "missing.yml", "--list-tasks"][..],
+    ] {
+        let output = isolated_docker_command(&project)
+            .args(arguments)
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert!(
+            stderr.contains("batect.local.yml") && stderr.contains(message),
+            "{arguments:?}: {stderr}"
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "", "{arguments:?}");
+    }
+    assert!(cache.exists(), "--clean removed a cache despite the error");
+
+    for flag in ["--help", "--version"] {
+        let output = isolated_docker_command(&project)
+            .arg(flag)
+            .output()
+            .expect("failed to run ratect");
+        assert_eq!(output.status.code(), Some(0), "{flag}");
+    }
+    let output = isolated_docker_command(&project)
+        .args(["--bogus", "--list-tasks"])
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--bogus") && !stderr.contains(message),
+        "{stderr}"
+    );
+    std::fs::remove_dir_all(&project).ok();
+}
+
+/// #450: an explicit value makes an invalid default moot.
+#[test]
+fn an_explicit_option_makes_an_invalid_default_moot() {
+    let project = one_task_project("defaults-moot");
+    std::fs::create_dir(project.join("batect.local.yml")).unwrap();
+    std::fs::write(project.join("vars.yml"), "{}\n").unwrap();
+    let output = isolated_docker_command(&project)
+        .env("BATECT_CACHE_TYPE", "bogus")
+        .args(["--config-vars-file", "vars.yml", "--cache-type", "volume"])
+        .arg("--list-tasks")
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&project).ok();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

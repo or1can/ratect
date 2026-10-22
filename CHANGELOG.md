@@ -47,6 +47,7 @@ history, from when it was the only binary.
 - A `--docker-config`, `--docker-cert-path`, `DOCKER_CONFIG` or `DOCKER_CERT_PATH` naming something that doesn't exist or isn't a directory is refused, naming it, instead of being read as an empty directory: by every `ratect-compat` command but `--help` and `--version`, and by every `ratect` command that connects to Docker, before it does — `ratect doctor` reports it as a problem. It exits `2`, or `125` on a run. An empty `DOCKER_CONFIG` or `DOCKER_CERT_PATH` isn't checked.
 - A `DOCKER_TLS_VERIFY` that is neither true nor false fails a command when it connects to a Docker host, naming the variable and its value, instead of silently connecting without TLS. `yes`, in any case, now turns TLS on. `--docker-tls` or `--docker-tls-verify` still turns TLS on whatever the variable says.
 - `ratect-compat` reads `BATECT_CACHE_TYPE` as the default for `--cache-type`, as Batect does: `directory` switches runs and `--clean`/`--clean-cache` to host directories under `.batect/caches`, and any value other than `volume` or `directory`, exactly, fails every command but `--help` and `--version` unless `--cache-type` is given. It exits `2`, or `125` on a run.
+- `ratect-compat` refuses a `batect.local.yml` in the current directory that exists but isn't a file, when `--config-vars-file` isn't given, on every command but `--help` and `--version`, instead of running with no overrides from it. It exits `2`, or `125` on a run.
 
 ### Added
 
