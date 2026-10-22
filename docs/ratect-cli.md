@@ -528,8 +528,9 @@ Every other verb runs nothing, so it exits `0` when it succeeds; `1` when it fai
 `doctor` finding a problem); and `2` when it was invoked wrong — a flag that's rejected
 (`ratect --bogus`, `ratect tasks list --bogus`, a missing subcommand), or an option value
 that fails its own check, such as a `-f` naming no file (`ratect tasks list` where there
-is no `ratect.toml`). `doctor` and `config validate` report a `-f` naming no file as a
-problem they found instead, and exit `1`; a flag rejected in their own arguments is still
+is no `ratect.toml`) or a `--docker-config` naming no directory. `doctor` and `config
+validate` report a `-f` naming no file as a problem they found instead, and exit `1`, as
+`doctor` does a Docker directory that isn't one; a flag rejected in their own arguments is still
 `2`.
 
 Every failure of Ratect's own reaches stderr as `Error: <message>`, in every output style

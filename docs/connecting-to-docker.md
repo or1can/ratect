@@ -5,7 +5,9 @@ options, on both binaries: `ratect run`, `ratect caches`, `ratect resources`
 and `ratect doctor` each accept them (`ratect tasks list`, `ratect includes`
 and `ratect config` never connect, so they don't), and `ratect-compat` accepts
 them on every invocation and uses them whenever the invocation actually
-connects (a `--list-tasks` run never does). This page is the one description
+connects (a `--list-tasks` run never does) — though it checks a Docker config
+or certificate directory given by an option or `DOCKER_CONFIG`/`DOCKER_CERT_PATH`
+on every one. This page is the one description
 of those options; the [`ratect`](ratect-cli.md#docker-connection-options) and
 [`ratect-compat`](ratect-compat-cli.md#docker-connection) CLI references only
 link here.
@@ -21,10 +23,10 @@ Windows named pipe) — see [Which daemon is used](#which-daemon-is-used).
 |---|---|---|
 | `--docker-host <HOST>` | `DOCKER_HOST` | Docker host to connect to, e.g. `unix:///var/run/docker.sock` or `tcp://1.2.3.4:5678`. An `https://` host connects over TLS as if `--docker-tls-verify` were given. Cannot be combined with `--docker-context`. |
 | `--docker-context <NAME>` | `DOCKER_CONTEXT`, then the active context, unless a host is set | Docker CLI context to connect through — read from the Docker CLI's own context store (`~/.docker/contexts/`, or `--docker-config`'s directory). The active context is `~/.docker/config.json`'s `currentContext`. Cannot be combined with `--docker-host` or any of the TLS options below. Errors clearly if the named context doesn't exist in the store. |
-| `--docker-config <PATH>` | `DOCKER_CONFIG`, then `~/.docker` | Directory containing the Docker CLI's own configuration files (context store, `config.json`). |
+| `--docker-config <PATH>` | `DOCKER_CONFIG`, then `~/.docker` | Directory containing the Docker CLI's own configuration files (context store, `config.json`). A directory given here or by `DOCKER_CONFIG` must exist and be a directory; `~/.docker` needn't exist. |
 | `--docker-tls` | — | Use TLS when connecting to the Docker host. Behaves identically to `--docker-tls-verify` — the daemon's certificate is always fully verified; there is no way to skip verification. |
 | `--docker-tls-verify` | `DOCKER_TLS_VERIFY` | Use TLS when connecting to the Docker host, verifying its certificate. Needs a host: `--docker-host` or `DOCKER_HOST`. |
-| `--docker-cert-path <PATH>` | `DOCKER_CERT_PATH`, then `--docker-config`/`DOCKER_CONFIG`, then `~/.docker` | Directory containing any of `ca.pem`/`cert.pem`/`key.pem` to authenticate to the Docker host and verify it, unless overridden individually by the three options below. None of the three files has to be there — see [TLS through the options](#tls-through-the-options). |
+| `--docker-cert-path <PATH>` | `DOCKER_CERT_PATH`, then `--docker-config`/`DOCKER_CONFIG`, then `~/.docker` | Directory containing any of `ca.pem`/`cert.pem`/`key.pem` to authenticate to the Docker host and verify it, unless overridden individually by the three options below. A directory given here or by `DOCKER_CERT_PATH` must exist and be a directory, whether or not TLS is used. None of the three files has to be there — see [TLS through the options](#tls-through-the-options). |
 | `--docker-tls-ca-cert <PATH>` | `ca.pem` in the certificate directory | The TLS CA certificate used to verify the Docker host's own certificate — the only certificate authority it is checked against. The file must exist. Without this option and without a `ca.pem`, the system trust store is used. |
 | `--docker-tls-cert <PATH>` | `cert.pem` in the certificate directory | The TLS certificate used to authenticate to the Docker host. The file must exist, and so must the key. |
 | `--docker-tls-key <PATH>` | `key.pem` in the certificate directory | The TLS key used to authenticate to the Docker host. The file must exist, and so must the certificate. |
@@ -35,8 +37,9 @@ With `--docker-tls` or `--docker-tls-verify` (or `DOCKER_TLS_VERIFY`), or an
 `https://` host, the certificate directory is `--docker-cert-path`, then `DOCKER_CERT_PATH`, then
 the Docker config directory if one was given (`--docker-config`, then
 `DOCKER_CONFIG`), then `~/.docker` (an empty `DOCKER_CERT_PATH` counts as
-unset). The directory must
-exist unless all three files are named by their own options. What it holds
+unset). A directory given by any of those four sources must exist, and every
+command that connects checks it first; `~/.docker` must exist unless all
+three files are named by their own options. What it holds
 decides how the connection is made:
 
 - `--docker-tls-ca-cert`, or else the directory's `ca.pem`, is the only
@@ -113,8 +116,8 @@ for making the certificate verifiable instead.
 |---|---|
 | `DOCKER_HOST` | Docker host to connect to — the default for `--docker-host`. Setting it means no context is used unless `--docker-context` is given. Empty counts as unset. |
 | `DOCKER_CONTEXT` | Docker CLI context to connect through — the default for `--docker-context`. Ignored when a host is set. Empty counts as unset. |
-| `DOCKER_CONFIG` | Directory containing the Docker CLI's own configuration files — the default for `--docker-config`, and for `--docker-cert-path` when `DOCKER_CERT_PATH` is unset. |
-| `DOCKER_CERT_PATH` | Directory containing any of `ca.pem`/`cert.pem`/`key.pem` for TLS — the default for `--docker-cert-path`. Empty counts as unset. |
+| `DOCKER_CONFIG` | Directory containing the Docker CLI's own configuration files — the default for `--docker-config`, and for `--docker-cert-path` when `DOCKER_CERT_PATH` is unset. Must exist and be a directory when set and not empty. |
+| `DOCKER_CERT_PATH` | Directory containing any of `ca.pem`/`cert.pem`/`key.pem` for TLS — the default for `--docker-cert-path`. Empty counts as unset; otherwise it must exist and be a directory. |
 | `DOCKER_TLS_VERIFY` | `1` or `true` (any case) enables TLS, fully verified — the default for `--docker-tls-verify`. Any other value leaves it off. |
 
 ## TLS with a private certificate authority

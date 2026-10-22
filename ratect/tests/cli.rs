@@ -3277,3 +3277,69 @@ fn a_run_that_fails_exits_125_and_any_other_verb_1() {
     assert_eq!(list, Some(1));
     assert_eq!(validate, Some(1));
 }
+
+/// #539: a verb that connects refuses a `--docker-config` that doesn't
+/// exist before it tries to — `2`, an invalid option value — naming it.
+#[test]
+fn a_connecting_verb_refuses_a_docker_config_directory_that_does_not_exist() {
+    let output = ratect_command()
+        .args(["resources", "list", "--all-projects"])
+        .args(["--docker-config", "/nonexistent-ratect-dir"])
+        .output()
+        .expect("failed to run ratect");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains(r#"--docker-config "/nonexistent-ratect-dir" does not exist."#),
+        "{stderr}"
+    );
+}
+
+/// #539: `doctor` reports it as a problem and carries on with its other
+/// checks.
+#[test]
+fn doctor_reports_a_docker_config_directory_that_does_not_exist() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(native_fixture_path())
+        .args(["doctor", "--docker-config", "/nonexistent-ratect-dir"])
+        .output()
+        .expect("failed to run ratect");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("problem ")
+                && line.contains(r#"--docker-config "/nonexistent-ratect-dir" does not exist."#)),
+        "{stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("ok ") && line.contains("loads")),
+        "{stdout}"
+    );
+}
+
+/// #539: `caches` checks it under `--cache-type directory` too, though
+/// that store never connects.
+#[test]
+fn caches_refuses_a_docker_config_directory_that_does_not_exist_without_connecting() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(native_fixture_path())
+        .args(["caches", "list", "--cache-type", "directory"])
+        .args(["--docker-config", "/nonexistent-ratect-dir"])
+        .output()
+        .expect("failed to run ratect");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains(r#"--docker-config "/nonexistent-ratect-dir" does not exist."#),
+        "{stderr}"
+    );
+}

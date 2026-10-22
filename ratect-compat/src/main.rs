@@ -258,6 +258,21 @@ impl Args {
         !self.upgrade && !self.clean && self.clean_cache.is_empty() && !self.list_tasks
     }
 
+    /// The Docker connection flags, as `ratect-core` takes them.
+    fn docker_connection(&self) -> DockerConnectionOptions {
+        DockerConnectionOptions {
+            host: self.docker_host.clone(),
+            context: self.docker_context.clone(),
+            config_directory: self.docker_config.clone(),
+            tls: self.docker_tls,
+            tls_verify: self.docker_tls_verify,
+            cert_path: self.docker_cert_path.clone(),
+            tls_ca_cert: self.docker_tls_ca_cert.clone(),
+            tls_cert: self.docker_tls_cert.clone(),
+            tls_key: self.docker_tls_key.clone(),
+        }
+    }
+
     /// Maps the engine-affecting flags onto the engine's settings.
     ///
     /// Split out from [`run`] so it can be tested without a Docker daemon.
@@ -602,6 +617,10 @@ async fn run(
         }
     }
 
+    // Like Batect's option parser, for every command: a Docker directory
+    // the user named must be one, whether or not this command connects.
+    args.docker_connection().check_directories()?;
+
     if args.upgrade {
         stderr.notice(
             "--upgrade has no effect: Ratect is a single native binary, not a self-updating \
@@ -665,7 +684,6 @@ async fn run(
             // for why, and for the fancy-on-a-non-interactive-console error
             // it can return.
             let event_sink = create_event_sink(requested_style, color_mode, &terminal, PROGRESS)?;
-            // Built before the connection options consume `args` below.
             let settings = args.engine_settings(
                 project.project_directory.clone(),
                 project.dialect,
@@ -680,18 +698,7 @@ async fn run(
             // and cleans up instead of killing the process where it stands.
             let interrupt = ratect_core::interrupt::Interrupt::new();
             interrupt.listen();
-            let docker_connection = DockerConnectionOptions {
-                host: args.docker_host,
-                context: args.docker_context,
-                config_directory: args.docker_config,
-                tls: args.docker_tls,
-                tls_verify: args.docker_tls_verify,
-                cert_path: args.docker_cert_path,
-                tls_ca_cert: args.docker_tls_ca_cert,
-                tls_cert: args.docker_tls_cert,
-                tls_key: args.docker_tls_key,
-            };
-            let docker = DockerClient::new(&docker_connection)
+            let docker = DockerClient::new(&args.docker_connection())
                 .await?
                 .with_event_sink(Arc::clone(&event_sink))
                 .with_enable_buildkit(args.enable_buildkit);
@@ -741,18 +748,7 @@ async fn clean_caches(args: &Args) -> Result<()> {
     let docker = match cache_type {
         ratect_core::cache::CacheType::Volume => {
             println!("Checking for cache volumes...");
-            let docker_connection = DockerConnectionOptions {
-                host: args.docker_host.clone(),
-                context: args.docker_context.clone(),
-                config_directory: args.docker_config.clone(),
-                tls: args.docker_tls,
-                tls_verify: args.docker_tls_verify,
-                cert_path: args.docker_cert_path.clone(),
-                tls_ca_cert: args.docker_tls_ca_cert.clone(),
-                tls_cert: args.docker_tls_cert.clone(),
-                tls_key: args.docker_tls_key.clone(),
-            };
-            Some(DockerClient::new(&docker_connection).await?)
+            Some(DockerClient::new(&args.docker_connection()).await?)
         }
         ratect_core::cache::CacheType::Directory => {
             println!(

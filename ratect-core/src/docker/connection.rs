@@ -98,6 +98,10 @@ use std::path::{Path, PathBuf};
 /// means the system trust store and a missing client pair means no client
 /// certificate, as for a Docker context.
 ///
+/// A Docker config or certificate directory the user gave must exist and be
+/// a directory (see [`DockerConnectionOptions::check_directories`]), which
+/// connecting checks before anything else.
+///
 /// Re-exported from `docker.rs` (`pub use`) so this module's existence is an
 /// implementation detail, not a path change.
 #[derive(Debug, Default, Clone)]
@@ -111,6 +115,22 @@ pub struct DockerConnectionOptions {
     pub tls_ca_cert: Option<PathBuf>,
     pub tls_cert: Option<PathBuf>,
     pub tls_key: Option<PathBuf>,
+}
+
+impl DockerConnectionOptions {
+    /// Refuses a `--docker-config`/`DOCKER_CONFIG` or
+    /// `--docker-cert-path`/`DOCKER_CERT_PATH` that names something missing
+    /// or not a directory, as an
+    /// [`InvalidOptionValue`](crate::exit_code::InvalidOptionValue).
+    /// Connecting does this first; `ratect-compat` calls it too, before any
+    /// command runs, as Batect checks them when it parses its arguments.
+    pub fn check_directories(&self) -> Result<()> {
+        check_chosen_directories(
+            self,
+            std::env::var("DOCKER_CONFIG").ok().as_deref(),
+            std::env::var("DOCKER_CERT_PATH").ok().as_deref(),
+        )
+    }
 }
 
 /// The Docker CLI's own context store identifier for a context name —
@@ -329,8 +349,10 @@ fn docker_config_directory(
 /// Batect's (`resolvePathToDockerCertificate`) order, and the Docker CLI's,
 /// which defaults the certificate path to its config directory. An empty
 /// `DOCKER_CERT_PATH` counts as unset, as in the Docker CLI, rather than
-/// naming the working directory. Whether the directory exists is
-/// [`flag_tls_settings`]'s question, asked only if it's consulted.
+/// naming the working directory. A directory the user gave was checked
+/// before this (see `check_chosen_directories`); whether the `~/.docker`
+/// default exists is [`flag_tls_settings`]'s question, asked only if it's
+/// consulted.
 ///
 /// Pure but for the home directory lookup — the environment values are
 /// injected, as for `resolve_host`.
@@ -352,6 +374,53 @@ fn docker_cert_directory(
         crate::user::home_directory()?.join(".docker"),
         "~/.docker".to_string(),
     ))
+}
+
+/// Refuses a Docker config or certificate directory the user gave —
+/// `--docker-config`, else a non-empty `DOCKER_CONFIG`; `--docker-cert-path`,
+/// else a non-empty `DOCKER_CERT_PATH` — that doesn't exist or isn't a
+/// directory (a symlink to one is one), naming the source, the path and
+/// which it is. Otherwise a typo reads as a directory holding nothing: no
+/// context, no registry credentials, no certificates, and no word about it.
+///
+/// Batect checks the same four when it parses its arguments, whether or not
+/// anything would read the directory, and so does this; like Batect, it
+/// leaves the `~/.docker` default alone, there or not. An empty
+/// `DOCKER_CONFIG` is left to resolve as it always has.
+///
+/// Pure but for the filesystem — the environment values are injected, as
+/// for `resolve_host`. [`DockerConnectionOptions::check_directories`] reads
+/// the real ones.
+fn check_chosen_directories(
+    options: &DockerConnectionOptions,
+    docker_config_env: Option<&str>,
+    docker_cert_path_env: Option<&str>,
+) -> Result<()> {
+    let config = chosen_config_directory(options, docker_config_env.filter(|dir| !dir.is_empty()));
+    let cert = match (
+        &options.cert_path,
+        docker_cert_path_env.filter(|dir| !dir.is_empty()),
+    ) {
+        (Some(dir), _) => Some((dir.clone(), "--docker-cert-path")),
+        (None, Some(dir)) => Some((PathBuf::from(dir), "DOCKER_CERT_PATH")),
+        (None, None) => None,
+    };
+    for (path, named_by) in config.into_iter().chain(cert) {
+        let problem = match fs::metadata(&path) {
+            Ok(metadata) if metadata.is_dir() => continue,
+            Ok(metadata) if metadata.is_file() => "is a file, not a directory".to_string(),
+            Ok(_) => "is not a directory".to_string(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                "does not exist".to_string()
+            }
+            Err(error) => format!("can't be read: {error}"),
+        };
+        return Err(crate::exit_code::InvalidOptionValue::new(format!(
+            "{named_by} {path:?} {problem}."
+        ))
+        .into());
+    }
+    Ok(())
 }
 
 /// `directory`'s `name`, when it is there.
@@ -388,9 +457,11 @@ fn client_pair_in(directory: &Path, named_by: &str) -> Result<Option<ClientCerti
 ///   (`<(…)`, to keep a key off disk) is read like one, once.
 /// - The directory must exist if any file is looked for in it — that is,
 ///   unless all three flags are given. Every file in it is optional, so a
-///   mistyped path would otherwise read as a directory holding none of
-///   them, and connect with the system trust store and no client
-///   certificate without a word.
+///   missing one would otherwise read as a directory holding none of them,
+///   and connect with the system trust store and no client certificate
+///   without a word. A directory the user gave was already checked, whether
+///   or not it is consulted (see `check_chosen_directories`); this is what
+///   covers the `~/.docker` default.
 /// - Without `--docker-tls-ca-cert`, the directory's `ca.pem` is the CA
 ///   when it is there; when it isn't there is none, and the system trust
 ///   store is used.
@@ -910,6 +981,7 @@ fn holds_certificate_error(error: &(dyn std::error::Error + 'static)) -> bool {
 /// carries what [`Connection::explain_failure`] needs to explain a
 /// verification failure.
 pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
+    options.check_directories()?;
     if options.context.is_some() {
         if let Some(conflicting) = conflicting_option_with_context(options) {
             anyhow::bail!("Cannot use both --docker-context and {conflicting}.");

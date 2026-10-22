@@ -44,6 +44,7 @@ history, from when it was the only binary.
 - A run whose task's command exited `0` exits `0` even if a signal arrives during its cleanup, instead of 128 + the signal's number, unless that cleanup is then abandoned or fails.
 - A run whose every container exited `0` but whose cleanup fails — the daemon refusing to remove a container or the task network, or a cleanup abandoned with something left to remove — exits `125` instead of `0`, and a prerequisite whose cleanup fails stops the run before the tasks after it. A task's own non-zero exit code is kept.
 - `ratect run` (ratect only) writes its progress — milestones, the summary line, and under `-o all` every container's prefixed lines except the task container's own — to stderr instead of stdout. Stdout is the task container's own output alone, in every style — prefixed with its container's name under `-o all` — and `fancy` is auto-selected when stderr is an interactive console, so a run with stdout redirected gets it. `ratect-compat` is unchanged.
+- A `--docker-config`, `--docker-cert-path`, `DOCKER_CONFIG` or `DOCKER_CERT_PATH` naming something that doesn't exist or isn't a directory is refused, naming it, instead of being read as an empty directory: by every `ratect-compat` command but `--help` and `--version`, and by every `ratect` command that connects to Docker, before it does — `ratect doctor` reports it as a problem. It exits `2`, or `125` on a run. An empty `DOCKER_CONFIG` or `DOCKER_CERT_PATH` isn't checked.
 
 ### Added
 

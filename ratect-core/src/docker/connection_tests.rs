@@ -793,8 +793,8 @@ fn flag_tls_settings_errors_naming_what_named_a_cert_directory_that_is_not_there
     }
 }
 
-/// `DOCKER_CERT_PATH` left over from a directory long gone, with every file
-/// named by a flag, connected before; nothing in the directory is wanted.
+/// A default `~/.docker` with no certificates in it, with every file named
+/// by a flag: nothing in the directory is wanted, so it needn't exist.
 #[test]
 fn flag_tls_settings_ignores_a_cert_directory_that_is_not_there_when_every_file_has_a_flag() {
     let files = unique_temp_dir();
@@ -808,12 +808,8 @@ fn flag_tls_settings_ignores_a_cert_directory_that_is_not_there_when_every_file_
         ..Default::default()
     };
 
-    let settings = flag_tls_settings(
-        &options,
-        &unique_temp_dir().join("gone"),
-        "DOCKER_CERT_PATH",
-    )
-    .unwrap();
+    let settings =
+        flag_tls_settings(&options, &unique_temp_dir().join("gone"), "~/.docker").unwrap();
     assert_eq!(
         settings.client,
         Some(ClientCertificate {
@@ -1780,14 +1776,16 @@ fn connect_over_tls_errors_naming_the_flag_when_its_key_is_encrypted_or_mismatch
 
 /// `bollard`'s `connect_with_ssl` built a client for either without
 /// complaint, which then failed on its first request. Refused before any
-/// file is read: the cert directory named here doesn't exist, and isn't
-/// what the error is about.
+/// file is read: the cert directory named here is empty, and isn't what
+/// the error is about.
 #[test]
 fn connect_over_tls_errors_naming_the_host_when_it_is_not_tcp() {
     for host in ["unix:///var/run/docker.sock", "http://127.0.0.1:2376"] {
+        let never_read = unique_temp_dir().join("never-read");
+        fs::create_dir(&never_read).unwrap();
         let options = DockerConnectionOptions {
             host: Some(host.to_string()),
-            ..tls_flag_options(1, &unique_temp_dir().join("never-read"))
+            ..tls_flag_options(1, &never_read)
         };
 
         let message = connect_error(&options);
@@ -1815,14 +1813,17 @@ async fn connect_over_tls_accepts_a_host_with_no_scheme() {
     assert!(result.is_ok(), "expected a verified ping: {result:?}");
 }
 
+/// Refused before anything else is tried, as a value the user gave.
 #[test]
 fn connect_over_tls_errors_naming_the_cert_directory_when_it_is_not_there() {
-    let options = tls_flag_options(1, &unique_temp_dir().join("typo"));
+    let typo = unique_temp_dir().join("typo");
+    let options = tls_flag_options(1, &typo);
 
     let message = connect_error(&options);
-    assert!(message.contains("over TLS"), "{message}");
-    assert!(message.contains("--docker-cert-path"), "{message}");
-    assert!(message.contains("typo"), "{message}");
+    assert!(
+        message.contains(&format!("--docker-cert-path {typo:?} does not exist")),
+        "{message}"
+    );
 }
 
 /// An `https://` host is a TLS connection whether or not a flag says so —
@@ -1868,4 +1869,131 @@ async fn connect_via_a_context_with_an_https_host_uses_the_tls_route() {
         .await
         .unwrap_err();
     assert!(holds_certificate_error(err.as_ref()), "{err:#}");
+}
+
+/// `check_directories`' message for `options` and the injected environment.
+fn directories_error(
+    options: &DockerConnectionOptions,
+    docker_config_env: Option<&str>,
+    docker_cert_path_env: Option<&str>,
+) -> String {
+    let error = check_chosen_directories(options, docker_config_env, docker_cert_path_env)
+        .expect_err("expected the directory to be rejected");
+    assert!(
+        error.is::<crate::exit_code::InvalidOptionValue>(),
+        "{error:#}"
+    );
+    format!("{error:#}")
+}
+
+/// #539: each of the four sources, given a missing path, a file, or
+/// something else that isn't a directory, is refused naming the source,
+/// the path and which of the three it is.
+#[test]
+fn check_chosen_directories_refuses_a_given_directory_that_is_not_one() {
+    let scratch = unique_temp_dir();
+    let missing = scratch.join("typo");
+    let file = scratch.join("file");
+    fs::write(&file, "").unwrap();
+    let special = PathBuf::from("/dev/null");
+    let cases = [
+        (&missing, "does not exist"),
+        (&file, "is a file, not a directory"),
+        (&special, "is not a directory"),
+    ];
+    for (path, problem) in cases {
+        let path_text = path.to_str().unwrap();
+        let expected = |source: &str| format!("{source} {path:?} {problem}");
+
+        let flag = DockerConnectionOptions {
+            config_directory: Some(path.clone()),
+            ..Default::default()
+        };
+        let message = directories_error(&flag, None, None);
+        assert!(message.contains(&expected("--docker-config")), "{message}");
+
+        let message = directories_error(&Default::default(), Some(path_text), None);
+        assert!(message.contains(&expected("DOCKER_CONFIG")), "{message}");
+
+        let flag = DockerConnectionOptions {
+            cert_path: Some(path.clone()),
+            ..Default::default()
+        };
+        let message = directories_error(&flag, None, None);
+        assert!(
+            message.contains(&expected("--docker-cert-path")),
+            "{message}"
+        );
+
+        let message = directories_error(&Default::default(), None, Some(path_text));
+        assert!(message.contains(&expected("DOCKER_CERT_PATH")), "{message}");
+    }
+}
+
+#[test]
+fn check_chosen_directories_accepts_a_directory_and_a_symlink_to_one() {
+    let scratch = unique_temp_dir();
+    let directory = scratch.join("dir");
+    fs::create_dir(&directory).unwrap();
+    let link = scratch.join("link");
+    std::os::unix::fs::symlink(&directory, &link).unwrap();
+    for path in [&directory, &link] {
+        let options = DockerConnectionOptions {
+            config_directory: Some(path.clone()),
+            cert_path: Some(path.clone()),
+            ..Default::default()
+        };
+        check_chosen_directories(&options, path.to_str(), path.to_str()).unwrap();
+    }
+}
+
+/// Batect checks only a directory the user gave: `~/.docker` is used as it
+/// is, there or not, and an empty variable is no directory at all.
+#[test]
+fn check_chosen_directories_checks_nothing_the_user_did_not_give() {
+    let options = DockerConnectionOptions::default();
+    check_chosen_directories(&options, None, None).unwrap();
+    check_chosen_directories(&options, Some(""), Some("")).unwrap();
+}
+
+/// A variable the flag overrides is never read, so it can't be wrong.
+#[test]
+fn check_chosen_directories_ignores_a_variable_its_flag_overrides() {
+    let directory = unique_temp_dir();
+    let options = DockerConnectionOptions {
+        config_directory: Some(directory.clone()),
+        cert_path: Some(directory),
+        ..Default::default()
+    };
+    check_chosen_directories(&options, Some("/nonexistent"), Some("/nonexistent")).unwrap();
+}
+
+/// An explicit certificate directory is checked whether or not TLS is on,
+/// and whether or not it would be consulted.
+#[test]
+fn connect_refuses_a_missing_cert_path_even_when_nothing_would_read_it() {
+    let files = unique_temp_dir();
+    for name in ["ca.pem", "cert.pem", "key.pem"] {
+        fs::write(files.join(name), name).unwrap();
+    }
+    let missing = files.join("typo");
+    let tls_off = DockerConnectionOptions {
+        host: Some("tcp://127.0.0.1:1".to_string()),
+        cert_path: Some(missing.clone()),
+        ..Default::default()
+    };
+    let every_file_named = DockerConnectionOptions {
+        tls_verify: true,
+        tls_ca_cert: Some(files.join("ca.pem")),
+        tls_cert: Some(files.join("cert.pem")),
+        tls_key: Some(files.join("key.pem")),
+        ..tls_off.clone()
+    };
+    for options in [tls_off, every_file_named] {
+        let message = connect_error(&options);
+        assert!(
+            message.contains(&format!("--docker-cert-path {missing:?} does not exist")),
+            "{message}"
+        );
+    }
 }

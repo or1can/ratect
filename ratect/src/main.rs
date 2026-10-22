@@ -1091,13 +1091,15 @@ async fn manage_caches(
     let quiet = style == OutputStyle::Quiet;
 
     let wanted: Option<ratect_core::config::CacheScope> = args.scope.map(Into::into);
+    let connection: DockerConnectionOptions = args.docker.into();
+    // Checked even for the directory store, which never connects: a Docker
+    // directory given to a verb that takes one must be one.
+    connection.check_directories()?;
     // One connection for the whole command: both the listing below and the
     // removal after it need the same daemon, and each `DockerClient::new`
     // opens its own.
     let docker = match cache_type {
-        ratect_core::cache::CacheType::Volume => {
-            Some(DockerClient::new(&args.docker.into()).await?)
-        }
+        ratect_core::cache::CacheType::Volume => Some(DockerClient::new(&connection).await?),
         ratect_core::cache::CacheType::Directory => None,
     };
     let store = ratect_core::cache::CacheStore::new(

@@ -228,7 +228,9 @@ runs nothing, so it exits `0` when it succeeds, `1` when it fails (a config that
 parse under `--list-tasks`, a `--log-file` that exists but can't be opened), and `2` when
 it was invoked wrong: a flag that's rejected (`ratect-compat --bogus --clean`), or an
 option value that fails its own check — a `-f` or `--config-vars-file` naming something
-that doesn't exist or isn't a file, or a `--log-file` in a directory that doesn't exist.
+that doesn't exist or isn't a file, a `--docker-config`, `--docker-cert-path`,
+`DOCKER_CONFIG` or `DOCKER_CERT_PATH` naming something that doesn't exist or isn't a
+directory, or a `--log-file` in a directory that doesn't exist.
 
 Every failure of Ratect's own is printed to stderr as `Error: <message>` (the marker in
 bold red when stderr is a terminal) — deliberately *not* through

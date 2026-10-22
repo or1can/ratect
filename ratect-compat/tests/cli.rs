@@ -5755,3 +5755,77 @@ fn tls_certificates_are_looked_for_in_the_chosen_docker_config_directory() {
     }
     std::fs::remove_dir_all(&project).ok();
 }
+
+/// #539: a Docker config or certificate directory that doesn't exist, or is
+/// a file, fails every command before it runs — `--list-tasks` included,
+/// which never connects — naming where it came from, and lists nothing.
+#[test]
+fn list_tasks_refuses_a_docker_directory_that_is_not_one() {
+    let project = one_task_project("docker-directory");
+    let file = project.join("a-file");
+    std::fs::write(&file, "").unwrap();
+    let missing = project.join("missing");
+    for path in [&missing, &file] {
+        let problem = if path == &file {
+            "is a file, not a directory"
+        } else {
+            "does not exist"
+        };
+        for (source, from_flag) in [
+            ("--docker-config", true),
+            ("DOCKER_CONFIG", false),
+            ("--docker-cert-path", true),
+            ("DOCKER_CERT_PATH", false),
+        ] {
+            let mut command = isolated_docker_command(&project);
+            if from_flag {
+                command.arg(source).arg(path);
+            } else {
+                command.env(source, path);
+            }
+            let output = command
+                .arg("--list-tasks")
+                .output()
+                .expect("failed to run ratect");
+
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(output.status.code(), Some(2), "{source}: {stderr}");
+            assert!(
+                stderr.contains(&format!("{source} {path:?} {problem}.")),
+                "{source}: {stderr}"
+            );
+            assert_eq!(String::from_utf8_lossy(&output.stdout), "", "{source}");
+        }
+    }
+    std::fs::remove_dir_all(&project).ok();
+}
+
+/// #539: a task run exits `125` for it, like any failure to run.
+#[test]
+fn a_run_refuses_a_docker_config_directory_that_does_not_exist() {
+    let project = one_task_project("docker-directory-run");
+    let output = isolated_docker_command(&project)
+        .args(["--docker-config", "/nonexistent-ratect-dir", "t"])
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&project).ok();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(125), "{stderr}");
+    assert!(
+        stderr.contains(r#"--docker-config "/nonexistent-ratect-dir" does not exist."#),
+        "{stderr}"
+    );
+}
+
+/// #539: `--help` and `--version` don't check it — a recorded divergence.
+#[test]
+fn help_and_version_ignore_a_docker_config_directory_that_does_not_exist() {
+    for flag in ["--help", "--version"] {
+        let output = ratect_command()
+            .args(["--docker-config", "/nonexistent-ratect-dir", flag])
+            .output()
+            .expect("failed to run ratect");
+        assert_eq!(output.status.code(), Some(0), "{flag}");
+    }
+}

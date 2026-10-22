@@ -210,6 +210,7 @@ list. The exceptions:
 | `--docker-context` | A context's `SkipTLSVerify` is not honoured: the daemon's certificate is always fully verified, as with `--docker-tls`. Batect honours it, skipping verification. See [Which daemon is used](connecting-to-docker.md#which-daemon-is-used). |
 | `--docker-host` | An `https://` host connects over TLS, as if `--docker-tls-verify` were given — from the flag, `DOCKER_HOST`, or a Docker context. Batect (and the Docker CLI) connect to such a host without TLS unless the TLS options or the context's stored files ask for it. See [Options](connecting-to-docker.md#options). |
 | `--docker-host`, `--docker-context` | An empty `DOCKER_HOST` or `DOCKER_CONTEXT` counts as unset, as in the Docker CLI. Batect takes an empty value as set: an empty `DOCKER_HOST` still rules out every context and becomes the host, and an empty `DOCKER_CONTEXT` names a context called `""`. See [Which daemon is used](connecting-to-docker.md#which-daemon-is-used). |
+| `--docker-config`, `--docker-cert-path` | A directory given by the flag, `DOCKER_CONFIG` or `DOCKER_CERT_PATH` that doesn't exist or isn't a directory is refused before any command runs, as in Batect, but in Ratect's own words, naming the flag or variable, the path and what is wrong with it. `ratect doctor` reports one as a problem and carries on with its other checks. See [Options](connecting-to-docker.md#options). |
 | `--enable-buildkit` | An invalid `DOCKER_BUILDKIT` (the flag's default) is rejected the first time a run builds an image — every run of a task with a `build_directory` container, since Ratect always builds and leaves Docker's layer cache to skip unchanged work — rather than on every command. A task that only pulls images, `--list-tasks` and `--clean` never read it. Batect, like the Docker CLI, rejects an invalid value on every command. A daemon whose `Builder-Version` ping header is none of empty, `1` and `2` is reported at the same point, and not at all when `DOCKER_BUILDKIT` or the flag chooses the builder; Batect fails every run that connects to it, with an unhandled exception. |
 | `--cache-type` | Unlike Batect, not forced to `directory` for Windows containers — Ratect has no Windows support to special-case. |
 | `--clean`, `--clean-cache` | Under `--cache-type=directory`, the Docker daemon is never contacted, so cleaning works while it's unreachable; Batect checks it can reach the daemon first, under either cache type, and fails without it. A project with no `.batect/caches` directory has nothing to remove, where Batect fails with exit code `255`. An entry there that is a symbolic link is skipped rather than followed: Batect follows it and deletes the contents of whatever it points to, even outside the project. |
@@ -231,9 +232,10 @@ Beyond any one flag:
   fails its own check, such as a `-f` or `--config-vars-file` naming no file.
   Batect's is `-1` (255) for both, the same as for any other failure
   ([decisions/0016](../decisions/0016-exit-codes.md)).
-- **`--help` and `--version` exit `0` even when an option's default is
-  invalid**: they act before any value they don't need is checked. Batect
-  checks its options' defaults first, so an invalid one makes `--help` exit
+- **`--help` and `--version` exit `0` even when an option's value or
+  default is invalid** — a `--docker-config` naming no directory, say: they
+  act before any value they don't need is checked. Batect checks its
+  options and their defaults first, so an invalid one makes `--help` exit
   `-1` (255) instead ([decisions/0016](../decisions/0016-exit-codes.md)).
 - **Short options combine, and take an attached value**: `-Tf batect.yml`,
   `-fbatect.yml` and `-oquiet` are accepted. Batect looks an option up by its
