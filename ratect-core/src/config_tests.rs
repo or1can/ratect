@@ -13761,7 +13761,12 @@ fn a_root_file_without_a_project_name_is_an_error_naming_it() {
     assert!(error.contains(&path.display().to_string()), "{error}");
 
     let missing = dir.join("absent.toml");
-    let error = format!("{:#}", project_name_of(&missing).unwrap_err());
+    let error = project_name_of(&missing).unwrap_err();
+    assert!(
+        error.is::<crate::exit_code::InvalidOptionValue>(),
+        "{error:#}"
+    );
+    let error = format!("{error:#}");
     assert!(error.contains(&missing.display().to_string()), "{error}");
     std::fs::remove_dir_all(&dir).unwrap();
 }

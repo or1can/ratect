@@ -6,8 +6,8 @@ on 2026-10-22, before that release shipped, into two paths. A usage error or
 an invalid option value exits `125` on a run, where a `ratect-compat` line
 naming no task now counts as one. On every other verb it exits `2`, except
 that a verb whose job is to diagnose reports an invalid value as a finding.
-That rework is planned in the
-same release
+That rework is implemented in
+the same release
 ([#654](https://github.com/or1can/ratect/issues/654)). As first written, a
 usage error was `2` everywhere, and a value that failed its check was the
 command's ordinary failure.
@@ -343,7 +343,7 @@ container is a failure CI should see, not borrowed from anywhere.
   first version of this record, and is corrected alongside this refinement.
 - [#654](https://github.com/or1can/ratect/issues/654) also rewrites both CLI
   reference pages' exit-code sections around the two paths, and the
-  differences page's rows. Until then those pages describe the first version.
+  differences page's rows.
 - `ratect_core::exit_code` gains a code for an invocation error and still
   keeps one mapping for both binaries. Both `main`s handle a `clap` error
   themselves rather than letting `clap` exit, so that its code can depend on

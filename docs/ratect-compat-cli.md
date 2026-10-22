@@ -177,9 +177,16 @@ If neither the task's `run` nor its container has a `command`, `ADDITIONAL_ARGS`
 
 ## Exit codes and error reporting
 
-A run — `ratect-compat <task>` — exits with one of three things, answering one question:
-did the task's own container run to an exit code of its own? The design is
+An invocation is on one of two paths, and its exit code depends on which. A line is a
+**run** unless it has one of the flags that replace a task: `--list-tasks`/`-T`,
+`--clean`, `--clean-cache` or `--upgrade`. That holds whether or not a task is named and
+whether or not the arguments parse; a flag counts only where it would be read as one, not
+after `--` or as another option's value. `--help` and `--version` exit `0` on either path,
+once the arguments reach them. The design is
 [decisions/0016](../decisions/0016-exit-codes.md).
+
+A run — `ratect-compat <task>` — exits with one of three things, answering one question:
+did the task's own container run to an exit code of its own?
 
 1. **It did: that exit code, `0` included.** Ratect waits for the container to exit and
    inspects its status — a task whose command is `exit 42` makes `ratect-compat` itself
@@ -208,16 +215,20 @@ did the task's own container run to an exit code of its own? The design is
    then completes still exits `0`. One that arrives during a prerequisite's cleanup
    ends the run before the next task starts, and exits 128 + its number.
 3. **It never ran, or never finished, for any other reason: `125`** — `docker run`'s own
-   code for "the `docker` command itself failed". A missing or malformed config file, a
-   task or container referenced by name that doesn't exist, a dependency cycle, an
-   unreachable daemon, an image pull or build that fails, a dependency that exits or
-   never becomes ready, a setup command that fails, a `--log-file` that can't be opened:
-   all `125`, one code, with the reason on stderr.
+   code for "the `docker` command itself failed". An unknown or misused flag
+   (`ratect-compat --bogus build`, or a bare `ratect-compat --bogus`), a missing or
+   malformed config file, a `--config-vars-file` that isn't a file, a task or container
+   referenced by name that doesn't exist, a dependency cycle, an unreachable daemon, an
+   image pull or build that fails, a dependency that exits or never becomes ready, a
+   setup command that fails, a `--log-file` that can't be opened: all `125`, one code,
+   with the reason on stderr.
 
-Everything other than a run — `--list-tasks`, `--clean`, `--clean-cache` — runs nothing,
-so it exits `1` on its own failure (a config that doesn't parse under `--list-tasks`, a
-`--log-file` that can't be opened) and `0` otherwise. A usage error (an unknown flag)
-exits `2`, and `--help` exits `0`.
+Everything other than a run — `--list-tasks`, `--clean`, `--clean-cache`, `--upgrade` —
+runs nothing, so it exits `0` when it succeeds, `1` when it fails (a config that doesn't
+parse under `--list-tasks`, a `--log-file` that exists but can't be opened), and `2` when
+it was invoked wrong: a flag that's rejected (`ratect-compat --bogus --clean`), or an
+option value that fails its own check — a `-f` or `--config-vars-file` naming something
+that doesn't exist or isn't a file, or a `--log-file` in a directory that doesn't exist.
 
 Every failure of Ratect's own is printed to stderr as `Error: <message>` (the marker in
 bold red when stderr is a terminal) — deliberately *not* through

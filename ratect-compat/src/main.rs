@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use ratect_core::config::{
     format_task_list, format_task_list_quiet, load_project, Config, Dialect,
 };
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
+use ratect_core::exit_code::{InvalidOptionValue, Word};
 use ratect_core::git_include::GitIncludeCache;
 use ratect_core::ui::{
     create_event_sink, select_output_style, ColorMode, Console, OutputStyle, ProgressStream,
@@ -245,16 +246,15 @@ struct Args {
 }
 
 impl Args {
-    /// Whether this invocation is a *run* — a task named, and none of the
-    /// flags that [`run`] handles instead of one — what
-    /// `ratect_core::exit_code::for_failure` is told (decisions/0016). Mirrors [`run`]'s own
-    /// dispatch order, which is why it reads the same flags.
+    /// Whether this invocation is a *run* — none of the flags that [`run`]
+    /// handles instead of a task, whether or not a task is named — what
+    /// `ratect_core::exit_code::for_failure` is told (decisions/0016). A line
+    /// naming no task is one: it was meant to run something, and a CI step
+    /// that runs nothing should not look like an ordinary verb's failure.
+    /// [`is_a_run`] answers the same question from the raw arguments, for
+    /// when they don't parse.
     fn runs_a_task(&self) -> bool {
-        !self.upgrade
-            && !self.clean
-            && self.clean_cache.is_empty()
-            && !self.list_tasks
-            && self.task_name.is_some()
+        !self.upgrade && !self.clean && self.clean_cache.is_empty() && !self.list_tasks
     }
 
     /// Maps the engine-affecting flags onto the engine's settings.
@@ -381,6 +381,20 @@ fn init_tracing(log_file: Option<&Path>, stderr_color: bool) -> Result<()> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let writer = match log_file {
         Some(path) => {
+            // The one check on the value itself (decisions/0016): a log file
+            // is created, so only its directory has to exist already, and be
+            // one. Any other failure to open it is this command's own.
+            if let Some(directory) = path
+                .parent()
+                .filter(|directory| !directory.as_os_str().is_empty())
+            {
+                if !directory.is_dir() {
+                    return Err(InvalidOptionValue::new(format!(
+                        "--log-file {path:?}: {directory:?} does not exist or is not a directory."
+                    ))
+                    .into());
+                }
+            }
             let file = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -405,11 +419,58 @@ fn init_tracing(log_file: Option<&Path>, stderr_color: bool) -> Result<()> {
     Ok(())
 }
 
+/// [`Args::runs_a_task`] for arguments that didn't parse: a line is a run
+/// unless one of the flags that replace a task appears where `clap` would
+/// read it as a flag — not after `--`, not as another option's value
+/// (decisions/0016). `args` excludes the program name.
+fn is_a_run(args: &[String]) -> bool {
+    let command = Args::command();
+    let words =
+        ratect_core::exit_code::command_line_words(args, |word| takes_value(&command, word));
+    !words.iter().any(|word| {
+        matches!(
+            word,
+            Word::Long("list-tasks" | "clean" | "clean-cache" | "upgrade") | Word::Short('T')
+        )
+    })
+}
+
+/// Whether `word` is one of `command`'s own options and takes a value —
+/// `false` for one it doesn't recognise, as `command_line_words` requires.
+fn takes_value(command: &clap::Command, word: Word<'_>) -> bool {
+    command
+        .get_arguments()
+        .find(|arg| match word {
+            Word::Long(name) => arg.get_long() == Some(name),
+            Word::Short(short) => arg.get_short() == Some(short),
+            Word::Positional(_) => false,
+        })
+        .is_some_and(|arg| arg.get_action().takes_values())
+}
+
+/// Parses the command line, exiting as decisions/0016 says when `clap`
+/// rejects it rather than with `clap`'s own `2` on either path: `125` on a
+/// run, `2` otherwise. A `--help` or `--version` `clap` reached still prints
+/// and exits `0`.
+fn parse_args() -> Args {
+    Args::try_parse().unwrap_or_else(|error| {
+        if !error.use_stderr() {
+            error.exit();
+        }
+        let _ = error.print();
+        let args: Vec<String> = std::env::args_os()
+            .skip(1)
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        std::process::exit(ratect_core::exit_code::for_invocation_error(is_a_run(&args)).into());
+    })
+}
+
 #[tokio::main]
 async fn main() {
     ratect_core::panic_hook::install(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
 
-    let mut args = Args::parse();
+    let mut args = parse_args();
     let runs_a_task = args.runs_a_task();
     let failed = |error: &anyhow::Error| ratect_core::exit_code::for_failure(error, runs_a_task);
 
@@ -532,10 +593,12 @@ async fn run(
     let config_vars_file =
         resolve_config_vars_file(args.config_vars_file.clone(), &std::env::current_dir()?);
     if let Some(path) = &config_vars_file {
-        anyhow::ensure!(
-            path.is_file(),
-            "--config-vars-file {path:?} does not exist or is not a file."
-        );
+        if !path.is_file() {
+            return Err(InvalidOptionValue::new(format!(
+                "--config-vars-file {path:?} does not exist or is not a file."
+            ))
+            .into());
+        }
     }
 
     if args.upgrade {

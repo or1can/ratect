@@ -181,3 +181,139 @@ fn already_reported_names_exactly_the_three_failures_reported_elsewhere() {
             .unwrap_err()
     ));
 }
+
+/// An invocation error — an argument `clap` rejects — takes its path's code:
+/// `125` on a run, where `2` would collide with a task's own code, and `2`
+/// everywhere else (decisions/0016).
+#[test]
+fn a_usage_error_exits_125_on_a_run_and_2_otherwise() {
+    assert_eq!(for_invocation_error(true), RATECT_FAILED);
+    assert_eq!(for_invocation_error(false), INVOCATION_ERROR);
+    assert_eq!(INVOCATION_ERROR, 2);
+}
+
+/// An invalid option value takes the same code as a usage error on either
+/// path, through whatever context the caller wrapped it in — the code
+/// depends on the kind of failure, not on which library checked the value.
+#[test]
+fn an_invalid_option_value_exits_125_on_a_run_and_2_otherwise() {
+    use anyhow::Context;
+
+    let invalid = || anyhow::Error::new(InvalidOptionValue::new("-f \"x\" is not a file."));
+    let wrapped = Err::<(), _>(invalid())
+        .context("Failed to load x")
+        .unwrap_err();
+
+    assert_eq!(for_failure(&invalid(), true), RATECT_FAILED);
+    assert_eq!(for_failure(&wrapped, true), RATECT_FAILED);
+    assert_eq!(for_failure(&invalid(), false), INVOCATION_ERROR);
+    assert_eq!(for_failure(&wrapped, false), INVOCATION_ERROR);
+}
+
+/// The value's own message is what the user reads — the type adds nothing
+/// to it, so a diagnosing verb that reports one as a finding quotes it as is.
+#[test]
+fn an_invalid_option_value_reads_as_its_message() {
+    let error = InvalidOptionValue::new("Configuration file \"nope.toml\" not found.");
+
+    assert_eq!(
+        error.to_string(),
+        "Configuration file \"nope.toml\" not found."
+    );
+}
+
+/// A tiny option table standing in for a binary's own `clap` definition:
+/// `-f`/`--config-file`, `-o`/`--output` and `--clean-cache` take a value,
+/// every other option doesn't.
+fn takes_value(word: Word<'_>) -> bool {
+    matches!(
+        word,
+        Word::Short('f' | 'o') | Word::Long("config-file" | "output" | "clean-cache")
+    )
+}
+
+fn words_of<'a>(line: &'a [&'a str]) -> Vec<Word<'a>> {
+    command_line_words(line, takes_value)
+}
+
+/// The words `clap` would read as options or positionals — what deciding a
+/// path needs when the arguments don't parse.
+#[test]
+fn command_line_words_reads_options_and_positionals_as_clap_would() {
+    assert_eq!(
+        words_of(&["--bogus", "run", "test"]),
+        [
+            Word::Long("bogus"),
+            Word::Positional("run"),
+            Word::Positional("test")
+        ]
+    );
+    assert_eq!(
+        words_of(&["-T", "--clean-cache=a", "build"]),
+        [
+            Word::Short('T'),
+            Word::Long("clean-cache"),
+            Word::Positional("build")
+        ]
+    );
+}
+
+/// Nothing after `--` is an option or a subcommand: it belongs to the task.
+#[test]
+fn command_line_words_stops_at_a_double_dash() {
+    assert_eq!(
+        words_of(&["build", "--bogus", "--", "--clean"]),
+        [Word::Positional("build"), Word::Long("bogus")]
+    );
+}
+
+/// An option that takes a value consumes the next word, whatever it looks
+/// like, so a value never counts as a subcommand or a flag.
+#[test]
+fn command_line_words_skips_an_options_value() {
+    assert_eq!(
+        words_of(&["-o", "bogus", "run", "test"]),
+        [
+            Word::Short('o'),
+            Word::Positional("run"),
+            Word::Positional("test")
+        ]
+    );
+    assert_eq!(
+        words_of(&["--config-file", "--clean", "tasks"]),
+        [Word::Long("config-file"), Word::Positional("tasks")]
+    );
+    assert_eq!(
+        words_of(&["--clean-cache", "run"]),
+        [Word::Long("clean-cache")]
+    );
+}
+
+/// A value-taking short option takes the rest of its cluster as its value,
+/// or the next word when nothing follows it; flags before it in the cluster
+/// still count.
+#[test]
+fn command_line_words_reads_a_short_cluster() {
+    assert_eq!(
+        words_of(&["-oT", "run"]),
+        [Word::Short('o'), Word::Positional("run")]
+    );
+    assert_eq!(
+        words_of(&["-Tf", "run", "build"]),
+        [
+            Word::Short('T'),
+            Word::Short('f'),
+            Word::Positional("build")
+        ]
+    );
+}
+
+/// An option nobody recognises is taken to take no value — the one reading
+/// that doesn't guess — so the word after it still counts.
+#[test]
+fn command_line_words_takes_an_unknown_option_to_take_no_value() {
+    assert_eq!(
+        words_of(&["--bogus", "--clean"]),
+        [Word::Long("bogus"), Word::Long("clean")]
+    );
+}
