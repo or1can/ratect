@@ -595,6 +595,31 @@ fn an_ssh_agent_naming_two_sockets_is_rejected() {
     );
 }
 
+/// Batect holds an agent's paths as a set, so a socket listed twice is one
+/// socket, not two agents under one id (ratect#390).
+#[test]
+fn an_ssh_agent_listing_the_same_socket_twice_forwards_that_socket() {
+    let mut scratch = ScratchPaths::new();
+    let socket = scratch.socket("agent.sock");
+
+    assert_eq!(
+        classify_ssh_agent_paths("default", &[socket.clone(), socket.clone()]).unwrap(),
+        SshAgentSource::Socket(socket.clone())
+    );
+}
+
+#[test]
+fn an_ssh_agent_listing_the_same_key_file_twice_serves_it_once() {
+    let scratch = ScratchPaths::new();
+    let key = scratch.file("id_ed25519");
+    let other = scratch.file("id_rsa");
+
+    assert_eq!(
+        classify_ssh_agent_paths("default", &[key.clone(), other.clone(), key.clone()]).unwrap(),
+        SshAgentSource::Keys(vec![key.clone(), other.clone()])
+    );
+}
+
 #[test]
 fn build_port_config_is_none_when_ports_is_absent() {
     assert!(build_port_config(None).is_none());
@@ -628,6 +653,49 @@ fn build_port_config_builds_exposed_ports_and_bindings() {
             host_port: Some("9000".to_string()),
         }])
     );
+}
+
+fn host_port(port: &str) -> PortBinding {
+    PortBinding {
+        host_ip: None,
+        host_port: Some(port.to_string()),
+    }
+}
+
+/// ratect#291: one container port published on two host ports binds both,
+/// as docker-client does, rather than the second replacing the first.
+#[test]
+fn build_port_config_binds_every_host_port_for_one_container_port() {
+    let ports = vec![
+        (19000, 80, "tcp".to_string()),
+        (19001, 80, "tcp".to_string()),
+    ];
+    let (exposed, bindings) = build_port_config(Some(&ports)).unwrap();
+
+    assert_eq!(
+        bindings["80/tcp"],
+        Some(vec![host_port("19000"), host_port("19001")])
+    );
+    assert_eq!(exposed, vec!["80/tcp".to_string()]);
+}
+
+#[test]
+fn build_port_config_binds_an_identical_mapping_once() {
+    let ports = vec![(9000, 80, "tcp".to_string()), (9000, 80, "tcp".to_string())];
+    let (exposed, bindings) = build_port_config(Some(&ports)).unwrap();
+
+    assert_eq!(bindings["80/tcp"], Some(vec![host_port("9000")]));
+    assert_eq!(exposed, vec!["80/tcp".to_string()]);
+}
+
+#[test]
+fn build_port_config_keeps_one_container_port_over_two_protocols_apart() {
+    let ports = vec![(9000, 80, "tcp".to_string()), (9001, 80, "udp".to_string())];
+    let (exposed, bindings) = build_port_config(Some(&ports)).unwrap();
+
+    assert_eq!(exposed, vec!["80/tcp".to_string(), "80/udp".to_string()]);
+    assert_eq!(bindings["80/tcp"], Some(vec![host_port("9000")]));
+    assert_eq!(bindings["80/udp"], Some(vec![host_port("9001")]));
 }
 
 #[test]

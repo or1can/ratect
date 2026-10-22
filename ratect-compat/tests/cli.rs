@@ -255,6 +255,10 @@ fn tmpfs_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tmpfs.yml")
 }
 
+fn repeated_volumes_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/repeated-volumes.yml")
+}
+
 fn enable_init_process_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/enable-init-process.yml")
 }
@@ -3241,6 +3245,32 @@ fn devices_reaches_the_real_container() {
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
 /// Run explicitly with `cargo test -- --ignored`.
 ///
+/// Proves a mount listed more than once, under two spellings of one host
+/// path, reaches the daemon as one bind: two would fail the create with
+/// `Duplicate mount point` (ratect#390).
+#[test]
+#[ignore]
+fn a_repeated_volume_is_mounted_once() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(repeated_volumes_config_path())
+        .arg("read-marker")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(task_output(&stdout, "build-env"), "mounted-once");
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
 /// Proves `enable_init_process` reaches the real container: without it, the
 /// container's own command runs directly as PID 1 (`/proc/1/comm` reports
 /// the actual command image — alpine's `sh -c` execs its single final
@@ -5007,6 +5037,30 @@ fn ports_publishes_a_container_port_to_the_host() {
         reachable,
         "the published port should have been reachable while the task ran"
     );
+    assert!(status.success(), "ratect should exit successfully");
+}
+
+/// Same real-Docker requirements as `ports_publishes_a_container_port_to_the_host`,
+/// on host ports 18082/18083. One container port published on two host
+/// ports reaches the container through both, as in Batect — not only
+/// through the last one listed (ratect#291).
+#[test]
+#[ignore]
+fn ports_publishes_one_container_port_on_every_host_port_given() {
+    let mut child = ratect_command()
+        .arg("-f")
+        .arg(ports_config_path())
+        .arg("serve-on-two-host-ports")
+        .spawn()
+        .expect("failed to spawn ratect");
+
+    let first = wait_for_port(18082, Duration::from_secs(15));
+    let second = wait_for_port(18083, Duration::from_secs(15));
+
+    let status = child.wait().expect("failed to wait for ratect");
+
+    assert!(first, "host port 18082 should have been reachable");
+    assert!(second, "host port 18083 should have been reachable");
     assert!(status.success(), "ratect should exit successfully");
 }
 

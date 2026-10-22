@@ -798,3 +798,86 @@ fn an_empty_customisation_derives_the_same_spec_as_none() {
         spec(Overlay::Customise(None))
     );
 }
+
+fn port_mappings(mappings: &[&str]) -> Option<Vec<crate::config::PortMapping>> {
+    Some(
+        mappings
+            .iter()
+            .map(|mapping| serde_json::from_value(serde_json::json!(mapping)).unwrap())
+            .collect(),
+    )
+}
+
+/// The `(local, container, protocol)` triples a task's container publishes,
+/// given its own `ports` and the task's `run.ports`.
+fn published_ports(container_ports: &[&str], run_ports: &[&str]) -> Vec<(u16, u16, String)> {
+    let mut container_config = sample_container();
+    container_config.ports = port_mappings(container_ports);
+    let run = TaskRun {
+        ports: port_mappings(run_ports),
+        ..empty_run()
+    };
+    let run_labels = RunLabels::new("demo", "task", "run-id", Some("0.6.0"));
+    derive_spec(ContainerSpecInputs {
+        name: "app",
+        container_config: &container_config,
+        overlay: Overlay::Run(&run),
+        image: "alpine:3.18",
+        network: ContainerNetwork::Task("ratect-run-id".to_string()),
+        interactive: false,
+        additional_args: &[],
+        user_mapping: None,
+        volumes: None,
+        term_var: None,
+        proxy: None,
+        publish_ports: true,
+        role: ContainerRole::Task,
+        run_labels: &run_labels,
+    })
+    .shared
+    .network_options
+    .ports
+    .unwrap_or_default()
+}
+
+fn tcp(local: u16, container: u16) -> (u16, u16, String) {
+    (local, container, "tcp".to_string())
+}
+
+/// Batect unions a container's ports with the task's as a set, so the same
+/// mapping in both is published once (ratect#390).
+#[test]
+fn a_port_in_both_the_container_and_the_run_is_published_once() {
+    assert_eq!(
+        published_ports(&["8080:80"], &["8080:80"]),
+        vec![tcp(8080, 80)]
+    );
+}
+
+/// Compared after a range is expanded, so a single mapping that a range
+/// also covers collapses into it.
+#[test]
+fn a_port_a_range_also_covers_is_published_once() {
+    assert_eq!(
+        published_ports(&["8080:80", "8080-8081:80-81"], &[]),
+        vec![tcp(8080, 80), tcp(8081, 81)]
+    );
+}
+
+#[test]
+fn distinct_ports_keep_the_order_they_were_listed_in() {
+    assert_eq!(
+        published_ports(&["9000:90", "8000:80"], &["7000:70"]),
+        vec![tcp(9000, 90), tcp(8000, 80), tcp(7000, 70)]
+    );
+}
+
+/// ratect#291: one container port on two host ports is two mappings, not a
+/// duplicate — both reach `docker.rs`, whichever side each came from.
+#[test]
+fn one_container_port_on_two_host_ports_from_the_container_and_the_run_keeps_both() {
+    assert_eq!(
+        published_ports(&["9000:80"], &["9001:80"]),
+        vec![tcp(9000, 80), tcp(9001, 80)]
+    );
+}

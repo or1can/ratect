@@ -614,10 +614,22 @@ pub enum SshAgentSource {
 /// build time, rather than at config load: a socket can't be combined with
 /// anything, since forwarding to two agents at once under one id has no
 /// meaning.
+///
+/// A path listed more than once counts once, keeping first-seen order:
+/// Batect holds an agent's paths as a set, so a socket listed twice is one
+/// socket to forward, not two (ratect#390).
 pub fn classify_ssh_agent_paths(id: &str, paths: &[PathBuf]) -> Result<SshAgentSource> {
     if paths.is_empty() {
         return Ok(SshAgentSource::HostAgent);
     }
+
+    let mut unique: Vec<PathBuf> = Vec::with_capacity(paths.len());
+    for path in paths {
+        if !unique.contains(path) {
+            unique.push(path.clone());
+        }
+    }
+    let paths = unique.as_slice();
 
     let sockets: Vec<&PathBuf> = paths.iter().filter(|path| is_socket(path)).collect();
     match (sockets.len(), paths.len()) {
@@ -699,6 +711,11 @@ fn build_health_config(health_check: Option<&HealthCheckOptions>) -> Option<Heal
 /// unit-testable without a daemon. `None` when `ports` itself is `None`
 /// (absent, or already filtered out by `--disable-ports` — see
 /// `NetworkOptions::ports`) or empty.
+///
+/// One container port published on several host ports gets a binding for
+/// each, in input order, under its one exposed key — as docker-client does,
+/// rather than the last replacing the rest (ratect#291). An identical triple
+/// binds once.
 fn build_port_config(ports: Option<&Vec<(u16, u16, String)>>) -> Option<(Vec<String>, PortMap)> {
     let ports = ports?;
     if ports.is_empty() {
@@ -709,14 +726,20 @@ fn build_port_config(ports: Option<&Vec<(u16, u16, String)>>) -> Option<(Vec<Str
     let mut port_bindings = PortMap::new();
     for (local_port, container_port, protocol) in ports {
         let key = format!("{container_port}/{protocol}");
-        exposed_ports.push(key.clone());
-        port_bindings.insert(
-            key,
-            Some(vec![PortBinding {
-                host_ip: None,
-                host_port: Some(local_port.to_string()),
-            }]),
-        );
+        if !exposed_ports.contains(&key) {
+            exposed_ports.push(key.clone());
+        }
+        let binding = PortBinding {
+            host_ip: None,
+            host_port: Some(local_port.to_string()),
+        };
+        let bindings = port_bindings
+            .entry(key)
+            .or_insert(None)
+            .get_or_insert_with(Vec::new);
+        if !bindings.contains(&binding) {
+            bindings.push(binding);
+        }
     }
 
     Some((exposed_ports, port_bindings))

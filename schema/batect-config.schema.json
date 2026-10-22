@@ -794,7 +794,7 @@
           ]
         },
         "ports": {
-          "description": "Additional port mappings for this task's run specifically — *added* to the container's own `ports` (a union, not an override: matching Batect, which combines these as a `Set`, so there's no concept of one replacing an entry from the other by container port). See `Container::ports`.",
+          "description": "Additional port mappings for this task's run specifically — *added* to the container's own `ports` (a union, not an override: there's no concept of one replacing an entry from the other by container port, and a mapping identical to one already given is published once, matching Batect, which combines these as a `Set`). See `Container::ports`.",
           "items": {
             "$ref": "#/definitions/PortMapping"
           },

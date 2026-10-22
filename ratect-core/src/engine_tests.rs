@@ -798,6 +798,12 @@ impl FakeContainerRuntime {
         self.spec_for(name)
             .and_then(|spec| spec.shared.options.tmpfs)
     }
+
+    /// The bind strings a prior `run_container`/
+    /// `start_background_container` call for `name` was given.
+    fn volumes_for(&self, name: &str) -> Option<Vec<String>> {
+        self.spec_for(name).and_then(|spec| spec.shared.volumes)
+    }
 }
 
 #[async_trait::async_trait]
@@ -8465,6 +8471,124 @@ async fn container_tmpfs_mounts_reach_the_container() {
     assert_eq!(
         docker.tmpfs_for("build-env"),
         Some(vec![("/code/tmp".to_string(), "size=64m".to_string())])
+    );
+}
+
+fn local_mount(local: &str, container: &str, options: Option<&str>) -> crate::config::VolumeMount {
+    crate::config::VolumeMount::Local(crate::config::LocalVolumeMount {
+        local: local.to_string(),
+        container: container.to_string(),
+        options: options.map(str::to_string),
+        compact: false,
+    })
+}
+
+/// Runs a one-container task whose container has `volumes`, returning the
+/// bind strings its container was created with.
+async fn binds_for_volumes(volumes: Vec<crate::config::VolumeMount>) -> Option<Vec<String>> {
+    let mut container_config = container("alpine:3.18", None);
+    container_config.volumes = Some(volumes);
+    let mut containers = IndexMap::new();
+    containers.insert("build-env".to_string(), container_config);
+    let mut tasks = IndexMap::new();
+    tasks.insert("test".to_string(), task("build-env", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let project = std::env::temp_dir().join(format!("ratect-binds-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&project).unwrap();
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            cache: Some((crate::cache::CacheType::Volume, project.clone())),
+            ..Default::default()
+        })
+        .unwrap();
+    engine.run_task("test", &[]).await.unwrap();
+    std::fs::remove_dir_all(&project).ok();
+    docker.volumes_for("build-env")
+}
+
+/// Batect holds a container's mounts as a set, so one listed twice is
+/// mounted once. Passing both on makes the daemon refuse the create with
+/// `Duplicate mount point` (ratect#390).
+#[tokio::test]
+async fn a_local_volume_listed_twice_is_bound_once() {
+    let binds = binds_for_volumes(vec![
+        local_mount("/host/a", "/a", None),
+        local_mount("/host/a", "/a", None),
+    ])
+    .await;
+
+    assert_eq!(binds, Some(vec!["/host/a:/a".to_string()]));
+}
+
+/// Compared once resolved, so two spellings of one host path collapse.
+#[tokio::test]
+async fn two_spellings_of_one_host_path_are_bound_once() {
+    let binds = binds_for_volumes(vec![
+        local_mount("./a", "/a", None),
+        local_mount("a", "/a", None),
+    ])
+    .await;
+
+    assert_eq!(binds, Some(vec!["/project/a:/a".to_string()]));
+}
+
+#[tokio::test]
+async fn a_cache_volume_listed_twice_is_bound_once() {
+    let cache = crate::config::VolumeMount::Cache(crate::config::CacheVolumeMount {
+        name: "deps".to_string(),
+        container: "/deps".to_string(),
+        options: None,
+        scope: Default::default(),
+    });
+
+    let binds = binds_for_volumes(vec![cache.clone(), cache]).await.unwrap();
+
+    assert_eq!(binds.len(), 1, "{binds:?}");
+    assert!(binds[0].ends_with(":/deps"), "{binds:?}");
+}
+
+#[tokio::test]
+async fn deduplicated_binds_keep_the_order_each_was_first_listed_in() {
+    let binds = binds_for_volumes(vec![
+        local_mount("/host/b", "/b", None),
+        local_mount("/host/a", "/a", None),
+        local_mount("/host/b", "/b", None),
+        local_mount("/host/c", "/c", None),
+        local_mount("/host/a", "/a", None),
+    ])
+    .await;
+
+    assert_eq!(
+        binds,
+        Some(vec![
+            "/host/b:/b".to_string(),
+            "/host/a:/a".to_string(),
+            "/host/c:/c".to_string(),
+        ])
+    );
+}
+
+/// Only an identical mount collapses: Batect compares the options too, so
+/// the same paths with different options are both kept.
+#[tokio::test]
+async fn the_same_paths_with_different_options_are_both_bound() {
+    let binds = binds_for_volumes(vec![
+        local_mount("/host/a", "/a", None),
+        local_mount("/host/a", "/a", Some("ro")),
+    ])
+    .await;
+
+    assert_eq!(
+        binds,
+        Some(vec!["/host/a:/a".to_string(), "/host/a:/a:ro".to_string()])
     );
 }
 
