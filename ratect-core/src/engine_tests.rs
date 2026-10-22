@@ -1555,6 +1555,41 @@ async fn wildcard_prerequisite_expands_to_matching_tasks_in_alphabetical_order()
     assert!(runs[2].starts_with("run:build-env:ci:"));
 }
 
+/// Batect's CL1-16: literal prerequisites run in the order they're listed —
+/// only a wildcard's own matches are sorted. Listed out of alphabetical
+/// order here so sorting would be caught.
+#[tokio::test]
+async fn literal_prerequisites_run_in_declared_order() {
+    let mut containers = IndexMap::new();
+    containers.insert("build-env".to_string(), container("alpine:3.18", None));
+    let mut tasks = IndexMap::new();
+    tasks.insert("alpha".to_string(), task("build-env", "alpha"));
+    tasks.insert("zeta".to_string(), task("build-env", "zeta"));
+    let mut ci_task = task("build-env", "ci");
+    ci_task.prerequisites = Some(vec!["zeta".to_string(), "alpha".to_string()]);
+    tasks.insert("ci".to_string(), ci_task);
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("ci", &[]).await.unwrap();
+
+    let events = docker.events();
+    let commands: Vec<&str> = events
+        .iter()
+        .filter_map(|e| e.strip_prefix("run:build-env:"))
+        .filter_map(|rest| rest.split(':').next())
+        .collect();
+    assert_eq!(commands, vec!["zeta", "alpha", "ci"], "{events:?}");
+}
+
 #[tokio::test]
 async fn wildcard_prerequisite_matching_no_tasks_is_not_an_error() {
     let mut containers = IndexMap::new();
