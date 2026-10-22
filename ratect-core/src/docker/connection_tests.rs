@@ -589,21 +589,195 @@ fn docker_cert_directory_prefers_the_explicit_option_over_the_env_var_and_defaul
         ..Default::default()
     };
     assert_eq!(
-        docker_cert_directory(&options, from_env.to_str()).unwrap(),
+        docker_cert_directory(&options, from_env.to_str(), None).unwrap(),
         (explicit, "--docker-cert-path".to_string())
     );
 
     let options = DockerConnectionOptions::default();
     assert_eq!(
-        docker_cert_directory(&options, from_env.to_str()).unwrap(),
+        docker_cert_directory(&options, from_env.to_str(), None).unwrap(),
         (from_env, "DOCKER_CERT_PATH".to_string())
     );
+    // With no Docker config directory chosen either, `~/.docker` is the
+    // default for both.
     let home = crate::user::home_directory().unwrap().join(".docker");
     for unset in [None, Some("")] {
         assert_eq!(
-            docker_cert_directory(&options, unset).unwrap(),
+            docker_cert_directory(&options, unset, None).unwrap(),
             (home.clone(), "~/.docker".to_string())
         );
+    }
+    // An empty DOCKER_CONFIG is the directory the context store is read
+    // from too — the working directory — so the certificates follow it.
+    assert_eq!(
+        docker_config_directory(&options, Some("")).unwrap(),
+        PathBuf::new()
+    );
+    assert_eq!(
+        docker_cert_directory(&options, None, Some("")).unwrap(),
+        (PathBuf::new(), "DOCKER_CONFIG".to_string())
+    );
+}
+
+/// `--docker-cert-path`, `DOCKER_CERT_PATH`, `--docker-config` and
+/// `DOCKER_CONFIG`, then the directory and the name expected.
+type CertDirectoryCase<'a> = (
+    Option<&'a str>,
+    Option<&'a str>,
+    Option<&'a str>,
+    Option<&'a str>,
+    &'a str,
+    &'a str,
+);
+
+/// Batect's `resolvePathToDockerCertificate` order: a certificate directory
+/// that was given, else a Docker config directory that was given, else
+/// `~/.docker` — every combination of the four sources.
+#[test]
+fn docker_cert_directory_falls_back_to_a_chosen_docker_config_directory() {
+    let cert_flag = "/cert/flag";
+    let cert_env = "/cert/env";
+    let config_flag = "/config/flag";
+    let config_env = "/config/env";
+    let cases: &[CertDirectoryCase] = &[
+        (
+            None,
+            None,
+            Some(config_flag),
+            None,
+            config_flag,
+            "--docker-config",
+        ),
+        (
+            None,
+            None,
+            None,
+            Some(config_env),
+            config_env,
+            "DOCKER_CONFIG",
+        ),
+        (
+            None,
+            None,
+            Some(config_flag),
+            Some(config_env),
+            config_flag,
+            "--docker-config",
+        ),
+        (
+            Some(cert_flag),
+            None,
+            Some(config_flag),
+            None,
+            cert_flag,
+            "--docker-cert-path",
+        ),
+        (
+            None,
+            Some(cert_env),
+            Some(config_flag),
+            None,
+            cert_env,
+            "DOCKER_CERT_PATH",
+        ),
+        (
+            Some(cert_flag),
+            Some(cert_env),
+            Some(config_flag),
+            None,
+            cert_flag,
+            "--docker-cert-path",
+        ),
+        (
+            Some(cert_flag),
+            None,
+            None,
+            Some(config_env),
+            cert_flag,
+            "--docker-cert-path",
+        ),
+        (
+            None,
+            Some(cert_env),
+            None,
+            Some(config_env),
+            cert_env,
+            "DOCKER_CERT_PATH",
+        ),
+        (
+            Some(cert_flag),
+            Some(cert_env),
+            None,
+            Some(config_env),
+            cert_flag,
+            "--docker-cert-path",
+        ),
+        (
+            Some(cert_flag),
+            None,
+            Some(config_flag),
+            Some(config_env),
+            cert_flag,
+            "--docker-cert-path",
+        ),
+        (
+            None,
+            Some(cert_env),
+            Some(config_flag),
+            Some(config_env),
+            cert_env,
+            "DOCKER_CERT_PATH",
+        ),
+        (
+            Some(cert_flag),
+            Some(cert_env),
+            Some(config_flag),
+            Some(config_env),
+            cert_flag,
+            "--docker-cert-path",
+        ),
+        // An empty DOCKER_CERT_PATH counts as unset, so the config directory
+        // is next.
+        (
+            None,
+            Some(""),
+            Some(config_flag),
+            None,
+            config_flag,
+            "--docker-config",
+        ),
+        (
+            None,
+            Some(""),
+            None,
+            Some(config_env),
+            config_env,
+            "DOCKER_CONFIG",
+        ),
+    ];
+    for &(cert_path, cert_path_env, config_directory, config_env_value, directory, named_by) in
+        cases
+    {
+        let options = DockerConnectionOptions {
+            cert_path: cert_path.map(PathBuf::from),
+            config_directory: config_directory.map(PathBuf::from),
+            ..Default::default()
+        };
+        let case =
+            format!("{cert_path:?} {cert_path_env:?} {config_directory:?} {config_env_value:?}");
+        assert_eq!(
+            docker_cert_directory(&options, cert_path_env, config_env_value).unwrap(),
+            (PathBuf::from(directory), named_by.to_string()),
+            "{case}"
+        );
+        // The config directory itself is unaffected by the cert sources.
+        if config_directory.is_some() || config_env_value.is_some() {
+            assert_eq!(
+                docker_config_directory(&options, config_env_value).unwrap(),
+                PathBuf::from(config_directory.or(config_env_value).unwrap()),
+                "{case}"
+            );
+        }
     }
 }
 

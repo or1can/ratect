@@ -5666,3 +5666,92 @@ fn error_and_warning_markers_are_bold_on_a_terminal_and_plain_without_color() {
         );
     }
 }
+
+/// A fresh, empty scratch directory named for `purpose`. Caller cleans up.
+fn scratch_directory(purpose: &str) -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "ratect-compat-{purpose}-{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// A scratch project with one task, `t`, and nothing else in it.
+fn one_task_project(purpose: &str) -> PathBuf {
+    let dir = scratch_directory(purpose);
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\n\
+         containers:\n  app:\n    image: alpine:3.18.2\n\
+         tasks:\n  t:\n    run:\n      container: app\n",
+    )
+    .unwrap();
+    dir
+}
+
+/// `ratect_command` in `project`, with none of the Docker or Batect
+/// environment variables the developer's own shell might set.
+fn isolated_docker_command(project: &Path) -> Command {
+    let mut command = ratect_command();
+    command.current_dir(project);
+    for name in [
+        "DOCKER_HOST",
+        "DOCKER_CONTEXT",
+        "DOCKER_CONFIG",
+        "DOCKER_CERT_PATH",
+        "DOCKER_TLS_VERIFY",
+        "DOCKER_BUILDKIT",
+        "BATECT_CACHE_TYPE",
+    ] {
+        command.env_remove(name);
+    }
+    command
+}
+
+/// #294: with TLS on and no certificate path, `cert.pem` is looked for in
+/// the Docker config directory the user chose — from `DOCKER_CONFIG` and
+/// from `--docker-config` alike — not in `~/.docker`. The host is
+/// unreachable, so the run fails on the missing file before any request.
+#[test]
+fn tls_certificates_are_looked_for_in_the_chosen_docker_config_directory() {
+    let project = one_task_project("cert-dir-from-config");
+    let config_directory = project.join("cfg");
+    std::fs::create_dir_all(&config_directory).unwrap();
+    let files = project.join("files");
+    std::fs::create_dir_all(&files).unwrap();
+    std::fs::write(files.join("ca.pem"), "ca").unwrap();
+    std::fs::write(files.join("key.pem"), "key").unwrap();
+
+    for (named_by, from_flag) in [("DOCKER_CONFIG", false), ("--docker-config", true)] {
+        let mut command = isolated_docker_command(&project);
+        command
+            .env("DOCKER_TLS_VERIFY", "1")
+            .env("DOCKER_HOST", "tcp://127.0.0.1:1")
+            .arg("--docker-tls-ca-cert")
+            .arg(files.join("ca.pem"))
+            .arg("--docker-tls-key")
+            .arg(files.join("key.pem"));
+        if from_flag {
+            command.arg("--docker-config").arg(&config_directory);
+        } else {
+            command.env("DOCKER_CONFIG", &config_directory);
+        }
+        let output = command.arg("t").output().expect("failed to run ratect");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(125), "{named_by}: {stderr}");
+        let expected = format!(
+            "{named_by}: {} does not exist or is not a file",
+            config_directory.join("cert.pem").display()
+        );
+        assert!(stderr.contains(&expected), "{named_by}: {stderr}");
+    }
+    std::fs::remove_dir_all(&project).ok();
+}

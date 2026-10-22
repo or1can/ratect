@@ -158,23 +158,24 @@ struct Args {
     /// Path to a directory containing any of ca.pem/cert.pem/key.pem to
     /// authenticate to the Docker host and verify it, unless overridden
     /// individually by --docker-tls-ca-cert/-cert/-key. Defaults to the
-    /// DOCKER_CERT_PATH environment variable, then ~/.docker.
+    /// DOCKER_CERT_PATH environment variable, then --docker-config's
+    /// directory if given (or DOCKER_CONFIG's), then ~/.docker.
     #[arg(long = "docker-cert-path", help_heading = "Docker connection")]
     docker_cert_path: Option<PathBuf>,
 
     /// Path to the TLS CA certificate file used to verify the Docker
-    /// host's own certificate. Defaults to ca.pem in --docker-cert-path's
-    /// directory.
+    /// host's own certificate. Defaults to ca.pem in the certificate
+    /// directory (see --docker-cert-path).
     #[arg(long = "docker-tls-ca-cert", help_heading = "Docker connection")]
     docker_tls_ca_cert: Option<PathBuf>,
 
     /// Path to the TLS certificate file used to authenticate to the Docker
-    /// host. Defaults to cert.pem in --docker-cert-path's directory.
+    /// host. Defaults to cert.pem in the certificate directory.
     #[arg(long = "docker-tls-cert", help_heading = "Docker connection")]
     docker_tls_cert: Option<PathBuf>,
 
     /// Path to the TLS key file used to authenticate to the Docker host.
-    /// Defaults to key.pem in --docker-cert-path's directory.
+    /// Defaults to key.pem in the certificate directory.
     #[arg(long = "docker-tls-key", help_heading = "Docker connection")]
     docker_tls_key: Option<PathBuf>,
 

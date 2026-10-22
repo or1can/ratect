@@ -501,22 +501,24 @@ struct DockerArgs {
     tls_verify: bool,
 
     /// Directory containing any of ca.pem/cert.pem/key.pem, unless overridden
-    /// individually below. Defaults to DOCKER_CERT_PATH, then ~/.docker.
+    /// individually below. Defaults to DOCKER_CERT_PATH, then
+    /// --docker-config's directory if given (or DOCKER_CONFIG's), then
+    /// ~/.docker.
     #[arg(long = "docker-cert-path")]
     cert_path: Option<PathBuf>,
 
     /// TLS CA certificate verifying the Docker host's own certificate.
-    /// Defaults to ca.pem in --docker-cert-path.
+    /// Defaults to ca.pem in the certificate directory.
     #[arg(long = "docker-tls-ca-cert")]
     tls_ca_cert: Option<PathBuf>,
 
     /// TLS certificate authenticating to the Docker host. Defaults to
-    /// cert.pem in --docker-cert-path.
+    /// cert.pem in the certificate directory.
     #[arg(long = "docker-tls-cert")]
     tls_cert: Option<PathBuf>,
 
     /// TLS key authenticating to the Docker host. Defaults to key.pem in
-    /// --docker-cert-path.
+    /// the certificate directory.
     #[arg(long = "docker-tls-key")]
     tls_key: Option<PathBuf>,
 }

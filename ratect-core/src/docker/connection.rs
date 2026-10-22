@@ -172,8 +172,8 @@ struct TlsSettings {
 
 /// A file holding TLS material, and what the user wrote that named it —
 /// `Docker context 'x'`, a flag (`--docker-tls-ca-cert`), or for a file
-/// found in the certificate directory whichever of `--docker-cert-path`,
-/// `DOCKER_CERT_PATH` and `~/.docker` chose that directory. Every error
+/// found in the certificate directory whichever source chose that
+/// directory (see [`docker_cert_directory`]). Every error
 /// about the file leads with `named_by`, so it points at something the
 /// user can change.
 #[derive(Debug, PartialEq)]
@@ -280,6 +280,22 @@ fn active_docker_context(config_directory: &Path) -> Option<String> {
     config.current_context.filter(|name| !name.is_empty())
 }
 
+/// `--docker-config`, else `DOCKER_CONFIG` — the Docker config directory
+/// when the user chose one, and which of the two chose it. The one place
+/// that order is written: [`docker_config_directory`] and
+/// [`docker_cert_directory`] both ask here, so the certificate directory's
+/// fallback can't drift from the directory the context store is read from.
+fn chosen_config_directory(
+    options: &DockerConnectionOptions,
+    docker_config_env: Option<&str>,
+) -> Option<(PathBuf, &'static str)> {
+    match (&options.config_directory, docker_config_env) {
+        (Some(dir), _) => Some((dir.clone(), "--docker-config")),
+        (None, Some(dir)) => Some((PathBuf::from(dir), "DOCKER_CONFIG")),
+        (None, None) => None,
+    }
+}
+
 /// `--docker-config`, else `DOCKER_CONFIG`, else `~/.docker` — the
 /// directory the Docker CLI's own context store and `config.json` live in,
 /// returned as given: a relative path stays relative, and nothing checks
@@ -293,39 +309,44 @@ fn docker_config_directory(
     options: &DockerConnectionOptions,
     docker_config_env: Option<&str>,
 ) -> Result<PathBuf> {
-    if let Some(dir) = &options.config_directory {
-        return Ok(dir.clone());
+    match chosen_config_directory(options, docker_config_env) {
+        Some((dir, _)) => Ok(dir),
+        None => Ok(crate::user::home_directory()?.join(".docker")),
     }
-    if let Some(dir) = docker_config_env {
-        return Ok(PathBuf::from(dir));
-    }
-    Ok(crate::user::home_directory()?.join(".docker"))
 }
 
-/// `--docker-cert-path`, else `DOCKER_CERT_PATH`, else `~/.docker` — the
-/// directory `ca.pem`/`cert.pem`/`key.pem` are looked for in unless
-/// `--docker-tls-ca-cert`/`-cert`/`-key` individually override one — and
-/// which of those three chose it, the name errors about a file found there
-/// use (see `TlsFile`). Resolved independently of `docker_config_directory`
-/// (its own separate environment variable, even though both happen to share
-/// the same hardcoded default) — matching Batect's own two
-/// independently-settable options exactly.
+/// The directory `ca.pem`/`cert.pem`/`key.pem` are looked for in unless
+/// `--docker-tls-ca-cert`/`-cert`/`-key` individually override one, and
+/// which source chose it — the name errors about a file found there use
+/// (see `TlsFile`). In order:
 ///
-/// An empty `DOCKER_CERT_PATH` counts as unset, as in the Docker CLI,
-/// rather than naming the working directory. Whether the directory exists
-/// is [`flag_tls_settings`]'s question, asked only if it's consulted.
+/// 1. `--docker-cert-path`;
+/// 2. `DOCKER_CERT_PATH`;
+/// 3. the Docker config directory, when one was chosen — `--docker-config`,
+///    else `DOCKER_CONFIG` (see [`chosen_config_directory`]);
+/// 4. `~/.docker`.
 ///
-/// Pure but for the home directory lookup — the environment value is
+/// Batect's (`resolvePathToDockerCertificate`) order, and the Docker CLI's,
+/// which defaults the certificate path to its config directory. An empty
+/// `DOCKER_CERT_PATH` counts as unset, as in the Docker CLI, rather than
+/// naming the working directory. Whether the directory exists is
+/// [`flag_tls_settings`]'s question, asked only if it's consulted.
+///
+/// Pure but for the home directory lookup — the environment values are
 /// injected, as for `resolve_host`.
 fn docker_cert_directory(
     options: &DockerConnectionOptions,
     docker_cert_path_env: Option<&str>,
+    docker_config_env: Option<&str>,
 ) -> Result<(PathBuf, String)> {
     if let Some(dir) = &options.cert_path {
         return Ok((dir.clone(), "--docker-cert-path".to_string()));
     }
     if let Some(dir) = docker_cert_path_env.filter(|dir| !dir.is_empty()) {
         return Ok((PathBuf::from(dir), "DOCKER_CERT_PATH".to_string()));
+    }
+    if let Some((dir, named_by)) = chosen_config_directory(options, docker_config_env) {
+        return Ok((dir, named_by.to_string()));
     }
     Ok((
         crate::user::home_directory()?.join(".docker"),
@@ -952,8 +973,11 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
     let target = format!("Docker host '{host}'");
     let address = tls_address(&target, &host)?;
     let docker_cert_path_env = std::env::var("DOCKER_CERT_PATH").ok();
-    let (cert_directory, named_by) =
-        docker_cert_directory(options, docker_cert_path_env.as_deref())?;
+    let (cert_directory, named_by) = docker_cert_directory(
+        options,
+        docker_cert_path_env.as_deref(),
+        docker_config_env.as_deref(),
+    )?;
     let tls = flag_tls_settings(options, &cert_directory, &named_by)
         .with_context(|| format!("Failed to connect to {target} over TLS"))?;
     let docker = connect_over_tls(&target, address, &tls)?;

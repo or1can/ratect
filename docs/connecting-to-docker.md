@@ -24,16 +24,18 @@ Windows named pipe) — see [Which daemon is used](#which-daemon-is-used).
 | `--docker-config <PATH>` | `DOCKER_CONFIG`, then `~/.docker` | Directory containing the Docker CLI's own configuration files (context store, `config.json`). |
 | `--docker-tls` | — | Use TLS when connecting to the Docker host. Behaves identically to `--docker-tls-verify` — the daemon's certificate is always fully verified; there is no way to skip verification. |
 | `--docker-tls-verify` | `DOCKER_TLS_VERIFY` | Use TLS when connecting to the Docker host, verifying its certificate. Needs a host: `--docker-host` or `DOCKER_HOST`. |
-| `--docker-cert-path <PATH>` | `DOCKER_CERT_PATH`, then `~/.docker` | Directory containing any of `ca.pem`/`cert.pem`/`key.pem` to authenticate to the Docker host and verify it, unless overridden individually by the three options below. None of the three files has to be there — see [TLS through the options](#tls-through-the-options). |
-| `--docker-tls-ca-cert <PATH>` | `ca.pem` in `--docker-cert-path` | The TLS CA certificate used to verify the Docker host's own certificate — the only certificate authority it is checked against. The file must exist. Without this option and without a `ca.pem`, the system trust store is used. |
-| `--docker-tls-cert <PATH>` | `cert.pem` in `--docker-cert-path` | The TLS certificate used to authenticate to the Docker host. The file must exist, and so must the key. |
-| `--docker-tls-key <PATH>` | `key.pem` in `--docker-cert-path` | The TLS key used to authenticate to the Docker host. The file must exist, and so must the certificate. |
+| `--docker-cert-path <PATH>` | `DOCKER_CERT_PATH`, then `--docker-config`/`DOCKER_CONFIG`, then `~/.docker` | Directory containing any of `ca.pem`/`cert.pem`/`key.pem` to authenticate to the Docker host and verify it, unless overridden individually by the three options below. None of the three files has to be there — see [TLS through the options](#tls-through-the-options). |
+| `--docker-tls-ca-cert <PATH>` | `ca.pem` in the certificate directory | The TLS CA certificate used to verify the Docker host's own certificate — the only certificate authority it is checked against. The file must exist. Without this option and without a `ca.pem`, the system trust store is used. |
+| `--docker-tls-cert <PATH>` | `cert.pem` in the certificate directory | The TLS certificate used to authenticate to the Docker host. The file must exist, and so must the key. |
+| `--docker-tls-key <PATH>` | `key.pem` in the certificate directory | The TLS key used to authenticate to the Docker host. The file must exist, and so must the certificate. |
 
 ## TLS through the options
 
 With `--docker-tls` or `--docker-tls-verify` (or `DOCKER_TLS_VERIFY`), or an
 `https://` host, the certificate directory is `--docker-cert-path`, then `DOCKER_CERT_PATH`, then
-`~/.docker` (an empty `DOCKER_CERT_PATH` counts as unset). The directory must
+the Docker config directory if one was given (`--docker-config`, then
+`DOCKER_CONFIG`), then `~/.docker` (an empty `DOCKER_CERT_PATH` counts as
+unset). The directory must
 exist unless all three files are named by their own options. What it holds
 decides how the connection is made:
 
@@ -111,7 +113,7 @@ for making the certificate verifiable instead.
 |---|---|
 | `DOCKER_HOST` | Docker host to connect to — the default for `--docker-host`. Setting it means no context is used unless `--docker-context` is given. Empty counts as unset. |
 | `DOCKER_CONTEXT` | Docker CLI context to connect through — the default for `--docker-context`. Ignored when a host is set. Empty counts as unset. |
-| `DOCKER_CONFIG` | Directory containing the Docker CLI's own configuration files — the default for `--docker-config`. |
+| `DOCKER_CONFIG` | Directory containing the Docker CLI's own configuration files — the default for `--docker-config`, and for `--docker-cert-path` when `DOCKER_CERT_PATH` is unset. |
 | `DOCKER_CERT_PATH` | Directory containing any of `ca.pem`/`cert.pem`/`key.pem` for TLS — the default for `--docker-cert-path`. Empty counts as unset. |
 | `DOCKER_TLS_VERIFY` | `1` or `true` (any case) enables TLS, fully verified — the default for `--docker-tls-verify`. Any other value leaves it off. |
 
