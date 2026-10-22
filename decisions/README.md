@@ -54,6 +54,16 @@ clearly than the bullet it replaces, not less. Sections:
 When a decision is superseded, mark the old record's status and link forward;
 never delete one (same append-only spirit as the roadmap's versioned lists).
 
+Append-only protects a decision once the release that implements it ships.
+Before that, while the release is still `-dev`, a refinement found by
+implementing the decision is folded into the record itself rather than
+written up as a new one. The status line says what changed and when, and how
+it read before, and it names the issue for the rework the change implies.
+That issue goes in the same release's Milestone, so the release can't be cut
+with the record ahead of the code ([AGENTS.md](../AGENTS.md) guideline 8
+closes every Milestone issue first). [0016](0016-exit-codes.md) is the first
+record refined this way.
+
 ## Index
 
 | # | Decision | Status |
@@ -73,7 +83,7 @@ never delete one (same append-only spirit as the roadmap's versioned lists).
 | [0013](0013-when-ratect-compat-copies-batect.md) | When `ratect-compat` copies Batect, and when it diverges | Accepted — adopted (parity triage, #284) |
 | [0014](0014-config-checked-at-load-evaluated-per-task.md) | Config is checked at load, and evaluated per task | Accepted — checking implemented; per-task evaluation planned (ratect-compat 0.32.0 · ratect 0.11.0) |
 | [0015](0015-native-project-records-its-written-for-version.md) | A native project records the Ratect version it was written for | Accepted — planned (ratect-compat 0.32.0 · ratect 0.11.0) |
-| [0016](0016-exit-codes.md) | What a run exits with | Accepted — implemented (ratect-compat 0.33.0 · ratect 0.12.0) |
+| [0016](0016-exit-codes.md) | What an invocation exits with | Accepted — run rules implemented; refined into two paths, rework planned (ratect-compat 0.33.0 · ratect 0.12.0) |
 | [0017](0017-output-streams-and-styles.md) | Output: what each stream is for, and how a style shapes it | Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0) |
 | [0018](0018-built-images-named-for-people-found-by-labels.md) | Built images are named for people and found by labels | Accepted — naming planned (ratect-compat 0.33.0 · ratect 0.12.0); lifecycle unscheduled |
 | [0019](0019-readiness-gates-starting-only.md) | A dependency's readiness gates only the start of what depends on it | Accepted — image work shipped (ratect-compat 0.33.0 · ratect 0.12.0); container creation planned |
