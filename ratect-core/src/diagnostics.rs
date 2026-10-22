@@ -127,6 +127,11 @@ pub fn config_findings(config: &Config, evaluation: &WholeProjectEvaluation) -> 
         )));
     }
 
+    // Batect refuses a list that names one entry twice; Ratect loads it and
+    // starts or runs the entry once, which is what Batect meant by it
+    // (ratect#393). Still a copy-paste slip worth saying out loud.
+    findings.extend(repeated_entries(config).into_iter().map(Finding::Warning));
+
     // Already resolved to an absolute path by evaluation, so this is the
     // path Ratect will actually hand to Docker.
     let mut missing: Vec<String> = Vec::new();
@@ -230,6 +235,54 @@ fn dependency_names(config: &Config) -> Vec<&str> {
     names.sort_unstable();
     names.dedup();
     names
+}
+
+/// One message per `dependencies` or `prerequisites` list and entry that
+/// list gives more than once — containers before tasks, each by name.
+///
+/// Compares the strings as written, as Batect does: `config` is the project
+/// before any wildcard prerequisite is expanded (that happens at run time),
+/// so `lint-*` twice is a repeat while `lint-*` beside `lint-a` is not. The
+/// entries load adds itself — an `external_health_check` companion — go in
+/// idempotently, so they never show up here.
+fn repeated_entries(config: &Config) -> Vec<String> {
+    let containers = config
+        .containers
+        .iter()
+        .map(|(name, container)| ("container", name, "dependencies", &container.dependencies));
+    let tasks = config.tasks.iter().flat_map(|(name, task)| {
+        [
+            ("task", name, "dependencies", &task.dependencies),
+            ("task", name, "prerequisites", &task.prerequisites),
+        ]
+    });
+
+    let mut messages = Vec::new();
+    for (kind, owner, field, entries) in containers.chain(tasks) {
+        // A dependency is a container, started; a prerequisite is a task, run.
+        let verb = if field == "prerequisites" {
+            "runs"
+        } else {
+            "starts"
+        };
+        let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+        for entry in entries.iter().flatten() {
+            *counts.entry(entry.as_str()).or_default() += 1;
+        }
+        messages.extend(
+            counts
+                .into_iter()
+                .filter(|(_, count)| *count > 1)
+                .map(|(entry, _)| {
+                    format!(
+                        "{kind} '{owner}' gives '{entry}' more than once in its '{field}' — \
+                         it {verb} only once"
+                    )
+                }),
+        );
+    }
+    messages.sort();
+    messages
 }
 
 /// Leftovers are worth reporting unasked — the whole reason

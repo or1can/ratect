@@ -9,6 +9,7 @@
 # - `database`, with no image tag: the floating-tag warning.
 # - `cache`, a dependency with no health_check: the unguarded-dependency warning.
 # - `app`, whose build_directory doesn't exist: the problem that fails the command.
+#   It also names `cache` twice in its dependencies: the repeated-entry warning.
 # - `deploy`, reading `$DEPLOY_TOKEN`, which no task here needs: the warning for
 #   a value this machine can't evaluate, as long as it isn't set.
 # - `batect`, beside this file: the wrapper-script warning.
@@ -30,7 +31,7 @@ image = "redis:7"
 
 [containers.app]
 build_directory = "missing-dir"
-dependencies = ["database", "cache"]
+dependencies = ["database", "cache", "cache"]
 
 [containers.deploy]
 image = "alpine:3.18.2"

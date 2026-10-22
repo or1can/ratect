@@ -2825,6 +2825,13 @@ fn doctor_reports_each_kind_of_config_finding_from_the_doctor_fixture() {
     assert!(
         has_line(
             "warning ",
+            &["container 'app' gives 'cache' more than once in its 'dependencies'"]
+        ),
+        "the repeated dependency should be flagged:\n{stdout}"
+    );
+    assert!(
+        has_line(
+            "warning ",
             &[
                 "Container 'deploy'",
                 "'environment.TOKEN'",
