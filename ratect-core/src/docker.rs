@@ -2025,7 +2025,7 @@ impl DockerClient {
             .context("Failed to negotiate the Docker API version with the daemon")
             .map_err(|err| connected.explain_failure(err))?;
         check_api_version_floor(docker.client_version())?;
-        let config_directory = connection::docker_config_directory(connection)?;
+        let config_directory = connected.config_directory.clone();
         Ok(Self {
             docker,
             builder_version: tokio::sync::OnceCell::new(),

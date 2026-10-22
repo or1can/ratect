@@ -281,16 +281,22 @@ fn active_docker_context(config_directory: &Path) -> Option<String> {
 }
 
 /// `--docker-config`, else `DOCKER_CONFIG`, else `~/.docker` — the
-/// directory the Docker CLI's own context store and `config.json` live in.
-/// Visible to `docker.rs` (like `connect`, below) so `DockerClient::new` can
-/// resolve the same directory a second time to hand to its credential
-/// resolver, honoring `--docker-config`/`DOCKER_CONFIG` exactly as
-/// everywhere else Ratect reads Docker's own config.
-pub(super) fn docker_config_directory(options: &DockerConnectionOptions) -> Result<PathBuf> {
+/// directory the Docker CLI's own context store and `config.json` live in,
+/// returned as given: a relative path stays relative, and nothing checks
+/// that it exists. [`connect`] resolves it once and hands it on in its
+/// [`Connection`], so `DockerClient::new`'s credential resolver reads the
+/// same directory the context lookup did.
+///
+/// Pure but for the home directory lookup — the environment value is
+/// injected, as for `resolve_host`.
+fn docker_config_directory(
+    options: &DockerConnectionOptions,
+    docker_config_env: Option<&str>,
+) -> Result<PathBuf> {
     if let Some(dir) = &options.config_directory {
         return Ok(dir.clone());
     }
-    if let Ok(dir) = std::env::var("DOCKER_CONFIG") {
+    if let Some(dir) = docker_config_env {
         return Ok(PathBuf::from(dir));
     }
     Ok(crate::user::home_directory()?.join(".docker"))
@@ -774,17 +780,21 @@ enum VerificationNote {
     SystemTrustStore { looked_for: PathBuf },
 }
 
-/// A connected client, plus what's needed to explain its first failure.
+/// A connected client, the Docker config directory it was resolved from
+/// (see [`docker_config_directory`]), and what's needed to explain its first
+/// failure.
 #[derive(Debug)]
 pub(super) struct Connection {
     pub(super) docker: Docker,
+    pub(super) config_directory: PathBuf,
     verification_note: Option<VerificationNote>,
 }
 
 impl Connection {
-    fn without_note(docker: Docker) -> Self {
+    fn without_note(docker: Docker, config_directory: PathBuf) -> Self {
         Self {
             docker,
+            config_directory,
             verification_note: None,
         }
     }
@@ -885,7 +895,8 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
         }
     }
 
-    let config_directory = docker_config_directory(options)?;
+    let docker_config_env = std::env::var("DOCKER_CONFIG").ok();
+    let config_directory = docker_config_directory(options, docker_config_env.as_deref())?;
     let docker_host_env = std::env::var("DOCKER_HOST").ok();
     let host = resolve_host(options, docker_host_env.as_deref());
     let docker_context_env = std::env::var("DOCKER_CONTEXT").ok();
@@ -908,7 +919,7 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
         });
         let Some(tls) = tls else {
             return connect_plain(&host)
-                .map(Connection::without_note)
+                .map(|docker| Connection::without_note(docker, config_directory))
                 .with_context(|| {
                     format!("Failed to connect to Docker context '{context_name}' (host '{host}')")
                 });
@@ -918,6 +929,7 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
         let docker = connect_over_tls(&target, address, &tls)?;
         return Ok(Connection {
             docker,
+            config_directory,
             verification_note: tls
                 .skip_verify_requested
                 .then_some(VerificationNote::ContextAskedToSkip(context_name)),
@@ -933,7 +945,7 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
                 .with_context(|| format!("Failed to connect to Docker host '{host}'"))?,
             None => Docker::connect_with_local_defaults().context("Failed to connect to Docker")?,
         };
-        return Ok(Connection::without_note(docker));
+        return Ok(Connection::without_note(docker, config_directory));
     }
 
     let host = require_host_for_tls(host)?;
@@ -947,6 +959,7 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
     let docker = connect_over_tls(&target, address, &tls)?;
     Ok(Connection {
         docker,
+        config_directory,
         verification_note: tls
             .ca
             .is_none()

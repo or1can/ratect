@@ -245,6 +245,100 @@ fn active_docker_context_is_none_when_current_context_is_unset_or_empty() {
     assert_eq!(active_docker_context(&config_directory), None);
 }
 
+/// Runs `body` in a child copy of this test binary with `vars` set in its
+/// environment, so a test can show a function ignores a variable without
+/// setting it in this process — where the `connect` tests running alongside
+/// would read it too. `test_name` is the calling test's own path, which the
+/// child re-runs alone; inside the child, `body` runs and the parent's
+/// branch is skipped.
+fn in_child_with_env(test_name: &str, vars: &[(&str, &str)], body: impl FnOnce()) {
+    const CHILD: &str = "RATECT_CONNECTION_TEST_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        body();
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([test_name, "--exact", "--nocapture", "--test-threads=1"])
+        .env(CHILD, "1")
+        .envs(vars.iter().copied())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "{test_name} failed in its child process:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The context read is the config file's alone: `DOCKER_HOST` is
+/// `resolve_context_name`'s business, never `active_docker_context`'s.
+#[test]
+fn active_docker_context_ignores_docker_host() {
+    in_child_with_env(
+        "docker::connection::tests::active_docker_context_ignores_docker_host",
+        &[("DOCKER_HOST", "tcp://127.0.0.1:1")],
+        || {
+            assert_eq!(std::env::var("DOCKER_HOST").unwrap(), "tcp://127.0.0.1:1");
+            let config_directory = unique_temp_dir();
+            fs::write(
+                config_directory.join("config.json"),
+                r#"{"currentContext":"from-file"}"#,
+            )
+            .unwrap();
+            assert_eq!(
+                active_docker_context(&config_directory),
+                Some("from-file".to_string())
+            );
+        },
+    );
+}
+
+#[test]
+fn active_docker_context_ignores_docker_context() {
+    in_child_with_env(
+        "docker::connection::tests::active_docker_context_ignores_docker_context",
+        &[("DOCKER_CONTEXT", "from-env")],
+        || {
+            assert_eq!(std::env::var("DOCKER_CONTEXT").unwrap(), "from-env");
+            let config_directory = unique_temp_dir();
+            fs::write(
+                config_directory.join("config.json"),
+                r#"{"currentContext":"from-file"}"#,
+            )
+            .unwrap();
+            assert_eq!(
+                active_docker_context(&config_directory),
+                Some("from-file".to_string())
+            );
+        },
+    );
+}
+
+#[test]
+fn docker_config_directory_returns_the_option_as_given() {
+    let options = DockerConnectionOptions {
+        config_directory: Some(PathBuf::from("relative/dir")),
+        ..Default::default()
+    };
+    let directory = docker_config_directory(&options, Some("/from/env")).unwrap();
+    assert_eq!(directory, PathBuf::from("relative/dir"));
+    assert!(directory.is_relative());
+}
+
+#[test]
+fn docker_config_directory_falls_back_to_docker_config_then_home() {
+    let options = DockerConnectionOptions::default();
+    assert_eq!(
+        docker_config_directory(&options, Some("/from/env")).unwrap(),
+        PathBuf::from("/from/env")
+    );
+    assert_eq!(
+        docker_config_directory(&options, None).unwrap(),
+        crate::user::home_directory().unwrap().join(".docker")
+    );
+}
+
 #[test]
 fn resolve_context_name_prefers_an_explicit_context_over_everything_else() {
     let options = DockerConnectionOptions {
