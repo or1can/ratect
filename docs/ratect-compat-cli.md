@@ -45,7 +45,7 @@ listed under.
 | `--tag-image <CONTAINER=TAG>` | — | — | Tags the image built by `CONTAINER` with `TAG`, in addition to the default `<project_name>-<container_name>` tag; repeatable, and `CONTAINER` may be given more than once to apply multiple tags. Only valid for a container that actually builds an image — errors immediately if `CONTAINER` ends up using a pulled image (whether configured that way or via `--override-image`), and errors once the whole task (and its prerequisites) finishes if `CONTAINER` never actually ran. A `TAG` that `docker tag` would refuse, such as `_nonsense` or one with uppercase in its repository name, is rejected while the arguments are parsed, before anything runs. |
 | `--enable-buildkit` | — | — | Use BuildKit for image builds, taking precedence over the `DOCKER_BUILDKIT` environment variable — see [config reference](ratect-compat-config-reference.md#image-building). No `--disable-buildkit` counterpart; force the classic builder via `DOCKER_BUILDKIT=0` instead. |
 | `--max-parallelism <N>` | — | unbounded | Caps how many image pulls/builds, container creates, dependency container starts, and setup-command executions run concurrently across the whole invocation — a create and a start are separate capped steps, and no slot is held while a container waits for its dependencies. Health-check waits, the task's own container's run, and container stop/removal are never gated — see [Differences from Batect](differences-from-batect.md#cli-flags). |
-| `--cache-type <volume\|directory>` | — | `volume` | Storage mechanism for a `cache` volume mount (see [Cache volumes](ratect-compat-config-reference.md#cache-volumes)): `volume` resolves it to a Docker named volume, `directory` to a host directory under `<project_directory>/.batect/caches/<name>/`. Has no effect on a config with no `cache` mounts — but does still select which storage `--clean`/`--clean-cache` act on. |
+| `--cache-type <volume\|directory>` | — | `BATECT_CACHE_TYPE`, then `volume` | Storage mechanism for a `cache` volume mount (see [Cache volumes](ratect-compat-config-reference.md#cache-volumes)): `volume` resolves it to a Docker named volume, `directory` to a host directory under `<project_directory>/.batect/caches/<name>/`. Has no effect on a config with no `cache` mounts — but does still select which storage `--clean`/`--clean-cache` act on. A `BATECT_CACHE_TYPE` that is neither `volume` nor `directory`, exactly, fails every command unless this flag is given. |
 
 ### Cleanup after a run
 
@@ -78,7 +78,7 @@ accepts them; they're used only when it actually connects.
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
-| `--clean` | — | — | Removes every one of this project's own cache volumes/directories (per `--cache-type`) and exits — doesn't run anything, and doesn't need `--config-file` to actually exist. See [Cache volumes](ratect-compat-config-reference.md#cache-volumes). |
+| `--clean` | — | — | Removes every one of this project's own cache volumes/directories (per `--cache-type` or `BATECT_CACHE_TYPE`) and exits — doesn't run anything, and doesn't need `--config-file` to actually exist. See [Cache volumes](ratect-compat-config-reference.md#cache-volumes). |
 | `--clean-cache <NAME>` | — | — | Removes just the named cache (repeatable) and exits, instead of every one of them. Given together with `--clean`, the explicit name(s) win — `--clean`'s own "everything" behavior only applies when `--clean-cache` is never given at all. |
 
 ### Output
@@ -228,7 +228,7 @@ runs nothing, so it exits `0` when it succeeds, `1` when it fails (a config that
 parse under `--list-tasks`, a `--log-file` that exists but can't be opened), and `2` when
 it was invoked wrong: a flag that's rejected (`ratect-compat --bogus --clean`), or an
 option value that fails its own check — a `-f` or `--config-vars-file` naming something
-that doesn't exist or isn't a file, a `--docker-config`, `--docker-cert-path`,
+that doesn't exist or isn't a file, a `BATECT_CACHE_TYPE` that is no cache type, a `--docker-config`, `--docker-cert-path`,
 `DOCKER_CONFIG` or `DOCKER_CERT_PATH` naming something that doesn't exist or isn't a
 directory, or a `--log-file` in a directory that doesn't exist.
 
@@ -268,6 +268,7 @@ it.
 | Variable | Effect |
 |---|---|
 | `RUST_LOG` | Controls log verbosity on stderr (`error`, `warn`, `info` [default], `debug`, `trace`) — and, if `--log-file` is given, the same file too. See [Filtering `RUST_LOG`](troubleshooting.md#filtering-rust_log) for scoping it to Ratect's own targets. Unlike Batect, Ratect always logs to stderr regardless of `--log-file`; Batect's own default with no `--log-file` is silent. See [Differences from Batect](differences-from-batect.md#cli-flags). |
+| `BATECT_CACHE_TYPE` | The default for `--cache-type`: `volume` or `directory`, exactly. Any other value, empty included, fails every command but `--help` and `--version`, unless `--cache-type` is given. |
 | `DOCKER_HOST` | The default for `--docker-host` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |
 | `DOCKER_CONTEXT` | The default for `--docker-context` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |
 | `DOCKER_CONFIG` | The default for `--docker-config` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |

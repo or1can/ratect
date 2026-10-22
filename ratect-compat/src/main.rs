@@ -14,6 +14,7 @@
 
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
+use ratect_core::cache::CacheType;
 use ratect_core::config::{
     format_task_list, format_task_list_quiet, load_project, Config, Dialect,
 };
@@ -187,14 +188,10 @@ struct Args {
 
     /// Storage mechanism for `cache` volume mounts: volume (a Docker named
     /// volume) or directory (a host directory under
-    /// `<project_directory>/.batect/caches/<name>`).
-    #[arg(
-        long = "cache-type",
-        value_enum,
-        default_value = "volume",
-        help_heading = "Task execution"
-    )]
-    cache_type: CacheTypeArg,
+    /// `<project_directory>/.batect/caches/<name>`). Defaults to the
+    /// BATECT_CACHE_TYPE environment variable, then volume.
+    #[arg(long = "cache-type", value_enum, help_heading = "Task execution")]
+    cache_type: Option<CacheTypeArg>,
 
     /// Remove every one of this project's cache volumes/directories and
     /// exit, without running anything. Never needs the config file itself.
@@ -258,6 +255,27 @@ impl Args {
         !self.upgrade && !self.clean && self.clean_cache.is_empty() && !self.list_tasks
     }
 
+    /// The cache type: `--cache-type`, else `BATECT_CACHE_TYPE`
+    /// (`batect_cache_type_env`, injected so this stays testable), else
+    /// volume. The variable must name a cache type exactly, as in Batect —
+    /// `Directory` and an empty value are refused — but only when the flag
+    /// doesn't make it moot. [`run`] resolves it once, for every command,
+    /// as Batect checks its options' defaults before running any.
+    fn cache_type(&self, batect_cache_type_env: Option<&str>) -> Result<CacheType> {
+        if let Some(cache_type) = self.cache_type {
+            return Ok(cache_type.into());
+        }
+        match batect_cache_type_env {
+            None | Some("volume") => Ok(CacheType::Volume),
+            Some("directory") => Ok(CacheType::Directory),
+            Some(other) => Err(InvalidOptionValue::new(format!(
+                "BATECT_CACHE_TYPE is '{other}', which is not a cache type: use volume or \
+                 directory, or give --cache-type."
+            ))
+            .into()),
+        }
+    }
+
     /// The Docker connection flags, as `ratect-core` takes them.
     fn docker_connection(&self) -> DockerConnectionOptions {
         DockerConnectionOptions {
@@ -288,6 +306,7 @@ impl Args {
         project_directory: PathBuf,
         dialect: Dialect,
         config_var_overrides: HashMap<String, String>,
+        cache_type: CacheType,
     ) -> TaskEngineSettings {
         let mut image_tags: HashMap<String, HashSet<String>> = HashMap::new();
         for (container, tag) in &self.tag_image {
@@ -306,7 +325,7 @@ impl Args {
             cleanup_after_success: !(self.no_cleanup || self.no_cleanup_after_success),
             cleanup_after_failure: !(self.no_cleanup || self.no_cleanup_after_failure),
             max_parallelism: self.max_parallelism.map(|max| max as usize),
-            cache: Some((self.cache_type.into(), project_directory)),
+            cache: Some((cache_type, project_directory)),
             // Stamped onto every resource this run creates, so it can be
             // identified later — see `ratect_core::labels`.
             ratect_version: Some(env!("CARGO_PKG_VERSION").to_string()),
@@ -342,7 +361,7 @@ impl From<OutputStyleArg> for OutputStyle {
     }
 }
 
-/// The CLI-side `--cache-type` value set. Mirrors [`ratect_core::cache::CacheType`]
+/// The CLI-side `--cache-type` value set. Mirrors [`CacheType`]
 /// rather than deriving on it directly, same reasoning as `OutputStyleArg`.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 enum CacheTypeArg {
@@ -350,11 +369,11 @@ enum CacheTypeArg {
     Directory,
 }
 
-impl From<CacheTypeArg> for ratect_core::cache::CacheType {
+impl From<CacheTypeArg> for CacheType {
     fn from(arg: CacheTypeArg) -> Self {
         match arg {
-            CacheTypeArg::Volume => ratect_core::cache::CacheType::Volume,
-            CacheTypeArg::Directory => ratect_core::cache::CacheType::Directory,
+            CacheTypeArg::Volume => CacheType::Volume,
+            CacheTypeArg::Directory => CacheType::Directory,
         }
     }
 }
@@ -617,6 +636,7 @@ async fn run(
         }
     }
 
+    let cache_type = args.cache_type(std::env::var("BATECT_CACHE_TYPE").ok().as_deref())?;
     // Like Batect's option parser, for every command: a Docker directory
     // the user named must be one, whether or not this command connects.
     args.docker_connection().check_directories()?;
@@ -630,7 +650,7 @@ async fn run(
     }
 
     if args.clean || !args.clean_cache.is_empty() {
-        return clean_caches(&args, stderr).await;
+        return clean_caches(&args, cache_type, stderr).await;
     }
 
     let project = load_project(&args.config_file).await?;
@@ -688,6 +708,7 @@ async fn run(
                 project.project_directory.clone(),
                 project.dialect,
                 config_var_overrides,
+                cache_type,
             );
             // Constructed here rather than inside `ratect-core` — a library
             // shouldn't take over a process's signal handling on its own
@@ -741,14 +762,13 @@ fn sweep_git_include_cache() -> Sweep {
 /// `CleanupCachesCommand` exactly: the explicit `cleanCaches` list (if
 /// non-empty) always wins over `--clean`'s "everything" default, regardless
 /// of whether `--clean` was also given.
-async fn clean_caches(args: &Args, stderr: &Console) -> Result<()> {
+async fn clean_caches(args: &Args, cache_type: CacheType, stderr: &Console) -> Result<()> {
     let base_path = ratect_core::config::base_path_for(&args.config_file);
     let project_directory = ratect_core::config::project_directory_path(base_path)?;
     let only: HashSet<String> = args.clean_cache.iter().cloned().collect();
-    let cache_type: ratect_core::cache::CacheType = args.cache_type.into();
 
     let docker = match cache_type {
-        ratect_core::cache::CacheType::Volume => {
+        CacheType::Volume => {
             println!("Checking for cache volumes...");
             Some(
                 DockerClient::new(&args.docker_connection(), |message| {
@@ -757,7 +777,7 @@ async fn clean_caches(args: &Args, stderr: &Console) -> Result<()> {
                 .await?,
             )
         }
-        ratect_core::cache::CacheType::Directory => {
+        CacheType::Directory => {
             println!(
                 "Checking for cache directories in '{}'...",
                 ratect_core::cache::cache_directory(&project_directory).display()
@@ -793,19 +813,19 @@ async fn clean_caches(args: &Args, stderr: &Console) -> Result<()> {
 /// identifier Batect itself prints: a Docker volume name under
 /// `CacheType::Volume`, a full host path under `CacheType::Directory` —
 /// never the bare cache name a `cache` mount declares.
-fn deleting_line(cache_type: ratect_core::cache::CacheType, storage: &str) -> String {
+fn deleting_line(cache_type: CacheType, storage: &str) -> String {
     match cache_type {
-        ratect_core::cache::CacheType::Volume => format!("Deleting volume '{storage}'..."),
-        ratect_core::cache::CacheType::Directory => format!("Deleting '{storage}'..."),
+        CacheType::Volume => format!("Deleting volume '{storage}'..."),
+        CacheType::Directory => format!("Deleting '{storage}'..."),
     }
 }
 
 /// The summary line, singular/plural matched to what was actually removed —
 /// the same Batect wording, pinned for the same reason as [`deleting_line`].
-fn done_line(cache_type: ratect_core::cache::CacheType, removed: usize) -> String {
+fn done_line(cache_type: CacheType, removed: usize) -> String {
     let (singular, plural) = match cache_type {
-        ratect_core::cache::CacheType::Volume => ("volume", "volumes"),
-        ratect_core::cache::CacheType::Directory => ("directory", "directories"),
+        CacheType::Volume => ("volume", "volumes"),
+        CacheType::Directory => ("directory", "directories"),
     };
     format!(
         "Done! Deleted {removed} {}.",

@@ -5898,3 +5898,95 @@ fn docker_tls_verify_from_the_environment_does_not_conflict_with_a_context() {
         "{stderr}"
     );
 }
+
+/// A one-task project with a `cache` directory `<name>` already under
+/// `.batect/caches`, as a `--cache-type directory` run would leave it.
+fn project_with_a_cache_directory(purpose: &str, name: &str) -> (PathBuf, PathBuf) {
+    let project = one_task_project(purpose);
+    let cache = project.join(".batect/caches").join(name);
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join("kept"), "").unwrap();
+    (project, cache)
+}
+
+/// #441: `BATECT_CACHE_TYPE=directory` makes `--clean` remove the cache
+/// directories, without contacting Docker, as `--cache-type directory` does.
+#[test]
+fn batect_cache_type_directory_cleans_cache_directories() {
+    let (project, cache) = project_with_a_cache_directory("cache-type-env", "deps");
+    let output = isolated_docker_command(&project)
+        .env("BATECT_CACHE_TYPE", "directory")
+        .env("DOCKER_HOST", "tcp://127.0.0.1:1")
+        .arg("--clean")
+        .output()
+        .expect("failed to run ratect");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let gone = !cache.exists();
+    std::fs::remove_dir_all(&project).ok();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains("Done! Deleted 1 directory."), "{stdout}");
+    assert!(gone, "the cache directory is still there");
+}
+
+/// #441: an invalid `BATECT_CACHE_TYPE` fails every command before it
+/// does anything — `2` off a run, `125` on one — naming the variable, the
+/// value and the cache types; `--clean` removes nothing.
+#[test]
+fn an_invalid_batect_cache_type_fails_every_command_before_it_runs() {
+    let (project, cache) = project_with_a_cache_directory("cache-type-invalid", "deps");
+    for (arguments, code) in [
+        (&["--list-tasks"][..], 2),
+        (&["--clean"][..], 2),
+        (&["-o", "quiet", "--list-tasks"][..], 2),
+        (&["t"][..], 125),
+    ] {
+        let output = isolated_docker_command(&project)
+            .env("BATECT_CACHE_TYPE", "bogus")
+            .env("DOCKER_HOST", "tcp://127.0.0.1:1")
+            .args(arguments)
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(code), "{arguments:?}: {stderr}");
+        assert!(
+            stderr.contains("BATECT_CACHE_TYPE is 'bogus'")
+                && stderr.contains("volume")
+                && stderr.contains("directory"),
+            "{arguments:?}: {stderr}"
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "", "{arguments:?}");
+    }
+    assert!(cache.exists(), "--clean removed a cache despite the error");
+    std::fs::remove_dir_all(&project).ok();
+}
+
+/// #441: `--cache-type` makes an invalid `BATECT_CACHE_TYPE` moot, and
+/// `--help` and `--version` never check it.
+#[test]
+fn an_invalid_batect_cache_type_is_moot_beside_the_flag_and_for_help() {
+    let (project, _) = project_with_a_cache_directory("cache-type-moot", "deps");
+    for arguments in [
+        &["--clean", "--cache-type", "directory"][..],
+        &["--help"][..],
+        &["--version"][..],
+    ] {
+        let output = isolated_docker_command(&project)
+            .env("BATECT_CACHE_TYPE", "bogus")
+            .args(arguments)
+            .output()
+            .expect("failed to run ratect");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    std::fs::remove_dir_all(&project).ok();
+}

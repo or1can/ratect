@@ -37,6 +37,7 @@ fn settings_from(arguments: &[&str]) -> TaskEngineSettings {
         PathBuf::from("/p"),
         Dialect::BatectCompatible,
         HashMap::new(),
+        CacheType::Volume,
     )
 }
 
@@ -129,6 +130,7 @@ fn no_flags_maps_to_the_engines_own_defaults() {
         PathBuf::from("/p"),
         Dialect::BatectCompatible,
         HashMap::new(),
+        CacheType::Volume,
     );
     let defaults = TaskEngineSettings::default();
 
@@ -168,7 +170,7 @@ fn no_flags_maps_to_the_engines_own_defaults() {
 /// but never actually read, which nothing else would.
 #[test]
 fn every_flag_reaches_its_own_engine_setting() {
-    let settings = args(&[
+    let parsed = args(&[
         "ratect-compat",
         "--use-network",
         "existing-network",
@@ -187,11 +189,12 @@ fn every_flag_reaches_its_own_engine_setting() {
         "--cache-type",
         "directory",
         "build",
-    ])
-    .engine_settings(
+    ]);
+    let settings = parsed.engine_settings(
         PathBuf::from("/projects/demo"),
         Dialect::BatectCompatible,
         HashMap::new(),
+        parsed.cache_type(None).unwrap(),
     );
 
     assert_eq!(
@@ -238,6 +241,7 @@ fn each_no_cleanup_flag_affects_only_its_own_half() {
         PathBuf::from("/p"),
         Dialect::BatectCompatible,
         HashMap::new(),
+        CacheType::Volume,
     );
     assert!(!success.cleanup_after_success);
     assert!(success.cleanup_after_failure);
@@ -246,6 +250,7 @@ fn each_no_cleanup_flag_affects_only_its_own_half() {
         PathBuf::from("/p"),
         Dialect::BatectCompatible,
         HashMap::new(),
+        CacheType::Volume,
     );
     assert!(failure.cleanup_after_success);
     assert!(!failure.cleanup_after_failure);
@@ -583,16 +588,61 @@ fn rejects_a_zero_max_parallelism() {
 #[test]
 fn defaults_cache_type_to_volume() {
     let args = Args::try_parse_from(["ratect"]).unwrap();
-    assert_eq!(args.cache_type, CacheTypeArg::Volume);
+    assert_eq!(args.cache_type(None).unwrap(), CacheType::Volume);
 }
 
 #[test]
 fn parses_cache_type_flag() {
     let args = Args::try_parse_from(["ratect", "--cache-type", "directory", "build"]).unwrap();
-    assert_eq!(args.cache_type, CacheTypeArg::Directory);
+    assert_eq!(args.cache_type(None).unwrap(), CacheType::Directory);
 
     let args = Args::try_parse_from(["ratect", "--cache-type", "volume", "build"]).unwrap();
-    assert_eq!(args.cache_type, CacheTypeArg::Volume);
+    assert_eq!(args.cache_type(None).unwrap(), CacheType::Volume);
+}
+
+/// #441: `BATECT_CACHE_TYPE` is `--cache-type`'s default, which the flag
+/// overrides.
+#[test]
+fn batect_cache_type_is_the_cache_type_default() {
+    let no_flag = args(&["ratect", "build"]);
+    assert_eq!(
+        no_flag.cache_type(Some("directory")).unwrap(),
+        CacheType::Directory
+    );
+    assert_eq!(
+        no_flag.cache_type(Some("volume")).unwrap(),
+        CacheType::Volume
+    );
+    let flag = args(&["ratect", "--cache-type", "volume", "build"]);
+    assert_eq!(
+        flag.cache_type(Some("directory")).unwrap(),
+        CacheType::Volume
+    );
+}
+
+/// #441: a `BATECT_CACHE_TYPE` that is no cache type — matched exactly, as
+/// Batect does, so `Directory` and an empty value aren't either — is an
+/// invalid option value naming it, unless `--cache-type` makes it moot.
+#[test]
+fn an_invalid_batect_cache_type_is_refused_unless_the_flag_is_given() {
+    let no_flag = args(&["ratect", "build"]);
+    for value in ["bogus", "Directory", ""] {
+        let error = no_flag.cache_type(Some(value)).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains(&format!("BATECT_CACHE_TYPE is '{value}'")),
+            "{message}"
+        );
+        assert!(
+            message.contains("volume") && message.contains("directory"),
+            "{message}"
+        );
+    }
+    let flag = args(&["ratect", "--cache-type", "directory", "build"]);
+    assert_eq!(
+        flag.cache_type(Some("bogus")).unwrap(),
+        CacheType::Directory
+    );
 }
 
 #[test]

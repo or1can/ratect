@@ -479,7 +479,7 @@ for.
 A `cache` mount persists between separate `ratect` invocations — unlike `local`, its
 contents aren't tied to a specific host path in `batect.yml`. `name` identifies it,
 combined with a per-project key into either a Docker named volume (the default) or a
-host directory, selected by `--cache-type` (see [CLI reference](ratect-compat-cli.md)):
+host directory, selected by `--cache-type`, or else `BATECT_CACHE_TYPE` (see [CLI reference](ratect-compat-cli.md)):
 
 ```yaml
 containers:
@@ -511,7 +511,7 @@ containers:
   rather than Batect's own shorter id): nothing depends on matching that format, only
   on reusing whatever key is already on record for this project.
 `--clean` removes every one of this project's own cache volumes/directories (per
-`--cache-type`) and exits, without running anything; `--clean-cache <NAME>` (repeatable)
+`--cache-type` or `BATECT_CACHE_TYPE`) and exits, without running anything; `--clean-cache <NAME>` (repeatable)
 restricts this to the named cache(s) instead of all of them — see
 [CLI reference](ratect-compat-cli.md).
 
