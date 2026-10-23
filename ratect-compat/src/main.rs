@@ -45,9 +45,9 @@ struct Args {
     #[arg(short = 'T', long)]
     list_tasks: bool,
 
-    /// Set a config variable's value, as NAME=VALUE (repeatable). Takes
-    /// precedence over --config-vars-file and the variable's `default` in
-    /// `config_variables`.
+    /// Set a config variable's value, as NAME=VALUE (repeatable, once per
+    /// NAME). Takes precedence over --config-vars-file and the variable's
+    /// `default` in `config_variables`.
     #[arg(long = "config-var", value_parser = parse_config_var, help_heading = "Configuration variables")]
     config_var: Vec<(String, String)>,
 
@@ -75,10 +75,11 @@ struct Args {
     skip_prerequisites: bool,
 
     /// Override the image used by a container, as CONTAINER=IMAGE
-    /// (repeatable). The container's own `image`/`build_directory` and
-    /// `image_pull_policy` are ignored entirely — the override is always
-    /// pulled under the default IfNotPresent policy.
-    #[arg(long = "override-image", value_parser = parse_container_value_pair, help_heading = "Task execution")]
+    /// (repeatable, once per CONTAINER; neither side may be empty). The
+    /// container's own `image`/`build_directory` and `image_pull_policy` are
+    /// ignored entirely — the override is always pulled under the default
+    /// IfNotPresent policy.
+    #[arg(long = "override-image", value_parser = parse_override_image, help_heading = "Task execution")]
     override_image: Vec<(String, String)>,
 
     /// Tag the image built by a container, as CONTAINER=TAG (repeatable;
@@ -291,6 +292,35 @@ impl Args {
         }
     }
 
+    /// `clap`'s parse, then the one check it can't make per value: a key
+    /// given twice to `--config-var` or `--override-image`, which Batect's
+    /// `SingleValueMapOption` refuses rather than keeping the last
+    /// (ratect#438). `--tag-image` may repeat a container, as in Batect. A
+    /// `--config-var` also set by a `--config-vars-file` isn't a repeat:
+    /// only the command line is counted, and it still wins over the file.
+    /// The error is `clap`'s own kind, so it prints and exits like any other
+    /// argument `clap` rejects.
+    fn parse_checked<I, T>(arguments: I) -> std::result::Result<Self, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<std::ffi::OsString> + Clone,
+    {
+        let args = Self::try_parse_from(arguments)?;
+        for (option, key_name, pairs) in [
+            ("--config-var", "variable", &args.config_var),
+            ("--override-image", "container", &args.override_image),
+        ] {
+            let mut seen = HashSet::new();
+            if let Some((key, _)) = pairs.iter().find(|(key, _)| !seen.insert(key)) {
+                return Err(Self::command().error(
+                    clap::error::ErrorKind::ArgumentConflict,
+                    format!("the {key_name} '{key}' was given to {option} more than once"),
+                ));
+            }
+        }
+        Ok(args)
+    }
+
     /// Maps the engine-affecting flags onto the engine's settings.
     ///
     /// Split out from [`run`] so it can be tested without a Docker daemon.
@@ -387,12 +417,25 @@ fn parse_config_var(s: &str) -> std::result::Result<(String, String), String> {
 }
 
 /// Parses a `CONTAINER=VALUE` pair, shared by `--override-image` (VALUE is
-/// an image) and `--tag-image` (VALUE is a tag).
-fn parse_container_value_pair(s: &str) -> std::result::Result<(String, String), String> {
+/// an image) and `--tag-image` (VALUE is a tag), which `value_name` names.
+/// Split at the first `=`, a recorded divergence; Batect splits at the
+/// last. Neither side may be empty, as in Batect.
+fn parse_container_value_pair(
+    s: &str,
+    value_name: &str,
+) -> std::result::Result<(String, String), String> {
     match s.split_once('=') {
+        Some(("", _)) => Err("the container name before '=' is empty".to_string()),
+        Some((_, "")) => Err(format!("the {value_name} after '=' is empty")),
         Some((container, value)) => Ok((container.to_string(), value.to_string())),
         None => Err(format!("expected CONTAINER=VALUE, got '{s}'")),
     }
+}
+
+/// `--override-image`'s `CONTAINER=IMAGE`. The image itself stays
+/// unchecked, as in Batect (decisions/0018).
+fn parse_override_image(s: &str) -> std::result::Result<(String, String), String> {
+    parse_container_value_pair(s, "image")
 }
 
 /// `--tag-image`'s `CONTAINER=TAG`, with TAG checked against Docker's
@@ -400,7 +443,7 @@ fn parse_container_value_pair(s: &str) -> std::result::Result<(String, String), 
 /// which checks it when that image's build starts (decisions/0018).
 /// `--override-image` stays unchecked, as in Batect.
 fn parse_tag_image(s: &str) -> std::result::Result<(String, String), String> {
-    let (container, tag) = parse_container_value_pair(s)?;
+    let (container, tag) = parse_container_value_pair(s, "tag")?;
     ratect_core::image_reference::check_tag(&tag)?;
     Ok((container, tag))
 }
@@ -488,7 +531,7 @@ fn takes_value(command: &clap::Command, word: Word<'_>) -> bool {
 /// run, `2` otherwise. A `--help` or `--version` `clap` reached still prints
 /// and exits `0`.
 fn parse_args() -> Args {
-    Args::try_parse().unwrap_or_else(|error| {
+    Args::parse_checked(std::env::args_os()).unwrap_or_else(|error| {
         if !error.use_stderr() {
             error.exit();
         }

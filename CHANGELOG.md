@@ -48,6 +48,7 @@ history, from when it was the only binary.
 - A `DOCKER_TLS_VERIFY` that is neither true nor false fails a command when it connects to a Docker host, naming the variable and its value, instead of silently connecting without TLS. `yes`, in any case, now turns TLS on. `--docker-tls` or `--docker-tls-verify` still turns TLS on whatever the variable says.
 - `ratect-compat` reads `BATECT_CACHE_TYPE` as the default for `--cache-type`, as Batect does: `directory` switches runs and `--clean`/`--clean-cache` to host directories under `.batect/caches`, and any value other than `volume` or `directory`, exactly, fails every command but `--help` and `--version` unless `--cache-type` is given. It exits `2`, or `125` on a run.
 - `ratect-compat` refuses a `batect.local.yml` in the current directory that exists but isn't a file, when `--config-vars-file` isn't given, on every command but `--help` and `--version`, instead of running with no overrides from it. It exits `2`, or `125` on a run.
+- `ratect-compat` refuses an `--override-image` or `--tag-image` with an empty container or value (`c=`, `=a`, `=`), and a container given twice to `--override-image` or a variable given twice to `--config-var`, while the arguments are parsed, instead of running with an empty value or the last one given. It exits `2`, or `125` on a run.
 
 ### Added
 

@@ -6061,3 +6061,46 @@ fn an_explicit_option_makes_an_invalid_default_moot() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// ratect#438: an empty side in `--override-image`, or a container given
+/// to it twice, is an argument error — reported before the config is read,
+/// with the code every other argument error on that path gets (`2` beside
+/// `--list-tasks`, `125` on a run) and nothing on stdout.
+#[test]
+fn an_empty_or_repeated_override_image_is_an_argument_error() {
+    let config = sample_config_path();
+    for (arguments, message, code) in [
+        (
+            &["--override-image", "build-env=", "--list-tasks"][..],
+            "the image after '=' is empty",
+            2,
+        ),
+        (
+            &[
+                "--override-image",
+                "build-env=a",
+                "--override-image",
+                "build-env=b",
+                "--list-tasks",
+            ],
+            "the container 'build-env' was given to --override-image more than once",
+            2,
+        ),
+        (
+            &["--override-image", "=alpine", "test-task"],
+            "the container name before '=' is empty",
+            125,
+        ),
+    ] {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(&config)
+            .args(arguments)
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(code), "{arguments:?}: {stderr}");
+        assert!(stderr.contains(message), "{arguments:?}: {stderr}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "", "{arguments:?}");
+    }
+}
