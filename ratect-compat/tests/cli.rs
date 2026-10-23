@@ -1173,6 +1173,34 @@ fn an_option_after_the_task_name_is_a_usage_error_not_applied() {
     );
 }
 
+/// `--list-tasks` wins over `--clean` and `--upgrade`, as in Batect
+/// (ratect#442): each line prints what plain `--list-tasks` prints, so
+/// `--clean` neither cleans nor connects (no daemon listens on the host
+/// given), and `--upgrade` prints no notice.
+#[test]
+fn list_tasks_wins_over_clean_and_upgrade() {
+    let config = sample_config_path();
+    let config = config.to_str().unwrap();
+    let run = |args: &[&str]| {
+        ratect_command()
+            .env_remove("BATECT_CACHE_TYPE")
+            .args(["-f", config, "--docker-host", "tcp://127.0.0.1:1"])
+            .args(args)
+            .output()
+            .expect("failed to run ratect")
+    };
+    for style in [&[][..], &["-o", "quiet"]] {
+        let plain = run(&[style, &["-T"]].concat());
+        assert_eq!(plain.status.code(), Some(0));
+        for flags in [&["-T", "--clean"][..], &["--upgrade", "-T"]] {
+            let output = run(&[style, flags].concat());
+            assert_eq!(output.status.code(), Some(0), "{style:?} {flags:?}");
+            assert_eq!(output.stdout, plain.stdout, "{style:?} {flags:?}");
+            assert!(output.stderr.is_empty(), "{style:?} {flags:?}");
+        }
+    }
+}
+
 /// A unique, empty temp directory holding a directory `dir` and a
 /// config file `broken.yml` that exists but doesn't parse.
 fn invalid_values_directory() -> PathBuf {

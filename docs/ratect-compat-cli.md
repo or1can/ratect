@@ -107,7 +107,7 @@ accepts them; they're used only when it actually connects.
 ### Recognized, no effect
 
 `--upgrade`, `--no-update-notification`, and `--no-wrapper-cache-cleanup` are accepted
-but do nothing — hidden from `--help`, since they're not real Ratect features, just
+but change nothing Ratect does — hidden from `--help`, since they're not real Ratect features, just
 recognized so an existing Batect invocation carrying one doesn't hard-fail outright
 (an unrecognized flag is a `clap` parse error that kills the *entire* invocation before
 anything runs at all, including `--list-tasks` — unless it comes after `--version` or
@@ -116,7 +116,9 @@ only make sense for Batect's own self-updating wrapper script, which Ratect — 
 native binary — doesn't have and isn't planning to grow. `--upgrade` specifically
 prints a one-line notice to stderr and exits `0` rather than running silently, since a
 user invoking it is likely expecting *some* visible response; reinstall or rebuild
-Ratect to get a newer version instead. The other two have no wrapper-cache/update
+Ratect to get a newer version instead. As in Batect, it's still a command of its own:
+it replaces a task name and `--clean`/`--clean-cache`, which then don't run, while
+`--list-tasks` replaces it, which then lists the tasks and prints no notice. The other two have no wrapper-cache/update
 notification to disable in the first place, so they're silently accepted with no
 message at all.
 

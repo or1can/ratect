@@ -1531,3 +1531,43 @@ async fn run_neither_waits_for_the_sweep_nor_takes_its_result() {
     assert_eq!(error(FakeSweep::NeverFinishes).await, expected);
     assert_eq!(error(FakeSweep::Fails).await, expected);
 }
+
+/// `--list-tasks` takes precedence over `--clean`, `--clean-cache` and
+/// `--upgrade`, whichever order they come in, as in Batect's
+/// `CommandFactory`: it lists, so it needs the config, and cleans nothing
+/// (ratect#442). Asserted on the cache directory itself, not only `run`'s
+/// result.
+#[tokio::test]
+async fn list_tasks_takes_precedence_over_clean_and_upgrade() {
+    let config = project_with_one_task();
+    let cache = Path::new(&config).with_file_name(".batect/caches/foo");
+    std::fs::create_dir_all(&cache).unwrap();
+    let directory = ["--cache-type", "directory"];
+    for flags in [
+        &["-T", "--clean"][..],
+        &["-T", "--clean-cache", "foo"],
+        &["--clean", "-T"],
+        &["--clean-cache", "foo", "--list-tasks"],
+        &["-T", "--upgrade"],
+    ] {
+        let line = [&["ratect", "-f", &config][..], &directory, flags].concat();
+        run_with_fake_sweep(&line, FakeSweep::Succeeds)
+            .await
+            .result
+            .unwrap_or_else(|e| panic!("{flags:?} should list the tasks: {e:?}"));
+        assert!(cache.is_dir(), "{flags:?} removed the cache");
+    }
+
+    for flags in [&["-T", "--upgrade"][..], &["-T", "--clean"]] {
+        let line = [
+            &["ratect", "-f", "/no/such/batect.yml"][..],
+            &directory,
+            flags,
+        ]
+        .concat();
+        run_with_fake_sweep(&line, FakeSweep::Succeeds)
+            .await
+            .result
+            .expect_err(&format!("{flags:?} should load the config to list"));
+    }
+}

@@ -796,10 +796,11 @@ fn resolve_config_vars_file(explicit: Option<PathBuf>, dir: &Path) -> Result<Opt
 /// is stderr). That one line is the whole difference between the two.
 const PROGRESS: ProgressStream = ProgressStream::Stdout;
 
-/// The CLI's real work, once `Args` is parsed: `--upgrade` is a documented
-/// no-op (see its own doc comment), `--clean`/`--clean-cache` short-circuit
-/// into [`clean_caches`] before any config loads, `--list-tasks` prints and
-/// returns without touching Docker at all, and naming a task loads the
+/// The CLI's real work, once `Args` is parsed, in Batect's `CommandFactory`
+/// order: `--list-tasks` loads the config, prints and returns without
+/// touching Docker at all; otherwise `--upgrade` is a documented no-op (see
+/// its own doc comment), `--clean`/`--clean-cache` short-circuit into
+/// [`clean_caches`] before any config loads, and naming a task loads the
 /// config, builds the engine, and runs it. [`Args::engine_settings`] is kept
 /// synchronous and separate specifically so its flag-to-settings mapping can
 /// be unit-tested without a Docker daemon — see its own doc comment.
@@ -841,7 +842,9 @@ async fn run(
     // the user named must be one, whether or not this command connects.
     args.docker_connection().check_directories()?;
 
-    if args.upgrade {
+    // `--list-tasks` wins over both, as in Batect's `CommandFactory`
+    // (ratect#442), so `-T --clean` lists rather than deletes.
+    if args.upgrade && !args.list_tasks {
         stderr.notice(
             "--upgrade has no effect: Ratect is a single native binary, not a self-updating \
              wrapper script like Batect. Reinstall/rebuild to get a newer version instead.",
@@ -849,7 +852,7 @@ async fn run(
         return Ok(());
     }
 
-    if args.clean || !args.clean_cache.is_empty() {
+    if (args.clean || !args.clean_cache.is_empty()) && !args.list_tasks {
         return clean_caches(&args, cache_type, stderr).await;
     }
 
@@ -952,10 +955,10 @@ fn sweep_git_include_cache() -> Sweep {
 ///
 /// `--clean-cache <NAME>` (repeatable) restricts this to the named caches;
 /// plain `--clean` with no `--clean-cache` cleans every one of this
-/// project's own caches — matching Batect's own `CommandFactory`/
-/// `CleanupCachesCommand` exactly: the explicit `cleanCaches` list (if
-/// non-empty) always wins over `--clean`'s "everything" default, regardless
-/// of whether `--clean` was also given.
+/// project's own caches — matching Batect's `CleanupCachesCommand` in how
+/// the two combine: the explicit `cleanCaches` list (if non-empty) always
+/// wins over `--clean`'s "everything" default, regardless of whether
+/// `--clean` was also given. Which command runs at all is [`run`]'s.
 async fn clean_caches(args: &Args, cache_type: CacheType, stderr: &Console) -> Result<()> {
     let base_path = ratect_core::config::base_path_for(&args.config_file);
     let project_directory = ratect_core::config::project_directory_path(base_path)?;
