@@ -8846,6 +8846,56 @@ async fn image_override_replaces_a_build_directory_container_with_a_pull_instead
     );
 }
 
+/// Batect's "multiple overrides" rule (TSF-3): each overridden container
+/// runs its *own* override, and one left out of the map keeps its own
+/// configured image (ratect#418).
+#[tokio::test]
+async fn several_image_overrides_each_replace_only_their_own_containers_image() {
+    let mut containers = IndexMap::new();
+    containers.insert("app".to_string(), container("alpine:3.18", None));
+    containers.insert("db".to_string(), container("postgres:15", None));
+    containers.insert("cache".to_string(), container("redis:7", None));
+    let mut main = task("app", "echo hi");
+    main.dependencies = Some(vec!["db".to_string(), "cache".to_string()]);
+    let mut tasks = IndexMap::new();
+    tasks.insert("main".to_string(), main);
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    let overrides = HashMap::from([
+        ("app".to_string(), "ubuntu:22.04".to_string()),
+        ("db".to_string(), "mysql:8".to_string()),
+    ]);
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            image_overrides: overrides,
+            ..Default::default()
+        })
+        .unwrap();
+
+    engine.run_task("main", &[]).await.unwrap();
+
+    let events = docker.events();
+    for pulled in ["pull:ubuntu:22.04", "pull:mysql:8", "pull:redis:7"] {
+        assert!(events.contains(&pulled.to_string()), "{pulled}: {events:?}");
+    }
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.contains("alpine") || e.contains("postgres")),
+        "an overridden container's configured image should never be touched: {events:?}"
+    );
+    assert_eq!(docker.spec_for("app").unwrap().shared.image, "ubuntu:22.04");
+    assert_eq!(docker.spec_for("db").unwrap().shared.image, "mysql:8");
+    assert_eq!(docker.spec_for("cache").unwrap().shared.image, "redis:7");
+}
+
 #[test]
 fn with_settings_rejects_an_unknown_image_override_container_name() {
     let mut containers = IndexMap::new();

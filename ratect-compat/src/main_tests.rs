@@ -418,6 +418,27 @@ fn parses_repeated_override_image_flags() {
     );
 }
 
+/// Two containers' overrides each reach the engine under their own
+/// container (ratect#418) — the `Vec` above, collected into the map.
+#[test]
+fn repeated_override_image_flags_each_reach_the_engine_under_their_own_container() {
+    let settings = settings_from(&[
+        BINARY,
+        "--override-image",
+        "build-env=alpine:3.18",
+        "--override-image",
+        "test-env=ubuntu:22.04",
+        "build",
+    ]);
+    assert_eq!(
+        settings.image_overrides,
+        HashMap::from([
+            ("build-env".to_string(), "alpine:3.18".to_string()),
+            ("test-env".to_string(), "ubuntu:22.04".to_string()),
+        ])
+    );
+}
+
 #[test]
 fn defaults_override_image_to_empty() {
     let args = Args::try_parse_from(["ratect"]).unwrap();
