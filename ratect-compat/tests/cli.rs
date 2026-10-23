@@ -172,6 +172,35 @@ fn run_loads_unquoted_numbers_from_a_config_variables_file() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// #468: a daemon nothing answers for is reported as unreachable, naming the
+/// host tried, where it came from and the likely causes — not as a failed
+/// API version negotiation, which never got as far as starting. No daemon:
+/// nothing listens on port 1.
+#[test]
+fn run_reports_an_unreachable_daemon_naming_the_host_tried() {
+    let output = ratect_command()
+        .args(["-f", sample_config_path().to_str().unwrap()])
+        .args(["--docker-host", "tcp://127.0.0.1:1", "test-task"])
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    let headline = stderr.lines().next().unwrap_or_default();
+    assert!(
+        headline.contains("Couldn't reach the Docker daemon")
+            && headline.contains("'tcp://127.0.0.1:1'")
+            && headline.contains("--docker-host")
+            && headline.contains("Docker is running")
+            && headline.contains("host or context"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("Failed to negotiate the Docker API version"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Connection refused"), "{stderr}");
+}
+
 /// #376: Batect reads a task's `description` and `group` as the text written,
 /// so unquoted numbers in them load and are listed exactly as written —
 /// `12.6000`, not `12.6`.

@@ -127,6 +127,23 @@ as with `--docker-tls`. If verification fails for a context that sets it, the er
 says so — see [TLS with a private certificate authority](#tls-with-a-private-certificate-authority)
 for making the certificate verifiable instead.
 
+## What is checked on connecting
+
+Before asking the daemon for anything else, Ratect checks three things, and
+stops with an error if any fails:
+
+- **That it answers.** When no connection can be made at all — nothing
+  listening, a host name that doesn't resolve, no route to it — the error says
+  the daemon couldn't be reached, names the host tried and what chose it
+  (`--docker-host`, `DOCKER_HOST`, a context, or the platform default), and
+  suggests checking that Docker is running and that the host or context is the
+  right one. The underlying reason follows as its cause.
+- **That it is Docker 20.10 or newer** (API 1.41) — see
+  [Installation](installation.md#prerequisites) for why.
+- **That it runs Linux containers.** A daemon in Windows containers mode is
+  refused, naming the operating system it reports: switch Docker to Linux
+  containers to use Ratect.
+
 ## Environment variables
 
 | Variable | Effect |

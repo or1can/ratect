@@ -79,6 +79,8 @@ history, from when it was the only binary.
 - Every tag for a built image, including the automatic `<project_name>-<container name>` one, is checked before the image is built.
 - When tags applied after a build fail, every failed tag is reported.
 - A Docker daemon advertising a `Builder-Version` other than empty, `1` or `2` is an error the first time a run builds an image, unless `DOCKER_BUILDKIT` or `--enable-buildkit` chooses the builder.
+- A Docker daemon that can't be reached at all is reported as unreachable, naming the host tried and what chose it, instead of as a failed API version negotiation.
+- A Docker daemon running Windows containers is refused on connecting, before any task, cache or resource work, naming the operating system it reports.
 - A config-load error about a file inside a Git include names it by its path within the repository plus the remote and ref (`'1.yml' from the bundle '<repo>' at '<ref>'`) instead of its path in the `~/.ratect/incl` clone cache. A missing include also gives the path as written.
 
 ### Removed
