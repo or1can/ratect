@@ -578,6 +578,33 @@ fn conflicting_option_with_context_names_whichever_tls_option_was_given() {
     assert_eq!(conflicting_option_with_context(&base), None);
 }
 
+/// Without `--docker-context` nothing conflicts; with it, the refusal is an
+/// invalid option value naming the first flag in Batect's order, which
+/// checks `--docker-cert-path` last.
+#[test]
+fn check_context_conflict_needs_a_context_and_names_cert_path_last() {
+    let flags = DockerConnectionOptions {
+        cert_path: Some(PathBuf::from("certs")),
+        tls_ca_cert: Some(PathBuf::from("ca.pem")),
+        ..Default::default()
+    };
+    flags.check_context_conflict().unwrap();
+    let error = DockerConnectionOptions {
+        context: Some("x".to_string()),
+        ..flags
+    }
+    .check_context_conflict()
+    .unwrap_err();
+    assert!(
+        error.is::<crate::exit_code::InvalidOptionValue>(),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "Cannot use both --docker-context and --docker-tls-ca-cert."
+    );
+}
+
 #[test]
 fn connect_rejects_docker_tls_flags_combined_with_docker_context() {
     for options in [

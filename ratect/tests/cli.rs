@@ -3483,3 +3483,28 @@ fn run_refuses_tagging_and_overriding_one_container_before_anything_runs() {
     }
     std::fs::remove_dir_all(&project).ok();
 }
+
+/// ratect#439: `--docker-context` beside a flag that picks a connection
+/// itself is refused by every verb that takes the Docker options, whether or
+/// not it connects — `caches list` with the directory store (`2`), and `run`
+/// before its config is read (`125`) — in Batect's words.
+#[test]
+fn docker_context_beside_a_connection_flag_is_refused_whether_or_not_the_verb_connects() {
+    for (arguments, code) in [
+        (&["caches", "list", "--cache-type", "directory"][..], 2),
+        (&["run", "t"], 125),
+    ] {
+        let output = ratect_command()
+            .args(["-f", "does-not-exist.toml"])
+            .args(arguments)
+            .args(["--docker-context", "x", "--docker-tls-verify"])
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(code), "{arguments:?}: {stderr}");
+        assert!(
+            stderr.contains("Cannot use both --docker-context and --docker-tls-verify."),
+            "{arguments:?}: {stderr}"
+        );
+    }
+}

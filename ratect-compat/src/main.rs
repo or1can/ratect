@@ -134,7 +134,8 @@ struct Args {
     /// Docker CLI context to use. Defaults to the DOCKER_CONTEXT
     /// environment variable, then the Docker CLI's own active context,
     /// unless a Docker host is set. Cannot be used together with
-    /// --docker-host.
+    /// --docker-host, --docker-tls, --docker-tls-verify, --docker-cert-path
+    /// or --docker-tls-ca-cert/-cert/-key.
     #[arg(long = "docker-context", help_heading = "Docker connection")]
     docker_context: Option<String>,
 
@@ -865,9 +866,14 @@ async fn run(
     }
 
     let cache_type = args.cache_type(std::env::var("BATECT_CACHE_TYPE").ok().as_deref())?;
-    // Like Batect's option parser, for every command: a Docker directory
-    // the user named must be one, whether or not this command connects.
-    args.docker_connection().check_directories()?;
+    // Like Batect's option parser, for every command, whether or not it
+    // connects: a Docker directory the user named must be one, and
+    // `--docker-context` can't be given beside a flag that picks a
+    // connection itself (ratect#439) — checked in that order, as Batect
+    // checks a path option's value before `validate()`.
+    let docker_connection = args.docker_connection();
+    docker_connection.check_directories()?;
+    docker_connection.check_context_conflict()?;
 
     // `--list-tasks` wins over both, as in Batect's `CommandFactory`
     // (ratect#442), so `-T --clean` lists rather than deletes.

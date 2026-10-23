@@ -75,7 +75,9 @@ listed under.
 Which daemon these reach, their `DOCKER_*` environment-variable defaults, and
 TLS with a private certificate authority are on [Connecting to
 Docker](connecting-to-docker.md), shared with `ratect`. Every invocation
-accepts them; they're used only when it actually connects.
+accepts them; they're used only when it actually connects. `--docker-context`
+beside `--docker-host` or a TLS option is refused whether or not the invocation
+connects, as in Batect.
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
@@ -247,7 +249,8 @@ it was invoked wrong: a flag that's rejected (`ratect-compat --bogus --clean`), 
 option value that fails its own check — a `-f` or `--config-vars-file` naming something
 that doesn't exist or isn't a file, a `batect.local.yml` that isn't a file, a `BATECT_CACHE_TYPE` that is no cache type, a `--docker-config`, `--docker-cert-path`,
 `DOCKER_CONFIG` or `DOCKER_CERT_PATH` naming something that doesn't exist or isn't a
-directory, or a `--log-file` in a directory that doesn't exist.
+directory, `--docker-context` beside `--docker-host` or a TLS option, or a `--log-file`
+in a directory that doesn't exist.
 
 Every failure of Ratect's own is printed to stderr as `Error: <message>` (the marker in
 bold red when stderr is a terminal) — deliberately *not* through

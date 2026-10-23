@@ -471,7 +471,7 @@ struct RunArgs {
 /// since it's about building images, not reaching a daemon). Its own struct,
 /// flattened into every subcommand that connects, so each picks up the
 /// identical surface rather than growing a second, subtly different copy.
-#[derive(ClapArgs, Debug)]
+#[derive(ClapArgs, Debug, Clone)]
 struct DockerArgs {
     /// Docker host to use, e.g. 'unix:///var/run/docker.sock' or
     /// 'tcp://1.2.3.4:5678'. Defaults to DOCKER_HOST, then Docker's own
@@ -481,7 +481,8 @@ struct DockerArgs {
 
     /// Docker CLI context to use. Defaults to DOCKER_CONTEXT, then the
     /// Docker CLI's own active context, unless a Docker host is set. Cannot
-    /// be combined with --docker-host.
+    /// be combined with --docker-host, --docker-tls, --docker-tls-verify,
+    /// --docker-cert-path or --docker-tls-ca-cert/-cert/-key.
     #[arg(long = "docker-context")]
     context: Option<String>,
 
@@ -770,8 +771,10 @@ async fn run(cli: Cli, color_mode: ColorMode, stderr: &Console) -> Result<()> {
     // Arms follow the `Command` enum's own order (see there).
     match command {
         Command::Run(args) => {
-            // Before the config is read, as in `ratect-compat` (ratect#436).
+            // Before the config is read, as in `ratect-compat` (ratect#436,
+            // ratect#439).
             ratect_core::engine::check_tag_and_override(&args.tag_image, &args.override_image)?;
+            DockerConnectionOptions::from(args.docker.clone()).check_context_conflict()?;
             let (project, config_var_overrides) =
                 load_with_overrides(&global, &args.config_vars).await?;
             run_task(
@@ -1098,8 +1101,11 @@ async fn manage_caches(
     let wanted: Option<ratect_core::config::CacheScope> = args.scope.map(Into::into);
     let connection: DockerConnectionOptions = args.docker.into();
     // Checked even for the directory store, which never connects: a Docker
-    // directory given to a verb that takes one must be one.
+    // directory given to a verb that takes one must be one, and
+    // `--docker-context` can't be given beside a flag that picks a
+    // connection itself (ratect#439).
     connection.check_directories()?;
+    connection.check_context_conflict()?;
     // One connection for the whole command: both the listing below and the
     // removal after it need the same daemon, and each `DockerClient::new`
     // opens its own.

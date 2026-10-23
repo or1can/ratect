@@ -7,7 +7,11 @@ and `ratect config` never connect, so they don't), and `ratect-compat` accepts
 them on every invocation and uses them whenever the invocation actually
 connects (a `--list-tasks` run never does) — though it checks a Docker config
 or certificate directory given by an option or `DOCKER_CONFIG`/`DOCKER_CERT_PATH`
-on every one. This page is the one description
+on every one. On both binaries, `--docker-context` beside `--docker-host` or a
+TLS option is refused whether or not the command connects — `ratect caches`
+with the directory store, or a `ratect-compat --list-tasks`, included — and
+`ratect doctor` reports it as a problem. This
+page is the one description
 of those options; the [`ratect`](ratect-cli.md#docker-connection-options) and
 [`ratect-compat`](ratect-compat-cli.md#docker-connection) CLI references only
 link here.

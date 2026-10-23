@@ -6361,6 +6361,98 @@ fn an_empty_or_repeated_override_image_is_an_argument_error() {
     }
 }
 
+/// ratect#439: `--docker-context` beside any of the seven flags Batect's
+/// `validate()` forbids with it is an invalid option value on every
+/// command, not only one that connects — `--list-tasks` and a `--clean` that
+/// never needs Docker (`2`), and a run whose config doesn't exist, which no
+/// longer masks it (`125`) — naming the first flag in Batect's order, with
+/// nothing on stdout. Real paths, so no check on a path's value fires first.
+/// `DOCKER_TLS_VERIFY` set beside it is no conflict, as in Batect.
+#[test]
+fn docker_context_beside_a_connection_flag_is_refused_on_every_command() {
+    let config = sample_config_path();
+    let config = config.to_str().unwrap();
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let directory = directory.to_str().unwrap();
+    let refused = |arguments: &[&str], named: &str, code: i32| {
+        let output = ratect_command()
+            .args(["--docker-context", "x"])
+            .args(arguments)
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(code), "{arguments:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!("Cannot use both --docker-context and {named}.")),
+            "{arguments:?}: {stderr}"
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "", "{arguments:?}");
+    };
+    for (flag, value) in [
+        ("--docker-host", Some("tcp://1.2.3.4:1")),
+        ("--docker-tls", None),
+        ("--docker-tls-verify", None),
+        ("--docker-cert-path", Some(directory)),
+        ("--docker-tls-ca-cert", Some(config)),
+        ("--docker-tls-cert", Some(config)),
+        ("--docker-tls-key", Some(config)),
+    ] {
+        let flag_and_value: Vec<&str> = std::iter::once(flag).chain(value).collect();
+        refused(
+            &[&flag_and_value[..], &["-f", config, "--list-tasks"]].concat(),
+            flag,
+            2,
+        );
+    }
+    refused(
+        &[
+            "--docker-tls-verify",
+            "-f",
+            config,
+            "--clean",
+            "--cache-type=directory",
+        ],
+        "--docker-tls-verify",
+        2,
+    );
+    refused(
+        &[
+            "--docker-host",
+            "tcp://1.2.3.4:1",
+            "-f",
+            "does-not-exist.yml",
+            "test-task",
+        ],
+        "--docker-host",
+        125,
+    );
+    refused(
+        &[
+            "--docker-tls-ca-cert",
+            config,
+            "--docker-cert-path",
+            directory,
+            "-f",
+            config,
+            "--list-tasks",
+        ],
+        "--docker-tls-ca-cert",
+        2,
+    );
+
+    let output = ratect_command()
+        .env("DOCKER_TLS_VERIFY", "1")
+        .args(["-f", config, "--docker-context", "x", "--list-tasks"])
+        .output()
+        .expect("failed to run ratect");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// What both binaries print for `--tag-image build-env=…` beside
 /// `--override-image build-env=…` — Batect's own words (ratect#436). Native
 /// `ratect`'s own tests assert the same literal.

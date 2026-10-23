@@ -23,6 +23,7 @@ history, from when it was the only binary.
 
 ### Breaking
 
+- `--docker-context` given with `--docker-host`, `--docker-tls`, `--docker-tls-verify`, `--docker-cert-path` or `--docker-tls-ca-cert`/`-cert`/`-key` is an invalid option value whether or not the command connects, as in Batect, so `ratect-compat --list-tasks` and `--clean`, and `ratect caches` with the directory store, refuse it, and a run refuses it before reading its config. `ratect doctor` reports it as a problem.
 - `ratect-compat`: running with no task name, and none of `--list-tasks`, `--clean`, `--clean-cache` or `--upgrade`, is a usage error that exits `125` before any config is read, instead of a warning and exit `0`.
 - `ratect-compat`: options end at the task name, as in Batect. An argument after the task name other than `-- ARGS…`, such as `build --disable-ports` or `test-task --list-tasks`, is refused as a usage error instead of being applied. Under `--list-tasks`, `--clean`, `--clean-cache` or `--upgrade`, whatever follows the options is ignored, so `--list-tasks a b` lists the tasks.
 - **ratect.toml:** a `\` in an expression escapes the character after it and is dropped — `\$X` is the literal `$X`, `a\b` is `ab`, `\\` is `\`, and `${X:-a\}b}` defaults to `a}b` — and a trailing `\` fails the load. A project with a backslash in an expression may resolve differently or stop loading; one without a `ratect_version` of 0.12.0 or later is refused until it declares one. A project whose root is a `batect.yml` still loads, unless it includes a `.toml` file.
