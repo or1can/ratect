@@ -87,6 +87,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- `ratect run` checks a `--docker-config` or `--docker-cert-path` directory, or one `DOCKER_CONFIG` or `DOCKER_CERT_PATH` gives, before reading its config, as `ratect-compat` does, so an error in the config no longer hides a directory that doesn't exist.
 - A path given to `--docker-config` or `--docker-cert-path`, or by `DOCKER_CONFIG` or `DOCKER_CERT_PATH`, has a leading `~` expanded to the home directory, and `.` and `..` removed before it is used, as in Batect.
 - A path given to `--docker-tls-ca-cert`, `--docker-tls-cert` or `--docker-tls-key` has a leading `~` expanded to the home directory, and `.` and `..` removed before it is used, as in Batect.
 - `ratect-compat`: a path given to `--log-file` has a leading `~` expanded to the home directory, and `.` and `..` removed before it is used, as in Batect, so `--log-file sub/../out.log` writes `./out.log` whether or not `sub` exists.

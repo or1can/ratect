@@ -786,9 +786,7 @@ async fn run(cli: Cli, color_mode: ColorMode, stderr: &Console) -> Result<()> {
             // Before the config is read, as in `ratect-compat` (ratect#436,
             // ratect#437, ratect#439).
             ratect_core::engine::check_tag_and_override(&args.tag_image, &args.override_image)?;
-            let connection = DockerConnectionOptions::from(args.docker.clone());
-            connection.check_tls_files()?;
-            connection.check_context_conflict()?;
+            DockerConnectionOptions::from(args.docker.clone()).check_options()?;
             let (project, config_var_overrides) =
                 load_with_overrides(&global, &args.config_vars).await?;
             run_task(
@@ -1123,9 +1121,7 @@ async fn manage_caches(
     // directory or TLS file given to a verb that takes one must be one
     // (ratect#437), and `--docker-context` can't be given beside a flag that
     // picks a connection itself (ratect#439).
-    connection.check_directories()?;
-    connection.check_tls_files()?;
-    connection.check_context_conflict()?;
+    connection.check_options()?;
     // One connection for the whole command: both the listing below and the
     // removal after it need the same daemon, and each `DockerClient::new`
     // opens its own.

@@ -904,10 +904,7 @@ async fn run(
     // (ratect#437), and `--docker-context` can't be given beside a flag that
     // picks a connection itself (ratect#439) — checked in that order, as
     // Batect checks a path option's value before `validate()`.
-    let docker_connection = args.docker_connection();
-    docker_connection.check_directories()?;
-    docker_connection.check_tls_files()?;
-    docker_connection.check_context_conflict()?;
+    args.docker_connection().check_options()?;
     // An explicit `-f` too, as Batect checks it — so before `--clean`, which
     // never reads it — though after the conflict above, which a missing file
     // mustn't mask (ratect#439). Its static default is left to whatever

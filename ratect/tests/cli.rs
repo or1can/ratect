@@ -3577,3 +3577,21 @@ fn a_missing_or_directory_tls_file_is_refused_whether_or_not_the_verb_connects()
         );
     }
 }
+
+/// `run` checks every Docker option before reading its config, as
+/// `ratect-compat` does — a directory option naming nothing included, so a
+/// missing config file doesn't mask it.
+#[test]
+fn run_checks_the_docker_directory_options_before_reading_the_config() {
+    let output = ratect_command()
+        .args(["run", "build", "-f", "does-not-exist.toml"])
+        .args(["--docker-config", "no-such-docker-config"])
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(125), "{stderr}");
+    assert!(
+        stderr.contains("--docker-config \"no-such-docker-config\" does not exist."),
+        "{stderr}"
+    );
+}

@@ -118,13 +118,26 @@ pub struct DockerConnectionOptions {
 }
 
 impl DockerConnectionOptions {
+    /// Every check on these options' own values, each failure an
+    /// [`InvalidOptionValue`](crate::exit_code::InvalidOptionValue), in
+    /// Batect's order: a path option's value as its converter checks it,
+    /// then `validate()`'s conflict. Connecting calls it first, and both
+    /// binaries call it before a command that takes the options but might
+    /// not connect, or connects only after reading its config — as Batect
+    /// checks them when it parses its arguments. `ratect doctor` leaves it to
+    /// connecting, and reports a failure as a problem it found
+    /// (decisions/0016). One call rather than three, so no call site can
+    /// skip one (ratect#437, ratect#439).
+    pub fn check_options(&self) -> Result<()> {
+        self.check_directories()?;
+        self.check_tls_files()?;
+        self.check_context_conflict()
+    }
+
     /// Refuses a `--docker-config`/`DOCKER_CONFIG` or
     /// `--docker-cert-path`/`DOCKER_CERT_PATH` that names something missing
-    /// or not a directory, as an
-    /// [`InvalidOptionValue`](crate::exit_code::InvalidOptionValue).
-    /// Connecting does this first; `ratect-compat` calls it too, before any
-    /// command runs, as Batect checks them when it parses its arguments.
-    pub fn check_directories(&self) -> Result<()> {
+    /// or not a directory — one of [`DockerConnectionOptions::check_options`].
+    fn check_directories(&self) -> Result<()> {
         check_chosen_directories(
             self,
             std::env::var("DOCKER_CONFIG").ok().as_deref(),
@@ -133,14 +146,12 @@ impl DockerConnectionOptions {
     }
 
     /// Refuses a `--docker-tls-ca-cert`, `--docker-tls-cert` or
-    /// `--docker-tls-key` that names nothing, or a directory, as an
-    /// [`InvalidOptionValue`](crate::exit_code::InvalidOptionValue), whether
-    /// or not TLS is used — as Batect's option parser does when it parses
-    /// its arguments. Both binaries call it before any command runs, and
-    /// connecting does too. Anything else that exists passes, a pipe
-    /// (`<(…)`, to keep a key off disk) included, as when connecting reads
-    /// it (see `flag_tls_settings`); Batect refuses one.
-    pub fn check_tls_files(&self) -> Result<()> {
+    /// `--docker-tls-key` that names nothing, or a directory, whether or not
+    /// TLS is used — one of
+    /// [`DockerConnectionOptions::check_options`]. Anything else that exists
+    /// passes, a pipe (`<(…)`, to keep a key off disk) included, as when
+    /// connecting reads it (see `flag_tls_settings`); Batect refuses one.
+    fn check_tls_files(&self) -> Result<()> {
         for (flag, path) in [
             ("--docker-tls-ca-cert", &self.tls_ca_cert),
             ("--docker-tls-cert", &self.tls_cert),
@@ -165,14 +176,11 @@ impl DockerConnectionOptions {
 
     /// Refuses `--docker-context` given beside a flag that chooses a
     /// connection itself, in Batect's words — `Cannot use both
-    /// --docker-context and --docker-host.` — as an
-    /// [`InvalidOptionValue`](crate::exit_code::InvalidOptionValue). Only
-    /// flags count: an environment variable never conflicts, as in Batect.
-    /// Connecting does this too; both binaries call it before any command
-    /// runs, beside [`DockerConnectionOptions::check_directories`], so a
-    /// command that never connects refuses the pair as well, as Batect's
-    /// `validate()` does.
-    pub fn check_context_conflict(&self) -> Result<()> {
+    /// --docker-context and --docker-host.` — one of
+    /// [`DockerConnectionOptions::check_options`], as Batect's `validate()`.
+    /// Only flags count: an environment variable never conflicts, as in
+    /// Batect.
+    fn check_context_conflict(&self) -> Result<()> {
         if self.context.is_none() {
             return Ok(());
         }
@@ -1068,9 +1076,7 @@ fn holds_certificate_error(error: &(dyn std::error::Error + 'static)) -> bool {
 /// carries what [`Connection::explain_failure`] needs to explain a
 /// verification failure.
 pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
-    options.check_directories()?;
-    options.check_tls_files()?;
-    options.check_context_conflict()?;
+    options.check_options()?;
 
     let docker_config_env = std::env::var("DOCKER_CONFIG").ok();
     let config_directory = docker_config_directory(options, docker_config_env.as_deref())?;
