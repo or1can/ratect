@@ -175,7 +175,8 @@ Ratect checks a config when the file loads, and the report is its own:
   the first the files declare is reported, as in Batect, but each check runs
   over every container before the next check starts, and over containers
   before tasks, so of two failing different checks the one reported can
-  differ. Every config check runs before `--override-image` is checked, a duplicate
+  differ. Every config check runs before an `--override-image` container name is
+  looked up, a duplicate
   `build_ssh` id is checked after a container's image source, a volume's
   fields are checked in a different order, and of several undeclared config
   variables given values, the first by name is reported, where Batect reports
@@ -196,7 +197,7 @@ list. The exceptions:
 
 | Flag | Notes |
 |---|---|
-| `--version` | Prints one line, `ratect-compat <version>`, rather than Batect's seven labelled lines (its version, build date and commit, and the JVM, OS, Docker and Git versions) and the help blurb after them. Also gets a `-V` short form Batect doesn't have (a `clap` default). Acts as soon as it's reached: whatever follows it on the command line is never parsed or checked, so `--version --bogus` exits `0`, where Batect checks every option first and rejects it. |
+| `--version` | Prints one line, `ratect-compat <version>`, rather than Batect's seven labelled lines (its version, build date and commit, and the JVM, OS, Docker and Git versions) and the help blurb after them. Also gets a `-V` short form Batect doesn't have (a `clap` default). Acts as soon as it's reached: whatever follows it on the command line is never parsed or checked, and no check across options is made, so `--version --bogus` and `--tag-image app=t --override-image app=i --version` exit `0`, where Batect checks every option first and rejects them. |
 | `--help` / `-h` | The layout and text are `clap`'s rather than Batect's, including `<CONFIG_FILE>`-style value placeholders and `[default: …]` for a fixed default. A description never shows an environment variable's current value — Batect's say, for example, whether `DOCKER_HOST` is currently set, and to what. Like `--version`, acts as soon as it's reached, without checking what follows it. Exits `0`, as help conventionally does; Batect's `HelpCommand` returns `1`. See [Options](ratect-compat-cli.md#options) and [decisions/0016](../decisions/0016-exit-codes.md). |
 | `--list-tasks` / `-T` | The listing opens with `Tasks in <project>:`, followed, when any task has a `group`, by a blank line before the first group heading. Batect's opens a flat list with `Available tasks:`, and a grouped one with its first group heading. The `-o quiet` listing, the one meant for scripts, has no header in either. |
 | `--config-var` | `--config-var NAME=` sets the variable to an empty value, which Batect rejects as having no value. A value containing `=` is split at its first `=`, so `--config-var a=b=c` sets `a` to `b=c`; Batect splits at the last, setting `a=b` to `c`. `--override-image` and `--tag-image` also split at the first `=`. |

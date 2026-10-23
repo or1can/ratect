@@ -9255,6 +9255,37 @@ async fn tag_image_errors_immediately_when_the_container_uses_a_pulled_image() {
     );
 }
 
+fn pairs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+    pairs
+        .iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect()
+}
+
+/// Batect's `CommandLineOptionsParser.validate()`: a container both tagged
+/// and overridden is refused, naming the first of them in `--tag-image`'s
+/// order, as an invalid option value — so it exits as an argument error
+/// does (ratect#436).
+#[test]
+fn a_container_both_tagged_and_overridden_is_refused_naming_the_first() {
+    let error = check_tag_and_override(
+        &pairs(&[("a", "t"), ("c", "t"), ("b", "t")]),
+        &pairs(&[("b", "i"), ("c", "i")]),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Cannot both tag the built image for container 'c' and also override the image \
+         for that container."
+    );
+    assert!(error.is::<crate::exit_code::InvalidOptionValue>());
+}
+
+#[test]
+fn tagging_one_container_and_overriding_another_is_not_a_conflict() {
+    check_tag_and_override(&pairs(&[("a", "t1"), ("a", "t2")]), &pairs(&[("b", "i")])).unwrap();
+}
+
 #[tokio::test]
 async fn tag_image_errors_immediately_when_an_override_image_replaces_a_build_with_a_pull() {
     let mut containers = IndexMap::new();

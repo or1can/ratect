@@ -3407,3 +3407,79 @@ fn doctor_reports_an_invalid_docker_boolean_variable_once() {
         assert!(!stdout.contains(name), "{name}: {stdout}");
     }
 }
+
+/// What both binaries print for `--tag-image build-env=…` beside
+/// `--override-image build-env=…` — Batect's own words (ratect#436).
+/// `ratect-compat`'s own tests assert the same literal.
+const TAG_AND_OVERRIDE_CONFLICT: &str = "Error: Cannot both tag the built image for container \
+    'build-env' and also override the image for that container.\n";
+
+/// ratect#436: `ratect run` refuses a container both tagged and overridden
+/// before it reads the config or runs anything — a task with a
+/// prerequisite, a config file that doesn't exist, a container the config
+/// doesn't declare — with the code a run's argument error gets.
+#[test]
+fn run_refuses_tagging_and_overriding_one_container_before_anything_runs() {
+    let project = unique_project_dir();
+    std::fs::write(
+        project.join("ratect.toml"),
+        "ratect_version = \"0.12.0\"\n\
+         project_name = \"conflict\"\n\
+         [containers.build-env]\nimage = \"alpine:3.18.2\"\n\
+         [containers.other]\nimage = \"alpine:3.18.2\"\n\
+         [tasks.pre]\nrun = { container = \"other\", command = \"true\" }\n\
+         [tasks.main]\nprerequisites = [\"pre\"]\n\
+         run = { container = \"other\", command = \"true\" }\n",
+    )
+    .unwrap();
+    let conflict = [
+        "--tag-image",
+        "build-env=t",
+        "--override-image",
+        "build-env=alpine",
+    ];
+    for (config, task) in [
+        ("ratect.toml", "main"),
+        ("nope.toml", "main"),
+        // The same pair, naming a container the config doesn't declare.
+        (native_fixture_path().to_str().unwrap(), "build"),
+    ] {
+        let output = ratect_command()
+            .current_dir(&project)
+            .env("DOCKER_HOST", "tcp://127.0.0.1:1")
+            .args(["-o", "simple", "run", task, "-f", config])
+            .args(conflict)
+            .output()
+            .expect("failed to run ratect");
+        assert_eq!(output.status.code(), Some(125), "{config}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            TAG_AND_OVERRIDE_CONFLICT,
+            "{config}"
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "", "{config}");
+    }
+
+    // Tagging one container and overriding another gets past the check, to
+    // the unreachable daemon.
+    let output = ratect_command()
+        .current_dir(&project)
+        .env("DOCKER_HOST", "tcp://127.0.0.1:1")
+        .args(["run", "main", "--tag-image", "build-env=t"])
+        .args(["--override-image", "other=alpine"])
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("Cannot both tag"), "{stderr}");
+
+    // `--help` and `--version` act before the check, as before any other.
+    for arguments in [&["run", "--help"][..], &["--version"]] {
+        let output = ratect_command()
+            .args(arguments)
+            .args(conflict)
+            .output()
+            .expect("failed to run ratect");
+        assert_eq!(output.status.code(), Some(0), "{arguments:?}");
+    }
+    std::fs::remove_dir_all(&project).ok();
+}

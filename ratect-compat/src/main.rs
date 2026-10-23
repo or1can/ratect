@@ -678,6 +678,10 @@ async fn run(
     stderr: &Console,
     sweep: impl FnOnce() -> Sweep,
 ) -> Result<()> {
+    // Before anything else reads a file, as Batect's `validate()` runs once
+    // the options have parsed (ratect#436).
+    ratect_core::engine::check_tag_and_override(&args.tag_image, &args.override_image)?;
+
     // Batect's option parser checks only that a named config-variables file
     // is a file, for every command. Its contents, like `--config-var`'s
     // names, are read only when a task runs, so nothing in either stops

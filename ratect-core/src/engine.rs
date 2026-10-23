@@ -825,6 +825,35 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     cache_key: OnceCell<String>,
 }
 
+/// Refuses a container named by both `--tag-image` and `--override-image`,
+/// as Batect's `CommandLineOptionsParser.validate()` does once the options
+/// have parsed: an overridden container is pulled, so there is no built
+/// image to tag. Both binaries call this before they read any config, so
+/// the conflict is reported even for a container the config doesn't
+/// declare. Of several, the first in `image_tags`' order is named, as in
+/// Batect. An [`InvalidOptionValue`](crate::exit_code::InvalidOptionValue),
+/// so it exits as an argument error does (decisions/0016).
+pub fn check_tag_and_override(
+    image_tags: &[(String, String)],
+    image_overrides: &[(String, String)],
+) -> Result<()> {
+    let overridden: HashSet<&str> = image_overrides
+        .iter()
+        .map(|(container, _)| container.as_str())
+        .collect();
+    match image_tags
+        .iter()
+        .find(|(container, _)| overridden.contains(container.as_str()))
+    {
+        Some((container, _)) => Err(crate::exit_code::InvalidOptionValue::new(format!(
+            "Cannot both tag the built image for container '{container}' and also override \
+             the image for that container."
+        ))
+        .into()),
+        None => Ok(()),
+    }
+}
+
 /// Every opt-in [`TaskEngine`] setting as plain data, for
 /// [`TaskEngine::with_settings`] — the shape a binary's own CLI flags map
 /// onto, so `ratect` and `ratect-compat` can offer the same knobs under
@@ -1525,12 +1554,14 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// `--tag-image` only ever makes sense for a *built* image — errors
     /// immediately (rather than silently ignoring the tag request) the
     /// moment a tagged container name turns out to resolve via a pull
-    /// instead, whether that's its own configured `image` or an
-    /// `--override-image` replacement. Matches Batect's
-    /// `ContainerUsesPulledImageException` message exactly, but not its
-    /// timing: Batect's `ImageTaggingValidator` raises it once the task
-    /// using the container has finished, where this fails before that
-    /// container runs.
+    /// instead. For a container whose own configured `image` pulls, this
+    /// matches Batect's `ContainerUsesPulledImageException` message exactly,
+    /// but not its timing: Batect's `ImageTaggingValidator` raises it once
+    /// the task using the container has finished, where this fails before
+    /// that container runs. For an `--override-image` replacement, both
+    /// binaries refuse the pair while parsing arguments, as Batect does
+    /// ([`check_tag_and_override`]), so only a direct `ratect-core` caller
+    /// building conflicting [`TaskEngineSettings`] reaches this with one.
     fn reject_tagged_pulled_image(&self, container_name: &str) -> Result<()> {
         if self.image_tags.contains_key(container_name) {
             anyhow::bail!(

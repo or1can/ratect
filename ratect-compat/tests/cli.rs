@@ -6104,3 +6104,90 @@ fn an_empty_or_repeated_override_image_is_an_argument_error() {
         assert_eq!(String::from_utf8_lossy(&output.stdout), "", "{arguments:?}");
     }
 }
+
+/// What both binaries print for `--tag-image build-env=…` beside
+/// `--override-image build-env=…` — Batect's own words (ratect#436). Native
+/// `ratect`'s own tests assert the same literal.
+const TAG_AND_OVERRIDE_CONFLICT: &str = "Error: Cannot both tag the built image for container \
+    'build-env' and also override the image for that container.\n";
+
+/// ratect#436: a container both tagged and overridden is refused before the
+/// config is read or anything runs — on `--list-tasks`, on a run whose task
+/// has prerequisites, with a config file that doesn't exist, and for a
+/// container the config doesn't declare — as an argument error on its path.
+#[test]
+fn tagging_and_overriding_one_container_is_refused_before_anything_runs() {
+    let smoke = sample_config_path();
+    let smoke = smoke.to_str().unwrap();
+    let sidecar = sidecar_config_path();
+    let conflict = [
+        "--tag-image",
+        "build-env=t",
+        "--override-image",
+        "build-env=alpine",
+    ];
+    for (config, extra, code) in [
+        (smoke, &["--list-tasks"][..], 2),
+        (smoke, &["-o", "simple", "test-task"], 125),
+        ("nope.yml", &["--list-tasks"], 2),
+        // The same pair, naming a container the config doesn't declare.
+        (sidecar.to_str().unwrap(), &["--list-tasks"], 2),
+    ] {
+        let output = isolated_docker_command(Path::new(env!("CARGO_MANIFEST_DIR")))
+            .env("DOCKER_HOST", "tcp://127.0.0.1:1")
+            .args(["-f", config])
+            .args(conflict)
+            .args(extra)
+            .output()
+            .expect("failed to run ratect");
+        assert_eq!(output.status.code(), Some(code), "{config} {extra:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            TAG_AND_OVERRIDE_CONFLICT,
+            "{config} {extra:?}"
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "", "{extra:?}");
+    }
+
+    // Tagging one container and overriding another is no conflict.
+    let output = ratect_command()
+        .args(["-f", smoke, "--tag-image", "build-env=t"])
+        .args(["--override-image", "other=alpine", "--list-tasks"])
+        .output()
+        .expect("failed to run ratect");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+
+    // `--help` and `--version` act before the check, as before any other.
+    for flag in ["--help", "--version"] {
+        let output = ratect_command()
+            .args(conflict)
+            .arg(flag)
+            .output()
+            .expect("failed to run ratect");
+        assert_eq!(output.status.code(), Some(0), "{flag}");
+    }
+}
+
+/// ratect#436: `--clean` with the conflict removes nothing.
+#[test]
+fn clean_with_a_container_both_tagged_and_overridden_removes_nothing() {
+    let (project, cache) = project_with_a_cache_directory("tag-override-clean", "deps");
+    let output = isolated_docker_command(&project)
+        .args(["--clean", "--cache-type", "directory"])
+        .args([
+            "--tag-image",
+            "build-env=t",
+            "--override-image",
+            "build-env=a",
+        ])
+        .output()
+        .expect("failed to run ratect");
+    let kept = cache.exists();
+    std::fs::remove_dir_all(&project).ok();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        TAG_AND_OVERRIDE_CONFLICT
+    );
+    assert!(kept, "--clean removed a cache despite the conflict");
+}
