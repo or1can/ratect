@@ -8846,12 +8846,19 @@ async fn image_override_replaces_a_build_directory_container_with_a_pull_instead
     );
 }
 
-#[test]
-fn with_settings_rejects_an_unknown_image_override_container_name() {
+/// Batect's "multiple overrides" rule (TSF-3): each overridden container
+/// runs its *own* override, and one left out of the map keeps its own
+/// configured image (ratect#418).
+#[tokio::test]
+async fn several_image_overrides_each_replace_only_their_own_containers_image() {
     let mut containers = IndexMap::new();
-    containers.insert("build-env".to_string(), container("alpine:3.18", None));
+    containers.insert("app".to_string(), container("alpine:3.18", None));
+    containers.insert("db".to_string(), container("postgres:15", None));
+    containers.insert("cache".to_string(), container("redis:7", None));
+    let mut main = task("app", "echo hi");
+    main.dependencies = Some(vec!["db".to_string(), "cache".to_string()]);
     let mut tasks = IndexMap::new();
-    tasks.insert("test".to_string(), task("build-env", "echo hi"));
+    tasks.insert("main".to_string(), main);
     let config = Config {
         project_name: "demo".to_string(),
         containers,
@@ -8861,20 +8868,148 @@ fn with_settings_rejects_an_unknown_image_override_container_name() {
     };
 
     let docker = FakeContainerRuntime::default();
-    let overrides = HashMap::from([("no-such-container".to_string(), "ubuntu:22.04".to_string())]);
-    let err = match engine(config, docker).with_settings(TaskEngineSettings {
-        image_overrides: overrides,
-        ..Default::default()
-    }) {
-        Ok(_) => panic!("expected with_settings to reject an unknown container name"),
-        Err(err) => err,
-    };
+    let overrides = HashMap::from([
+        ("app".to_string(), "ubuntu:22.04".to_string()),
+        ("db".to_string(), "mysql:8".to_string()),
+    ]);
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            image_overrides: overrides,
+            ..Default::default()
+        })
+        .unwrap();
 
-    assert_eq!(
-        err.to_string(),
-        "Cannot override image for container 'no-such-container' because there is no \
-             container named 'no-such-container' defined."
+    engine.run_task("main", &[]).await.unwrap();
+
+    let events = docker.events();
+    for pulled in ["pull:ubuntu:22.04", "pull:mysql:8", "pull:redis:7"] {
+        assert!(events.contains(&pulled.to_string()), "{pulled}: {events:?}");
+    }
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.contains("alpine") || e.contains("postgres")),
+        "an overridden container's configured image should never be touched: {events:?}"
     );
+    assert_eq!(docker.spec_for("app").unwrap().shared.image, "ubuntu:22.04");
+    assert_eq!(docker.spec_for("db").unwrap().shared.image, "mysql:8");
+    assert_eq!(docker.spec_for("cache").unwrap().shared.image, "redis:7");
+}
+
+const UNKNOWN_OVERRIDE_ERROR: &str = "Cannot override image for container 'no-such-container' \
+    because there is no container named 'no-such-container' defined.";
+
+fn unknown_override(dialect: Dialect) -> TaskEngineSettings {
+    TaskEngineSettings {
+        image_overrides: HashMap::from([(
+            "no-such-container".to_string(),
+            "ubuntu:22.04".to_string(),
+        )]),
+        dialect,
+        ..TaskEngineSettings::default()
+    }
+}
+
+fn prerequisites_only(prerequisites: &[&str]) -> Task {
+    Task {
+        run: None,
+        dependencies: None,
+        prerequisites: Some(prerequisites.iter().map(|name| name.to_string()).collect()),
+        description: None,
+        group: None,
+        customise: None,
+    }
+}
+
+/// `build-env`'s `app` task, and `outer` with only `app` as a prerequisite.
+fn config_with_a_prerequisites_only_task() -> Config {
+    let mut containers = IndexMap::new();
+    containers.insert("build-env".to_string(), container("alpine:3.18", None));
+    let mut tasks = IndexMap::new();
+    tasks.insert("app".to_string(), task("build-env", "echo hi"));
+    tasks.insert("outer".to_string(), prerequisites_only(&["app"]));
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+/// An `--override-image` naming no container fails the first task with a
+/// `run` the run reaches, before anything of it starts — as Batect's
+/// `TaskSpecialisedConfigurationFactory` does — whether that task was asked
+/// for or is a prerequisite of one that wasn't, in either dialect
+/// (ratect#453).
+#[tokio::test]
+async fn an_unknown_image_override_fails_the_first_task_with_a_run_before_it_starts() {
+    for dialect in [Dialect::BatectCompatible, Dialect::Native] {
+        for requested in ["app", "outer"] {
+            let sink = RecordingEventSink::default();
+            let docker = FakeContainerRuntime::default();
+            let engine = TaskEngine::new(
+                project(config_with_a_prerequisites_only_task()),
+                docker.clone(),
+                Arc::new(sink.clone()),
+                crate::interrupt::Interrupt::new(),
+            )
+            .with_settings(unknown_override(dialect))
+            .expect("an unknown override is only checked once a task with a `run` is reached");
+
+            let error = engine.run_task(requested, &[]).await.unwrap_err();
+
+            assert_eq!(
+                error.to_string(),
+                UNKNOWN_OVERRIDE_ERROR,
+                "{dialect:?} {requested}"
+            );
+            assert_eq!(
+                docker.events(),
+                Vec::<String>::new(),
+                "{dialect:?} {requested}"
+            );
+            assert!(
+                !sink
+                    .events()
+                    .iter()
+                    .any(|event| matches!(event, TaskEvent::TaskStarting { .. })),
+                "{dialect:?} {requested}: {:?}",
+                sink.events()
+            );
+        }
+    }
+}
+
+/// A run that reaches no task with a `run` never looks the override up,
+/// and succeeds, as in Batect: `--skip-prerequisites` on a task with only
+/// prerequisites, and a chain of them ending in a wildcard that matches
+/// nothing (ratect#453).
+#[tokio::test]
+async fn an_unknown_image_override_is_never_checked_by_a_run_with_no_task_with_a_run() {
+    let docker = FakeContainerRuntime::default();
+    let skipping = engine(config_with_a_prerequisites_only_task(), docker.clone())
+        .with_settings(TaskEngineSettings {
+            run_prerequisites: false,
+            ..unknown_override(Dialect::BatectCompatible)
+        })
+        .unwrap();
+    skipping.run_task("outer", &[]).await.unwrap();
+    assert_eq!(docker.events(), Vec::<String>::new());
+
+    let mut config = config_with_a_prerequisites_only_task();
+    config
+        .tasks
+        .insert("inner".to_string(), prerequisites_only(&["nomatch-*"]));
+    config
+        .tasks
+        .insert("chain".to_string(), prerequisites_only(&["inner"]));
+    let docker = FakeContainerRuntime::default();
+    let chained = engine(config, docker.clone())
+        .with_settings(unknown_override(Dialect::Native))
+        .unwrap();
+    chained.run_task("chain", &[]).await.unwrap();
+    assert_eq!(docker.events(), Vec::<String>::new());
 }
 
 /// `with_settings` is how both binaries configure an engine, so a
@@ -8980,35 +9115,6 @@ fn default_settings_leave_an_engine_in_its_no_flags_state() {
     assert!(engine.ratect_version.is_none());
     assert!(engine.task_container_readiness_gate);
     assert!(engine.config_var_overrides.is_empty());
-}
-
-/// The one setting that can fail — `with_settings` returns a `Result`
-/// solely because of it, and the error has to survive the indirection.
-#[test]
-fn with_settings_still_rejects_an_unknown_image_override() {
-    let config = Config {
-        project_name: "demo".to_string(),
-        containers: IndexMap::new(),
-        tasks: IndexMap::new(),
-        config_variables: None,
-        forbid_telemetry: None,
-    };
-    let settings = TaskEngineSettings {
-        image_overrides: HashMap::from([(
-            "no-such-container".to_string(),
-            "ubuntu:22.04".to_string(),
-        )]),
-        ..TaskEngineSettings::default()
-    };
-    let error = match engine(config, FakeContainerRuntime::default()).with_settings(settings) {
-        Ok(_) => panic!("an override naming an unknown container should be rejected"),
-        Err(error) => error,
-    };
-    assert_eq!(
-        error.to_string(),
-        "Cannot override image for container 'no-such-container' because there is no \
-             container named 'no-such-container' defined."
-    );
 }
 
 #[tokio::test]
@@ -9203,6 +9309,37 @@ async fn tag_image_errors_immediately_when_the_container_uses_a_pulled_image() {
         "The image built for container 'build-env' was requested to be tagged with \
              --tag-image, but 'build-env' uses a pulled image."
     );
+}
+
+fn pairs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+    pairs
+        .iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect()
+}
+
+/// Batect's `CommandLineOptionsParser.validate()`: a container both tagged
+/// and overridden is refused, naming the first of them in `--tag-image`'s
+/// order, as an invalid option value — so it exits as an argument error
+/// does (ratect#436).
+#[test]
+fn a_container_both_tagged_and_overridden_is_refused_naming_the_first() {
+    let error = check_tag_and_override(
+        &pairs(&[("a", "t"), ("c", "t"), ("b", "t")]),
+        &pairs(&[("b", "i"), ("c", "i")]),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Cannot both tag the built image for container 'c' and also override the image \
+         for that container."
+    );
+    assert!(error.is::<crate::exit_code::InvalidOptionValue>());
+}
+
+#[test]
+fn tagging_one_container_and_overriding_another_is_not_a_conflict() {
+    check_tag_and_override(&pairs(&[("a", "t1"), ("a", "t2")]), &pairs(&[("b", "i")])).unwrap();
 }
 
 #[tokio::test]

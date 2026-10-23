@@ -308,6 +308,129 @@ fn rejects_config_var_without_equals_sign() {
     assert!(result.is_err());
 }
 
+/// The `clap` error `Args::parse_checked` gives `arguments`, rendered.
+fn argument_error(arguments: &[&str]) -> String {
+    match Args::parse_checked(arguments) {
+        Ok(args) => panic!("{arguments:?} should be rejected, parsed as {args:?}"),
+        Err(error) => error.to_string(),
+    }
+}
+
+/// An empty container or value in `--override-image`/`--tag-image` is
+/// refused while the arguments are parsed, as Batect's `(.+)=(.+)` refuses
+/// it, in both the `--opt k=v` and `--opt=k=v` forms (ratect#438).
+#[test]
+fn rejects_an_empty_side_in_override_image_and_tag_image() {
+    for (arguments, reason) in [
+        (
+            &["--override-image", "c="][..],
+            "the image after '=' is empty",
+        ),
+        (
+            &["--override-image", "=a"],
+            "the container name before '=' is empty",
+        ),
+        (
+            &["--override-image", "="],
+            "the container name before '=' is empty",
+        ),
+        (&["--override-image=c="], "the image after '=' is empty"),
+        (&["--tag-image", "c="], "the tag after '=' is empty"),
+        (
+            &["--tag-image", "=a"],
+            "the container name before '=' is empty",
+        ),
+        (
+            &["--tag-image", "="],
+            "the container name before '=' is empty",
+        ),
+        (&["--tag-image=c="], "the tag after '=' is empty"),
+    ] {
+        let line = [&[BINARY], arguments, &["--list-tasks"]].concat();
+        let error = argument_error(&line);
+        let option = arguments[0].split('=').next().unwrap();
+        assert!(
+            error.contains(&format!("for '{option} <")) && error.contains(reason),
+            "{arguments:?}: {error}"
+        );
+    }
+}
+
+/// A key given twice to `--override-image` or `--config-var` is refused,
+/// whether or not the values agree, where it used to be last-wins
+/// (ratect#438). Batect's `SingleValueMapOption` refuses it too.
+#[test]
+fn rejects_a_key_repeated_in_override_image_or_config_var() {
+    for (arguments, message) in [
+        (
+            &["--override-image", "c=a", "--override-image", "c=b"][..],
+            "the container 'c' was given to --override-image more than once",
+        ),
+        (
+            &["--override-image", "c=a", "--override-image=c=a"],
+            "the container 'c' was given to --override-image more than once",
+        ),
+        (
+            &["--config-var", "x=1", "--config-var", "x=2"],
+            "the variable 'x' was given to --config-var more than once",
+        ),
+    ] {
+        let line = [&[BINARY], arguments, &["build"]].concat();
+        let error = argument_error(&line);
+        assert!(error.contains(message), "{arguments:?}: {error}");
+    }
+}
+
+/// What stays accepted: an empty `--config-var` value, a split at the
+/// first `=` (both recorded divergences), a container tagged twice, and
+/// distinct keys — including one also set by a `--config-vars-file`, which
+/// the command line still overrides rather than repeats.
+#[test]
+fn parse_checked_still_accepts_what_batect_does_and_the_recorded_divergences() {
+    let parsed = Args::parse_checked([
+        BINARY,
+        "--config-var",
+        "x=",
+        "--config-var",
+        "y=a=b",
+        "--config-vars-file",
+        "vars.yml",
+        "--override-image",
+        "c=a=b",
+        "--override-image=d=e",
+        "--tag-image",
+        "c=t1",
+        "--tag-image",
+        "c=t2",
+        "build",
+    ])
+    .unwrap();
+    assert_eq!(
+        parsed.config_var,
+        vec![
+            ("x".to_string(), String::new()),
+            ("y".to_string(), "a=b".to_string()),
+        ]
+    );
+    let settings = parsed.engine_settings(
+        PathBuf::from("/p"),
+        Dialect::BatectCompatible,
+        HashMap::new(),
+        CacheType::Volume,
+    );
+    assert_eq!(
+        settings.image_overrides,
+        HashMap::from([
+            ("c".to_string(), "a=b".to_string()),
+            ("d".to_string(), "e".to_string()),
+        ])
+    );
+    assert_eq!(
+        settings.image_tags["c"],
+        HashSet::from(["t1".to_string(), "t2".to_string()])
+    );
+}
+
 #[test]
 fn rejects_a_tag_image_value_docker_would_refuse_while_parsing_arguments() {
     let error = Args::try_parse_from(["ratect", "--tag-image", "app=_nonsense", "--list-tasks"])
@@ -415,6 +538,27 @@ fn parses_repeated_override_image_flags() {
             ("build-env".to_string(), "alpine:3.18".to_string()),
             ("test-env".to_string(), "ubuntu:22.04".to_string()),
         ]
+    );
+}
+
+/// Two containers' overrides each reach the engine under their own
+/// container (ratect#418) — the `Vec` above, collected into the map.
+#[test]
+fn repeated_override_image_flags_each_reach_the_engine_under_their_own_container() {
+    let settings = settings_from(&[
+        BINARY,
+        "--override-image",
+        "build-env=alpine:3.18",
+        "--override-image",
+        "test-env=ubuntu:22.04",
+        "build",
+    ]);
+    assert_eq!(
+        settings.image_overrides,
+        HashMap::from([
+            ("build-env".to_string(), "alpine:3.18".to_string()),
+            ("test-env".to_string(), "ubuntu:22.04".to_string()),
+        ])
     );
 }
 

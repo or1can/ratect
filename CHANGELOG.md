@@ -48,6 +48,8 @@ history, from when it was the only binary.
 - A `DOCKER_TLS_VERIFY` that is neither true nor false fails a command when it connects to a Docker host, naming the variable and its value, instead of silently connecting without TLS. `yes`, in any case, now turns TLS on. `--docker-tls` or `--docker-tls-verify` still turns TLS on whatever the variable says.
 - `ratect-compat` reads `BATECT_CACHE_TYPE` as the default for `--cache-type`, as Batect does: `directory` switches runs and `--clean`/`--clean-cache` to host directories under `.batect/caches`, and any value other than `volume` or `directory`, exactly, fails every command but `--help` and `--version` unless `--cache-type` is given. It exits `2`, or `125` on a run.
 - `ratect-compat` refuses a `batect.local.yml` in the current directory that exists but isn't a file, when `--config-vars-file` isn't given, on every command but `--help` and `--version`, instead of running with no overrides from it. It exits `2`, or `125` on a run.
+- `ratect-compat` refuses an `--override-image` or `--tag-image` with an empty container or value (`c=`, `=a`, `=`), and a container given twice to `--override-image` or a variable given twice to `--config-var`, while the arguments are parsed, instead of running with an empty value or the last one given. It exits `2`, or `125` on a run.
+- A `--tag-image` and an `--override-image` naming the same container are refused, with Batect's message, before the config is loaded or anything runs — by every `ratect-compat` command but `--help` and `--version`, and by `ratect run` — instead of failing a run once that container's image is resolved, after its prerequisites have run. It exits `2`, or `125` on a run.
 
 ### Added
 
@@ -78,6 +80,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- An `--override-image` naming a container the config doesn't define fails a run only once it reaches a task with a `run`, before that task starts, as in Batect. A run that reaches none — `--skip-prerequisites` on a task with only `prerequisites`, say — succeeds instead of failing.
 - In a YAML config file, a local include whose path starts with `~` (`~/shared.yml`) loads that file from the home directory, as in Batect, instead of looking for a `~` directory beside the file declaring it. A Git include's `path` is still taken as written within the clone.
 - `ratect-compat` loads a `batect.yml` with no `project_name`, as Batect does: the project is named after the root file's directory, lowercased, and one whose name isn't a Docker image-name component fails the load. A root `batect.yml` holding no configuration — empty, only comments, or only a null document such as `---` — fails the load saying so.
 - `ratect config convert` (ratect only) writes a `project_name` into `ratect.toml` when the root `batect.yml` has none — the one `ratect-compat` infers for it.

@@ -770,6 +770,8 @@ async fn run(cli: Cli, color_mode: ColorMode, stderr: &Console) -> Result<()> {
     // Arms follow the `Command` enum's own order (see there).
     match command {
         Command::Run(args) => {
+            // Before the config is read, as in `ratect-compat` (ratect#436).
+            ratect_core::engine::check_tag_and_override(&args.tag_image, &args.override_image)?;
             let (project, config_var_overrides) =
                 load_with_overrides(&global, &args.config_vars).await?;
             run_task(
