@@ -705,20 +705,20 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     skip_prerequisites: bool,
     /// Set via `--override-image <container>=<image>` (repeatable):
     /// container name -> the image to pull instead of whatever that
-    /// container actually configures. Validated against `config.containers`
-    /// up front (see `with_settings`) rather than left to fail lazily
-    /// the first time an overridden container is reached. See
+    /// container actually configures. Checked against `config.containers`
+    /// each time a task with a `run` is reached (`check_image_overrides`),
+    /// as in Batect, rather than when the engine is configured. See
     /// `resolve_image`.
     image_overrides: HashMap<String, String>,
     /// Set via `--tag-image <container>=<tag>` (repeatable, multiple tags
     /// per container): container name -> extra tags applied to that
     /// container's *built* image, in addition to the default
     /// `<project_name>-<container_name>` tag `resolve_image` already
-    /// applies. Never validated against `config.containers` up front (no
-    /// eager check here, unlike `image_overrides`): a tag on a container
-    /// that uses a pulled image fails when that container's image is
-    /// resolved (see `resolve_image`), and one on a container that's never
-    /// reached at all once the whole invocation finishes (see `run_task`).
+    /// applies. Never looked up in `config.containers`, unlike
+    /// `image_overrides`: a tag on a container that uses a pulled image
+    /// fails when that container's image is resolved (see `resolve_image`),
+    /// and one on a container that's never reached at all once the whole
+    /// invocation finishes (see `run_task`).
     /// Batect makes the second check at the same point, but the first only
     /// once the task using the container has finished.
     image_tags: HashMap<String, std::collections::HashSet<String>>,
@@ -1013,19 +1013,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             dialect,
             config_var_overrides,
         } = settings;
-        // Validated up front — matching Batect's own eager validation and
-        // error wording exactly — rather than only failing the first time
-        // (if ever) an overridden container is actually reached. See
-        // `resolve_image`.
-        for name in image_overrides.keys() {
-            if !self.project.config.containers.contains_key(name) {
-                anyhow::bail!(
-                    "Cannot override image for container '{name}' because there is no \
-                     container named '{name}' defined."
-                );
-            }
-        }
-        // Up front too, so an override for a variable the project doesn't
+        // Up front, so an override for a variable the project doesn't
         // declare is refused before any task runs rather than when the first
         // one is evaluated. Evaluating nothing reads no host value.
         self.project
@@ -1551,6 +1539,22 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         unshare(result)
     }
 
+    /// Every `--override-image` must name a container the config declares,
+    /// in Batect's words.
+    fn check_image_overrides(&self) -> Result<()> {
+        match self
+            .image_overrides
+            .keys()
+            .find(|name| !self.project.config.containers.contains_key(*name))
+        {
+            Some(name) => anyhow::bail!(
+                "Cannot override image for container '{name}' because there is no container \
+                 named '{name}' defined."
+            ),
+            None => Ok(()),
+        }
+    }
+
     /// `--tag-image` only ever makes sense for a *built* image — errors
     /// immediately (rather than silently ignoring the tag request) the
     /// moment a tagged container name turns out to resolve via a pull
@@ -2031,6 +2035,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             );
             return Ok(());
         };
+
+        // Batect looks each override up when it specialises a task with a
+        // `run`, before that task starts, so the first such task fails, and
+        // a run that reaches none doesn't look (ratect#453).
+        self.check_image_overrides()?;
 
         // The same check before the task's own run. A prerequisite-only task
         // never gets here: once its last prerequisite has passed, nothing is
