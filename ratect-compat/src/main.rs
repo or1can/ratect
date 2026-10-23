@@ -174,17 +174,17 @@ struct Args {
     /// Path to the TLS CA certificate file used to verify the Docker
     /// host's own certificate. Defaults to ca.pem in the certificate
     /// directory (see --docker-cert-path).
-    #[arg(long = "docker-tls-ca-cert", help_heading = "Docker connection")]
+    #[arg(long = "docker-tls-ca-cert", value_parser = path_option(), help_heading = "Docker connection")]
     docker_tls_ca_cert: Option<PathBuf>,
 
     /// Path to the TLS certificate file used to authenticate to the Docker
     /// host. Defaults to cert.pem in the certificate directory.
-    #[arg(long = "docker-tls-cert", help_heading = "Docker connection")]
+    #[arg(long = "docker-tls-cert", value_parser = path_option(), help_heading = "Docker connection")]
     docker_tls_cert: Option<PathBuf>,
 
     /// Path to the TLS key file used to authenticate to the Docker host.
     /// Defaults to key.pem in the certificate directory.
-    #[arg(long = "docker-tls-key", help_heading = "Docker connection")]
+    #[arg(long = "docker-tls-key", value_parser = path_option(), help_heading = "Docker connection")]
     docker_tls_key: Option<PathBuf>,
 
     /// Maximum number of image pulls/builds, dependency container starts and
@@ -900,12 +900,13 @@ async fn run(
 
     let cache_type = args.cache_type(std::env::var("BATECT_CACHE_TYPE").ok().as_deref())?;
     // Like Batect's option parser, for every command, whether or not it
-    // connects: a Docker directory the user named must be one, and
-    // `--docker-context` can't be given beside a flag that picks a
-    // connection itself (ratect#439) — checked in that order, as Batect
-    // checks a path option's value before `validate()`.
+    // connects: a Docker directory or TLS file the user named must be one
+    // (ratect#437), and `--docker-context` can't be given beside a flag that
+    // picks a connection itself (ratect#439) — checked in that order, as
+    // Batect checks a path option's value before `validate()`.
     let docker_connection = args.docker_connection();
     docker_connection.check_directories()?;
+    docker_connection.check_tls_files()?;
     docker_connection.check_context_conflict()?;
     // An explicit `-f` too, as Batect checks it — so before `--clean`, which
     // never reads it — though after the conflict above, which a missing file

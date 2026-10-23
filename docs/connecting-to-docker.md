@@ -6,8 +6,8 @@ and `ratect doctor` each accept them (`ratect tasks list`, `ratect includes`
 and `ratect config` never connect, so they don't), and `ratect-compat` accepts
 them on every invocation and uses them whenever the invocation actually
 connects (a `--list-tasks` run never does) — though it checks a Docker config
-or certificate directory given by an option or `DOCKER_CONFIG`/`DOCKER_CERT_PATH`
-on every one. On both binaries, `--docker-context` beside `--docker-host` or a
+or certificate directory given by an option or `DOCKER_CONFIG`/`DOCKER_CERT_PATH`,
+and a file given to a TLS option, on every one. On both binaries, `--docker-context` beside `--docker-host` or a
 TLS option is refused whether or not the command connects — `ratect caches`
 with the directory store, or a `ratect-compat --list-tasks`, included — and
 `ratect doctor` reports it as a problem. This
@@ -35,6 +35,10 @@ Windows named pipe) — see [Which daemon is used](#which-daemon-is-used).
 | `--docker-tls-cert <PATH>` | `cert.pem` in the certificate directory | The TLS certificate used to authenticate to the Docker host. The file must exist, and so must the key. |
 | `--docker-tls-key <PATH>` | `key.pem` in the certificate directory | The TLS key used to authenticate to the Docker host. The file must exist, and so must the certificate. |
 
+A path given to `--docker-tls-ca-cert`, `--docker-tls-cert` or `--docker-tls-key` has a
+leading `~` expanded to your home directory, and `.` and `..` removed, before it is used,
+as in Batect.
+
 ## TLS through the options
 
 With `--docker-tls` or `--docker-tls-verify` (or `DOCKER_TLS_VERIFY`), or an
@@ -55,7 +59,10 @@ decides how the connection is made:
   neither option and neither file, none is presented. Only one of the two
   files in the directory is an error, and so is giving one option when the
   directory doesn't hold the other file.
-- A file named by an option must exist.
+- A file named by an option must exist and not be a directory, whether or not
+  TLS is used: every command that takes the option checks it before it runs.
+  It needn't be a regular file — a pipe, such as `<(cat key.pem)`, is read
+  like one, once.
 - An encrypted key, or one that doesn't match the certificate, is an error
   naming the option or the directory, and the file.
 - Only a `tcp://` or `https://` host, or a bare `host:port`, can be connected

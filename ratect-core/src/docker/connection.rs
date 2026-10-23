@@ -132,6 +132,37 @@ impl DockerConnectionOptions {
         )
     }
 
+    /// Refuses a `--docker-tls-ca-cert`, `--docker-tls-cert` or
+    /// `--docker-tls-key` that names nothing, or a directory, as an
+    /// [`InvalidOptionValue`](crate::exit_code::InvalidOptionValue), whether
+    /// or not TLS is used — as Batect's option parser does when it parses
+    /// its arguments. Both binaries call it before any command runs, and
+    /// connecting does too. Anything else that exists passes, a pipe
+    /// (`<(…)`, to keep a key off disk) included, as when connecting reads
+    /// it (see `flag_tls_settings`); Batect refuses one.
+    pub fn check_tls_files(&self) -> Result<()> {
+        for (flag, path) in [
+            ("--docker-tls-ca-cert", &self.tls_ca_cert),
+            ("--docker-tls-cert", &self.tls_cert),
+            ("--docker-tls-key", &self.tls_key),
+        ] {
+            let Some(path) = path else { continue };
+            let problem = match fs::metadata(path) {
+                Ok(metadata) if metadata.is_dir() => "is a directory, not a file".to_string(),
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    "does not exist".to_string()
+                }
+                Err(error) => format!("can't be read: {error}"),
+            };
+            return Err(crate::exit_code::InvalidOptionValue::new(format!(
+                "{flag} {path:?} {problem}."
+            ))
+            .into());
+        }
+        Ok(())
+    }
+
     /// Refuses `--docker-context` given beside a flag that chooses a
     /// connection itself, in Batect's words — `Cannot use both
     /// --docker-context and --docker-host.` — as an
@@ -1028,6 +1059,7 @@ fn holds_certificate_error(error: &(dyn std::error::Error + 'static)) -> bool {
 /// verification failure.
 pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
     options.check_directories()?;
+    options.check_tls_files()?;
     options.check_context_conflict()?;
 
     let docker_config_env = std::env::var("DOCKER_CONFIG").ok();

@@ -23,6 +23,7 @@ history, from when it was the only binary.
 
 ### Breaking
 
+- A `--docker-tls-ca-cert`, `--docker-tls-cert` or `--docker-tls-key` that doesn't exist or is a directory is an invalid option value whether or not TLS is used, as in Batect, so `ratect-compat --list-tasks` and `ratect caches` with the directory store refuse one, and a run refuses one before reading its config. `ratect doctor` reports one as a problem.
 - `ratect-compat`: a `--log-file` that is a directory, or exists but isn't a regular file (`/dev/null`), is an invalid option value, as in Batect.
 - `ratect-compat`: a `-f` given explicitly that names no file is refused before any command runs, as in Batect, so `--clean` refuses it too.
 - `ratect`: a `--config-vars-file` that doesn't exist, is a directory, or isn't a regular file (`/dev/null`) is an invalid option value, refused before the config is read.
@@ -86,6 +87,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- A path given to `--docker-tls-ca-cert`, `--docker-tls-cert` or `--docker-tls-key` has a leading `~` expanded to the home directory, and `.` and `..` removed before it is used, as in Batect.
 - `ratect-compat`: a path given to `--log-file` has a leading `~` expanded to the home directory, and `.` and `..` removed before it is used, as in Batect, so `--log-file sub/../out.log` writes `./out.log` whether or not `sub` exists.
 - A path given to `-f` or `--config-vars-file` has a leading `~` expanded to the home directory, and `.` and `..` removed before it is used, as in Batect. `-f link/../batect.yml` reads `./batect.yml` even when `link` is a symlink.
 - `ratect-compat`: `--use-network=`, `--docker-host=` and `--docker-context=`, with nothing after the `=`, are argument errors, as in Batect, instead of failing later with an unrelated error. `--use-network ''` is still accepted.

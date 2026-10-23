@@ -6584,6 +6584,59 @@ fn log_file_must_be_a_file_or_not_yet_exist() {
     );
 }
 
+/// ratect#437: a file `--docker-tls-ca-cert`, `--docker-tls-cert` or
+/// `--docker-tls-key` names must exist and not be a directory on every
+/// command, as Batect's option parser checks it, not only when a TLS
+/// connection reads it — an invalid option value, so `2` beside
+/// `--list-tasks`. Something that exists but isn't a regular file passes,
+/// as a pipe (`<(…)`) must.
+#[cfg(unix)]
+#[test]
+fn a_missing_or_directory_tls_file_is_refused_on_every_command() {
+    let config = sample_config_path();
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let list = |option: &str, value: &Path| {
+        ratect_command()
+            .arg("-f")
+            .arg(&config)
+            .arg(option)
+            .arg(value)
+            .arg("--list-tasks")
+            .output()
+            .expect("failed to run ratect")
+    };
+    for (option, value, problem) in [
+        (
+            "--docker-tls-ca-cert",
+            Path::new("no-such-ca.pem"),
+            "does not exist",
+        ),
+        (
+            "--docker-tls-cert",
+            Path::new("no-such-cert.pem"),
+            "does not exist",
+        ),
+        ("--docker-tls-key", &directory, "is a directory, not a file"),
+    ] {
+        let output = list(option, value);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{option}: {stderr}");
+        assert!(
+            stderr.contains(&format!("{option} {value:?} {problem}.")),
+            "{option}: {stderr}"
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "", "{option}");
+    }
+
+    let output = list("--docker-tls-ca-cert", Path::new("/dev/null"));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// What both binaries print for `--tag-image build-env=…` beside
 /// `--override-image build-env=…` — Batect's own words (ratect#436). Native
 /// `ratect`'s own tests assert the same literal.
