@@ -1855,7 +1855,10 @@ fn docker_buildkit_env_value(
 /// docker-client's `BuilderVersion.fromAPI` makes it. Both are raised when a
 /// build first needs the builder, not on every command as in Batect (and,
 /// for `DOCKER_BUILDKIT`, the docker CLI; see
-/// `docs/differences-from-batect.md`'s `--enable-buildkit` row).
+/// `docs/differences-from-batect.md`'s `--enable-buildkit` row). Batect
+/// also refuses BuildKit on a daemon older than Docker 18.09 without
+/// experimental features, or older than 17.07 at all; neither can be met
+/// above [`MINIMUM_API_VERSION`], so neither is here.
 ///
 /// Pure (both inputs injected) so the whole decision table is
 /// unit-testable; [`DockerClient`] feeds it the real environment variable
@@ -1892,9 +1895,9 @@ const MINIMUM_API_VERSION: ClientVersion = ClientVersion {
 };
 
 /// Checks a negotiated API version against [`MINIMUM_API_VERSION`], naming
-/// both the daemon's own version and the floor Ratect requires on failure —
-/// a clear, upfront reason rather than some later, arbitrary request failing
-/// with a message that doesn't explain why. Pure (the version is injected)
+/// both the API version the daemon supports and the floor Ratect requires on
+/// failure — a clear, upfront reason rather than some later, arbitrary
+/// request failing with a message that doesn't explain why. Pure (the version is injected)
 /// so every scenario — well above the floor, exactly at it, below it — is
 /// unit-testable without a real daemon of that exact version;
 /// `DockerClient::new` feeds it the real negotiated version.
