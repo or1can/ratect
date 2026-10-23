@@ -28,12 +28,13 @@ An option's value that starts with `-` has to be given after `=`, as in
 `--use-network=-x`: given as the next argument, it's refused — see [differences from
 Batect](differences-from-batect.md#cli-flags).
 
-A path given to `-f` or `--config-vars-file` is resolved as Batect resolves it: a
+A path given to `-f`, `--config-vars-file` or `--log-file` is resolved as Batect resolves it: a
 leading `~` is your home directory, even where the shell leaves it alone
 (`--config-file=~/batect.yml`), and `.` and `..` are removed before the path is used,
 so `link/../batect.yml` <!-- example --> is `./batect.yml` whether or not `link` is a symlink. A leading
 `..` stays. Before any command runs — `--clean` included — an `-f` you give must name
-a file, and so must `--config-vars-file`.
+a file, and so must `--config-vars-file`; a `--log-file` must name a file or nothing
+yet.
 
 ## Options
 
@@ -257,7 +258,7 @@ option value that fails its own check — a `-f` or `--config-vars-file` naming 
 that doesn't exist or isn't a file, a `batect.local.yml` that isn't a file, a `BATECT_CACHE_TYPE` that is no cache type, a `--docker-config`, `--docker-cert-path`,
 `DOCKER_CONFIG` or `DOCKER_CERT_PATH` naming something that doesn't exist or isn't a
 directory, `--docker-context` beside `--docker-host` or a TLS option, or a `--log-file`
-in a directory that doesn't exist.
+in a directory that doesn't exist, or that exists but isn't a file.
 
 Every failure of Ratect's own is printed to stderr as `Error: <message>` (the marker in
 bold red when stderr is a terminal) — deliberately *not* through

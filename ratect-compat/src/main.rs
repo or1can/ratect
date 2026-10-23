@@ -242,7 +242,7 @@ struct Args {
 
     /// Write Ratect's own internal logs to this file, in addition to
     /// stderr (still governed by RUST_LOG as usual).
-    #[arg(long = "log-file", help_heading = "Output")]
+    #[arg(long = "log-file", value_parser = path_option(), help_heading = "Output")]
     log_file: Option<PathBuf>,
 
     // `task_name` and `additional_args` are declared for `--help`'s usage
@@ -553,9 +553,21 @@ fn init_tracing(log_file: Option<&Path>, stderr_color: bool) -> Result<()> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let writer = match log_file {
         Some(path) => {
-            // The one check on the value itself (decisions/0016): a log file
-            // is created, so only its directory has to exist already, and be
-            // one. Any other failure to open it is this command's own.
+            // The checks on the value itself (decisions/0016): a log file is
+            // created, so only its directory has to exist already, and be
+            // one — but one that is there must be a file, as Batect's option
+            // parser requires (ratect#437). Any other failure to open it is
+            // this command's own.
+            let problem = match std::fs::metadata(path) {
+                Ok(metadata) if metadata.is_dir() => Some("is a directory, not a file"),
+                Ok(metadata) if !metadata.is_file() => Some("is not a file"),
+                _ => None,
+            };
+            if let Some(problem) = problem {
+                return Err(
+                    InvalidOptionValue::new(format!("--log-file {path:?} {problem}.")).into(),
+                );
+            }
             if let Some(directory) = path
                 .parent()
                 .filter(|directory| !directory.as_os_str().is_empty())

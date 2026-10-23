@@ -5789,10 +5789,13 @@ tasks:
 
 /// Only a run's failure exits `125`; `--list-tasks`'s exits `1` — the same
 /// unloadable config, and the same `--log-file` that exists but can't be
-/// opened (a directory), either way (decisions/0016). A `--log-file` whose
-/// directory is missing is an invalid option value instead — see
-/// `an_invalid_option_value_exits_2_or_125_by_path`. Needs no daemon: both
-/// fail before anything connects.
+/// opened (a file with no permissions), either way (decisions/0016). A
+/// `--log-file` whose directory is missing, or that is a directory, is an
+/// invalid option value instead — see
+/// `an_invalid_option_value_exits_2_or_125_by_path` and
+/// `log_file_must_be_a_file_or_not_yet_exist`. Needs no daemon: both fail
+/// before anything connects.
+#[cfg(unix)]
 #[test]
 fn a_run_that_fails_exits_125_and_list_tasks_1() {
     let directory =
@@ -5813,7 +5816,12 @@ fn a_run_that_fails_exits_125_and_list_tasks_1() {
 
     let run = exit_code(&["build"]);
     let list = exit_code(&["--list-tasks"]);
-    let unopenable = directory.to_str().unwrap();
+    let unopenable = directory.join("unopenable.log");
+    std::fs::write(&unopenable, "").unwrap();
+    let mut permissions = std::fs::metadata(&unopenable).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o000);
+    std::fs::set_permissions(&unopenable, permissions).unwrap();
+    let unopenable = unopenable.to_str().unwrap();
     let log_file_run = exit_code(&["--log-file", unopenable, "build"]);
     let log_file_list = exit_code(&["--log-file", unopenable, "--list-tasks"]);
     std::fs::remove_dir_all(&directory).unwrap();
@@ -6519,6 +6527,60 @@ fn clean_refuses_an_explicit_config_file_naming_no_file() {
         Some(0),
         "{}",
         String::from_utf8_lossy(&defaulted.stderr)
+    );
+}
+
+/// ratect#437: `--log-file` naming a directory or something else that isn't
+/// a file (`/dev/null`) is an invalid option value, as Batect's option
+/// parser makes it. One that doesn't exist yet is created — through a
+/// lexically removed `..`, so `sub/../out.log` needs no `sub` — and gets
+/// the log (CLO-4, VC-19).
+#[cfg(unix)]
+#[test]
+fn log_file_must_be_a_file_or_not_yet_exist() {
+    let config = sample_config_path();
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for (value, problem) in [
+        (directory.as_path(), "is a directory, not a file"),
+        (Path::new("/dev/null"), "is not a file"),
+    ] {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(&config)
+            .arg("--log-file")
+            .arg(value)
+            .arg("--list-tasks")
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{value:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!("--log-file {value:?} {problem}.")),
+            "{value:?}: {stderr}"
+        );
+    }
+
+    // A run against a daemon that refuses the connection: it fails, but
+    // only after logging, at `debug`, where it tried to connect.
+    let project = std::env::temp_dir().join(format!("ratect-new-log-{}", std::process::id()));
+    std::fs::create_dir_all(&project).unwrap();
+    let output = ratect_command()
+        .current_dir(&project)
+        .env("RUST_LOG", "debug")
+        .env("DOCKER_HOST", "tcp://127.0.0.1:9")
+        .arg("-f")
+        .arg(&config)
+        .args(["--log-file", "sub/../out.log", "test-task"])
+        .output()
+        .expect("failed to run ratect");
+    let log = std::fs::read_to_string(project.join("out.log"));
+    std::fs::remove_dir_all(&project).ok();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(125), "{stderr}");
+    let log = log.expect("--log-file sub/../out.log was not created as ./out.log");
+    assert!(
+        log.contains("127.0.0.1:9"),
+        "the log file holds no log: {log:?}"
     );
 }
 
