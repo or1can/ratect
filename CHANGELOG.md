@@ -82,6 +82,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- `ratect-compat`: `--max-parallelism` rejects values above 2147483647, as Batect does.
 - `ratect-compat`: `--list-tasks` given with `--clean`, `--clean-cache` or `--upgrade`, in either order, lists the tasks, as in Batect, instead of deleting caches or printing the `--upgrade` notice.
 - An `--override-image` naming a container the config doesn't define fails a run only once it reaches a task with a `run`, before that task starts, as in Batect. A run that reaches none — `--skip-prerequisites` on a task with only `prerequisites`, say — succeeds instead of failing.
 - In a YAML config file, a local include whose path starts with `~` (`~/shared.yml`) loads that file from the home directory, as in Batect, instead of looking for a `~` directory beside the file declaring it. A Git include's `path` is still taken as written within the clone.

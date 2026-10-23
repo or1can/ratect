@@ -1201,6 +1201,47 @@ fn list_tasks_wins_over_clean_and_upgrade() {
     }
 }
 
+/// `--max-parallelism` takes Batect's range, 1 to 2147483647, its
+/// `Integer.parseInt`'s: a larger value is an argument error naming the
+/// option and the value, in either form (ratect#451).
+#[test]
+fn max_parallelism_takes_batects_range() {
+    let config = sample_config_path();
+    let config = config.to_str().unwrap();
+    let run = |value: &[&str]| {
+        ratect_command()
+            .args(["-f", config])
+            .args(value)
+            .arg("--list-tasks")
+            .output()
+            .expect("failed to run ratect")
+    };
+    for accepted in [
+        "--max-parallelism=2147483647",
+        "--max-parallelism=1",
+        "--max-parallelism=+1",
+    ] {
+        let output = run(&[accepted]);
+        assert_eq!(output.status.code(), Some(0), "{accepted}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("Tasks in ratect-test:"));
+    }
+    for (rejected, value) in [
+        (&["--max-parallelism=2147483648"][..], "2147483648"),
+        (&["--max-parallelism=4294967295"], "4294967295"),
+        (&["--max-parallelism", "2147483648"], "2147483648"),
+        (&["--max-parallelism=0"], "0"),
+    ] {
+        let output = run(rejected);
+        assert_eq!(output.status.code(), Some(2), "{rejected:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("--max-parallelism") && stderr.contains(value),
+            "{rejected:?}: {stderr}"
+        );
+        assert!(output.stdout.is_empty(), "{rejected:?}");
+    }
+}
+
 /// A unique, empty temp directory holding a directory `dir` and a
 /// config file `broken.yml` that exists but doesn't parse.
 fn invalid_values_directory() -> PathBuf {
