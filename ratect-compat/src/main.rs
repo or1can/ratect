@@ -199,8 +199,9 @@ struct Args {
     #[arg(long = "clean", help_heading = "Cache management")]
     clean: bool,
 
-    /// Remove the named cache volume/directory (repeatable) and exit,
-    /// without running anything. Never needs the config file itself.
+    /// Remove the named cache volumes/directories and exit, without running
+    /// anything: a comma-separated list of names, each trimmed (repeatable).
+    /// Never needs the config file itself.
     #[arg(long = "clean-cache", help_heading = "Cache management")]
     clean_cache: Vec<String>,
 
@@ -303,7 +304,9 @@ impl Args {
     /// replaces the task it is ignored instead, as Batect's `parseTaskName`
     /// ignores it.
     ///
-    /// Then the one check `clap` can't make per value: a key given twice to
+    /// `--clean-cache`'s values are split into names here, as Batect's
+    /// `SetOption` splits them. Then the one check `clap` can't make per
+    /// value: a key given twice to
     /// `--config-var` or `--override-image`, which Batect's
     /// `SingleValueMapOption` refuses rather than keeping the last
     /// (ratect#438). `--tag-image` may repeat a container, as in Batect. A
@@ -324,6 +327,14 @@ impl Args {
             (_, Some(error)) => return Err(error),
             (parsed, None) => parsed?,
         };
+        // Batect's `SetOption`: each value is a comma-separated list, each
+        // name trimmed (ratect#448). An empty name stays, matching no cache,
+        // so `--clean-cache ""` still selects cleanup, as in Batect.
+        args.clean_cache = args
+            .clean_cache
+            .iter()
+            .flat_map(|value| value.split(',').map(|name| name.trim().to_string()))
+            .collect();
         if args.runs_a_task() {
             let rest = rest
                 .iter()
@@ -594,12 +605,16 @@ fn takes_value(command: &clap::Command, word: Word<'_>) -> bool {
 /// do, so the leniency recorded in `docs/differences-from-batect.md` stays:
 /// `-Tf x`, `-fx` and `-oquiet`.
 ///
-/// A separate value starting with `-` is refused instead, for every option
-/// that takes one: the third part is the first, for [`Args::parse_checked`]
-/// to report unless `clap`'s own parse of the options ends in `--help` or
-/// `--version`. `clap` refuses it too, but with a tip to write `-- -x`,
-/// which here would pass `-x` to the task: this error's tip is the `=` form
-/// (ratect#435).
+/// Two values `clap` would misread are refused instead, for every option
+/// that takes one: the third part is the first of them, for
+/// [`Args::parse_checked`] to report unless `clap`'s own parse of the
+/// options ends in `--help` or `--version`. An empty one after `=`
+/// (`--use-network=`, `-f=`) is Batect's "invalid format" (ratect#449,
+/// ratect#448), where `clap` would take `""` — which `--use-network ''`
+/// still gives, as in Batect. And a
+/// separate value starting with `-`, which `clap` refuses too, but with a tip
+/// to write `-- -x`, which here would pass `-x` to the task: this error's tip
+/// is the `=` form (ratect#435).
 fn split_at_task(
     arguments: &[std::ffi::OsString],
 ) -> (
@@ -626,7 +641,14 @@ fn split_at_task(
         // its value, if any.
         let value_option = if let Some(long) = argument.strip_prefix("--") {
             match long.split_once('=') {
-                Some(_) => None,
+                Some((name, value)) => {
+                    if value.is_empty() && takes_value(&command, Word::Long(name)) {
+                        refuse(format!(
+                            "'--{name}=' has nothing after '=': give a value after the '='"
+                        ));
+                    }
+                    None
+                }
                 None => takes_value(&command, Word::Long(long)).then(|| format!("--{long}")),
             }
         } else if let Some(shorts) = argument
@@ -640,6 +662,11 @@ fn split_at_task(
                         return None;
                     }
                     let attached = &shorts[position + short.len_utf8()..];
+                    if attached == "=" {
+                        refuse(format!(
+                            "'-{short}=' has nothing after '=': give a value after the '='"
+                        ));
+                    }
                     Some(attached.is_empty().then(|| format!("-{short}")))
                 })
                 .flatten()

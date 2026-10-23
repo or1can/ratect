@@ -550,7 +550,8 @@ fn a_hyphen_leading_value_is_refused_with_a_tip_naming_the_equals_form() {
 fn help_and_version_win_over_a_refused_value() {
     for arguments in [
         &["--version", "--use-network", "-x"][..],
-        &["--help", "-f", "-x"],
+        &["--help", "--use-network="],
+        &["--version", "-f="],
     ] {
         let error = Args::parse_checked([&[BINARY], arguments].concat())
             .expect_err("help and version are clap errors");
@@ -585,6 +586,88 @@ fn the_equals_forms_and_combined_short_options_still_parse() {
     assert_eq!(args.config_file, PathBuf::from("x.yml"));
     assert_eq!(args.output, Some(OutputStyleArg::Quiet));
     assert_eq!(args.task_name.as_deref(), Some("t"));
+}
+
+/// An option given `=` with nothing after it is refused, as Batect's
+/// `ValueOption` and `SetOption` refuse it, where `clap` would take `""`
+/// (ratect#449, ratect#448) — but the same empty value as the next
+/// argument still parses, as in Batect, and so does anything after `--`.
+#[test]
+fn an_empty_value_after_equals_is_refused_but_an_empty_next_argument_is_not() {
+    for option in [
+        "--use-network",
+        "--docker-host",
+        "--docker-context",
+        "--clean-cache",
+        "-f",
+    ] {
+        let error = argument_error(&[BINARY, &format!("{option}="), "--list-tasks"]);
+        assert!(
+            error.contains(&format!("'{option}='")) && error.contains("after '='"),
+            "{option}: {error}"
+        );
+    }
+
+    let args = parsed(&[
+        BINARY,
+        "--use-network",
+        "",
+        "--docker-host",
+        "",
+        "--docker-context",
+        "",
+        "t",
+        "--",
+        "--use-network=",
+    ]);
+    assert_eq!(args.use_network.as_deref(), Some(""));
+    assert_eq!(args.docker_host.as_deref(), Some(""));
+    assert_eq!(args.docker_context.as_deref(), Some(""));
+    assert_eq!(args.additional_args, ["--use-network="]);
+
+    let args = parsed(&[
+        BINARY,
+        "--docker-host=tcp://1.2.3.4:1",
+        "--use-network",
+        "net",
+        "t",
+    ]);
+    assert_eq!(args.docker_host.as_deref(), Some("tcp://1.2.3.4:1"));
+    assert_eq!(args.use_network.as_deref(), Some("net"));
+}
+
+/// `--clean-cache` splits each value on `,` and trims each name, as
+/// Batect's `SetOption` does, across every repetition (ratect#448). An
+/// empty name matches no cache, and `--clean-cache ""` still selects
+/// cleanup.
+#[test]
+fn clean_cache_splits_on_commas_and_trims_each_name() {
+    let names = |arguments: &[&str]| -> HashSet<String> {
+        parsed(&[&[BINARY], arguments].concat())
+            .clean_cache
+            .into_iter()
+            .filter(|name| !name.is_empty())
+            .collect()
+    };
+    let set = |names: &[&str]| {
+        names
+            .iter()
+            .map(|name| name.to_string())
+            .collect::<HashSet<_>>()
+    };
+    assert_eq!(names(&["--clean-cache=foo,bar"]), set(&["foo", "bar"]));
+    assert_eq!(names(&["--clean-cache=foo, bar"]), set(&["foo", "bar"]));
+    assert_eq!(names(&["--clean-cache= foo"]), set(&["foo"]));
+    assert_eq!(names(&["--clean-cache=a,,b"]), set(&["a", "b"]));
+    assert_eq!(
+        names(&["--clean-cache", "foo", "--clean-cache", "bar,baz"]),
+        set(&["foo", "bar", "baz"])
+    );
+    assert!(parsed(&[BINARY, "t"]).clean_cache.is_empty());
+
+    let args = parsed(&[BINARY, "--clean-cache", ""]);
+    assert!(!args.runs_a_task());
+    assert!(args.clean_cache.iter().all(String::is_empty));
 }
 
 #[test]

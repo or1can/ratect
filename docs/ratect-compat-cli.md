@@ -94,7 +94,7 @@ accepts them; they're used only when it actually connects.
 | Flag | Short | Default | Description |
 |---|---|---|---|
 | `--clean` | — | — | Removes every one of this project's own cache volumes/directories (per `--cache-type` or `BATECT_CACHE_TYPE`) and exits — doesn't run anything, and doesn't need `--config-file` to actually exist. See [Cache volumes](ratect-compat-config-reference.md#cache-volumes). |
-| `--clean-cache <NAME>` | — | — | Removes just the named cache (repeatable) and exits, instead of every one of them. Given together with `--clean`, the explicit name(s) win — `--clean`'s own "everything" behavior only applies when `--clean-cache` is never given at all. |
+| `--clean-cache <NAME>` | — | — | Removes just the named caches and exits, instead of every one of them. Takes a comma-separated list of names, each trimmed of surrounding whitespace, and is repeatable. Given together with `--clean`, the explicit name(s) win — `--clean`'s own "everything" behavior only applies when `--clean-cache` is never given at all. |
 
 ### Output
 

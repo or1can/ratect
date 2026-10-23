@@ -82,6 +82,8 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- `ratect-compat`: `--use-network=`, `--docker-host=` and `--docker-context=`, with nothing after the `=`, are argument errors, as in Batect, instead of failing later with an unrelated error. `--use-network ''` is still accepted.
+- `ratect-compat`: `--clean-cache` takes a comma-separated list of names, each trimmed, as in Batect, so `--clean-cache=foo,bar` removes `foo` and `bar`. `--clean-cache=`, with nothing after the `=`, is an argument error.
 - `ratect-compat`: `--max-parallelism` rejects values above 2147483647, as Batect does.
 - `ratect-compat`: `--list-tasks` given with `--clean`, `--clean-cache` or `--upgrade`, in either order, lists the tasks, as in Batect, instead of deleting caches or printing the `--upgrade` notice.
 - An `--override-image` naming a container the config doesn't define fails a run only once it reaches a task with a `run`, before that task starts, as in Batect. A run that reaches none — `--skip-prerequisites` on a task with only `prerequisites`, say — succeeds instead of failing.

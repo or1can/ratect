@@ -1242,6 +1242,81 @@ fn max_parallelism_takes_batects_range() {
     }
 }
 
+/// `--use-network=`, `--docker-host=` and `--docker-context=` are argument
+/// errors, as `--output=` is, as in Batect (ratect#449): nothing is listed,
+/// and the empty host is reported rather than taken as set alongside a
+/// context.
+#[test]
+fn an_empty_string_option_after_equals_is_an_argument_error() {
+    let config = sample_config_path();
+    let config = config.to_str().unwrap();
+    let run = |args: &[&str]| {
+        ratect_command()
+            .args(["-f", config])
+            .args(args)
+            .output()
+            .expect("failed to run ratect")
+    };
+    let expected = run(&["--list-tasks", "--output="]).status.code();
+    assert!(expected.is_some_and(|code| code != 0));
+    for option in ["--use-network=", "--docker-host=", "--docker-context="] {
+        let output = run(&["--list-tasks", option]);
+        assert_eq!(output.status.code(), expected, "{option}");
+        assert!(output.stdout.is_empty(), "{option} listed the tasks");
+        assert!(String::from_utf8_lossy(&output.stderr).contains(&format!("'{option}'")));
+    }
+
+    let output = run(&["--docker-context=foo", "--docker-host=", "test-task"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("'--docker-host='") && !stderr.contains("Cannot use both"),
+        "{stderr}"
+    );
+}
+
+/// `--clean-cache` takes a comma-separated list, as in Batect, and
+/// repeats; `--clean-cache=` is refused and removes nothing (ratect#448).
+/// Asserted on the directories left behind.
+#[test]
+fn clean_cache_takes_a_comma_separated_list() {
+    let project = one_task_project("clean-cache-list");
+    let caches = project.join(".batect/caches");
+    let remaining = |args: &[&str]| {
+        for name in ["foo", "bar", "baz"] {
+            std::fs::create_dir_all(caches.join(name)).unwrap();
+        }
+        let output = ratect_command()
+            .current_dir(&project)
+            .args(["--cache-type", "directory"])
+            .args(args)
+            .output()
+            .expect("failed to run ratect");
+        let mut left: Vec<String> = std::fs::read_dir(&caches)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        (output, left)
+    };
+
+    for (args, left) in [
+        (&["--clean-cache=foo,bar"][..], &["baz"][..]),
+        (&["--clean-cache=foo"], &["bar", "baz"]),
+        (&["--clean-cache", "foo", "--clean-cache", "bar"], &["baz"]),
+    ] {
+        let (output, remaining) = remaining(args);
+        assert_eq!(output.status.code(), Some(0), "{args:?}");
+        assert_eq!(remaining, left, "{args:?}");
+    }
+
+    let (output, remaining) = remaining(&["--clean-cache="]);
+    assert_ne!(output.status.code(), Some(0));
+    assert_eq!(remaining, ["bar", "baz", "foo"]);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("'--clean-cache='"));
+
+    std::fs::remove_dir_all(&project).unwrap();
+}
+
 /// A unique, empty temp directory holding a directory `dir` and a
 /// config file `broken.yml` that exists but doesn't parse.
 fn invalid_values_directory() -> PathBuf {
