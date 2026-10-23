@@ -464,6 +464,25 @@ fn an_argument_after_the_task_name_is_refused_unless_it_follows_double_dash() {
     }
 }
 
+/// No task name, and no flag that replaces one, is refused while the
+/// arguments are parsed, as Batect's `parseTaskName` refuses it — `--`
+/// with task arguments and no task included (ratect#434).
+#[test]
+fn a_run_with_no_task_name_is_refused_while_parsing() {
+    for arguments in [
+        &[][..],
+        &["-f", "x.yml"],
+        &["--", "foo"],
+        &["--no-color", "--"],
+    ] {
+        let error = argument_error(&[&[BINARY], arguments].concat());
+        assert!(
+            error.contains("no task name") && error.contains("--list-tasks"),
+            "{arguments:?}: {error}"
+        );
+    }
+}
+
 #[test]
 fn arguments_after_double_dash_reach_the_task_whatever_they_look_like() {
     let args = parsed(&[
@@ -1285,7 +1304,6 @@ fn a_line_that_does_not_parse_is_a_run_unless_a_flag_replaces_the_task() {
 fn the_raw_reading_agrees_with_the_parsed_one() {
     for line in [
         &["build"][..],
-        &[],
         &["build", "--", "--clean"],
         &["-f", "x.yml", "--list-tasks"],
         &["-T"],
@@ -1467,14 +1485,6 @@ async fn only_a_task_run_starts_the_sweep() {
             .result
             .unwrap_or_else(|e| panic!("{arguments:?} should succeed: {e:?}"));
         assert_eq!(swept.made, 0, "{arguments:?} should not start the sweep");
-    }
-
-    // No task name: today a warning, under Batect a parse error (#434).
-    // Either way, no sweep.
-    let no_task = ["ratect", "-f", &config];
-    if Args::try_parse_from(no_task).is_ok() {
-        let swept = run_with_fake_sweep(&no_task, FakeSweep::Succeeds).await;
-        assert_eq!(swept.made, 0, "no task name should not start the sweep");
     }
 }
 

@@ -137,7 +137,7 @@ shared with `ratect`.
 
 | Argument | Description |
 |---|---|
-| `TASK_NAME` | The name of the task to run, as defined under `tasks:` in the config file. Optional — if omitted (and `--list-tasks` isn't given), Ratect logs a warning and exits without doing anything. |
+| `TASK_NAME` | The name of the task to run, as defined under `tasks:` in the config file. Required unless `--list-tasks`, `--clean`, `--clean-cache` or `--upgrade` is given — see [Exit codes and error reporting](#exit-codes-and-error-reporting). |
 | `-- ADDITIONAL_ARGS...` | Anything after a literal `--` is appended as literal argv entries after the task's own tokenized `command` — see below. Only applies to the task named on the command line, never to its prerequisites. |
 
 ## Examples
@@ -231,7 +231,7 @@ did the task's own container run to an exit code of its own?
    ends the run before the next task starts, and exits 128 + its number.
 3. **It never ran, or never finished, for any other reason: `125`** — `docker run`'s own
    code for "the `docker` command itself failed". An unknown or misused flag
-   (`ratect-compat --bogus build`, or a bare `ratect-compat --bogus`), a missing or
+   (`ratect-compat --bogus build`, or a bare `ratect-compat --bogus`), no task name, a missing or
    malformed config file, a `--config-vars-file` that isn't a file, a task or container
    referenced by name that doesn't exist, a dependency cycle, an unreachable daemon, an
    image pull or build that fails, a dependency that exits or never becomes ready, a
@@ -261,9 +261,12 @@ interrupt notice said so when it arrived). A cleanup failure is reported once, a
 happens, by a line naming what was left behind and the `docker` command that removes
 it.
 
-- Running with no task name at all (and not `--list-tasks`) **exits `0`** — Ratect prints
-  a `Warning:` on stderr but doesn't fail the process. This is a rough edge, not intentional design;
-  don't rely on it in scripts.
+- Running with no task name, and none of `--list-tasks`, `--clean`, `--clean-cache` or
+  `--upgrade`, is a command-line error, found before the config-variables file or the
+  config is read — so a missing or broken `-f` still reports the missing task name. It
+  exits `125`, like any other usage error on a run, and the error, which points at
+  `--list-tasks` and `--help`, is always on stderr, whatever `RUST_LOG` or `-o` says.
+  So is `-- ADDITIONAL_ARGS` with no task name before it.
 - A misspelled task name (whether given directly on the command line, or as a
   [`prerequisites`](ratect-compat-config-reference.md#task) entry) gets a `Did you mean 'x'?`
   suggestion appended to the error, for every existing task name within a Levenshtein

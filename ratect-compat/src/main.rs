@@ -298,7 +298,8 @@ impl Args {
     /// The command line in Batect's grammar, which `clap`'s alone can't say
     /// (ratect#435). The options end at the first argument that isn't one —
     /// [`split_at_task`] finds it — and only they reach `clap`. What follows
-    /// is the task name, then nothing or `-- ARGS…`; under a flag that
+    /// is the task name, then nothing or `-- ARGS…`, and a run without one is
+    /// refused here, before any file is read (ratect#434); under a flag that
     /// replaces the task it is ignored instead, as Batect's `parseTaskName`
     /// ignores it.
     ///
@@ -336,7 +337,14 @@ impl Args {
                 })
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             match rest.as_slice() {
-                [] | ["--", ..] => {}
+                [] | ["--", ..] => {
+                    return Err(Self::command().error(
+                        clap::error::ErrorKind::MissingRequiredArgument,
+                        "no task name was given: name the task to run after the options, as \
+                         in 'ratect-compat build'. 'ratect-compat --list-tasks' lists this \
+                         project's tasks, and 'ratect-compat --help' every option",
+                    ));
+                }
                 [task] => args.task_name = Some(task.to_string()),
                 [task, "--", task_args @ ..] => {
                     args.task_name = Some(task.to_string());
@@ -864,68 +872,62 @@ async fn run(
         return Ok(());
     }
 
-    match args.task_name.as_deref() {
-        Some(task_name) => {
-            // Unconditional, fire-and-forget — matching Batect's own
-            // `GitRepositoryCacheCleanupTask`, an unconditional daemon
-            // thread started on every "run a task" invocation regardless of
-            // whether this particular config uses a Git include, after the
-            // config loads and before Docker is reached. Never awaited: a
-            // failure (or simply not finishing before the process exits —
-            // see `main`'s own comment on `std::process::exit`) is
-            // inherently best-effort, same as a JVM daemon thread not
-            // blocking process exit either.
-            let sweep = sweep();
-            tokio::spawn(async {
-                if let Err(e) = sweep.await {
-                    tracing::warn!("Failed to sweep stale Git include cache entries: {e}");
-                }
-            });
-
-            let mut config_var_overrides: HashMap<String, String> = match &config_vars_file {
-                Some(path) => Config::load_config_vars_file(path)?,
-                None => HashMap::new(),
-            };
-            config_var_overrides.extend(args.config_var.iter().cloned());
-
-            // The output-mode logger — one instance shared by the Docker
-            // client (fine-grained pull/build progress) and the engine
-            // (lifecycle milestones), so it sees the whole event stream in
-            // order. Selection, construction, and (for an explicit fancy)
-            // validation all live in `create_event_sink` — see its own docs
-            // for why, and for the fancy-on-a-non-interactive-console error
-            // it can return.
-            let event_sink = create_event_sink(requested_style, color_mode, &terminal, PROGRESS)?;
-            let settings = args.engine_settings(
-                project.project_directory.clone(),
-                project.dialect,
-                config_var_overrides,
-                cache_type,
-            );
-            // Constructed here rather than inside `ratect-core` — a library
-            // shouldn't take over a process's signal handling on its own
-            // initiative — and armed immediately, since (unlike
-            // `engine_settings`, kept synchronous so the flag-mapping tests
-            // can call it directly) this whole function already is async.
-            // From this point Ctrl+C, `SIGTERM` or `SIGHUP` abandons the run
-            // and cleans up instead of killing the process where it stands.
-            let interrupt = ratect_core::interrupt::Interrupt::new();
-            interrupt.listen();
-            let docker = DockerClient::new(&args.docker_connection(), |message| {
-                event_sink.post(TaskEvent::Warning { message })
-            })
-            .await?
-            .with_event_sink(Arc::clone(&event_sink))
-            .with_enable_buildkit(args.enable_buildkit);
-            let engine =
-                TaskEngine::new(project, docker, event_sink, interrupt).with_settings(settings)?;
-            engine.run_task(task_name, &args.additional_args).await?;
+    let Some(task_name) = args.task_name.as_deref() else {
+        unreachable!("Args::parse_checked refuses a run that names no task");
+    };
+    // Unconditional, fire-and-forget — matching Batect's own
+    // `GitRepositoryCacheCleanupTask`, an unconditional daemon
+    // thread started on every "run a task" invocation regardless of
+    // whether this particular config uses a Git include, after the
+    // config loads and before Docker is reached. Never awaited: a
+    // failure (or simply not finishing before the process exits —
+    // see `main`'s own comment on `std::process::exit`) is
+    // inherently best-effort, same as a JVM daemon thread not
+    // blocking process exit either.
+    let sweep = sweep();
+    tokio::spawn(async {
+        if let Err(e) = sweep.await {
+            tracing::warn!("Failed to sweep stale Git include cache entries: {e}");
         }
-        None => {
-            // Printed, not logged: the one line explaining why nothing ran.
-            stderr.warning("No task name provided. Use --help for usage.");
-        }
-    }
+    });
+
+    let mut config_var_overrides: HashMap<String, String> = match &config_vars_file {
+        Some(path) => Config::load_config_vars_file(path)?,
+        None => HashMap::new(),
+    };
+    config_var_overrides.extend(args.config_var.iter().cloned());
+
+    // The output-mode logger — one instance shared by the Docker
+    // client (fine-grained pull/build progress) and the engine
+    // (lifecycle milestones), so it sees the whole event stream in
+    // order. Selection, construction, and (for an explicit fancy)
+    // validation all live in `create_event_sink` — see its own docs
+    // for why, and for the fancy-on-a-non-interactive-console error
+    // it can return.
+    let event_sink = create_event_sink(requested_style, color_mode, &terminal, PROGRESS)?;
+    let settings = args.engine_settings(
+        project.project_directory.clone(),
+        project.dialect,
+        config_var_overrides,
+        cache_type,
+    );
+    // Constructed here rather than inside `ratect-core` — a library
+    // shouldn't take over a process's signal handling on its own
+    // initiative — and armed immediately, since (unlike
+    // `engine_settings`, kept synchronous so the flag-mapping tests
+    // can call it directly) this whole function already is async.
+    // From this point Ctrl+C, `SIGTERM` or `SIGHUP` abandons the run
+    // and cleans up instead of killing the process where it stands.
+    let interrupt = ratect_core::interrupt::Interrupt::new();
+    interrupt.listen();
+    let docker = DockerClient::new(&args.docker_connection(), |message| {
+        event_sink.post(TaskEvent::Warning { message })
+    })
+    .await?
+    .with_event_sink(Arc::clone(&event_sink))
+    .with_enable_buildkit(args.enable_buildkit);
+    let engine = TaskEngine::new(project, docker, event_sink, interrupt).with_settings(settings)?;
+    engine.run_task(task_name, &args.additional_args).await?;
 
     Ok(())
 }
