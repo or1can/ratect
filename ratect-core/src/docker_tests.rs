@@ -1256,6 +1256,66 @@ fn check_api_version_floor_rejects_a_version_below_the_floor() {
     );
 }
 
+#[test]
+fn check_daemon_os_accepts_linux_in_any_case_and_a_missing_or_empty_one() {
+    for os in [Some("linux"), Some("Linux"), Some(""), None] {
+        check_daemon_os(os).unwrap_or_else(|err| panic!("{os:?}: {err:#}"));
+    }
+}
+
+#[test]
+fn check_daemon_os_refuses_windows_in_any_case_naming_what_was_reported() {
+    for os in ["windows", "Windows"] {
+        let err = check_daemon_os(Some(os)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "The Docker daemon is running Windows containers (it reports its operating \
+                 system as '{os}'), but Ratect needs one running Linux containers — switch \
+                 Docker to Linux containers to use Ratect."
+            )
+        );
+    }
+}
+
+#[tokio::test]
+async fn docker_client_new_refuses_a_daemon_running_windows_containers() {
+    let options = stub_daemon(
+        serde_json::json!({ "ApiVersion": "1.41", "Version": "27.3.1", "Os": "windows" }),
+        None,
+    )
+    .await;
+    let Err(err) = DockerClient::new(&options, |_| {}).await else {
+        panic!("a Windows-containers daemon should be refused");
+    };
+    assert!(
+        err.to_string()
+            .starts_with("The Docker daemon is running Windows containers"),
+        "{err:#}"
+    );
+}
+
+/// A daemon that stops answering between `DockerClient::new`'s two
+/// `/version` requests is still reported as unreachable, naming the host
+/// tried, not as a failure to read its operating system.
+#[tokio::test]
+async fn docker_client_new_reports_a_daemon_gone_before_its_second_request_as_unreachable() {
+    let options = stub_daemon_for(1, stub_version_body(Some("27.3.1")), None).await;
+    let Err(err) = DockerClient::new(&options, |_| {}).await else {
+        panic!("the second request should find nothing listening");
+    };
+    let host = options.host.unwrap();
+    assert!(
+        err.to_string()
+            .starts_with(&format!("Couldn't reach the Docker daemon at '{host}'")),
+        "{err:#}"
+    );
+    assert!(
+        !format!("{err:#}").contains("Failed to read the Docker daemon's operating system"),
+        "{err:#}"
+    );
+}
+
 /// A stand-in Docker daemon on a local TCP port, answering the two
 /// daemon-information requests `DockerClient` makes: `/version` with
 /// `version_body`, and `/_ping` with `builder_version` as its
@@ -1266,12 +1326,22 @@ async fn stub_daemon(
     version_body: serde_json::Value,
     builder_version: Option<&'static str>,
 ) -> DockerConnectionOptions {
+    stub_daemon_for(usize::MAX, version_body, builder_version).await
+}
+
+/// [`stub_daemon`], but answering only its first `connections` requests:
+/// after that it stops listening, so the next connection is refused.
+async fn stub_daemon_for(
+    connections: usize,
+    version_body: serde_json::Value,
+    builder_version: Option<&'static str>,
+) -> DockerConnectionOptions {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let version_body = version_body.to_string();
     tokio::spawn(async move {
-        loop {
+        for _ in 0..connections {
             let (mut stream, _) = listener.accept().await.unwrap();
             let version_body = version_body.clone();
             tokio::spawn(async move {

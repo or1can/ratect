@@ -1909,6 +1909,24 @@ fn check_api_version_floor(negotiated: ClientVersion) -> Result<()> {
     Ok(())
 }
 
+/// Refuses a daemon running Windows containers, given the operating system
+/// its `/version` reports (`windows`, in any case): Ratect only supports
+/// Linux containers. A deliberate divergence — Batect accepts both, and
+/// refuses only a daemon reporting neither, which no real Docker daemon
+/// does, so that check isn't copied: an empty or missing operating system
+/// passes. Pure (the value is injected) so it's unit-testable without such
+/// a daemon; `DockerClient::new` feeds it the real one.
+fn check_daemon_os(os: Option<&str>) -> Result<()> {
+    match os {
+        Some(os) if os.eq_ignore_ascii_case("windows") => Err(anyhow::anyhow!(
+            "The Docker daemon is running Windows containers (it reports its operating system \
+             as '{os}'), but Ratect needs one running Linux containers — switch Docker to Linux \
+             containers to use Ratect."
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Resolves the credential to pull `image` with, via `resolver` — the
 /// image's own registry (via [`crate::registry_auth::registry_hostname`]) is
 /// the only one pull ever needs. Pulled out of `pull_image` itself so this
@@ -1996,10 +2014,10 @@ pub use connection::DockerConnectionOptions;
 
 impl DockerClient {
     /// The daemon's own version string, and — the actual point — proof
-    /// that it can be reached at all. `DockerClient::new` already
-    /// negotiated the API version (a `/version` call of its own) before
-    /// this method exists to be called, so this is a second, deliberate
-    /// round trip — this is how `ratect doctor` distinguishes "unreachable"
+    /// that it can be reached at all. `DockerClient::new` already asked
+    /// `/version` twice (to negotiate the API version and to check the
+    /// daemon's operating system) before this method exists to be called,
+    /// so this is a further, deliberate round trip — this is how `ratect doctor` distinguishes "unreachable"
     /// from "reachable, and here's what it is" without running a task.
     pub async fn server_version(&self) -> Result<String> {
         let version = self
@@ -2018,6 +2036,14 @@ impl DockerClient {
     /// that fails. Required rather than collected afterwards because only
     /// the caller knows where a warning goes: a run's event sink, a verb's
     /// stderr, a `doctor` finding.
+    ///
+    /// Then checks the daemon, before anything else asks it for anything:
+    /// that it answers at all — an error naming the daemon tried when it
+    /// doesn't (see `Connection::explain_failure`) — that its API is at
+    /// least `MINIMUM_API_VERSION`, and that it isn't running Windows
+    /// containers (see `check_daemon_os`). Each is a request: one
+    /// `/version` to negotiate the API version, and another, at that
+    /// version, for the daemon's operating system.
     pub async fn new(connection: &DockerConnectionOptions, warn: impl Fn(String)) -> Result<Self> {
         let connected = connection::connect(connection)?;
         connected.warnings.iter().cloned().for_each(warn);
@@ -2026,9 +2052,20 @@ impl DockerClient {
             .clone()
             .negotiate_version()
             .await
-            .context("Failed to negotiate the Docker API version with the daemon")
-            .map_err(|err| connected.explain_failure(err))?;
+            .map_err(|err| {
+                connected.explain_failure(
+                    err.into(),
+                    "Failed to negotiate the Docker API version with the daemon",
+                )
+            })?;
         check_api_version_floor(docker.client_version())?;
+        let version = docker.version().await.map_err(|err| {
+            connected.explain_failure(
+                err.into(),
+                "Failed to read the Docker daemon's operating system",
+            )
+        })?;
+        check_daemon_os(version.os.as_deref())?;
         let config_directory = connected.config_directory.clone();
         Ok(Self {
             docker,

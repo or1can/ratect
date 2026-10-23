@@ -399,7 +399,13 @@ tables above:
   (see `--enable-buildkit` under [CLI flags](#cli-flags)). And a daemon that
   can't be reached, or is too old, is reported in Ratect's own words, not
   Batect's `Docker is not installed, not running or not compatible with
-  Batect: …`.
+  Batect: …` — for an unreachable one, naming the host tried (see [What is
+  checked on connecting](connecting-to-docker.md#what-is-checked-on-connecting)).
+- **A daemon running Windows containers is refused.** Ratect checks the
+  operating system the daemon reports and refuses `windows` before running
+  anything, since it only supports Linux containers. Batect accepts a Windows
+  daemon, and refuses only one reporting neither Linux nor Windows, which
+  Ratect doesn't check.
 - **The task network is ready before any image work starts.** Ratect creates
   it — or, under `--use-network`, checks that it exists — and only then pulls
   or builds an image, where Batect does both at once. So a network problem,

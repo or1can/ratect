@@ -964,35 +964,83 @@ enum VerificationNote {
     SystemTrustStore { looked_for: PathBuf },
 }
 
+/// The platform default `connect` falls back to with no host and no
+/// context: `bollard`'s own, which it doesn't export.
+const DEFAULT_DOCKER_HOST: &str = "unix:///var/run/docker.sock";
+
+/// What an unreachable-daemon error calls the daemon `connect` chose: its
+/// host, and what chose it — the context `context` names (its name and
+/// host), else `--docker-host`, else the `DOCKER_HOST` environment variable
+/// (empty counts as unset, as in [`resolve_host`]), else the platform
+/// default. The source is named because a stale `DOCKER_HOST` or context is
+/// as likely a cause as a stopped daemon. Pure (the environment value is
+/// injected) so every source is unit-testable.
+fn daemon_target(
+    options: &DockerConnectionOptions,
+    docker_host_env: Option<&str>,
+    context: Option<(&str, &str)>,
+) -> String {
+    if let Some((name, host)) = context {
+        return format!("'{host}' (Docker context '{name}')");
+    }
+    if let Some(host) = &options.host {
+        return format!("'{host}' (from --docker-host)");
+    }
+    match docker_host_env.filter(|host| !host.is_empty()) {
+        Some(host) => format!("'{host}' (from the DOCKER_HOST environment variable)"),
+        None => format!("'{DEFAULT_DOCKER_HOST}' (the default)"),
+    }
+}
+
 /// A connected client, the Docker config directory it was resolved from
 /// (see [`docker_config_directory`]), what's needed to explain its first
-/// failure, and the warnings choosing it raised — for `DockerClient::new`
-/// to hand to its caller, which alone knows where a warning is printed.
+/// failure — the daemon it was made to (see [`daemon_target`]) and any
+/// [`VerificationNote`] — and the warnings choosing it raised, for
+/// `DockerClient::new` to hand to its caller, which alone knows where a
+/// warning is printed.
 #[derive(Debug)]
 pub(super) struct Connection {
     pub(super) docker: Docker,
     pub(super) config_directory: PathBuf,
     pub(super) warnings: Vec<String>,
+    daemon_target: String,
     verification_note: Option<VerificationNote>,
 }
 
 impl Connection {
-    fn without_note(docker: Docker, config_directory: PathBuf, warnings: Vec<String>) -> Self {
+    fn without_note(
+        docker: Docker,
+        config_directory: PathBuf,
+        warnings: Vec<String>,
+        daemon_target: String,
+    ) -> Self {
         Self {
             docker,
             config_directory,
             warnings,
+            daemon_target,
             verification_note: None,
         }
     }
 
-    /// `err`, from a request over this connection, with an explanation added
-    /// when it's a certificate-verification failure and the connection has
-    /// a [`VerificationNote`] — the cases where the user's own
-    /// configuration says this shouldn't have happened, or doesn't say
-    /// which roots the daemon was verified against. Anything else is
-    /// returned unchanged.
-    pub(super) fn explain_failure(&self, err: anyhow::Error) -> anyhow::Error {
+    /// `err`, from a request over this connection, headed `failed` — what
+    /// the request was for — unless no connection could be made at all (see
+    /// [`is_unreachable`]): then it is headed by that instead, naming the
+    /// daemon tried and the likely causes, since nothing was asked of a
+    /// daemon that never answered. A certificate-verification failure on a
+    /// connection with a [`VerificationNote`] gets an explanation on top —
+    /// the cases where the user's own configuration says this shouldn't
+    /// have happened, or doesn't say which roots the daemon was verified
+    /// against.
+    pub(super) fn explain_failure(&self, err: anyhow::Error, failed: &str) -> anyhow::Error {
+        if is_unreachable(err.as_ref()) {
+            return err.context(format!(
+                "Couldn't reach the Docker daemon at {} — check that Docker is running and that \
+                 this is the right Docker host or context.",
+                self.daemon_target
+            ));
+        }
+        let err = err.context(failed.to_string());
         let Some(note) = &self.verification_note else {
             return err;
         };
@@ -1016,22 +1064,57 @@ impl Connection {
     }
 }
 
-/// Whether `error`'s chain holds a `rustls` certificate error. That error
-/// sits inside a `std::io::Error` — two, in fact: `tokio-rustls` wraps it in
-/// one and `hyper-rustls` wraps that in another — and an `io::Error`'s own
+/// Whether `error`'s chain holds a `rustls` certificate error.
+fn holds_certificate_error(error: &(dyn std::error::Error + 'static)) -> bool {
+    chain_holds(error, &|error| {
+        error
+            .downcast_ref::<rustls::Error>()
+            .is_some_and(|error| matches!(error, rustls::Error::InvalidCertificate(_)))
+    })
+}
+
+/// Whether `error`'s chain says no connection to the daemon could be made at
+/// all — refused, no route, a host name that doesn't resolve, a connect
+/// timed out — rather than that something answered. That's the HTTP
+/// client's own connect-failure kind, which every transport `connect` builds
+/// reports through, less the two connect failures where something did
+/// answer: TLS (any `rustls` error, a failed verification included, which
+/// [`Connection::explain_failure`] explains instead) and a socket refusing
+/// this user permission.
+fn is_unreachable(error: &(dyn std::error::Error + 'static)) -> bool {
+    chain_holds(error, &|error| {
+        error
+            .downcast_ref::<hyper_util::client::legacy::Error>()
+            .is_some_and(hyper_util::client::legacy::Error::is_connect)
+    }) && !chain_holds(error, &|error| {
+        error.is::<rustls::Error>()
+            || error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied)
+    })
+}
+
+/// Whether `found` holds for any error in `error`'s chain. A TLS error sits
+/// inside a `std::io::Error` — two, in fact: `tokio-rustls` wraps it in one
+/// and `hyper-rustls` wraps that in another — and an `io::Error`'s own
 /// `source` skips straight past its payload, so each one is looked inside as
 /// well as past.
-fn holds_certificate_error(error: &(dyn std::error::Error + 'static)) -> bool {
-    if let Some(rustls_error) = error.downcast_ref::<rustls::Error>() {
-        return matches!(rustls_error, rustls::Error::InvalidCertificate(_));
+fn chain_holds(
+    error: &(dyn std::error::Error + 'static),
+    found: &dyn Fn(&(dyn std::error::Error + 'static)) -> bool,
+) -> bool {
+    if found(error) {
+        return true;
     }
     let payload = error
         .downcast_ref::<std::io::Error>()
         .and_then(std::io::Error::get_ref);
-    if payload.is_some_and(|payload| holds_certificate_error(payload)) {
+    if payload.is_some_and(|payload| chain_holds(payload, found)) {
         return true;
     }
-    error.source().is_some_and(holds_certificate_error)
+    error
+        .source()
+        .is_some_and(|source| chain_holds(source, found))
 }
 
 /// Resolves and connects to the Docker daemon, matching Batect's own
@@ -1073,8 +1156,8 @@ fn holds_certificate_error(error: &(dyn std::error::Error + 'static)) -> bool {
 /// Either way the settings are one [`TlsSettings`], turned into a
 /// connection by [`connect_over_tls`]; the flags' come from
 /// [`flag_tls_settings`]. The returned [`Connection`]
-/// carries what [`Connection::explain_failure`] needs to explain a
-/// verification failure.
+/// carries what [`Connection::explain_failure`] needs to explain an
+/// unreachable daemon or a verification failure.
 pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
     options.check_options()?;
 
@@ -1102,6 +1185,7 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
     if let Some(context_name) = context_name {
         let ContextEndpoint { host, tls } =
             docker_context_endpoint(&config_directory, &context_name)?;
+        let daemon_target = daemon_target(options, None, Some((&context_name, &host)));
         let tls = tls.or_else(|| {
             is_https(&host).then_some(TlsSettings {
                 ca: None,
@@ -1111,7 +1195,9 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
         });
         let Some(tls) = tls else {
             return connect_plain(&host)
-                .map(|docker| Connection::without_note(docker, config_directory, warnings))
+                .map(|docker| {
+                    Connection::without_note(docker, config_directory, warnings, daemon_target)
+                })
                 .with_context(|| {
                     format!("Failed to connect to Docker context '{context_name}' (host '{host}')")
                 });
@@ -1123,12 +1209,14 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
             docker,
             config_directory,
             warnings,
+            daemon_target,
             verification_note: tls
                 .skip_verify_requested
                 .then_some(VerificationNote::ContextAskedToSkip(context_name)),
         });
     }
 
+    let daemon_target = daemon_target(options, docker_host_env.as_deref(), None);
     let docker_tls_verify_env = std::env::var("DOCKER_TLS_VERIFY").ok();
     let tls = tls_enabled(options, docker_tls_verify_env.as_deref())?
         || host.as_deref().is_some_and(is_https);
@@ -1138,7 +1226,12 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
                 .with_context(|| format!("Failed to connect to Docker host '{host}'"))?,
             None => Docker::connect_with_local_defaults().context("Failed to connect to Docker")?,
         };
-        return Ok(Connection::without_note(docker, config_directory, warnings));
+        return Ok(Connection::without_note(
+            docker,
+            config_directory,
+            warnings,
+            daemon_target,
+        ));
     }
 
     let host = require_host_for_tls(host)?;
@@ -1157,6 +1250,7 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
         docker,
         config_directory,
         warnings,
+        daemon_target,
         verification_note: tls
             .ca
             .is_none()
