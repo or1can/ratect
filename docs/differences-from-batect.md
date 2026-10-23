@@ -246,6 +246,13 @@ Beyond any one flag:
 - **Short options combine, and take an attached value**: `-Tf batect.yml`,
   `-fbatect.yml` and `-oquiet` are accepted. Batect looks an option up by its
   exact text up to any `=`, and rejects each of those as an invalid option.
+- **An option's value can't start with `-` when it's given as the next
+  argument**: `--use-network -x` and `--clean-cache --list-tasks` are usage
+  errors, whose tip is the `=` form (`--use-network=-x`), which is accepted.
+  Batect takes the next argument as the value whatever it starts with, so a
+  forgotten value silently swallows the flag after it, while no Docker
+  network, volume or context name and no Batect task name can start with `-`,
+  and a path that does can be written `./-x`.
 
 ## Runtime behavior gaps
 

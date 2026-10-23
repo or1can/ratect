@@ -194,7 +194,9 @@ line meant to run a task exits `125`, and so does a line naming no task at all
 ([#434](https://github.com/or1can/ratect/issues/434)), the safe answer for a
 CI step that was meant to run one. In both binaries the subcommand or flag
 counts only where `clap` would read it as one. It doesn't count after `--`,
-where it belongs to the task, or as the value of an option that takes one.
+where it belongs to the task, or as the value of an option that takes one,
+and in `ratect-compat` not after the task name either, where the options have
+already ended ([#435](https://github.com/or1can/ratect/issues/435)).
 An option `clap` doesn't recognise is taken to take no value, the one reading
 that doesn't guess at an unknown flag. So `ratect-compat build --bogus --
 --clean` and `ratect --bogus run test` are runs (`125`), and `ratect-compat

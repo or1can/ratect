@@ -13,6 +13,21 @@ The forward-looking `ratect` binary has its own, subcommand-based interface — 
 [`ratect` CLI reference](ratect-cli.md), and [Two binaries, two
 formats](index.md#two-binaries-two-formats) for which to pick.
 
+## Where options go
+
+Options go before the task name, as in Batect. The first argument that isn't an
+option or an option's value is the task name, and nothing after it is read as an
+option. Only `--` and arguments for the task may follow the task name: anything else,
+such as `ratect-compat build --disable-ports` or `ratect-compat build extra`, is
+refused before anything runs, with an error naming the task name and the first extra
+argument. Under `--list-tasks`, `--clean`, `--clean-cache` or `--upgrade`, which
+replace the task, whatever follows the options is ignored, so `ratect-compat
+--list-tasks a b` lists the tasks.
+
+An option's value that starts with `-` has to be given after `=`, as in
+`--use-network=-x`: given as the next argument, it's refused — see [differences from
+Batect](differences-from-batect.md#cli-flags).
+
 ## Options
 
 Grouped by purpose, matching `ratect-compat --help`. The grouping is

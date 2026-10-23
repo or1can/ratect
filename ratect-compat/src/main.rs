@@ -236,6 +236,9 @@ struct Args {
     #[arg(long = "log-file", help_heading = "Output")]
     log_file: Option<PathBuf>,
 
+    // `task_name` and `additional_args` are declared for `--help`'s usage
+    // line only: nothing after the options reaches `clap`, and
+    // `parse_checked` sets them itself.
     /// Name of the task to run
     task_name: Option<String>,
 
@@ -292,20 +295,65 @@ impl Args {
         }
     }
 
-    /// `clap`'s parse, then the one check it can't make per value: a key
-    /// given twice to `--config-var` or `--override-image`, which Batect's
+    /// The command line in Batect's grammar, which `clap`'s alone can't say
+    /// (ratect#435). The options end at the first argument that isn't one —
+    /// [`split_at_task`] finds it — and only they reach `clap`. What follows
+    /// is the task name, then nothing or `-- ARGS…`; under a flag that
+    /// replaces the task it is ignored instead, as Batect's `parseTaskName`
+    /// ignores it.
+    ///
+    /// Then the one check `clap` can't make per value: a key given twice to
+    /// `--config-var` or `--override-image`, which Batect's
     /// `SingleValueMapOption` refuses rather than keeping the last
     /// (ratect#438). `--tag-image` may repeat a container, as in Batect. A
     /// `--config-var` also set by a `--config-vars-file` isn't a repeat:
     /// only the command line is counted, and it still wins over the file.
-    /// The error is `clap`'s own kind, so it prints and exits like any other
-    /// argument `clap` rejects.
+    /// Every error is `clap`'s own kind, so it prints and exits like any
+    /// other argument `clap` rejects.
     fn parse_checked<I, T>(arguments: I) -> std::result::Result<Self, clap::Error>
     where
         I: IntoIterator<Item = T>,
         T: Into<std::ffi::OsString> + Clone,
     {
-        let args = Self::try_parse_from(arguments)?;
+        let arguments: Vec<std::ffi::OsString> = arguments.into_iter().map(Into::into).collect();
+        let (options, rest, refused) = split_at_task(&arguments);
+        let mut args = match (Self::try_parse_from(options), refused) {
+            // `--help` and `--version` act as soon as `clap` reaches them.
+            (Err(error), _) if !error.use_stderr() => return Err(error),
+            (_, Some(error)) => return Err(error),
+            (parsed, None) => parsed?,
+        };
+        if args.runs_a_task() {
+            let rest = rest
+                .iter()
+                .map(|word| {
+                    word.to_str().ok_or_else(|| {
+                        Self::command().error(
+                            clap::error::ErrorKind::InvalidUtf8,
+                            format!("{word:?} is not valid UTF-8"),
+                        )
+                    })
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            match rest.as_slice() {
+                [] | ["--", ..] => {}
+                [task] => args.task_name = Some(task.to_string()),
+                [task, "--", task_args @ ..] => {
+                    args.task_name = Some(task.to_string());
+                    args.additional_args = task_args.iter().map(|arg| arg.to_string()).collect();
+                }
+                [task, extra, ..] => {
+                    return Err(Self::command().error(
+                        clap::error::ErrorKind::UnknownArgument,
+                        format!(
+                            "'{task}' was taken as the task name, and '{extra}' follows it: \
+                             options go before the task name, and arguments for the task \
+                             after '--', as in '{task} -- {extra}'"
+                        ),
+                    ));
+                }
+            }
+        }
         for (option, key_name, pairs) in [
             ("--config-var", "variable", &args.config_var),
             ("--override-image", "container", &args.override_image),
@@ -498,19 +546,23 @@ fn init_tracing(log_file: Option<&Path>, stderr_color: bool) -> Result<()> {
 }
 
 /// [`Args::runs_a_task`] for arguments that didn't parse: a line is a run
-/// unless one of the flags that replace a task appears where `clap` would
-/// read it as a flag — not after `--`, not as another option's value
-/// (decisions/0016). `args` excludes the program name.
+/// unless one of the flags that replace a task appears where it would be
+/// read as a flag — among the options, so not after the task name or `--`,
+/// and not as another option's value (decisions/0016; ratect#435). `args`
+/// excludes the program name.
 fn is_a_run(args: &[String]) -> bool {
     let command = Args::command();
     let words =
         ratect_core::exit_code::command_line_words(args, |word| takes_value(&command, word));
-    !words.iter().any(|word| {
-        matches!(
-            word,
-            Word::Long("list-tasks" | "clean" | "clean-cache" | "upgrade") | Word::Short('T')
-        )
-    })
+    !words
+        .iter()
+        .take_while(|word| !matches!(word, Word::Positional(_)))
+        .any(|word| {
+            matches!(
+                word,
+                Word::Long("list-tasks" | "clean" | "clean-cache" | "upgrade") | Word::Short('T')
+            )
+        })
 }
 
 /// Whether `word` is one of `command`'s own options and takes a value —
@@ -524,6 +576,85 @@ fn takes_value(command: &clap::Command, word: Word<'_>) -> bool {
             Word::Positional(_) => false,
         })
         .is_some_and(|arg| arg.get_action().takes_values())
+}
+
+/// Splits `arguments` (the program name first) where Batect's option parser
+/// stops: at the first argument that isn't an option or an option's value —
+/// the task name — or at a `--`. The first part, the program name included,
+/// is what `clap` parses; the second is everything from that argument on.
+/// It reads options as `clap` and [`ratect_core::exit_code::command_line_words`]
+/// do, so the leniency recorded in `docs/differences-from-batect.md` stays:
+/// `-Tf x`, `-fx` and `-oquiet`.
+///
+/// A separate value starting with `-` is refused instead, for every option
+/// that takes one: the third part is the first, for [`Args::parse_checked`]
+/// to report unless `clap`'s own parse of the options ends in `--help` or
+/// `--version`. `clap` refuses it too, but with a tip to write `-- -x`,
+/// which here would pass `-x` to the task: this error's tip is the `=` form
+/// (ratect#435).
+fn split_at_task(
+    arguments: &[std::ffi::OsString],
+) -> (
+    &[std::ffi::OsString],
+    &[std::ffi::OsString],
+    Option<clap::Error>,
+) {
+    let command = Args::command();
+    let mut refused = None;
+    let mut refuse = |message: String| {
+        refused.get_or_insert_with(|| {
+            command
+                .clone()
+                .error(clap::error::ErrorKind::InvalidValue, message)
+        });
+    };
+    let mut index = 1;
+    while let Some(argument) = arguments.get(index) {
+        let argument = argument.to_string_lossy();
+        if argument == "--" {
+            break;
+        }
+        // The option `argument` ends with that takes the next argument as
+        // its value, if any.
+        let value_option = if let Some(long) = argument.strip_prefix("--") {
+            match long.split_once('=') {
+                Some(_) => None,
+                None => takes_value(&command, Word::Long(long)).then(|| format!("--{long}")),
+            }
+        } else if let Some(shorts) = argument
+            .strip_prefix('-')
+            .filter(|shorts| !shorts.is_empty())
+        {
+            shorts
+                .char_indices()
+                .find_map(|(position, short)| {
+                    if !takes_value(&command, Word::Short(short)) {
+                        return None;
+                    }
+                    let attached = &shorts[position + short.len_utf8()..];
+                    Some(attached.is_empty().then(|| format!("-{short}")))
+                })
+                .flatten()
+        } else {
+            break;
+        };
+        if let Some(option) = value_option {
+            if let Some(value) = arguments.get(index + 1) {
+                let value = value.to_string_lossy();
+                if value.starts_with('-') && value != "-" {
+                    refuse(format!(
+                        "{option} takes a value, and the argument after it, '{value}', starts \
+                         with '-': to give a value starting with '-', write it as \
+                         '{option}={value}'"
+                    ));
+                }
+                index += 1;
+            }
+        }
+        index += 1;
+    }
+    let (options, rest) = arguments.split_at(index.min(arguments.len()));
+    (options, rest, refused)
 }
 
 /// Parses the command line, exiting as decisions/0016 says when `clap`

@@ -28,8 +28,8 @@ fn args(arguments: &[&str]) -> Args {
 }
 
 const BINARY: &str = "ratect-compat";
-/// `ratect-compat` takes the task name as a trailing positional, after
-/// its flags.
+/// `ratect-compat` takes the task name after every option, as Batect does:
+/// nothing after it is read as one (ratect#435).
 const TASK_ARGUMENTS: &[&str] = &["build"];
 
 fn settings_from(arguments: &[&str]) -> TaskEngineSettings {
@@ -429,6 +429,143 @@ fn parse_checked_still_accepts_what_batect_does_and_the_recorded_divergences() {
         settings.image_tags["c"],
         HashSet::from(["t1".to_string(), "t2".to_string()])
     );
+}
+
+/// `parse_checked`'s parse of a line it accepts.
+fn parsed(arguments: &[&str]) -> Args {
+    Args::parse_checked(arguments).unwrap_or_else(|error| panic!("{arguments:?}: {error}"))
+}
+
+/// Options end at the task name, as in Batect: anything after it but
+/// `-- ARGS…` is refused, naming the task and the first extra argument,
+/// rather than read as an option (ratect#435).
+#[test]
+fn an_argument_after_the_task_name_is_refused_unless_it_follows_double_dash() {
+    for (arguments, task, extra) in [
+        (
+            &["test-task", "--list-tasks"][..],
+            "test-task",
+            "--list-tasks",
+        ),
+        (&["build", "--disable-ports"], "build", "--disable-ports"),
+        (&["test-task", "extra"], "test-task", "extra"),
+        (&["--no-color", "t", "extra", "--", "x"], "t", "extra"),
+        (&["t", "-f", "other.yml"], "t", "-f"),
+    ] {
+        let line = [&[BINARY], arguments].concat();
+        let error = argument_error(&line);
+        assert!(
+            error.contains(&format!("'{task}'"))
+                && error.contains(&format!("'{extra}'"))
+                && error.contains("before the task name")
+                && error.contains("--"),
+            "{arguments:?}: {error}"
+        );
+    }
+}
+
+#[test]
+fn arguments_after_double_dash_reach_the_task_whatever_they_look_like() {
+    let args = parsed(&[
+        BINARY,
+        "-f",
+        "x.yml",
+        "test-task",
+        "--",
+        "a",
+        "-b",
+        "--c",
+        "--",
+    ]);
+    assert_eq!(args.task_name.as_deref(), Some("test-task"));
+    assert_eq!(args.additional_args, ["a", "-b", "--c", "--"]);
+    assert_eq!(args.config_file, PathBuf::from("x.yml"));
+}
+
+/// A flag that replaces the task ignores everything after the options, as
+/// Batect's `parseTaskName` returns early for one (ratect#435).
+#[test]
+fn a_flag_that_replaces_the_task_ignores_everything_after_the_options() {
+    for arguments in [
+        &["--list-tasks", "a", "b"][..],
+        &["--list-tasks", "a", "--", "x"],
+        &["--clean-cache", "foo", "test-task", "extra"],
+        &["--clean", "test-task", "x"],
+        &["--upgrade", "--", "x"],
+    ] {
+        let args = parsed(&[&[BINARY], arguments].concat());
+        assert!(!args.runs_a_task(), "{arguments:?}");
+        assert_eq!(args.task_name, None, "{arguments:?}");
+        assert!(args.additional_args.is_empty(), "{arguments:?}");
+    }
+}
+
+/// A value given as its own argument that starts with `-` is refused, as
+/// `clap` refuses it, but the error points at the `=` form rather than at
+/// `--`, which passes arguments to the task (ratect#435).
+#[test]
+fn a_hyphen_leading_value_is_refused_with_a_tip_naming_the_equals_form() {
+    for (arguments, tip) in [
+        (
+            &["--use-network", "-x", "test-task"][..],
+            "--use-network=-x",
+        ),
+        (
+            &["--clean-cache", "--list-tasks"],
+            "--clean-cache=--list-tasks",
+        ),
+        (&["-f", "-x", "test-task"], "-f=-x"),
+    ] {
+        let error = argument_error(&[&[BINARY], arguments].concat());
+        assert!(
+            error.contains(tip) && !error.contains("'-- "),
+            "{arguments:?}: {error}"
+        );
+    }
+}
+
+/// `--help` and `--version` still act as soon as they are reached, before
+/// a value refused while splitting at the task name is reported — as before
+/// that check existed (decisions/0016).
+#[test]
+fn help_and_version_win_over_a_refused_value() {
+    for arguments in [
+        &["--version", "--use-network", "-x"][..],
+        &["--help", "-f", "-x"],
+    ] {
+        let error = Args::parse_checked([&[BINARY], arguments].concat())
+            .expect_err("help and version are clap errors");
+        assert!(!error.use_stderr(), "{arguments:?}: {error}");
+    }
+}
+
+/// The `=` forms reach their option, a value containing `=` included, and
+/// the recorded short-option leniency stays (ratect#435).
+#[test]
+fn the_equals_forms_and_combined_short_options_still_parse() {
+    let args = parsed(&[BINARY, "--use-network=-x", "-f=a=b.yml", "--list-tasks"]);
+    assert_eq!(args.use_network.as_deref(), Some("-x"));
+    assert_eq!(args.config_file, PathBuf::from("a=b.yml"));
+
+    let args = parsed(&[
+        BINARY,
+        "--output=quiet",
+        "--log-file=l",
+        "--max-parallelism=2",
+        "t",
+    ]);
+    assert_eq!(args.output, Some(OutputStyleArg::Quiet));
+    assert_eq!(args.log_file, Some(PathBuf::from("l")));
+    assert_eq!(args.max_parallelism, Some(2));
+    assert_eq!(args.task_name.as_deref(), Some("t"));
+
+    let args = parsed(&[BINARY, "-Tf", "x.yml"]);
+    assert!(args.list_tasks);
+    assert_eq!(args.config_file, PathBuf::from("x.yml"));
+    let args = parsed(&[BINARY, "-fx.yml", "-oquiet", "t"]);
+    assert_eq!(args.config_file, PathBuf::from("x.yml"));
+    assert_eq!(args.output, Some(OutputStyleArg::Quiet));
+    assert_eq!(args.task_name.as_deref(), Some("t"));
 }
 
 #[test]
@@ -1117,9 +1254,9 @@ fn raw(line: &[&str]) -> Vec<String> {
 }
 
 /// The raw-argument reading, for a line `clap` rejects: a flag that replaces
-/// a task counts only where `clap` would read it as one — not after `--`,
+/// a task counts only among the options — not after the task name or `--`,
 /// not as another option's value — and an unknown option takes no value
-/// (decisions/0016).
+/// (decisions/0016; ratect#435).
 #[test]
 fn a_line_that_does_not_parse_is_a_run_unless_a_flag_replaces_the_task() {
     assert!(is_a_run(&raw(&["--bogus", "build"])));
@@ -1128,6 +1265,9 @@ fn a_line_that_does_not_parse_is_a_run_unless_a_flag_replaces_the_task() {
     assert!(is_a_run(&raw(&["build", "--bogus", "--", "--clean"])));
     assert!(is_a_run(&raw(&["-f", "--clean", "--bogus"])));
     assert!(is_a_run(&raw(&["--config-file=--clean", "--bogus"])));
+    // Options end at the task name (ratect#435).
+    assert!(is_a_run(&raw(&["build", "--list-tasks"])));
+    assert!(is_a_run(&raw(&["build", "-T", "--clean"])));
 
     assert!(!is_a_run(&raw(&["--bogus", "--clean"])));
     assert!(!is_a_run(&raw(&["--bogus", "-T"])));
@@ -1138,7 +1278,9 @@ fn a_line_that_does_not_parse_is_a_run_unless_a_flag_replaces_the_task() {
 }
 
 /// On a line that parses, the raw reading agrees with the parsed one, so a
-/// line's path never depends on whether `clap` accepted it.
+/// line's path never depends on whether `clap` accepted it — including a
+/// line with a flag that replaces the task after its task name, where
+/// `split_at_task` and `command_line_words` must agree the options ended.
 #[test]
 fn the_raw_reading_agrees_with_the_parsed_one() {
     for line in [
@@ -1152,12 +1294,16 @@ fn the_raw_reading_agrees_with_the_parsed_one() {
         &["--clean-cache=cargo", "build"],
         &["--upgrade"],
         &["-o", "quiet", "build"],
+        &["--list-tasks", "build", "--clean"],
+        &["-Tf", "x.yml", "a", "b"],
+        &["-oquiet", "--clean-cache=a,b", "x"],
+        &["build", "--", "-T"],
     ] {
         let mut parsed = vec!["ratect"];
         parsed.extend_from_slice(line);
         assert_eq!(
             is_a_run(&raw(line)),
-            args(&parsed).runs_a_task(),
+            Args::parse_checked(&parsed).unwrap().runs_a_task(),
             "{line:?}"
         );
     }

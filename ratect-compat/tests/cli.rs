@@ -1075,6 +1075,58 @@ fn help_exits_zero_and_a_usage_error_takes_its_paths_code() {
     assert_eq!(exit_code_of(&["--bogus", "--list-tasks"]), Some(2));
 }
 
+/// Options end at the task name (ratect#435): an argument after it but
+/// `-- ARGS…` is a usage error on a run, `125`, and lists nothing — while a
+/// flag that replaces the task ignores whatever follows the options.
+#[test]
+fn an_option_after_the_task_name_is_a_usage_error_not_applied() {
+    let config = sample_config_path();
+    let config = config.to_str().unwrap();
+    let run = |args: &[&str]| {
+        ratect_command()
+            .args(["-f", config])
+            .args(args)
+            .output()
+            .expect("failed to run ratect")
+    };
+
+    for line in [
+        &["test-task", "--list-tasks"][..],
+        &["test-task", "extra"],
+        &["build", "--disable-ports"],
+    ] {
+        let output = run(line);
+        assert_eq!(output.status.code(), Some(125), "{line:?}");
+        assert!(output.stdout.is_empty(), "{line:?} printed to stdout");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("'{}'", line[0]))
+                && stderr.contains(&format!("'{}'", line[1])),
+            "{line:?}: {stderr}"
+        );
+    }
+
+    for line in [
+        &["--list-tasks", "a", "b"][..],
+        &["--list-tasks", "a", "--", "x"],
+    ] {
+        let output = run(line);
+        assert_eq!(output.status.code(), Some(0), "{line:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("Tasks in ratect-test:"),
+            "{line:?}"
+        );
+    }
+
+    let output = run(&["--use-network", "-x", "test-task"]);
+    assert_eq!(output.status.code(), Some(125));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--use-network=-x") && !stderr.contains("'-- -x'"),
+        "{stderr}"
+    );
+}
+
 /// A unique, empty temp directory holding a directory `dir` and a
 /// config file `broken.yml` that exists but doesn't parse.
 fn invalid_values_directory() -> PathBuf {
@@ -5657,7 +5709,7 @@ fn error_and_warning_markers_are_bold_on_a_terminal_and_plain_without_color() {
     for env in [&[("NO_COLOR", "1")][..], &[][..]] {
         let mut plain_args = args.to_vec();
         if env.is_empty() {
-            plain_args.push("--no-color");
+            plain_args.insert(0, "--no-color");
         }
         let plain = run_on_a_terminal(&plain_args, env);
         assert!(
