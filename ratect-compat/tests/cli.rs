@@ -6637,6 +6637,31 @@ fn a_missing_or_directory_tls_file_is_refused_on_every_command() {
     );
 }
 
+/// ratect#437: `DOCKER_CERT_PATH` is resolved as `--docker-cert-path` is,
+/// so a leading `~` is the passwd home — shown by the check refusing a
+/// missing one, which names the resolved path, as Batect's does.
+#[test]
+fn a_tilde_in_docker_cert_path_is_the_home_directory() {
+    let missing = "ratect-437-no-such-cert-directory";
+    let output = ratect_command()
+        .env("DOCKER_CERT_PATH", format!("~/{missing}"))
+        .arg("-f")
+        .arg(sample_config_path())
+        .arg("--list-tasks")
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let home = ratect_core::user::home_directory().unwrap();
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "DOCKER_CERT_PATH {:?} does not exist.",
+            home.join(missing)
+        )),
+        "{stderr}"
+    );
+}
+
 /// What both binaries print for `--tag-image build-env=…` beside
 /// `--override-image build-env=…` — Batect's own words (ratect#436). Native
 /// `ratect`'s own tests assert the same literal.

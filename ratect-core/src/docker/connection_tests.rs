@@ -375,6 +375,36 @@ fn docker_config_directory_falls_back_to_docker_config_then_home() {
     );
 }
 
+/// `DOCKER_CONFIG` and `DOCKER_CERT_PATH` are resolved as Batect resolves
+/// the options they default (ratect#437): a leading `~` is the passwd home,
+/// and `.` and `..` are removed lexically — for the directory used and for
+/// the check on it alike.
+#[test]
+fn the_directory_variables_are_resolved_as_batect_resolves_them() {
+    let home = crate::user::home_directory().unwrap();
+    let options = DockerConnectionOptions::default();
+    assert_eq!(
+        docker_config_directory(&options, Some("~/alt")).unwrap(),
+        home.join("alt")
+    );
+    assert_eq!(
+        docker_config_directory(&options, Some("a/../alt")).unwrap(),
+        PathBuf::from("alt")
+    );
+    assert_eq!(
+        docker_cert_directory(&options, Some("~/certs"), None).unwrap(),
+        (home.join("certs"), "DOCKER_CERT_PATH".to_string())
+    );
+    let missing = "ratect-437-no-such-directory";
+    let error = check_chosen_directories(&options, None, Some(&format!("~/{missing}")))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains(&format!("{:?}", home.join(missing))),
+        "{error}"
+    );
+}
+
 /// The active context, for `resolve_context_name` — `"active"`.
 fn active() -> Option<String> {
     Some("active".to_string())
@@ -704,14 +734,15 @@ fn docker_cert_directory_prefers_the_explicit_option_over_the_env_var_and_defaul
         );
     }
     // An empty DOCKER_CONFIG is the directory the context store is read
-    // from too — the working directory — so the certificates follow it.
+    // from too — the working directory, `.` once resolved — so the
+    // certificates follow it.
     assert_eq!(
         docker_config_directory(&options, Some("")).unwrap(),
-        PathBuf::new()
+        PathBuf::from(".")
     );
     assert_eq!(
         docker_cert_directory(&options, None, Some("")).unwrap(),
-        (PathBuf::new(), "DOCKER_CONFIG".to_string())
+        (PathBuf::from("."), "DOCKER_CONFIG".to_string())
     );
 }
 

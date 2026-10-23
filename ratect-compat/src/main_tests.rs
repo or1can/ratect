@@ -290,6 +290,23 @@ fn resolves_the_config_path_options() {
     assert_eq!(parsed.config_vars_file, Some(PathBuf::from("vars.yml")));
 }
 
+/// The Docker directory options are resolved as Batect's `PathResolver`
+/// resolves a path (ratect#437).
+#[test]
+fn resolves_the_docker_directory_options() {
+    let home = ratect_core::user::home_directory().unwrap();
+    let parsed = Args::parse_checked([
+        BINARY,
+        "--docker-config",
+        "~/alt",
+        "--docker-cert-path=a/../certs",
+        "-T",
+    ])
+    .unwrap();
+    assert_eq!(parsed.docker_config, Some(home.join("alt")));
+    assert_eq!(parsed.docker_cert_path, Some(PathBuf::from("certs")));
+}
+
 #[test]
 fn parses_task_name_and_trailing_args() {
     let args = Args::try_parse_from(["ratect", "build", "--", "--flag", "value"]).unwrap();

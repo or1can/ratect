@@ -46,6 +46,29 @@ fn resolves_the_config_path_options() {
     }
 }
 
+/// The Docker directory options are resolved as Batect's `PathResolver`
+/// resolves a path (ratect#437).
+#[test]
+fn resolves_the_docker_directory_options() {
+    let home = ratect_core::user::home_directory().unwrap();
+    let cli = Cli::try_parse_from([
+        "ratect",
+        "run",
+        "build",
+        "--docker-config",
+        "~/alt",
+        "--docker-cert-path=a/../certs",
+    ])
+    .unwrap();
+    match cli.command {
+        Command::Run(args) => {
+            assert_eq!(args.docker.config_directory, Some(home.join("alt")));
+            assert_eq!(args.docker.cert_path, Some(PathBuf::from("certs")));
+        }
+        other => panic!("expected a run command, got {other:?}"),
+    }
+}
+
 #[test]
 fn run_takes_the_task_name_as_its_own_argument() {
     let cli = Cli::try_parse_from(["ratect", "run", "build"]).unwrap();

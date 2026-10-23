@@ -370,15 +370,25 @@ fn active_docker_context(config_directory: &Path) -> Result<Option<String>> {
 /// that order is written: [`docker_config_directory`] and
 /// [`docker_cert_directory`] both ask here, so the certificate directory's
 /// fallback can't drift from the directory the context store is read from.
+/// `DOCKER_CONFIG` is resolved as the option is (see [`variable_path`]).
 fn chosen_config_directory(
     options: &DockerConnectionOptions,
     docker_config_env: Option<&str>,
-) -> Option<(PathBuf, &'static str)> {
-    match (&options.config_directory, docker_config_env) {
+) -> Result<Option<(PathBuf, &'static str)>> {
+    Ok(match (&options.config_directory, docker_config_env) {
         (Some(dir), _) => Some((dir.clone(), "--docker-config")),
-        (None, Some(dir)) => Some((PathBuf::from(dir), "DOCKER_CONFIG")),
+        (None, Some(dir)) => Some((variable_path(dir)?, "DOCKER_CONFIG")),
         (None, None) => None,
-    }
+    })
+}
+
+/// A path `DOCKER_CONFIG` or `DOCKER_CERT_PATH` gives, resolved as the
+/// option it defaults is — see
+/// [`resolve_option_path`](crate::config::resolve_option_path) — as Batect
+/// resolves both through the same converter (ratect#437). The Docker CLI
+/// takes either as written.
+fn variable_path(value: &str) -> Result<PathBuf> {
+    crate::config::resolve_option_path(Path::new(value))
 }
 
 /// `--docker-config`, else `DOCKER_CONFIG`, else `~/.docker` — the
@@ -394,7 +404,7 @@ fn docker_config_directory(
     options: &DockerConnectionOptions,
     docker_config_env: Option<&str>,
 ) -> Result<PathBuf> {
-    match chosen_config_directory(options, docker_config_env) {
+    match chosen_config_directory(options, docker_config_env)? {
         Some((dir, _)) => Ok(dir),
         None => Ok(crate::user::home_directory()?.join(".docker")),
     }
@@ -430,9 +440,9 @@ fn docker_cert_directory(
         return Ok((dir.clone(), "--docker-cert-path".to_string()));
     }
     if let Some(dir) = docker_cert_path_env.filter(|dir| !dir.is_empty()) {
-        return Ok((PathBuf::from(dir), "DOCKER_CERT_PATH".to_string()));
+        return Ok((variable_path(dir)?, "DOCKER_CERT_PATH".to_string()));
     }
-    if let Some((dir, named_by)) = chosen_config_directory(options, docker_config_env) {
+    if let Some((dir, named_by)) = chosen_config_directory(options, docker_config_env)? {
         return Ok((dir, named_by.to_string()));
     }
     Ok((
@@ -461,13 +471,13 @@ fn check_chosen_directories(
     docker_config_env: Option<&str>,
     docker_cert_path_env: Option<&str>,
 ) -> Result<()> {
-    let config = chosen_config_directory(options, docker_config_env.filter(|dir| !dir.is_empty()));
+    let config = chosen_config_directory(options, docker_config_env.filter(|dir| !dir.is_empty()))?;
     let cert = match (
         &options.cert_path,
         docker_cert_path_env.filter(|dir| !dir.is_empty()),
     ) {
         (Some(dir), _) => Some((dir.clone(), "--docker-cert-path")),
-        (None, Some(dir)) => Some((PathBuf::from(dir), "DOCKER_CERT_PATH")),
+        (None, Some(dir)) => Some((variable_path(dir)?, "DOCKER_CERT_PATH")),
         (None, None) => None,
     };
     for (path, named_by) in config.into_iter().chain(cert) {

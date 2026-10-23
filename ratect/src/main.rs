@@ -489,7 +489,7 @@ struct DockerArgs {
 
     /// Directory containing the Docker CLI's configuration (context store,
     /// config.json). Defaults to DOCKER_CONFIG, then ~/.docker.
-    #[arg(long = "docker-config")]
+    #[arg(long = "docker-config", value_parser = path_option())]
     config_directory: Option<PathBuf>,
 
     /// Use TLS when connecting to the Docker host. Identical to
@@ -507,7 +507,7 @@ struct DockerArgs {
     /// individually below. Defaults to DOCKER_CERT_PATH, then
     /// --docker-config's directory if given (or DOCKER_CONFIG's), then
     /// ~/.docker.
-    #[arg(long = "docker-cert-path")]
+    #[arg(long = "docker-cert-path", value_parser = path_option())]
     cert_path: Option<PathBuf>,
 
     /// TLS CA certificate verifying the Docker host's own certificate.

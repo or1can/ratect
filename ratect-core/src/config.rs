@@ -4980,8 +4980,8 @@ fn expand_home_directory(path: impl AsRef<Path>) -> Result<Option<PathBuf>> {
     Ok(Some(home.join(components.as_path())))
 }
 
-/// A path a command-line option was given, as Batect's `PathResolver`
-/// resolves one: a leading `~` expanded (see `expand_home_directory`),
+/// A path a command-line option was given — or a variable that defaults
+/// one, such as `DOCKER_CONFIG` — as Batect's `PathResolver` resolves one: a leading `~` expanded (see `expand_home_directory`),
 /// then `.` and `..` removed lexically, without asking the filesystem — so
 /// `link/../batect.yml` is `batect.yml` even when `link` is a symlink,
 /// where the operating system would follow the link first. A leading `..`
