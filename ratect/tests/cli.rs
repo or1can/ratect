@@ -3508,3 +3508,32 @@ fn docker_context_beside_a_connection_flag_is_refused_whether_or_not_the_verb_co
         );
     }
 }
+
+/// ratect#437: an explicit `--config-vars-file` must name a file that
+/// exists — not a directory, nor something else (`/dev/null`) — checked
+/// before the config is read, as an invalid option value: `125` on a run.
+#[test]
+fn run_refuses_a_config_vars_file_that_is_not_a_file() {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for value in [
+        Path::new("no-such-vars.toml"),
+        directory.as_path(),
+        Path::new("/dev/null"),
+    ] {
+        let output = ratect_command()
+            .args(["run", "build", "-f"])
+            .arg(native_fixture_path())
+            .arg("--config-vars-file")
+            .arg(value)
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(125), "{value:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "--config-vars-file {value:?} does not exist or is not a file."
+            )),
+            "{value:?}: {stderr}"
+        );
+    }
+}

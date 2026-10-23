@@ -28,6 +28,13 @@ An option's value that starts with `-` has to be given after `=`, as in
 `--use-network=-x`: given as the next argument, it's refused — see [differences from
 Batect](differences-from-batect.md#cli-flags).
 
+A path given to `-f` or `--config-vars-file` is resolved as Batect resolves it: a
+leading `~` is your home directory, even where the shell leaves it alone
+(`--config-file=~/batect.yml`), and `.` and `..` are removed before the path is used,
+so `link/../batect.yml` <!-- example --> is `./batect.yml` whether or not `link` is a symlink. A leading
+`..` stays. Before any command runs — `--clean` included — an `-f` you give must name
+a file, and so must `--config-vars-file`.
+
 ## Options
 
 Grouped by purpose, matching `ratect-compat --help`. The grouping is
@@ -95,7 +102,7 @@ connects, as in Batect.
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
-| `--clean` | — | — | Removes every one of this project's own cache volumes/directories (per `--cache-type` or `BATECT_CACHE_TYPE`) and exits — doesn't run anything, and doesn't need `--config-file` to actually exist. See [Cache volumes](ratect-compat-config-reference.md#cache-volumes). |
+| `--clean` | — | — | Removes every one of this project's own cache volumes/directories (per `--cache-type` or `BATECT_CACHE_TYPE`) and exits — doesn't run anything, and never reads the config file, though a `--config-file` you give must name one. See [Cache volumes](ratect-compat-config-reference.md#cache-volumes). |
 | `--clean-cache <NAME>` | — | — | Removes just the named caches and exits, instead of every one of them. Takes a comma-separated list of names, each trimmed of surrounding whitespace, and is repeatable. Given together with `--clean`, the explicit name(s) win — `--clean`'s own "everything" behavior only applies when `--clean-cache` is never given at all. |
 
 ### Output

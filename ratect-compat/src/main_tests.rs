@@ -272,6 +272,24 @@ fn parses_custom_config_file() {
     assert_eq!(args.task_name.as_deref(), Some("build"));
 }
 
+/// `-f` and `--config-vars-file` are resolved as Batect's `PathResolver`
+/// resolves a path (ratect#437) — see `resolve_option_path`'s own test for
+/// the cases; this proves the options go through it.
+#[test]
+fn resolves_the_config_path_options() {
+    let home = ratect_core::user::home_directory().unwrap();
+    let parsed = Args::parse_checked([
+        BINARY,
+        "-f",
+        "~/x.yml",
+        "--config-vars-file=link/../vars.yml",
+        "-T",
+    ])
+    .unwrap();
+    assert_eq!(parsed.config_file, home.join("x.yml"));
+    assert_eq!(parsed.config_vars_file, Some(PathBuf::from("vars.yml")));
+}
+
 #[test]
 fn parses_task_name_and_trailing_args() {
     let args = Args::try_parse_from(["ratect", "build", "--", "--flag", "value"]).unwrap();

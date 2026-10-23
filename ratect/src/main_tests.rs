@@ -21,6 +21,31 @@ fn the_cli_definition_is_internally_valid() {
     Cli::command().debug_assert();
 }
 
+/// `-f` and `--config-vars-file` are resolved as Batect's `PathResolver`
+/// resolves a path (ratect#437) — see `resolve_option_path`'s own test for
+/// the cases; this proves the options go through it.
+#[test]
+fn resolves_the_config_path_options() {
+    let home = ratect_core::user::home_directory().unwrap();
+    let cli = Cli::try_parse_from([
+        "ratect",
+        "run",
+        "build",
+        "-f",
+        "~/x.toml",
+        "--config-vars-file=link/../vars.toml",
+    ])
+    .unwrap();
+    assert_eq!(cli.global.config_file, home.join("x.toml"));
+    match cli.command {
+        Command::Run(args) => assert_eq!(
+            args.config_vars.config_vars_file,
+            Some(PathBuf::from("vars.toml"))
+        ),
+        other => panic!("expected a run command, got {other:?}"),
+    }
+}
+
 #[test]
 fn run_takes_the_task_name_as_its_own_argument() {
     let cli = Cli::try_parse_from(["ratect", "run", "build"]).unwrap();

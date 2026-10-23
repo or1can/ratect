@@ -111,6 +111,12 @@ ones that reach a daemon).
 | `--config-var <NAME=VALUE>` | `run`, `config validate`, `doctor` | Sets a [config variable](ratect-compat-config-reference.md#configvariable). Repeatable; wins over `--config-vars-file` and the variable's own default. |
 | `--config-vars-file <PATH>` | `run`, `config validate`, `doctor` | A file of config variable values (a flat `NAME = VALUE` map), parsed as TOML or YAML by extension. In a YAML file an unquoted number or boolean is read as written, as in `ratect-compat`. Defaults to an auto-discovered [`ratect.local.toml`](ratect-config-reference.md#local-overrides) beside the config file, when present. |
 
+A path given to `-f` or `--config-vars-file` has a leading `~` expanded to your home
+directory, and `.` and `..` removed before the path is used, so `link/../ratect.toml` <!-- example -->
+is `./ratect.toml` whether or not `link` is a symlink. A leading `..` stays. A
+`--config-vars-file` you give must name a file: `run` refuses one that doesn't before
+reading the config, and `config validate` and `doctor` report it as a problem.
+
 `tasks list` still accepts both, deprecated: they have no effect there, since listing
 tasks evaluates no value, and passing either prints a warning saying so. They'll be
 removed in a later release.

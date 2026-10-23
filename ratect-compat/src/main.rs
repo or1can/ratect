@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use anyhow::{Context, Result};
-use clap::{CommandFactory, Parser};
+use clap::{CommandFactory, FromArgMatches, Parser};
 use ratect_core::cache::CacheType;
 use ratect_core::config::{
     format_task_list, format_task_list_quiet, load_project, Config, Dialect,
@@ -38,8 +38,13 @@ use tracing_subscriber::EnvFilter;
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Path to the configuration file
-    #[arg(short = 'f', long, default_value = "batect.yml")]
+    #[arg(short = 'f', long, default_value = "batect.yml", value_parser = path_option())]
     config_file: PathBuf,
+
+    /// Whether `-f` was given, rather than defaulted: only a given one is
+    /// checked before a command that never reads it (see [`run`]).
+    #[arg(skip)]
+    config_file_given: bool,
 
     /// List available tasks and exit
     #[arg(short = 'T', long)]
@@ -52,7 +57,7 @@ struct Args {
     config_var: Vec<(String, String)>,
 
     /// Path to a YAML file of config variable NAME: VALUE pairs
-    #[arg(long = "config-vars-file", help_heading = "Configuration variables")]
+    #[arg(long = "config-vars-file", value_parser = path_option(), help_heading = "Configuration variables")]
     config_vars_file: Option<PathBuf>,
 
     /// Existing Docker network to use for all tasks. If not set, a new
@@ -196,13 +201,15 @@ struct Args {
     cache_type: Option<CacheTypeArg>,
 
     /// Remove every one of this project's cache volumes/directories and
-    /// exit, without running anything. Never needs the config file itself.
+    /// exit, without running anything. Never reads the config file, though
+    /// a --config-file given must name one.
     #[arg(long = "clean", help_heading = "Cache management")]
     clean: bool,
 
     /// Remove the named cache volumes/directories and exit, without running
     /// anything: a comma-separated list of names, each trimmed (repeatable).
-    /// Never needs the config file itself.
+    /// Never reads the config file, though a --config-file given must name
+    /// one.
     #[arg(long = "clean-cache", help_heading = "Cache management")]
     clean_cache: Vec<String>,
 
@@ -322,7 +329,16 @@ impl Args {
     {
         let arguments: Vec<std::ffi::OsString> = arguments.into_iter().map(Into::into).collect();
         let (options, rest, refused) = split_at_task(&arguments);
-        let mut args = match (Self::try_parse_from(options), refused) {
+        let parsed = Self::command()
+            .try_get_matches_from(options)
+            .and_then(|mut matches| {
+                let given = matches.value_source("config_file")
+                    == Some(clap::parser::ValueSource::CommandLine);
+                let mut args = Self::from_arg_matches_mut(&mut matches)?;
+                args.config_file_given = given;
+                Ok(args)
+            });
+        let mut args = match (parsed, refused) {
             // `--help` and `--version` act as soon as `clap` reaches them.
             (Err(error), _) if !error.use_stderr() => return Err(error),
             (_, Some(error)) => return Err(error),
@@ -474,6 +490,16 @@ impl From<CacheTypeArg> for CacheType {
             CacheTypeArg::Directory => CacheType::Directory,
         }
     }
+}
+
+/// A path option's parser: the value as Batect's `PathResolver` would
+/// resolve it (ratect#437) — see [`ratect_core::config::resolve_option_path`].
+/// Whether it exists, and is the right kind of thing, is checked before any
+/// command runs, by the command.
+fn path_option() -> impl clap::builder::TypedValueParser<Value = PathBuf> {
+    use clap::builder::TypedValueParser;
+    clap::builder::PathBufValueParser::new()
+        .try_map(|path| ratect_core::config::resolve_option_path(&path))
 }
 
 /// Parses a `--config-var` value of the form `NAME=VALUE`.
@@ -857,12 +883,7 @@ async fn run(
     let config_vars_file =
         resolve_config_vars_file(args.config_vars_file.clone(), &std::env::current_dir()?)?;
     if let Some(path) = &config_vars_file {
-        if !path.is_file() {
-            return Err(InvalidOptionValue::new(format!(
-                "--config-vars-file {path:?} does not exist or is not a file."
-            ))
-            .into());
-        }
+        ratect_core::config::check_config_vars_file(path)?;
     }
 
     let cache_type = args.cache_type(std::env::var("BATECT_CACHE_TYPE").ok().as_deref())?;
@@ -874,6 +895,13 @@ async fn run(
     let docker_connection = args.docker_connection();
     docker_connection.check_directories()?;
     docker_connection.check_context_conflict()?;
+    // An explicit `-f` too, as Batect checks it — so before `--clean`, which
+    // never reads it — though after the conflict above, which a missing file
+    // mustn't mask (ratect#439). Its static default is left to whatever
+    // reads it, as in Batect (ratect#437).
+    if args.config_file_given {
+        ratect_core::config::check_config_file(&args.config_file)?;
+    }
 
     // `--list-tasks` wins over both, as in Batect's `CommandFactory`
     // (ratect#442), so `-T --clean` lists rather than deletes.
@@ -977,9 +1005,10 @@ fn sweep_git_include_cache() -> Sweep {
 }
 
 /// `--clean`/`--clean-cache`: removes this project's own cache
-/// volumes/directories and exits, without running anything. Never needs
-/// `--config-file` to actually exist — matching Batect, whose own
-/// `CleanupCachesCommand` doesn't read the task config either. Under
+/// volumes/directories and exits, without running anything. Never reads
+/// `--config-file` — matching Batect, whose own `CleanupCachesCommand`
+/// doesn't read the task config either — though [`run`] checks that one
+/// given names a file, as Batect's option parser does. Under
 /// `--cache-type=directory` it never connects to Docker at all, so it works
 /// with the daemon unreachable; Batect checks connectivity first under either
 /// cache type, only so it can detect Windows containers (which force its

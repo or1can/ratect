@@ -1060,7 +1060,9 @@ fn no_task_name_is_a_usage_error_before_any_config_is_read() {
     assert!(String::from_utf8_lossy(&upgraded.stderr).contains("--upgrade has no effect"));
     for clean in [&["--clean"][..], &["--clean-cache", "x"]] {
         let output = run(
-            &[&["-f", "nope.yml", "--cache-type", "directory"], clean].concat(),
+            // A file `--clean` never reads, so it may be broken; it must
+            // only exist, as a given `-f` must (ratect#437).
+            &[&["-f", "broken.yml", "--cache-type", "directory"], clean].concat(),
             &[],
         );
         assert_eq!(output.status.code(), Some(0), "{clean:?}");
@@ -6450,6 +6452,73 @@ fn docker_context_beside_a_connection_flag_is_refused_on_every_command() {
         Some(0),
         "{}",
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// ratect#437: `-f link/../batect.yml` reads `./batect.yml`, as Batect's
+/// lexical normalisation does, not the `batect.yml` beside the symlink's
+/// target, which the operating system would reach by following `link` first.
+#[cfg(unix)]
+#[test]
+fn a_dot_dot_after_a_symlink_in_the_config_path_is_resolved_lexically() {
+    let project =
+        std::env::temp_dir().join(format!("ratect-symlink-dotdot-{}", std::process::id()));
+    std::fs::create_dir_all(project.join("other/inner")).unwrap();
+    let config = |name: &str| {
+        format!(
+            "project_name: {name}\ntasks:\n  t:\n    run:\n      container: c\n\
+             containers:\n  c:\n    image: alpine\n"
+        )
+    };
+    std::fs::write(project.join("batect.yml"), config("here")).unwrap();
+    std::fs::write(project.join("other/batect.yml"), config("there")).unwrap();
+    std::os::unix::fs::symlink("other/inner", project.join("link")).unwrap();
+    let output = ratect_command()
+        .current_dir(&project)
+        .args(["-f", "link/../batect.yml", "--list-tasks"])
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&project).ok();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Tasks in here:"),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// ratect#437: an explicit `-f` is checked before any command runs, as
+/// Batect's option parser checks it — so `--clean`, which never reads the
+/// config, still refuses one naming no file. The default `batect.yml` isn't
+/// checked there, as Batect doesn't check its static default.
+#[test]
+fn clean_refuses_an_explicit_config_file_naming_no_file() {
+    let project = std::env::temp_dir().join(format!("ratect-clean-no-f-{}", std::process::id()));
+    std::fs::create_dir_all(&project).unwrap();
+    let clean = |arguments: &[&str]| {
+        ratect_command()
+            .current_dir(&project)
+            .args(arguments)
+            .args(["--clean", "--cache-type=directory"])
+            .output()
+            .expect("failed to run ratect")
+    };
+    let explicit = clean(&["-f", "missing.yml"]);
+    let defaulted = clean(&[]);
+    std::fs::remove_dir_all(&project).ok();
+
+    let stderr = String::from_utf8_lossy(&explicit.stderr);
+    assert_eq!(explicit.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("Configuration file \"missing.yml\" not found."),
+        "{stderr}"
+    );
+    assert_eq!(
+        defaulted.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&defaulted.stderr)
     );
 }
 

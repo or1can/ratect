@@ -78,6 +78,7 @@ struct GlobalArgs {
         default_value = DEFAULT_CONFIG_FILE,
         global = true,
         value_hint = clap::ValueHint::FilePath,
+        value_parser = path_option(),
     )]
     config_file: PathBuf,
 
@@ -107,7 +108,7 @@ struct ConfigVarArgs {
     /// Path to a file of config variable values (a flat NAME = VALUE map),
     /// parsed as TOML or YAML by its extension. Defaults to an auto-discovered
     /// `ratect.local.toml` beside the config file, when present.
-    #[arg(long = "config-vars-file")]
+    #[arg(long = "config-vars-file", value_parser = path_option())]
     config_vars_file: Option<PathBuf>,
 }
 
@@ -608,6 +609,17 @@ fn parse_age(value: &str) -> std::result::Result<std::time::Duration, String> {
     Ok(std::time::Duration::from_secs(number * seconds))
 }
 
+/// A path option's parser: the value as Batect's `PathResolver` would
+/// resolve it (ratect#437) — see [`ratect_core::config::resolve_option_path`].
+/// Whether it exists, and is the right kind of thing, is checked before any
+/// command runs, by the command — as in `ratect-compat`, which has the same
+/// function, each binary keeping its own `clap` code.
+fn path_option() -> impl clap::builder::TypedValueParser<Value = PathBuf> {
+    use clap::builder::TypedValueParser;
+    clap::builder::PathBufValueParser::new()
+        .try_map(|path| ratect_core::config::resolve_option_path(&path))
+}
+
 /// Parses a `NAME=VALUE` pair — `--config-var` and `--override-image` take
 /// one, and `--tag-image` before checking its value.
 fn parse_key_value(value: &str) -> std::result::Result<(String, String), String> {
@@ -924,6 +936,11 @@ fn config_var_overrides(
     // config file, loaded only if it exists (an absent one just means no file
     // overrides, not an error). This binary's native equivalent of
     // `ratect-compat`'s `batect.local.yml` default; see decisions/0003.
+    // One named explicitly must be a file, as in `ratect-compat` (ratect#437);
+    // the default is only read when it is one.
+    if let Some(path) = &config_vars.config_vars_file {
+        ratect_core::config::check_config_vars_file(path)?;
+    }
     let vars_file = config_vars.config_vars_file.clone().or_else(|| {
         let default =
             ratect_core::config::base_path_for(&global.config_file).join(LOCAL_CONFIG_VARS_FILE);
