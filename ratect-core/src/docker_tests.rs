@@ -1256,6 +1256,150 @@ fn check_api_version_floor_rejects_a_version_below_the_floor() {
     );
 }
 
+/// A stand-in Docker daemon on a local TCP port, answering the two
+/// daemon-information requests `DockerClient` makes: `/version` with
+/// `version_body`, and `/_ping` with `builder_version` as its
+/// `Builder-Version` header when there is one. Any other path gets a 404.
+/// It answers one request per connection, any number of them, until the
+/// test's runtime ends; the returned options connect to it in plain HTTP.
+async fn stub_daemon(
+    version_body: serde_json::Value,
+    builder_version: Option<&'static str>,
+) -> DockerConnectionOptions {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let version_body = version_body.to_string();
+    tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let version_body = version_body.clone();
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let read = stream.read(&mut buf).await.unwrap();
+                    if read == 0 {
+                        return;
+                    }
+                    request.extend_from_slice(&buf[..read]);
+                }
+                let request = String::from_utf8_lossy(&request);
+                let mut request_line = request.split_whitespace();
+                let method = request_line.next().unwrap_or_default();
+                let path = request_line.next().unwrap_or_default();
+                let (status, headers, body) = if path.ends_with("/version") {
+                    (
+                        "200 OK",
+                        "Content-Type: application/json\r\n".to_string(),
+                        version_body,
+                    )
+                } else if path.ends_with("/_ping") {
+                    let header = builder_version
+                        .map(|version| format!("Builder-Version: {version}\r\n"))
+                        .unwrap_or_default();
+                    ("200 OK", header, "OK".to_string())
+                } else {
+                    ("404 Not Found", String::new(), String::new())
+                };
+                let body = if method == "HEAD" { "" } else { &body };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n\
+                     {body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            });
+        }
+    });
+    DockerConnectionOptions {
+        host: Some(format!("tcp://127.0.0.1:{port}")),
+        ..Default::default()
+    }
+}
+
+/// `stub_daemon`'s `/version` body, reporting `version` as the daemon's
+/// own version (none when `None`) and an API version at Ratect's floor.
+fn stub_version_body(version: Option<&str>) -> serde_json::Value {
+    let mut body = serde_json::json!({ "ApiVersion": "1.41" });
+    if let Some(version) = version {
+        body["Version"] = version.into();
+    }
+    body
+}
+
+/// A `DockerClient` connected to a `stub_daemon` serving `version_body`
+/// and `builder_version`.
+async fn client_for_stub_daemon(
+    version_body: serde_json::Value,
+    builder_version: Option<&'static str>,
+) -> DockerClient {
+    let options = stub_daemon(version_body, builder_version).await;
+    DockerClient::new(&options, |_| {})
+        .await
+        .expect("the stub daemon should be connectable")
+}
+
+/// Batect's `DockerClientDaemonInformationSpec`, "be able to get daemon
+/// information": the version is the daemon's own string, `+suffix` build
+/// tag and all, never parsed or reformatted.
+#[tokio::test]
+async fn server_version_passes_a_build_tagged_version_through_unchanged() {
+    let client = client_for_stub_daemon(stub_version_body(Some("27.3.1+dfsg-1")), None).await;
+    assert_eq!(client.server_version().await.unwrap(), "27.3.1+dfsg-1");
+}
+
+/// Batect's `DockerClientDaemonInformationSpec`, "be able to get daemon
+/// information": the legacy `master-dockerproject-YYYY-MM-DD` form, which
+/// isn't a version number at all, passes through the same way.
+#[tokio::test]
+async fn server_version_passes_a_legacy_dockerproject_version_through_unchanged() {
+    let client = client_for_stub_daemon(
+        stub_version_body(Some("master-dockerproject-2016-01-01")),
+        None,
+    )
+    .await;
+    assert_eq!(
+        client.server_version().await.unwrap(),
+        "master-dockerproject-2016-01-01"
+    );
+}
+
+/// Ratect's own fallback, with no Batect rule to mirror: Batect's client
+/// library reports whatever the daemon sent, and has no `doctor` to word it.
+#[tokio::test]
+async fn server_version_is_unknown_when_the_daemon_reports_none() {
+    let client = client_for_stub_daemon(stub_version_body(None), None).await;
+    assert_eq!(client.server_version().await.unwrap(), "unknown version");
+}
+
+/// Batect's `DockerClientDaemonInformationSpec`, "be able to ping the
+/// daemon": the ping's `Builder-Version` header is what picks the builder
+/// when neither `DOCKER_BUILDKIT` nor `--enable-buildkit` does.
+#[tokio::test]
+async fn builder_version_is_buildkit_when_the_daemon_ping_advertises_it() {
+    let client = client_for_stub_daemon(stub_version_body(Some("27.3.1")), Some("2")).await;
+    assert_eq!(
+        client.builder_version_given(None).await.unwrap(),
+        bollard::query_parameters::BuilderVersion::BuilderBuildKit
+    );
+}
+
+/// Batect's `DockerClientDaemonInformationSpec`, "be able to ping the
+/// daemon", for a ping advertising the classic builder or none at all.
+#[tokio::test]
+async fn builder_version_is_classic_when_the_daemon_ping_advertises_it_or_nothing() {
+    for advertised in [Some("1"), None] {
+        let client = client_for_stub_daemon(stub_version_body(Some("27.3.1")), advertised).await;
+        assert_eq!(
+            client.builder_version_given(None).await.unwrap(),
+            bollard::query_parameters::BuilderVersion::BuilderV1,
+            "advertised: {advertised:?}"
+        );
+    }
+}
+
 /// A [`RegistryCredentialResolver`] returning a fixed, pre-arranged answer
 /// for every registry — no subprocess, no filesystem, no daemon — so
 /// `resolve_pull_credential`'s own decision (what credential to pass,

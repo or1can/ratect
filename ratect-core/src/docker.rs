@@ -2062,11 +2062,20 @@ impl DockerClient {
     /// call (one `/_ping` round trip) and cached for the client's lifetime;
     /// see `select_builder_version`.
     async fn builder_version(&self) -> Result<bollard::query_parameters::BuilderVersion> {
+        self.builder_version_given(std::env::var("DOCKER_BUILDKIT").ok().as_deref())
+            .await
+    }
+
+    /// [`Self::builder_version`] with the real `DOCKER_BUILDKIT` value
+    /// injected, so a test can show the daemon's ping header deciding
+    /// without depending on the environment it runs in.
+    async fn builder_version_given(
+        &self,
+        real_env_value: Option<&str>,
+    ) -> Result<bollard::query_parameters::BuilderVersion> {
         self.builder_version
             .get_or_try_init(|| async {
-                let real_env_value = std::env::var("DOCKER_BUILDKIT").ok();
-                let env_value =
-                    docker_buildkit_env_value(self.enable_buildkit, real_env_value.as_deref());
+                let env_value = docker_buildkit_env_value(self.enable_buildkit, real_env_value);
                 let ping_info = self
                     .docker
                     .ping_info()
