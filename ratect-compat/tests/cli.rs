@@ -1009,21 +1009,67 @@ fn image_combined_with_a_build_field_is_rejected_when_the_config_loads() {
     );
 }
 
+/// No task name, and no flag that replaces one, is a usage error found
+/// while the arguments are parsed, as in Batect (ratect#434): before the
+/// config-variables file or the config is read, so neither a broken one nor
+/// `RUST_LOG=off` changes what is reported, and with the same code as an
+/// option `clap` doesn't know on a run.
 #[test]
-fn no_task_name_warns() {
-    let output = ratect_command()
-        .arg("-f")
-        .arg(sample_config_path())
-        .output()
-        .expect("failed to run ratect");
+fn no_task_name_is_a_usage_error_before_any_config_is_read() {
+    let directory = invalid_values_directory();
+    let run = |args: &[&str], env: &[(&str, &str)]| {
+        ratect_command()
+            .current_dir(&directory)
+            .args(args)
+            .envs(env.iter().copied())
+            .output()
+            .expect("failed to run ratect")
+    };
+    let bogus = run(&["--bogus", "build"], &[]).status.code();
+    assert!(bogus.is_some_and(|code| code != 0));
 
-    assert!(output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("No task name provided"),
-        "stderr:\n{}",
-        stderr
-    );
+    let sample = sample_config_path();
+    let sample = sample.to_str().unwrap();
+    for (args, env) in [
+        (&["-f", sample][..], &[][..]),
+        (&["-f", sample], &[("RUST_LOG", "off")]),
+        (&["-f", sample, "--", "foo"], &[]),
+        (&["-f", "broken.yml"], &[]),
+        (&["-f", "nope.yml"], &[]),
+        (&["-f", sample, "--config-vars-file", "nope.yml"], &[]),
+        (&[], &[]),
+    ] {
+        let output = run(args, env);
+        assert_eq!(output.status.code(), bogus, "{args:?} {env:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("no task name")
+                && stderr.contains("--list-tasks")
+                && stderr.contains("--help"),
+            "{args:?} {env:?}: {stderr}"
+        );
+        assert!(output.stdout.is_empty(), "{args:?} printed to stdout");
+    }
+
+    // The flags that replace a task still need none.
+    let listed = run(&["-f", sample, "--list-tasks"], &[]);
+    assert_eq!(listed.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&listed.stdout).contains("Tasks in ratect-test:"));
+    let upgraded = run(&["-f", sample, "--upgrade"], &[]);
+    assert_eq!(upgraded.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&upgraded.stderr).contains("--upgrade has no effect"));
+    for clean in [&["--clean"][..], &["--clean-cache", "x"]] {
+        let output = run(
+            &[&["-f", "nope.yml", "--cache-type", "directory"], clean].concat(),
+            &[],
+        );
+        assert_eq!(output.status.code(), Some(0), "{clean:?}");
+    }
+    for mode in ["--help", "--version"] {
+        assert_eq!(run(&[mode], &[]).status.code(), Some(0), "{mode}");
+    }
+
+    std::fs::remove_dir_all(&directory).unwrap();
 }
 
 #[test]
@@ -1073,6 +1119,202 @@ fn help_exits_zero_and_a_usage_error_takes_its_paths_code() {
 
     assert_eq!(exit_code_of(&["--bogus", "--clean"]), Some(2));
     assert_eq!(exit_code_of(&["--bogus", "--list-tasks"]), Some(2));
+}
+
+/// Options end at the task name (ratect#435): an argument after it but
+/// `-- ARGS…` is a usage error on a run, `125`, and lists nothing — while a
+/// flag that replaces the task ignores whatever follows the options.
+#[test]
+fn an_option_after_the_task_name_is_a_usage_error_not_applied() {
+    let config = sample_config_path();
+    let config = config.to_str().unwrap();
+    let run = |args: &[&str]| {
+        ratect_command()
+            .args(["-f", config])
+            .args(args)
+            .output()
+            .expect("failed to run ratect")
+    };
+
+    for line in [
+        &["test-task", "--list-tasks"][..],
+        &["test-task", "extra"],
+        &["build", "--disable-ports"],
+    ] {
+        let output = run(line);
+        assert_eq!(output.status.code(), Some(125), "{line:?}");
+        assert!(output.stdout.is_empty(), "{line:?} printed to stdout");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("'{}'", line[0]))
+                && stderr.contains(&format!("'{}'", line[1])),
+            "{line:?}: {stderr}"
+        );
+    }
+
+    for line in [
+        &["--list-tasks", "a", "b"][..],
+        &["--list-tasks", "a", "--", "x"],
+    ] {
+        let output = run(line);
+        assert_eq!(output.status.code(), Some(0), "{line:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("Tasks in ratect-test:"),
+            "{line:?}"
+        );
+    }
+
+    let output = run(&["--use-network", "-x", "test-task"]);
+    assert_eq!(output.status.code(), Some(125));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--use-network=-x") && !stderr.contains("'-- -x'"),
+        "{stderr}"
+    );
+}
+
+/// `--list-tasks` wins over `--clean` and `--upgrade`, as in Batect
+/// (ratect#442): each line prints what plain `--list-tasks` prints, so
+/// `--clean` neither cleans nor connects (no daemon listens on the host
+/// given), and `--upgrade` prints no notice.
+#[test]
+fn list_tasks_wins_over_clean_and_upgrade() {
+    let config = sample_config_path();
+    let config = config.to_str().unwrap();
+    let run = |args: &[&str]| {
+        ratect_command()
+            .env_remove("BATECT_CACHE_TYPE")
+            .args(["-f", config, "--docker-host", "tcp://127.0.0.1:1"])
+            .args(args)
+            .output()
+            .expect("failed to run ratect")
+    };
+    for style in [&[][..], &["-o", "quiet"]] {
+        let plain = run(&[style, &["-T"]].concat());
+        assert_eq!(plain.status.code(), Some(0));
+        for flags in [&["-T", "--clean"][..], &["--upgrade", "-T"]] {
+            let output = run(&[style, flags].concat());
+            assert_eq!(output.status.code(), Some(0), "{style:?} {flags:?}");
+            assert_eq!(output.stdout, plain.stdout, "{style:?} {flags:?}");
+            assert!(output.stderr.is_empty(), "{style:?} {flags:?}");
+        }
+    }
+}
+
+/// `--max-parallelism` takes Batect's range, 1 to 2147483647, its
+/// `Integer.parseInt`'s: a larger value is an argument error naming the
+/// option and the value, in either form (ratect#451).
+#[test]
+fn max_parallelism_takes_batects_range() {
+    let config = sample_config_path();
+    let config = config.to_str().unwrap();
+    let run = |value: &[&str]| {
+        ratect_command()
+            .args(["-f", config])
+            .args(value)
+            .arg("--list-tasks")
+            .output()
+            .expect("failed to run ratect")
+    };
+    for accepted in [
+        "--max-parallelism=2147483647",
+        "--max-parallelism=1",
+        "--max-parallelism=+1",
+    ] {
+        let output = run(&[accepted]);
+        assert_eq!(output.status.code(), Some(0), "{accepted}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("Tasks in ratect-test:"));
+    }
+    for (rejected, value) in [
+        (&["--max-parallelism=2147483648"][..], "2147483648"),
+        (&["--max-parallelism=4294967295"], "4294967295"),
+        (&["--max-parallelism", "2147483648"], "2147483648"),
+        (&["--max-parallelism=0"], "0"),
+    ] {
+        let output = run(rejected);
+        assert_eq!(output.status.code(), Some(2), "{rejected:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("--max-parallelism") && stderr.contains(value),
+            "{rejected:?}: {stderr}"
+        );
+        assert!(output.stdout.is_empty(), "{rejected:?}");
+    }
+}
+
+/// `--use-network=`, `--docker-host=` and `--docker-context=` are argument
+/// errors, as `--output=` is, as in Batect (ratect#449): nothing is listed,
+/// and the empty host is reported rather than taken as set alongside a
+/// context.
+#[test]
+fn an_empty_string_option_after_equals_is_an_argument_error() {
+    let config = sample_config_path();
+    let config = config.to_str().unwrap();
+    let run = |args: &[&str]| {
+        ratect_command()
+            .args(["-f", config])
+            .args(args)
+            .output()
+            .expect("failed to run ratect")
+    };
+    let expected = run(&["--list-tasks", "--output="]).status.code();
+    assert!(expected.is_some_and(|code| code != 0));
+    for option in ["--use-network=", "--docker-host=", "--docker-context="] {
+        let output = run(&["--list-tasks", option]);
+        assert_eq!(output.status.code(), expected, "{option}");
+        assert!(output.stdout.is_empty(), "{option} listed the tasks");
+        assert!(String::from_utf8_lossy(&output.stderr).contains(&format!("'{option}'")));
+    }
+
+    let output = run(&["--docker-context=foo", "--docker-host=", "test-task"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("'--docker-host='") && !stderr.contains("Cannot use both"),
+        "{stderr}"
+    );
+}
+
+/// `--clean-cache` takes a comma-separated list, as in Batect, and
+/// repeats; `--clean-cache=` is refused and removes nothing (ratect#448).
+/// Asserted on the directories left behind.
+#[test]
+fn clean_cache_takes_a_comma_separated_list() {
+    let project = one_task_project("clean-cache-list");
+    let caches = project.join(".batect/caches");
+    let remaining = |args: &[&str]| {
+        for name in ["foo", "bar", "baz"] {
+            std::fs::create_dir_all(caches.join(name)).unwrap();
+        }
+        let output = ratect_command()
+            .current_dir(&project)
+            .args(["--cache-type", "directory"])
+            .args(args)
+            .output()
+            .expect("failed to run ratect");
+        let mut left: Vec<String> = std::fs::read_dir(&caches)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        (output, left)
+    };
+
+    for (args, left) in [
+        (&["--clean-cache=foo,bar"][..], &["baz"][..]),
+        (&["--clean-cache=foo"], &["bar", "baz"]),
+        (&["--clean-cache", "foo", "--clean-cache", "bar"], &["baz"]),
+    ] {
+        let (output, remaining) = remaining(args);
+        assert_eq!(output.status.code(), Some(0), "{args:?}");
+        assert_eq!(remaining, left, "{args:?}");
+    }
+
+    let (output, remaining) = remaining(&["--clean-cache="]);
+    assert_ne!(output.status.code(), Some(0));
+    assert_eq!(remaining, ["bar", "baz", "foo"]);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("'--clean-cache='"));
+
+    std::fs::remove_dir_all(&project).unwrap();
 }
 
 /// A unique, empty temp directory holding a directory `dir` and a
@@ -5635,8 +5877,9 @@ fn run_on_a_terminal(args: &[&str], env: &[(&str, &str)]) -> String {
 /// one SGR sequence, when stderr is a terminal, and plain under
 /// `NO_COLOR`/`--no-color` — pinned byte for byte, since nothing type-checks
 /// an escape sequence (ratect#493; decisions/0017). A missing config file
-/// and a missing task name both stop before any daemon is needed, so this
-/// runs in the default suite.
+/// stops before any daemon is needed, and a Docker CLI `config.json` that
+/// can't be read is warned about before the daemon is reached, so this runs
+/// in the default suite.
 #[test]
 fn error_and_warning_markers_are_bold_on_a_terminal_and_plain_without_color() {
     let args = ["-f", "/no/such/batect.yml", "build"];
@@ -5646,18 +5889,31 @@ fn error_and_warning_markers_are_bold_on_a_terminal_and_plain_without_color() {
         colored.contains("\x1b[1;31mError:\x1b[0m "),
         "the marker should be bold red on a terminal: {colored:?}"
     );
-    // The warning marker likewise — no task name is a warning, not a
-    // failure, and needs no daemon either.
-    let warned = run_on_a_terminal(&["-f", &sample_config_path().to_string_lossy()], &[]);
+    // The warning marker likewise. Cleaning one cache that can't exist
+    // reads the active context from `config.json`, and removes nothing even
+    // where a daemon answers.
+    let project = one_task_project("warning-marker");
+    std::fs::write(project.join("config.json"), "{").unwrap();
+    let warned = run_on_a_terminal(
+        &[
+            "-f",
+            &project.join("batect.yml").to_string_lossy(),
+            "--docker-config",
+            &project.to_string_lossy(),
+            "--clean-cache=no-such-cache-for-the-warning-marker",
+        ],
+        &[("DOCKER_HOST", ""), ("DOCKER_CONTEXT", "")],
+    );
+    std::fs::remove_dir_all(&project).unwrap();
     assert!(
-        warned.contains("\x1b[1;33mWarning:\x1b[0m No task name provided."),
+        warned.contains("\x1b[1;33mWarning:\x1b[0m ") && warned.contains("config.json"),
         "the warning marker should be bold yellow on a terminal: {warned:?}"
     );
 
     for env in [&[("NO_COLOR", "1")][..], &[][..]] {
         let mut plain_args = args.to_vec();
         if env.is_empty() {
-            plain_args.push("--no-color");
+            plain_args.insert(0, "--no-color");
         }
         let plain = run_on_a_terminal(&plain_args, env);
         assert!(

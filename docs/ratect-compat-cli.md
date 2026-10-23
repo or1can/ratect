@@ -13,6 +13,21 @@ The forward-looking `ratect` binary has its own, subcommand-based interface — 
 [`ratect` CLI reference](ratect-cli.md), and [Two binaries, two
 formats](index.md#two-binaries-two-formats) for which to pick.
 
+## Where options go
+
+Options go before the task name, as in Batect. The first argument that isn't an
+option or an option's value is the task name, and nothing after it is read as an
+option. Only `--` and arguments for the task may follow the task name: anything else,
+such as `ratect-compat build --disable-ports` or `ratect-compat build extra`, is
+refused before anything runs, with an error naming the task name and the first extra
+argument. Under `--list-tasks`, `--clean`, `--clean-cache` or `--upgrade`, which
+replace the task, whatever follows the options is ignored, so `ratect-compat
+--list-tasks a b` lists the tasks.
+
+An option's value that starts with `-` has to be given after `=`, as in
+`--use-network=-x`: given as the next argument, it's refused — see [differences from
+Batect](differences-from-batect.md#cli-flags).
+
 ## Options
 
 Grouped by purpose, matching `ratect-compat --help`. The grouping is
@@ -44,7 +59,7 @@ listed under.
 | `--override-image <CONTAINER=IMAGE>` | — | — | Overrides the image used by `CONTAINER`; repeatable. Replaces the container's `image`/`build_directory` and `image_pull_policy` entirely — the override is always pulled under the default `IfNotPresent` policy, regardless of what the container itself configures. An empty `CONTAINER` or `IMAGE`, a `CONTAINER` given twice, or one also given to `--tag-image`, is rejected while the arguments are parsed. A `CONTAINER` the config doesn't define fails the run once it reaches its first task with a `run`, before anything of that task starts; a run that reaches no such task, such as `--skip-prerequisites` on a task with only `prerequisites`, doesn't check it. |
 | `--tag-image <CONTAINER=TAG>` | — | — | Tags the image built by `CONTAINER` with `TAG`, in addition to the default `<project_name>-<container_name>` tag; repeatable, and `CONTAINER` may be given more than once to apply multiple tags. Only valid for a container that actually builds an image — errors immediately if `CONTAINER` is configured to use a pulled image, and errors once the whole task (and its prerequisites) finishes if `CONTAINER` never actually ran. An empty `CONTAINER` or `TAG`, or a `TAG` that `docker tag` would refuse, such as `_nonsense` or one with uppercase in its repository name, is rejected while the arguments are parsed, before anything runs, and so is a `CONTAINER` also given to `--override-image`, before the config is loaded. |
 | `--enable-buildkit` | — | — | Use BuildKit for image builds, taking precedence over the `DOCKER_BUILDKIT` environment variable — see [config reference](ratect-compat-config-reference.md#image-building). No `--disable-buildkit` counterpart; force the classic builder via `DOCKER_BUILDKIT=0` instead. |
-| `--max-parallelism <N>` | — | unbounded | Caps how many image pulls/builds, container creates, dependency container starts, and setup-command executions run concurrently across the whole invocation — a create and a start are separate capped steps, and no slot is held while a container waits for its dependencies. Health-check waits, the task's own container's run, and container stop/removal are never gated — see [Differences from Batect](differences-from-batect.md#cli-flags). |
+| `--max-parallelism <N>` | — | unbounded | From 1 to 2147483647, as in Batect. Caps how many image pulls/builds, container creates, dependency container starts, and setup-command executions run concurrently across the whole invocation — a create and a start are separate capped steps, and no slot is held while a container waits for its dependencies. Health-check waits, the task's own container's run, and container stop/removal are never gated — see [Differences from Batect](differences-from-batect.md#cli-flags). |
 | `--cache-type <volume\|directory>` | — | `BATECT_CACHE_TYPE`, then `volume` | Storage mechanism for a `cache` volume mount (see [Cache volumes](ratect-compat-config-reference.md#cache-volumes)): `volume` resolves it to a Docker named volume, `directory` to a host directory under `<project_directory>/.batect/caches/<name>/`. Has no effect on a config with no `cache` mounts — but does still select which storage `--clean`/`--clean-cache` act on. A `BATECT_CACHE_TYPE` that is neither `volume` nor `directory`, exactly, fails every command unless this flag is given. |
 
 ### Cleanup after a run
@@ -79,7 +94,7 @@ accepts them; they're used only when it actually connects.
 | Flag | Short | Default | Description |
 |---|---|---|---|
 | `--clean` | — | — | Removes every one of this project's own cache volumes/directories (per `--cache-type` or `BATECT_CACHE_TYPE`) and exits — doesn't run anything, and doesn't need `--config-file` to actually exist. See [Cache volumes](ratect-compat-config-reference.md#cache-volumes). |
-| `--clean-cache <NAME>` | — | — | Removes just the named cache (repeatable) and exits, instead of every one of them. Given together with `--clean`, the explicit name(s) win — `--clean`'s own "everything" behavior only applies when `--clean-cache` is never given at all. |
+| `--clean-cache <NAME>` | — | — | Removes just the named caches and exits, instead of every one of them. Takes a comma-separated list of names, each trimmed of surrounding whitespace, and is repeatable. Given together with `--clean`, the explicit name(s) win — `--clean`'s own "everything" behavior only applies when `--clean-cache` is never given at all. |
 
 ### Output
 
@@ -92,7 +107,7 @@ accepts them; they're used only when it actually connects.
 ### Recognized, no effect
 
 `--upgrade`, `--no-update-notification`, and `--no-wrapper-cache-cleanup` are accepted
-but do nothing — hidden from `--help`, since they're not real Ratect features, just
+but change nothing Ratect does — hidden from `--help`, since they're not real Ratect features, just
 recognized so an existing Batect invocation carrying one doesn't hard-fail outright
 (an unrecognized flag is a `clap` parse error that kills the *entire* invocation before
 anything runs at all, including `--list-tasks` — unless it comes after `--version` or
@@ -101,7 +116,9 @@ only make sense for Batect's own self-updating wrapper script, which Ratect — 
 native binary — doesn't have and isn't planning to grow. `--upgrade` specifically
 prints a one-line notice to stderr and exits `0` rather than running silently, since a
 user invoking it is likely expecting *some* visible response; reinstall or rebuild
-Ratect to get a newer version instead. The other two have no wrapper-cache/update
+Ratect to get a newer version instead. As in Batect, it's still a command of its own:
+it replaces a task name and `--clean`/`--clean-cache`, which then don't run, while
+`--list-tasks` replaces it, which then lists the tasks and prints no notice. The other two have no wrapper-cache/update
 notification to disable in the first place, so they're silently accepted with no
 message at all.
 
@@ -122,7 +139,7 @@ shared with `ratect`.
 
 | Argument | Description |
 |---|---|
-| `TASK_NAME` | The name of the task to run, as defined under `tasks:` in the config file. Optional — if omitted (and `--list-tasks` isn't given), Ratect logs a warning and exits without doing anything. |
+| `TASK_NAME` | The name of the task to run, as defined under `tasks:` in the config file. Required unless `--list-tasks`, `--clean`, `--clean-cache` or `--upgrade` is given — see [Exit codes and error reporting](#exit-codes-and-error-reporting). |
 | `-- ADDITIONAL_ARGS...` | Anything after a literal `--` is appended as literal argv entries after the task's own tokenized `command` — see below. Only applies to the task named on the command line, never to its prerequisites. |
 
 ## Examples
@@ -216,7 +233,7 @@ did the task's own container run to an exit code of its own?
    ends the run before the next task starts, and exits 128 + its number.
 3. **It never ran, or never finished, for any other reason: `125`** — `docker run`'s own
    code for "the `docker` command itself failed". An unknown or misused flag
-   (`ratect-compat --bogus build`, or a bare `ratect-compat --bogus`), a missing or
+   (`ratect-compat --bogus build`, or a bare `ratect-compat --bogus`), no task name, a missing or
    malformed config file, a `--config-vars-file` that isn't a file, a task or container
    referenced by name that doesn't exist, a dependency cycle, an unreachable daemon, an
    image pull or build that fails, a dependency that exits or never becomes ready, a
@@ -246,9 +263,12 @@ interrupt notice said so when it arrived). A cleanup failure is reported once, a
 happens, by a line naming what was left behind and the `docker` command that removes
 it.
 
-- Running with no task name at all (and not `--list-tasks`) **exits `0`** — Ratect prints
-  a `Warning:` on stderr but doesn't fail the process. This is a rough edge, not intentional design;
-  don't rely on it in scripts.
+- Running with no task name, and none of `--list-tasks`, `--clean`, `--clean-cache` or
+  `--upgrade`, is a command-line error, found before the config-variables file or the
+  config is read — so a missing or broken `-f` still reports the missing task name. It
+  exits `125`, like any other usage error on a run, and the error, which points at
+  `--list-tasks` and `--help`, is always on stderr, whatever `RUST_LOG` or `-o` says.
+  So is `-- ADDITIONAL_ARGS` with no task name before it.
 - A misspelled task name (whether given directly on the command line, or as a
   [`prerequisites`](ratect-compat-config-reference.md#task) entry) gets a `Did you mean 'x'?`
   suggestion appended to the error, for every existing task name within a Levenshtein

@@ -182,9 +182,9 @@ struct Args {
     docker_tls_key: Option<PathBuf>,
 
     /// Maximum number of image pulls/builds, dependency container starts and
-    /// setup commands to run in parallel when running a task. Unset means
-    /// unbounded.
-    #[arg(long = "max-parallelism", value_parser = clap::value_parser!(u32).range(1..), help_heading = "Task execution")]
+    /// setup commands to run in parallel when running a task, from 1 to
+    /// 2147483647. Unset means unbounded.
+    #[arg(long = "max-parallelism", value_parser = clap::value_parser!(u32).range(1..=i32::MAX as i64), help_heading = "Task execution")]
     max_parallelism: Option<u32>,
 
     /// Storage mechanism for `cache` volume mounts: volume (a Docker named
@@ -199,8 +199,9 @@ struct Args {
     #[arg(long = "clean", help_heading = "Cache management")]
     clean: bool,
 
-    /// Remove the named cache volume/directory (repeatable) and exit,
-    /// without running anything. Never needs the config file itself.
+    /// Remove the named cache volumes/directories and exit, without running
+    /// anything: a comma-separated list of names, each trimmed (repeatable).
+    /// Never needs the config file itself.
     #[arg(long = "clean-cache", help_heading = "Cache management")]
     clean_cache: Vec<String>,
 
@@ -236,6 +237,9 @@ struct Args {
     #[arg(long = "log-file", help_heading = "Output")]
     log_file: Option<PathBuf>,
 
+    // `task_name` and `additional_args` are declared for `--help`'s usage
+    // line only: nothing after the options reaches `clap`, and
+    // `parse_checked` sets them itself.
     /// Name of the task to run
     task_name: Option<String>,
 
@@ -292,20 +296,83 @@ impl Args {
         }
     }
 
-    /// `clap`'s parse, then the one check it can't make per value: a key
-    /// given twice to `--config-var` or `--override-image`, which Batect's
+    /// The command line in Batect's grammar, which `clap`'s alone can't say
+    /// (ratect#435). The options end at the first argument that isn't one —
+    /// [`split_at_task`] finds it — and only they reach `clap`. What follows
+    /// is the task name, then nothing or `-- ARGS…`, and a run without one is
+    /// refused here, before any file is read (ratect#434); under a flag that
+    /// replaces the task it is ignored instead, as Batect's `parseTaskName`
+    /// ignores it.
+    ///
+    /// `--clean-cache`'s values are split into names here, as Batect's
+    /// `SetOption` splits them. Then the one check `clap` can't make per
+    /// value: a key given twice to
+    /// `--config-var` or `--override-image`, which Batect's
     /// `SingleValueMapOption` refuses rather than keeping the last
     /// (ratect#438). `--tag-image` may repeat a container, as in Batect. A
     /// `--config-var` also set by a `--config-vars-file` isn't a repeat:
     /// only the command line is counted, and it still wins over the file.
-    /// The error is `clap`'s own kind, so it prints and exits like any other
-    /// argument `clap` rejects.
+    /// Every error is `clap`'s own kind, so it prints and exits like any
+    /// other argument `clap` rejects.
     fn parse_checked<I, T>(arguments: I) -> std::result::Result<Self, clap::Error>
     where
         I: IntoIterator<Item = T>,
         T: Into<std::ffi::OsString> + Clone,
     {
-        let args = Self::try_parse_from(arguments)?;
+        let arguments: Vec<std::ffi::OsString> = arguments.into_iter().map(Into::into).collect();
+        let (options, rest, refused) = split_at_task(&arguments);
+        let mut args = match (Self::try_parse_from(options), refused) {
+            // `--help` and `--version` act as soon as `clap` reaches them.
+            (Err(error), _) if !error.use_stderr() => return Err(error),
+            (_, Some(error)) => return Err(error),
+            (parsed, None) => parsed?,
+        };
+        // Batect's `SetOption`: each value is a comma-separated list, each
+        // name trimmed (ratect#448). An empty name stays, matching no cache,
+        // so `--clean-cache ""` still selects cleanup, as in Batect.
+        args.clean_cache = args
+            .clean_cache
+            .iter()
+            .flat_map(|value| value.split(',').map(|name| name.trim().to_string()))
+            .collect();
+        if args.runs_a_task() {
+            let rest = rest
+                .iter()
+                .map(|word| {
+                    word.to_str().ok_or_else(|| {
+                        Self::command().error(
+                            clap::error::ErrorKind::InvalidUtf8,
+                            format!("{word:?} is not valid UTF-8"),
+                        )
+                    })
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            match rest.as_slice() {
+                [] | ["--", ..] => {
+                    return Err(Self::command().error(
+                        clap::error::ErrorKind::MissingRequiredArgument,
+                        "no task name was given: name the task to run after the options, as \
+                         in 'ratect-compat build'. 'ratect-compat --list-tasks' lists this \
+                         project's tasks, and 'ratect-compat --help' every option",
+                    ));
+                }
+                [task] => args.task_name = Some(task.to_string()),
+                [task, "--", task_args @ ..] => {
+                    args.task_name = Some(task.to_string());
+                    args.additional_args = task_args.iter().map(|arg| arg.to_string()).collect();
+                }
+                [task, extra, ..] => {
+                    return Err(Self::command().error(
+                        clap::error::ErrorKind::UnknownArgument,
+                        format!(
+                            "'{task}' was taken as the task name, and '{extra}' follows it: \
+                             options go before the task name, and arguments for the task \
+                             after '--', as in '{task} -- {extra}'"
+                        ),
+                    ));
+                }
+            }
+        }
         for (option, key_name, pairs) in [
             ("--config-var", "variable", &args.config_var),
             ("--override-image", "container", &args.override_image),
@@ -498,19 +565,23 @@ fn init_tracing(log_file: Option<&Path>, stderr_color: bool) -> Result<()> {
 }
 
 /// [`Args::runs_a_task`] for arguments that didn't parse: a line is a run
-/// unless one of the flags that replace a task appears where `clap` would
-/// read it as a flag — not after `--`, not as another option's value
-/// (decisions/0016). `args` excludes the program name.
+/// unless one of the flags that replace a task appears where it would be
+/// read as a flag — among the options, so not after the task name or `--`,
+/// and not as another option's value (decisions/0016; ratect#435). `args`
+/// excludes the program name.
 fn is_a_run(args: &[String]) -> bool {
     let command = Args::command();
     let words =
         ratect_core::exit_code::command_line_words(args, |word| takes_value(&command, word));
-    !words.iter().any(|word| {
-        matches!(
-            word,
-            Word::Long("list-tasks" | "clean" | "clean-cache" | "upgrade") | Word::Short('T')
-        )
-    })
+    !words
+        .iter()
+        .take_while(|word| !matches!(word, Word::Positional(_)))
+        .any(|word| {
+            matches!(
+                word,
+                Word::Long("list-tasks" | "clean" | "clean-cache" | "upgrade") | Word::Short('T')
+            )
+        })
 }
 
 /// Whether `word` is one of `command`'s own options and takes a value —
@@ -524,6 +595,101 @@ fn takes_value(command: &clap::Command, word: Word<'_>) -> bool {
             Word::Positional(_) => false,
         })
         .is_some_and(|arg| arg.get_action().takes_values())
+}
+
+/// Splits `arguments` (the program name first) where Batect's option parser
+/// stops: at the first argument that isn't an option or an option's value —
+/// the task name — or at a `--`. The first part, the program name included,
+/// is what `clap` parses; the second is everything from that argument on.
+/// It reads options as `clap` and [`ratect_core::exit_code::command_line_words`]
+/// do, so the leniency recorded in `docs/differences-from-batect.md` stays:
+/// `-Tf x`, `-fx` and `-oquiet`.
+///
+/// Two values `clap` would misread are refused instead, for every option
+/// that takes one: the third part is the first of them, for
+/// [`Args::parse_checked`] to report unless `clap`'s own parse of the
+/// options ends in `--help` or `--version`. An empty one after `=`
+/// (`--use-network=`, `-f=`) is Batect's "invalid format" (ratect#449,
+/// ratect#448), where `clap` would take `""` — which `--use-network ''`
+/// still gives, as in Batect. And a
+/// separate value starting with `-`, which `clap` refuses too, but with a tip
+/// to write `-- -x`, which here would pass `-x` to the task: this error's tip
+/// is the `=` form (ratect#435).
+fn split_at_task(
+    arguments: &[std::ffi::OsString],
+) -> (
+    &[std::ffi::OsString],
+    &[std::ffi::OsString],
+    Option<clap::Error>,
+) {
+    let command = Args::command();
+    let mut refused = None;
+    let mut refuse = |message: String| {
+        refused.get_or_insert_with(|| {
+            command
+                .clone()
+                .error(clap::error::ErrorKind::InvalidValue, message)
+        });
+    };
+    let mut index = 1;
+    while let Some(argument) = arguments.get(index) {
+        let argument = argument.to_string_lossy();
+        if argument == "--" {
+            break;
+        }
+        // The option `argument` ends with that takes the next argument as
+        // its value, if any.
+        let value_option = if let Some(long) = argument.strip_prefix("--") {
+            match long.split_once('=') {
+                Some((name, value)) => {
+                    if value.is_empty() && takes_value(&command, Word::Long(name)) {
+                        refuse(format!(
+                            "'--{name}=' has nothing after '=': give a value after the '='"
+                        ));
+                    }
+                    None
+                }
+                None => takes_value(&command, Word::Long(long)).then(|| format!("--{long}")),
+            }
+        } else if let Some(shorts) = argument
+            .strip_prefix('-')
+            .filter(|shorts| !shorts.is_empty())
+        {
+            shorts
+                .char_indices()
+                .find_map(|(position, short)| {
+                    if !takes_value(&command, Word::Short(short)) {
+                        return None;
+                    }
+                    let attached = &shorts[position + short.len_utf8()..];
+                    if attached == "=" {
+                        refuse(format!(
+                            "'-{short}=' has nothing after '=': give a value after the '='"
+                        ));
+                    }
+                    Some(attached.is_empty().then(|| format!("-{short}")))
+                })
+                .flatten()
+        } else {
+            break;
+        };
+        if let Some(option) = value_option {
+            if let Some(value) = arguments.get(index + 1) {
+                let value = value.to_string_lossy();
+                if value.starts_with('-') && value != "-" {
+                    refuse(format!(
+                        "{option} takes a value, and the argument after it, '{value}', starts \
+                         with '-': to give a value starting with '-', write it as \
+                         '{option}={value}'"
+                    ));
+                }
+                index += 1;
+            }
+        }
+        index += 1;
+    }
+    let (options, rest) = arguments.split_at(index.min(arguments.len()));
+    (options, rest, refused)
 }
 
 /// Parses the command line, exiting as decisions/0016 says when `clap`
@@ -657,10 +823,11 @@ fn resolve_config_vars_file(explicit: Option<PathBuf>, dir: &Path) -> Result<Opt
 /// is stderr). That one line is the whole difference between the two.
 const PROGRESS: ProgressStream = ProgressStream::Stdout;
 
-/// The CLI's real work, once `Args` is parsed: `--upgrade` is a documented
-/// no-op (see its own doc comment), `--clean`/`--clean-cache` short-circuit
-/// into [`clean_caches`] before any config loads, `--list-tasks` prints and
-/// returns without touching Docker at all, and naming a task loads the
+/// The CLI's real work, once `Args` is parsed, in Batect's `CommandFactory`
+/// order: `--list-tasks` loads the config, prints and returns without
+/// touching Docker at all; otherwise `--upgrade` is a documented no-op (see
+/// its own doc comment), `--clean`/`--clean-cache` short-circuit into
+/// [`clean_caches`] before any config loads, and naming a task loads the
 /// config, builds the engine, and runs it. [`Args::engine_settings`] is kept
 /// synchronous and separate specifically so its flag-to-settings mapping can
 /// be unit-tested without a Docker daemon — see its own doc comment.
@@ -702,7 +869,9 @@ async fn run(
     // the user named must be one, whether or not this command connects.
     args.docker_connection().check_directories()?;
 
-    if args.upgrade {
+    // `--list-tasks` wins over both, as in Batect's `CommandFactory`
+    // (ratect#442), so `-T --clean` lists rather than deletes.
+    if args.upgrade && !args.list_tasks {
         stderr.notice(
             "--upgrade has no effect: Ratect is a single native binary, not a self-updating \
              wrapper script like Batect. Reinstall/rebuild to get a newer version instead.",
@@ -710,7 +879,7 @@ async fn run(
         return Ok(());
     }
 
-    if args.clean || !args.clean_cache.is_empty() {
+    if (args.clean || !args.clean_cache.is_empty()) && !args.list_tasks {
         return clean_caches(&args, cache_type, stderr).await;
     }
 
@@ -733,68 +902,62 @@ async fn run(
         return Ok(());
     }
 
-    match args.task_name.as_deref() {
-        Some(task_name) => {
-            // Unconditional, fire-and-forget — matching Batect's own
-            // `GitRepositoryCacheCleanupTask`, an unconditional daemon
-            // thread started on every "run a task" invocation regardless of
-            // whether this particular config uses a Git include, after the
-            // config loads and before Docker is reached. Never awaited: a
-            // failure (or simply not finishing before the process exits —
-            // see `main`'s own comment on `std::process::exit`) is
-            // inherently best-effort, same as a JVM daemon thread not
-            // blocking process exit either.
-            let sweep = sweep();
-            tokio::spawn(async {
-                if let Err(e) = sweep.await {
-                    tracing::warn!("Failed to sweep stale Git include cache entries: {e}");
-                }
-            });
-
-            let mut config_var_overrides: HashMap<String, String> = match &config_vars_file {
-                Some(path) => Config::load_config_vars_file(path)?,
-                None => HashMap::new(),
-            };
-            config_var_overrides.extend(args.config_var.iter().cloned());
-
-            // The output-mode logger — one instance shared by the Docker
-            // client (fine-grained pull/build progress) and the engine
-            // (lifecycle milestones), so it sees the whole event stream in
-            // order. Selection, construction, and (for an explicit fancy)
-            // validation all live in `create_event_sink` — see its own docs
-            // for why, and for the fancy-on-a-non-interactive-console error
-            // it can return.
-            let event_sink = create_event_sink(requested_style, color_mode, &terminal, PROGRESS)?;
-            let settings = args.engine_settings(
-                project.project_directory.clone(),
-                project.dialect,
-                config_var_overrides,
-                cache_type,
-            );
-            // Constructed here rather than inside `ratect-core` — a library
-            // shouldn't take over a process's signal handling on its own
-            // initiative — and armed immediately, since (unlike
-            // `engine_settings`, kept synchronous so the flag-mapping tests
-            // can call it directly) this whole function already is async.
-            // From this point Ctrl+C, `SIGTERM` or `SIGHUP` abandons the run
-            // and cleans up instead of killing the process where it stands.
-            let interrupt = ratect_core::interrupt::Interrupt::new();
-            interrupt.listen();
-            let docker = DockerClient::new(&args.docker_connection(), |message| {
-                event_sink.post(TaskEvent::Warning { message })
-            })
-            .await?
-            .with_event_sink(Arc::clone(&event_sink))
-            .with_enable_buildkit(args.enable_buildkit);
-            let engine =
-                TaskEngine::new(project, docker, event_sink, interrupt).with_settings(settings)?;
-            engine.run_task(task_name, &args.additional_args).await?;
+    let Some(task_name) = args.task_name.as_deref() else {
+        unreachable!("Args::parse_checked refuses a run that names no task");
+    };
+    // Unconditional, fire-and-forget — matching Batect's own
+    // `GitRepositoryCacheCleanupTask`, an unconditional daemon
+    // thread started on every "run a task" invocation regardless of
+    // whether this particular config uses a Git include, after the
+    // config loads and before Docker is reached. Never awaited: a
+    // failure (or simply not finishing before the process exits —
+    // see `main`'s own comment on `std::process::exit`) is
+    // inherently best-effort, same as a JVM daemon thread not
+    // blocking process exit either.
+    let sweep = sweep();
+    tokio::spawn(async {
+        if let Err(e) = sweep.await {
+            tracing::warn!("Failed to sweep stale Git include cache entries: {e}");
         }
-        None => {
-            // Printed, not logged: the one line explaining why nothing ran.
-            stderr.warning("No task name provided. Use --help for usage.");
-        }
-    }
+    });
+
+    let mut config_var_overrides: HashMap<String, String> = match &config_vars_file {
+        Some(path) => Config::load_config_vars_file(path)?,
+        None => HashMap::new(),
+    };
+    config_var_overrides.extend(args.config_var.iter().cloned());
+
+    // The output-mode logger — one instance shared by the Docker
+    // client (fine-grained pull/build progress) and the engine
+    // (lifecycle milestones), so it sees the whole event stream in
+    // order. Selection, construction, and (for an explicit fancy)
+    // validation all live in `create_event_sink` — see its own docs
+    // for why, and for the fancy-on-a-non-interactive-console error
+    // it can return.
+    let event_sink = create_event_sink(requested_style, color_mode, &terminal, PROGRESS)?;
+    let settings = args.engine_settings(
+        project.project_directory.clone(),
+        project.dialect,
+        config_var_overrides,
+        cache_type,
+    );
+    // Constructed here rather than inside `ratect-core` — a library
+    // shouldn't take over a process's signal handling on its own
+    // initiative — and armed immediately, since (unlike
+    // `engine_settings`, kept synchronous so the flag-mapping tests
+    // can call it directly) this whole function already is async.
+    // From this point Ctrl+C, `SIGTERM` or `SIGHUP` abandons the run
+    // and cleans up instead of killing the process where it stands.
+    let interrupt = ratect_core::interrupt::Interrupt::new();
+    interrupt.listen();
+    let docker = DockerClient::new(&args.docker_connection(), |message| {
+        event_sink.post(TaskEvent::Warning { message })
+    })
+    .await?
+    .with_event_sink(Arc::clone(&event_sink))
+    .with_enable_buildkit(args.enable_buildkit);
+    let engine = TaskEngine::new(project, docker, event_sink, interrupt).with_settings(settings)?;
+    engine.run_task(task_name, &args.additional_args).await?;
 
     Ok(())
 }
@@ -819,10 +982,10 @@ fn sweep_git_include_cache() -> Sweep {
 ///
 /// `--clean-cache <NAME>` (repeatable) restricts this to the named caches;
 /// plain `--clean` with no `--clean-cache` cleans every one of this
-/// project's own caches — matching Batect's own `CommandFactory`/
-/// `CleanupCachesCommand` exactly: the explicit `cleanCaches` list (if
-/// non-empty) always wins over `--clean`'s "everything" default, regardless
-/// of whether `--clean` was also given.
+/// project's own caches — matching Batect's `CleanupCachesCommand` in how
+/// the two combine: the explicit `cleanCaches` list (if non-empty) always
+/// wins over `--clean`'s "everything" default, regardless of whether
+/// `--clean` was also given. Which command runs at all is [`run`]'s.
 async fn clean_caches(args: &Args, cache_type: CacheType, stderr: &Console) -> Result<()> {
     let base_path = ratect_core::config::base_path_for(&args.config_file);
     let project_directory = ratect_core::config::project_directory_path(base_path)?;

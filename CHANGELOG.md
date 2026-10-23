@@ -23,6 +23,8 @@ history, from when it was the only binary.
 
 ### Breaking
 
+- `ratect-compat`: running with no task name, and none of `--list-tasks`, `--clean`, `--clean-cache` or `--upgrade`, is a usage error that exits `125` before any config is read, instead of a warning and exit `0`.
+- `ratect-compat`: options end at the task name, as in Batect. An argument after the task name other than `-- ARGS…`, such as `build --disable-ports` or `test-task --list-tasks`, is refused as a usage error instead of being applied. Under `--list-tasks`, `--clean`, `--clean-cache` or `--upgrade`, whatever follows the options is ignored, so `--list-tasks a b` lists the tasks.
 - **ratect.toml:** a `\` in an expression escapes the character after it and is dropped — `\$X` is the literal `$X`, `a\b` is `ab`, `\\` is `\`, and `${X:-a\}b}` defaults to `a}b` — and a trailing `\` fails the load. A project with a backslash in an expression may resolve differently or stop loading; one without a `ratect_version` of 0.12.0 or later is refused until it declares one. A project whose root is a `batect.yml` still loads, unless it includes a `.toml` file.
 - **ratect.toml:** every `$` or `<` in an expression that isn't escaped starts a reference, as in Batect. One that is malformed — with no name after it (`$`, `$$`, `a < b`, `${}`), an unclosed `{` (`${X`), or a `:` not followed by `-` (`${X:default}`) — fails the load, giving its line and column, instead of being kept as literal text. An unbraced name is the longest run of letters, digits and `_`, so `$5` and `$é` are references and a `.` or `-` ends one: `<foo.txt` is `foo`'s value then `.txt`, and `<batect.project_directory` reads a variable named `batect` — write `<{batect.project_directory}`. A braced name runs to its `}`, so `${a b}` and `<{my-var}` are references.
 - **ratect.toml:** task and config variable names follow Batect's rules, and one that breaks them fails the load, giving its line and column. A task name contains only letters, digits, `:`, `-`, `.` and `_`, and starts and ends with a letter or digit, so a task named `a*` can no longer exist. A config variable name starts with a letter, contains only letters, digits, `-`, `.` and `_`, and doesn't start with `batect` in any case.
@@ -80,6 +82,10 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- `ratect-compat`: `--use-network=`, `--docker-host=` and `--docker-context=`, with nothing after the `=`, are argument errors, as in Batect, instead of failing later with an unrelated error. `--use-network ''` is still accepted.
+- `ratect-compat`: `--clean-cache` takes a comma-separated list of names, each trimmed, as in Batect, so `--clean-cache=foo,bar` removes `foo` and `bar`. `--clean-cache=`, with nothing after the `=`, is an argument error.
+- `ratect-compat`: `--max-parallelism` rejects values above 2147483647, as Batect does.
+- `ratect-compat`: `--list-tasks` given with `--clean`, `--clean-cache` or `--upgrade`, in either order, lists the tasks, as in Batect, instead of deleting caches or printing the `--upgrade` notice.
 - An `--override-image` naming a container the config doesn't define fails a run only once it reaches a task with a `run`, before that task starts, as in Batect. A run that reaches none — `--skip-prerequisites` on a task with only `prerequisites`, say — succeeds instead of failing.
 - In a YAML config file, a local include whose path starts with `~` (`~/shared.yml`) loads that file from the home directory, as in Batect, instead of looking for a `~` directory beside the file declaring it. A Git include's `path` is still taken as written within the clone.
 - `ratect-compat` loads a `batect.yml` with no `project_name`, as Batect does: the project is named after the root file's directory, lowercased, and one whose name isn't a Docker image-name component fails the load. A root `batect.yml` holding no configuration — empty, only comments, or only a null document such as `---` — fails the load saying so.
