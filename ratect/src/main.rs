@@ -31,7 +31,8 @@ use ratect_core::config::{
     format_task_list, format_task_list_quiet, load_project_native, Config, Dialect,
 };
 use ratect_core::diagnostics::{
-    config_findings, leftover_finding, wrapper_script_findings, ConversionCheck, Finding,
+    config_findings, docker_environment_findings, leftover_finding, wrapper_script_findings,
+    ConversionCheck, Finding,
 };
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
@@ -39,7 +40,7 @@ use ratect_core::exit_code::Word;
 use ratect_core::resources::Leftover;
 use ratect_core::ui::{
     create_event_sink, resolve_color_mode, resolve_no_color, select_output_style, ColorMode,
-    Console, OutputStyle, ProgressStream, TerminalFacts,
+    Console, OutputStyle, ProgressStream, TaskEvent, TerminalFacts,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -501,22 +502,24 @@ struct DockerArgs {
     tls_verify: bool,
 
     /// Directory containing any of ca.pem/cert.pem/key.pem, unless overridden
-    /// individually below. Defaults to DOCKER_CERT_PATH, then ~/.docker.
+    /// individually below. Defaults to DOCKER_CERT_PATH, then
+    /// --docker-config's directory if given (or DOCKER_CONFIG's), then
+    /// ~/.docker.
     #[arg(long = "docker-cert-path")]
     cert_path: Option<PathBuf>,
 
     /// TLS CA certificate verifying the Docker host's own certificate.
-    /// Defaults to ca.pem in --docker-cert-path.
+    /// Defaults to ca.pem in the certificate directory.
     #[arg(long = "docker-tls-ca-cert")]
     tls_ca_cert: Option<PathBuf>,
 
     /// TLS certificate authenticating to the Docker host. Defaults to
-    /// cert.pem in --docker-cert-path.
+    /// cert.pem in the certificate directory.
     #[arg(long = "docker-tls-cert")]
     tls_cert: Option<PathBuf>,
 
     /// TLS key authenticating to the Docker host. Defaults to key.pem in
-    /// --docker-cert-path.
+    /// the certificate directory.
     #[arg(long = "docker-tls-key")]
     tls_key: Option<PathBuf>,
 }
@@ -794,7 +797,7 @@ async fn run(cli: Cli, color_mode: ColorMode, stderr: &Console) -> Result<()> {
         // Deliberately no `load` call: see `CachesArgs`.
         Command::Caches { command } => manage_caches(command, &global, style, stderr).await,
         Command::Includes { command } => manage_includes(command, style).await,
-        Command::Resources { command } => manage_resources(command, &global, style).await,
+        Command::Resources { command } => manage_resources(command, &global, style, stderr).await,
         Command::Config { command } => match command {
             ConfigCommand::Validate(args) => validate_config(args, &global, style).await,
             ConfigCommand::Convert(args) => convert_config(args, &global, style).await,
@@ -1005,10 +1008,12 @@ async fn run_task(
     // process where it stands.
     let interrupt = ratect_core::interrupt::Interrupt::new();
     interrupt.listen();
-    let docker = DockerClient::new(&args.docker.into())
-        .await?
-        .with_event_sink(Arc::clone(&event_sink))
-        .with_enable_buildkit(args.enable_buildkit);
+    let docker = DockerClient::new(&args.docker.into(), |message| {
+        event_sink.post(TaskEvent::Warning { message })
+    })
+    .await?
+    .with_event_sink(Arc::clone(&event_sink))
+    .with_enable_buildkit(args.enable_buildkit);
 
     let engine = TaskEngine::new(project, docker, event_sink, interrupt).with_settings(settings)?;
     engine.run_task(&args.task, &args.args).await
@@ -1089,12 +1094,16 @@ async fn manage_caches(
     let quiet = style == OutputStyle::Quiet;
 
     let wanted: Option<ratect_core::config::CacheScope> = args.scope.map(Into::into);
+    let connection: DockerConnectionOptions = args.docker.into();
+    // Checked even for the directory store, which never connects: a Docker
+    // directory given to a verb that takes one must be one.
+    connection.check_directories()?;
     // One connection for the whole command: both the listing below and the
     // removal after it need the same daemon, and each `DockerClient::new`
     // opens its own.
     let docker = match cache_type {
         ratect_core::cache::CacheType::Volume => {
-            Some(DockerClient::new(&args.docker.into()).await?)
+            Some(DockerClient::new(&connection, |message| stderr.warning(&message)).await?)
         }
         ratect_core::cache::CacheType::Directory => None,
     };
@@ -1227,6 +1236,7 @@ async fn manage_resources(
     command: ResourcesCommand,
     global: &GlobalArgs,
     style: OutputStyle,
+    stderr: &Console,
 ) -> Result<()> {
     let (args, removing) = match command {
         ResourcesCommand::List(args) => (args, false),
@@ -1254,7 +1264,7 @@ async fn manage_resources(
             )?,
         )
     };
-    let docker = DockerClient::new(&args.docker.into()).await?;
+    let docker = DockerClient::new(&args.docker.into(), |message| stderr.warning(&message)).await?;
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1385,8 +1395,20 @@ async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> 
     let mut findings = Vec::new();
 
     // Docker first: nothing else about a task can work without it, so it's
-    // the most likely single answer to "why did that fail?".
-    let docker = DockerClient::new(&args.docker.into()).await;
+    // the most likely single answer to "why did that fail?". The variables
+    // a run reads as true or false come before the connection, which may
+    // stop on one of them — said once, below, not twice.
+    findings.extend(docker_environment_findings(
+        std::env::var("DOCKER_TLS_VERIFY").ok().as_deref(),
+        std::env::var("DOCKER_BUILDKIT").ok().as_deref(),
+    ));
+    // A warning connecting raises is one of doctor's own findings.
+    let warnings = std::sync::Mutex::new(Vec::new());
+    let docker = DockerClient::new(&args.docker.into(), |message| {
+        warnings.lock().unwrap().push(Finding::Warning(message))
+    })
+    .await;
+    findings.extend(warnings.into_inner().unwrap());
     let docker = match docker {
         Ok(docker) => match docker.server_version().await {
             Ok(version) => {
@@ -1403,9 +1425,12 @@ async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> 
             }
         },
         Err(error) => {
-            findings.push(Finding::Problem(format!(
-                "Docker connection options are unusable: {error:#}"
-            )));
+            let already_found = Finding::Problem(format!("{error:#}"));
+            if !findings.contains(&already_found) {
+                findings.push(Finding::Problem(format!(
+                    "Docker connection options are unusable: {error:#}"
+                )));
+            }
             None
         }
     };

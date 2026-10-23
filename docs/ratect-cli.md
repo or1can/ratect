@@ -130,10 +130,10 @@ Docker](connecting-to-docker.md), shared with `ratect-compat`.
 | `--docker-config <PATH>` | `DOCKER_CONFIG`, then `~/.docker` | Directory containing the Docker CLI's own configuration — see [Connecting to Docker](connecting-to-docker.md#options). |
 | `--docker-tls` | — | Use TLS, identically to `--docker-tls-verify` — see [Connecting to Docker](connecting-to-docker.md#options). |
 | `--docker-tls-verify` | `DOCKER_TLS_VERIFY` | Use TLS, verifying the daemon's certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
-| `--docker-cert-path <PATH>` | `DOCKER_CERT_PATH`, then `~/.docker` | Directory containing any of `ca.pem`/`cert.pem`/`key.pem` — see [Connecting to Docker](connecting-to-docker.md#options). |
-| `--docker-tls-ca-cert <PATH>` | `ca.pem` in `--docker-cert-path` | The TLS CA certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
-| `--docker-tls-cert <PATH>` | `cert.pem` in `--docker-cert-path` | The TLS client certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
-| `--docker-tls-key <PATH>` | `key.pem` in `--docker-cert-path` | The TLS client key — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-cert-path <PATH>` | `DOCKER_CERT_PATH`, then `--docker-config`/`DOCKER_CONFIG`, then `~/.docker` | Directory containing any of `ca.pem`/`cert.pem`/`key.pem` — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-tls-ca-cert <PATH>` | `ca.pem` in the certificate directory | The TLS CA certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-tls-cert <PATH>` | `cert.pem` in the certificate directory | The TLS client certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-tls-key <PATH>` | `key.pem` in the certificate directory | The TLS client key — see [Connecting to Docker](connecting-to-docker.md#options). |
 
 ## `run` options
 
@@ -528,8 +528,9 @@ Every other verb runs nothing, so it exits `0` when it succeeds; `1` when it fai
 `doctor` finding a problem); and `2` when it was invoked wrong — a flag that's rejected
 (`ratect --bogus`, `ratect tasks list --bogus`, a missing subcommand), or an option value
 that fails its own check, such as a `-f` naming no file (`ratect tasks list` where there
-is no `ratect.toml`). `doctor` and `config validate` report a `-f` naming no file as a
-problem they found instead, and exit `1`; a flag rejected in their own arguments is still
+is no `ratect.toml`) or a `--docker-config` naming no directory. `doctor` and `config
+validate` report a `-f` naming no file as a problem they found instead, and exit `1`, as
+`doctor` does a Docker directory that isn't one; a flag rejected in their own arguments is still
 `2`.
 
 Every failure of Ratect's own reaches stderr as `Error: <message>`, in every output style

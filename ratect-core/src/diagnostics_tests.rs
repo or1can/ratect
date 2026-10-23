@@ -791,3 +791,30 @@ async fn conversion_checks_are_ordered_by_container_then_kind() {
         Finding::Warning(checks[0].message.clone())
     );
 }
+
+/// #461: an invalid `DOCKER_TLS_VERIFY` or `DOCKER_BUILDKIT` is a problem
+/// naming the variable and its value as written; a valid, empty or unset
+/// one is nothing.
+#[test]
+fn docker_environment_findings_reports_each_invalid_boolean_variable() {
+    let findings = docker_environment_findings(Some("Bogus"), Some("nope"));
+    let [Finding::Problem(tls), Finding::Problem(buildkit)] = findings.as_slice() else {
+        panic!("expected two problems: {findings:?}");
+    };
+    assert!(
+        tls.contains("DOCKER_TLS_VERIFY") && tls.contains("'Bogus'"),
+        "{tls}"
+    );
+    assert!(
+        buildkit.contains("DOCKER_BUILDKIT") && buildkit.contains("'nope'"),
+        "{buildkit}"
+    );
+
+    for value in [None, Some(""), Some("1"), Some("No")] {
+        assert_eq!(
+            docker_environment_findings(value, value),
+            vec![],
+            "{value:?}"
+        );
+    }
+}

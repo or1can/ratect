@@ -1114,8 +1114,70 @@ fn docker_buildkit_env_var_overrides_the_daemon_advertised_default() {
 
 #[test]
 fn an_unparseable_docker_buildkit_env_var_is_a_hard_error() {
-    let err = select_builder_version(Some("banana"), Some("2")).unwrap_err();
-    assert!(err.to_string().contains("'banana'"));
+    for value in ["banana", "Banana", "BANANA"] {
+        let err = select_builder_version(Some(value), Some("2")).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains(&format!("'{value}'")), "{message}");
+        assert!(message.contains("yes"), "{message}");
+        assert!(
+            err.is::<crate::exit_code::InvalidOptionValue>(),
+            "{message}"
+        );
+    }
+}
+
+/// #447: Batect's whole vocabulary, in any case, chooses the builder
+/// whatever the daemon advertises.
+#[test]
+fn docker_buildkit_accepts_batects_vocabulary_in_any_case() {
+    use bollard::query_parameters::BuilderVersion;
+    for value in ["1", "yes", "YES", "true", "TRUE", "True", "Yes"] {
+        for advertised in [None, Some("1"), Some("2")] {
+            assert_eq!(
+                select_builder_version(Some(value), advertised).unwrap(),
+                BuilderVersion::BuilderBuildKit,
+                "{value} {advertised:?}"
+            );
+        }
+    }
+    for value in ["0", "no", "NO", "false", "FALSE", "False", "No"] {
+        for advertised in [None, Some("1"), Some("2")] {
+            assert_eq!(
+                select_builder_version(Some(value), advertised).unwrap(),
+                BuilderVersion::BuilderV1,
+                "{value} {advertised:?}"
+            );
+        }
+    }
+}
+
+/// #447: an empty `DOCKER_BUILDKIT` is no choice at all — the daemon's
+/// advertised builder is used, as with none.
+#[test]
+fn an_empty_docker_buildkit_defers_to_the_daemon() {
+    use bollard::query_parameters::BuilderVersion;
+    assert_eq!(
+        select_builder_version(Some(""), Some("2")).unwrap(),
+        BuilderVersion::BuilderBuildKit
+    );
+    assert_eq!(
+        select_builder_version(Some(""), None).unwrap(),
+        BuilderVersion::BuilderV1
+    );
+}
+
+/// `--enable-buildkit` wins over any value, an invalid or empty one too.
+#[test]
+fn enable_buildkit_overrides_an_invalid_or_empty_docker_buildkit() {
+    use bollard::query_parameters::BuilderVersion;
+    for value in ["banana", ""] {
+        let env_value = docker_buildkit_env_value(true, Some(value));
+        assert_eq!(env_value.as_deref(), Some("1"));
+        assert_eq!(
+            select_builder_version(env_value.as_deref(), None).unwrap(),
+            BuilderVersion::BuilderBuildKit
+        );
+    }
 }
 
 #[test]

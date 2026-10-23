@@ -1822,7 +1822,7 @@ fn split_image_reference(reference: &str) -> (&str, Option<&str>) {
 /// environment variable, so an explicit flag on the command line always
 /// wins over it. `real_env_value`, verbatim, otherwise. There's no
 /// `--disable-buildkit` counterpart (matching Batect exactly) — forcing the
-/// classic builder is only ever done via `DOCKER_BUILDKIT=0`/`false`.
+/// classic builder is only ever done via `DOCKER_BUILDKIT=0`/`no`/`false`.
 ///
 /// Pure, so `--enable-buildkit`'s precedence is unit-testable without a live
 /// daemon; [`DockerClient::builder_version`] feeds it the real environment
@@ -1838,12 +1838,14 @@ fn docker_buildkit_env_value(
     }
 }
 
-/// Picks the builder for this invocation's image builds, matching Batect's
-/// own selection (`DockerConnectivity.kt`): an explicit `DOCKER_BUILDKIT`
-/// environment variable wins (`1`/`true` forces BuildKit, `0`/`false` forces
-/// the classic builder — the same env var Batect reads as its
-/// `--enable-buildkit` default, and the docker CLI's own override
-/// convention); otherwise the builder the daemon itself advertises as its
+/// Picks the builder for this invocation's image builds, as Batect's own
+/// selection does (`DockerConnectivity.kt`): an explicit `DOCKER_BUILDKIT`
+/// environment variable wins — read by [`boolean_variable::parse`], so `1`,
+/// `yes` or `true` forces BuildKit and `0`, `no` or `false` the classic
+/// builder, in any case, and an empty one is unset (Batect's vocabulary,
+/// with two divergences that module lists; the docker CLI accepts no
+/// `yes`/`no`) — the same env var Batect reads as its `--enable-buildkit`
+/// default; otherwise the builder the daemon itself advertises as its
 /// default (the `/_ping` response's `Builder-Version` header — `"2"` is
 /// BuildKit) is used, which is BuildKit on any modern daemon. A missing or
 /// empty header (a daemon old enough to predate it) or `"1"` means the
@@ -1863,16 +1865,10 @@ fn select_builder_version(
     daemon_advertised: Option<&str>,
 ) -> Result<bollard::query_parameters::BuilderVersion> {
     use bollard::query_parameters::BuilderVersion;
-    if let Some(value) = docker_buildkit_env {
-        return match value.to_ascii_lowercase().as_str() {
-            "1" | "true" => Ok(BuilderVersion::BuilderBuildKit),
-            "0" | "false" => Ok(BuilderVersion::BuilderV1),
-            other => Err(anyhow::anyhow!(
-                "The DOCKER_BUILDKIT environment variable is set to '{other}', which is not a \
-                 valid value — use '1'/'true' to force BuildKit or '0'/'false' to force the \
-                 classic builder."
-            )),
-        };
+    match boolean_variable::parse("DOCKER_BUILDKIT", docker_buildkit_env)? {
+        Some(true) => return Ok(BuilderVersion::BuilderBuildKit),
+        Some(false) => return Ok(BuilderVersion::BuilderV1),
+        None => {}
     }
     match daemon_advertised {
         None | Some("") | Some("1") => Ok(BuilderVersion::BuilderV1),
@@ -1994,6 +1990,7 @@ async fn resolve_build_credentials(
     (credentials, warnings)
 }
 
+pub(crate) mod boolean_variable;
 mod connection;
 pub use connection::DockerConnectionOptions;
 
@@ -2015,8 +2012,15 @@ impl DockerClient {
             .unwrap_or_else(|| "unknown version".to_string()))
     }
 
-    pub async fn new(connection: &DockerConnectionOptions) -> Result<Self> {
+    /// Connects as `connection` says. `warn` is given each warning choosing
+    /// the daemon raised — a Docker CLI `config.json` that can't be used,
+    /// say — before the daemon is first contacted, so it is said even when
+    /// that fails. Required rather than collected afterwards because only
+    /// the caller knows where a warning goes: a run's event sink, a verb's
+    /// stderr, a `doctor` finding.
+    pub async fn new(connection: &DockerConnectionOptions, warn: impl Fn(String)) -> Result<Self> {
         let connected = connection::connect(connection)?;
+        connected.warnings.iter().cloned().for_each(warn);
         let docker = connected
             .docker
             .clone()
@@ -2025,7 +2029,7 @@ impl DockerClient {
             .context("Failed to negotiate the Docker API version with the daemon")
             .map_err(|err| connected.explain_failure(err))?;
         check_api_version_floor(docker.client_version())?;
-        let config_directory = connection::docker_config_directory(connection)?;
+        let config_directory = connected.config_directory.clone();
         Ok(Self {
             docker,
             builder_version: tokio::sync::OnceCell::new(),

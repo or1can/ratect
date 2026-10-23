@@ -14,6 +14,7 @@
 
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
+use ratect_core::cache::CacheType;
 use ratect_core::config::{
     format_task_list, format_task_list_quiet, load_project, Config, Dialect,
 };
@@ -23,7 +24,7 @@ use ratect_core::exit_code::{InvalidOptionValue, Word};
 use ratect_core::git_include::GitIncludeCache;
 use ratect_core::ui::{
     create_event_sink, select_output_style, ColorMode, Console, OutputStyle, ProgressStream,
-    TerminalFacts,
+    TaskEvent, TerminalFacts,
 };
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -158,23 +159,24 @@ struct Args {
     /// Path to a directory containing any of ca.pem/cert.pem/key.pem to
     /// authenticate to the Docker host and verify it, unless overridden
     /// individually by --docker-tls-ca-cert/-cert/-key. Defaults to the
-    /// DOCKER_CERT_PATH environment variable, then ~/.docker.
+    /// DOCKER_CERT_PATH environment variable, then --docker-config's
+    /// directory if given (or DOCKER_CONFIG's), then ~/.docker.
     #[arg(long = "docker-cert-path", help_heading = "Docker connection")]
     docker_cert_path: Option<PathBuf>,
 
     /// Path to the TLS CA certificate file used to verify the Docker
-    /// host's own certificate. Defaults to ca.pem in --docker-cert-path's
-    /// directory.
+    /// host's own certificate. Defaults to ca.pem in the certificate
+    /// directory (see --docker-cert-path).
     #[arg(long = "docker-tls-ca-cert", help_heading = "Docker connection")]
     docker_tls_ca_cert: Option<PathBuf>,
 
     /// Path to the TLS certificate file used to authenticate to the Docker
-    /// host. Defaults to cert.pem in --docker-cert-path's directory.
+    /// host. Defaults to cert.pem in the certificate directory.
     #[arg(long = "docker-tls-cert", help_heading = "Docker connection")]
     docker_tls_cert: Option<PathBuf>,
 
     /// Path to the TLS key file used to authenticate to the Docker host.
-    /// Defaults to key.pem in --docker-cert-path's directory.
+    /// Defaults to key.pem in the certificate directory.
     #[arg(long = "docker-tls-key", help_heading = "Docker connection")]
     docker_tls_key: Option<PathBuf>,
 
@@ -186,14 +188,10 @@ struct Args {
 
     /// Storage mechanism for `cache` volume mounts: volume (a Docker named
     /// volume) or directory (a host directory under
-    /// `<project_directory>/.batect/caches/<name>`).
-    #[arg(
-        long = "cache-type",
-        value_enum,
-        default_value = "volume",
-        help_heading = "Task execution"
-    )]
-    cache_type: CacheTypeArg,
+    /// `<project_directory>/.batect/caches/<name>`). Defaults to the
+    /// BATECT_CACHE_TYPE environment variable, then volume.
+    #[arg(long = "cache-type", value_enum, help_heading = "Task execution")]
+    cache_type: Option<CacheTypeArg>,
 
     /// Remove every one of this project's cache volumes/directories and
     /// exit, without running anything. Never needs the config file itself.
@@ -257,6 +255,42 @@ impl Args {
         !self.upgrade && !self.clean && self.clean_cache.is_empty() && !self.list_tasks
     }
 
+    /// The cache type: `--cache-type`, else `BATECT_CACHE_TYPE`
+    /// (`batect_cache_type_env`, injected so this stays testable), else
+    /// volume. The variable must name a cache type exactly, as in Batect —
+    /// `Directory` and an empty value are refused — but only when the flag
+    /// doesn't make it moot. [`run`] resolves it once, for every command,
+    /// as Batect checks its options' defaults before running any.
+    fn cache_type(&self, batect_cache_type_env: Option<&str>) -> Result<CacheType> {
+        if let Some(cache_type) = self.cache_type {
+            return Ok(cache_type.into());
+        }
+        match batect_cache_type_env {
+            None | Some("volume") => Ok(CacheType::Volume),
+            Some("directory") => Ok(CacheType::Directory),
+            Some(other) => Err(InvalidOptionValue::new(format!(
+                "BATECT_CACHE_TYPE is '{other}', which is not a cache type: use volume or \
+                 directory, or give --cache-type."
+            ))
+            .into()),
+        }
+    }
+
+    /// The Docker connection flags, as `ratect-core` takes them.
+    fn docker_connection(&self) -> DockerConnectionOptions {
+        DockerConnectionOptions {
+            host: self.docker_host.clone(),
+            context: self.docker_context.clone(),
+            config_directory: self.docker_config.clone(),
+            tls: self.docker_tls,
+            tls_verify: self.docker_tls_verify,
+            cert_path: self.docker_cert_path.clone(),
+            tls_ca_cert: self.docker_tls_ca_cert.clone(),
+            tls_cert: self.docker_tls_cert.clone(),
+            tls_key: self.docker_tls_key.clone(),
+        }
+    }
+
     /// Maps the engine-affecting flags onto the engine's settings.
     ///
     /// Split out from [`run`] so it can be tested without a Docker daemon.
@@ -272,6 +306,7 @@ impl Args {
         project_directory: PathBuf,
         dialect: Dialect,
         config_var_overrides: HashMap<String, String>,
+        cache_type: CacheType,
     ) -> TaskEngineSettings {
         let mut image_tags: HashMap<String, HashSet<String>> = HashMap::new();
         for (container, tag) in &self.tag_image {
@@ -290,7 +325,7 @@ impl Args {
             cleanup_after_success: !(self.no_cleanup || self.no_cleanup_after_success),
             cleanup_after_failure: !(self.no_cleanup || self.no_cleanup_after_failure),
             max_parallelism: self.max_parallelism.map(|max| max as usize),
-            cache: Some((self.cache_type.into(), project_directory)),
+            cache: Some((cache_type, project_directory)),
             // Stamped onto every resource this run creates, so it can be
             // identified later — see `ratect_core::labels`.
             ratect_version: Some(env!("CARGO_PKG_VERSION").to_string()),
@@ -326,7 +361,7 @@ impl From<OutputStyleArg> for OutputStyle {
     }
 }
 
-/// The CLI-side `--cache-type` value set. Mirrors [`ratect_core::cache::CacheType`]
+/// The CLI-side `--cache-type` value set. Mirrors [`CacheType`]
 /// rather than deriving on it directly, same reasoning as `OutputStyleArg`.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 enum CacheTypeArg {
@@ -334,11 +369,11 @@ enum CacheTypeArg {
     Directory,
 }
 
-impl From<CacheTypeArg> for ratect_core::cache::CacheType {
+impl From<CacheTypeArg> for CacheType {
     fn from(arg: CacheTypeArg) -> Self {
         match arg {
-            CacheTypeArg::Volume => ratect_core::cache::CacheType::Volume,
-            CacheTypeArg::Directory => ratect_core::cache::CacheType::Directory,
+            CacheTypeArg::Volume => CacheType::Volume,
+            CacheTypeArg::Directory => CacheType::Directory,
         }
     }
 }
@@ -548,16 +583,30 @@ async fn main() {
 
 /// Resolves which config-variables file to load. An explicit
 /// `--config-vars-file` always wins; otherwise Batect's default of
-/// `batect.local.yml` applies, but *only when that file exists* — an absent
-/// default file is simply "no overrides", not an error. This mirrors
-/// Batect's `FileDefaultValueProvider("batect.local.yml")`, which resolves
-/// the default against the current directory (`dir` here), not against the
-/// `-f` config file's own directory.
-fn resolve_config_vars_file(explicit: Option<PathBuf>, dir: &Path) -> Option<PathBuf> {
-    explicit.or_else(|| {
-        let default = dir.join("batect.local.yml");
-        default.is_file().then_some(default)
-    })
+/// `batect.local.yml` in the current directory (`dir` here, not the `-f`
+/// config file's own directory) applies when it is a file. An absent one is
+/// "no overrides", not an error; one that exists but isn't a file is an
+/// invalid default, as Batect's `FileDefaultValueProvider` makes it — even
+/// for a command that never reads it, since this is a check on the
+/// default, not on reading it.
+fn resolve_config_vars_file(explicit: Option<PathBuf>, dir: &Path) -> Result<Option<PathBuf>> {
+    if explicit.is_some() {
+        return Ok(explicit);
+    }
+    let default = dir.join("batect.local.yml");
+    match std::fs::metadata(&default) {
+        Ok(metadata) if metadata.is_file() => Ok(Some(default)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Ok(_) => Err(InvalidOptionValue::new(format!(
+            "{default:?}, --config-vars-file's default in the current directory, is not a file."
+        ))
+        .into()),
+        Err(error) => Err(InvalidOptionValue::new(format!(
+            "{default:?}, --config-vars-file's default in the current directory, can't be \
+             read: {error}."
+        ))
+        .into()),
+    }
 }
 
 /// This binary's progress console is stdout — Batect's placement, kept
@@ -591,7 +640,7 @@ async fn run(
     // names, are read only when a task runs, so nothing in either stops
     // `--list-tasks` (#355).
     let config_vars_file =
-        resolve_config_vars_file(args.config_vars_file.clone(), &std::env::current_dir()?);
+        resolve_config_vars_file(args.config_vars_file.clone(), &std::env::current_dir()?)?;
     if let Some(path) = &config_vars_file {
         if !path.is_file() {
             return Err(InvalidOptionValue::new(format!(
@@ -600,6 +649,11 @@ async fn run(
             .into());
         }
     }
+
+    let cache_type = args.cache_type(std::env::var("BATECT_CACHE_TYPE").ok().as_deref())?;
+    // Like Batect's option parser, for every command: a Docker directory
+    // the user named must be one, whether or not this command connects.
+    args.docker_connection().check_directories()?;
 
     if args.upgrade {
         stderr.notice(
@@ -610,7 +664,7 @@ async fn run(
     }
 
     if args.clean || !args.clean_cache.is_empty() {
-        return clean_caches(&args).await;
+        return clean_caches(&args, cache_type, stderr).await;
     }
 
     let project = load_project(&args.config_file).await?;
@@ -664,11 +718,11 @@ async fn run(
             // for why, and for the fancy-on-a-non-interactive-console error
             // it can return.
             let event_sink = create_event_sink(requested_style, color_mode, &terminal, PROGRESS)?;
-            // Built before the connection options consume `args` below.
             let settings = args.engine_settings(
                 project.project_directory.clone(),
                 project.dialect,
                 config_var_overrides,
+                cache_type,
             );
             // Constructed here rather than inside `ratect-core` — a library
             // shouldn't take over a process's signal handling on its own
@@ -679,21 +733,12 @@ async fn run(
             // and cleans up instead of killing the process where it stands.
             let interrupt = ratect_core::interrupt::Interrupt::new();
             interrupt.listen();
-            let docker_connection = DockerConnectionOptions {
-                host: args.docker_host,
-                context: args.docker_context,
-                config_directory: args.docker_config,
-                tls: args.docker_tls,
-                tls_verify: args.docker_tls_verify,
-                cert_path: args.docker_cert_path,
-                tls_ca_cert: args.docker_tls_ca_cert,
-                tls_cert: args.docker_tls_cert,
-                tls_key: args.docker_tls_key,
-            };
-            let docker = DockerClient::new(&docker_connection)
-                .await?
-                .with_event_sink(Arc::clone(&event_sink))
-                .with_enable_buildkit(args.enable_buildkit);
+            let docker = DockerClient::new(&args.docker_connection(), |message| {
+                event_sink.post(TaskEvent::Warning { message })
+            })
+            .await?
+            .with_event_sink(Arc::clone(&event_sink))
+            .with_enable_buildkit(args.enable_buildkit);
             let engine =
                 TaskEngine::new(project, docker, event_sink, interrupt).with_settings(settings)?;
             engine.run_task(task_name, &args.additional_args).await?;
@@ -731,29 +776,22 @@ fn sweep_git_include_cache() -> Sweep {
 /// `CleanupCachesCommand` exactly: the explicit `cleanCaches` list (if
 /// non-empty) always wins over `--clean`'s "everything" default, regardless
 /// of whether `--clean` was also given.
-async fn clean_caches(args: &Args) -> Result<()> {
+async fn clean_caches(args: &Args, cache_type: CacheType, stderr: &Console) -> Result<()> {
     let base_path = ratect_core::config::base_path_for(&args.config_file);
     let project_directory = ratect_core::config::project_directory_path(base_path)?;
     let only: HashSet<String> = args.clean_cache.iter().cloned().collect();
-    let cache_type: ratect_core::cache::CacheType = args.cache_type.into();
 
     let docker = match cache_type {
-        ratect_core::cache::CacheType::Volume => {
+        CacheType::Volume => {
             println!("Checking for cache volumes...");
-            let docker_connection = DockerConnectionOptions {
-                host: args.docker_host.clone(),
-                context: args.docker_context.clone(),
-                config_directory: args.docker_config.clone(),
-                tls: args.docker_tls,
-                tls_verify: args.docker_tls_verify,
-                cert_path: args.docker_cert_path.clone(),
-                tls_ca_cert: args.docker_tls_ca_cert.clone(),
-                tls_cert: args.docker_tls_cert.clone(),
-                tls_key: args.docker_tls_key.clone(),
-            };
-            Some(DockerClient::new(&docker_connection).await?)
+            Some(
+                DockerClient::new(&args.docker_connection(), |message| {
+                    stderr.warning(&message)
+                })
+                .await?,
+            )
         }
-        ratect_core::cache::CacheType::Directory => {
+        CacheType::Directory => {
             println!(
                 "Checking for cache directories in '{}'...",
                 ratect_core::cache::cache_directory(&project_directory).display()
@@ -789,19 +827,19 @@ async fn clean_caches(args: &Args) -> Result<()> {
 /// identifier Batect itself prints: a Docker volume name under
 /// `CacheType::Volume`, a full host path under `CacheType::Directory` —
 /// never the bare cache name a `cache` mount declares.
-fn deleting_line(cache_type: ratect_core::cache::CacheType, storage: &str) -> String {
+fn deleting_line(cache_type: CacheType, storage: &str) -> String {
     match cache_type {
-        ratect_core::cache::CacheType::Volume => format!("Deleting volume '{storage}'..."),
-        ratect_core::cache::CacheType::Directory => format!("Deleting '{storage}'..."),
+        CacheType::Volume => format!("Deleting volume '{storage}'..."),
+        CacheType::Directory => format!("Deleting '{storage}'..."),
     }
 }
 
 /// The summary line, singular/plural matched to what was actually removed —
 /// the same Batect wording, pinned for the same reason as [`deleting_line`].
-fn done_line(cache_type: ratect_core::cache::CacheType, removed: usize) -> String {
+fn done_line(cache_type: CacheType, removed: usize) -> String {
     let (singular, plural) = match cache_type {
-        ratect_core::cache::CacheType::Volume => ("volume", "volumes"),
-        ratect_core::cache::CacheType::Directory => ("directory", "directories"),
+        CacheType::Volume => ("volume", "volumes"),
+        CacheType::Directory => ("directory", "directories"),
     };
     format!(
         "Done! Deleted {removed} {}.",

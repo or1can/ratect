@@ -31,7 +31,7 @@ listed under.
 | Flag | Short | Default | Description |
 |---|---|---|---|
 | `--config-var <NAME=VALUE>` | — | — | Sets a [config variable](ratect-compat-config-reference.md#configvariable)'s value; repeatable. Takes precedence over `--config-vars-file` and the variable's `default`. |
-| `--config-vars-file <PATH>` | — | `batect.local.yml` if it exists | A flat YAML file of config variable `name: value` pairs, in the same format as `batect.yml` itself. Every value is a string, as in Batect: an unquoted number or boolean is read as written (`3.10` is `3.10`, not `3.1`) unless the file also contains a YAML tag, and a null or empty value is refused. Lower precedence than `--config-var`. When not given, defaults to `batect.local.yml` in the current directory *if that file exists* (an absent default file just means no overrides from a file, not an error) — matching Batect. Read only when a task runs, as in Batect: every command checks only that a named file is a file, so nothing in it, nor a `--config-var` naming an undeclared variable, stops `--list-tasks`. |
+| `--config-vars-file <PATH>` | — | `batect.local.yml` if it exists | A flat YAML file of config variable `name: value` pairs, in the same format as `batect.yml` itself. Every value is a string, as in Batect: an unquoted number or boolean is read as written (`3.10` is `3.10`, not `3.1`) unless the file also contains a YAML tag, and a null or empty value is refused. Lower precedence than `--config-var`. When not given, defaults to `batect.local.yml` in the current directory *if that file exists* (an absent default file just means no overrides from a file, not an error); one that exists but isn't a file fails every command, as in Batect. Read only when a task runs, as in Batect: every command checks only that a named file is a file, so nothing in it, nor a `--config-var` naming an undeclared variable, stops `--list-tasks`. |
 
 ### Task execution
 
@@ -43,9 +43,9 @@ listed under.
 | `--skip-prerequisites` | — | — | Don't run the named task's own `prerequisites`. Only ever affects the task actually named on the command line — if that task is itself reached as someone else's prerequisite in a later invocation, this flag has no bearing on that. |
 | `--override-image <CONTAINER=IMAGE>` | — | — | Overrides the image used by `CONTAINER`; repeatable. Replaces the container's `image`/`build_directory` and `image_pull_policy` entirely — the override is always pulled under the default `IfNotPresent` policy, regardless of what the container itself configures. Errors immediately if `CONTAINER` isn't defined in the config. |
 | `--tag-image <CONTAINER=TAG>` | — | — | Tags the image built by `CONTAINER` with `TAG`, in addition to the default `<project_name>-<container_name>` tag; repeatable, and `CONTAINER` may be given more than once to apply multiple tags. Only valid for a container that actually builds an image — errors immediately if `CONTAINER` ends up using a pulled image (whether configured that way or via `--override-image`), and errors once the whole task (and its prerequisites) finishes if `CONTAINER` never actually ran. A `TAG` that `docker tag` would refuse, such as `_nonsense` or one with uppercase in its repository name, is rejected while the arguments are parsed, before anything runs. |
-| `--enable-buildkit` | — | — | Use BuildKit for image builds, taking precedence over the `DOCKER_BUILDKIT` environment variable — see [config reference](ratect-compat-config-reference.md#image-building). No `--disable-buildkit` counterpart; force the classic builder via `DOCKER_BUILDKIT=0`/`false` instead. |
+| `--enable-buildkit` | — | — | Use BuildKit for image builds, taking precedence over the `DOCKER_BUILDKIT` environment variable — see [config reference](ratect-compat-config-reference.md#image-building). No `--disable-buildkit` counterpart; force the classic builder via `DOCKER_BUILDKIT=0` instead. |
 | `--max-parallelism <N>` | — | unbounded | Caps how many image pulls/builds, container creates, dependency container starts, and setup-command executions run concurrently across the whole invocation — a create and a start are separate capped steps, and no slot is held while a container waits for its dependencies. Health-check waits, the task's own container's run, and container stop/removal are never gated — see [Differences from Batect](differences-from-batect.md#cli-flags). |
-| `--cache-type <volume\|directory>` | — | `volume` | Storage mechanism for a `cache` volume mount (see [Cache volumes](ratect-compat-config-reference.md#cache-volumes)): `volume` resolves it to a Docker named volume, `directory` to a host directory under `<project_directory>/.batect/caches/<name>/`. Has no effect on a config with no `cache` mounts — but does still select which storage `--clean`/`--clean-cache` act on. |
+| `--cache-type <volume\|directory>` | — | `BATECT_CACHE_TYPE`, then `volume` | Storage mechanism for a `cache` volume mount (see [Cache volumes](ratect-compat-config-reference.md#cache-volumes)): `volume` resolves it to a Docker named volume, `directory` to a host directory under `<project_directory>/.batect/caches/<name>/`. Has no effect on a config with no `cache` mounts — but does still select which storage `--clean`/`--clean-cache` act on. A `BATECT_CACHE_TYPE` that is neither `volume` nor `directory`, exactly, fails every command unless this flag is given. |
 
 ### Cleanup after a run
 
@@ -69,16 +69,16 @@ accepts them; they're used only when it actually connects.
 | `--docker-config <PATH>` | — | `DOCKER_CONFIG`, then `~/.docker` | Directory containing the Docker CLI's own configuration — see [Connecting to Docker](connecting-to-docker.md#options). |
 | `--docker-tls` | — | — | Use TLS, identically to `--docker-tls-verify` — see [Connecting to Docker](connecting-to-docker.md#options). |
 | `--docker-tls-verify` | — | `DOCKER_TLS_VERIFY` | Use TLS, verifying the daemon's certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
-| `--docker-cert-path <PATH>` | — | `DOCKER_CERT_PATH`, then `~/.docker` | Directory containing any of `ca.pem`/`cert.pem`/`key.pem` — see [Connecting to Docker](connecting-to-docker.md#options). |
-| `--docker-tls-ca-cert <PATH>` | — | `ca.pem` in `--docker-cert-path` | The TLS CA certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
-| `--docker-tls-cert <PATH>` | — | `cert.pem` in `--docker-cert-path` | The TLS client certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
-| `--docker-tls-key <PATH>` | — | `key.pem` in `--docker-cert-path` | The TLS client key — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-cert-path <PATH>` | — | `DOCKER_CERT_PATH`, then `--docker-config`/`DOCKER_CONFIG`, then `~/.docker` | Directory containing any of `ca.pem`/`cert.pem`/`key.pem` — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-tls-ca-cert <PATH>` | — | `ca.pem` in the certificate directory | The TLS CA certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-tls-cert <PATH>` | — | `cert.pem` in the certificate directory | The TLS client certificate — see [Connecting to Docker](connecting-to-docker.md#options). |
+| `--docker-tls-key <PATH>` | — | `key.pem` in the certificate directory | The TLS client key — see [Connecting to Docker](connecting-to-docker.md#options). |
 
 ### Cache management
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
-| `--clean` | — | — | Removes every one of this project's own cache volumes/directories (per `--cache-type`) and exits — doesn't run anything, and doesn't need `--config-file` to actually exist. See [Cache volumes](ratect-compat-config-reference.md#cache-volumes). |
+| `--clean` | — | — | Removes every one of this project's own cache volumes/directories (per `--cache-type` or `BATECT_CACHE_TYPE`) and exits — doesn't run anything, and doesn't need `--config-file` to actually exist. See [Cache volumes](ratect-compat-config-reference.md#cache-volumes). |
 | `--clean-cache <NAME>` | — | — | Removes just the named cache (repeatable) and exits, instead of every one of them. Given together with `--clean`, the explicit name(s) win — `--clean`'s own "everything" behavior only applies when `--clean-cache` is never given at all. |
 
 ### Output
@@ -228,7 +228,9 @@ runs nothing, so it exits `0` when it succeeds, `1` when it fails (a config that
 parse under `--list-tasks`, a `--log-file` that exists but can't be opened), and `2` when
 it was invoked wrong: a flag that's rejected (`ratect-compat --bogus --clean`), or an
 option value that fails its own check — a `-f` or `--config-vars-file` naming something
-that doesn't exist or isn't a file, or a `--log-file` in a directory that doesn't exist.
+that doesn't exist or isn't a file, a `batect.local.yml` that isn't a file, a `BATECT_CACHE_TYPE` that is no cache type, a `--docker-config`, `--docker-cert-path`,
+`DOCKER_CONFIG` or `DOCKER_CERT_PATH` naming something that doesn't exist or isn't a
+directory, or a `--log-file` in a directory that doesn't exist.
 
 Every failure of Ratect's own is printed to stderr as `Error: <message>` (the marker in
 bold red when stderr is a terminal) — deliberately *not* through
@@ -266,12 +268,13 @@ it.
 | Variable | Effect |
 |---|---|
 | `RUST_LOG` | Controls log verbosity on stderr (`error`, `warn`, `info` [default], `debug`, `trace`) — and, if `--log-file` is given, the same file too. See [Filtering `RUST_LOG`](troubleshooting.md#filtering-rust_log) for scoping it to Ratect's own targets. Unlike Batect, Ratect always logs to stderr regardless of `--log-file`; Batect's own default with no `--log-file` is silent. See [Differences from Batect](differences-from-batect.md#cli-flags). |
+| `BATECT_CACHE_TYPE` | The default for `--cache-type`: `volume` or `directory`, exactly. Any other value, empty included, fails every command but `--help` and `--version`, unless `--cache-type` is given. |
 | `DOCKER_HOST` | The default for `--docker-host` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |
 | `DOCKER_CONTEXT` | The default for `--docker-context` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |
 | `DOCKER_CONFIG` | The default for `--docker-config` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |
 | `DOCKER_CERT_PATH` | The default for `--docker-cert-path` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |
 | `DOCKER_TLS_VERIFY` | The default for `--docker-tls-verify` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |
-| `DOCKER_BUILDKIT` | Forces the image builder on (`1`/`true`) or off (`0`/`false`) — see `--enable-buildkit` and [config reference](ratect-compat-config-reference.md#image-building). |
+| `DOCKER_BUILDKIT` | Forces the image builder on (`1`, `yes` or `true`) or off (`0`, `no` or `false`), in any case; empty counts as unset, and any other value fails the first build — see `--enable-buildkit` and [config reference](ratect-compat-config-reference.md#image-building). |
 | `NO_COLOR` | If set, exactly the same effect as `--no-color` — see [Colour](output-styles.md#colour). |
 | `CLICOLOR_FORCE` | Forces colored output even when the stream isn't a terminal, unless `--no-color`/`NO_COLOR` is set — see [Colour](output-styles.md#colour). |
 

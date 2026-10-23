@@ -5666,3 +5666,398 @@ fn error_and_warning_markers_are_bold_on_a_terminal_and_plain_without_color() {
         );
     }
 }
+
+/// A fresh, empty scratch directory named for `purpose`. Caller cleans up.
+fn scratch_directory(purpose: &str) -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "ratect-compat-{purpose}-{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// A scratch project with one task, `t`, and nothing else in it.
+fn one_task_project(purpose: &str) -> PathBuf {
+    let dir = scratch_directory(purpose);
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\n\
+         containers:\n  app:\n    image: alpine:3.18.2\n\
+         tasks:\n  t:\n    run:\n      container: app\n",
+    )
+    .unwrap();
+    dir
+}
+
+/// `ratect_command` in `project`, with none of the Docker or Batect
+/// environment variables the developer's own shell might set.
+fn isolated_docker_command(project: &Path) -> Command {
+    let mut command = ratect_command();
+    command.current_dir(project);
+    for name in [
+        "DOCKER_HOST",
+        "DOCKER_CONTEXT",
+        "DOCKER_CONFIG",
+        "DOCKER_CERT_PATH",
+        "DOCKER_TLS_VERIFY",
+        "DOCKER_BUILDKIT",
+        "BATECT_CACHE_TYPE",
+    ] {
+        command.env_remove(name);
+    }
+    command
+}
+
+/// #294: with TLS on and no certificate path, `cert.pem` is looked for in
+/// the Docker config directory the user chose — from `DOCKER_CONFIG` and
+/// from `--docker-config` alike — not in `~/.docker`. The host is
+/// unreachable, so the run fails on the missing file before any request.
+#[test]
+fn tls_certificates_are_looked_for_in_the_chosen_docker_config_directory() {
+    let project = one_task_project("cert-dir-from-config");
+    let config_directory = project.join("cfg");
+    std::fs::create_dir_all(&config_directory).unwrap();
+    let files = project.join("files");
+    std::fs::create_dir_all(&files).unwrap();
+    std::fs::write(files.join("ca.pem"), "ca").unwrap();
+    std::fs::write(files.join("key.pem"), "key").unwrap();
+
+    for (named_by, from_flag) in [("DOCKER_CONFIG", false), ("--docker-config", true)] {
+        let mut command = isolated_docker_command(&project);
+        command
+            .env("DOCKER_TLS_VERIFY", "1")
+            .env("DOCKER_HOST", "tcp://127.0.0.1:1")
+            .arg("--docker-tls-ca-cert")
+            .arg(files.join("ca.pem"))
+            .arg("--docker-tls-key")
+            .arg(files.join("key.pem"));
+        if from_flag {
+            command.arg("--docker-config").arg(&config_directory);
+        } else {
+            command.env("DOCKER_CONFIG", &config_directory);
+        }
+        let output = command.arg("t").output().expect("failed to run ratect");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(125), "{named_by}: {stderr}");
+        let expected = format!(
+            "{named_by}: {} does not exist or is not a file",
+            config_directory.join("cert.pem").display()
+        );
+        assert!(stderr.contains(&expected), "{named_by}: {stderr}");
+    }
+    std::fs::remove_dir_all(&project).ok();
+}
+
+/// #539: a Docker config or certificate directory that doesn't exist, or is
+/// a file, fails every command before it runs — `--list-tasks` included,
+/// which never connects — naming where it came from, and lists nothing.
+#[test]
+fn list_tasks_refuses_a_docker_directory_that_is_not_one() {
+    let project = one_task_project("docker-directory");
+    let file = project.join("a-file");
+    std::fs::write(&file, "").unwrap();
+    let missing = project.join("missing");
+    for path in [&missing, &file] {
+        let problem = if path == &file {
+            "is a file, not a directory"
+        } else {
+            "does not exist"
+        };
+        for (source, from_flag) in [
+            ("--docker-config", true),
+            ("DOCKER_CONFIG", false),
+            ("--docker-cert-path", true),
+            ("DOCKER_CERT_PATH", false),
+        ] {
+            let mut command = isolated_docker_command(&project);
+            if from_flag {
+                command.arg(source).arg(path);
+            } else {
+                command.env(source, path);
+            }
+            let output = command
+                .arg("--list-tasks")
+                .output()
+                .expect("failed to run ratect");
+
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(output.status.code(), Some(2), "{source}: {stderr}");
+            assert!(
+                stderr.contains(&format!("{source} {path:?} {problem}.")),
+                "{source}: {stderr}"
+            );
+            assert_eq!(String::from_utf8_lossy(&output.stdout), "", "{source}");
+        }
+    }
+    std::fs::remove_dir_all(&project).ok();
+}
+
+/// #539: a task run exits `125` for it, like any failure to run.
+#[test]
+fn a_run_refuses_a_docker_config_directory_that_does_not_exist() {
+    let project = one_task_project("docker-directory-run");
+    let output = isolated_docker_command(&project)
+        .args(["--docker-config", "/nonexistent-ratect-dir", "t"])
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&project).ok();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(125), "{stderr}");
+    assert!(
+        stderr.contains(r#"--docker-config "/nonexistent-ratect-dir" does not exist."#),
+        "{stderr}"
+    );
+}
+
+/// #539: `--help` and `--version` don't check it — a recorded divergence.
+#[test]
+fn help_and_version_ignore_a_docker_config_directory_that_does_not_exist() {
+    for flag in ["--help", "--version"] {
+        let output = ratect_command()
+            .args(["--docker-config", "/nonexistent-ratect-dir", flag])
+            .output()
+            .expect("failed to run ratect");
+        assert_eq!(output.status.code(), Some(0), "{flag}");
+    }
+}
+
+/// #305: a `DOCKER_TLS_VERIFY` that is neither true nor false stops a run
+/// before it connects — the listener standing in for the daemon receives
+/// nothing, not a plaintext request — naming the variable and the value.
+#[test]
+fn a_run_refuses_an_invalid_docker_tls_verify_before_connecting() {
+    let project = one_task_project("tls-verify-invalid");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    let output = isolated_docker_command(&project)
+        .env("DOCKER_HOST", format!("tcp://127.0.0.1:{port}"))
+        .env("DOCKER_TLS_VERIFY", "maybe")
+        .arg("t")
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&project).ok();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(125), "{stderr}");
+    assert!(stderr.contains("DOCKER_TLS_VERIFY is 'maybe'"), "{stderr}");
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+        "something connected to the stand-in daemon"
+    );
+}
+
+/// #305: it is read only on connecting, so `--list-tasks` never sees it —
+/// a recorded divergence from Batect, which refuses it on every command.
+#[test]
+fn list_tasks_ignores_an_invalid_docker_tls_verify() {
+    let project = one_task_project("tls-verify-list");
+    let output = isolated_docker_command(&project)
+        .env("DOCKER_TLS_VERIFY", "maybe")
+        .arg("--list-tasks")
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&project).ok();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("- t"));
+}
+
+/// #305: only the flags conflict with `--docker-context`; the variable,
+/// which a context connection never reads, doesn't.
+#[test]
+fn docker_tls_verify_from_the_environment_does_not_conflict_with_a_context() {
+    let project = one_task_project("tls-verify-context");
+    let config_directory = project.join("cfg");
+    std::fs::create_dir_all(&config_directory).unwrap();
+    let output = isolated_docker_command(&project)
+        .env("DOCKER_TLS_VERIFY", "1")
+        .arg("--docker-context")
+        .arg("nope")
+        .arg("--docker-config")
+        .arg(&config_directory)
+        .arg("t")
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&project).ok();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("Cannot use both"), "{stderr}");
+    assert!(
+        stderr.contains("Docker context 'nope' does not exist"),
+        "{stderr}"
+    );
+}
+
+/// A one-task project with a `cache` directory `<name>` already under
+/// `.batect/caches`, as a `--cache-type directory` run would leave it.
+fn project_with_a_cache_directory(purpose: &str, name: &str) -> (PathBuf, PathBuf) {
+    let project = one_task_project(purpose);
+    let cache = project.join(".batect/caches").join(name);
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join("kept"), "").unwrap();
+    (project, cache)
+}
+
+/// #441: `BATECT_CACHE_TYPE=directory` makes `--clean` remove the cache
+/// directories, without contacting Docker, as `--cache-type directory` does.
+#[test]
+fn batect_cache_type_directory_cleans_cache_directories() {
+    let (project, cache) = project_with_a_cache_directory("cache-type-env", "deps");
+    let output = isolated_docker_command(&project)
+        .env("BATECT_CACHE_TYPE", "directory")
+        .env("DOCKER_HOST", "tcp://127.0.0.1:1")
+        .arg("--clean")
+        .output()
+        .expect("failed to run ratect");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let gone = !cache.exists();
+    std::fs::remove_dir_all(&project).ok();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains("Done! Deleted 1 directory."), "{stdout}");
+    assert!(gone, "the cache directory is still there");
+}
+
+/// #441: an invalid `BATECT_CACHE_TYPE` fails every command before it
+/// does anything — `2` off a run, `125` on one — naming the variable, the
+/// value and the cache types; `--clean` removes nothing.
+#[test]
+fn an_invalid_batect_cache_type_fails_every_command_before_it_runs() {
+    let (project, cache) = project_with_a_cache_directory("cache-type-invalid", "deps");
+    for (arguments, code) in [
+        (&["--list-tasks"][..], 2),
+        (&["--clean"][..], 2),
+        (&["-o", "quiet", "--list-tasks"][..], 2),
+        (&["t"][..], 125),
+    ] {
+        let output = isolated_docker_command(&project)
+            .env("BATECT_CACHE_TYPE", "bogus")
+            .env("DOCKER_HOST", "tcp://127.0.0.1:1")
+            .args(arguments)
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(code), "{arguments:?}: {stderr}");
+        assert!(
+            stderr.contains("BATECT_CACHE_TYPE is 'bogus'")
+                && stderr.contains("volume")
+                && stderr.contains("directory"),
+            "{arguments:?}: {stderr}"
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "", "{arguments:?}");
+    }
+    assert!(cache.exists(), "--clean removed a cache despite the error");
+    std::fs::remove_dir_all(&project).ok();
+}
+
+/// #441: `--cache-type` makes an invalid `BATECT_CACHE_TYPE` moot, and
+/// `--help` and `--version` never check it.
+#[test]
+fn an_invalid_batect_cache_type_is_moot_beside_the_flag_and_for_help() {
+    let (project, _) = project_with_a_cache_directory("cache-type-moot", "deps");
+    for arguments in [
+        &["--clean", "--cache-type", "directory"][..],
+        &["--help"][..],
+        &["--version"][..],
+    ] {
+        let output = isolated_docker_command(&project)
+            .env("BATECT_CACHE_TYPE", "bogus")
+            .args(arguments)
+            .output()
+            .expect("failed to run ratect");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    std::fs::remove_dir_all(&project).ok();
+}
+
+/// #450: a `batect.local.yml` that exists but isn't a file fails every
+/// command before it does anything — before `--clean` removes a cache,
+/// before `-f`'s file is looked for — in every output style, naming it as
+/// `--config-vars-file`'s default; `--help` and `--version` don't check it,
+/// and an unknown flag is still reported first.
+#[test]
+fn a_batect_local_yml_that_is_not_a_file_fails_every_command_before_it_runs() {
+    let (project, cache) = project_with_a_cache_directory("local-yml-dir", "deps");
+    std::fs::create_dir(project.join("batect.local.yml")).unwrap();
+    let message = "--config-vars-file's default in the current directory, is not a file.";
+    for arguments in [
+        &["--list-tasks"][..],
+        &["-o", "quiet", "--list-tasks"][..],
+        &["--clean", "--cache-type", "directory"][..],
+        &["-f", "missing.yml", "--list-tasks"][..],
+    ] {
+        let output = isolated_docker_command(&project)
+            .args(arguments)
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert!(
+            stderr.contains("batect.local.yml") && stderr.contains(message),
+            "{arguments:?}: {stderr}"
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "", "{arguments:?}");
+    }
+    assert!(cache.exists(), "--clean removed a cache despite the error");
+
+    for flag in ["--help", "--version"] {
+        let output = isolated_docker_command(&project)
+            .arg(flag)
+            .output()
+            .expect("failed to run ratect");
+        assert_eq!(output.status.code(), Some(0), "{flag}");
+    }
+    let output = isolated_docker_command(&project)
+        .args(["--bogus", "--list-tasks"])
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--bogus") && !stderr.contains(message),
+        "{stderr}"
+    );
+    std::fs::remove_dir_all(&project).ok();
+}
+
+/// #450: an explicit value makes an invalid default moot.
+#[test]
+fn an_explicit_option_makes_an_invalid_default_moot() {
+    let project = one_task_project("defaults-moot");
+    std::fs::create_dir(project.join("batect.local.yml")).unwrap();
+    std::fs::write(project.join("vars.yml"), "{}\n").unwrap();
+    let output = isolated_docker_command(&project)
+        .env("BATECT_CACHE_TYPE", "bogus")
+        .args(["--config-vars-file", "vars.yml", "--cache-type", "volume"])
+        .arg("--list-tasks")
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&project).ok();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

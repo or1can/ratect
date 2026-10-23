@@ -220,7 +220,7 @@ fn active_docker_context_reads_current_context_from_config_json() {
     .unwrap();
 
     assert_eq!(
-        active_docker_context(&config_directory),
+        active_docker_context(&config_directory).unwrap(),
         Some("orbstack".to_string())
     );
 }
@@ -228,21 +228,176 @@ fn active_docker_context_reads_current_context_from_config_json() {
 #[test]
 fn active_docker_context_is_none_when_config_json_is_missing() {
     let config_directory = unique_temp_dir();
-    assert_eq!(active_docker_context(&config_directory), None);
+    assert_eq!(active_docker_context(&config_directory).unwrap(), None);
 }
 
 #[test]
 fn active_docker_context_is_none_when_current_context_is_unset_or_empty() {
     let config_directory = unique_temp_dir();
     fs::write(config_directory.join("config.json"), r#"{}"#).unwrap();
-    assert_eq!(active_docker_context(&config_directory), None);
+    assert_eq!(active_docker_context(&config_directory).unwrap(), None);
 
     fs::write(
         config_directory.join("config.json"),
         r#"{"currentContext":""}"#,
     )
     .unwrap();
-    assert_eq!(active_docker_context(&config_directory), None);
+    assert_eq!(active_docker_context(&config_directory).unwrap(), None);
+}
+
+/// #304: a `config.json` that isn't valid JSON, or can't be read, is an
+/// error naming the file — `connect` warns with it — not a silent `None`.
+#[test]
+fn active_docker_context_reports_a_config_json_it_cannot_use() {
+    let malformed = unique_temp_dir();
+    fs::write(malformed.join("config.json"), "{not json").unwrap();
+    let unreadable = unique_temp_dir();
+    fs::create_dir(unreadable.join("config.json")).unwrap();
+    for config_directory in [malformed, unreadable] {
+        let error = active_docker_context(&config_directory).unwrap_err();
+        let message = format!("{error:#}");
+        let path = config_directory.join("config.json");
+        assert!(message.contains(&path.display().to_string()), "{message}");
+    }
+}
+
+/// #304: connecting with such a file goes on with the default context, as
+/// the Docker CLI does, and says why.
+#[test]
+fn connect_warns_about_a_config_json_it_cannot_use_and_uses_the_default_context() {
+    let config_directory = unique_temp_dir();
+    fs::write(config_directory.join("config.json"), "{not json").unwrap();
+    let options = DockerConnectionOptions {
+        config_directory: Some(config_directory.clone()),
+        ..Default::default()
+    };
+
+    let connection = connect(&options).unwrap();
+    let [warning] = connection.warnings.as_slice() else {
+        panic!("expected one warning: {:?}", connection.warnings);
+    };
+    let path = config_directory.join("config.json");
+    assert!(warning.contains(&path.display().to_string()), "{warning}");
+    assert!(warning.contains("default context"), "{warning}");
+}
+
+/// Runs `body` in a child copy of this test binary with `vars` set in its
+/// environment, so a test can show a function ignores a variable without
+/// setting it in this process — where the `connect` tests running alongside
+/// would read it too. `test_name` is the calling test's own path, which the
+/// child re-runs alone; inside the child, `body` runs and the parent's
+/// branch is skipped.
+fn in_child_with_env(test_name: &str, vars: &[(&str, &str)], body: impl FnOnce()) {
+    const CHILD: &str = "RATECT_CONNECTION_TEST_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        body();
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([test_name, "--exact", "--nocapture", "--test-threads=1"])
+        .env(CHILD, "1")
+        .envs(vars.iter().copied())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "{test_name} failed in its child process:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The context read is the config file's alone: `DOCKER_HOST` is
+/// `resolve_context_name`'s business, never `active_docker_context`'s.
+#[test]
+fn active_docker_context_ignores_docker_host() {
+    in_child_with_env(
+        "docker::connection::tests::active_docker_context_ignores_docker_host",
+        &[("DOCKER_HOST", "tcp://127.0.0.1:1")],
+        || {
+            assert_eq!(std::env::var("DOCKER_HOST").unwrap(), "tcp://127.0.0.1:1");
+            let config_directory = unique_temp_dir();
+            fs::write(
+                config_directory.join("config.json"),
+                r#"{"currentContext":"from-file"}"#,
+            )
+            .unwrap();
+            assert_eq!(
+                active_docker_context(&config_directory).unwrap(),
+                Some("from-file".to_string())
+            );
+        },
+    );
+}
+
+#[test]
+fn active_docker_context_ignores_docker_context() {
+    in_child_with_env(
+        "docker::connection::tests::active_docker_context_ignores_docker_context",
+        &[("DOCKER_CONTEXT", "from-env")],
+        || {
+            assert_eq!(std::env::var("DOCKER_CONTEXT").unwrap(), "from-env");
+            let config_directory = unique_temp_dir();
+            fs::write(
+                config_directory.join("config.json"),
+                r#"{"currentContext":"from-file"}"#,
+            )
+            .unwrap();
+            assert_eq!(
+                active_docker_context(&config_directory).unwrap(),
+                Some("from-file".to_string())
+            );
+        },
+    );
+}
+
+#[test]
+fn docker_config_directory_returns_the_option_as_given() {
+    let options = DockerConnectionOptions {
+        config_directory: Some(PathBuf::from("relative/dir")),
+        ..Default::default()
+    };
+    let directory = docker_config_directory(&options, Some("/from/env")).unwrap();
+    assert_eq!(directory, PathBuf::from("relative/dir"));
+    assert!(directory.is_relative());
+}
+
+#[test]
+fn docker_config_directory_falls_back_to_docker_config_then_home() {
+    let options = DockerConnectionOptions::default();
+    assert_eq!(
+        docker_config_directory(&options, Some("/from/env")).unwrap(),
+        PathBuf::from("/from/env")
+    );
+    assert_eq!(
+        docker_config_directory(&options, None).unwrap(),
+        crate::user::home_directory().unwrap().join(".docker")
+    );
+}
+
+/// The active context, for `resolve_context_name` — `"active"`.
+fn active() -> Option<String> {
+    Some("active".to_string())
+}
+
+/// No active context, for `resolve_context_name`.
+fn no_active() -> Option<String> {
+    None
+}
+
+/// Reading the active context is the last resort: when something before it
+/// decides, `config.json` is never read — so a broken one is never reported.
+#[test]
+fn resolve_context_name_reads_the_active_context_only_when_nothing_else_decides() {
+    let unread = || -> Option<String> { panic!("the active context was read") };
+    let explicit = DockerConnectionOptions {
+        context: Some("explicit".to_string()),
+        ..Default::default()
+    };
+    resolve_context_name(&explicit, None, None, unread);
+    let options = DockerConnectionOptions::default();
+    resolve_context_name(&options, Some("tcp://host:2375"), None, unread);
+    resolve_context_name(&options, None, Some("env-context"), unread);
 }
 
 #[test]
@@ -256,7 +411,7 @@ fn resolve_context_name_prefers_an_explicit_context_over_everything_else() {
             &options,
             Some("tcp://from-env:2375"),
             Some("env-context"),
-            Some("active".to_string())
+            active
         ),
         Some("explicit".to_string())
     );
@@ -270,12 +425,7 @@ fn resolve_context_name_an_explicit_host_skips_context_resolution_entirely() {
     };
     let host = resolve_host(&options, None);
     assert_eq!(
-        resolve_context_name(
-            &options,
-            host.as_deref(),
-            Some("env-context"),
-            Some("active".to_string())
-        ),
+        resolve_context_name(&options, host.as_deref(), Some("env-context"), active),
         None
     );
 }
@@ -285,16 +435,11 @@ fn resolve_context_name_a_host_from_the_environment_skips_context_resolution_too
     let options = DockerConnectionOptions::default();
     let host = resolve_host(&options, Some("tcp://from-env:2375"));
     assert_eq!(
-        resolve_context_name(
-            &options,
-            host.as_deref(),
-            Some("env-context"),
-            Some("active".to_string())
-        ),
+        resolve_context_name(&options, host.as_deref(), Some("env-context"), active),
         None
     );
     assert_eq!(
-        resolve_context_name(&options, host.as_deref(), None, Some("active".to_string())),
+        resolve_context_name(&options, host.as_deref(), None, active),
         None
     );
 }
@@ -303,26 +448,21 @@ fn resolve_context_name_a_host_from_the_environment_skips_context_resolution_too
 fn resolve_context_name_falls_back_to_the_env_var_then_the_active_context() {
     let options = DockerConnectionOptions::default();
     assert_eq!(
-        resolve_context_name(
-            &options,
-            None,
-            Some("env-context"),
-            Some("active".to_string())
-        ),
+        resolve_context_name(&options, None, Some("env-context"), active),
         Some("env-context".to_string())
     );
     assert_eq!(
-        resolve_context_name(&options, None, None, Some("active".to_string())),
+        resolve_context_name(&options, None, None, active),
         Some("active".to_string())
     );
-    assert_eq!(resolve_context_name(&options, None, None, None), None);
+    assert_eq!(resolve_context_name(&options, None, None, no_active), None);
 }
 
 #[test]
 fn resolve_context_name_treats_an_empty_docker_context_as_unset() {
     let options = DockerConnectionOptions::default();
     assert_eq!(
-        resolve_context_name(&options, None, Some(""), Some("active".to_string())),
+        resolve_context_name(&options, None, Some(""), active),
         Some("active".to_string())
     );
 }
@@ -333,7 +473,7 @@ fn resolve_context_name_treats_the_default_context_name_as_no_context() {
         context: Some("default".to_string()),
         ..Default::default()
     };
-    assert_eq!(resolve_context_name(&options, None, None, None), None);
+    assert_eq!(resolve_context_name(&options, None, None, no_active), None);
 }
 
 #[test]
@@ -464,26 +604,49 @@ fn connect_rejects_docker_tls_flags_combined_with_docker_context() {
 #[test]
 fn tls_enabled_is_true_for_either_flag_or_the_real_env_var() {
     let base = DockerConnectionOptions::default();
-    assert!(!tls_enabled(&base, None));
-    assert!(tls_enabled(
-        &DockerConnectionOptions {
+    assert!(!tls_enabled(&base, None).unwrap());
+    let tls = DockerConnectionOptions {
+        tls: true,
+        ..base.clone()
+    };
+    let tls_verify = DockerConnectionOptions {
+        tls_verify: true,
+        ..base.clone()
+    };
+    assert!(tls_enabled(&tls, None).unwrap());
+    assert!(tls_enabled(&tls_verify, None).unwrap());
+    for value in ["1", "true", "TRUE", "yes", "YES"] {
+        assert!(tls_enabled(&base, Some(value)).unwrap(), "{value}");
+    }
+    for value in ["0", "false", "no", ""] {
+        assert!(!tls_enabled(&base, Some(value)).unwrap(), "{value:?}");
+    }
+}
+
+/// #305: a value that is neither true nor false is an error rather than a
+/// silent plaintext connection — unless a flag already turned TLS on, which
+/// makes the variable irrelevant.
+#[test]
+fn tls_enabled_refuses_an_invalid_docker_tls_verify_unless_a_flag_decides() {
+    let base = DockerConnectionOptions::default();
+    let error = tls_enabled(&base, Some("Maybe")).unwrap_err();
+    let message = format!("{error:#}");
+    assert!(message.contains("DOCKER_TLS_VERIFY"), "{message}");
+    assert!(message.contains("'Maybe'"), "{message}");
+    assert!(error.is::<crate::exit_code::InvalidOptionValue>());
+
+    for options in [
+        DockerConnectionOptions {
             tls: true,
             ..base.clone()
         },
-        None
-    ));
-    assert!(tls_enabled(
-        &DockerConnectionOptions {
+        DockerConnectionOptions {
             tls_verify: true,
             ..base.clone()
         },
-        None
-    ));
-    assert!(tls_enabled(&base, Some("1")));
-    assert!(tls_enabled(&base, Some("true")));
-    assert!(tls_enabled(&base, Some("TRUE")));
-    assert!(!tls_enabled(&base, Some("0")));
-    assert!(!tls_enabled(&base, Some("false")));
+    ] {
+        assert!(tls_enabled(&options, Some("maybe")).unwrap());
+    }
 }
 
 #[test]
@@ -495,21 +658,195 @@ fn docker_cert_directory_prefers_the_explicit_option_over_the_env_var_and_defaul
         ..Default::default()
     };
     assert_eq!(
-        docker_cert_directory(&options, from_env.to_str()).unwrap(),
+        docker_cert_directory(&options, from_env.to_str(), None).unwrap(),
         (explicit, "--docker-cert-path".to_string())
     );
 
     let options = DockerConnectionOptions::default();
     assert_eq!(
-        docker_cert_directory(&options, from_env.to_str()).unwrap(),
+        docker_cert_directory(&options, from_env.to_str(), None).unwrap(),
         (from_env, "DOCKER_CERT_PATH".to_string())
     );
+    // With no Docker config directory chosen either, `~/.docker` is the
+    // default for both.
     let home = crate::user::home_directory().unwrap().join(".docker");
     for unset in [None, Some("")] {
         assert_eq!(
-            docker_cert_directory(&options, unset).unwrap(),
+            docker_cert_directory(&options, unset, None).unwrap(),
             (home.clone(), "~/.docker".to_string())
         );
+    }
+    // An empty DOCKER_CONFIG is the directory the context store is read
+    // from too — the working directory — so the certificates follow it.
+    assert_eq!(
+        docker_config_directory(&options, Some("")).unwrap(),
+        PathBuf::new()
+    );
+    assert_eq!(
+        docker_cert_directory(&options, None, Some("")).unwrap(),
+        (PathBuf::new(), "DOCKER_CONFIG".to_string())
+    );
+}
+
+/// `--docker-cert-path`, `DOCKER_CERT_PATH`, `--docker-config` and
+/// `DOCKER_CONFIG`, then the directory and the name expected.
+type CertDirectoryCase<'a> = (
+    Option<&'a str>,
+    Option<&'a str>,
+    Option<&'a str>,
+    Option<&'a str>,
+    &'a str,
+    &'a str,
+);
+
+/// Batect's `resolvePathToDockerCertificate` order: a certificate directory
+/// that was given, else a Docker config directory that was given, else
+/// `~/.docker` — every combination of the four sources.
+#[test]
+fn docker_cert_directory_falls_back_to_a_chosen_docker_config_directory() {
+    let cert_flag = "/cert/flag";
+    let cert_env = "/cert/env";
+    let config_flag = "/config/flag";
+    let config_env = "/config/env";
+    let cases: &[CertDirectoryCase] = &[
+        (
+            None,
+            None,
+            Some(config_flag),
+            None,
+            config_flag,
+            "--docker-config",
+        ),
+        (
+            None,
+            None,
+            None,
+            Some(config_env),
+            config_env,
+            "DOCKER_CONFIG",
+        ),
+        (
+            None,
+            None,
+            Some(config_flag),
+            Some(config_env),
+            config_flag,
+            "--docker-config",
+        ),
+        (
+            Some(cert_flag),
+            None,
+            Some(config_flag),
+            None,
+            cert_flag,
+            "--docker-cert-path",
+        ),
+        (
+            None,
+            Some(cert_env),
+            Some(config_flag),
+            None,
+            cert_env,
+            "DOCKER_CERT_PATH",
+        ),
+        (
+            Some(cert_flag),
+            Some(cert_env),
+            Some(config_flag),
+            None,
+            cert_flag,
+            "--docker-cert-path",
+        ),
+        (
+            Some(cert_flag),
+            None,
+            None,
+            Some(config_env),
+            cert_flag,
+            "--docker-cert-path",
+        ),
+        (
+            None,
+            Some(cert_env),
+            None,
+            Some(config_env),
+            cert_env,
+            "DOCKER_CERT_PATH",
+        ),
+        (
+            Some(cert_flag),
+            Some(cert_env),
+            None,
+            Some(config_env),
+            cert_flag,
+            "--docker-cert-path",
+        ),
+        (
+            Some(cert_flag),
+            None,
+            Some(config_flag),
+            Some(config_env),
+            cert_flag,
+            "--docker-cert-path",
+        ),
+        (
+            None,
+            Some(cert_env),
+            Some(config_flag),
+            Some(config_env),
+            cert_env,
+            "DOCKER_CERT_PATH",
+        ),
+        (
+            Some(cert_flag),
+            Some(cert_env),
+            Some(config_flag),
+            Some(config_env),
+            cert_flag,
+            "--docker-cert-path",
+        ),
+        // An empty DOCKER_CERT_PATH counts as unset, so the config directory
+        // is next.
+        (
+            None,
+            Some(""),
+            Some(config_flag),
+            None,
+            config_flag,
+            "--docker-config",
+        ),
+        (
+            None,
+            Some(""),
+            None,
+            Some(config_env),
+            config_env,
+            "DOCKER_CONFIG",
+        ),
+    ];
+    for &(cert_path, cert_path_env, config_directory, config_env_value, directory, named_by) in
+        cases
+    {
+        let options = DockerConnectionOptions {
+            cert_path: cert_path.map(PathBuf::from),
+            config_directory: config_directory.map(PathBuf::from),
+            ..Default::default()
+        };
+        let case =
+            format!("{cert_path:?} {cert_path_env:?} {config_directory:?} {config_env_value:?}");
+        assert_eq!(
+            docker_cert_directory(&options, cert_path_env, config_env_value).unwrap(),
+            (PathBuf::from(directory), named_by.to_string()),
+            "{case}"
+        );
+        // The config directory itself is unaffected by the cert sources.
+        if config_directory.is_some() || config_env_value.is_some() {
+            assert_eq!(
+                docker_config_directory(&options, config_env_value).unwrap(),
+                PathBuf::from(config_directory.or(config_env_value).unwrap()),
+                "{case}"
+            );
+        }
     }
 }
 
@@ -525,8 +862,8 @@ fn flag_tls_settings_errors_naming_what_named_a_cert_directory_that_is_not_there
     }
 }
 
-/// `DOCKER_CERT_PATH` left over from a directory long gone, with every file
-/// named by a flag, connected before; nothing in the directory is wanted.
+/// A default `~/.docker` with no certificates in it, with every file named
+/// by a flag: nothing in the directory is wanted, so it needn't exist.
 #[test]
 fn flag_tls_settings_ignores_a_cert_directory_that_is_not_there_when_every_file_has_a_flag() {
     let files = unique_temp_dir();
@@ -540,12 +877,8 @@ fn flag_tls_settings_ignores_a_cert_directory_that_is_not_there_when_every_file_
         ..Default::default()
     };
 
-    let settings = flag_tls_settings(
-        &options,
-        &unique_temp_dir().join("gone"),
-        "DOCKER_CERT_PATH",
-    )
-    .unwrap();
+    let settings =
+        flag_tls_settings(&options, &unique_temp_dir().join("gone"), "~/.docker").unwrap();
     assert_eq!(
         settings.client,
         Some(ClientCertificate {
@@ -1333,7 +1666,7 @@ async fn docker_client_new_explains_a_verification_failure_for_a_context_asking_
         None,
     ));
 
-    let result = crate::docker::DockerClient::new(&options).await;
+    let result = crate::docker::DockerClient::new(&options, |_| {}).await;
     server.await.expect("server task should not panic");
 
     let Err(err) = result else {
@@ -1512,14 +1845,16 @@ fn connect_over_tls_errors_naming_the_flag_when_its_key_is_encrypted_or_mismatch
 
 /// `bollard`'s `connect_with_ssl` built a client for either without
 /// complaint, which then failed on its first request. Refused before any
-/// file is read: the cert directory named here doesn't exist, and isn't
-/// what the error is about.
+/// file is read: the cert directory named here is empty, and isn't what
+/// the error is about.
 #[test]
 fn connect_over_tls_errors_naming_the_host_when_it_is_not_tcp() {
     for host in ["unix:///var/run/docker.sock", "http://127.0.0.1:2376"] {
+        let never_read = unique_temp_dir().join("never-read");
+        fs::create_dir(&never_read).unwrap();
         let options = DockerConnectionOptions {
             host: Some(host.to_string()),
-            ..tls_flag_options(1, &unique_temp_dir().join("never-read"))
+            ..tls_flag_options(1, &never_read)
         };
 
         let message = connect_error(&options);
@@ -1547,14 +1882,17 @@ async fn connect_over_tls_accepts_a_host_with_no_scheme() {
     assert!(result.is_ok(), "expected a verified ping: {result:?}");
 }
 
+/// Refused before anything else is tried, as a value the user gave.
 #[test]
 fn connect_over_tls_errors_naming_the_cert_directory_when_it_is_not_there() {
-    let options = tls_flag_options(1, &unique_temp_dir().join("typo"));
+    let typo = unique_temp_dir().join("typo");
+    let options = tls_flag_options(1, &typo);
 
     let message = connect_error(&options);
-    assert!(message.contains("over TLS"), "{message}");
-    assert!(message.contains("--docker-cert-path"), "{message}");
-    assert!(message.contains("typo"), "{message}");
+    assert!(
+        message.contains(&format!("--docker-cert-path {typo:?} does not exist")),
+        "{message}"
+    );
 }
 
 /// An `https://` host is a TLS connection whether or not a flag says so —
@@ -1600,4 +1938,131 @@ async fn connect_via_a_context_with_an_https_host_uses_the_tls_route() {
         .await
         .unwrap_err();
     assert!(holds_certificate_error(err.as_ref()), "{err:#}");
+}
+
+/// `check_directories`' message for `options` and the injected environment.
+fn directories_error(
+    options: &DockerConnectionOptions,
+    docker_config_env: Option<&str>,
+    docker_cert_path_env: Option<&str>,
+) -> String {
+    let error = check_chosen_directories(options, docker_config_env, docker_cert_path_env)
+        .expect_err("expected the directory to be rejected");
+    assert!(
+        error.is::<crate::exit_code::InvalidOptionValue>(),
+        "{error:#}"
+    );
+    format!("{error:#}")
+}
+
+/// #539: each of the four sources, given a missing path, a file, or
+/// something else that isn't a directory, is refused naming the source,
+/// the path and which of the three it is.
+#[test]
+fn check_chosen_directories_refuses_a_given_directory_that_is_not_one() {
+    let scratch = unique_temp_dir();
+    let missing = scratch.join("typo");
+    let file = scratch.join("file");
+    fs::write(&file, "").unwrap();
+    let special = PathBuf::from("/dev/null");
+    let cases = [
+        (&missing, "does not exist"),
+        (&file, "is a file, not a directory"),
+        (&special, "is not a directory"),
+    ];
+    for (path, problem) in cases {
+        let path_text = path.to_str().unwrap();
+        let expected = |source: &str| format!("{source} {path:?} {problem}");
+
+        let flag = DockerConnectionOptions {
+            config_directory: Some(path.clone()),
+            ..Default::default()
+        };
+        let message = directories_error(&flag, None, None);
+        assert!(message.contains(&expected("--docker-config")), "{message}");
+
+        let message = directories_error(&Default::default(), Some(path_text), None);
+        assert!(message.contains(&expected("DOCKER_CONFIG")), "{message}");
+
+        let flag = DockerConnectionOptions {
+            cert_path: Some(path.clone()),
+            ..Default::default()
+        };
+        let message = directories_error(&flag, None, None);
+        assert!(
+            message.contains(&expected("--docker-cert-path")),
+            "{message}"
+        );
+
+        let message = directories_error(&Default::default(), None, Some(path_text));
+        assert!(message.contains(&expected("DOCKER_CERT_PATH")), "{message}");
+    }
+}
+
+#[test]
+fn check_chosen_directories_accepts_a_directory_and_a_symlink_to_one() {
+    let scratch = unique_temp_dir();
+    let directory = scratch.join("dir");
+    fs::create_dir(&directory).unwrap();
+    let link = scratch.join("link");
+    std::os::unix::fs::symlink(&directory, &link).unwrap();
+    for path in [&directory, &link] {
+        let options = DockerConnectionOptions {
+            config_directory: Some(path.clone()),
+            cert_path: Some(path.clone()),
+            ..Default::default()
+        };
+        check_chosen_directories(&options, path.to_str(), path.to_str()).unwrap();
+    }
+}
+
+/// Batect checks only a directory the user gave: `~/.docker` is used as it
+/// is, there or not, and an empty variable is no directory at all.
+#[test]
+fn check_chosen_directories_checks_nothing_the_user_did_not_give() {
+    let options = DockerConnectionOptions::default();
+    check_chosen_directories(&options, None, None).unwrap();
+    check_chosen_directories(&options, Some(""), Some("")).unwrap();
+}
+
+/// A variable the flag overrides is never read, so it can't be wrong.
+#[test]
+fn check_chosen_directories_ignores_a_variable_its_flag_overrides() {
+    let directory = unique_temp_dir();
+    let options = DockerConnectionOptions {
+        config_directory: Some(directory.clone()),
+        cert_path: Some(directory),
+        ..Default::default()
+    };
+    check_chosen_directories(&options, Some("/nonexistent"), Some("/nonexistent")).unwrap();
+}
+
+/// An explicit certificate directory is checked whether or not TLS is on,
+/// and whether or not it would be consulted.
+#[test]
+fn connect_refuses_a_missing_cert_path_even_when_nothing_would_read_it() {
+    let files = unique_temp_dir();
+    for name in ["ca.pem", "cert.pem", "key.pem"] {
+        fs::write(files.join(name), name).unwrap();
+    }
+    let missing = files.join("typo");
+    let tls_off = DockerConnectionOptions {
+        host: Some("tcp://127.0.0.1:1".to_string()),
+        cert_path: Some(missing.clone()),
+        ..Default::default()
+    };
+    let every_file_named = DockerConnectionOptions {
+        tls_verify: true,
+        tls_ca_cert: Some(files.join("ca.pem")),
+        tls_cert: Some(files.join("cert.pem")),
+        tls_key: Some(files.join("key.pem")),
+        ..tls_off.clone()
+    };
+    for options in [tls_off, every_file_named] {
+        let message = connect_error(&options);
+        assert!(
+            message.contains(&format!("--docker-cert-path {missing:?} does not exist")),
+            "{message}"
+        );
+    }
 }

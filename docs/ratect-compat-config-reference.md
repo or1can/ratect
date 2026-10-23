@@ -249,12 +249,14 @@ task's own container, as a dependency, or by more than one task) — but never r
 
 - **Builder selection**: builds use the builder the Docker daemon itself advertises
   as its default — BuildKit on any modern daemon — exactly matching Batect. The
-  `DOCKER_BUILDKIT` environment variable overrides this either way (`1`/`true`
-  forces BuildKit, `0`/`false` forces the classic builder; any other value is an
-  error), the same variable the docker CLI honors. `--enable-buildkit`
+  `DOCKER_BUILDKIT` environment variable overrides this either way (`1`, `yes`
+  or `true` forces BuildKit, `0`, `no` or `false` the classic builder, in any
+  case; empty counts as unset; any other value is an error) — the same
+  variable the docker CLI honors, read with Batect's vocabulary, since the
+  docker CLI accepts no `yes`/`no`. `--enable-buildkit`
   (see [CLI reference](ratect-compat-cli.md)) forces BuildKit on, taking precedence
   over `DOCKER_BUILDKIT` too — there's no `--disable-buildkit` counterpart;
-  force the classic builder via `DOCKER_BUILDKIT=0`/`false` instead. A daemon old
+  force the classic builder via `DOCKER_BUILDKIT=0` instead. A daemon old
   enough not to advertise a default builder at all falls back to the classic
   builder; one advertising a builder Ratect doesn't know is an error unless
   `DOCKER_BUILDKIT` or `--enable-buildkit` chooses the builder. Note that `build_secrets` and `build_ssh` *require* BuildKit —
@@ -477,7 +479,7 @@ for.
 A `cache` mount persists between separate `ratect` invocations — unlike `local`, its
 contents aren't tied to a specific host path in `batect.yml`. `name` identifies it,
 combined with a per-project key into either a Docker named volume (the default) or a
-host directory, selected by `--cache-type` (see [CLI reference](ratect-compat-cli.md)):
+host directory, selected by `--cache-type`, or else `BATECT_CACHE_TYPE` (see [CLI reference](ratect-compat-cli.md)):
 
 ```yaml
 containers:
@@ -509,7 +511,7 @@ containers:
   rather than Batect's own shorter id): nothing depends on matching that format, only
   on reusing whatever key is already on record for this project.
 `--clean` removes every one of this project's own cache volumes/directories (per
-`--cache-type`) and exits, without running anything; `--clean-cache <NAME>` (repeatable)
+`--cache-type` or `BATECT_CACHE_TYPE`) and exits, without running anything; `--clean-cache <NAME>` (repeatable)
 restricts this to the named cache(s) instead of all of them — see
 [CLI reference](ratect-compat-cli.md).
 

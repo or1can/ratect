@@ -44,10 +44,15 @@ history, from when it was the only binary.
 - A run whose task's command exited `0` exits `0` even if a signal arrives during its cleanup, instead of 128 + the signal's number, unless that cleanup is then abandoned or fails.
 - A run whose every container exited `0` but whose cleanup fails — the daemon refusing to remove a container or the task network, or a cleanup abandoned with something left to remove — exits `125` instead of `0`, and a prerequisite whose cleanup fails stops the run before the tasks after it. A task's own non-zero exit code is kept.
 - `ratect run` (ratect only) writes its progress — milestones, the summary line, and under `-o all` every container's prefixed lines except the task container's own — to stderr instead of stdout. Stdout is the task container's own output alone, in every style — prefixed with its container's name under `-o all` — and `fancy` is auto-selected when stderr is an interactive console, so a run with stdout redirected gets it. `ratect-compat` is unchanged.
+- A `--docker-config`, `--docker-cert-path`, `DOCKER_CONFIG` or `DOCKER_CERT_PATH` naming something that doesn't exist or isn't a directory is refused, naming it, instead of being read as an empty directory: by every `ratect-compat` command but `--help` and `--version`, and by every `ratect` command that connects to Docker, before it does — `ratect doctor` reports it as a problem. It exits `2`, or `125` on a run. An empty `DOCKER_CONFIG` or `DOCKER_CERT_PATH` isn't checked.
+- A `DOCKER_TLS_VERIFY` that is neither true nor false fails a command when it connects to a Docker host, naming the variable and its value, instead of silently connecting without TLS. `yes`, in any case, now turns TLS on. `--docker-tls` or `--docker-tls-verify` still turns TLS on whatever the variable says.
+- `ratect-compat` reads `BATECT_CACHE_TYPE` as the default for `--cache-type`, as Batect does: `directory` switches runs and `--clean`/`--clean-cache` to host directories under `.batect/caches`, and any value other than `volume` or `directory`, exactly, fails every command but `--help` and `--version` unless `--cache-type` is given. It exits `2`, or `125` on a run.
+- `ratect-compat` refuses a `batect.local.yml` in the current directory that exists but isn't a file, when `--config-vars-file` isn't given, on every command but `--help` and `--version`, instead of running with no overrides from it. It exits `2`, or `125` on a run.
 
 ### Added
 
 - `ratect doctor` and `ratect config validate` (ratect only) warn when a container's `dependencies`, a task's `dependencies` or a task's `prerequisites` gives the same entry more than once, naming the container or task, the field and the entry. The project still loads, and the entry still starts or runs once.
+- `ratect doctor` (ratect only) reports a `DOCKER_TLS_VERIFY` or `DOCKER_BUILDKIT` that is neither true nor false as a problem, naming the variable and its value.
 
 ### Changed
 
@@ -102,6 +107,10 @@ history, from when it was the only binary.
 - A `build_ssh` agent listing the same path more than once uses it once, as in Batect, so a socket listed twice no longer fails the build as two agent sockets.
 - A port mapping given more than once — in a container's `ports`, or in both the container's and a task's `run` or a `customise` entry's — is published once, as in Batect, including where a range also covers it.
 - A container port mapped to several host ports — `9000:80` and `9001:80`, in a container's `ports`, a task's `run` or a `customise` entry — is published on all of them, as in Batect, instead of only the last.
+- With TLS on and no `--docker-cert-path` or `DOCKER_CERT_PATH`, `ca.pem`, `cert.pem` and `key.pem` are looked for in the Docker config directory given by `--docker-config` or `DOCKER_CONFIG`, as in Batect and the Docker CLI, before `~/.docker`.
+- A Docker CLI `config.json` that can't be read or isn't valid JSON, when the active Docker context would be read from it, is a warning naming the file before the default context is used, instead of being silently ignored.
+- `DOCKER_BUILDKIT` accepts `yes` and `no`, in any case, as in Batect.
+- An empty `DOCKER_BUILDKIT` counts as unset, so the daemon's own builder is used, instead of failing the first build.
 
 ### Security
 

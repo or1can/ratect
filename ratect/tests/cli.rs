@@ -3277,3 +3277,133 @@ fn a_run_that_fails_exits_125_and_any_other_verb_1() {
     assert_eq!(list, Some(1));
     assert_eq!(validate, Some(1));
 }
+
+/// #539: a verb that connects refuses a `--docker-config` that doesn't
+/// exist before it tries to — `2`, an invalid option value — naming it.
+#[test]
+fn a_connecting_verb_refuses_a_docker_config_directory_that_does_not_exist() {
+    let output = ratect_command()
+        .args(["resources", "list", "--all-projects"])
+        .args(["--docker-config", "/nonexistent-ratect-dir"])
+        .output()
+        .expect("failed to run ratect");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains(r#"--docker-config "/nonexistent-ratect-dir" does not exist."#),
+        "{stderr}"
+    );
+}
+
+/// #539: `doctor` reports it as a problem and carries on with its other
+/// checks.
+#[test]
+fn doctor_reports_a_docker_config_directory_that_does_not_exist() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(native_fixture_path())
+        .args(["doctor", "--docker-config", "/nonexistent-ratect-dir"])
+        .output()
+        .expect("failed to run ratect");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("problem ")
+                && line.contains(r#"--docker-config "/nonexistent-ratect-dir" does not exist."#)),
+        "{stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("ok ") && line.contains("loads")),
+        "{stdout}"
+    );
+}
+
+/// #539: `caches` checks it under `--cache-type directory` too, though
+/// that store never connects.
+#[test]
+fn caches_refuses_a_docker_config_directory_that_does_not_exist_without_connecting() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(native_fixture_path())
+        .args(["caches", "list", "--cache-type", "directory"])
+        .args(["--docker-config", "/nonexistent-ratect-dir"])
+        .output()
+        .expect("failed to run ratect");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains(r#"--docker-config "/nonexistent-ratect-dir" does not exist."#),
+        "{stderr}"
+    );
+}
+
+/// #304: a Docker CLI `config.json` that isn't valid JSON is reported,
+/// naming it, rather than silently meaning the default context.
+#[test]
+fn doctor_warns_about_a_docker_config_json_it_cannot_use() {
+    let config_directory = unique_project_dir();
+    std::fs::write(config_directory.join("config.json"), "{not json").unwrap();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(native_fixture_path())
+        .arg("doctor")
+        .arg("--docker-config")
+        .arg(&config_directory)
+        .env_remove("DOCKER_HOST")
+        .env_remove("DOCKER_CONTEXT")
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&config_directory).ok();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let path = config_directory.join("config.json").display().to_string();
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("warning ")
+                && line.contains(&path)
+                && line.contains("default context")),
+        "{stdout}"
+    );
+}
+
+/// #461: `doctor` reports a `DOCKER_TLS_VERIFY` or `DOCKER_BUILDKIT` that is
+/// neither true nor false, once, naming it and its value, and fails; an
+/// empty one is nothing to report.
+#[test]
+fn doctor_reports_an_invalid_docker_boolean_variable_once() {
+    for name in ["DOCKER_TLS_VERIFY", "DOCKER_BUILDKIT"] {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(native_fixture_path())
+            .arg("doctor")
+            .env(name, "bogus")
+            .output()
+            .expect("failed to run ratect");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(output.status.code(), Some(1), "{name}: {stdout}");
+        let mentions = stdout
+            .lines()
+            .filter(|line| line.trim_start().starts_with("problem ") && line.contains(name))
+            .count();
+        assert_eq!(mentions, 1, "{name}: {stdout}");
+        assert!(stdout.contains(&format!("{name} is 'bogus'")), "{stdout}");
+
+        let output = ratect_command()
+            .arg("-f")
+            .arg(native_fixture_path())
+            .arg("doctor")
+            .env(name, "")
+            .output()
+            .expect("failed to run ratect");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(!stdout.contains(name), "{name}: {stdout}");
+    }
+}
