@@ -23,6 +23,11 @@ history, from when it was the only binary.
 
 ### Breaking
 
+- A `--docker-tls-ca-cert`, `--docker-tls-cert` or `--docker-tls-key` that doesn't exist or is a directory is an invalid option value whether or not TLS is used, as in Batect, so `ratect-compat --list-tasks` and `ratect caches` with the directory store refuse one, and a run refuses one before reading its config. `ratect doctor` reports one as a problem.
+- `ratect-compat`: a `--log-file` that is a directory, or exists but isn't a regular file (`/dev/null`), is an invalid option value, as in Batect.
+- `ratect-compat`: a `-f` given explicitly that names no file is refused before any command runs, as in Batect, so `--clean` refuses it too.
+- `ratect`: a `--config-vars-file` that doesn't exist, is a directory, or isn't a regular file (`/dev/null`) is an invalid option value, refused before the config is read.
+- `--docker-context` given with `--docker-host`, `--docker-tls`, `--docker-tls-verify`, `--docker-cert-path` or `--docker-tls-ca-cert`/`-cert`/`-key` is an invalid option value whether or not the command connects, as in Batect, so `ratect-compat --list-tasks` and `--clean`, and `ratect caches` with the directory store, refuse it, and a run refuses it before reading its config. `ratect doctor` reports it as a problem.
 - `ratect-compat`: running with no task name, and none of `--list-tasks`, `--clean`, `--clean-cache` or `--upgrade`, is a usage error that exits `125` before any config is read, instead of a warning and exit `0`.
 - `ratect-compat`: options end at the task name, as in Batect. An argument after the task name other than `-- ARGS…`, such as `build --disable-ports` or `test-task --list-tasks`, is refused as a usage error instead of being applied. Under `--list-tasks`, `--clean`, `--clean-cache` or `--upgrade`, whatever follows the options is ignored, so `--list-tasks a b` lists the tasks.
 - **ratect.toml:** a `\` in an expression escapes the character after it and is dropped — `\$X` is the literal `$X`, `a\b` is `ab`, `\\` is `\`, and `${X:-a\}b}` defaults to `a}b` — and a trailing `\` fails the load. A project with a backslash in an expression may resolve differently or stop loading; one without a `ratect_version` of 0.12.0 or later is refused until it declares one. A project whose root is a `batect.yml` still loads, unless it includes a `.toml` file.
@@ -82,6 +87,11 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- `ratect run` checks a `--docker-config` or `--docker-cert-path` directory, or one `DOCKER_CONFIG` or `DOCKER_CERT_PATH` gives, before reading its config, as `ratect-compat` does, so an error in the config no longer hides a directory that doesn't exist.
+- A path given to `--docker-config` or `--docker-cert-path`, or by `DOCKER_CONFIG` or `DOCKER_CERT_PATH`, has a leading `~` expanded to the home directory, and `.` and `..` removed before it is used, as in Batect.
+- A path given to `--docker-tls-ca-cert`, `--docker-tls-cert` or `--docker-tls-key` has a leading `~` expanded to the home directory, and `.` and `..` removed before it is used, as in Batect.
+- `ratect-compat`: a path given to `--log-file` has a leading `~` expanded to the home directory, and `.` and `..` removed before it is used, as in Batect, so `--log-file sub/../out.log` writes `./out.log` whether or not `sub` exists.
+- A path given to `-f` or `--config-vars-file` has a leading `~` expanded to the home directory, and `.` and `..` removed before it is used, as in Batect. `-f link/../batect.yml` reads `./batect.yml` even when `link` is a symlink.
 - `ratect-compat`: `--use-network=`, `--docker-host=` and `--docker-context=`, with nothing after the `=`, are argument errors, as in Batect, instead of failing later with an unrelated error. `--use-network ''` is still accepted.
 - `ratect-compat`: `--clean-cache` takes a comma-separated list of names, each trimmed, as in Batect, so `--clean-cache=foo,bar` removes `foo` and `bar`. `--clean-cache=`, with nothing after the `=`, is an argument error.
 - `ratect-compat`: `--max-parallelism` rejects values above 2147483647, as Batect does.

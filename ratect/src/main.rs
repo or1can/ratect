@@ -78,6 +78,7 @@ struct GlobalArgs {
         default_value = DEFAULT_CONFIG_FILE,
         global = true,
         value_hint = clap::ValueHint::FilePath,
+        value_parser = path_option(),
     )]
     config_file: PathBuf,
 
@@ -107,7 +108,7 @@ struct ConfigVarArgs {
     /// Path to a file of config variable values (a flat NAME = VALUE map),
     /// parsed as TOML or YAML by its extension. Defaults to an auto-discovered
     /// `ratect.local.toml` beside the config file, when present.
-    #[arg(long = "config-vars-file")]
+    #[arg(long = "config-vars-file", value_parser = path_option())]
     config_vars_file: Option<PathBuf>,
 }
 
@@ -471,7 +472,7 @@ struct RunArgs {
 /// since it's about building images, not reaching a daemon). Its own struct,
 /// flattened into every subcommand that connects, so each picks up the
 /// identical surface rather than growing a second, subtly different copy.
-#[derive(ClapArgs, Debug)]
+#[derive(ClapArgs, Debug, Clone)]
 struct DockerArgs {
     /// Docker host to use, e.g. 'unix:///var/run/docker.sock' or
     /// 'tcp://1.2.3.4:5678'. Defaults to DOCKER_HOST, then Docker's own
@@ -481,13 +482,14 @@ struct DockerArgs {
 
     /// Docker CLI context to use. Defaults to DOCKER_CONTEXT, then the
     /// Docker CLI's own active context, unless a Docker host is set. Cannot
-    /// be combined with --docker-host.
+    /// be combined with --docker-host, --docker-tls, --docker-tls-verify,
+    /// --docker-cert-path or --docker-tls-ca-cert/-cert/-key.
     #[arg(long = "docker-context")]
     context: Option<String>,
 
     /// Directory containing the Docker CLI's configuration (context store,
     /// config.json). Defaults to DOCKER_CONFIG, then ~/.docker.
-    #[arg(long = "docker-config")]
+    #[arg(long = "docker-config", value_parser = path_option())]
     config_directory: Option<PathBuf>,
 
     /// Use TLS when connecting to the Docker host. Identical to
@@ -505,22 +507,22 @@ struct DockerArgs {
     /// individually below. Defaults to DOCKER_CERT_PATH, then
     /// --docker-config's directory if given (or DOCKER_CONFIG's), then
     /// ~/.docker.
-    #[arg(long = "docker-cert-path")]
+    #[arg(long = "docker-cert-path", value_parser = path_option())]
     cert_path: Option<PathBuf>,
 
     /// TLS CA certificate verifying the Docker host's own certificate.
     /// Defaults to ca.pem in the certificate directory.
-    #[arg(long = "docker-tls-ca-cert")]
+    #[arg(long = "docker-tls-ca-cert", value_parser = path_option())]
     tls_ca_cert: Option<PathBuf>,
 
     /// TLS certificate authenticating to the Docker host. Defaults to
     /// cert.pem in the certificate directory.
-    #[arg(long = "docker-tls-cert")]
+    #[arg(long = "docker-tls-cert", value_parser = path_option())]
     tls_cert: Option<PathBuf>,
 
     /// TLS key authenticating to the Docker host. Defaults to key.pem in
     /// the certificate directory.
-    #[arg(long = "docker-tls-key")]
+    #[arg(long = "docker-tls-key", value_parser = path_option())]
     tls_key: Option<PathBuf>,
 }
 
@@ -605,6 +607,17 @@ fn parse_age(value: &str) -> std::result::Result<std::time::Duration, String> {
         _ => return Err(invalid()),
     };
     Ok(std::time::Duration::from_secs(number * seconds))
+}
+
+/// A path option's parser: the value as Batect's `PathResolver` would
+/// resolve it (ratect#437) — see [`ratect_core::config::resolve_option_path`].
+/// Whether it exists, and is the right kind of thing, is checked before any
+/// command runs, by the command — as in `ratect-compat`, which has the same
+/// function, each binary keeping its own `clap` code.
+fn path_option() -> impl clap::builder::TypedValueParser<Value = PathBuf> {
+    use clap::builder::TypedValueParser;
+    clap::builder::PathBufValueParser::new()
+        .try_map(|path| ratect_core::config::resolve_option_path(&path))
 }
 
 /// Parses a `NAME=VALUE` pair — `--config-var` and `--override-image` take
@@ -770,8 +783,10 @@ async fn run(cli: Cli, color_mode: ColorMode, stderr: &Console) -> Result<()> {
     // Arms follow the `Command` enum's own order (see there).
     match command {
         Command::Run(args) => {
-            // Before the config is read, as in `ratect-compat` (ratect#436).
+            // Before the config is read, as in `ratect-compat` (ratect#436,
+            // ratect#437, ratect#439).
             ratect_core::engine::check_tag_and_override(&args.tag_image, &args.override_image)?;
+            DockerConnectionOptions::from(args.docker.clone()).check_options()?;
             let (project, config_var_overrides) =
                 load_with_overrides(&global, &args.config_vars).await?;
             run_task(
@@ -921,6 +936,11 @@ fn config_var_overrides(
     // config file, loaded only if it exists (an absent one just means no file
     // overrides, not an error). This binary's native equivalent of
     // `ratect-compat`'s `batect.local.yml` default; see decisions/0003.
+    // One named explicitly must be a file, as in `ratect-compat` (ratect#437);
+    // the default is only read when it is one.
+    if let Some(path) = &config_vars.config_vars_file {
+        ratect_core::config::check_config_vars_file(path)?;
+    }
     let vars_file = config_vars.config_vars_file.clone().or_else(|| {
         let default =
             ratect_core::config::base_path_for(&global.config_file).join(LOCAL_CONFIG_VARS_FILE);
@@ -1098,8 +1118,10 @@ async fn manage_caches(
     let wanted: Option<ratect_core::config::CacheScope> = args.scope.map(Into::into);
     let connection: DockerConnectionOptions = args.docker.into();
     // Checked even for the directory store, which never connects: a Docker
-    // directory given to a verb that takes one must be one.
-    connection.check_directories()?;
+    // directory or TLS file given to a verb that takes one must be one
+    // (ratect#437), and `--docker-context` can't be given beside a flag that
+    // picks a connection itself (ratect#439).
+    connection.check_options()?;
     // One connection for the whole command: both the listing below and the
     // removal after it need the same daemon, and each `DockerClient::new`
     // opens its own.

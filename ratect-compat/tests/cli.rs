@@ -1060,7 +1060,9 @@ fn no_task_name_is_a_usage_error_before_any_config_is_read() {
     assert!(String::from_utf8_lossy(&upgraded.stderr).contains("--upgrade has no effect"));
     for clean in [&["--clean"][..], &["--clean-cache", "x"]] {
         let output = run(
-            &[&["-f", "nope.yml", "--cache-type", "directory"], clean].concat(),
+            // A file `--clean` never reads, so it may be broken; it must
+            // only exist, as a given `-f` must (ratect#437).
+            &[&["-f", "broken.yml", "--cache-type", "directory"], clean].concat(),
             &[],
         );
         assert_eq!(output.status.code(), Some(0), "{clean:?}");
@@ -5787,10 +5789,13 @@ tasks:
 
 /// Only a run's failure exits `125`; `--list-tasks`'s exits `1` — the same
 /// unloadable config, and the same `--log-file` that exists but can't be
-/// opened (a directory), either way (decisions/0016). A `--log-file` whose
-/// directory is missing is an invalid option value instead — see
-/// `an_invalid_option_value_exits_2_or_125_by_path`. Needs no daemon: both
-/// fail before anything connects.
+/// opened (a file with no permissions), either way (decisions/0016). A
+/// `--log-file` whose directory is missing, or that is a directory, is an
+/// invalid option value instead — see
+/// `an_invalid_option_value_exits_2_or_125_by_path` and
+/// `log_file_must_be_a_file_or_not_yet_exist`. Needs no daemon: both fail
+/// before anything connects.
+#[cfg(unix)]
 #[test]
 fn a_run_that_fails_exits_125_and_list_tasks_1() {
     let directory =
@@ -5811,7 +5816,12 @@ fn a_run_that_fails_exits_125_and_list_tasks_1() {
 
     let run = exit_code(&["build"]);
     let list = exit_code(&["--list-tasks"]);
-    let unopenable = directory.to_str().unwrap();
+    let unopenable = directory.join("unopenable.log");
+    std::fs::write(&unopenable, "").unwrap();
+    let mut permissions = std::fs::metadata(&unopenable).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o000);
+    std::fs::set_permissions(&unopenable, permissions).unwrap();
+    let unopenable = unopenable.to_str().unwrap();
     let log_file_run = exit_code(&["--log-file", unopenable, "build"]);
     let log_file_list = exit_code(&["--log-file", unopenable, "--list-tasks"]);
     std::fs::remove_dir_all(&directory).unwrap();
@@ -6359,6 +6369,297 @@ fn an_empty_or_repeated_override_image_is_an_argument_error() {
         assert!(stderr.contains(message), "{arguments:?}: {stderr}");
         assert_eq!(String::from_utf8_lossy(&output.stdout), "", "{arguments:?}");
     }
+}
+
+/// ratect#439: `--docker-context` beside any of the seven flags Batect's
+/// `validate()` forbids with it is an invalid option value on every
+/// command, not only one that connects — `--list-tasks` and a `--clean` that
+/// never needs Docker (`2`), and a run whose config doesn't exist, which no
+/// longer masks it (`125`) — naming the first flag in Batect's order, with
+/// nothing on stdout. Real paths, so no check on a path's value fires first.
+/// `DOCKER_TLS_VERIFY` set beside it is no conflict, as in Batect.
+#[test]
+fn docker_context_beside_a_connection_flag_is_refused_on_every_command() {
+    let config = sample_config_path();
+    let config = config.to_str().unwrap();
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let directory = directory.to_str().unwrap();
+    let refused = |arguments: &[&str], named: &str, code: i32| {
+        let output = ratect_command()
+            .args(["--docker-context", "x"])
+            .args(arguments)
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(code), "{arguments:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!("Cannot use both --docker-context and {named}.")),
+            "{arguments:?}: {stderr}"
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "", "{arguments:?}");
+    };
+    for (flag, value) in [
+        ("--docker-host", Some("tcp://1.2.3.4:1")),
+        ("--docker-tls", None),
+        ("--docker-tls-verify", None),
+        ("--docker-cert-path", Some(directory)),
+        ("--docker-tls-ca-cert", Some(config)),
+        ("--docker-tls-cert", Some(config)),
+        ("--docker-tls-key", Some(config)),
+    ] {
+        let flag_and_value: Vec<&str> = std::iter::once(flag).chain(value).collect();
+        refused(
+            &[&flag_and_value[..], &["-f", config, "--list-tasks"]].concat(),
+            flag,
+            2,
+        );
+    }
+    refused(
+        &[
+            "--docker-tls-verify",
+            "-f",
+            config,
+            "--clean",
+            "--cache-type=directory",
+        ],
+        "--docker-tls-verify",
+        2,
+    );
+    refused(
+        &[
+            "--docker-host",
+            "tcp://1.2.3.4:1",
+            "-f",
+            "does-not-exist.yml",
+            "test-task",
+        ],
+        "--docker-host",
+        125,
+    );
+    refused(
+        &[
+            "--docker-tls-ca-cert",
+            config,
+            "--docker-cert-path",
+            directory,
+            "-f",
+            config,
+            "--list-tasks",
+        ],
+        "--docker-tls-ca-cert",
+        2,
+    );
+
+    let output = ratect_command()
+        .env("DOCKER_TLS_VERIFY", "1")
+        .args(["-f", config, "--docker-context", "x", "--list-tasks"])
+        .output()
+        .expect("failed to run ratect");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// ratect#437: `-f link/../batect.yml` reads `./batect.yml`, as Batect's
+/// lexical normalisation does, not the `batect.yml` beside the symlink's
+/// target, which the operating system would reach by following `link` first.
+#[cfg(unix)]
+#[test]
+fn a_dot_dot_after_a_symlink_in_the_config_path_is_resolved_lexically() {
+    let project =
+        std::env::temp_dir().join(format!("ratect-symlink-dotdot-{}", std::process::id()));
+    std::fs::create_dir_all(project.join("other/inner")).unwrap();
+    let config = |name: &str| {
+        format!(
+            "project_name: {name}\ntasks:\n  t:\n    run:\n      container: c\n\
+             containers:\n  c:\n    image: alpine\n"
+        )
+    };
+    std::fs::write(project.join("batect.yml"), config("here")).unwrap();
+    std::fs::write(project.join("other/batect.yml"), config("there")).unwrap();
+    std::os::unix::fs::symlink("other/inner", project.join("link")).unwrap();
+    let output = ratect_command()
+        .current_dir(&project)
+        .args(["-f", "link/../batect.yml", "--list-tasks"])
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&project).ok();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Tasks in here:"),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// ratect#437: an explicit `-f` is checked before any command runs, as
+/// Batect's option parser checks it — so `--clean`, which never reads the
+/// config, still refuses one naming no file. The default `batect.yml` isn't
+/// checked there, as Batect doesn't check its static default.
+#[test]
+fn clean_refuses_an_explicit_config_file_naming_no_file() {
+    let project = std::env::temp_dir().join(format!("ratect-clean-no-f-{}", std::process::id()));
+    std::fs::create_dir_all(&project).unwrap();
+    let clean = |arguments: &[&str]| {
+        ratect_command()
+            .current_dir(&project)
+            .args(arguments)
+            .args(["--clean", "--cache-type=directory"])
+            .output()
+            .expect("failed to run ratect")
+    };
+    let explicit = clean(&["-f", "missing.yml"]);
+    let defaulted = clean(&[]);
+    std::fs::remove_dir_all(&project).ok();
+
+    let stderr = String::from_utf8_lossy(&explicit.stderr);
+    assert_eq!(explicit.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("Configuration file \"missing.yml\" not found."),
+        "{stderr}"
+    );
+    assert_eq!(
+        defaulted.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&defaulted.stderr)
+    );
+}
+
+/// ratect#437: `--log-file` naming a directory or something else that isn't
+/// a file (`/dev/null`) is an invalid option value, as Batect's option
+/// parser makes it. One that doesn't exist yet is created — through a
+/// lexically removed `..`, so `sub/../out.log` needs no `sub` — and gets
+/// the log (CLO-4, VC-19).
+#[cfg(unix)]
+#[test]
+fn log_file_must_be_a_file_or_not_yet_exist() {
+    let config = sample_config_path();
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for (value, problem) in [
+        (directory.as_path(), "is a directory, not a file"),
+        (Path::new("/dev/null"), "is not a file"),
+    ] {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(&config)
+            .arg("--log-file")
+            .arg(value)
+            .arg("--list-tasks")
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{value:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!("--log-file {value:?} {problem}.")),
+            "{value:?}: {stderr}"
+        );
+    }
+
+    // A run against a daemon that refuses the connection: it fails, but
+    // only after logging, at `debug`, where it tried to connect.
+    let project = std::env::temp_dir().join(format!("ratect-new-log-{}", std::process::id()));
+    std::fs::create_dir_all(&project).unwrap();
+    let output = ratect_command()
+        .current_dir(&project)
+        .env("RUST_LOG", "debug")
+        .env("DOCKER_HOST", "tcp://127.0.0.1:9")
+        .arg("-f")
+        .arg(&config)
+        .args(["--log-file", "sub/../out.log", "test-task"])
+        .output()
+        .expect("failed to run ratect");
+    let log = std::fs::read_to_string(project.join("out.log"));
+    std::fs::remove_dir_all(&project).ok();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(125), "{stderr}");
+    let log = log.expect("--log-file sub/../out.log was not created as ./out.log");
+    assert!(
+        log.contains("127.0.0.1:9"),
+        "the log file holds no log: {log:?}"
+    );
+}
+
+/// ratect#437: a file `--docker-tls-ca-cert`, `--docker-tls-cert` or
+/// `--docker-tls-key` names must exist and not be a directory on every
+/// command, as Batect's option parser checks it, not only when a TLS
+/// connection reads it — an invalid option value, so `2` beside
+/// `--list-tasks`. Something that exists but isn't a regular file passes,
+/// as a pipe (`<(…)`) must.
+#[cfg(unix)]
+#[test]
+fn a_missing_or_directory_tls_file_is_refused_on_every_command() {
+    let config = sample_config_path();
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let list = |option: &str, value: &Path| {
+        ratect_command()
+            .arg("-f")
+            .arg(&config)
+            .arg(option)
+            .arg(value)
+            .arg("--list-tasks")
+            .output()
+            .expect("failed to run ratect")
+    };
+    for (option, value, problem) in [
+        (
+            "--docker-tls-ca-cert",
+            Path::new("no-such-ca.pem"),
+            "does not exist",
+        ),
+        (
+            "--docker-tls-cert",
+            Path::new("no-such-cert.pem"),
+            "does not exist",
+        ),
+        ("--docker-tls-key", &directory, "is a directory, not a file"),
+    ] {
+        let output = list(option, value);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{option}: {stderr}");
+        assert!(
+            stderr.contains(&format!("{option} {value:?} {problem}.")),
+            "{option}: {stderr}"
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "", "{option}");
+    }
+
+    let output = list("--docker-tls-ca-cert", Path::new("/dev/null"));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// ratect#437: `DOCKER_CERT_PATH` is resolved as `--docker-cert-path` is,
+/// so a leading `~` is the passwd home — shown by the check refusing a
+/// missing one, which names the resolved path, as Batect's does.
+#[test]
+fn a_tilde_in_docker_cert_path_is_the_home_directory() {
+    let missing = "ratect-437-no-such-cert-directory";
+    let output = ratect_command()
+        .env("DOCKER_CERT_PATH", format!("~/{missing}"))
+        .arg("-f")
+        .arg(sample_config_path())
+        .arg("--list-tasks")
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let home = ratect_core::user::home_directory().unwrap();
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "DOCKER_CERT_PATH {:?} does not exist.",
+            home.join(missing)
+        )),
+        "{stderr}"
+    );
 }
 
 /// What both binaries print for `--tag-image build-env=…` beside

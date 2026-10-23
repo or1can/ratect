@@ -3483,3 +3483,115 @@ fn run_refuses_tagging_and_overriding_one_container_before_anything_runs() {
     }
     std::fs::remove_dir_all(&project).ok();
 }
+
+/// ratect#439: `--docker-context` beside a flag that picks a connection
+/// itself is refused by every verb that takes the Docker options, whether or
+/// not it connects — `caches list` with the directory store (`2`), and `run`
+/// before its config is read (`125`) — in Batect's words.
+#[test]
+fn docker_context_beside_a_connection_flag_is_refused_whether_or_not_the_verb_connects() {
+    for (arguments, code) in [
+        (&["caches", "list", "--cache-type", "directory"][..], 2),
+        (&["run", "t"], 125),
+    ] {
+        let output = ratect_command()
+            .args(["-f", "does-not-exist.toml"])
+            .args(arguments)
+            .args(["--docker-context", "x", "--docker-tls-verify"])
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(code), "{arguments:?}: {stderr}");
+        assert!(
+            stderr.contains("Cannot use both --docker-context and --docker-tls-verify."),
+            "{arguments:?}: {stderr}"
+        );
+    }
+}
+
+/// ratect#437: an explicit `--config-vars-file` must name a file that
+/// exists — not a directory, nor something else (`/dev/null`) — checked
+/// before the config is read, as an invalid option value: `125` on a run.
+#[test]
+fn run_refuses_a_config_vars_file_that_is_not_a_file() {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for value in [
+        Path::new("no-such-vars.toml"),
+        directory.as_path(),
+        Path::new("/dev/null"),
+    ] {
+        let output = ratect_command()
+            .args(["run", "build", "-f"])
+            .arg(native_fixture_path())
+            .arg("--config-vars-file")
+            .arg(value)
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(125), "{value:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "--config-vars-file {value:?} does not exist or is not a file."
+            )),
+            "{value:?}: {stderr}"
+        );
+    }
+}
+
+/// ratect#437: a file a TLS option names must exist and not be a
+/// directory, checked by every verb that takes it, whether or not it
+/// connects over TLS — `caches list` with the directory store (`2`), and
+/// `run` before its config is read (`125`).
+#[test]
+fn a_missing_or_directory_tls_file_is_refused_whether_or_not_the_verb_connects() {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for (arguments, option, value, problem, code) in [
+        (
+            &["caches", "list", "--cache-type", "directory"][..],
+            "--docker-tls-key",
+            directory.as_path(),
+            "is a directory, not a file",
+            2,
+        ),
+        (
+            &["run", "build"],
+            "--docker-tls-ca-cert",
+            Path::new("no-such-ca.pem"),
+            "does not exist",
+            125,
+        ),
+    ] {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(native_fixture_path())
+            .args(arguments)
+            .arg(option)
+            .arg(value)
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(code), "{arguments:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!("{option} {value:?} {problem}.")),
+            "{arguments:?}: {stderr}"
+        );
+    }
+}
+
+/// `run` checks every Docker option before reading its config, as
+/// `ratect-compat` does — a directory option naming nothing included, so a
+/// missing config file doesn't mask it.
+#[test]
+fn run_checks_the_docker_directory_options_before_reading_the_config() {
+    let output = ratect_command()
+        .args(["run", "build", "-f", "does-not-exist.toml"])
+        .args(["--docker-config", "no-such-docker-config"])
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(125), "{stderr}");
+    assert!(
+        stderr.contains("--docker-config \"no-such-docker-config\" does not exist."),
+        "{stderr}"
+    );
+}

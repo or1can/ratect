@@ -118,18 +118,79 @@ pub struct DockerConnectionOptions {
 }
 
 impl DockerConnectionOptions {
+    /// Every check on these options' own values, each failure an
+    /// [`InvalidOptionValue`](crate::exit_code::InvalidOptionValue), in
+    /// Batect's order: a path option's value as its converter checks it,
+    /// then `validate()`'s conflict. Connecting calls it first, and both
+    /// binaries call it before a command that takes the options but might
+    /// not connect, or connects only after reading its config — as Batect
+    /// checks them when it parses its arguments. `ratect doctor` leaves it to
+    /// connecting, and reports a failure as a problem it found
+    /// (decisions/0016). One call rather than three, so no call site can
+    /// skip one (ratect#437, ratect#439).
+    pub fn check_options(&self) -> Result<()> {
+        self.check_directories()?;
+        self.check_tls_files()?;
+        self.check_context_conflict()
+    }
+
     /// Refuses a `--docker-config`/`DOCKER_CONFIG` or
     /// `--docker-cert-path`/`DOCKER_CERT_PATH` that names something missing
-    /// or not a directory, as an
-    /// [`InvalidOptionValue`](crate::exit_code::InvalidOptionValue).
-    /// Connecting does this first; `ratect-compat` calls it too, before any
-    /// command runs, as Batect checks them when it parses its arguments.
-    pub fn check_directories(&self) -> Result<()> {
+    /// or not a directory — one of [`DockerConnectionOptions::check_options`].
+    fn check_directories(&self) -> Result<()> {
         check_chosen_directories(
             self,
             std::env::var("DOCKER_CONFIG").ok().as_deref(),
             std::env::var("DOCKER_CERT_PATH").ok().as_deref(),
         )
+    }
+
+    /// Refuses a `--docker-tls-ca-cert`, `--docker-tls-cert` or
+    /// `--docker-tls-key` that names nothing, or a directory, whether or not
+    /// TLS is used — one of
+    /// [`DockerConnectionOptions::check_options`]. Anything else that exists
+    /// passes, a pipe (`<(…)`, to keep a key off disk) included, as when
+    /// connecting reads it (see `flag_tls_settings`); Batect refuses one.
+    fn check_tls_files(&self) -> Result<()> {
+        for (flag, path) in [
+            ("--docker-tls-ca-cert", &self.tls_ca_cert),
+            ("--docker-tls-cert", &self.tls_cert),
+            ("--docker-tls-key", &self.tls_key),
+        ] {
+            let Some(path) = path else { continue };
+            let problem = match fs::metadata(path) {
+                Ok(metadata) if metadata.is_dir() => "is a directory, not a file".to_string(),
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    "does not exist".to_string()
+                }
+                Err(error) => format!("can't be read: {error}"),
+            };
+            return Err(crate::exit_code::InvalidOptionValue::new(format!(
+                "{flag} {path:?} {problem}."
+            ))
+            .into());
+        }
+        Ok(())
+    }
+
+    /// Refuses `--docker-context` given beside a flag that chooses a
+    /// connection itself, in Batect's words — `Cannot use both
+    /// --docker-context and --docker-host.` — one of
+    /// [`DockerConnectionOptions::check_options`], as Batect's `validate()`.
+    /// Only flags count: an environment variable never conflicts, as in
+    /// Batect.
+    fn check_context_conflict(&self) -> Result<()> {
+        if self.context.is_none() {
+            return Ok(());
+        }
+        match conflicting_option_with_context(self) {
+            Some(conflicting) => Err(crate::exit_code::InvalidOptionValue::new(format!(
+                "Cannot use both --docker-context and {conflicting}."
+            ))
+            .into()),
+            None => Ok(()),
+        }
     }
 }
 
@@ -317,15 +378,25 @@ fn active_docker_context(config_directory: &Path) -> Result<Option<String>> {
 /// that order is written: [`docker_config_directory`] and
 /// [`docker_cert_directory`] both ask here, so the certificate directory's
 /// fallback can't drift from the directory the context store is read from.
+/// `DOCKER_CONFIG` is resolved as the option is (see [`variable_path`]).
 fn chosen_config_directory(
     options: &DockerConnectionOptions,
     docker_config_env: Option<&str>,
-) -> Option<(PathBuf, &'static str)> {
-    match (&options.config_directory, docker_config_env) {
+) -> Result<Option<(PathBuf, &'static str)>> {
+    Ok(match (&options.config_directory, docker_config_env) {
         (Some(dir), _) => Some((dir.clone(), "--docker-config")),
-        (None, Some(dir)) => Some((PathBuf::from(dir), "DOCKER_CONFIG")),
+        (None, Some(dir)) => Some((variable_path(dir)?, "DOCKER_CONFIG")),
         (None, None) => None,
-    }
+    })
+}
+
+/// A path `DOCKER_CONFIG` or `DOCKER_CERT_PATH` gives, resolved as the
+/// option it defaults is — see
+/// [`resolve_option_path`](crate::config::resolve_option_path) — as Batect
+/// resolves both through the same converter (ratect#437). The Docker CLI
+/// takes either as written.
+fn variable_path(value: &str) -> Result<PathBuf> {
+    crate::config::resolve_option_path(Path::new(value))
 }
 
 /// `--docker-config`, else `DOCKER_CONFIG`, else `~/.docker` — the
@@ -341,7 +412,7 @@ fn docker_config_directory(
     options: &DockerConnectionOptions,
     docker_config_env: Option<&str>,
 ) -> Result<PathBuf> {
-    match chosen_config_directory(options, docker_config_env) {
+    match chosen_config_directory(options, docker_config_env)? {
         Some((dir, _)) => Ok(dir),
         None => Ok(crate::user::home_directory()?.join(".docker")),
     }
@@ -377,9 +448,9 @@ fn docker_cert_directory(
         return Ok((dir.clone(), "--docker-cert-path".to_string()));
     }
     if let Some(dir) = docker_cert_path_env.filter(|dir| !dir.is_empty()) {
-        return Ok((PathBuf::from(dir), "DOCKER_CERT_PATH".to_string()));
+        return Ok((variable_path(dir)?, "DOCKER_CERT_PATH".to_string()));
     }
-    if let Some((dir, named_by)) = chosen_config_directory(options, docker_config_env) {
+    if let Some((dir, named_by)) = chosen_config_directory(options, docker_config_env)? {
         return Ok((dir, named_by.to_string()));
     }
     Ok((
@@ -408,13 +479,13 @@ fn check_chosen_directories(
     docker_config_env: Option<&str>,
     docker_cert_path_env: Option<&str>,
 ) -> Result<()> {
-    let config = chosen_config_directory(options, docker_config_env.filter(|dir| !dir.is_empty()));
+    let config = chosen_config_directory(options, docker_config_env.filter(|dir| !dir.is_empty()))?;
     let cert = match (
         &options.cert_path,
         docker_cert_path_env.filter(|dir| !dir.is_empty()),
     ) {
         (Some(dir), _) => Some((dir.clone(), "--docker-cert-path")),
-        (None, Some(dir)) => Some((PathBuf::from(dir), "DOCKER_CERT_PATH")),
+        (None, Some(dir)) => Some((variable_path(dir)?, "DOCKER_CERT_PATH")),
         (None, None) => None,
     };
     for (path, named_by) in config.into_iter().chain(cert) {
@@ -651,7 +722,8 @@ fn resolve_context_name(
 /// time so the error can say exactly which flag conflicts, matching
 /// Batect's own message format (`"Cannot use both --docker-context and
 /// --docker-host."`) rather than a generic "these are mutually exclusive"
-/// dump.
+/// dump. Asked in Batect's order, so with several given the same one is
+/// named: `--docker-cert-path` last.
 fn conflicting_option_with_context(options: &DockerConnectionOptions) -> Option<&'static str> {
     if options.host.is_some() {
         Some("--docker-host")
@@ -659,14 +731,14 @@ fn conflicting_option_with_context(options: &DockerConnectionOptions) -> Option<
         Some("--docker-tls")
     } else if options.tls_verify {
         Some("--docker-tls-verify")
-    } else if options.cert_path.is_some() {
-        Some("--docker-cert-path")
     } else if options.tls_ca_cert.is_some() {
         Some("--docker-tls-ca-cert")
     } else if options.tls_cert.is_some() {
         Some("--docker-tls-cert")
     } else if options.tls_key.is_some() {
         Some("--docker-tls-key")
+    } else if options.cert_path.is_some() {
+        Some("--docker-cert-path")
     } else {
         None
     }
@@ -1004,12 +1076,7 @@ fn holds_certificate_error(error: &(dyn std::error::Error + 'static)) -> bool {
 /// carries what [`Connection::explain_failure`] needs to explain a
 /// verification failure.
 pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
-    options.check_directories()?;
-    if options.context.is_some() {
-        if let Some(conflicting) = conflicting_option_with_context(options) {
-            anyhow::bail!("Cannot use both --docker-context and {conflicting}.");
-        }
-    }
+    options.check_options()?;
 
     let docker_config_env = std::env::var("DOCKER_CONFIG").ok();
     let config_directory = docker_config_directory(options, docker_config_env.as_deref())?;

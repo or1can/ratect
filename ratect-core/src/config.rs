@@ -4963,8 +4963,9 @@ impl Provenance {
 /// "another user's home" form is not supported there and isn't here either,
 /// and a path with `~` anywhere but the front is untouched. `None` means
 /// there was nothing to expand, leaving the caller's own handling alone.
-fn expand_home_directory(path: &str) -> Result<Option<PathBuf>> {
-    let mut components = Path::new(path).components();
+fn expand_home_directory(path: impl AsRef<Path>) -> Result<Option<PathBuf>> {
+    let path = path.as_ref();
+    let mut components = path.components();
     let leads_with_tilde = matches!(
         components.next(),
         Some(std::path::Component::Normal(first)) if first == "~"
@@ -4973,10 +4974,23 @@ fn expand_home_directory(path: &str) -> Result<Option<PathBuf>> {
         return Ok(None);
     }
     let home = crate::user::home_directory()
-        .with_context(|| format!("Cannot expand '~' in path '{path}'"))?;
+        .with_context(|| format!("Cannot expand '~' in path '{}'", path.display()))?;
     // For a bare `~` the remainder is empty, and joining that yields the home
     // directory itself.
     Ok(Some(home.join(components.as_path())))
+}
+
+/// A path a command-line option was given — or a variable that defaults
+/// one, such as `DOCKER_CONFIG` — as Batect's `PathResolver` resolves one: a leading `~` expanded (see `expand_home_directory`),
+/// then `.` and `..` removed lexically, without asking the filesystem — so
+/// `link/../batect.yml` is `batect.yml` even when `link` is a symlink,
+/// where the operating system would follow the link first. A leading `..`
+/// stays, as Java's `normalize()` keeps it. Left relative, unlike Batect's,
+/// which only an error message could tell apart.
+pub fn resolve_option_path(path: &Path) -> Result<PathBuf> {
+    Ok(expand_home_directory(path)?
+        .unwrap_or_else(|| path.to_path_buf())
+        .clean())
 }
 
 /// Expands a leading `~` in an already-evaluated host path (see
@@ -5470,6 +5484,22 @@ pub async fn load_project(config_file: &Path) -> Result<LoadedProject> {
 /// `ConfigFormat::Native`).
 pub async fn load_project_native(config_file: &Path) -> Result<LoadedProject> {
     load_project_impl(config_file, ConfigFormat::Native).await
+}
+
+/// `--config-vars-file`'s own check: the file it names exists and is a
+/// regular file — not a directory, and not something else such as
+/// `/dev/null`, as Batect's option parser requires — or an
+/// [`InvalidOptionValue`](crate::exit_code::InvalidOptionValue). A file that
+/// exists but doesn't parse is the command's own failure, left to its
+/// loader.
+pub fn check_config_vars_file(path: &Path) -> Result<()> {
+    if path.is_file() {
+        return Ok(());
+    }
+    Err(crate::exit_code::InvalidOptionValue::new(format!(
+        "--config-vars-file {path:?} does not exist or is not a file."
+    ))
+    .into())
 }
 
 /// `-f`'s own check: the config file it names, given or defaulted, exists

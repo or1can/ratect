@@ -28,6 +28,14 @@ An option's value that starts with `-` has to be given after `=`, as in
 `--use-network=-x`: given as the next argument, it's refused — see [differences from
 Batect](differences-from-batect.md#cli-flags).
 
+A path given to `-f`, `--config-vars-file` or `--log-file` is resolved as Batect resolves it: a
+leading `~` is your home directory, even where the shell leaves it alone
+(`--config-file=~/batect.yml`), and `.` and `..` are removed before the path is used,
+so `link/../batect.yml` <!-- example --> is `./batect.yml` whether or not `link` is a symlink. A leading
+`..` stays. Before any command runs — `--clean` included — an `-f` you give must name
+a file, and so must `--config-vars-file`; a `--log-file` must name a file or nothing
+yet.
+
 ## Options
 
 Grouped by purpose, matching `ratect-compat --help`. The grouping is
@@ -75,7 +83,9 @@ listed under.
 Which daemon these reach, their `DOCKER_*` environment-variable defaults, and
 TLS with a private certificate authority are on [Connecting to
 Docker](connecting-to-docker.md), shared with `ratect`. Every invocation
-accepts them; they're used only when it actually connects.
+accepts them; they're used only when it actually connects. `--docker-context`
+beside `--docker-host` or a TLS option is refused whether or not the invocation
+connects, as in Batect.
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
@@ -93,7 +103,7 @@ accepts them; they're used only when it actually connects.
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
-| `--clean` | — | — | Removes every one of this project's own cache volumes/directories (per `--cache-type` or `BATECT_CACHE_TYPE`) and exits — doesn't run anything, and doesn't need `--config-file` to actually exist. See [Cache volumes](ratect-compat-config-reference.md#cache-volumes). |
+| `--clean` | — | — | Removes every one of this project's own cache volumes/directories (per `--cache-type` or `BATECT_CACHE_TYPE`) and exits — doesn't run anything, and never reads the config file, though a `--config-file` you give must name one. See [Cache volumes](ratect-compat-config-reference.md#cache-volumes). |
 | `--clean-cache <NAME>` | — | — | Removes just the named caches and exits, instead of every one of them. Takes a comma-separated list of names, each trimmed of surrounding whitespace, and is repeatable. Given together with `--clean`, the explicit name(s) win — `--clean`'s own "everything" behavior only applies when `--clean-cache` is never given at all. |
 
 ### Output
@@ -247,7 +257,8 @@ it was invoked wrong: a flag that's rejected (`ratect-compat --bogus --clean`), 
 option value that fails its own check — a `-f` or `--config-vars-file` naming something
 that doesn't exist or isn't a file, a `batect.local.yml` that isn't a file, a `BATECT_CACHE_TYPE` that is no cache type, a `--docker-config`, `--docker-cert-path`,
 `DOCKER_CONFIG` or `DOCKER_CERT_PATH` naming something that doesn't exist or isn't a
-directory, or a `--log-file` in a directory that doesn't exist.
+directory, `--docker-context` beside `--docker-host` or a TLS option, or a `--log-file`
+in a directory that doesn't exist, or that exists but isn't a file.
 
 Every failure of Ratect's own is printed to stderr as `Error: <message>` (the marker in
 bold red when stderr is a terminal) — deliberately *not* through

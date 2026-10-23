@@ -3689,6 +3689,36 @@ fn evaluate_path_expands_a_leading_tilde_to_the_home_directory() {
     }
 }
 
+/// An option's path is resolved as Batect's `PathResolver` resolves it
+/// (ratect#437): a leading `~` component is the passwd home, and `.` and an
+/// interior `..` are removed lexically — so `link/../batect.yml` is
+/// `batect.yml`, symlink or not. A leading `..` stays, as Java's
+/// `normalize()` keeps it, so `-f ../proj/batect.yml` reaches
+/// `project_directory_path` exactly as written (ratect#402). `~user` and a
+/// later `~` are left alone.
+#[test]
+fn resolve_option_path_expands_a_leading_tilde_and_normalises_lexically() {
+    let home = crate::user::home_directory().unwrap();
+    for (given, expected) in [
+        ("~/x.yml", home.join("x.yml")),
+        ("~", home.clone()),
+        ("~/a/../b", home.join("b")),
+        ("link/../batect.yml", PathBuf::from("batect.yml")),
+        ("./a/./b/", PathBuf::from("a/b")),
+        ("../proj/batect.yml", PathBuf::from("../proj/batect.yml")),
+        ("../a/b/../c", PathBuf::from("../a/c")),
+        ("/a/../../b", PathBuf::from("/b")),
+        ("~user/x", PathBuf::from("~user/x")),
+        ("a/~/x", PathBuf::from("a/~/x")),
+    ] {
+        assert_eq!(
+            resolve_option_path(Path::new(given)).unwrap(),
+            expected,
+            "{given}"
+        );
+    }
+}
+
 /// Only a whole leading `~` *component* expands, matching Batect's own
 /// component-wise check: `~user` (bash's "another user's home", which
 /// Batect doesn't support either) and a `~` anywhere but the front stay
