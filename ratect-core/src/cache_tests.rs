@@ -567,6 +567,116 @@ async fn a_removed_volume_cache_reports_its_full_volume_name_as_storage() {
     fs::remove_dir_all(&project_dir).unwrap();
 }
 
+/// A project holding both kinds of cache under one name, `deps` — a volume
+/// the fake lists and a directory under `.batect/caches` — so a clean of
+/// either type that reached into the other's storage would find something
+/// to remove there. The key is pinned so the volume's name is predictable.
+fn project_with_both_cache_types() -> (PathBuf, FakeRuntime) {
+    let project_dir = unique_temp_dir();
+    touch_cache(&cache_directory(&project_dir), "deps");
+    touch_cache(&cache_directory(&project_dir), "other");
+    fs::write(cache_directory(&project_dir).join("key"), "abc123\n").unwrap();
+    let runtime = FakeRuntime {
+        volumes: vec![
+            "batect-cache-abc123-deps".to_string(),
+            "batect-cache-abc123-other".to_string(),
+        ],
+        ..Default::default()
+    };
+    (project_dir, runtime)
+}
+
+/// Runs `ratect-compat --clean`'s own sequence — `list` scoped to the
+/// project, then `remove` — against a `cache_type` store over the project
+/// `project_with_both_cache_types` built, returning what it removed.
+async fn clean_project(
+    cache_type: CacheType,
+    runtime: &FakeRuntime,
+    project_dir: &Path,
+    only: &[&str],
+) -> Vec<String> {
+    let store =
+        CacheStore::new(cache_type, Some(runtime), project_dir.to_path_buf(), None).unwrap();
+    let found = store.list(Some(CacheScope::Project)).await.unwrap();
+    let only: HashSet<String> = only.iter().map(|name| name.to_string()).collect();
+    let mut removed: Vec<String> = store
+        .remove(&found, &only)
+        .await
+        .unwrap()
+        .unwrap()
+        .into_iter()
+        .map(|cache| cache.name)
+        .collect();
+    removed.sort();
+    removed
+}
+
+/// Batect's CCC-5: cleaning volume caches deletes nothing from the host
+/// cache directory.
+#[tokio::test]
+async fn a_volume_clean_leaves_every_cache_directory_in_place() {
+    let (project_dir, runtime) = project_with_both_cache_types();
+
+    let removed = clean_project(CacheType::Volume, &runtime, &project_dir, &[]).await;
+
+    assert_eq!(removed, ["deps", "other"]);
+    assert_eq!(runtime.removed.lock().unwrap().len(), 2);
+    assert!(cache_directory(&project_dir).join("deps").is_dir());
+    assert!(cache_directory(&project_dir).join("other").is_dir());
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}
+
+/// Batect's CCC-10: cleaning named volume caches leaves the host cache
+/// directory of the same name in place.
+#[tokio::test]
+async fn a_named_volume_clean_leaves_the_same_named_cache_directory_in_place() {
+    let (project_dir, runtime) = project_with_both_cache_types();
+
+    let removed = clean_project(CacheType::Volume, &runtime, &project_dir, &["deps"]).await;
+
+    assert_eq!(removed, ["deps"]);
+    assert_eq!(
+        *runtime.removed.lock().unwrap(),
+        ["batect-cache-abc123-deps"]
+    );
+    assert!(cache_directory(&project_dir).join("deps").is_dir());
+    assert!(cache_directory(&project_dir).join("other").is_dir());
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}
+
+/// Batect's CCC-15: cleaning directory caches removes no Docker volume,
+/// even from a store that was handed a runtime it could have used.
+#[tokio::test]
+async fn a_directory_clean_removes_no_volume() {
+    let (project_dir, runtime) = project_with_both_cache_types();
+
+    let removed = clean_project(CacheType::Directory, &runtime, &project_dir, &[]).await;
+
+    assert_eq!(removed, ["deps", "other"]);
+    assert!(!cache_directory(&project_dir).join("deps").exists());
+    assert!(runtime.removed.lock().unwrap().is_empty());
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}
+
+/// Batect's CCC-20: cleaning named directory caches removes no Docker
+/// volume, including the one sharing the name.
+#[tokio::test]
+async fn a_named_directory_clean_removes_no_same_named_volume() {
+    let (project_dir, runtime) = project_with_both_cache_types();
+
+    let removed = clean_project(CacheType::Directory, &runtime, &project_dir, &["deps"]).await;
+
+    assert_eq!(removed, ["deps"]);
+    assert!(!cache_directory(&project_dir).join("deps").exists());
+    assert!(cache_directory(&project_dir).join("other").is_dir());
+    assert!(runtime.removed.lock().unwrap().is_empty());
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}
+
 /// A host with no home directory has no shared caches — an absent
 /// `shared_root` reads as empty, not as a failure, matching what
 /// `list_shared_directory_caches`/`clean_shared_directory_caches` used to
