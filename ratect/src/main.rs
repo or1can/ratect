@@ -808,7 +808,10 @@ async fn run(cli: Cli, color_mode: ColorMode, stderr: &Console) -> Result<()> {
                 OutputStyle::Quiet => format_task_list_quiet(&project.config.tasks),
                 _ => format_task_list(&project.config.project_name, &project.config.tasks),
             };
-            println!("{listing}");
+            // Through a `Console`, not `println!`: a reader that has already gone
+            // (`| head -c 0`) is a write error to ignore, as Batect's `PrintStream`
+            // does, not a panic (ratect#444).
+            Console::stdout(ColorMode::Off).write_raw(&format!("{listing}\n"));
             Ok(())
         }
         // Deliberately no `load` call: see `CachesArgs`.
