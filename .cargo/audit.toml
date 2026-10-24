@@ -4,8 +4,9 @@
 # Entries here are deliberate, reviewed exceptions — not a way to quieten a
 # noisy check. Each one states what the advisory covers, why it is accepted,
 # what mitigates it in the meantime, and what would let it be removed. An
-# advisory with a fixed release available should never appear here: upgrade
-# instead.
+# advisory with a fixed release available should never appear here — upgrade
+# instead — unless no stable release of what depends on it can take the fix,
+# and its entry says so.
 
 [advisories]
 ignore = [
@@ -38,4 +39,31 @@ ignore = [
     # Remove this entry when a fixed `rsa` release exists, or if `build_ssh`
     # stops supporting RSA keys.
     "RUSTSEC-2023-0071",
+
+    # RUSTSEC-2026-0387 — "Multiple timing variability issues in operations
+    # intended to be constant-time", in `crypto-bigint` before 0.7.6.
+    #
+    # A fixed release exists, but no stable release of what depends on it
+    # can use it. `crypto-bigint` 0.5.5 comes in through `elliptic-curve`
+    # 0.13, which `ssh-key` 0.6's `p256`/`p384`/`p521` features pin; the fix
+    # needs `elliptic-curve` 0.14, reachable only through `ssh-key` 0.7,
+    # still a release candidate. Moving Ratect's cryptography to release
+    # candidates was declined.
+    #
+    # Where it is used: only by `ratect-core`'s in-process ssh-agent
+    # (`src/ssh_agent.rs`), to sign with an ECDSA private key a `build_ssh`
+    # entry's `paths` names. Ed25519 and RSA keys don't use this crate.
+    #
+    # Why it is accepted rather than fixed by dropping ECDSA: refusing ECDSA
+    # keys would be a real gap in `build_ssh`, as for RSA above.
+    #
+    # Mitigation: the same narrow exposure as the RSA entry — a signing
+    # oracle on a Unix socket in a `0700` directory, reachable only by the
+    # invoking user's own processes, for the duration of one image build, so
+    # anything able to time it can already use the key. Unlike RSA, there is
+    # no blinding: ECDSA signs through `ssh-key`'s own `try_sign`.
+    #
+    # Remove this entry once `ssh-key` 0.7 is stable and Ratect moves to it
+    # (ratect#664), or if `build_ssh` stops supporting ECDSA keys.
+    "RUSTSEC-2026-0387",
 ]
