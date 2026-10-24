@@ -1500,12 +1500,9 @@ async fn ping_over_tls(
         let _guard = serial_tls();
         connect(options).expect("connecting over TLS should build a client")
     };
-    let result = connection
-        .docker
-        .ping()
-        .await
-        .map(|_| ())
-        .map_err(|err| connection.explain_failure(anyhow::Error::new(err)));
+    let result = connection.docker.ping().await.map(|_| ()).map_err(|err| {
+        connection.explain_failure(anyhow::Error::new(err), "Failed to ping the daemon")
+    });
     server.await.expect("server task should not panic");
     result
 }
@@ -1623,10 +1620,108 @@ async fn a_failure_other_than_verification_is_not_explained_as_one() {
         let _guard = serial_tls();
         connect(&options).unwrap()
     };
-    let err = connection.explain_failure(anyhow::Error::new(
-        connection.docker.ping().await.unwrap_err(),
-    ));
+    let err = connection.explain_failure(
+        anyhow::Error::new(connection.docker.ping().await.unwrap_err()),
+        "Failed to ping the daemon",
+    );
     assert!(!format!("{err:#}").contains("always verifies"), "{err:#}");
+}
+
+/// The first request's error, through `explain_failure`, for a plain
+/// connection to `host`.
+async fn plain_first_request_error(host: &str) -> String {
+    let connection = connect(&DockerConnectionOptions {
+        host: Some(host.to_string()),
+        ..Default::default()
+    })
+    .unwrap();
+    let err = connection.explain_failure(
+        anyhow::Error::new(connection.docker.ping().await.unwrap_err()),
+        "Failed to ping the daemon",
+    );
+    format!("{err:#}")
+}
+
+#[tokio::test]
+async fn a_refused_connection_is_reported_as_an_unreachable_daemon_naming_the_host_tried() {
+    let (listener, port) = local_listener().await;
+    drop(listener);
+    let host = format!("tcp://127.0.0.1:{port}");
+
+    let message = plain_first_request_error(&host).await;
+    assert!(
+        message.starts_with(&format!(
+            "Couldn't reach the Docker daemon at '{host}' (from --docker-host) — check that \
+             Docker is running"
+        )),
+        "{message}"
+    );
+    assert!(!message.contains("Failed to ping the daemon"), "{message}");
+    assert!(message.contains("Connection refused"), "{message}");
+}
+
+/// The `.invalid` top-level domain never resolves (RFC 2606), offline or
+/// not.
+#[tokio::test]
+async fn a_host_name_that_does_not_resolve_is_reported_as_an_unreachable_daemon() {
+    let message = plain_first_request_error("tcp://no-such-daemon.invalid:2375").await;
+    assert!(
+        message.starts_with("Couldn't reach the Docker daemon at"),
+        "{message}"
+    );
+}
+
+/// Something answered — the socket is there, but refuses this user — so the
+/// request's own headline stays.
+#[tokio::test]
+async fn a_socket_refusing_permission_is_not_reported_as_an_unreachable_daemon() {
+    use std::os::unix::fs::PermissionsExt;
+    if nix::unistd::geteuid().is_root() {
+        return; // root ignores the socket's permissions
+    }
+    // Not under `unique_temp_dir`: macOS's temporary directory makes a
+    // socket path longer than a socket address holds.
+    let socket = PathBuf::from(format!("/tmp/ratect-denied-{}.sock", std::process::id()));
+    let _ = fs::remove_file(&socket);
+    let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    fs::set_permissions(&socket, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let message = plain_first_request_error(&format!("unix://{}", socket.display())).await;
+    fs::remove_file(&socket).unwrap();
+    assert!(
+        message.starts_with("Failed to ping the daemon"),
+        "{message}"
+    );
+    assert!(!message.contains("Couldn't reach"), "{message}");
+}
+
+#[test]
+fn daemon_target_names_the_host_and_what_chose_it() {
+    let flag = DockerConnectionOptions {
+        host: Some("tcp://flag:2375".to_string()),
+        ..Default::default()
+    };
+    let none = DockerConnectionOptions::default();
+    assert_eq!(
+        daemon_target(&flag, Some("tcp://env:2375"), None),
+        "'tcp://flag:2375' (from --docker-host)"
+    );
+    assert_eq!(
+        daemon_target(&none, Some("tcp://env:2375"), None),
+        "'tcp://env:2375' (from the DOCKER_HOST environment variable)"
+    );
+    assert_eq!(
+        daemon_target(&none, None, Some(("remote", "tcp://remote:2376"))),
+        "'tcp://remote:2376' (Docker context 'remote')"
+    );
+    assert_eq!(
+        daemon_target(&none, None, None),
+        "'unix:///var/run/docker.sock' (the default)"
+    );
+    assert_eq!(
+        daemon_target(&none, Some(""), None),
+        "'unix:///var/run/docker.sock' (the default)"
+    );
 }
 
 /// Connects through a context storing `files`, expecting it to fail before
@@ -1733,6 +1828,7 @@ async fn docker_client_new_explains_a_verification_failure_for_a_context_asking_
     let message = format!("{err:#}");
     assert!(message.contains("Docker context 'insecure'"), "{message}");
     assert!(message.contains("always verifies"), "{message}");
+    assert!(!message.contains("Couldn't reach"), "{message}");
 }
 
 /// The options for `--docker-host tcp://127.0.0.1:<port> --docker-tls-verify
