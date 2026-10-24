@@ -1855,7 +1855,10 @@ fn docker_buildkit_env_value(
 /// docker-client's `BuilderVersion.fromAPI` makes it. Both are raised when a
 /// build first needs the builder, not on every command as in Batect (and,
 /// for `DOCKER_BUILDKIT`, the docker CLI; see
-/// `docs/differences-from-batect.md`'s `--enable-buildkit` row).
+/// `docs/differences-from-batect.md`'s `--enable-buildkit` row). Batect
+/// also refuses BuildKit on a daemon older than Docker 18.09 without
+/// experimental features, or older than 17.07 at all; neither can be met
+/// above [`MINIMUM_API_VERSION`], so neither is here.
 ///
 /// Pure (both inputs injected) so the whole decision table is
 /// unit-testable; [`DockerClient`] feeds it the real environment variable
@@ -1892,9 +1895,9 @@ const MINIMUM_API_VERSION: ClientVersion = ClientVersion {
 };
 
 /// Checks a negotiated API version against [`MINIMUM_API_VERSION`], naming
-/// both the daemon's own version and the floor Ratect requires on failure —
-/// a clear, upfront reason rather than some later, arbitrary request failing
-/// with a message that doesn't explain why. Pure (the version is injected)
+/// both the API version the daemon supports and the floor Ratect requires on
+/// failure — a clear, upfront reason rather than some later, arbitrary
+/// request failing with a message that doesn't explain why. Pure (the version is injected)
 /// so every scenario — well above the floor, exactly at it, below it — is
 /// unit-testable without a real daemon of that exact version;
 /// `DockerClient::new` feeds it the real negotiated version.
@@ -1907,6 +1910,24 @@ fn check_api_version_floor(negotiated: ClientVersion) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Refuses a daemon running Windows containers, given the operating system
+/// its `/version` reports (`windows`, in any case): Ratect only supports
+/// Linux containers. A deliberate divergence — Batect accepts both, and
+/// refuses only a daemon reporting neither, which no real Docker daemon
+/// does, so that check isn't copied: an empty or missing operating system
+/// passes. Pure (the value is injected) so it's unit-testable without such
+/// a daemon; `DockerClient::new` feeds it the real one.
+fn check_daemon_os(os: Option<&str>) -> Result<()> {
+    match os {
+        Some(os) if os.eq_ignore_ascii_case("windows") => Err(anyhow::anyhow!(
+            "The Docker daemon is running Windows containers (it reports its operating system \
+             as '{os}'), but Ratect needs one running Linux containers — switch Docker to Linux \
+             containers to use Ratect."
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Resolves the credential to pull `image` with, via `resolver` — the
@@ -1996,10 +2017,10 @@ pub use connection::DockerConnectionOptions;
 
 impl DockerClient {
     /// The daemon's own version string, and — the actual point — proof
-    /// that it can be reached at all. `DockerClient::new` already
-    /// negotiated the API version (a `/version` call of its own) before
-    /// this method exists to be called, so this is a second, deliberate
-    /// round trip — this is how `ratect doctor` distinguishes "unreachable"
+    /// that it can be reached at all. `DockerClient::new` already asked
+    /// `/version` twice (to negotiate the API version and to check the
+    /// daemon's operating system) before this method exists to be called,
+    /// so this is a further, deliberate round trip — this is how `ratect doctor` distinguishes "unreachable"
     /// from "reachable, and here's what it is" without running a task.
     pub async fn server_version(&self) -> Result<String> {
         let version = self
@@ -2018,6 +2039,14 @@ impl DockerClient {
     /// that fails. Required rather than collected afterwards because only
     /// the caller knows where a warning goes: a run's event sink, a verb's
     /// stderr, a `doctor` finding.
+    ///
+    /// Then checks the daemon, before anything else asks it for anything:
+    /// that it answers at all — an error naming the daemon tried when it
+    /// doesn't (see `Connection::explain_failure`) — that its API is at
+    /// least `MINIMUM_API_VERSION`, and that it isn't running Windows
+    /// containers (see `check_daemon_os`). Each is a request: one
+    /// `/version` to negotiate the API version, and another, at that
+    /// version, for the daemon's operating system.
     pub async fn new(connection: &DockerConnectionOptions, warn: impl Fn(String)) -> Result<Self> {
         let connected = connection::connect(connection)?;
         connected.warnings.iter().cloned().for_each(warn);
@@ -2026,9 +2055,20 @@ impl DockerClient {
             .clone()
             .negotiate_version()
             .await
-            .context("Failed to negotiate the Docker API version with the daemon")
-            .map_err(|err| connected.explain_failure(err))?;
+            .map_err(|err| {
+                connected.explain_failure(
+                    err.into(),
+                    "Failed to negotiate the Docker API version with the daemon",
+                )
+            })?;
         check_api_version_floor(docker.client_version())?;
+        let version = docker.version().await.map_err(|err| {
+            connected.explain_failure(
+                err.into(),
+                "Failed to read the Docker daemon's operating system",
+            )
+        })?;
+        check_daemon_os(version.os.as_deref())?;
         let config_directory = connected.config_directory.clone();
         Ok(Self {
             docker,
@@ -2062,11 +2102,20 @@ impl DockerClient {
     /// call (one `/_ping` round trip) and cached for the client's lifetime;
     /// see `select_builder_version`.
     async fn builder_version(&self) -> Result<bollard::query_parameters::BuilderVersion> {
+        self.builder_version_given(std::env::var("DOCKER_BUILDKIT").ok().as_deref())
+            .await
+    }
+
+    /// [`Self::builder_version`] with the real `DOCKER_BUILDKIT` value
+    /// injected, so a test can show the daemon's ping header deciding
+    /// without depending on the environment it runs in.
+    async fn builder_version_given(
+        &self,
+        real_env_value: Option<&str>,
+    ) -> Result<bollard::query_parameters::BuilderVersion> {
         self.builder_version
             .get_or_try_init(|| async {
-                let real_env_value = std::env::var("DOCKER_BUILDKIT").ok();
-                let env_value =
-                    docker_buildkit_env_value(self.enable_buildkit, real_env_value.as_deref());
+                let env_value = docker_buildkit_env_value(self.enable_buildkit, real_env_value);
                 let ping_info = self
                     .docker
                     .ping_info()

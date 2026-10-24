@@ -112,9 +112,9 @@ without a prebuilt binary.
   2020) is Ratect's own floor below that negotiation — the oldest release its
   *features* actually require, for the `host-gateway` sentinel behind [proxy
   support](proxies.md#a-proxy-on-localhost) — and a daemon
-  older than that is refused with a clear error naming both its version and
-  the one required, rather than some later request failing for an unexplained
-  reason. Check yours with `docker version --format '{{.Server.APIVersion}}'`
+  older than that is refused with a clear error naming the API version it
+  supports and the one required, rather than some later request failing for
+  an unexplained reason. Check yours with `docker version --format '{{.Server.APIVersion}}'`
   (API 1.41 corresponds to Docker 20.10).
 
 ### Build from source

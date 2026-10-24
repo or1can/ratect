@@ -333,9 +333,11 @@ tables above:
   - **A proxy bound to loopback only is diagnosed, not left to fail** — Batect's own
     roadmap notes the same warning is needed and never shipped one.
 
-  What stays an accepted gap is Batect's Docker-version-gated hostname fallback
-  chain, which reaches back to Docker 17.06 — not worth chasing for any
-  actively-maintained daemon.
+  Batect's Docker-version-gated hostname fallback chain, which reaches back
+  to Docker 17.06, isn't ported: its first choice, `host.docker.internal`,
+  is the one for Docker 18.03 and later, so every Docker release Ratect
+  connects to would get it (see the Docker 20.10 entry under [Runtime behavior
+  gaps](#runtime-behavior-gaps)).
 - **Private registry credentials**: Batect's own Go client swallows every
   credential-helper error unconditionally; Ratect warns instead, naming the
   registry that failed to resolve. See [Private registry
@@ -392,6 +394,21 @@ tables above:
   doesn't become ready — whatever else was starting alongside it is dropped
   there and then, and cleanup begins. Batect cancels that work and waits for it
   to wind down first.
+- **Docker 20.10 or newer is required.** Ratect refuses a daemon whose API
+  is older than 1.41 (Docker 20.10) when it connects — before any task runs,
+  whether or not BuildKit is asked for — because its proxy support needs
+  20.10's `host-gateway` address (see
+  [Installation](installation.md#prerequisites)). Batect's floor is API 1.37
+  (Docker 18.03), so Docker 18.03 to 19.03 runs under Batect and is refused by
+  Ratect. Below API 1.37 both refuse, in different words: Ratect's error names
+  the API version the daemon supports and the 1.41 it requires; Batect's, in
+  red, names the daemon's Docker version. The exit code is any failure's (see
+  [Exit codes and error
+  reporting](ratect-compat-cli.md#exit-codes-and-error-reporting)) — `125` on
+  a run — where Batect's is `-1` (255). Batect's refusals of BuildKit on a
+  daemon too old for it, or without experimental features turned on, apply
+  only below Docker 18.09, so none could fire on a daemon Ratect accepts, and
+  they aren't ported.
 - **The daemon is first asked for its version, not pinged.** Ratect's first
   request is `/version`; Batect sends `/_ping` and then asks for the version,
   before running anything. The image builder — BuildKit or the classic one — is
@@ -399,7 +416,13 @@ tables above:
   (see `--enable-buildkit` under [CLI flags](#cli-flags)). And a daemon that
   can't be reached, or is too old, is reported in Ratect's own words, not
   Batect's `Docker is not installed, not running or not compatible with
-  Batect: …`.
+  Batect: …` — for an unreachable one, naming the host tried (see [What is
+  checked on connecting](connecting-to-docker.md#what-is-checked-on-connecting)).
+- **A daemon running Windows containers is refused.** Ratect checks the
+  operating system the daemon reports and refuses `windows` before running
+  anything, since it only supports Linux containers. Batect accepts a Windows
+  daemon, and refuses only one reporting neither Linux nor Windows, which
+  Ratect doesn't check.
 - **The task network is ready before any image work starts.** Ratect creates
   it — or, under `--use-network`, checks that it exists — and only then pulls
   or builds an image, where Batect does both at once. So a network problem,
