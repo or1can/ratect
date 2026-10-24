@@ -175,7 +175,9 @@ Docker volume it's stored in; that name is what `caches clean` takes back. Under
 emits is exactly what a `caches clean` carrying the same flags would act on, so
 the output can be piped straight back. Naming a cache that doesn't
 exist warns on stderr rather than passing silently, since the likeliest cause is
-a typo.
+a typo. Under `--cache-type directory`, `caches clean` also warns when the project
+has no `.batect/caches` directory, and names each entry there that it skips
+because it is a symbolic link, which is never followed.
 
 `--scope <project|shared>` restricts both commands to one kind of cache. A
 [shared cache](ratect-config-reference.md#shared-caches) is one every project on

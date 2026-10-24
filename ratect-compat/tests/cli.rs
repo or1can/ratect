@@ -6229,6 +6229,93 @@ fn batect_cache_type_directory_cleans_cache_directories() {
     assert!(gone, "the cache directory is still there");
 }
 
+/// #459: a directory-mode clean skips a cache entry that is a symbolic
+/// link rather than following it, and says so on stderr — once, though
+/// both listing and removal read the directory — in every output style,
+/// with stdout unchanged.
+#[cfg(unix)]
+#[test]
+fn directory_clean_warns_once_about_a_skipped_symbolic_link() {
+    let (project, _) = project_with_a_cache_directory("clean-symlink", "deps");
+    // As the binary reports it: the temporary directory may be behind a
+    // symbolic link itself (macOS's `/var`).
+    let project = project.canonicalize().unwrap();
+    let outside = scratch_directory("clean-symlink-target");
+    let link = project.join(".batect/caches/linked");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+    for style in [&[][..], &["-o", "quiet"]] {
+        std::fs::create_dir_all(project.join(".batect/caches/deps")).unwrap();
+        let output = isolated_docker_command(&project)
+            .args(["--clean", "--cache-type", "directory"])
+            .args(style)
+            .output()
+            .expect("failed to run ratect");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(0), "{style:?}: {stderr}");
+        assert!(
+            stdout.ends_with("Done! Deleted 1 directory.\n"),
+            "{style:?}: {stdout}"
+        );
+        assert_eq!(
+            stderr
+                .matches(&format!("Skipped '{}'", link.display()))
+                .count(),
+            1,
+            "{style:?}: {stderr}"
+        );
+        assert!(link.is_symlink(), "{style:?}: the link was removed");
+    }
+
+    std::fs::remove_dir_all(&project).unwrap();
+    std::fs::remove_dir_all(&outside).unwrap();
+}
+
+/// #459: a directory-mode clean of a project with no `.batect/caches`
+/// still succeeds with zero deletions, where Batect fails — and says
+/// there was no cache directory, once, rather than leaving that to read
+/// as an ordinary empty clean.
+#[test]
+fn directory_clean_warns_once_when_there_is_no_cache_directory() {
+    let project = one_task_project("clean-no-caches").canonicalize().unwrap();
+    let caches = project.join(".batect/caches");
+
+    for args in [
+        &["--clean"][..],
+        &["--clean-cache", "deps"],
+        &["--clean", "-o", "quiet"],
+    ] {
+        let output = isolated_docker_command(&project)
+            .args(["--cache-type", "directory"])
+            .args(args)
+            .output()
+            .expect("failed to run ratect");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        assert_eq!(
+            stdout,
+            format!(
+                "Checking for cache directories in '{}'...\nDone! Deleted 0 directories.\n",
+                caches.display()
+            ),
+            "{args:?}"
+        );
+        assert_eq!(
+            stderr
+                .matches(&format!("no cache directory at '{}'", caches.display()))
+                .count(),
+            1,
+            "{args:?}: {stderr}"
+        );
+    }
+
+    std::fs::remove_dir_all(&project).unwrap();
+}
+
 /// #445: a volume-mode `--clean` says it is checking for cache volumes
 /// only once the daemon has been reached, as Batect does — an unreachable
 /// daemon prints the connection error and nothing on stdout. Two failure

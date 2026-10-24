@@ -1065,7 +1065,7 @@ async fn clean_caches(args: &Args, cache_type: CacheType, stderr: &Console) -> R
         .list(Some(ratect_core::config::CacheScope::Project))
         .await?;
     let removed = store
-        .remove(&found, &only)
+        .remove(&found, &only, |message| stderr.warning(&message))
         .await?
         .expect("a Project-scoped selection can never trigger CacheStore's shared-cache refusal");
 

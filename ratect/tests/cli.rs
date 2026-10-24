@@ -2106,6 +2106,45 @@ fn cleaning_a_cache_that_does_not_exist_says_so() {
     std::fs::remove_dir_all(&project).unwrap();
 }
 
+/// A cache entry that is a symbolic link is warned about by `clean`, which
+/// skips it, and not by `list`, which skips nothing it would act on — so a
+/// project with one shows its listing as it always has (ratect#459).
+#[cfg(unix)]
+#[test]
+fn only_cleaning_warns_about_a_symbolic_link_among_the_caches() {
+    let project = project_with_directory_caches(&["npm-cache"]);
+    // Any directory outside the project will do as the link's target.
+    let outside = project_with_directory_caches(&[]);
+    std::fs::create_dir_all(&outside).unwrap();
+    let link = project.join(".batect/caches/linked");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    let caches = |verb: &str| {
+        caches_command(&project)
+            .args(["caches", verb, "--cache-type", "directory"])
+            .args(["--scope", "project"])
+            .output()
+            .expect("failed to run ratect")
+    };
+
+    let listed = caches("list");
+    assert!(listed.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&listed.stdout),
+        "Caches for this project:\n- npm-cache\n"
+    );
+    assert!(listed.stderr.is_empty(), "{listed:?}");
+
+    let cleaned = caches("clean");
+    let stderr = String::from_utf8_lossy(&cleaned.stderr);
+    assert!(cleaned.status.success(), "{stderr}");
+    assert_eq!(stderr.matches("Skipped '").count(), 1, "{stderr}");
+    assert!(stderr.contains("linked"), "{stderr}");
+    assert!(link.is_symlink(), "the link was removed");
+
+    std::fs::remove_dir_all(&project).unwrap();
+    std::fs::remove_dir_all(&outside).unwrap();
+}
+
 /// Requires a running Docker daemon with network access to pull
 /// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
 ///
